@@ -1,0 +1,23 @@
+{
+  "name": "TR_LotDataMRAM",
+  "keywords": "TR_LotDataMRAM",
+  "description": "Arduino library for logging rocket data to MRAM and SD",
+  "authors":
+  [
+    {
+      "name": "Christian Pederse ",
+      "email": "tinkerbug@tinkerbugrobotics.com",
+      "maintainer": true
+    }
+  ],
+  "repository":
+  {
+    "type": "",
+    "url": ""
+  },
+  "version": "0.1",
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "headers": "TR_LotDataMRAM.h"
+}

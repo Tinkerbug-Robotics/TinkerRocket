@@ -1,0 +1,83 @@
+# TinkerRocket Simulation Configuration
+# Parameters not defined in the .ork file (fin tabs, sensors, control, inertia)
+
+# Fin tab aerodynamic model (from CFD analysis)
+fin_tabs:
+  Kt_ref: 4.20e-3         # N-m/deg at V_ref, per tab
+  V_ref: 95.0             # m/s reference velocity
+  n_tabs: 4               # number of fin tabs (all deflect identically)
+  deflection_min: -20.0   # deg
+  deflection_max: 20.0    # deg
+
+# Mass & inertia overrides (from CFD report component breakdown)
+mass_overrides:
+  I_roll_launch: 8.3e-4       # kg-m^2 (at launch, full propellant)
+  I_roll_burnout: 8.237e-4    # kg-m^2 (at burnout)
+  I_transverse_launch: 0.02   # kg-m^2 (pitch/yaw, approximate)
+  I_transverse_burnout: 0.019 # kg-m^2
+
+# Aerodynamic overrides
+aerodynamics:
+  Cd: 0.5    # drag coefficient
+
+# PID roll controller
+control:
+  pid:
+    kp: 0.10
+    ki: 0.0
+    kd: 0.0
+    setpoint_dps: 0.0      # target roll rate (deg/s)
+    min_cmd_deg: -20.0
+    max_cmd_deg: 20.0
+  gain_schedule:
+    enabled: true
+    v_ref: 95.0            # m/s
+    v_min: 30.0            # m/s (floor)
+    max_scale: 3.0         # cap on gain multiplier
+  actuator:
+    servo_rate_hz: 50      # servo PWM update rate
+    rate_limit_dps: 500.0  # servo slew rate (deg/s)
+
+# Sensor specifications (matching ISM6HG256, BMP585, MMC5983MA, GNSS)
+sensors:
+  imu:
+    update_rate_hz: 1200
+    accel_noise_sigma: 0.05       # m/s^2
+    accel_bias_sigma: 0.01        # m/s^2
+    accel_bias_tau: 100.0         # s (Markov correlation time)
+    gyro_noise_sigma: 0.00175     # rad/s
+    gyro_bias_sigma: 0.00025      # rad/s
+    gyro_bias_tau: 50.0           # s
+    accel_low_range: 16.0         # g (±16g)
+    accel_high_range: 256.0       # g (±256g)
+    gyro_range: 4000.0            # deg/s
+    accel_low_lsb: 0.00488        # m/s^2 per LSB
+    accel_high_lsb: 0.0781        # m/s^2 per LSB
+    gyro_lsb: 0.122               # deg/s per LSB
+    mounting_rotation_z_deg: -45.0  # sensor frame rotation
+  barometer:
+    update_rate_hz: 500
+    pressure_noise_sigma: 5.0     # Pa
+    temperature_noise_sigma: 0.1  # K
+  magnetometer:
+    update_rate_hz: 1000
+    noise_sigma: 0.5              # uT per axis
+    mounting_rotation_z_deg: 180.0
+    # Earth field at ~38N (approximate)
+    earth_field_x_uT: 22.0       # North
+    earth_field_y_uT: 5.0        # East
+    earth_field_z_uT: 42.0       # Down
+  gnss:
+    update_rate_hz: 25
+    pos_noise_ne_m: 3.0           # horizontal position sigma
+    pos_noise_d_m: 6.0            # vertical position sigma
+    vel_noise_ne_mps: 0.5         # horizontal velocity sigma
+    vel_noise_d_mps: 1.0          # vertical velocity sigma
+
+# Simulation settings
+simulation:
+  physics_dt: 1.0e-4       # s (10 kHz)
+  control_dt: 8.333e-4     # s (1200 Hz, matches IMU)
+  duration: 30.0            # s total simulation time
+  launch_rail_length: 1.0   # m
+  launch_angle_deg: 85.0    # from horizontal (90 = vertical)

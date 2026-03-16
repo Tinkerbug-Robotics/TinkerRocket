@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64", "pybind11>=2.11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinkerrocket-sim"
+version = "0.1.0"
+description = "6-DOF rocket flight simulation with fin-tab roll control"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+    "rocketpy>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pybind11>=2.11",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

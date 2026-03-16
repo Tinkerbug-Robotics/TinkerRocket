@@ -1,0 +1,33 @@
+# iOS app has its own repo
+TinkerRocketApp/
+
+# Build artifacts
+build/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.vscode/
+*.swp
+*.swo
+
+# Generated plots (regenerable from data)
+Data_Analysis/plots/
+tinkerrocket-sim/plots/
+tinkerrocket-sim/*.png
+plots/
+
+# Claude Code working files
+.claude/

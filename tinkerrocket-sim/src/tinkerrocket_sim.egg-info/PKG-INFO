@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: tinkerrocket-sim
+Version: 0.1.0
+Summary: 6-DOF rocket flight simulation with fin-tab roll control
+Requires-Python: >=3.10
+Requires-Dist: numpy>=1.24
+Requires-Dist: scipy>=1.10
+Requires-Dist: matplotlib>=3.7
+Requires-Dist: pandas>=2.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: rocketpy>=1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pybind11>=2.11; extra == "dev"

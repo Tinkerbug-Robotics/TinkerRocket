@@ -1,0 +1,13 @@
+# Launch site configuration
+launch_site:
+  latitude_deg: 38.0
+  longitude_deg: -122.0
+  elevation_m: 0.0
+  ground_pressure_pa: 101325.0
+  ground_temperature_k: 293.15   # 20 C
+
+# Wind model
+wind:
+  speed_mps: 0.0           # steady wind speed
+  direction_deg: 0.0       # wind FROM direction (0=North)
+  gust_sigma_mps: 0.0      # gust standard deviation

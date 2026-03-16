@@ -1,0 +1,10 @@
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+pandas>=2.0
+pyyaml>=6.0
+rocketpy>=1.0
+
+[dev]
+pytest>=7.0
+pybind11>=2.11
