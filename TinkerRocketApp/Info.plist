@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>audio</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is needed to record slow-motion video during pyro channel testing.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone access is needed for video recording during pyro channel testing.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Photo library access is needed to save pyro test videos.</string>
+</dict>
+</plist>

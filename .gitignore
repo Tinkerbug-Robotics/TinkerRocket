@@ -1,6 +1,3 @@
-# iOS app has its own repo
-TinkerRocketApp/
-
 # Build artifacts
 build/
 *.o
@@ -28,6 +25,18 @@ Data_Analysis/plots/
 tinkerrocket-sim/plots/
 tinkerrocket-sim/*.png
 plots/
+
+# Test build artifacts
+tests_cpp/build/
+
+# Sim build artifacts
+tinkerrocket-sim/build/
+tinkerrocket-sim/*.egg-info/
+tinkerrocket-sim/*.so
+
+# Xcode
+TinkerRocketApp/DerivedData/
+*.xcuserdata
 
 # Claude Code working files
 .claude/

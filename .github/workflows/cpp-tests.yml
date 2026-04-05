@@ -1,0 +1,27 @@
+name: C++ Unit Tests
+
+on:
+  push:
+    paths:
+      - 'libraries/**'
+      - 'tests_cpp/**'
+  pull_request:
+    paths:
+      - 'libraries/**'
+      - 'tests_cpp/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S tests_cpp -B tests_cpp/build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build tests_cpp/build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir tests_cpp/build --output-on-failure

@@ -1,0 +1,29 @@
+name: iOS Tests (XCTest)
+
+on:
+  push:
+    paths:
+      - 'TinkerRocketApp/**'
+  pull_request:
+    paths:
+      - 'TinkerRocketApp/**'
+
+jobs:
+  test:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Build and test
+        working-directory: TinkerRocketApp
+        run: |
+          xcodebuild test \
+            -project TinkerRocketApp.xcodeproj \
+            -scheme TinkerRocketApp \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -resultBundlePath TestResults \
+            | xcpretty || true

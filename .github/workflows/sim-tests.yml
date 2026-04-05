@@ -1,0 +1,37 @@
+name: Simulation Tests (Python)
+
+on:
+  push:
+    paths:
+      - 'tinkerrocket-sim/**'
+      - 'libraries/TR_GpsInsEKF/**'
+      - 'libraries/TR_PID/**'
+      - 'libraries/TR_ControlMixer/**'
+      - 'libraries/TR_GuidancePN/**'
+      - 'tests/integration/**'
+  pull_request:
+    paths:
+      - 'tinkerrocket-sim/**'
+      - 'libraries/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install pybind11 build deps
+        run: pip install pybind11 setuptools
+
+      - name: Install simulation package
+        working-directory: tinkerrocket-sim
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        working-directory: tinkerrocket-sim
+        run: python -m pytest tests/ -v --tb=short
