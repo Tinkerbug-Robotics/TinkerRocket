@@ -1,4 +1,7 @@
 #include "TR_LoRa_Comms.h"
+#include <esp_log.h>
+
+static const char* TAG = "LORA";
 
 TR_LoRa_Comms* TR_LoRa_Comms::instance_ = nullptr;
 
@@ -44,7 +47,7 @@ bool TR_LoRa_Comms::begin(SPIClass& spi, const Config& cfg, bool debug)
     {
         if (debug_)
         {
-            Serial.printf("LoRa begin failed: %d\n", st);
+            ESP_LOGE(TAG, "LoRa begin failed: %d", st);
         }
         enabled_ = false;
         stats_.enabled = false;
@@ -57,7 +60,7 @@ bool TR_LoRa_Comms::begin(SPIClass& spi, const Config& cfg, bool debug)
         stats_.last_error = st;
         if (debug_)
         {
-            Serial.printf("LoRa setFrequency failed: %d\n", st);
+            ESP_LOGE(TAG, "LoRa setFrequency failed: %d", st);
         }
         enabled_ = false;
         stats_.enabled = false;
@@ -89,7 +92,7 @@ bool TR_LoRa_Comms::begin(SPIClass& spi, const Config& cfg, bool debug)
 
     if (debug_)
     {
-        Serial.println("LoRa radio initialized");
+        ESP_LOGI(TAG, "LoRa radio initialized");
     }
     return true;
 }
@@ -117,7 +120,7 @@ void TR_LoRa_Comms::service()
         stats_.tx_fail++;
         if (debug_)
         {
-            Serial.printf("LoRa finishTransmit failed: %d\n", st);
+            ESP_LOGE(TAG, "LoRa finishTransmit failed: %d", st);
         }
     }
     tx_ongoing_ = false;
@@ -149,7 +152,7 @@ bool TR_LoRa_Comms::send(const uint8_t* payload, size_t len)
         stats_.tx_fail++;
         if (debug_)
         {
-            Serial.printf("LoRa startTransmit failed: %d\n", st);
+            ESP_LOGE(TAG, "LoRa startTransmit failed: %d", st);
         }
         return false;
     }
@@ -193,7 +196,7 @@ bool TR_LoRa_Comms::startReceive()
     {
         if (debug_)
         {
-            Serial.printf("LoRa startReceive failed: %d\n", st);
+            ESP_LOGE(TAG, "LoRa startReceive failed: %d", st);
         }
         rx_mode_ = false;
         return false;
@@ -241,14 +244,14 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
         stats_.rx_crc_fail++;
         if (debug_)
         {
-            Serial.println("LoRa RX CRC mismatch");
+            ESP_LOGW(TAG, "LoRa RX CRC mismatch");
         }
     }
     else
     {
         if (debug_)
         {
-            Serial.printf("LoRa readData failed: %d\n", st);
+            ESP_LOGE(TAG, "LoRa readData failed: %d", st);
         }
     }
 
@@ -336,7 +339,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
-        if (debug_) Serial.printf("LoRa reconfigure setBW failed: %d\n", st);
+        if (debug_) ESP_LOGE(TAG, "LoRa reconfigure setBW failed: %d", st);
         return false;  // Nothing changed, no rollback needed
     }
     steps_done = 1;
@@ -345,7 +348,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
-        if (debug_) Serial.printf("LoRa reconfigure setSF failed: %d\n", st);
+        if (debug_) ESP_LOGE(TAG, "LoRa reconfigure setSF failed: %d", st);
         goto rollback;
     }
     steps_done = 2;
@@ -354,7 +357,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
-        if (debug_) Serial.printf("LoRa reconfigure setFreq failed: %d\n", st);
+        if (debug_) ESP_LOGE(TAG, "LoRa reconfigure setFreq failed: %d", st);
         goto rollback;
     }
     steps_done = 3;
@@ -363,7 +366,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
-        if (debug_) Serial.printf("LoRa reconfigure setCR failed: %d\n", st);
+        if (debug_) ESP_LOGE(TAG, "LoRa reconfigure setCR failed: %d", st);
         goto rollback;
     }
     steps_done = 4;
@@ -372,7 +375,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
-        if (debug_) Serial.printf("LoRa reconfigure setPower failed: %d\n", st);
+        if (debug_) ESP_LOGE(TAG, "LoRa reconfigure setPower failed: %d", st);
         goto rollback;
     }
 
@@ -385,7 +388,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
 
     if (debug_)
     {
-        Serial.printf("LoRa reconfigured: %.1f MHz SF%u BW%.0f CR%u %d dBm\n",
+        ESP_LOGI(TAG, "LoRa reconfigured: %.1f MHz SF%u BW%.0f CR%u %d dBm",
                       (double)freq_mhz, (unsigned)sf, (double)bw_khz, (unsigned)cr, (int)tx_power);
     }
 
@@ -393,7 +396,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
 
 rollback:
     // Best-effort restore of the previous configuration.
-    if (debug_) Serial.printf("LoRa reconfigure rolling back %d steps\n", steps_done);
+    if (debug_) ESP_LOGW(TAG, "LoRa reconfigure rolling back %d steps", steps_done);
     if (steps_done >= 4) (void)radio_->setCodingRate(old_cr);
     if (steps_done >= 3) (void)radio_->setFrequency(old_freq);
     if (steps_done >= 2) (void)radio_->setSpreadingFactor(old_sf);

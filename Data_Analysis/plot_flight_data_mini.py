@@ -91,7 +91,7 @@ MSG_EXPECTED_LEN = {
     MSG_ISM6HG256:        22,
     MSG_BMP585:           12,
     MSG_MMC5983MA:        16,
-    MSG_NON_SENSOR:       42,
+    MSG_NON_SENSOR:       None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:            10,
     MSG_START_LOGGING:    None,  # variable / no payload
     MSG_END_FLIGHT:       None,
@@ -110,7 +110,8 @@ FMT_MMC = '<I III'
 # POWERData: 10 bytes (time_us, voltage_raw:u16, current_raw:i16, soc_raw:i16)
 FMT_POWER = '<I Hhh'
 # NonSensorData: 42 bytes (q0-q3 as int16*10000, roll_cmd centideg)
-FMT_NONSENSOR = '<I hhhhh iii iii BB h'
+FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
+FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # current (with pyro_status byte)
 # OutStatusQueryData: 16 bytes
 FMT_STATUS_QUERY = '<B H H hh B hhh'
 
@@ -126,10 +127,20 @@ ROCKET_STATES = {
 }
 
 # NonSensor flags
-NSF_ALT_LANDED = (1 << 0)
-NSF_ALT_APOGEE = (1 << 1)
-NSF_VEL_APOGEE = (1 << 2)
-NSF_LAUNCH     = (1 << 3)
+NSF_ALT_LANDED  = (1 << 0)
+NSF_ALT_APOGEE  = (1 << 1)
+NSF_VEL_APOGEE  = (1 << 2)
+NSF_LAUNCH      = (1 << 3)
+NSF_BURNOUT     = (1 << 4)
+NSF_GUIDANCE    = (1 << 5)
+NSF_PYRO1_ARMED = (1 << 6)
+NSF_PYRO2_ARMED = (1 << 7)
+
+# Pyro status byte bits
+PSF_CH1_CONT  = (1 << 0)
+PSF_CH2_CONT  = (1 << 1)
+PSF_CH1_FIRED = (1 << 2)
+PSF_CH2_FIRED = (1 << 3)
 
 
 # ---------- CRC-16 (Rob Tillaart CRC library defaults) ----------
@@ -351,8 +362,13 @@ def parse_binary_file(filepath):
                     "raw_z":    fields[3],
                 })
 
-            elif msg_type == MSG_NON_SENSOR:
-                fields = struct.unpack(FMT_NONSENSOR, payload)
+            elif msg_type == MSG_NON_SENSOR and msg_len in (42, 43):
+                if msg_len == 43:
+                    fields = struct.unpack(FMT_NONSENSOR_43, payload)
+                    pyro_status = fields[15]
+                else:
+                    fields = struct.unpack(FMT_NONSENSOR_42, payload)
+                    pyro_status = 0
                 q0 = fields[1] / 10000.0
                 q1 = fields[2] / 10000.0
                 q2 = fields[3] / 10000.0
@@ -386,6 +402,12 @@ def parse_binary_file(filepath):
                     "alt_apogee":    bool(flags & NSF_ALT_APOGEE),
                     "vel_apogee":    bool(flags & NSF_VEL_APOGEE),
                     "launch":        bool(flags & NSF_LAUNCH),
+                    "pyro1_armed":   bool(flags & NSF_PYRO1_ARMED),
+                    "pyro2_armed":   bool(flags & NSF_PYRO2_ARMED),
+                    "pyro1_cont":    bool(pyro_status & PSF_CH1_CONT),
+                    "pyro2_cont":    bool(pyro_status & PSF_CH2_CONT),
+                    "pyro1_fired":   bool(pyro_status & PSF_CH1_FIRED),
+                    "pyro2_fired":   bool(pyro_status & PSF_CH2_FIRED),
                 })
 
             elif msg_type == MSG_POWER:
@@ -1260,41 +1282,41 @@ def plot_nav_vs_gps_pos(records, t0_global):
 
 #BINARY_FILE = "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_08/Raw Downloads/Goblin Flight 2 F52/flight_20260308_190239.bin"
 #BINARY_FILE = "/Users/christianpedersen/Downloads/flight_20260309_233258.bin"
-BINARY_FILE = "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 2 - F67-6/Raw Data/flight_20260314_224121.bin"
-OUTPUT_DIR  = "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 2 - F67-6/Analysis"
-SHOW_PLOTS  = True    # True = show interactive matplotlib windows
+BINARY_FILE = "/Users/christianpedersen/Downloads/flight_20260331_192916.bin"
+OUTPUT_DIR  = "/Users/christianpedersen/Downloads/simflight_20260331_analysis"
+SHOW_PLOTS  = False    # True = show interactive matplotlib windows
 TIME_WINDOW = None     # (t_start, t_end) in seconds, or None for all data
 
 # ---------- Plot chooser (True = generate, False = skip) ----------
 PLOTS = {
     # Sensor data
     "acc_sats":          True,
-    "acc_low_g":         False,
-    "acc_high_g":        False,
-    "acc_overlay":       False,
-    "gyro":              False,
-    "pressure":          False,
-    "temperature":       False,
-    "magnetometer":      False,
+    "acc_low_g":         True,
+    "acc_high_g":        True,
+    "acc_overlay":       True,
+    "gyro":              True,
+    "pressure":          True,
+    "temperature":       True,
+    "magnetometer":      False,   # X axis broken
     # Power
-    "voltage":           False,
-    "current":           False,
-    "soc":               False,
+    "voltage":           True,
+    "current":           True,
+    "soc":               True,
     # GPS
     "gps_altitude":      True,
     "gps_alt_annotated": True,
     "gps_velocity":      True,
-    "ground_track":      False,
-    "gps_enu_3d":        False,
-    "gps_enu_2d":        False,
+    "ground_track":      True,
+    "gps_enu_3d":        True,
+    "gps_enu_2d":        True,
     # Nav filter
-    "attitude":          False,
-    "roll_cmd_gyro":     False,
-    "nav_altitude":      False,
-    "nav_velocity":      False,
-    "rocket_state":      False,
-    "nav_pos_3d":        False,
-    "nav_pos_2d":        False,
+    "attitude":          True,
+    "roll_cmd_gyro":     True,
+    "nav_altitude":      True,
+    "nav_velocity":      True,
+    "rocket_state":      True,
+    "nav_pos_3d":        True,
+    "nav_pos_2d":        True,
     # Comparisons
     "press_vs_gps_alt":  True,
     "nav_vs_gps_pos":    True,

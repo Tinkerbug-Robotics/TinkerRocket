@@ -25,14 +25,9 @@ from plot_flight_data_mini import parse_binary_file, ROCKET_STATES, NSF_LAUNCH
 
 FLIGHTS = [
     {
-        "name": "Flight 1 - E24-4",
-        "bin_path": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 1 - E24-4/Raw Data/flight_20260314_195900.bin",
-        "output_dir": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 1 - E24-4/Analysis/",
-    },
-    {
-        "name": "Flight 2 - F67-6",
-        "bin_path": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 2 - F67-6/Raw Data/flight_20260314_224121.bin",
-        "output_dir": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 2 - F67-6/Analysis/",
+        "name": "Sim Flight 2026-03-31",
+        "bin_path": "/Users/christianpedersen/Downloads/flight_20260331_192916.bin",
+        "output_dir": "/Users/christianpedersen/Downloads/simflight_20260331_analysis/",
     },
 ]
 

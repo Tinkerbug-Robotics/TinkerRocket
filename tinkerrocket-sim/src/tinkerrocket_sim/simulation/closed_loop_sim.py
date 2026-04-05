@@ -98,6 +98,39 @@ class SimConfig:
     # Perfect IMU: zero noise and bias (feeds truth sensor data to filter)
     perfect_imu: bool = False
 
+    # --- Guidance (PN + 3-axis control) ---
+    guidance_enabled: bool = False  # False = roll-only (default), True = guided coast
+    guidance_mode: str = 'pn'       # 'pn' = proportional navigation, 'attitude' = point-at-target
+
+    # PN guidance parameters
+    pn_nav_gain: float = 3.0
+    pn_max_tilt_deg: float = 10.0
+    pn_max_accel_mps2: float = 5.0
+    pn_blend_radius_m: float = 5.0
+    pn_kp_pos: float = 0.5
+    pn_kd_vel: float = 1.0
+
+    # Pitch/yaw outer loop angle P gains
+    pn_kp_pitch_angle: float = 4.0
+    pn_kp_yaw_angle: float = 4.0
+
+    # Pitch/yaw inner loop rate PID gains
+    pn_pitch_kp: float = 0.04
+    pn_pitch_ki: float = 0.001
+    pn_pitch_kd: float = 0.0003
+    pn_yaw_kp: float = 0.04
+    pn_yaw_ki: float = 0.001
+    pn_yaw_kd: float = 0.0003
+
+    # Guided mode limits
+    pn_max_fin_deg: float = 15.0
+    pn_min_speed_mps: float = 15.0
+    pn_coast_delay_s: float = 0.0   # delay after burnout before guidance activates
+
+    # Gain scheduling for pitch/yaw (separate from roll)
+    pn_gain_V_ref: float = 50.0
+    pn_gain_V_min: float = 25.0
+
     # Logging
     log_interval: float = 0.001     # 1 kHz log rate
 
@@ -170,6 +203,34 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
     ekf = GpsInsEKF()
 
+    # Initialize guidance and mixer (only used when guidance_enabled)
+    guidance = None
+    control_mixer = None
+    roll_controller_standalone = None  # separate roll PID for guided mode
+    if config.guidance_enabled:
+        from tinkerrocket_sim._guidance import GuidancePN
+        from tinkerrocket_sim._mixer import ControlMixer
+
+        guidance = GuidancePN()
+        guidance.configure(
+            config.pn_nav_gain, config.pn_max_accel_mps2,
+            600.0)  # target alt above apogee
+
+        control_mixer = ControlMixer()
+        control_mixer.configure(
+            config.pn_pitch_kp, config.pn_pitch_ki, config.pn_pitch_kd,
+            config.pn_yaw_kp, config.pn_yaw_ki, config.pn_yaw_kd,
+            config.pn_max_fin_deg,
+            config.pn_gain_V_ref, config.pn_gain_V_min)
+        control_mixer.enable_gain_schedule(config.pn_gain_V_ref, config.pn_gain_V_min)
+
+        # Standalone roll PID for guided mode (same gains as main controller)
+        roll_controller_standalone = RollController(
+            kp=config.pid_kp, ki=config.pid_ki, kd=config.pid_kd,
+            min_cmd=-config.pn_max_fin_deg, max_cmd=config.pn_max_fin_deg,
+            V_ref=config.gain_V_ref, V_min=config.gain_V_min,
+            max_scale=config.gain_max_scale)
+
     # Reference LLA for EKF position → NED conversion
     ref_lat_rad = math.radians(config.ref_lat_deg)
     ref_lon_rad = math.radians(config.ref_lon_deg)
@@ -192,6 +253,14 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     fin_tab_cmd = 0.0
     fin_tab_actual = 0.0
     roll_target_deg = None  # current angle target (for profile mode logging)
+
+    # 4-fin actuator state (guided mode)
+    fin_cmds = np.zeros(4)
+    fin_actuals = np.zeros(4)
+    guidance_active = False
+    burnout_detected = False
+    burnout_time = None
+    guidance_cpa_reached = False  # closest point of approach — stop guidance
 
     # EKF initialization flag
     ekf_initialized = False
@@ -465,12 +534,182 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         baro_d.altitude_m = baro_alt
                         ekf.baro_meas_update(baro_d)
 
+                # --- Burnout detection (for guidance activation) ---
+                if (config.guidance_enabled and not burnout_detected and
+                        t > 0.2 and flight_phase == 'COAST'):
+                    burnout_detected = True
+                    burnout_time = t
+                    # Remove roll disturbance after burnout (motor spin stops)
+                    if hasattr(sim.rocket, 'roll_disturbance_torque'):
+                        sim.rocket.roll_disturbance_torque = 0.0
+
+                # --- Determine if guided coast is active ---
+                guidance_active = False
+                if (config.guidance_enabled and guidance is not None and
+                        burnout_detected and
+                        not guidance_cpa_reached and
+                        t >= burnout_time + config.pn_coast_delay_s and
+                        speed > config.pn_min_speed_mps):
+                    guidance_active = True
+
                 # PID control: use EKF roll rate estimate
-                if config.control_enabled and speed > 5.0:
+                # Roll control starts at t=0.5s; full guidance after burnout
+                if config.control_enabled and speed > 5.0 and t > 0.5:
                     rot_rate = ekf.get_rot_rate_est()
                     roll_rate_dps = math.degrees(rot_rate[0])
 
-                    if config.roll_profile is not None:
+                    if guidance_active:
+                        # ============================================
+                        # GUIDED COAST MODE — 3D PN to target point
+                        # ============================================
+
+                        # 1. Build position ENU from EKF
+                        ekf_pos_lla = ekf.get_position()  # (lat_rad, lon_rad, alt_m)
+                        R_earth = 6378137.0
+                        pos_e = (ekf_pos_lla[1] - ref_lon_rad) * R_earth * math.cos(ref_lat_rad)
+                        pos_n = (ekf_pos_lla[0] - ref_lat_rad) * R_earth
+                        pos_u = ekf_pos_lla[2] - config.ref_alt_m
+                        pos_enu = [float(pos_e), float(pos_n), float(pos_u)]
+
+                        # 2. Velocity NED from EKF
+                        ekf_vel = ekf.get_velocity()  # (vn, ve, vd)
+                        vel_ned = [float(ekf_vel[0]), float(ekf_vel[1]), float(ekf_vel[2])]
+
+                        # 3. Quaternion from EKF (body-to-NED, scalar-first)
+                        ekf_quat = ekf.get_quaternion()
+                        quat_ned = [float(ekf_quat[0]), float(ekf_quat[1]),
+                                    float(ekf_quat[2]), float(ekf_quat[3])]
+
+                        # 4. PN guidance via C++ library (TR_GuidancePN)
+                        #    Same textbook 3D PN (Yanushevsky Ch.2, eq 1.11/2.23)
+                        #    Library outputs ENU acceleration commands.
+                        target_alt = 600.0
+
+                        guid_active = guidance.update(
+                            [float(pos_e), float(pos_n), float(pos_u)],
+                            [float(vel_ned[0]), float(vel_ned[1]), float(vel_ned[2])],
+                            imu_dt)
+
+                        if guid_active:
+                            a_cmd_e = guidance.get_accel_east_cmd()
+                            a_cmd_n = guidance.get_accel_north_cmd()
+                            a_cmd_u = guidance.get_accel_up_cmd()
+                            los_angle_deg = guidance.get_los_angle_deg()
+                            v_cl = guidance.get_closing_velocity()
+
+                            if guidance.is_cpa_reached():
+                                guidance_cpa_reached = True
+
+                            a_cmd_mag = math.sqrt(a_cmd_e**2 + a_cmd_n**2 + a_cmd_u**2)
+
+                            # Debug: print selected guidance steps
+                            if not hasattr(config, '_guid_dbg_count'):
+                                config._guid_dbg_count = 0
+                                config._guid_dbg_t_next = 0.0
+                            if t >= config._guid_dbg_t_next and config._guid_dbg_count < 20:
+                                config._guid_dbg_count += 1
+                                config._guid_dbg_t_next = t + 0.5
+                                print(f"  PN[{config._guid_dbg_count:2d}] t={t:.3f}s "
+                                      f"pos_enu=({pos_e:.1f}, {pos_n:.1f}, {pos_u:.1f}) "
+                                      f"LOS={los_angle_deg:.2f}° v_cl={v_cl:.2f}m/s")
+                                print(f"    a_cmd=({a_cmd_e:.3f}, {a_cmd_n:.3f}, {a_cmd_u:.3f}) m/s²"
+                                      f"  |a|={a_cmd_mag:.3f} m/s²")
+                                config._guid_dbg_print_fins = True
+
+                            # --- Log ENU accel commands ---
+                            guid_pn_a_e = a_cmd_e
+                            guid_pn_a_n = a_cmd_n
+                            guid_pn_a_u = a_cmd_u
+                            guid_pn_los_angle = los_angle_deg
+                            guid_pn_v_cl = v_cl
+
+                            # --- Convert ENU accel to body pitch/yaw ---
+                            # With heading=0 (North) and roll=0:
+                            #   Body X (fwd) ≈ North+Up
+                            #   Body Y (right) = East
+                            #   Body Z (down) = ~toward ground
+                            # So:
+                            #   North accel → pitch (fins 0/2, top/bottom)
+                            #   East accel  → yaw  (fins 1/3, right/left)
+                            #
+                            # Use full quaternion rotation for correctness:
+                            # ENU → NED: [N, E, D] = [a_n, a_e, -a_u]
+                            a_cmd_ned = np.array([a_cmd_n, a_cmd_e, -a_cmd_u])
+                            q_ekf = np.array(quat_ned)
+                            R_b2ned = quat_to_dcm(q_ekf)
+                            a_cmd_body = R_b2ned.T @ a_cmd_ned
+                            # FRD body: X=fwd, Y=right, Z=down
+                            # Positive pitch fin cmd pitches nose toward +Z (body down)
+                            # Positive yaw fin cmd yaws nose toward -Y (body left)
+                            pitch_accel = a_cmd_body[2]
+                            yaw_accel = -a_cmd_body[1]
+
+                            # Direct accel → fin deflection (bypass PID)
+                            # Scale: deg of fin per m/s² of accel command
+                            accel_to_fin_deg = 5.0  # tunable
+                            pitch_fin = accel_to_fin_deg * pitch_accel
+                            yaw_fin = accel_to_fin_deg * yaw_accel
+
+                            # Roll control (maintain zero roll, no gain sched)
+                            roll_fin_cmd = roll_controller_standalone.compute(
+                                config.roll_setpoint_dps, roll_rate_dps,
+                                imu_dt, airspeed=None)
+
+                            # Map to 4 fins directly:
+                            # Pitch: fins 0(top) and 2(bottom) differential
+                            # Yaw: fins 1(right) and 3(left) differential
+                            # Roll: all fins same direction (common mode)
+                            max_fin_deg = 20.0
+                            fin_cmds = np.clip(np.array([
+                                +pitch_fin + roll_fin_cmd,    # fin 0 (top)
+                                +yaw_fin   + roll_fin_cmd,    # fin 1 (right)
+                                -pitch_fin + roll_fin_cmd,    # fin 2 (bottom)
+                                -yaw_fin   + roll_fin_cmd,    # fin 3 (left)
+                            ]), -max_fin_deg, max_fin_deg)
+                            guid_pitch_cmd = pitch_fin
+                            guid_yaw_cmd = yaw_fin
+
+                            # Debug: print body accel and fins
+                            if (hasattr(config, '_guid_dbg_print_fins') and
+                                    config._guid_dbg_print_fins):
+                                config._guid_dbg_print_fins = False
+                                print(f"    a_body=({a_cmd_body[0]:.3f}, "
+                                      f"{a_cmd_body[1]:.3f}, "
+                                      f"{a_cmd_body[2]:.3f}) FRD")
+                                print(f"    pitch_accel={pitch_accel:.3f} "
+                                      f"yaw_accel={yaw_accel:.3f}")
+                                print(f"    fin_cmd: pitch={pitch_fin:.2f}° "
+                                      f"yaw={yaw_fin:.2f}°")
+                                print(f"    fins=[{fin_cmds[0]:.2f}, "
+                                      f"{fin_cmds[1]:.2f}, {fin_cmds[2]:.2f}, "
+                                      f"{fin_cmds[3]:.2f}]°")
+
+                        else:
+                            # Library returned inactive (too close or invalid)
+                            a_cmd_body = np.array([0.0, 0.0, 0.0])
+                            guid_pitch_cmd = 0.0
+                            guid_yaw_cmd = 0.0
+                            guid_pn_a_e = 0.0
+                            guid_pn_a_n = 0.0
+                            guid_pn_a_u = 0.0
+                            guid_pn_los_angle = 0.0
+                            guid_pn_v_cl = 0.0
+
+                            roll_fin_cmd = roll_controller_standalone.compute(
+                                config.roll_setpoint_dps, roll_rate_dps,
+                                imu_dt, airspeed=None)
+                            pitch_rate_dps = math.degrees(rot_rate[1])
+                            yaw_rate_dps = math.degrees(rot_rate[2])
+                            control_mixer.update(
+                                0.0, 0.0, 0.0, 0.0,
+                                pitch_rate_dps, yaw_rate_dps,
+                                roll_fin_cmd, speed,
+                                config.pn_kp_pitch_angle,
+                                config.pn_kp_yaw_angle,
+                                imu_dt)
+                            fin_cmds = np.array(control_mixer.get_fin_deflections())
+
+                    elif config.roll_profile is not None:
                         # --- Cascaded angle control ---
                         # 1. Look up target angle from profile
                         target_angle = config.roll_profile[0][1]
@@ -520,10 +759,18 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
             # Actuator model: rate-limit the command
             max_delta = config.servo_rate_limit * imu_dt
-            delta = fin_tab_cmd - fin_tab_actual
-            if abs(delta) > max_delta:
-                delta = max_delta if delta > 0 else -max_delta
-            fin_tab_actual += delta
+            if guidance_active:
+                # 4-fin servo rate-limit model
+                for i in range(4):
+                    delta_i = fin_cmds[i] - fin_actuals[i]
+                    if abs(delta_i) > max_delta:
+                        delta_i = max_delta if delta_i > 0 else -max_delta
+                    fin_actuals[i] += delta_i
+            else:
+                delta = fin_tab_cmd - fin_tab_actual
+                if abs(delta) > max_delta:
+                    delta = max_delta if delta > 0 else -max_delta
+                fin_tab_actual += delta
 
         # --- Logging ---
         if t >= next_log:
@@ -657,11 +904,42 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 row['ekf_vel_sigma_e'] = math.sqrt(max(0.0, cov_vel[1]))
                 row['ekf_vel_sigma_d'] = math.sqrt(max(0.0, cov_vel[2]))
 
+            # Guidance telemetry
+            row['guidance_active'] = guidance_active
+            row['burnout_detected'] = burnout_detected
+            if guidance_active and guidance is not None:
+                row['guid_pitch_cmd_deg'] = guid_pitch_cmd
+                row['guid_yaw_cmd_deg'] = guid_yaw_cmd
+                row['guid_lateral_offset_m'] = guidance.get_lateral_offset()
+                row['guid_accel_n'] = guidance.get_accel_north_cmd()
+                row['guid_accel_e'] = guidance.get_accel_east_cmd()
+                row['guid_target_alt'] = target_alt
+                row['pn_a_e'] = guid_pn_a_e
+                row['pn_a_n'] = guid_pn_a_n
+                row['pn_a_u'] = guid_pn_a_u
+                row['pn_los_angle'] = guid_pn_los_angle
+                row['pn_v_cl'] = guid_pn_v_cl
+                row['pn_pitch_cmd_deg'] = guid_pitch_cmd
+                row['pn_yaw_cmd_deg'] = guid_yaw_cmd
+                row['pn_a_body_fwd'] = float(a_cmd_body[0])
+                row['pn_a_body_right'] = float(a_cmd_body[1])
+                row['pn_a_body_down'] = float(a_cmd_body[2])
+                # Fin deflections (1-indexed: 1=top, 2=right, 3=bottom, 4=left)
+                for i in range(4):
+                    row[f'fin{i+1}_cmd'] = float(fin_cmds[i])
+                    row[f'fin{i+1}_actual'] = float(fin_actuals[i])
+
             log_rows.append(row)
 
         # --- Physics step (skip during pad phase — rocket is stationary) ---
         if not in_pad_phase:
-            state = sim.step_rk4(state, t, config.physics_dt, fin_tab_actual, wind_enu)
+            if guidance_active:
+                state = sim.step_rk4(state, t, config.physics_dt,
+                                     fin_tab_actual, wind_enu,
+                                     fin_deflections=fin_actuals)
+            else:
+                state = sim.step_rk4(state, t, config.physics_dt,
+                                     fin_tab_actual, wind_enu)
         t += config.physics_dt
 
     # Build result

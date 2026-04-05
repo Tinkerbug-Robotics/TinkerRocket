@@ -1,0 +1,23 @@
+{
+  "name": "TR_ControlMixer",
+  "keywords": "control, mixing, fins, PID",
+  "description": "3-axis fin mixing for cruciform rocket configuration with pitch/yaw rate PIDs",
+  "authors":
+  [
+    {
+      "name": "Christian Pedersen",
+      "email": "tinkerbug@tinkerbugrobotics.com",
+      "maintainer": true
+    }
+  ],
+  "repository":
+  {
+    "type": "",
+    "url": ""
+  },
+  "version": "0.1",
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "headers": "TR_ControlMixer.h"
+}

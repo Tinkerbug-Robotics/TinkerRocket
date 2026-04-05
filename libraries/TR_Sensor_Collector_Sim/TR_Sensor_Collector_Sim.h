@@ -82,9 +82,13 @@ private:
     // Physics state (SI)
     float altitude_m_       = 0.0f;
     float velocity_mps_     = 0.0f;   // positive = up
-    float accel_mps2_       = 0.0f;   // net acceleration (body X = forward/long axis)
+    float accel_mps2_       = 0.0f;   // net acceleration (vertical, excludes gravity)
     float sim_time_s_       = 0.0f;
     float ground_pressure_pa_ = 101325.0f;
+
+    // Attitude state (pitch-plane only, 0 = horizontal, π/2 = vertical nose-up)
+    float pitch_rad_        = 0.0f;
+    float pitch_rate_rps_   = 0.0f;
 
     // Inverse rotation (body frame → sensor frame) for ISM6 encoding
     float ism6_inv_c_ = 1.0f;   // cos(config_angle)
@@ -104,9 +108,16 @@ private:
     static constexpr float REFERENCE_AREA = 0.0019635f; // pi * 0.025^2 (50mm dia)
     static constexpr float PRELAUNCH_DURATION_MS = 5000.0f;
 
-    // ISM6 sensitivity constants (for ±16g low-G, ±256g high-G)
+    // Attitude dynamics defaults (typical model rocket)
+    static constexpr float LAUNCH_ANGLE_RAD = 85.0f * 3.14159265f / 180.0f;  // 5° from vertical
+    static constexpr float CP_CG_DIST_M    = 0.075f;   // 1.5 cal stability margin (50mm body)
+    static constexpr float I_TRANSVERSE     = 0.02f;    // kg⋅m² (500g, 0.6m rocket)
+    static constexpr float C_DAMP           = 20.0f;    // pitch damping coefficient
+
+    // ISM6 sensitivity constants (for ±16g low-G, ±256g high-G, ±4000dps gyro)
     static constexpr float ACC_LOW_MS2_PER_LSB  = (16.0f * 1000.0f / 32768.0f) * 1.0e-3f * GRAVITY;
     static constexpr float ACC_HIGH_MS2_PER_LSB = (256.0f * 1000.0f / 32768.0f) * 1.0e-3f * GRAVITY;
+    static constexpr float GYRO_DPS_PER_LSB     = (4000.0f * 1000.0f / 32768.0f) * 1.0e-3f;
 
     // ========================================================================
     // Physics methods

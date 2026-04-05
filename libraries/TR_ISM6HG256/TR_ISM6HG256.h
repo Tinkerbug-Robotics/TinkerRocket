@@ -41,6 +41,12 @@ public:
     TR_ISM6HG256Status Get_HG_X_AxesRaw(TR_ISM6HG256_AxesRaw_t *Value);
     TR_ISM6HG256Status Get_G_AxesRaw(TR_ISM6HG256_AxesRaw_t *Value);
 
+    // Bulk read: gyro + low-g accel + high-g accel in a single 24-byte SPI
+    // transaction (0x22–0x39).  Bytes 12-17 (OIS/EIS gyro) are discarded.
+    TR_ISM6HG256Status Get_AllAxesRaw(TR_ISM6HG256_AxesRaw_t *gyro,
+                                       TR_ISM6HG256_AxesRaw_t *acc_lg,
+                                       TR_ISM6HG256_AxesRaw_t *acc_hg);
+
     TR_ISM6HG256Status Get_DRDY_Status(ism6hg256x_data_ready_t *Status);
     TR_ISM6HG256Status Get_X_DRDY_Status(uint8_t *Status);
     TR_ISM6HG256Status HG_X_Get_DRDY_Status(uint8_t *Status);

@@ -3,6 +3,9 @@
 #include <cstring>
 #include <cstdio>
 #include <esp_heap_caps.h>
+#include <esp_log.h>
+
+static const char* TAG = "LOG";
 
 // Timestamp storage is now persisted in NAND flash as part of the catalog
 // (removed static in-memory timestamp array)
@@ -37,11 +40,11 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         spi_mutex_ = xSemaphoreCreateMutex();
         if (!spi_mutex_)
         {
-            if (cfg.debug) Serial.println("[LogToFlash] Failed to create SPI mutex");
+            if (cfg.debug) ESP_LOGE(TAG, "Failed to create SPI mutex");
             return false;
         }
 
-        if (cfg.debug) Serial.printf("[LogToFlash] MRAM ring: %lu bytes on CS pin %d\n",
+        if (cfg.debug) ESP_LOGI(TAG, "MRAM ring: %lu bytes on CS pin %d",
                                       (unsigned long)ring_size_, cfg.mram_cs);
     }
     else
@@ -51,11 +54,11 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         ring_buf_ = (uint8_t*)heap_caps_malloc(ring_size_, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         if (!ring_buf_)
         {
-            if (cfg.debug) Serial.printf("[LogToFlash] Failed to allocate %lu byte ring buffer\n",
+            if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate %lu byte ring buffer",
                                           (unsigned long)ring_size_);
             return false;
         }
-        if (cfg.debug) Serial.printf("[LogToFlash] Allocated %lu byte RAM ring (free heap: %lu)\n",
+        if (cfg.debug) ESP_LOGI(TAG, "Allocated %lu byte RAM ring (free heap: %lu)",
                                       (unsigned long)ring_size_, (unsigned long)ESP.getFreeHeap());
     }
     ring_prelaunch_cap_ = ring_size_ / 2;
@@ -93,7 +96,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
 
     if (!lfs_read_buffer || !lfs_prog_buffer || !lfs_lookahead_buffer)
     {
-        if (cfg.debug) Serial.println("[LogToFlash] Failed to allocate LittleFS buffers");
+        if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate LittleFS buffers");
         free(lfs_read_buffer);
         free(lfs_prog_buffer);
         free(lfs_lookahead_buffer);
@@ -104,7 +107,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     lfs_cfg = (lfs_config*)malloc(sizeof(lfs_config));
     if (!lfs_cfg)
     {
-        if (cfg.debug) Serial.println("[LogToFlash] Failed to allocate LittleFS config");
+        if (cfg.debug) ESP_LOGE(TAG, "Failed to allocate LittleFS config");
         free(lfs_read_buffer);
         free(lfs_prog_buffer);
         free(lfs_lookahead_buffer);
@@ -132,17 +135,17 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     lfs_cfg->lookahead_buffer = lfs_lookahead_buffer;
 
     // Try to mount existing filesystem
-    if (cfg.debug) Serial.println("[LogToFlash] Mounting LittleFS...");
+    if (cfg.debug) ESP_LOGI(TAG, "Mounting LittleFS...");
     int err = lfs_mount(&lfs, lfs_cfg);
 
     if (err)
     {
         // No filesystem found, format fresh
-        if (cfg.debug) Serial.printf("[LogToFlash] Mount failed (%d), formatting NAND...\n", err);
+        if (cfg.debug) ESP_LOGW(TAG, "Mount failed (%d), formatting NAND...", err);
         err = lfs_format(&lfs, lfs_cfg);
         if (err)
         {
-            if (cfg.debug) Serial.printf("[LogToFlash] Format failed: %d\n", err);
+            if (cfg.debug) ESP_LOGE(TAG, "Format failed: %d", err);
             free(lfs_read_buffer);
             free(lfs_prog_buffer);
             free(lfs_lookahead_buffer);
@@ -152,7 +155,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         err = lfs_mount(&lfs, lfs_cfg);
         if (err)
         {
-            if (cfg.debug) Serial.printf("[LogToFlash] Mount after format failed: %d\n", err);
+            if (cfg.debug) ESP_LOGE(TAG, "Mount after format failed: %d", err);
             free(lfs_read_buffer);
             free(lfs_prog_buffer);
             free(lfs_lookahead_buffer);
@@ -161,7 +164,45 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         }
     }
 
-    if (cfg.debug) Serial.println("[LogToFlash] LittleFS mounted successfully");
+    // Verify filesystem is healthy by creating and removing a test file.
+    // If this fails with LFS_ERR_CORRUPT, reformat the entire filesystem.
+    {
+        int test_err = lfs_file_open(&lfs, &file, "/.health_check",
+                                      LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
+        if (test_err == LFS_ERR_CORRUPT)
+        {
+            ESP_LOGW(TAG, "Filesystem corrupt — reformatting...");
+            lfs_unmount(&lfs);
+            err = lfs_format(&lfs, lfs_cfg);
+            if (err)
+            {
+                ESP_LOGE(TAG, "Reformat failed: %d", err);
+                free(lfs_read_buffer);
+                free(lfs_prog_buffer);
+                free(lfs_lookahead_buffer);
+                free(lfs_cfg);
+                return false;
+            }
+            err = lfs_mount(&lfs, lfs_cfg);
+            if (err)
+            {
+                ESP_LOGE(TAG, "Mount after reformat failed: %d", err);
+                free(lfs_read_buffer);
+                free(lfs_prog_buffer);
+                free(lfs_lookahead_buffer);
+                free(lfs_cfg);
+                return false;
+            }
+            ESP_LOGI(TAG, "Filesystem reformatted successfully");
+        }
+        else if (test_err == 0)
+        {
+            lfs_file_close(&lfs, &file);
+            lfs_remove(&lfs, "/.health_check");
+        }
+    }
+
+    if (cfg.debug) ESP_LOGI(TAG, "LittleFS mounted successfully");
 
     runStartupRecovery();
     return true;
@@ -170,6 +211,19 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
 bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
 {
     if (frame == nullptr || len == 0 || len > MAX_FRAME)
+    {
+        return false;
+    }
+    if (end_flight_requested)
+    {
+        return false;
+    }
+    // Accept frames when logging is active OR when the log file has been
+    // pre-created (PRELAUNCH).  Pre-launch frames buffer in the ring
+    // (capped at 50%) and are flushed once activateLogging() fires.
+    // Stale MRAM data is no longer a concern: clearRing() now zeros
+    // the MRAM, and processFrame() has a timestamp monotonicity filter.
+    if (!logging_active && !file_open)
     {
         return false;
     }
@@ -407,21 +461,21 @@ bool TR_LogToFlash::formatFilesystem()
     {
         if (cfg.debug)
         {
-            Serial.println("[LogToFlash] Cannot format: logging is active");
+            ESP_LOGE(TAG, "Cannot format: logging is active");
         }
         return false;
     }
 
     if (cfg.debug)
     {
-        Serial.println("[LogToFlash] WARNING: Formatting filesystem - all data will be lost!");
+        ESP_LOGW(TAG, "Formatting filesystem - all data will be lost!");
     }
 
     // Unmount filesystem
     int err = lfs_unmount((lfs_t*)&lfs);
     if (err && cfg.debug)
     {
-        Serial.printf("[LogToFlash] Unmount before format returned: %d\n", err);
+        ESP_LOGW(TAG, "Unmount before format returned: %d", err);
     }
 
     // Format the filesystem
@@ -430,7 +484,7 @@ bool TR_LogToFlash::formatFilesystem()
     {
         if (cfg.debug)
         {
-            Serial.printf("[LogToFlash] Format failed: %d\n", err);
+            ESP_LOGE(TAG, "Format failed: %d", err);
         }
         // Try to remount even if format failed
         lfs_mount((lfs_t*)&lfs, (lfs_config*)lfs_cfg);
@@ -443,14 +497,14 @@ bool TR_LogToFlash::formatFilesystem()
     {
         if (cfg.debug)
         {
-            Serial.printf("[LogToFlash] Mount after format failed: %d\n", err);
+            ESP_LOGE(TAG, "Mount after format failed: %d", err);
         }
         return false;
     }
 
     if (cfg.debug)
     {
-        Serial.println("[LogToFlash] Filesystem formatted successfully");
+        ESP_LOGI(TAG, "Filesystem formatted successfully");
     }
 
     return true;
@@ -464,7 +518,9 @@ const char* TR_LogToFlash::currentFilename() const
 
 bool TR_LogToFlash::isLoggingActive() const
 {
-    return logging_active;
+    // Report active while stop is pending (drain in progress)
+    // so toggle commands don't re-start logging
+    return logging_active || end_flight_requested;
 }
 
 // ============================================================================
@@ -591,7 +647,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
             {
                 if (cfg.debug)
                 {
-                    Serial.printf("[LOG] ringPush: bad SOF at tail, clearing ring\n");
+                    ESP_LOGW(TAG, "ringPush: bad SOF at tail, clearing ring");
                 }
                 rb_drop_oldest_bytes += local_count;
                 clearRing();
@@ -606,7 +662,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
             {
                 if (cfg.debug)
                 {
-                    Serial.printf("[LOG] ringPush: partial frame at tail (%lu > %lu), clearing ring\n",
+                    ESP_LOGW(TAG, "ringPush: partial frame at tail (%lu > %lu), clearing ring",
                                   (unsigned long)frame_size, (unsigned long)local_count);
                 }
                 rb_drop_oldest_bytes += local_count;
@@ -959,7 +1015,7 @@ bool TR_LogToFlash::nandInit()
 
     if (cfg.debug)
     {
-        Serial.printf("[NAND] RDID MID=0x%02X DID=0x%02X\n", mid, did);
+        ESP_LOGI(TAG, "RDID MID=0x%02X DID=0x%02X", mid, did);
     }
     return true;
 }
@@ -974,6 +1030,11 @@ int TR_LogToFlash::lfsBlockRead(const struct lfs_config *c, lfs_block_t block,
     TR_LogToFlash* self = (TR_LogToFlash*)c->context;
     uint8_t* buf = (uint8_t*)buffer;
     lfs_size_t bytes_read = 0;
+
+    // Yield 1 tick to let IDLE task reset the watchdog.
+    // vTaskDelay(0) only yields to equal-or-higher priority,
+    // which doesn't help IDLE (priority 0).
+    vTaskDelay(1);
 
     while (bytes_read < size)
     {
@@ -1041,6 +1102,9 @@ int TR_LogToFlash::lfsBlockErase(const struct lfs_config *c, lfs_block_t block)
 {
     TR_LogToFlash* self = (TR_LogToFlash*)c->context;
 
+    // Yield before erase — this is the slowest NAND operation (~2ms per block)
+    vTaskDelay(1);
+
     if (!self->nandEraseBlock(block))
     {
         return LFS_ERR_IO;
@@ -1074,7 +1138,7 @@ void TR_LogToFlash::openLogSession()
 
     if (cfg.debug)
     {
-        Serial.printf("[LogToFlash] Opening log file: %s\n", current_filename);
+        ESP_LOGI(TAG, "Opening log file: %s", current_filename);
     }
 
     // Open file for writing — this is the expensive NAND operation
@@ -1082,7 +1146,7 @@ void TR_LogToFlash::openLogSession()
                             LFS_O_WRONLY | LFS_O_CREAT | LFS_O_EXCL);
     if (err)
     {
-        if (cfg.debug) Serial.printf("[LogToFlash] File open failed: %d\n", err);
+        if (cfg.debug) ESP_LOGE(TAG, "File open failed: %d", err);
         return;
     }
 
@@ -1090,6 +1154,7 @@ void TR_LogToFlash::openLogSession()
     current_file_bytes = 0;
     current_file_has_timestamp = false;
     page_buf_idx = 0;
+    pages_since_sync_ = 0;
     end_flight_requested = false;
 
     // NOTE: logging_active and ring_prelaunch_cap_ are NOT set here.
@@ -1103,10 +1168,14 @@ void TR_LogToFlash::openLogSession()
 /// PRELAUNCH, this is the only thing that needs to happen at launch time.
 void TR_LogToFlash::activateLogging()
 {
+    // Clear stale pre-launch data from the ring buffer so only
+    // fresh data from this moment forward gets logged.
+    clearRing();
+
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
-    if (cfg.debug) Serial.println("[LogToFlash] Logging activated (ring cap raised)");
+    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (ring cleared + cap raised)");
 }
 
 void TR_LogToFlash::closeLogSession()
@@ -1138,7 +1207,7 @@ void TR_LogToFlash::closeLogSession()
 
     if (cfg.debug)
     {
-        Serial.printf("[LogToFlash] Closed %s (%lu bytes)\n",
+        ESP_LOGI(TAG, "Closed %s (%lu bytes)",
                       current_filename, current_file_bytes);
     }
 
@@ -1180,27 +1249,97 @@ void TR_LogToFlash::clearRing()
     rb_tail = 0;
     rb_count = 0;
     portEXIT_CRITICAL(&ring_mux_);
+
+    // When using MRAM, zero-fill the entire ring to prevent stale data from
+    // a previous session from leaking into the log file.  MRAM is non-volatile,
+    // so clearRing() resetting pointers alone is not sufficient — the flush task
+    // could read stale bytes if rb_count becomes inconsistent due to any race.
+    // At 40 MHz SPI, zeroing 128 KB takes ~26 ms — acceptable at launch time.
+    if (use_mram_)
+    {
+        static constexpr size_t ZERO_CHUNK = 256;
+        uint8_t zeros[ZERO_CHUNK] = {};
+        for (uint32_t addr = 0; addr < ring_size_; addr += ZERO_CHUNK)
+        {
+            uint32_t len = (ring_size_ - addr < ZERO_CHUNK)
+                         ? (ring_size_ - addr) : ZERO_CHUNK;
+            mramWriteBytes(addr, zeros, len);
+        }
+    }
 }
 
 void TR_LogToFlash::runStartupRecovery()
 {
-    // RAM ring buffer is volatile — no data to recover after reboot.
-    // Just check if the previous session was interrupted (dirty flag).
-    clearRing();
+    if (!checkDirtyOnStartup())
+    {
+        clearRing();
+        if (cfg.debug) ESP_LOGI(TAG, "Clean startup, no recovery needed.");
+        return;
+    }
 
-    if (checkDirtyOnStartup())
+    // Previous session was interrupted (dirty flag present).
+    if (!use_mram_)
     {
-        if (cfg.debug)
-        {
-            Serial.println("[LOG] Previous session was dirty (interrupted). "
-                           "Buffered data lost (volatile RAM ring).");
-        }
+        // RAM ring is volatile — nothing to recover.
+        clearRing();
         clearDirty();
+        if (cfg.debug) ESP_LOGW(TAG, "Dirty startup — RAM ring volatile, data lost.");
+        return;
     }
-    else
+
+    // MRAM ring survived the reset — drain it into a recovery file.
+    // rb_head/rb_tail/rb_count are in volatile RAM and lost, but the MRAM
+    // contents are intact.  Read the entire MRAM into a recovery file.
+    // The data may contain partial frames at boundaries, but the downstream
+    // parser already handles that (length-prefixed frames with CRC).
+    if (cfg.debug) ESP_LOGI(TAG, "Dirty startup — recovering MRAM ring (%lu bytes)...",
+                                  (unsigned long)ring_size_);
+
+    // Generate recovery filename
+    struct lfs_info info;
+    int idx = 1;
+    do {
+        snprintf(recovery_filename, sizeof(recovery_filename),
+                 "/recovery_%03d.bin", idx++);
+    } while (lfs_stat(&lfs, recovery_filename, &info) >= 0 && idx < 1000);
+
+    lfs_file_t rf;
+    int err = lfs_file_open(&lfs, &rf, recovery_filename,
+                            LFS_O_WRONLY | LFS_O_CREAT | LFS_O_EXCL);
+    if (err)
     {
-        if (cfg.debug) Serial.println("[LOG] Clean startup, no recovery needed.");
+        if (cfg.debug) ESP_LOGE(TAG, "Recovery file open failed: %d", err);
+        clearRing();
+        clearDirty();
+        return;
     }
+
+    // Read MRAM in page-sized chunks and write to LittleFS
+    uint8_t chunk[NAND_PAGE_SIZE];
+    uint32_t offset = 0;
+    uint32_t total_written = 0;
+    while (offset < ring_size_)
+    {
+        uint32_t len = ring_size_ - offset;
+        if (len > NAND_PAGE_SIZE) len = NAND_PAGE_SIZE;
+
+        mramReadBytes(offset, chunk, len);
+        lfs_ssize_t written = lfs_file_write(&lfs, &rf, chunk, len);
+        if (written > 0) total_written += (uint32_t)written;
+        offset += len;
+    }
+
+    lfs_file_sync(&lfs, &rf);
+    lfs_file_close(&lfs, &rf);
+
+    recovery_performed = true;
+    recovery_bytes = total_written;
+
+    if (cfg.debug) ESP_LOGI(TAG, "Recovered %lu bytes to %s",
+                                  (unsigned long)total_written, recovery_filename);
+
+    clearRing();
+    clearDirty();
 }
 
 void TR_LogToFlash::flushRingToNand()
@@ -1244,13 +1383,22 @@ void TR_LogToFlash::flushRingToNand()
             lfs_ssize_t written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
             if (written != NAND_PAGE_SIZE)
             {
-                if (cfg.debug) Serial.printf("[LogToFlash] Write failed: %d\n", written);
+                if (cfg.debug) ESP_LOGE(TAG, "Write failed: %d", written);
                 nand_prog_fail++;
                 return;
             }
             nand_bytes_written += NAND_PAGE_SIZE;
             nand_prog_ops++;
             page_buf_idx = 0;
+
+            // Periodic sync: commit LittleFS metadata to NAND so that a hard
+            // reset loses at most SYNC_INTERVAL_PAGES worth of data (~256 KB).
+            // The ring buffer absorbs incoming frames during the sync stall.
+            if (++pages_since_sync_ >= SYNC_INTERVAL_PAGES)
+            {
+                lfs_file_sync(&lfs, &file);
+                pages_since_sync_ = 0;
+            }
         }
 
         // Re-read count (may have increased from Core 1 pushes)
@@ -1282,7 +1430,7 @@ void TR_LogToFlash::flushTaskLoop()
             openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
             markDirty();
             prepare_file_requested_ = false;
-            if (cfg.debug) Serial.println("[LogToFlash] Log file pre-created for launch");
+            if (cfg.debug) ESP_LOGI(TAG, "Log file pre-created for launch");
         }
         else
         {
@@ -1306,13 +1454,53 @@ void TR_LogToFlash::flushTaskLoop()
             start_logging_requested = false;
         }
 
-        // Apply deferred timestamp rename (from Core 1) before flushing
-        applyPendingTimestamp();
+        // Defer timestamp rename to end-of-logging to avoid NAND stalls
+        // during active recording.  The rename involves LittleFS directory
+        // operations that can stall for 100-500ms, causing ring overflow.
 
-        // Flush RAM ring to NAND (no page limit — this is a dedicated task)
+        // Handle end-of-logging FIRST — check before flushing more data.
+        // enqueueFrame() rejects new data when end_flight_requested is set,
+        // so the drain loop will terminate quickly.
+        if (end_flight_requested && logging_active && file_open)
+        {
+            uint32_t t0 = millis();
+
+            // Drain remaining data
+            portENTER_CRITICAL(&ring_mux_);
+            uint32_t remaining = rb_count;
+            portEXIT_CRITICAL(&ring_mux_);
+
+            ESP_LOGI("LOG", "Draining %lu bytes...", (unsigned long)remaining);
+
+            while (remaining > 0)
+            {
+                flushRingToNand();
+                vTaskDelay(1);  // feed WDT during drain
+                portENTER_CRITICAL(&ring_mux_);
+                remaining = rb_count;
+                portEXIT_CRITICAL(&ring_mux_);
+            }
+
+            uint32_t t1 = millis();
+            // Apply deferred timestamp rename now (after drain, before close).
+            // Doing it here instead of during active logging avoids NAND stalls
+            // that cause ring buffer overflow and frame drops.
+            applyPendingTimestamp();
+            closeLogSession();
+            uint32_t t2 = millis();
+            end_flight_requested = false;
+
+            ESP_LOGI("LOG", "Stop: drain=%lums close=%lums total=%lums",
+                     (unsigned long)(t1 - t0),
+                     (unsigned long)(t2 - t1),
+                     (unsigned long)(t2 - t0));
+        }
+
+        // Normal flush: write ring buffer data to NAND.
+        // With RAM ring buffer (no MRAM), there's no SPI contention on the
+        // push path, so we can flush aggressively.
         if (logging_active && file_open)
         {
-            // Read how much data is available
             portENTER_CRITICAL(&ring_mux_);
             const uint32_t avail = rb_count;
             portEXIT_CRITICAL(&ring_mux_);
@@ -1320,26 +1508,7 @@ void TR_LogToFlash::flushTaskLoop()
             if (avail > 0)
             {
                 flushRingToNand();
-            }
-
-            // Handle end-of-logging (drain everything then close)
-            if (end_flight_requested)
-            {
-                // Drain remaining data
-                portENTER_CRITICAL(&ring_mux_);
-                uint32_t remaining = rb_count;
-                portEXIT_CRITICAL(&ring_mux_);
-
-                while (remaining > 0)
-                {
-                    flushRingToNand();
-                    portENTER_CRITICAL(&ring_mux_);
-                    remaining = rb_count;
-                    portEXIT_CRITICAL(&ring_mux_);
-                }
-
-                closeLogSession();
-                end_flight_requested = false;
+                vTaskDelay(1);  // 1ms yield — enough for WDT, no BLE contention
             }
         }
 
@@ -1372,13 +1541,13 @@ void TR_LogToFlash::startFlushTask(uint8_t core, uint32_t stackSize, uint8_t pri
 
     if (ret != pdPASS)
     {
-        if (cfg.debug) Serial.println("[LogToFlash] Failed to create flush task");
+        if (cfg.debug) ESP_LOGE(TAG, "Failed to create flush task");
         flush_task_running_ = false;
         flush_task_ = nullptr;
         return;
     }
 
-    if (cfg.debug) Serial.printf("[LogToFlash] Flush task started on core %d\n", core);
+    if (cfg.debug) ESP_LOGI(TAG, "Flush task started on core %d", core);
 }
 
 // END CORE FUNCTIONS
@@ -1442,7 +1611,7 @@ void TR_LogToFlash::applyPendingTimestamp_impl(const char* filename, uint16_t ye
     {
         if (cfg.debug)
         {
-            Serial.printf("[LogToFlash] Failed to set timestamp: %d\n", err);
+            ESP_LOGE(TAG, "Failed to set timestamp: %d", err);
         }
         return;
     }
@@ -1474,7 +1643,7 @@ void TR_LogToFlash::applyPendingTimestamp_impl(const char* filename, uint16_t ye
 
             if (cfg.debug)
             {
-                Serial.printf("[LogToFlash] Renamed to %s\n", newpath + 1);  // +1 to skip leading '/'
+                ESP_LOGI(TAG, "Renamed to %s", newpath + 1);  // +1 to skip leading '/'
             }
         }
         else
@@ -1484,7 +1653,7 @@ void TR_LogToFlash::applyPendingTimestamp_impl(const char* filename, uint16_t ye
 
             if (cfg.debug)
             {
-                Serial.printf("[LogToFlash] Rename failed: %d\n", err);
+                ESP_LOGE(TAG, "Rename failed: %d", err);
             }
         }
     }

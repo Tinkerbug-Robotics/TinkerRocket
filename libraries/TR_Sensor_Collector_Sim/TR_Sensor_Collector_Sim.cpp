@@ -98,10 +98,12 @@ void SensorCollectorSim::startSim(float ground_pressure_pa)
         return;
     }
 
-    altitude_m_   = 0.0f;
-    velocity_mps_ = 0.0f;
-    accel_mps2_   = 0.0f;
-    sim_time_s_   = 0.0f;
+    altitude_m_      = 0.0f;
+    velocity_mps_    = 0.0f;
+    accel_mps2_      = 0.0f;
+    sim_time_s_      = 0.0f;
+    pitch_rad_       = LAUNCH_ANGLE_RAD;
+    pitch_rate_rps_  = 0.0f;
 
     ground_pressure_pa_ = (ground_pressure_pa > 50000.0f)
         ? ground_pressure_pa : 101325.0f;
@@ -228,8 +230,10 @@ void SensorCollectorSim::stepPhysics(float dt)
         stepDescent(dt);
         break;
     case SIM_LANDED:
-        velocity_mps_ = 0.0f;
-        accel_mps2_   = 0.0f;
+        velocity_mps_   = 0.0f;
+        accel_mps2_     = 0.0f;
+        pitch_rad_      = 0.0f;
+        pitch_rate_rps_ = 0.0f;
         // Hold long enough for the kinematic landing checks to fire.
         // Landing detection needs 5 consecutive 1-second checks (5s)
         // plus a 2-second state-machine debounce = 7s minimum.
@@ -246,9 +250,11 @@ void SensorCollectorSim::stepPhysics(float dt)
 
 void SensorCollectorSim::stepPrelaunch(uint32_t elapsed_ms)
 {
-    altitude_m_   = 0.0f;
-    velocity_mps_ = 0.0f;
-    accel_mps2_   = 0.0f;
+    altitude_m_     = 0.0f;
+    velocity_mps_   = 0.0f;
+    accel_mps2_     = 0.0f;
+    pitch_rad_      = LAUNCH_ANGLE_RAD;
+    pitch_rate_rps_ = 0.0f;
 
     if (elapsed_ms >= (uint32_t)PRELAUNCH_DURATION_MS)
     {
@@ -290,12 +296,33 @@ void SensorCollectorSim::stepCoasting(float dt)
 
     accel_mps2_ = net_accel;
 
+    // --- Pitch dynamics: gravity turn ---
+    // Gravity acting on a stable rocket (CP aft of CG) creates a
+    // restoring moment that tips the nose toward the velocity vector.
+    // M_grav = m * g * sin(θ) * -(CP-CG distance)
+    // Sign: when pitch > 0 (nose up), moment is negative (tips nose down).
+    const float M_grav = cfg_.mass_kg * GRAVITY * sinf(pitch_rad_) * (-CP_CG_DIST_M);
+
+    // Aerodynamic pitch damping (opposes rotation, proportional to q_dyn)
+    float M_damp = 0.0f;
+    const float v_abs = fabsf(velocity_mps_);
+    if (v_abs > 1.0f)
+    {
+        const float q_dyn = 0.5f * airDensity(altitude_m_) * v_abs * v_abs;
+        M_damp = -C_DAMP * q_dyn * REFERENCE_AREA / v_abs * pitch_rate_rps_;
+    }
+
+    const float pitch_accel = (M_grav + M_damp) / I_TRANSVERSE;
+    pitch_rate_rps_ += pitch_accel * dt;
+    pitch_rad_      += pitch_rate_rps_ * dt;
+
     if (velocity_mps_ <= 0.0f)
     {
         velocity_mps_ = 0.0f;
         phase_ = SIM_DESCENT;
         phase_start_ms_ = millis();
-        Serial.printf("[SIM] Phase: DESCENT (apogee ~%.0fm)\n", (double)altitude_m_);
+        Serial.printf("[SIM] Phase: DESCENT (apogee ~%.0fm, pitch=%.1f°)\n",
+                      (double)altitude_m_, (double)(pitch_rad_ * 180.0f / 3.14159265f));
     }
 }
 
@@ -306,6 +333,12 @@ void SensorCollectorSim::stepDescent(float dt)
     velocity_mps_ = -rate;
     altitude_m_  += velocity_mps_ * dt;
     accel_mps2_   = 0.0f;
+
+    // Under parachute: pendulum relaxes pitch toward 0° (horizontal)
+    const float M_pend = -cfg_.mass_kg * GRAVITY * sinf(pitch_rad_) * 0.1f;
+    const float M_damp_chute = -0.5f * pitch_rate_rps_;
+    pitch_rate_rps_ += (M_pend + M_damp_chute) / I_TRANSVERSE * dt;
+    pitch_rad_      += pitch_rate_rps_ * dt;
 
     if (altitude_m_ <= 0.0f)
     {
@@ -352,37 +385,55 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     memset(&out, 0, sizeof(out));
     out.time_us = time_us;
 
-    // Accelerometer reads specific force = net_accel + g
-    //   Pad:     0 + g = g       (1g at rest)
-    //   Thrust:  (T-g-D) + g = T-D  (reads thrust minus drag)
-    //   Coast:   (-g-D) + g = -D    (near 0g in freefall)
-    //   Descent: 0 + g = g       (1g under parachute)
-    // Body-frame: accel on X (forward / long axis), zero on Y/Z
-    const float body_ax = accel_mps2_ + GRAVITY;
-    // body_ay = 0
+    // Specific force in body frame.
+    // Body X = along rocket axis (forward), Z = perpendicular (down in body).
+    //
+    // The sim tracks vertical motion + pitch angle.  Gravity is [0, 0, -g]
+    // in ENU.  Projected into body frame by pitch angle:
+    //   body_ax = accel_vertical * sin(pitch) + g * sin(pitch)
+    //           = (accel_mps2_ + GRAVITY) * sin(pitch)
+    //   body_az = (accel_mps2_ + GRAVITY) * cos(pitch)
+    //
+    // Simplification: accel_mps2_ is the net vertical acceleration (excl gravity).
+    // specific_force_vertical = accel_mps2_ + GRAVITY (what a vertical accel would read).
+    // Project onto body axes via pitch:
+    const float sp = sinf(pitch_rad_);
+    const float cp = cosf(pitch_rad_);
+    const float sf_vert = accel_mps2_ + GRAVITY;  // specific force if perfectly vertical
+    const float body_ax = sf_vert * sp;  // axial (along rocket)
+    const float body_az = sf_vert * cp;  // perpendicular
 
-    // Inverse rotation: body-frame → sensor-frame
-    // sensor = R(θ)^T * body  where θ is the ISM6 config angle
-    //        = [ cos θ   sin θ ] [ body_ax ]
-    //          [-sin θ   cos θ ] [    0    ]
+    // Inverse rotation: body-frame → sensor-frame (ISM6 board rotation about Z)
+    // Only rotates X/Y; Z passes through
     const float sensor_ax =  body_ax * ism6_inv_c_;
     const float sensor_ay = -body_ax * ism6_inv_s_;
+    const float sensor_az =  body_az;
 
-    // Low-G accelerometer (+-16g range)
+    // Low-G accelerometer (±16g range)
     out.acc_low_raw.x = (int16_t)constrain(
         lroundf(sensor_ax / ACC_LOW_MS2_PER_LSB), -32768, 32767);
     out.acc_low_raw.y = (int16_t)constrain(
         lroundf(sensor_ay / ACC_LOW_MS2_PER_LSB), -32768, 32767);
-    // z stays 0 (memset above)
+    out.acc_low_raw.z = (int16_t)constrain(
+        lroundf(sensor_az / ACC_LOW_MS2_PER_LSB), -32768, 32767);
 
-    // High-G accelerometer (+-256g range)
+    // High-G accelerometer (±256g range)
     out.acc_high_raw.x = (int16_t)constrain(
         lroundf(sensor_ax / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
     out.acc_high_raw.y = (int16_t)constrain(
         lroundf(sensor_ay / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
+    out.acc_high_raw.z = (int16_t)constrain(
+        lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
 
-    // Gyro (no rotation in 1D sim)
-    // x, y, z already zeroed by memset
+    // Gyro: pitch rate on body Y axis (right-hand rule: Y = pitch axis)
+    // Rotated by ISM6 board angle same as accel X/Y
+    const float gyro_body_y_dps = pitch_rate_rps_ * (180.0f / 3.14159265f);
+    const float sensor_gx =  gyro_body_y_dps * ism6_inv_s_;  // cross-coupling
+    const float sensor_gy =  gyro_body_y_dps * ism6_inv_c_;
+    out.gyro_raw.x = (int16_t)constrain(
+        lroundf(sensor_gx / GYRO_DPS_PER_LSB), -32768, 32767);
+    out.gyro_raw.y = (int16_t)constrain(
+        lroundf(sensor_gy / GYRO_DPS_PER_LSB), -32768, 32767);
 }
 
 void SensorCollectorSim::encodeBMP585(uint32_t time_us, BMP585Data& out)
@@ -398,13 +449,28 @@ void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
     memset(&out, 0, sizeof(out));
     out.time_us = time_us;
 
-    // Simulated Earth magnetic field at ~38N latitude
-    // X(north) ~ 22 uT, Y(east) ~ 5 uT, Z(down) ~ 42 uT
+    // Earth magnetic field at ~38N latitude (NED frame):
+    //   North ~ 22 µT, East ~ 5 µT, Down ~ 42 µT
+    // Rotate into body frame by pitch angle.
+    // Body X = along rocket axis, Y = lateral, Z = perpendicular (body-down)
+    // Pitch rotation: nose-up angle from horizontal.
+    //   body_x =  North * sin(pitch) + Down * cos(pitch)
+    //   body_y =  East
+    //   body_z = -North * cos(pitch) + Down * sin(pitch)
+    static constexpr float B_NORTH = 22.0f;   // µT
+    static constexpr float B_EAST  =  5.0f;
+    static constexpr float B_DOWN  = 42.0f;
     static constexpr float COUNTS_PER_UT = 131072.0f / 800.0f;
 
-    out.mag_x = (uint32_t)(lroundf(22.0f * COUNTS_PER_UT) + 131072);
-    out.mag_y = (uint32_t)(lroundf(5.0f  * COUNTS_PER_UT) + 131072);
-    out.mag_z = (uint32_t)(lroundf(42.0f * COUNTS_PER_UT) + 131072);
+    const float sp = sinf(pitch_rad_);
+    const float cp = cosf(pitch_rad_);
+    const float body_x =  B_NORTH * sp + B_DOWN * cp;
+    const float body_y =  B_EAST;
+    const float body_z = -B_NORTH * cp + B_DOWN * sp;
+
+    out.mag_x = (uint32_t)(lroundf(body_x * COUNTS_PER_UT) + 131072);
+    out.mag_y = (uint32_t)(lroundf(body_y * COUNTS_PER_UT) + 131072);
+    out.mag_z = (uint32_t)(lroundf(body_z * COUNTS_PER_UT) + 131072);
 }
 
 void SensorCollectorSim::encodeGNSS(uint32_t time_us, GNSSData& out)

@@ -1,8 +1,12 @@
 pyproject.toml
 setup.py
+../libraries/TR_ControlMixer/TR_ControlMixer.cpp
 ../libraries/TR_GpsInsEKF/TR_GpsInsEKF.cpp
-/Users/christianpedersen/Documents/Hobbies/Model Rockets/Code/tinkerrocket-sim/../libraries/TR_GpsInsEKF/TR_GpsInsEKF.cpp
+../libraries/TR_GuidancePN/TR_GuidancePN.cpp
+../libraries/TR_PID/TR_PID.cpp
 cpp/ekf/ekf_bindings.cpp
+cpp/guidance/guidance_bindings.cpp
+cpp/mixer/mixer_bindings.cpp
 cpp/pid/pid_bindings.cpp
 src/tinkerrocket_sim/__init__.py
 src/tinkerrocket_sim.egg-info/PKG-INFO
@@ -34,4 +38,8 @@ src/tinkerrocket_sim/sensors/mag_model.py
 src/tinkerrocket_sim/simulation/__init__.py
 src/tinkerrocket_sim/simulation/closed_loop_sim.py
 src/tinkerrocket_sim/simulation/rocketpy_passive.py
+src/tinkerrocket_sim/visualization/__init__.py
+src/tinkerrocket_sim/visualization/flight_3d.py
+src/tinkerrocket_sim/visualization/flight_html.py
+src/tinkerrocket_sim/visualization/rocket_3d.py
 tests/test_sixdof.py

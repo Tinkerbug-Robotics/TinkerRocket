@@ -42,14 +42,9 @@ from plot_flight_data_mini import parse_binary_file, ROCKET_STATES, NSF_LAUNCH
 # -- Configuration --
 FLIGHTS = [
     {
-        "name": "Flight 1 - E24-4",
-        "bin_path": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 1 - E24-4/Raw Data/flight_20260314_195900.bin",
-        "output_dir": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 1 - E24-4/Analysis/",
-    },
-    {
-        "name": "Flight 2 - F67-6",
-        "bin_path": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 2 - F67-6/Raw Data/flight_20260314_224121.bin",
-        "output_dir": "/Users/christianpedersen/Documents/Hobbies/Model Rockets/TestFlights/2026_03_14/Raw Downloads/Flight 2 - F67-6/Analysis/",
+        "name": "Bench Test 2026-04-03",
+        "bin_path": "/Users/christianpedersen/Downloads/flight_20260403_111034.bin",
+        "output_dir": "/Users/christianpedersen/Downloads/flight_20260403_analysis/",
     },
 ]
 
@@ -739,6 +734,121 @@ def analyze_one_flight(flight_info):
     plot_paths.append(path4)
     print(f"  Saved: {path4}")
     plt.close(fig4)
+
+    # -- Plot 5: POWER (OutComputer-sourced) data gap analysis --
+    pwr_times = per_sensor.get("POWER")
+    if pwr_times is not None and len(pwr_times) > 2:
+        pwr_dt = np.diff(pwr_times)
+        pwr_dt_ms = pwr_dt / 1000.0
+        pwr_t_rel = (pwr_times[:-1] - t0) / 1e6
+        pwr_median_ms = np.median(pwr_dt_ms)
+
+        fig5, axes5 = plt.subplots(2, 2, figsize=(16, 12))
+        fig5.suptitle(f"POWER Data Gap Analysis (OutComputer): {name}",
+                      fontsize=14, fontweight="bold")
+
+        # 5a: POWER inter-sample dt over time
+        ax = axes5[0, 0]
+        sc = ax.scatter(pwr_t_rel, pwr_dt_ms, s=10, alpha=0.5,
+                        c=pwr_dt_ms, cmap="coolwarm",
+                        vmin=pwr_median_ms * 0.5, vmax=pwr_median_ms * 3,
+                        edgecolors="none")
+        plt.colorbar(sc, ax=ax, label="dt (ms)")
+        ax.axhline(pwr_median_ms, color="green", linestyle="--", linewidth=1,
+                   label=f"Median={pwr_median_ms:.1f}ms ({1000/pwr_median_ms:.0f}Hz)")
+        ax.axhline(pwr_median_ms * 2, color="orange", linestyle=":", linewidth=1,
+                   label=f"2x median={pwr_median_ms*2:.1f}ms")
+        if launch_us:
+            ax.axvline((launch_us - t0) / 1e6, color="orange", linewidth=2)
+        for trans_t, sname in state_timeline:
+            ax.axvline(trans_t / 1e6, color="gray", linestyle=":", linewidth=0.5, alpha=0.5)
+        ax.set_xlabel("Time from first record (s)")
+        ax.set_ylabel("Inter-sample dt (ms)")
+        ax.set_title("POWER Sample Timing Over Flight")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # 5b: POWER dt histogram
+        ax = axes5[0, 1]
+        hist_max = min(np.percentile(pwr_dt_ms, 99.5) + 5, 100)
+        ax.hist(pwr_dt_ms, bins=np.arange(0, hist_max, 0.5),
+                color="steelblue", edgecolor="none", alpha=0.8)
+        ax.axvline(pwr_median_ms, color="red", linestyle="--", linewidth=1.5,
+                   label=f"Median={pwr_median_ms:.1f}ms")
+        ax.set_xlabel("Inter-sample dt (ms)")
+        ax.set_ylabel("Count")
+        ax.set_title("POWER dt Distribution")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # 5c: POWER gaps > 2x median over time
+        pwr_gap_thresh = pwr_median_ms * 2
+        pwr_big = pwr_dt_ms > pwr_gap_thresh
+        ax = axes5[1, 0]
+        if np.any(pwr_big):
+            ax.scatter(pwr_t_rel[pwr_big], pwr_dt_ms[pwr_big],
+                       s=20, c="red", alpha=0.6, edgecolors="darkred", linewidth=0.5)
+            ax.axhline(pwr_gap_thresh, color="orange", linestyle="--",
+                       label=f"Threshold={pwr_gap_thresh:.1f}ms (2x median)")
+            if launch_us:
+                ax.axvline((launch_us - t0) / 1e6, color="orange", linewidth=2)
+            for trans_t, sname in state_timeline:
+                ax.axvline(trans_t / 1e6, color="gray", linestyle=":", linewidth=0.5, alpha=0.5)
+        ax.set_xlabel("Time from first record (s)")
+        ax.set_ylabel("Gap duration (ms)")
+        ax.set_title(f"POWER Gaps > 2x Median ({np.sum(pwr_big)} gaps)")
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        # 5d: POWER gap rate and cumulative lost time
+        ax = axes5[1, 1]
+        # Sliding window gap rate
+        window_s = 2.0
+        t_bins_p = np.arange(pwr_t_rel[0], pwr_t_rel[-1], window_s / 2)
+        pwr_gap_rate = np.zeros_like(t_bins_p)
+        for i, tb in enumerate(t_bins_p):
+            mask = (pwr_t_rel >= tb) & (pwr_t_rel < tb + window_s) & pwr_big
+            pwr_gap_rate[i] = np.sum(mask) / window_s
+
+        ax.plot(t_bins_p, pwr_gap_rate, color="steelblue", linewidth=1.5,
+                label="Gap rate (gaps/s)")
+        ax.fill_between(t_bins_p, 0, pwr_gap_rate, alpha=0.2, color="steelblue")
+
+        # Cumulative gap time on secondary axis
+        ax2 = ax.twinx()
+        pwr_excess_ms = np.where(pwr_big, pwr_dt_ms - pwr_median_ms, 0)
+        cum_lost = np.cumsum(pwr_excess_ms)
+        ax2.plot(pwr_t_rel, cum_lost, color="red", linewidth=1, alpha=0.7,
+                 label="Cumulative lost (ms)")
+        ax2.set_ylabel("Cumulative excess gap time (ms)", color="red")
+        ax2.tick_params(axis="y", labelcolor="red")
+
+        ax.set_xlabel("Time from first record (s)")
+        ax.set_ylabel("POWER gap rate (gaps/s)")
+        ax.set_title("POWER Gap Rate & Cumulative Lost Time")
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        path5 = os.path.join(output_dir, "detailed_gap_power.png")
+        fig5.savefig(path5, dpi=FIGURE_DPI, bbox_inches="tight")
+        plot_paths.append(path5)
+        print(f"  Saved: {path5}")
+
+        # Print POWER gap summary
+        print(f"\n  --- POWER Data Gap Summary ---")
+        print(f"  Total samples: {len(pwr_times)}")
+        print(f"  Median dt: {pwr_median_ms:.1f}ms ({1000/pwr_median_ms:.0f} Hz)")
+        print(f"  Gaps > 2x median: {np.sum(pwr_big)} ({100*np.mean(pwr_big):.1f}%)")
+        print(f"  dt std: {np.std(pwr_dt_ms):.1f}ms")
+        print(f"  dt P95: {np.percentile(pwr_dt_ms, 95):.1f}ms, "
+              f"P99: {np.percentile(pwr_dt_ms, 99):.1f}ms")
+        print(f"  Worst gap: {np.max(pwr_dt_ms):.1f}ms at t={pwr_t_rel[np.argmax(pwr_dt_ms)]:.2f}s")
+        print(f"  Cumulative excess gap time: {cum_lost[-1]:.1f}ms")
+
+        plt.close(fig5)
 
     return {
         "name": name,

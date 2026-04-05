@@ -1,9 +1,9 @@
 #pragma once
 // GPS/INS Fusion EKF — shared library for flight computer and simulation.
 //
-// Fuses 6-DOF IMU, GNSS, magnetometer, and barometer into a 15-state
+// Fuses 6-DOF IMU, GNSS, magnetometer, and barometer into a 16-state
 // navigation solution: position (LLA), velocity (NED), attitude (quaternion),
-// accelerometer bias, gyroscope bias.
+// accelerometer bias, gyroscope bias, barometer offset.
 //
 // Unified EKF architecture (Mahony AHRS removed):
 //   - Quaternion propagation via gyro in timeUpdate()
@@ -61,6 +61,7 @@ struct EkfBaroData {
 
 class GpsInsEKF {
 public:
+    static constexpr int N = 16;  // number of states (15 nav + 1 baro offset)
     GpsInsEKF();
 
     // ─── Initialization (call once at startup) ──────────────────────
@@ -122,6 +123,8 @@ public:
     void getCovOrient(float (&r)[3]) const { r[0]=P_[6][6]; r[1]=P_[7][7]; r[2]=P_[8][8]; }
     void getCovAccelBias(float (&r)[3]) const { r[0]=P_[9][9]; r[1]=P_[10][10]; r[2]=P_[11][11]; }
     void getCovRotRateBias(float (&r)[3]) const { r[0]=P_[12][12]; r[1]=P_[13][13]; r[2]=P_[14][14]; }
+    float getBaroOffset() const { return baroOffset_m_; }
+    float getCovBaroOffset() const { return P_[15][15]; }
 
 private:
     void timeUpdate();
@@ -156,6 +159,12 @@ private:
     float vNoiseSigma_NE_mps = 0.5f;
     float vNoiseSigma_D_mps = 1.0f;
 
+    // Baro offset process noise (random walk sigma in m/√s).
+    // At 0.01 m/√s the offset can drift ~1 m over a 100 s flight,
+    // which is enough to absorb the GPS-to-baro reference mismatch
+    // without chasing short-term baro noise.
+    float baroOffsetSigma_mps = 0.01f;
+
     // Initial covariance
     static constexpr float pErrSigma_Init_m = 10.0f;
     static constexpr float vErrSigma_Init_mps = 1.0f;
@@ -163,6 +172,7 @@ private:
     static constexpr float hdgErrSigma_Init_rad = 3.14159f;
     static constexpr float aBiasSigma_Init_mps2 = 0.9810f;
     static constexpr float wBiasSigma_Init_rps = 0.01745f;
+    static constexpr float baroOffsetSigma_Init_m = 50.0f; // large initial uncertainty
 
     // State variables
     float aBias_mps2_[3];
@@ -171,6 +181,7 @@ private:
     float vEst_NED_mps_[3];
     float aEst_B_mps2_[3];
     float wEst_B_rps_[3];
+    float baroOffset_m_ = 0.0f;  // barometer altitude offset (state 15)
     uint32_t tPrev_us_;
     float dt_s_;
     uint32_t timeWeekPrev_;
@@ -180,13 +191,13 @@ private:
     // Kalman matrices
     float quat_BL_[4];
     float T_B2NED[3][3];
-    float x[15];
-    float P_[15][15];
-    float H_[6][15];
+    float x[N];
+    float P_[N][N];
+    float H_[6][N];
     float Rw_[12][12];
     float R_[6][6];
-    float Gs_[15][12];
-    float Fs_[15][15];
+    float Gs_[N][12];
+    float Fs_[N][N];
 
     // Constants
     static constexpr float G = 9.807f;
@@ -206,6 +217,16 @@ private:
 
     // Mag heading proportional gain
     float magKp_ = 1.0f;
+
+    // P diagonal clamping — prevents float32 overflow when states are
+    // unobservable (e.g. no GPS fix on bench).  Caps are well above
+    // initial P so they never fire during normal GNSS-aided operation.
+    static constexpr float P_MAX_POS   = 1e8f;   // ~10 km sigma
+    static constexpr float P_MAX_VEL   = 1e4f;   // ~100 m/s sigma
+    static constexpr float P_MAX_ATT   = 10.0f;   // ~180 deg sigma
+    static constexpr float P_MAX_ABIAS = 10.0f;   // ~3 m/s² sigma
+    static constexpr float P_MAX_GBIAS = 0.01f;   // ~6 deg/s sigma
+    static constexpr float P_MAX_BOFS  = 1e4f;    // ~100 m baro offset sigma
 
     // Helper methods
     void Quat2Euler(float q[4], float euler[3]);

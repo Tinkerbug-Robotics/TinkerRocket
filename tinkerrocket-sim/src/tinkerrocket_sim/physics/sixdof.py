@@ -246,14 +246,18 @@ class SixDOF:
 
     def derivatives(self, state: np.ndarray, t: float,
                     fin_tab_deflection_deg: float = 0.0,
-                    wind_enu: np.ndarray = None) -> np.ndarray:
+                    wind_enu: np.ndarray = None,
+                    fin_deflections: np.ndarray = None) -> np.ndarray:
         """Compute state derivatives for integration.
 
         Args:
             state: 13-element state vector.
             t: Current time in seconds.
-            fin_tab_deflection_deg: Fin tab deflection in degrees.
+            fin_tab_deflection_deg: Fin tab deflection in degrees (roll-only mode).
             wind_enu: Wind velocity in ENU frame (m/s), or None for calm.
+            fin_deflections: 4-element array [top, right, bottom, left] fin
+                deflections in degrees (guided mode).  When provided, replaces
+                fin_tab_deflection_deg and produces 3-axis torques.
 
         Returns:
             13-element state derivative vector.
@@ -392,12 +396,31 @@ class SixDOF:
                 moments_body[1] -= damp_factor * omega[1]  # pitch damping
                 moments_body[2] -= damp_factor * omega[2]  # yaw damping
 
-        # 4. Fin tab roll torque
-        if abs(fin_tab_deflection_deg) > 0.001 and v_air_mag > 1.0:
-            ft = self.rocket.fin_tabs
-            V_ratio_sq = (v_air_mag / ft.V_ref) ** 2
-            tau_roll = ft.n_tabs * ft.Kt_ref * V_ratio_sq * fin_tab_deflection_deg
-            moments_body[0] += tau_roll
+        # 4. Fin torques
+        if v_air_mag > 1.0:
+            if fin_deflections is not None:
+                # --- 4-fin cruciform mode (guided) ---
+                cf = self.rocket.cruciform_fins
+                V_ratio_sq = (v_air_mag / cf.V_ref) ** 2
+                d0, d1, d2, d3 = fin_deflections  # top, right, bottom, left
+
+                # Roll: common-mode deflection (all fins same direction)
+                roll_common = (d0 + d1 + d2 + d3) * 0.25
+                moments_body[0] += cf.Kt_roll * V_ratio_sq * roll_common
+
+                # Pitch: differential top vs bottom (fins 0, 2)
+                pitch_diff = d0 - d2
+                moments_body[1] += cf.Kt_pitch * V_ratio_sq * pitch_diff
+
+                # Yaw: differential right vs left (fins 1, 3)
+                yaw_diff = d1 - d3
+                moments_body[2] += cf.Kt_yaw * V_ratio_sq * yaw_diff
+            elif abs(fin_tab_deflection_deg) > 0.001:
+                # --- Single fin tab mode (roll-only) ---
+                ft = self.rocket.fin_tabs
+                V_ratio_sq = (v_air_mag / ft.V_ref) ** 2
+                tau_roll = ft.n_tabs * ft.Kt_ref * V_ratio_sq * fin_tab_deflection_deg
+                moments_body[0] += tau_roll
 
         # 5. Roll disturbance torque (constant, e.g. motor spin or asymmetry)
         if hasattr(self.rocket, 'roll_disturbance_torque'):
@@ -420,23 +443,25 @@ class SixDOF:
 
     def step_rk4(self, state: np.ndarray, t: float, dt: float,
                  fin_tab_deflection_deg: float = 0.0,
-                 wind_enu: np.ndarray = None) -> np.ndarray:
+                 wind_enu: np.ndarray = None,
+                 fin_deflections: np.ndarray = None) -> np.ndarray:
         """Single RK4 integration step.
 
         Args:
             state: 13-element state vector.
             t: Current time.
             dt: Time step.
-            fin_tab_deflection_deg: Fin tab deflection.
+            fin_tab_deflection_deg: Fin tab deflection (roll-only mode).
             wind_enu: Wind velocity ENU.
+            fin_deflections: 4-element array of per-fin deflections (guided mode).
 
         Returns:
             New 13-element state vector at t + dt.
         """
-        k1 = self.derivatives(state, t, fin_tab_deflection_deg, wind_enu)
-        k2 = self.derivatives(state + 0.5*dt*k1, t + 0.5*dt, fin_tab_deflection_deg, wind_enu)
-        k3 = self.derivatives(state + 0.5*dt*k2, t + 0.5*dt, fin_tab_deflection_deg, wind_enu)
-        k4 = self.derivatives(state + dt*k3, t + dt, fin_tab_deflection_deg, wind_enu)
+        k1 = self.derivatives(state, t, fin_tab_deflection_deg, wind_enu, fin_deflections)
+        k2 = self.derivatives(state + 0.5*dt*k1, t + 0.5*dt, fin_tab_deflection_deg, wind_enu, fin_deflections)
+        k3 = self.derivatives(state + 0.5*dt*k2, t + 0.5*dt, fin_tab_deflection_deg, wind_enu, fin_deflections)
+        k4 = self.derivatives(state + dt*k3, t + dt, fin_tab_deflection_deg, wind_enu, fin_deflections)
 
         new_state = state + (dt/6.0) * (k1 + 2*k2 + 2*k3 + k4)
 

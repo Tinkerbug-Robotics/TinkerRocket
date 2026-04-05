@@ -167,21 +167,17 @@ bool TR_MMC5983MA::readControl2(uint8_t *ctrl2)
 
 bool TR_MMC5983MA::readFieldsXYZ(uint32_t *x, uint32_t *y, uint32_t *z)
 {
-    uint8_t buffer[7] = {0};
     if (x == nullptr || y == nullptr || z == nullptr) return false;
-    if (!readMultipleBytes(X_OUT_0_REG, buffer, 7)) return false;
 
-    *x = buffer[0];
-    *x = (*x << 8) | buffer[1];
-    *x = (*x << 2) | (buffer[6] >> 6);
+    // Burst read all 7 output registers starting at 0x00
+    uint8_t buf[7] = {};
+    if (!readMultipleBytes(0x00, buf, 7)) return false;
 
-    *y = buffer[2];
-    *y = (*y << 8) | buffer[3];
-    *y = (*y << 2) | ((buffer[6] >> 4) & 0x03);
-
-    *z = buffer[4];
-    *z = (*z << 8) | buffer[5];
-    *z = (*z << 2) | ((buffer[6] >> 2) & 0x03);
+    // Registers: Xout0(0), Xout1(1), Yout0(2), Yout1(3), Zout0(4), Zout1(5), XYZout2(6)
+    // 18-bit values: [out0:8][out1:8][out2_bits:2] = 18 bits
+    *x = (uint32_t)buf[0] << 10 | (uint32_t)buf[1] << 2 | (buf[6] >> 6);
+    *y = (uint32_t)buf[2] << 10 | (uint32_t)buf[3] << 2 | ((buf[6] >> 4) & 0x03);
+    *z = (uint32_t)buf[4] << 10 | (uint32_t)buf[5] << 2 | ((buf[6] >> 2) & 0x03);
     return true;
 }
 

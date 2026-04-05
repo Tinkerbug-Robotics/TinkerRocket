@@ -26,6 +26,31 @@ class FinTabConfig:
 
 
 @dataclass
+class CruciformFinConfig:
+    """4-fin cruciform control surface aerodynamic config.
+
+    For a cruciform (4-fin at 0/90/180/270 deg) arrangement where each fin
+    can be independently deflected.  Torques scale with (V/V_ref)^2.
+
+    Kt_roll: roll torque coefficient per degree of common-mode deflection
+             across all 4 fins (N-m/deg at V_ref).  Sum of 4 fins.
+    Kt_pitch: pitch torque coefficient per degree of differential deflection
+              between top and bottom fins (N-m/deg at V_ref).
+    Kt_yaw: yaw torque coefficient per degree of differential deflection
+            between right and left fins (N-m/deg at V_ref).
+
+    The pitch/yaw coefficients encode Kf_normal * L_arm where Kf_normal is
+    the fin normal force per degree and L_arm is the axial moment arm from
+    CG to fin CP.  These should be tuned from CFD or estimated.
+    """
+    Kt_roll: float = 5.34e-3   # N-m/deg at V_ref (total, all 4 fins)
+    Kt_pitch: float = 0.02     # N-m/deg differential at V_ref
+    Kt_yaw: float = 0.02       # N-m/deg differential at V_ref
+    V_ref: float = 95.0        # reference airspeed (m/s)
+    max_deflection: float = 20.0  # per-fin max deflection (deg)
+
+
+@dataclass
 class MotorConfig:
     """Motor/thrust configuration."""
     thrust_times: np.ndarray = field(default_factory=lambda: np.array([0.0]))
@@ -108,8 +133,11 @@ class RocketDefinition:
     # Motor
     motor: MotorConfig = field(default_factory=MotorConfig)
 
-    # Fin tabs
+    # Fin tabs (roll-only control)
     fin_tabs: FinTabConfig = field(default_factory=FinTabConfig)
+
+    # Cruciform fins (3-axis guided control)
+    cruciform_fins: CruciformFinConfig = field(default_factory=CruciformFinConfig)
 
     @property
     def total_mass_launch(self) -> float:

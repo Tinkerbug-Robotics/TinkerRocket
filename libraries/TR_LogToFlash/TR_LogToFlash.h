@@ -16,6 +16,7 @@ struct TR_LogToFlashConfig
     uint8_t spi_mode_nand = SPI_MODE0;
     uint32_t ring_buffer_size = 65536;  // RAM ring buffer size (bytes)
     bool debug = false;
+    bool force_format = false;  // Erase entire NAND before mount (recovery from corruption)
 
     // MRAM ring buffer (optional — set mram_cs >= 0 to enable).
     // When enabled the ring buffer lives in SPI MRAM instead of ESP32 RAM,
@@ -169,6 +170,12 @@ private:
     // page staging
     uint8_t page_buf[NAND_PAGE_SIZE];
     uint32_t page_buf_idx = 0;
+
+    // Periodic sync — commit LittleFS metadata to NAND every N pages so that
+    // a hard reset only loses at most sync_interval pages (~256 KB default).
+    // The ring buffer absorbs incoming data during the sync stall (~5-50 ms).
+    static constexpr uint32_t SYNC_INTERVAL_PAGES = 128;  // ~256 KB between syncs
+    uint32_t pages_since_sync_ = 0;
 
     // counters
     uint64_t bytes_received = 0;

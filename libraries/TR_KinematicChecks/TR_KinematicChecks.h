@@ -18,25 +18,39 @@ public:
                          float position[3],
                          float velocity[3],
                          float roll_rate,
-                         bool new_baro = true);
-    
+                         bool  new_baro = true,
+                         float gps_altitude = 0.0f,
+                         bool  new_gps = false,
+                         float pitch_rad = 1.57f,
+                         bool  burnout_detected = false,
+                         bool  baro_locked_out = false);
+
     bool launch_flag;
     bool alt_landed_flag;
-    bool alt_apogee_flag;
-    bool vel_u_apogee_flag;
+    bool alt_apogee_flag;       // Test 2: baro altitude decreasing
+    bool vel_u_apogee_flag;     // Test 1: EKF velocity negative
+    bool gps_apogee_flag;       // Test 3: GPS altitude decreasing
+    bool pitch_apogee_flag;     // Test 4: pitch below horizontal
+    bool apogee_flag;           // Combined voted result
     float max_altitude;
     float max_speed;
     float alt_est;    // Filtered altitude (m)
     float d_alt_est_; // Filtered altitude change rate (m/s)
 
 private:
-    
+
     uint16_t launch_count;
     uint32_t landing_check_time;
     float landing_look_back_alt;
     uint32_t landing_check_dt;
     uint8_t apogee_count;
     uint16_t landing_checks;
+
+    // GPS apogee test state
+    float max_gps_altitude_;
+    uint8_t gps_apogee_count_;
+    bool gps_available_;
+    uint32_t last_gps_time_ms_;
     
     // 1D CV Kalman filter for altitude & rate
     bool kf_init_;

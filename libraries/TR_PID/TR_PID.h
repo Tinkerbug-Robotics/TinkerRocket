@@ -1,4 +1,16 @@
+#ifndef TR_PID_H
+#define TR_PID_H
+
+#ifdef ARDUINO
 #include "Arduino.h"
+#else
+#include <cstdint>
+#include <cmath>
+#include <algorithm>
+#ifndef constrain
+#define constrain(x, lo, hi) std::clamp((x), (lo), (hi))
+#endif
+#endif
 
 
 class TR_PID
@@ -6,23 +18,27 @@ class TR_PID
 public:
 
     // Constructor
-    explicit TR_PID(float kp, 
-                    float ki, 
-                    float kd, 
-                    float max_in, 
+    explicit TR_PID(float kp,
+                    float ki,
+                    float kd,
+                    float max_in,
                     float min_in);
-  
-    // Main function that computes a control output given
-    // a setpoint and a measured value
+
+#ifdef ARDUINO
+    // Arduino path: computes dt from micros()
     float computePID(float setpoint, float measurment);
+#endif
+
+    // Platform-independent path: explicit dt in seconds
+    float computePID(float setpoint, float measurement, float dt_seconds);
 
     // Set proportional gain
     void setKp(float Kp);
-    
-    // Set proportional gain
+
+    // Set integral gain
     void setKi(float Ki);
-    
-    // Set proportional gain
+
+    // Set derivative gain
     void setKd(float Kd);
 
     // Set output limits
@@ -39,27 +55,27 @@ protected:
 
     // Proportional gain
     float Kp;
-    
+
     // Integral gain
     float Ki;
-    
+
     // Derivative gain
     float Kd;
-    
+
     // Accumulate error for integral term
     float cumulative_error;
-    
-    
+
     uint32_t last_update_time = 0;
 
     float last_error;
     float last_measurement = 0.0f;
 
     bool first_call;
-    
+
     // Min and max allowable controller outputs
     float max_cmd;
     float min_cmd;
-    
+
 };
 
+#endif // TR_PID_H

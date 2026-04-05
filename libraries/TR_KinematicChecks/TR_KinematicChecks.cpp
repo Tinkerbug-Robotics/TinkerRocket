@@ -6,6 +6,9 @@ TR_KinematicChecks::TR_KinematicChecks()
     alt_landed_flag = false;
     alt_apogee_flag = false;
     vel_u_apogee_flag = false;
+    gps_apogee_flag = false;
+    pitch_apogee_flag = false;
+    apogee_flag = false;
     launch_count = 0;
     max_altitude = 0.0f;
     max_speed = 0.0f;
@@ -14,14 +17,18 @@ TR_KinematicChecks::TR_KinematicChecks()
     landing_check_dt = 1000;
     apogee_count = 0;
     landing_checks = 0;
-    
+    max_gps_altitude_ = 0.0f;
+    gps_apogee_count_ = 0;
+    gps_available_ = false;
+    last_gps_time_ms_ = 0;
+
     // KF init
     kf_init_ = false;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
     P00_ = 10.0f;  P01_ = 0.0f;
     P10_ = 0.0f;   P11_ = 10.0f;
-    
+
     // Tunable altitude filter parameters
     // R_ ~ altitude measurement variance; BMP585 noise is ~0.17m, but vibration
     // and barometric formula error add noise, so we use a conservative 1 m^2.
@@ -40,6 +47,9 @@ void TR_KinematicChecks::reset()
     alt_landed_flag = false;
     alt_apogee_flag = false;
     vel_u_apogee_flag = false;
+    gps_apogee_flag = false;
+    pitch_apogee_flag = false;
+    apogee_flag = false;
     launch_count = 0;
     max_altitude = 0.0f;
     max_speed = 0.0f;
@@ -47,6 +57,10 @@ void TR_KinematicChecks::reset()
     landing_look_back_alt = 0.0;
     apogee_count = 0;
     landing_checks = 0;
+    max_gps_altitude_ = 0.0f;
+    gps_apogee_count_ = 0;
+    gps_available_ = false;
+    last_gps_time_ms_ = 0;
     kf_init_ = false;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
@@ -59,7 +73,12 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          float position[3],
                                          float velocity[3],
                                          float roll_rate,
-                                         bool new_baro)
+                                         bool  new_baro,
+                                         float gps_altitude,
+                                         bool  new_gps,
+                                         float pitch_rad,
+                                         bool  burnout_detected,
+                                         bool  baro_locked_out)
 {
 
     // ### Altitude ###
@@ -99,7 +118,7 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     }
 
     // ### Check for Landing ###
-    
+
     if (millis() > landing_check_time + landing_check_dt)
     {
         float landing_altitude_change = fabs(pressure_altitude - landing_look_back_alt);
@@ -126,44 +145,121 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         }
     }
 
-    // ### Check for Apogee Using Pressure ###
-    
-    // If altitude is below max altitude for 3 times 
-    // in a row then set flag to true
-    
-    if (pressure_altitude > 15.0 && pressure_altitude < max_altitude-5.0)
+    // ### GPS altitude tracking ###
+    // Track max GPS altitude from launch onwards (raw MSL — relative
+    // tracking means absolute value doesn't matter).
+    if (new_gps && launch_flag)
     {
-        apogee_count++;
-    }
-    else
-    {
-        apogee_count = 0;
-    }
-    if (apogee_count > 5)
-    {
-        alt_apogee_flag = true;
+        gps_available_ = true;
+        last_gps_time_ms_ = millis();
+
+        // Spike rejection: 100m window (wider than baro's 50m for GPS noise)
+        if (max_gps_altitude_ == 0.0f ||
+            fabs(gps_altitude - max_gps_altitude_) < 100.0f) {
+            max_gps_altitude_ = fmax(max_gps_altitude_, gps_altitude);
+        }
     }
 
-
-    // Check for apogee using up velocity (only after launch —
-    // pre-launch EKF transients can produce brief negative velocity
-    // with position > 15 m from GPS noise, latching the flag early)
-    if (launch_flag && position[2] > 15.0 && velocity[2] < 0.0)
+    // ================================================================
+    // ### Apogee Detection (gated on burnout) ###
+    // Four independent tests with N-1 of N voting.
+    // No apogee flag can latch before motor burnout is confirmed.
+    // ================================================================
+    if (burnout_detected)
     {
-        vel_u_apogee_flag = true;
-    }
-    
+        // --- Test 1: Velocity (EKF vertical velocity negative) ---
+        if (launch_flag && position[2] > 15.0f && velocity[2] < 0.0f)
+        {
+            vel_u_apogee_flag = true;
+        }
+
+        // --- Test 2: Baro altitude (pressure altitude decreasing) ---
+        if (pressure_altitude > 15.0f &&
+            pressure_altitude < max_altitude - 5.0f)
+        {
+            apogee_count++;
+        }
+        else
+        {
+            apogee_count = 0;
+        }
+        if (apogee_count > 5)
+        {
+            alt_apogee_flag = true;
+        }
+
+        // --- Test 3: GPS altitude (GPS altitude decreasing) ---
+        if (new_gps && gps_available_ && gps_altitude > 15.0f)
+        {
+            if (gps_altitude < max_gps_altitude_ - 10.0f)
+            {
+                gps_apogee_count_++;
+            }
+            else
+            {
+                gps_apogee_count_ = 0;
+            }
+            if (gps_apogee_count_ > 3)
+            {
+                gps_apogee_flag = true;
+            }
+        }
+
+        // --- Test 4: Pitch below horizontal ---
+        // NED convention: +90° = nose up, 0° = horizontal, negative = past horizontal.
+        // -5° threshold avoids false trigger from coast oscillation.
+        if (pitch_rad < -0.087f)
+        {
+            pitch_apogee_flag = true;
+        }
+
+        // --- Dynamic N-1 of N voting ---
+        if (!apogee_flag)
+        {
+            uint8_t available = 0;
+            uint8_t passed = 0;
+
+            // Velocity — always available
+            available++;
+            if (vel_u_apogee_flag) passed++;
+
+            // Baro — excluded during mach lockout
+            if (!baro_locked_out)
+            {
+                available++;
+                if (alt_apogee_flag) passed++;
+            }
+
+            // GPS — excluded if stale (>5s since last fix)
+            if (gps_available_ &&
+                (millis() - last_gps_time_ms_ < 5000))
+            {
+                available++;
+                if (gps_apogee_flag) passed++;
+            }
+
+            // Pitch — always available
+            available++;
+            if (pitch_apogee_flag) passed++;
+
+            // N-1 of N (no minimum floor)
+            // 4 available → need 3.  3 available → need 2.  2 available → need 1.
+            if (available >= 2 && passed >= (available - 1))
+            {
+                apogee_flag = true;
+            }
+        }
+    } // end burnout gate
+
     // ### Pre-Apogee Max Speed ###
     float speed = sqrt(velocity[0]*velocity[0]+
                        velocity[1]*velocity[1]+
                        velocity[2]*velocity[2]);
-    if ((!alt_apogee_flag && !vel_u_apogee_flag)
-        && speed > max_speed)
+    if (!apogee_flag && speed > max_speed)
     {
         max_speed = speed;
     }
-        
-    
+
 }
 
 // ======================================================================

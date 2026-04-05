@@ -250,7 +250,9 @@ typedef struct __attribute__((packed))
         bit 1: alt_apogee_flag
         bit 2: vel_u_apogee_flag
         bit 3: launch_flag
-        bit 4–7: reserved
+        bit 4: burnout_detected
+        bit 5: guidance_active
+        bit 6–7: reserved
     */
 
     uint8_t rocket_state; // RocketState enum
@@ -258,15 +260,35 @@ typedef struct __attribute__((packed))
     // KF-filtered barometric altitude rate from FlightComputer (dm/s = 0.1 m/s)
     int16_t baro_alt_rate_dmps;
 
+    // Pyro channel status (bitfield)
+    uint8_t pyro_status;
+    /*
+        bit 0: ch1 continuity (1 = load present)
+        bit 1: ch2 continuity (1 = load present)
+        bit 2: ch1 fired
+        bit 3: ch2 fired
+        bit 4–7: reserved
+    */
+
 } NonSensorData;
 
-static_assert(sizeof(NonSensorData) == 42,
-              "NonSensorData must be 42 bytes");
+static_assert(sizeof(NonSensorData) == 43,
+              "NonSensorData must be 43 bytes");
 
 static constexpr uint8_t NSF_ALT_LANDED   = (1u << 0);
 static constexpr uint8_t NSF_ALT_APOGEE   = (1u << 1);
 static constexpr uint8_t NSF_VEL_APOGEE   = (1u << 2);
 static constexpr uint8_t NSF_LAUNCH       = (1u << 3);
+static constexpr uint8_t NSF_BURNOUT      = (1u << 4);
+static constexpr uint8_t NSF_GUIDANCE     = (1u << 5);
+static constexpr uint8_t NSF_PYRO1_ARMED  = (1u << 6);
+static constexpr uint8_t NSF_PYRO2_ARMED  = (1u << 7);
+
+// Pyro status byte bit masks
+static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
+static constexpr uint8_t PSF_CH2_CONT  = (1u << 1);
+static constexpr uint8_t PSF_CH1_FIRED = (1u << 2);
+static constexpr uint8_t PSF_CH2_FIRED = (1u << 3);
 
 typedef struct
 {
@@ -472,7 +494,46 @@ static constexpr uint8_t SERVO_REPLAY_MSG     = 0xC4;
 static constexpr uint8_t SERVO_REPLAY_STOP    = 0xC5;
 static constexpr uint8_t ROLL_CTRL_CONFIG_PENDING = 0xC6;
 static constexpr uint8_t ROLL_CTRL_CONFIG_MSG     = 0xC7;
+static constexpr uint8_t GUIDANCE_ENABLE          = 0xC8;
+static constexpr uint8_t GUIDANCE_DISABLE         = 0xC9;
+static constexpr uint8_t GUIDANCE_TELEM_MSG       = 0xCA;
+static constexpr uint8_t CAMERA_CONFIG_PENDING    = 0xCB;
+static constexpr uint8_t CAMERA_CONFIG_MSG        = 0xCC;
+static constexpr uint8_t PYRO_CONFIG_PENDING      = 0xCD;
+static constexpr uint8_t PYRO_CONFIG_MSG          = 0xCE;
+static constexpr uint8_t PYRO_CONT_TEST           = 0xCF;  // momentary arm → read continuity → disarm
+static constexpr uint8_t PYRO_FIRE_TEST            = 0xD0;  // test-fire a pyro channel from app
 static constexpr uint8_t LORA_MSG            = 0xF1;
+
+// Camera types
+static constexpr uint8_t CAM_TYPE_NONE   = 0;
+static constexpr uint8_t CAM_TYPE_GOPRO  = 1;
+static constexpr uint8_t CAM_TYPE_RUNCAM = 2;
+
+// Camera config data (1 byte)
+typedef struct __attribute__((packed))
+{
+    uint8_t camera_type;  // CAM_TYPE_NONE, CAM_TYPE_GOPRO, CAM_TYPE_RUNCAM
+} CameraConfigData;
+static_assert(sizeof(CameraConfigData) == 1, "CameraConfigData must be 1 byte");
+
+// Pyro trigger modes
+enum PyroTriggerMode : uint8_t {
+    PYRO_TRIGGER_TIME_AFTER_APOGEE    = 0,
+    PYRO_TRIGGER_ALTITUDE_ON_DESCENT  = 1,
+};
+
+// Pyro channel configuration (both channels, 12 bytes)
+typedef struct __attribute__((packed))
+{
+    uint8_t  ch1_enabled;       // 0 = disabled, 1 = enabled
+    uint8_t  ch1_trigger_mode;  // PyroTriggerMode
+    float    ch1_trigger_value; // seconds (time mode) or meters (altitude mode)
+    uint8_t  ch2_enabled;
+    uint8_t  ch2_trigger_mode;
+    float    ch2_trigger_value;
+} PyroConfigData;
+static_assert(sizeof(PyroConfigData) == 12, "PyroConfigData must be 12 bytes");
 
 // Packed config data structures for BLE → I2C relay
 typedef struct __attribute__((packed))
@@ -545,6 +606,19 @@ typedef struct __attribute__((packed))
     uint16_t roll_delay_ms;       // ms after launch before any roll control activates
 } RollControlConfigData;
 static_assert(sizeof(RollControlConfigData) == 4, "RollControlConfigData must be 4 bytes");
+
+// --- Guidance Telemetry Data (sent at ~10 Hz during coast) ---
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;
+    int16_t  pitch_cmd_cdeg;    // guidance pitch command (centi-deg)
+    int16_t  yaw_cmd_cdeg;      // guidance yaw command (centi-deg)
+    int16_t  lateral_offset_cm; // lateral distance from pad vertical (cm)
+    int16_t  pitch_fin_cdeg;    // pitch fin command after PID (centi-deg)
+    int16_t  yaw_fin_cdeg;      // yaw fin command after PID (centi-deg)
+    uint8_t  guid_flags;        // bit 0: guidance_active, bit 1: burnout_detected
+} GuidanceTelemData;
+static_assert(sizeof(GuidanceTelemData) == 15, "GuidanceTelemData must be 15 bytes");
 
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);

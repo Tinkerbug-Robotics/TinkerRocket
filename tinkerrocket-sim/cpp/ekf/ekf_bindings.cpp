@@ -128,5 +128,7 @@ PYBIND11_MODULE(_ekf, m) {
         .def("get_cov_rot_rate_bias", [](const GpsInsEKF& self) {
             float r[3]; self.getCovRotRateBias(r);
             return py::make_tuple(r[0], r[1], r[2]);
-        });
+        })
+        .def("get_baro_offset", &GpsInsEKF::getBaroOffset)
+        .def("get_cov_baro_offset", &GpsInsEKF::getCovBaroOffset);
 }

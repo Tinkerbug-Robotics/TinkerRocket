@@ -1,39 +1,51 @@
 #include "TR_PID.h"
 
-TR_PID::TR_PID(float kp, 
-               float ki, 
-               float kd, 
-               float max_in, 
+TR_PID::TR_PID(float kp,
+               float ki,
+               float kd,
+               float max_in,
                float min_in)
 {
     // Set gains based on inputs
     Kp = kp;
     Ki = ki;
     Kd = kd;
-    
+
     // Set min and max controller output
     max_cmd = max_in;
     min_cmd = min_in;
-    
+
     // Cumulative error starts at 0
     cumulative_error = 0.0;
-    
+
     // Initialize the last error to 0
     last_error = 0.0;
-    
+
     // Indicate it is the first time calling the library
     first_call = true;
 }
 
+#ifdef ARDUINO
 float TR_PID::computePID(float setpoint, float actual)
 {
-
     // Current time in micro seconds
     uint32_t now = micros();
 
     // Delta time since last call
     float dt = (last_update_time > 0)
              ? (now - last_update_time) / 1e6f : 0.0f;
+
+    // Save timestamp
+    last_update_time = now;
+
+    // Delegate to the dt-based implementation
+    return computePID(setpoint, actual, dt);
+}
+#endif
+
+float TR_PID::computePID(float setpoint, float actual, float dt_seconds)
+{
+    float dt = dt_seconds;
 
     // Difference between desired state and input state is the error
     float error = setpoint - actual;
@@ -44,8 +56,7 @@ float TR_PID::computePID(float setpoint, float actual)
     {
         first_call = false;
 
-        // Save data for next time (use same 'now' to avoid timing bias)
-        last_update_time = now;
+        // Save data for next time
         last_error = error;
         last_measurement = actual;
         return 0;
@@ -65,13 +76,11 @@ float TR_PID::computePID(float setpoint, float actual)
     // Calculate command out
     float command_out = P + I + D;
 
-    // Save data for next time (use same 'now' to avoid timing bias)
-    last_update_time = now;
+    // Save data for next time
     last_error = error;
     last_measurement = actual;
 
     return constrain(command_out, min_cmd, max_cmd);
-
 }
 
 void TR_PID::setKp(float kp)
@@ -112,7 +121,3 @@ void TR_PID::resetIntegral()
 {
     cumulative_error = 0.0;
 }
-
-
-
-

@@ -6,7 +6,7 @@
 #include "TR_GpsInsEKF.h"
 
 GpsInsEKF::GpsInsEKF() {
-    // Observation matrix (H) — 6x15
+    // Observation matrix (H) — 6xN (GNSS measures states 0-5)
     std::memset(H_, 0, sizeof(H_));
     H_[0][0]=1; H_[1][1]=1; H_[2][2]=1; H_[3][3]=1; H_[4][4]=1; H_[5][5]=1;
 
@@ -34,7 +34,7 @@ GpsInsEKF::GpsInsEKF() {
     R_[4][4]=vNoiseSigma_NE_mps*vNoiseSigma_NE_mps;
     R_[5][5]=vNoiseSigma_D_mps*vNoiseSigma_D_mps;
 
-    // Initial covariance P — 15x15
+    // Initial covariance P — NxN
     std::memset(P_, 0, sizeof(P_));
     P_[0][0]=pErrSigma_Init_m*pErrSigma_Init_m;
     P_[1][1]=pErrSigma_Init_m*pErrSigma_Init_m;
@@ -51,14 +51,15 @@ GpsInsEKF::GpsInsEKF() {
     P_[12][12]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
     P_[13][13]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
     P_[14][14]=wBiasSigma_Init_rps*wBiasSigma_Init_rps;
+    P_[15][15]=baroOffsetSigma_Init_m*baroOffsetSigma_Init_m;
 
-    // Gs — 15x12
+    // Gs — Nx12 (baro offset row 15 is all zero — no IMU coupling)
     std::memset(Gs_, 0, sizeof(Gs_));
     Gs_[6][3]=-0.5f; Gs_[7][4]=-0.5f; Gs_[8][5]=-0.5f;
     Gs_[9][6]=1; Gs_[10][7]=1; Gs_[11][8]=1;
     Gs_[12][9]=1; Gs_[13][10]=1; Gs_[14][11]=1;
 
-    // Fs — 15x15
+    // Fs — NxN (baro offset is a random walk: Fs_[15][*] = 0)
     std::memset(Fs_, 0, sizeof(Fs_));
     Fs_[0][3]=1; Fs_[1][4]=1; Fs_[2][5]=1;
     Fs_[5][2]=-2.0f*G/EARTH_RADIUS;
@@ -69,6 +70,7 @@ GpsInsEKF::GpsInsEKF() {
     Fs_[12][12]=-1.0f/wMarkovTau_s;
     Fs_[13][13]=-1.0f/wMarkovTau_s;
     Fs_[14][14]=-1.0f/wMarkovTau_s;
+    // Fs_[15][15] = 0 (random walk — no decay)
 
     // Zero state vectors
     std::memset(aBias_mps2_, 0, sizeof(aBias_mps2_));
@@ -79,6 +81,7 @@ GpsInsEKF::GpsInsEKF() {
     std::memset(wEst_B_rps_, 0, sizeof(wEst_B_rps_));
     std::memset(quat_BL_, 0, sizeof(quat_BL_));
     std::memset(x, 0, sizeof(x));
+    baroOffset_m_ = 0.0f;
 
     // Initial quaternion: nose-up vertical rocket (FRD body frame)
     // Body X (nose) → NED Up (-D), Body Y (right) → East, Body Z (down) → North.
@@ -104,6 +107,7 @@ void GpsInsEKF::initCore(EkfIMUData imu_data,
     pEst_D_rrm_[0]=pMeas_D_rrm[0]; pEst_D_rrm_[1]=pMeas_D_rrm[1]; pEst_D_rrm_[2]=pMeas_D_rrm[2];
     vEst_NED_mps_[0]=vMeas_NED[0]; vEst_NED_mps_[1]=vMeas_NED[1]; vEst_NED_mps_[2]=vMeas_NED[2];
     wBias_rps_[0]=wMeas[0]; wBias_rps_[1]=wMeas[1]; wBias_rps_[2]=wMeas[2];
+    baroOffset_m_ = 0.0f;  // will be estimated by the filter
 
     // Initial quaternion: nose-up vertical (same as constructor)
     quat_BL_[0] = 0.707107f; quat_BL_[1] = 0.0f;
@@ -300,7 +304,7 @@ void GpsInsEKF::timeUpdate() {
     NED2D_Rate(pDot_D, vEst_NED_mps_, pEst_D_rrm_);
     for (int i=0;i<3;i++) pEst_D_rrm_[i]+=(double)dt_s_*pDot_D[i];
 
-    // Assemble Jacobian
+    // ── Assemble Jacobian (dynamic blocks of Fs_) ──
     float skew_temp[3][3], Fs_sub[3][3];
     Skew(skew_temp, aEst_B_mps2_);
     multiplyMatrix3x3(T_B2NED, skew_temp, Fs_sub);
@@ -310,67 +314,224 @@ void GpsInsEKF::timeUpdate() {
     Skew(Fs_w, wEst_B_rps_);
     for (int i=0;i<3;i++) for (int j=0;j<3;j++) Fs_[i+6][j+6]=-Fs_w[i][j];
 
-    float PHI[15][15], Q[15][15], PHI_T[15][15];
-    float PHI_P[15][15], PHI_P_PHIt[15][15];
-    float phi_dt[15][15];
-    float Gs_T[12][15];
-    float PHI_dt_Gs[15][12], PHI_dt_Gs_Rw[15][12];
-
-    // PHI = I + Fs * dt
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++)
-        PHI[i][j] = (i==j?1.0f:0.0f) + Fs_[i][j]*dt_s_;
-
-    // Update Gs dynamic portion
+    // Update Gs dynamic portion (rows 3-5, cols 0-2)
     for (int i=0;i<3;i++) for (int j=0;j<3;j++) Gs_[i+3][j]=-T_B2NED[i][j];
 
-    // phi_dt = PHI * dt
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) phi_dt[i][j]=PHI[i][j]*dt_s_;
+    // ── Sparse Q computation and P propagation ────────────────────────
+    // Exploits known zero structure of Fs, Gs, Rw to reduce ~14,500
+    // FLOPs (7 dense 15×15 multiplies) to ~1,700 FLOPs.
+    // Verified against dense reference: verify_sparse_ekf.py
+    //
+    // State 15 (baro offset) is a random walk with Fs_[15][*]=0 and
+    // Gs_[15][*]=0, so it does not appear in B, Q, or the sparse PHI
+    // row/column passes.  Its covariance grows by Q_baro_offset*dt
+    // and its cross-covariances are propagated passively via PHI*P*PHI^T
+    // (since PHI[15][k]=delta(15,k), they are only modified by the other
+    // states' PHI rows, which the existing sparse code already handles
+    // through the column pass).
 
-    // PHI_dt_Gs = phi_dt * Gs
-    for (int i=0;i<15;i++) for (int j=0;j<12;j++) {
-        PHI_dt_Gs[i][j]=0;
-        for (int k=0;k<15;k++) PHI_dt_Gs[i][j]+=phi_dt[i][k]*Gs_[k][j];
+    const float dt2 = dt_s_ * dt_s_;
+
+    // ── Step 1: B[15][12] = (I + Fs*dt)*dt * Gs * diag(Rw) ─────────
+    // Gs non-zero blocks (rows 0-14 only; row 15 is zero):
+    //   rows 3-5, cols 0-2:   Gs_[i+3][j] (dynamic, = -T_B2NED)
+    //   rows 6-8, cols 3-5:   -0.5 (fixed)
+    //   rows 9-11, cols 6-8:  1.0 (fixed)
+    //   rows 12-14, cols 9-11: 1.0 (fixed)
+    float B[15][12];
+    std::memset(B, 0, sizeof(B));
+
+    // Rw diagonal values (pre-scaled)
+    const float rw[12] = {
+        Rw_[0][0], Rw_[1][1], Rw_[2][2],
+        Rw_[3][3], Rw_[4][4], Rw_[5][5],
+        Rw_[6][6], Rw_[7][7], Rw_[8][8],
+        Rw_[9][9], Rw_[10][10], Rw_[11][11]
+    };
+
+    // Cols 0-2: Gs rows 3-5 have a 3×3 block
+    for (int i = 0; i < 15; i++) {
+        for (int c = 0; c < 3; c++) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                float pdt = dt2 * Fs_[i][k+3];
+                if (i == k+3) pdt += dt_s_;
+                s += pdt * Gs_[k+3][c];
+            }
+            B[i][c] = s * rw[c];
+        }
     }
 
-    // PHI_dt_Gs_Rw = PHI_dt_Gs * Rw
-    for (int i=0;i<15;i++) for (int j=0;j<12;j++) {
-        PHI_dt_Gs_Rw[i][j]=0;
-        for (int k=0;k<12;k++) PHI_dt_Gs_Rw[i][j]+=PHI_dt_Gs[i][k]*Rw_[k][j];
+    // Cols 3-11: each column has a single non-zero Gs row
+    static const int src_row[9] = {6, 7, 8, 9, 10, 11, 12, 13, 14};
+    static const float src_val[9] = {-0.5f, -0.5f, -0.5f,
+                                      1.0f, 1.0f, 1.0f,
+                                      1.0f, 1.0f, 1.0f};
+    for (int i = 0; i < 15; i++) {
+        for (int cc = 0; cc < 9; cc++) {
+            const int c = cc + 3;
+            const int k = src_row[cc];
+            float pdt = dt2 * Fs_[i][k];
+            if (i == k) pdt += dt_s_;
+            B[i][c] = pdt * src_val[cc] * rw[c];
+        }
     }
 
-    // Gs transpose
-    for (int i=0;i<15;i++) for (int j=0;j<12;j++) Gs_T[j][i]=Gs_[i][j];
+    // ── Step 2: Q[15][15] = B * Gs^T ───────────────────────────────
+    float Q[15][15];
+    std::memset(Q, 0, sizeof(Q));
 
-    // Q = PHI_dt_Gs_Rw * Gs^T
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) {
-        Q[i][j]=0;
-        for (int k=0;k<12;k++) Q[i][j]+=PHI_dt_Gs_Rw[i][k]*Gs_T[k][j];
+    for (int i = 0; i < 15; i++) {
+        for (int j = 3; j < 6; j++) {
+            float s = 0.0f;
+            for (int c = 0; c < 3; c++)
+                s += B[i][c] * Gs_[j][c];
+            Q[i][j] = s;
+        }
+        Q[i][6] = B[i][3] * (-0.5f);
+        Q[i][7] = B[i][4] * (-0.5f);
+        Q[i][8] = B[i][5] * (-0.5f);
+        for (int j = 9; j < 15; j++)
+            Q[i][j] = B[i][j - 3];
     }
 
-    // Symmetrize Q
-    for (int i=0;i<15;i++) for (int j=0;j<=i;j++) {
-        float s=0.5f*(Q[i][j]+Q[j][i]); Q[i][j]=s; Q[j][i]=s;
+    // Symmetrize Q (15x15 block only)
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < i; j++) {
+            float s = 0.5f * (Q[i][j] + Q[j][i]);
+            Q[i][j] = s; Q[j][i] = s;
+        }
+
+    // ── Step 3: P propagation — PHI*P (row pass) ───────────────────
+    // PHI = I + Fs*dt.  State 15 has Fs_[15][*]=0 so PHI[15][k]=delta(15,k).
+    // We propagate the full NxN P but the sparse Fs structure means only
+    // rows 0-14 need active treatment; row 15 copies through unchanged.
+    float PHI_P[N][N];
+    std::memcpy(PHI_P, P_, sizeof(PHI_P));
+
+    // Rows 0-2: Fs[i][i+3] = 1
+    for (int j = 0; j < N; j++) PHI_P[0][j] += dt_s_ * P_[3][j];
+    for (int j = 0; j < N; j++) PHI_P[1][j] += dt_s_ * P_[4][j];
+    for (int j = 0; j < N; j++) PHI_P[2][j] += dt_s_ * P_[5][j];
+
+    // Rows 3-5: Fs[i+3][6..8] and Fs[i+3][9..11]
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < N; j++) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                s += Fs_[i+3][k+6]  * P_[k+6][j];
+                s += Fs_[i+3][k+9]  * P_[k+9][j];
+            }
+            PHI_P[i+3][j] += dt_s_ * s;
+        }
     }
 
-    // PHI transpose
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) PHI_T[i][j]=PHI[j][i];
-
-    // PHI * P
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) {
-        PHI_P[i][j]=0;
-        for (int k=0;k<15;k++) PHI_P[i][j]+=PHI[i][k]*P_[k][j];
+    // Row 5 extra: Fs[5][2]
+    {
+        const float f52_dt = dt_s_ * Fs_[5][2];
+        for (int j = 0; j < N; j++) PHI_P[5][j] += f52_dt * P_[2][j];
     }
 
-    // P = PHI * P * PHI^T + Q
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) {
-        PHI_P_PHIt[i][j]=0;
-        for (int k=0;k<15;k++) PHI_P_PHIt[i][j]+=PHI_P[i][k]*PHI_T[k][j];
-        P_[i][j]=PHI_P_PHIt[i][j]+Q[i][j];
+    // Rows 6-8: Fs[i+6][6..8] (skew) and Fs[i+6][i+12] (-0.5)
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < N; j++) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; k++)
+                s += Fs_[i+6][k+6] * P_[k+6][j];
+            s += Fs_[i+6][i+12] * P_[i+12][j];
+            PHI_P[i+6][j] += dt_s_ * s;
+        }
     }
 
-    // Symmetrize P
-    for (int i=0;i<15;i++) for (int j=0;j<=i;j++) {
-        float s=0.5f*(P_[i][j]+P_[j][i]); P_[i][j]=s; P_[j][i]=s;
+    // Rows 9-14: diagonal only
+    for (int i = 9; i < 15; i++) {
+        const float f_dt = dt_s_ * Fs_[i][i];
+        for (int j = 0; j < N; j++) PHI_P[i][j] += f_dt * P_[i][j];
+    }
+    // Row 15: PHI[15][k]=delta(15,k) → PHI_P[15][j]=P_[15][j] (already copied)
+
+    // ── Step 4: Column pass — PHI_P * PHI^T + Q → P ────────────────
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            P_[i][j] = PHI_P[i][j];
+
+    // Add Q for the 15x15 nav block
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            P_[i][j] += Q[i][j];
+
+    // Add baro offset random-walk process noise
+    P_[15][15] += baroOffsetSigma_mps * baroOffsetSigma_mps * dt_s_;
+
+    // Cols 0-2: Fs[i][i+3] = 1
+    for (int i = 0; i < N; i++) P_[i][0] += dt_s_ * PHI_P[i][3];
+    for (int i = 0; i < N; i++) P_[i][1] += dt_s_ * PHI_P[i][4];
+    for (int i = 0; i < N; i++) P_[i][2] += dt_s_ * PHI_P[i][5];
+
+    // Cols 3-5: Fs[j+3][6..8] and Fs[j+3][9..11]
+    for (int j = 0; j < 3; j++) {
+        for (int i = 0; i < N; i++) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                s += PHI_P[i][k+6]  * Fs_[j+3][k+6];
+                s += PHI_P[i][k+9]  * Fs_[j+3][k+9];
+            }
+            P_[i][j+3] += dt_s_ * s;
+        }
+    }
+
+    // Col 5 extra: Fs[5][2]
+    {
+        const float f52_dt = dt_s_ * Fs_[5][2];
+        for (int i = 0; i < N; i++) P_[i][5] += f52_dt * PHI_P[i][2];
+    }
+
+    // Cols 6-8: Fs[j+6][6..8] (skew) and Fs[j+6][j+12] (-0.5)
+    for (int j = 0; j < 3; j++) {
+        for (int i = 0; i < N; i++) {
+            float s = 0.0f;
+            for (int k = 0; k < 3; k++)
+                s += PHI_P[i][k+6] * Fs_[j+6][k+6];
+            s += PHI_P[i][j+12] * Fs_[j+6][j+12];
+            P_[i][j+6] += dt_s_ * s;
+        }
+    }
+
+    // Cols 9-14: diagonal only
+    for (int j = 9; j < 15; j++) {
+        const float f_dt = dt_s_ * Fs_[j][j];
+        for (int i = 0; i < N; i++) P_[i][j] += f_dt * PHI_P[i][j];
+    }
+    // Col 15: PHI^T[k][15]=delta(k,15) → already handled (no Fs coupling)
+
+    // Symmetrize P (full NxN)
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < i; j++) {
+            float s = 0.5f * (P_[i][j] + P_[j][i]);
+            P_[i][j] = s; P_[j][i] = s;
+        }
+
+    // Clamp P diagonals to prevent float32 overflow when states are
+    // unobservable (no GPS).  Off-diagonal elements are scaled
+    // proportionally to maintain correlation structure.
+    static constexpr float pmax[N] = {
+        P_MAX_POS, P_MAX_POS, P_MAX_POS,
+        P_MAX_VEL, P_MAX_VEL, P_MAX_VEL,
+        P_MAX_ATT, P_MAX_ATT, P_MAX_ATT,
+        P_MAX_ABIAS, P_MAX_ABIAS, P_MAX_ABIAS,
+        P_MAX_GBIAS, P_MAX_GBIAS, P_MAX_GBIAS,
+        P_MAX_BOFS
+    };
+    for (int i = 0; i < N; i++) {
+        if (P_[i][i] > pmax[i]) {
+            float scale = std::sqrt(pmax[i] / P_[i][i]);
+            for (int j = 0; j < N; j++) {
+                P_[i][j] *= scale;
+                P_[j][i] *= scale;
+            }
+            // Diagonal was scaled twice; correct it
+            P_[i][i] = pmax[i];
+        }
     }
 }
 
@@ -387,9 +548,9 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
     for (int i = 0; i < 3; i++)
         y[i] = (aMeas[i] - aBias_mps2_[i]) + aGrav_B[i];
 
-    // H matrix (3×15): attitude columns (6–8) and accel bias columns (9–11)
+    // H matrix (3×N): attitude columns (6–8) and accel bias columns (9–11)
     // ∂y/∂δθ = -2 * skew(aGrav_B),  ∂y/∂δb_accel = +I
-    float H[3][15] = {};
+    float H[3][N] = {};
     H[0][6] =  0.0f;           H[0][7] =  2*aGrav_B[2];  H[0][8] = -2*aGrav_B[1];
     H[1][6] = -2*aGrav_B[2];   H[1][7] =  0.0f;          H[1][8] =  2*aGrav_B[0];
     H[2][6] =  2*aGrav_B[1];   H[2][7] = -2*aGrav_B[0];  H[2][8] =  0.0f;
@@ -398,9 +559,9 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
     H[2][11] = 1.0f;
 
     // S = H * P * H^T + R  (3×3)
-    float HP[3][15] = {};
+    float HP[3][N] = {};
     for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 15; j++)
+        for (int j = 0; j < N; j++)
             for (int k = 6; k <= 11; k++)
                 HP[i][j] += H[i][k] * P_[k][j];
 
@@ -415,22 +576,22 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
     float S_inv[9];
     if (!invertMatrix3x3(S, S_inv)) return;
 
-    // K = P * H^T * S^-1  (15×3)
-    float PHt[15][3] = {};
-    for (int i = 0; i < 15; i++)
+    // K = P * H^T * S^-1  (Nx3)
+    float PHt[N][3] = {};
+    for (int i = 0; i < N; i++)
         for (int j = 0; j < 3; j++)
             for (int k = 6; k <= 11; k++)
                 PHt[i][j] += P_[i][k] * H[j][k];
 
-    float K[15][3] = {};
-    for (int i = 0; i < 15; i++)
+    float K[N][3] = {};
+    for (int i = 0; i < N; i++)
         for (int j = 0; j < 3; j++)
             for (int k = 0; k < 3; k++)
                 K[i][j] += PHt[i][k] * S_inv[k*3+j];
 
     // State correction: xk = K * y
-    float xk[15] = {};
-    for (int i = 0; i < 15; i++)
+    float xk[N] = {};
+    for (int i = 0; i < N; i++)
         for (int j = 0; j < 3; j++)
             xk[i] += K[i][j] * y[j];
 
@@ -446,6 +607,7 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
         aBias_mps2_[i] += xk[i + 9];
         wBias_rps_[i] += xk[i + 12];
     }
+    baroOffset_m_ += xk[15];
 
     // Quaternion correction
     float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
@@ -454,40 +616,44 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
     multiplyQuaternions(quat_BL_, quatDelta, qTemp);
     for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
 
-    // Joseph form covariance update: P = (I-KH)*P*(I-KH)^T + K*R*K^T
-    float KH[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 3; k++)
-                KH[i][j] += K[i][k] * H[k][j];
+    // Sparse Joseph form: P = (I-KH)*P*(I-KH)^T + K*R*K^T
+    // Exploits H sparsity (non-zero only in cols 6-11) to avoid building
+    // full KH and I_KH matrices.  Uses already-computed HP and K.
 
-    float I_KH[15][15];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - KH[i][j];
-
-    float I_KH_P[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 15; k++)
-                I_KH_P[i][j] += I_KH[i][k] * P_[k][j];
-
-    float P_new[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++) {
-            for (int k = 0; k < 15; k++)
-                P_new[i][j] += I_KH_P[i][k] * I_KH[j][k];
-            for (int k = 0; k < 3; k++)
-                P_new[i][j] += K[i][k] * R_accel_ * K[j][k];
+    // Step 1: I_KH_P[i][j] = P[i][j] - K[i][:] * HP[:][j]
+    float I_KH_P[N][N];
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++) {
+            float v = P_[i][j];
+            for (int m = 0; m < 3; m++)
+                v -= K[i][m] * HP[m][j];
+            I_KH_P[i][j] = v;
         }
 
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            P_[i][j] = P_new[i][j];
+    // Step 2: AHt[i][m] = sum_{k=6}^{11} I_KH_P[i][k] * H[m][k]
+    float AHt[N][3];
+    for (int i = 0; i < N; i++)
+        for (int m = 0; m < 3; m++) {
+            float s = 0.0f;
+            for (int k = 6; k <= 11; k++)
+                s += I_KH_P[i][k] * H[m][k];
+            AHt[i][m] = s;
+        }
+
+    // Step 3: P = I_KH_P - AHt * K^T + K * R * K^T
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++) {
+            float v = I_KH_P[i][j];
+            for (int m = 0; m < 3; m++) {
+                v -= AHt[i][m] * K[j][m];
+                v += K[i][m] * R_accel_ * K[j][m];
+            }
+            P_[i][j] = v;
+        }
 
     // Symmetrize P
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j <= i; j++) {
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < i; j++) {
             float s = 0.5f * (P_[i][j] + P_[j][i]);
             P_[i][j] = s; P_[j][i] = s;
         }
@@ -605,26 +771,44 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
                             R_scaled[i+3][i+3] = R_[i+3][i+3] * vel_scale; }
 
     // S = H * P * H^T + R_scaled
-    float H_T[15][6];
-    for (int i=0;i<6;i++) for (int j=0;j<15;j++) H_T[j][i]=H_[i][j];
+    float H_T[N][6];
+    for (int i=0;i<6;i++) for (int j=0;j<N;j++) H_T[j][i]=H_[i][j];
 
-    float H_P[6][15]={};
-    for (int i=0;i<6;i++) for (int j=0;j<15;j++) for (int k=0;k<15;k++) H_P[i][j]+=H_[i][k]*P_[k][j];
+    float H_P[6][N]={};
+    for (int i=0;i<6;i++) for (int j=0;j<N;j++) for (int k=0;k<N;k++) H_P[i][j]+=H_[i][k]*P_[k][j];
 
     float S[36]={};
     for (int i=0;i<6;i++) for (int j=0;j<6;j++) {
-        for (int k=0;k<15;k++) S[i*6+j]+=H_P[i][k]*H_T[k][j];
+        for (int k=0;k<N;k++) S[i*6+j]+=H_P[i][k]*H_T[k][j];
         S[i*6+j]+=R_scaled[i][j];
     }
 
     float S_inv[36];
     if (!invertMatrix6x6(S, S_inv)) return;  // singular S — skip update
 
-    float P_Ht[15][6]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<15;k++) P_Ht[i][j]+=P_[i][k]*H_T[k][j];
+    // ── Gate 2: Chi-squared innovation test ──
+    // Reject GNSS measurement if innovation is statistically inconsistent
+    // with the current state + covariance.  Test statistic: y^T * S^-1 * y
+    // follows chi-squared with 6 DOF.  Threshold ≈ 22.46 corresponds to
+    // p = 0.001 (99.9% confidence), generous enough to avoid rejecting
+    // legitimate measurements during high dynamics.
+    {
+        float nis = 0.0f; // Normalized Innovation Squared
+        for (int i = 0; i < 6; i++) {
+            float row_sum = 0.0f;
+            for (int j = 0; j < 6; j++)
+                row_sum += S_inv[i * 6 + j] * y[j];
+            nis += y[i] * row_sum;
+        }
+        static constexpr float CHI2_GATE_6DOF = 22.46f; // chi²(6, 0.001)
+        if (nis > CHI2_GATE_6DOF) return; // reject outlier measurement
+    }
 
-    float K[15][6]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) K[i][j]+=P_Ht[i][k]*S_inv[k*6+j];
+    float P_Ht[N][6]={};
+    for (int i=0;i<N;i++) for (int j=0;j<6;j++) for (int k=0;k<N;k++) P_Ht[i][j]+=P_[i][k]*H_T[k][j];
+
+    float K[N][6]={};
+    for (int i=0;i<N;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) K[i][j]+=P_Ht[i][k]*S_inv[k*6+j];
 
     // Gate attitude rows of K by cos⁴(pitch) to suppress GNSS attitude
     // corrections near vertical, where position/velocity innovations have
@@ -645,34 +829,34 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
     }
 
     // Joseph form: P = (I-KH)*P*(I-KH)^T + K*R_scaled*K^T
-    float KH[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<6;k++) KH[i][j]+=K[i][k]*H_[k][j];
+    float KH[N][N]={};
+    for (int i=0;i<N;i++) for (int j=0;j<N;j++) for (int k=0;k<6;k++) KH[i][j]+=K[i][k]*H_[k][j];
 
-    float I_KH[15][15];
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) I_KH[i][j]=(i==j?1.0f:0.0f)-KH[i][j];
+    float I_KH[N][N];
+    for (int i=0;i<N;i++) for (int j=0;j<N;j++) I_KH[i][j]=(i==j?1.0f:0.0f)-KH[i][j];
 
-    float I_KH_P[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<15;k++) I_KH_P[i][j]+=I_KH[i][k]*P_[k][j];
+    float I_KH_P[N][N]={};
+    for (int i=0;i<N;i++) for (int j=0;j<N;j++) for (int k=0;k<N;k++) I_KH_P[i][j]+=I_KH[i][k]*P_[k][j];
 
-    float I_KH_P_I_KHt[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<15;k++) I_KH_P_I_KHt[i][j]+=I_KH_P[i][k]*I_KH[j][k];
+    float I_KH_P_I_KHt[N][N]={};
+    for (int i=0;i<N;i++) for (int j=0;j<N;j++) for (int k=0;k<N;k++) I_KH_P_I_KHt[i][j]+=I_KH_P[i][k]*I_KH[j][k];
 
-    float KR[15][6]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) KR[i][j]+=K[i][k]*R_scaled[k][j];
+    float KR[N][6]={};
+    for (int i=0;i<N;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) KR[i][j]+=K[i][k]*R_scaled[k][j];
 
-    float KR_Kt[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<6;k++) KR_Kt[i][j]+=KR[i][k]*K[j][k];
+    float KR_Kt[N][N]={};
+    for (int i=0;i<N;i++) for (int j=0;j<N;j++) for (int k=0;k<6;k++) KR_Kt[i][j]+=KR[i][k]*K[j][k];
 
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) P_[i][j]=I_KH_P_I_KHt[i][j]+KR_Kt[i][j];
+    for (int i=0;i<N;i++) for (int j=0;j<N;j++) P_[i][j]=I_KH_P_I_KHt[i][j]+KR_Kt[i][j];
 
     // Symmetrize P
-    for (int i=0;i<15;i++) for (int j=0;j<=i;j++) {
+    for (int i=0;i<N;i++) for (int j=0;j<=i;j++) {
         float s=0.5f*(P_[i][j]+P_[j][i]); P_[i][j]=s; P_[j][i]=s;
     }
 
     // State update: x = K * y
-    float xk[15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) xk[i]+=K[i][j]*y[j];
+    float xk[N]={};
+    for (int i=0;i<N;i++) for (int j=0;j<6;j++) xk[i]+=K[i][j]*y[j];
 
     // Apply corrections
     double Rew, Rns;
@@ -686,6 +870,7 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         aBias_mps2_[i]+=xk[i+9];
         wBias_rps_[i]+=xk[i+12];
     }
+    baroOffset_m_ += xk[15];
 
     // Attitude correction (K rows 6-8 already gated by cos²(pitch) above)
     float quatDelta[4]={1.0f, xk[6], xk[7], xk[8]};
@@ -701,29 +886,40 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
     if (baro_data.time_us == baroTimePrev_) return;
     baroTimePrev_ = baro_data.time_us;
 
-    // pEst_D_rrm_[2] stores altitude (positive-up), but the EKF state
-    // vector index 2 is "Down" in NED.  H_baro = [0..0, -1, 0..0] at
-    // index 2 maps the Down state to altitude: z_baro = -x_down = alt.
+    // Measurement model: z_baro = altitude + baro_offset + noise
+    // H_baro has -1 at index 2 (Down→Alt) and +1 at index 15 (baro offset).
     //
-    // Innovation: y = z - H*x = baro_alt - (-1)*(-down) = baro_alt - alt
-    //           = baro_alt - pEst_D_rrm_[2]
-    float y = (float)(baro_data.altitude_m - pEst_D_rrm_[2]);
+    // Innovation: y = z_baro - (altitude_est + baro_offset_est)
+    float y = (float)(baro_data.altitude_m - pEst_D_rrm_[2] - baroOffset_m_);
 
-    // S = H*P*H^T + R.  With H[2]=-1: S = (-1)*P[2][2]*(-1) + R = P[2][2] + R
-    float S = P_[2][2] + R_baro_;
+    // S = H*P*H^T + R.
+    // H = [0..0, -1, 0..0, +1] at indices 2 and 15.
+    // S = P[2][2] - P[2][15] - P[15][2] + P[15][15] + R
+    float S = P_[2][2] - P_[2][15] - P_[15][2] + P_[15][15] + R_baro_;
     if (S < 1e-10f) return;
     float S_inv = 1.0f / S;
 
-    // K = P * H^T * S^-1.  H^T has -1 at row 2, so K[i] = P[i][2]*(-1)*S_inv
-    float K[15];
-    for (int i = 0; i < 15; i++) K[i] = -P_[i][2] * S_inv;
+    // Chi-squared innovation gate (1 DOF).  Reject baro measurement if
+    // innovation is statistically inconsistent with the current state +
+    // covariance.  Threshold 10.83 ≈ chi²(1, 0.001) (99.9% confidence).
+    // Catches ejection-charge pressure transients that pass the sample-to-
+    // sample spike filter but are large relative to the EKF prediction.
+    float nis = y * y * S_inv;
+    static constexpr float CHI2_GATE_1DOF = 10.83f;
+    if (nis > CHI2_GATE_1DOF) return;
 
-    // State correction: x = K * y  (x is in NED, so xk[2] is Down)
-    float xk[15];
-    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
+    // K = P * H^T * S^-1.
+    // H^T has -1 at row 2 and +1 at row 15:
+    // K[i] = (-P[i][2] + P[i][15]) * S_inv
+    float K[N];
+    for (int i = 0; i < N; i++)
+        K[i] = (-P_[i][2] + P_[i][15]) * S_inv;
 
-    // Apply corrections — same convention as GPS measUpdate:
-    // altitude (up) subtracts the Down correction
+    // State correction: xk = K * y
+    float xk[N];
+    for (int i = 0; i < N; i++) xk[i] = K[i] * y;
+
+    // Apply corrections
     double Rew, Rns;
     EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
     pEst_D_rrm_[2] -= xk[2];
@@ -735,6 +931,7 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
         aBias_mps2_[i] += xk[i + 9];
         wBias_rps_[i] += xk[i + 12];
     }
+    baroOffset_m_ += xk[15];
 
     // Quaternion correction
     float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
@@ -744,27 +941,33 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
     for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
 
     // Joseph form covariance: P = (I - K*H) * P * (I - K*H)^T + K*R*K^T
-    // H[2] = -1, so K*H row i col j = K[i] * (-1 if j==2, else 0)
-    float I_KH[15][15];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * (j == 2 ? -1.0f : 0.0f);
+    // H has non-zero entries at cols 2 (-1) and 15 (+1).
+    // (I-KH)[i][j] = delta(i,j) - K[i]*H[j]
+    //   where H[j] = -1 if j==2, +1 if j==15, else 0.
+    float I_KH[N][N];
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++) {
+            float h_j = 0.0f;
+            if (j == 2)  h_j = -1.0f;
+            if (j == 15) h_j =  1.0f;
+            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * h_j;
+        }
 
-    float P_new[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 15; k++)
+    float P_new[N][N] = {};
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++)
+            for (int k = 0; k < N; k++)
                 P_new[i][j] += I_KH[i][k] * P_[k][j];
 
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++) {
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++) {
             float sum = 0;
-            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
+            for (int k = 0; k < N; k++) sum += P_new[i][k] * I_KH[j][k];
             P_[i][j] = sum + K[i] * R_baro_ * K[j];
         }
 
     // Symmetrize P
-    for (int i = 0; i < 15; i++)
+    for (int i = 0; i < N; i++)
         for (int j = 0; j <= i; j++) {
             float s = 0.5f * (P_[i][j] + P_[j][i]);
             P_[i][j] = s; P_[j][i] = s;
@@ -791,7 +994,7 @@ void GpsInsEKF::setQuaternion(float q0_in, float q1_in, float q2_in, float q3_in
     // and zero all cross-covariances with attitude states
     float att_var = 1e-6f;  // (0.001 rad)^2 ~ 0.06 deg
     for (int i = 6; i <= 8; i++) {
-        for (int j = 0; j < 15; j++) {
+        for (int j = 0; j < N; j++) {
             P_[i][j] = 0.0f;
             P_[j][i] = 0.0f;
         }

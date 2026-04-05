@@ -1,0 +1,183 @@
+TinkerRocket Test & Analysis Scripts
+=====================================
+
+All scripts live in:  Code/tests/
+All scripts use:      Python 3 (no pip dependencies beyond stdlib)
+Run from:             Code/tests/  or anywhere with absolute paths
+
+
+SCRIPT OVERVIEW
+===============
+
+1. analyze_bench.py   -- PRIMARY TOOL: Unified bench test analyzer
+2. parse_flight.py    -- Detailed per-sensor binary log parser
+3. analyze_rates.py   -- Sensor rate analysis with gap histograms
+4. verify_sparse_ekf.py      -- Float64 sparse vs dense EKF verification
+5. verify_sparse_ekf_f32.py  -- Float32 sparse vs dense EKF verification
+6. trace_divergence.py       -- EKF divergence debugging
+
+
+QUICK REFERENCE
+===============
+
+After a bench test, you typically have:
+  - A binary flight log:  ~/Downloads/flight_YYYYMMDD_HHMMSS.bin
+  - Serial monitor output: copy-pasted or saved from Arduino Serial Monitor
+
+Run the unified analyzer:
+
+    python3 tests/analyze_bench.py <binary.bin>
+    python3 tests/analyze_bench.py <binary.bin> <serial_output.txt>
+    python3 tests/analyze_bench.py --serial <serial_output.txt>
+
+For deeper analysis of a specific area:
+
+    python3 tests/parse_flight.py <binary.bin>       # per-sensor detail + anomalies
+    python3 tests/analyze_rates.py <binary.bin>      # rate histograms + gap analysis
+
+
+DETAILED USAGE
+==============
+
+analyze_bench.py
+----------------
+The main analysis tool. Accepts binary logs, serial output, or both.
+
+Input formats:
+  - Binary (.bin): Raw flight log downloaded from flash via OutComputer.
+    Frame format: [AA 55 AA 55] [type] [len] [payload] [CRC16_hi CRC16_lo]
+    CRC16: polynomial 0x8001, init 0, no reversal (RobTillaart CRC lib defaults)
+
+  - Serial (.txt/.log): Copy of Arduino Serial Monitor output.
+    Must contain timestamp prefix like "HH:MM:SS.mmm -> " before each line.
+    Parses these diagnostic tags:
+      [TIMING]   - EKF execution time, flight loop rate
+      [GAP DIAG] - Sensor poll timing, I2C queue stats, gap analysis
+      [EKF DIAG] - Attitude, mag field, gyro bias
+
+Output sections:
+  - MESSAGE COUNTS: Frame counts by type
+  - LOGGED SENSOR RATES: Rate vs target with status icons
+  - GAP ANALYSIS: Per-sensor interval statistics (median, P95, P99, worst)
+  - EKF/STATE ANALYSIS: Quaternion health, position drift, state transitions
+  - ANOMALY CHECK: Automated checks for common problems
+  - EKF TIMING: avg/max execution time per window (serial only)
+  - I2C QUEUE HEALTH: Enqueue OK/drop, TX success/fail, queue depth
+  - COMBINED COMPARISON: Cross-reference serial vs binary data
+
+Target rates (from config.h):
+  ISM6:         960 Hz
+  BMP:          500 Hz (actual ~460 Hz with OSR x1/x1)
+  MMC:          200 Hz (hw supports 1/10/20/50/100/200/1000 only)
+  GNSS:          10 Hz (4 constellations, config asks 18 to hit ceiling)
+  NonSensor:    250 Hz
+  Flight loop: 1000 Hz
+  EKF:          500 Hz (loop / EKF_DECIMATION=2)
+
+Status icons:
+  Pass: rate >= 95% of target
+  Warn: rate 70-95% of target
+  Fail: rate < 70% of target
+
+
+parse_flight.py
+---------------
+Detailed binary log parser with per-sensor data analysis.
+
+    python3 tests/parse_flight.py <binary.bin>
+
+Shows: frame counts, time range, IMU raw ranges + saturation check,
+barometer temp/pressure ranges, GNSS fix/sat/position, EKF quaternion
+norms + state transitions + altitude/velocity, LoRa telemetry, power
+voltage/current/SOC, magnetometer raw values + midpoint offset.
+
+
+analyze_rates.py
+----------------
+Focused rate analysis with detailed gap histogram for IMU.
+
+    python3 tests/analyze_rates.py <binary.bin>
+
+Shows: message counts, per-sensor rate computation, IMU gap histogram
+(50us bins), threshold analysis (gaps >1ms, >2ms, >5ms, >10ms), worst
+gap listing, duplicate timestamp detection.
+
+
+verify_sparse_ekf.py / verify_sparse_ekf_f32.py
+------------------------------------------------
+Verify sparse EKF matrix operations match dense reference implementation.
+
+    python3 tests/verify_sparse_ekf.py
+    python3 tests/verify_sparse_ekf_f32.py
+
+No arguments needed. Runs 1000 iterations comparing sparse vs dense
+timeUpdate() and prints max element-wise difference.
+Expected: <1e-10 (f64), <1e-4 (f32).
+
+
+trace_divergence.py
+-------------------
+Debug tool for investigating EKF P-matrix divergence.
+
+    python3 tests/trace_divergence.py
+
+No arguments needed. Steps through EKF propagation one iteration at a time,
+printing P diagonal values to identify when/where divergence occurs.
+
+
+BINARY LOG FORMAT REFERENCE
+============================
+
+Frame: [AA 55 AA 55] [type:1] [len:1] [payload:len] [crc16:2]
+
+Message types and payload structs (all little-endian, packed):
+
+  0xA1 GNSS (42 bytes):
+    uint32 time_us, uint16 year, uint8 month, uint8 day,
+    uint8 hour, uint8 minute, uint8 second, uint16 ms,
+    uint8 fix_mode, uint8 num_sats, uint8 pdop_x10,
+    int32 lat_e7, int32 lon_e7, int32 alt_mm,
+    int32 vel_e_mmps, int32 vel_n_mmps, int32 vel_u_mmps,
+    uint8 h_acc_m, uint8 v_acc_m
+
+  0xA2 ISM6HG256 (22 bytes):
+    uint32 time_us,
+    int16 acc_low_x, int16 acc_low_y, int16 acc_low_z,
+    int16 acc_high_x, int16 acc_high_y, int16 acc_high_z,
+    int16 gyro_x, int16 gyro_y, int16 gyro_z
+
+  0xA3 BMP585 (12 bytes):
+    uint32 time_us, int32 temp_q16 (degC*65536), uint32 press_q6 (Pa*64)
+
+  0xA4 MMC5983MA (16 bytes):
+    uint32 time_us, uint32 mag_x, uint32 mag_y, uint32 mag_z
+
+  0xA5 NonSensor (42 bytes):
+    uint32 time_us,
+    int16 q0, int16 q1, int16 q2, int16 q3   (quaternion * 10000)
+    int16 roll_cmd (deg*100),
+    int32 e_pos, int32 n_pos, int32 u_pos     (cm)
+    int32 e_vel, int32 n_vel, int32 u_vel     (cm/s)
+    uint8 flags, uint8 rocket_state,
+    int16 baro_alt_rate_dmps (dm/s)
+
+  0xA6 Power (10 bytes):
+    uint32 time_us,
+    uint16 voltage_raw ((V/10)*65535),
+    int16 current_raw ((mA/10000)*32767),
+    int16 soc_raw ((soc+25)*(32767/150))
+
+
+SERIAL DIAGNOSTIC LINE FORMATS
+================================
+
+[TIMING] ekf: avg=<us> max=<us> us cnt=<n> | loop: cnt=<n>/s
+[TIMING] ekf: not running | loop: cnt=<n>/s
+
+[GAP DIAG] iter_max=<us> gnss_max=<us> bmp_max=<us> mmc_max=<us> ism6_max=<us> us
+[GAP DIAG] gaps>10ms=<n> worst=<us> us | gnss calls=<n> >1ms=<n> >5ms=<n> >10ms=<n>
+[GAP DIAG] i2c enqueue ok/drop=<n>/<n> tx ok/fail=<n>/<n> last_err=<n> q_free=<n>
+[GAP DIAG] getOutReady_max=<us> us  query ok/fail=<n>/<n>
+
+[EKF DIAG] quat_roll=<deg> euler_roll=<deg> pitch=<deg> yaw=<deg> cos2p=<f>
+[EKF DIAG] mag=<uT>(<OK|REJ|NONE>) gyro_bias=[<x>,<y>,<z>]dps

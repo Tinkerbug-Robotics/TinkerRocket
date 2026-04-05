@@ -21,7 +21,7 @@ from tinkerrocket_sim.simulation.closed_loop_sim import run_closed_loop, SimConf
 
 # --- Rocket source ---
 # Option 1: Load from OpenRocket .ork file (motor thrust data from motors/*.eng)
-ORK_FILE = "rockets/54mm_Roll_Control.ork"
+ORK_FILE = "rockets/67mm Guidance Testbed.ork"
 # Option 2: Set to None to use the manual definition in make_rocket() below
 # ORK_FILE = None
 
@@ -36,17 +36,17 @@ KD = 0.0003                # derivative gain
 #           The controller tracks each angle until the next waypoint time.
 ROLL_SETPOINT_DPS = 0.0    # desired roll rate (deg/s), only used if ROLL_PROFILE is None
 
-ROLL_PROFILE = [            # list of (time_s, target_angle_deg) waypoints
-    (0.0,   0.0),           # hold 0° from launch
-    (1.0, 180.0),           # at t=1.0s, roll to 180°
-]
-# ROLL_PROFILE = None       # uncomment for constant rate mode
+# ROLL_PROFILE = [            # list of (time_s, target_angle_deg) waypoints
+#     (0.0,   0.0),           # hold 0° from launch
+#     (1.0, 180.0),           # at t=1.0s, roll to 180°
+# ]
+ROLL_PROFILE = None       # no roll during guidance debug
 
 KP_ANGLE = 5.0             # outer angle loop gain: (deg/s rate cmd) per (deg angle error)
 
 # --- Control ---
 CONTROL_ENABLED = True      # False = passive flight (no fin tab actuation)
-ROLL_DISTURBANCE_NM = 0.0   # constant roll torque disturbance (N-m), e.g. 0.005
+ROLL_DISTURBANCE_NM = 0.002  # constant roll torque disturbance (N-m)
 
 # --- Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s ---
 GAIN_V_REF = 50.0           # reference airspeed for gain schedule (m/s)
@@ -66,7 +66,7 @@ WIND_DIRECTION = 0.0        # direction wind comes FROM in degrees (0=N, 90=E)
 PAD_TIME = 2.0              # pre-launch pad warmup (s) for EKF convergence
 DURATION = 16.0             # sim duration after launch (s)
 PHYSICS_DT = 0.001          # physics timestep (s), 0.001=1kHz, 0.0001=10kHz
-LAUNCH_ANGLE_DEG = 89.0     # from horizontal (90 = straight up)
+LAUNCH_ANGLE_DEG = 87.0     # from horizontal (90 = straight up)
 HEADING_DEG = 0.0           # launch heading (0 = North)
 
 # --- Sensor rates ---
@@ -90,6 +90,36 @@ PAD_HEADING_DEG = 0.0            # Known heading on pad (°, 0=N). None = use ma
 #   No-mag flight:     PERFECT_IMU=False, INJECT=False, GNSS=True,  BARO=True,  MAG=False, PAD=0.0
 #   IMU-only:          PERFECT_IMU=False, INJECT=False, GNSS=False, BARO=False, MAG=False, PAD=0.0
 #   Perfect IMU:       PERFECT_IMU=True,  INJECT=True,  GNSS=False, BARO=False, MAG=False, PAD=None
+
+# --- Guidance — guided coast to point at target above pad ---
+GUIDANCE_ENABLED = True        # True = guided coast, False = roll-only
+GUIDANCE_MODE = 'pn'            # 'pn' = proportional nav, 'attitude' = point-at-target
+PN_NAV_GAIN = 5.0               # navigation constant (3-5 typical)
+PN_MAX_TILT_DEG = 15.0          # max body tilt command (deg)
+PN_MAX_ACCEL_MPS2 = 20.0        # max lateral accel command (m/s^2)
+PN_BLEND_RADIUS_M = 200.0       # PD blend radius (m) — large = always PD mode
+PN_KP_POS = 0.8                 # PD position gain (s^-2)
+PN_KD_VEL = 1.5                 # PD velocity gain (s^-1)
+PN_KP_PITCH_ANGLE = 8.0         # outer-loop pitch angle P gain
+PN_KP_YAW_ANGLE = 8.0           # outer-loop yaw angle P gain
+PN_PITCH_KP = 0.06              # inner-loop pitch rate PID
+PN_PITCH_KI = 0.002
+PN_PITCH_KD = 0.0004
+PN_YAW_KP = 0.06                # inner-loop yaw rate PID
+PN_YAW_KI = 0.002
+PN_YAW_KD = 0.0004
+PN_MAX_FIN_DEG = 20.0           # per-fin max deflection (deg)
+PN_MIN_SPEED_MPS = 10.0         # min speed for guidance (m/s)
+PN_COAST_DELAY_S = 0.0          # delay after burnout (s)
+PN_GAIN_V_REF = 50.0            # pitch/yaw gain-schedule V_ref (m/s)
+PN_GAIN_V_MIN = 25.0            # pitch/yaw gain-schedule V_min (m/s)
+
+# --- 3D Visualization ---
+SHOW_3D = True              # True = show 3D rocket flight visualization
+ANIMATE_3D = False          # True = animated playback (slower), False = static snapshots
+N_SNAPSHOTS = 8             # number of rocket models along trajectory (static mode)
+ANIM_SPEED = 2.0            # animation playback speed multiplier
+EXPORT_HTML = True          # True = export interactive Three.js HTML visualization
 
 # --- Output ---
 SHOW_PLOT = True            # True = interactive window, False = save PNG
@@ -148,6 +178,25 @@ def load_rocket():
 
     # Apply disturbance (not in .ork file)
     rd.roll_disturbance_torque = ROLL_DISTURBANCE_NM
+
+    # Adjust stability to 3.5 cal (realistic with motor installed)
+    target_stability_cal = 2.88  # with G80 motor installed
+    rd.cg_from_nose = rd.cp_from_nose - target_stability_cal * rd.body_diameter
+
+    # Set Kt_pitch/yaw from CFD Fy data:
+    # CFD: Fy ≈ 47.5 mN/deg at 95 m/s per fin tab
+    # Moment arm CG→fin tab CP ≈ 0.55 m (depends on CG position)
+    # Kt_pitch = Fy_per_deg × arm ≈ 0.026 N-m/deg per tab
+    fin_tab_cp_from_nose = (rd.nose_length + rd.body_length
+                            - 0.25 * rd.fin_root_chord)  # tab at 75% chord
+    moment_arm = fin_tab_cp_from_nose - rd.cg_from_nose
+    Fy_per_deg_95 = 47.5e-3  # N/deg at V_ref=95 m/s (from CFD)
+    Kt_pitch_cfd = Fy_per_deg_95 * moment_arm
+    rd.cruciform_fins.Kt_pitch = Kt_pitch_cfd
+    rd.cruciform_fins.Kt_yaw = Kt_pitch_cfd
+    print(f"  Kt_pitch/yaw from CFD: {Kt_pitch_cfd:.4e} N-m/deg "
+          f"(Fy={Fy_per_deg_95*1000:.1f} mN/deg, arm={moment_arm*1000:.0f} mm)")
+
     return rd
 
 
@@ -174,8 +223,12 @@ def plot_results(df, title, save_path=None, show=False):
         save_p2 = f"{base}_control{ext}"
         save_p3 = f"{base}_ekf{ext}"
         save_p4 = f"{base}_imu{ext}"
+        save_p5 = f"{base}_guidance{ext}"
     else:
-        save_p1 = save_p2 = save_p3 = save_p4 = None
+        save_p1 = save_p2 = save_p3 = save_p4 = save_p5 = None
+
+    # Skip pages 1-4 when only guidance plots are needed
+    GUIDANCE_PLOTS_ONLY = False
 
     # ---- Page 1: Flight Performance ----
     fig1, axes1 = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
@@ -202,6 +255,8 @@ def plot_results(df, title, save_path=None, show=False):
     if save_p1:
         fig1.savefig(save_p1, dpi=150)
         print(f"Plot saved to {save_p1}")
+    if GUIDANCE_PLOTS_ONLY:
+        plt.close(fig1)
 
     # ---- Page 2: Attitude & Control ----
     has_angle_profile = 'roll_target_deg' in df.columns
@@ -286,6 +341,8 @@ def plot_results(df, title, save_path=None, show=False):
     if save_p2:
         fig2.savefig(save_p2, dpi=150)
         print(f"Plot saved to {save_p2}")
+    if GUIDANCE_PLOTS_ONLY:
+        plt.close(fig2)
 
     # ---- Page 3: EKF Estimation Performance ----
     has_ekf_data = all(c in df.columns for c in ['ekf_roll_deg', 'ekf_vn', 'ekf_pn'])
@@ -294,17 +351,36 @@ def plot_results(df, title, save_path=None, show=False):
         fig3, axes3 = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
         fig3.suptitle(f"{title} — EKF Estimation Error")
 
-        # Panel 1: Orientation error (deg)
-        # Use quaternion-based roll (gimbal-lock-free) if available
-        if 'ekf_roll_quat_deg' in df.columns and 'true_roll_quat_deg' in df.columns:
-            roll_err = df['ekf_roll_quat_deg'] - df['true_roll_quat_deg']
+        # Panel 1: Orientation error via error quaternion
+        # q_err = q_true^-1 ⊗ q_ekf — gives rotation from truth to EKF
+        # Decompose into roll/pitch/yaw error angles (wrapping-free)
+        has_quats = all(c in df.columns for c in
+                        ['ekf_q0', 'ekf_q1', 'ekf_q2', 'ekf_q3',
+                         'true_q0_ned', 'true_q1_ned', 'true_q2_ned', 'true_q3_ned'])
+        if has_quats:
+            # q_true inverse (conjugate): [w, -x, -y, -z]
+            tw = df['true_q0_ned']; tx = df['true_q1_ned']
+            ty = df['true_q2_ned']; tz = df['true_q3_ned']
+            ew = df['ekf_q0']; ex = df['ekf_q1']
+            ey = df['ekf_q2']; ez = df['ekf_q3']
+            # q_err = q_true_inv ⊗ q_ekf  (Hamilton product)
+            qe_w =  tw*ew + tx*ex + ty*ey + tz*ez
+            qe_x = -tx*ew + tw*ex + tz*ey - ty*ez
+            qe_y = -ty*ew - tz*ex + tw*ey + tx*ez
+            qe_z = -tz*ew + ty*ex - tx*ey + tw*ez
+            # Ensure positive scalar part (short rotation)
+            sign = np.sign(qe_w).replace(0, 1)
+            qe_w *= sign; qe_x *= sign; qe_y *= sign; qe_z *= sign
+            # Small-angle: error ≈ 2*[qx, qy, qz] in radians
+            # For larger errors, use proper Euler extraction
+            roll_err = np.degrees(2.0 * qe_x)
+            pitch_err = np.degrees(2.0 * qe_y)
+            yaw_err = np.degrees(2.0 * qe_z)
         else:
-            roll_err = df['ekf_roll_deg'] - df['true_roll_ned_deg']
-        roll_err = (roll_err + 180.0) % 360.0 - 180.0  # wrap to [-180, 180]
-        pitch_err = df['ekf_pitch_deg'] - df['true_pitch_ned_deg']
-        pitch_err = (pitch_err + 180.0) % 360.0 - 180.0
-        yaw_err = df['ekf_yaw_deg'] - df['true_yaw_ned_deg']
-        yaw_err = (yaw_err + 180.0) % 360.0 - 180.0
+            # Fallback to Euler difference
+            roll_err = (df['ekf_roll_deg'] - df['true_roll_ned_deg'] + 180) % 360 - 180
+            pitch_err = (df['ekf_pitch_deg'] - df['true_pitch_ned_deg'] + 180) % 360 - 180
+            yaw_err = (df['ekf_yaw_deg'] - df['true_yaw_ned_deg'] + 180) % 360 - 180
 
         axes3[0].plot(df['time'], roll_err, 'r-', label='Roll', alpha=0.8)
         axes3[0].plot(df['time'], pitch_err, 'g-', label='Pitch', alpha=0.8)
@@ -349,6 +425,8 @@ def plot_results(df, title, save_path=None, show=False):
         if save_p3:
             fig3.savefig(save_p3, dpi=150)
             print(f"Plot saved to {save_p3}")
+        if GUIDANCE_PLOTS_ONLY:
+            plt.close(fig3)
 
     # ---- Page 4: IMU Accelerometer vs Truth ----
     fig4 = None
@@ -389,6 +467,134 @@ def plot_results(df, title, save_path=None, show=False):
         if save_p4:
             fig4.savefig(save_p4, dpi=150)
             print(f"Plot saved to {save_p4}")
+        if GUIDANCE_PLOTS_ONLY:
+            plt.close(fig4)
+
+    # ---- Page 5: PN Guidance + Fin Control ----
+    fig5 = None
+    has_pn = 'pn_a_n' in df.columns
+    has_fins = 'fin1_actual' in df.columns
+    guided = df[df['guidance_active'] == True] if 'guidance_active' in df.columns else df.iloc[0:0]
+    # Show page if we have guidance data OR fin data
+    if (has_pn and len(guided) > 0) or has_fins:
+            fig5, axes5 = plt.subplots(3, 2, figsize=(16, 12))
+            fig5.suptitle(f"{title} — PN Guidance + Fin Control")
+
+            # Panel (0,0): PN accel commands ENU
+            ax = axes5[0, 0]
+            if has_pn and len(guided) > 0:
+                ax.plot(guided['time'], guided['pn_a_e'].fillna(0),
+                        'r-', label='East', alpha=0.8)
+                ax.plot(guided['time'], guided['pn_a_n'].fillna(0),
+                        'g-', label='North', alpha=0.8)
+                ax.plot(guided['time'], guided['pn_a_u'].fillna(0),
+                        'b-', label='Up', alpha=0.8)
+                a_mag = np.sqrt(guided['pn_a_e'].fillna(0)**2 +
+                                guided['pn_a_n'].fillna(0)**2 +
+                                guided['pn_a_u'].fillna(0)**2)
+                ax.plot(guided['time'], a_mag, 'k--', label='|a|', alpha=0.5)
+            ax.set_ylabel("PN Accel Cmd ENU (m/s²)")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.axhline(0, color='k', alpha=0.2)
+
+            # Panel (0,1): Commanded body-frame accel (FRD)
+            ax = axes5[0, 1]
+            if has_pn and len(guided) > 0:
+                if 'pn_a_body_fwd' in guided.columns:
+                    ax.plot(guided['time'], guided['pn_a_body_fwd'].fillna(0),
+                            'r-', label='Cmd Fwd (X)', alpha=0.8)
+                    ax.plot(guided['time'], guided['pn_a_body_right'].fillna(0),
+                            'g-', label='Cmd Right (Y)', alpha=0.8)
+                    ax.plot(guided['time'], guided['pn_a_body_down'].fillna(0),
+                            'b-', label='Cmd Down (Z)', alpha=0.8)
+                # Overlay true body accel (FLU→FRD: negate Y,Z)
+                if 'true_acc_x' in guided.columns:
+                    ax.plot(guided['time'], guided['true_acc_x'].fillna(0),
+                            'r--', label='Actual Fwd', alpha=0.4)
+                    ax.plot(guided['time'], -guided['true_acc_y'].fillna(0),
+                            'g--', label='Actual Right', alpha=0.4)
+                    ax.plot(guided['time'], -guided['true_acc_z'].fillna(0),
+                            'b--', label='Actual Down', alpha=0.4)
+            ax.set_ylabel("Body-Frame Accel (m/s²)")
+            ax.set_title("Cmd (solid) vs Actual (dashed) — FRD")
+            ax.legend(fontsize=7, ncol=2)
+            ax.grid(True, alpha=0.3)
+            ax.axhline(0, color='k', alpha=0.2)
+
+            # Panel (1,0): LOS angle + Closing velocity (dual axis)
+            ax = axes5[1, 0]
+            if has_pn and len(guided) > 0:
+                ax.plot(guided['time'], guided['pn_los_angle'].fillna(0),
+                        'b-', linewidth=1.5, label='LOS angle')
+                ax.set_ylabel("LOS Angle (°)", color='b')
+                ax2 = ax.twinx()
+                ax2.plot(guided['time'], guided['pn_v_cl'].fillna(0),
+                         'r-', linewidth=1.5, alpha=0.7, label='v_cl')
+                ax2.set_ylabel("Closing Velocity (m/s)", color='r')
+                lines1, labels1 = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+            # Panel (1,1): Fin deflections (1-4) — use full df
+            ax = axes5[1, 1]
+            fin_colors = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3']
+            fin_labels = ['Fin 1 Top (pitch+)',
+                          'Fin 2 Right (yaw+)',
+                          'Fin 3 Bottom (pitch-)',
+                          'Fin 4 Left (yaw-)']
+            for i in range(4):
+                col = f'fin{i+1}_actual'
+                if col in df.columns:
+                    ax.plot(df['time'], df[col].fillna(0),
+                            color=fin_colors[i], label=fin_labels[i],
+                            linewidth=1.2, alpha=0.8)
+            ax.set_ylabel("Fin Deflection (°)")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.axhline(0, color='k', alpha=0.2)
+
+            # Panel (2,0): Position N/E (to correlate with accel direction)
+            ax = axes5[2, 0]
+            if 'ekf_pe' in df.columns:
+                ax.plot(df['time'], df['ekf_pe'].fillna(0),
+                        'r-', label='East', alpha=0.8)
+                ax.plot(df['time'], df['ekf_pn'].fillna(0),
+                        'g-', label='North', alpha=0.8)
+            if len(guided) > 0:
+                t_start = guided['time'].iloc[0]
+                t_end = guided['time'].iloc[-1]
+                ax.axvspan(t_start, t_end, alpha=0.1, color='green',
+                           label='Guidance active')
+            ax.set_ylabel("Position (m)")
+            ax.set_xlabel("Time (s)")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.axhline(0, color='k', alpha=0.2)
+
+            # Panel (2,1): Orientation (EKF pitch/yaw)
+            ax = axes5[2, 1]
+            ax.plot(df['time'], df['ekf_pitch_deg'], 'r-',
+                    label='EKF Pitch', alpha=0.6, linewidth=0.8)
+            ax.plot(df['time'], df['ekf_yaw_deg'], 'b-',
+                    label='EKF Yaw', alpha=0.6, linewidth=0.8)
+            # Mark guidance window
+            if len(guided) > 0:
+                t_start = guided['time'].iloc[0]
+                t_end = guided['time'].iloc[-1]
+                ax.axvspan(t_start, t_end, alpha=0.1, color='green',
+                           label='Guidance active')
+            ax.set_ylabel("EKF Euler Angle (°)")
+            ax.set_xlabel("Time (s)")
+            ax.legend(fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+            fig5.tight_layout()
+
+            if save_p5:
+                fig5.savefig(save_p5, dpi=150)
+                print(f"Plot saved to {save_p5}")
 
     if show:
         plt.show()
@@ -399,6 +605,8 @@ def plot_results(df, title, save_path=None, show=False):
             plt.close(fig3)
         if fig4 is not None:
             plt.close(fig4)
+        if fig5 is not None:
+            plt.close(fig5)
 
 
 # ============================================================================
@@ -433,6 +641,28 @@ if __name__ == "__main__":
         gain_V_ref=GAIN_V_REF,
         gain_V_min=GAIN_V_MIN,
         gain_max_scale=GAIN_MAX_SCALE,
+        # Guidance
+        guidance_enabled=GUIDANCE_ENABLED,
+        guidance_mode=GUIDANCE_MODE,
+        pn_nav_gain=PN_NAV_GAIN,
+        pn_max_tilt_deg=PN_MAX_TILT_DEG,
+        pn_max_accel_mps2=PN_MAX_ACCEL_MPS2,
+        pn_blend_radius_m=PN_BLEND_RADIUS_M,
+        pn_kp_pos=PN_KP_POS,
+        pn_kd_vel=PN_KD_VEL,
+        pn_kp_pitch_angle=PN_KP_PITCH_ANGLE,
+        pn_kp_yaw_angle=PN_KP_YAW_ANGLE,
+        pn_pitch_kp=PN_PITCH_KP,
+        pn_pitch_ki=PN_PITCH_KI,
+        pn_pitch_kd=PN_PITCH_KD,
+        pn_yaw_kp=PN_YAW_KP,
+        pn_yaw_ki=PN_YAW_KI,
+        pn_yaw_kd=PN_YAW_KD,
+        pn_max_fin_deg=PN_MAX_FIN_DEG,
+        pn_min_speed_mps=PN_MIN_SPEED_MPS,
+        pn_coast_delay_s=PN_COAST_DELAY_S,
+        pn_gain_V_ref=PN_GAIN_V_REF,
+        pn_gain_V_min=PN_GAIN_V_MIN,
         # EKF debug modes
         perfect_imu=PERFECT_IMU,
         inject_truth_orientation_at_ignition=INJECT_TRUTH_AT_IGNITION,
@@ -463,6 +693,11 @@ if __name__ == "__main__":
 
     if ROLL_DISTURBANCE_NM != 0.0:
         print(f"  Roll disturbance: {ROLL_DISTURBANCE_NM*1000:.1f} mN-m")
+    if GUIDANCE_ENABLED:
+        print(f"  Guidance: PN (N={PN_NAV_GAIN}, max_tilt={PN_MAX_TILT_DEG}°, "
+              f"max_fin={PN_MAX_FIN_DEG}°)")
+    else:
+        print(f"  Guidance: OFF (roll-only)")
     if WIND_SPEED > 0:
         print(f"  Wind: {WIND_SPEED:.1f} m/s from {WIND_DIRECTION:.0f}°")
 
@@ -492,8 +727,14 @@ if __name__ == "__main__":
     result = run_closed_loop(rd, cfg)
     elapsed = time.time() - t0
 
-    # Results
+    # Trim to apogee — discard descent phase
     df = result.df
+    apogee_idx = df['altitude'].idxmax()
+    df = df.iloc[:apogee_idx + 1].reset_index(drop=True)
+    result.df = df
+    print(f"  Trimmed to apogee at T+{df['time'].iloc[-1]:.2f}s ({len(df)} rows)")
+
+    # Results
     print(f"\nResults:")
     print(f"  Apogee:      {result.apogee_m:.1f} m")
     print(f"  Max speed:   {result.max_speed_mps:.1f} m/s")
@@ -544,6 +785,25 @@ if __name__ == "__main__":
         print(f"  Max pitch rate: {df['pitch_rate_dps'].abs().max():.1f} deg/s")
         print(f"  Max yaw rate:   {df['yaw_rate_dps'].abs().max():.1f} deg/s")
 
+    # Guidance stats
+    if GUIDANCE_ENABLED and 'guidance_active' in df.columns:
+        guided = df[df['guidance_active'] == True]
+        if len(guided) > 0:
+            print(f"\n  Guidance active: {guided['time'].iloc[0]:.2f}s - {guided['time'].iloc[-1]:.2f}s")
+            if 'guid_lateral_offset_m' in guided.columns:
+                print(f"  Max lateral offset: {guided['guid_lateral_offset_m'].max():.1f}m")
+                print(f"  Final lateral offset: {guided['guid_lateral_offset_m'].iloc[-1]:.1f}m")
+            if 'pn_pitch_cmd_deg' in guided.columns:
+                print(f"  Max pitch cmd: {guided['pn_pitch_cmd_deg'].abs().max():.2f}°")
+                print(f"  Max yaw cmd: {guided['pn_yaw_cmd_deg'].abs().max():.2f}°")
+            # Fin deflection stats
+            for i in range(4):
+                col = f'fin{i+1}_actual'
+                if col in guided.columns:
+                    vals = guided[col].fillna(0)
+                    print(f"  Fin {i+1} deflection: "
+                          f"min={vals.min():.2f}°, max={vals.max():.2f}°")
+
     # Landing position / drift
     if len(df) > 0:
         end = df.iloc[-1]
@@ -577,3 +837,51 @@ if __name__ == "__main__":
         plot_results(df, title, save_path=png_path, show=SHOW_PLOT)
     except Exception as e:
         print(f"Plotting failed: {e}")
+
+    # 3D visualization
+    if SHOW_3D:
+        try:
+            from tinkerrocket_sim.visualization.rocket_3d import build_rocket_mesh
+            from tinkerrocket_sim.visualization.flight_3d import plot_flight_3d, animate_flight_3d
+
+            print("\nGenerating 3D visualization...")
+            mesh = build_rocket_mesh(rd)
+
+            save_3d = None
+            if not SHOW_PLOT and save_path:
+                base, ext = os.path.splitext(save_path)
+                save_3d = f"{base}_3d{ext}"
+
+            if ANIMATE_3D:
+                anim_path = None
+                if not SHOW_PLOT and save_path:
+                    base, _ = os.path.splitext(save_path)
+                    anim_path = f"{base}_3d.gif"
+                animate_flight_3d(df, mesh, speed=ANIM_SPEED,
+                                  title=f"{rd.name} — 3D Flight",
+                                  save_path=anim_path, show=SHOW_PLOT)
+            else:
+                plot_flight_3d(df, mesh, n_snapshots=N_SNAPSHOTS,
+                               title=f"{rd.name} — 3D Flight",
+                               save_path=save_3d, show=SHOW_PLOT)
+        except Exception as e:
+            print(f"3D visualization failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Interactive HTML visualization
+    if EXPORT_HTML:
+        try:
+            from tinkerrocket_sim.visualization.rocket_3d import build_rocket_mesh
+            from tinkerrocket_sim.visualization.flight_html import export_flight_html
+
+            if 'mesh' not in dir():
+                mesh = build_rocket_mesh(rd)
+
+            html_path = os.path.join(project_dir, "flight_3d.html")
+            export_flight_html(df, mesh, output_path=html_path,
+                               title=f"{rd.name} — Interactive Flight")
+        except Exception as e:
+            print(f"HTML export failed: {e}")
+            import traceback
+            traceback.print_exc()

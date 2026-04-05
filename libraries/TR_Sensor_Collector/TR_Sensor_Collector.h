@@ -162,6 +162,7 @@ private:
     uint32_t mmc_stall_threshold_us;
     uint32_t mmc_recover_cooldown_us;
 
+    volatile bool ism6_isr_fired;        // Set by ISR, cleared by poll loop
     volatile uint32_t ism6_isr_hits;
     volatile uint32_t ism6_notify_wakes;
     volatile uint32_t ism6_notify_timeouts;

@@ -164,8 +164,8 @@ def replay(binary_file, plot_dir=None):
         t_rel = (time_us - t0_us) / 1e6
 
         if etype == "gnss":
-            # Skip packets with no valid fix
-            has_fix = rec.get("num_sats", 0) > 0
+            # Skip packets without a solid fix (matches onboard GNSS_MIN_SATS)
+            has_fix = rec.get("num_sats", 0) >= 4
             if has_fix:
                 # Record GNSS truth only when fix is valid
                 gnss_log_time.append(time_us)
@@ -189,12 +189,13 @@ def replay(binary_file, plot_dir=None):
             latest_mag = rec
 
         elif etype == "baro":
-            # Collect pad baro samples for reference pressure (first 5s)
+            # Collect pad baro samples for reference pressure (first 20 samples)
             if baro_ref_pa is None:
                 baro_samples_for_ref.append(rec["pressure_pa"])
-                if t_rel > 5.0:
+                if len(baro_samples_for_ref) >= 20:
                     baro_ref_pa = np.mean(baro_samples_for_ref)
-                    print(f"  Baro ref pressure: {baro_ref_pa:.2f} Pa")
+                    print(f"  Baro ref pressure: {baro_ref_pa:.2f} Pa "
+                          f"(from {len(baro_samples_for_ref)} samples at t={t_rel:.2f}s)")
                 continue
 
             # Defer baro offset until we have a valid GNSS fix

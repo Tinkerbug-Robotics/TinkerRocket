@@ -1,5 +1,7 @@
 
 #include <TR_Sensor_Collector.h>
+#include <esp_log.h>
+static const char* SC_TAG = "SENSORS";
 
 SensorCollector* SensorCollector::ism6hg256_instance = nullptr;
 SensorCollector* SensorCollector::bmp585_instance = nullptr;
@@ -46,8 +48,8 @@ SensorCollector::SensorCollector(
       use_ism6hg256(use_ism6hg256),
       spi(spi),
       spi_speed(spi_speed),
-      bmp585(this->spi, BMP585_CS, SPISettings(1000000, MSBFIRST, SPI_MODE0)),
-      mmc5983ma(this->spi, MMC5983MA_CS, SPISettings(10000000, MSBFIRST, SPI_MODE0)),
+      bmp585(this->spi, BMP585_CS, SPISettings(spi_speed, MSBFIRST, SPI_MODE0)),
+      mmc5983ma(this->spi, MMC5983MA_CS, SPISettings(2000000, MSBFIRST, SPI_MODE0)),  // MMC5983MA supports Mode 0 and Mode 3
       ism6hg256(&this->spi, ISM6HG256_CS, spi_speed),
       gyro_cal_x(0), gyro_cal_y(0), gyro_cal_z(0) {}
 
@@ -62,6 +64,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     gnss_data_ready = false;
     bmp585_irq_pending_count = 0;
     mmc5983ma_irq_pending_count = 0;
+    ism6_isr_fired = false;
     ism6_isr_hits = 0;
     ism6_notify_wakes = 0;
     ism6_notify_timeouts = 0;
@@ -115,7 +118,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ism6hg256DataSemaphore = xSemaphoreCreateBinary();
     if (ism6hg256DataSemaphore == NULL)
     {
-        Serial.println("Failed to create ISM6HG256 data semaphore!");
+        ESP_LOGE(SC_TAG, "Failed to create ISM6HG256 data semaphore!");
         while (1) delay(1000);
     }
     xSemaphoreGive(ism6hg256DataSemaphore);
@@ -123,7 +126,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     bmp585DataSemaphore = xSemaphoreCreateBinary();
     if (bmp585DataSemaphore == NULL)
     {
-        Serial.println("Failed to create BMP585 data semaphore!");
+        ESP_LOGE(SC_TAG, "Failed to create BMP585 data semaphore!");
         while (1) delay(1000);
     }
     xSemaphoreGive(bmp585DataSemaphore);
@@ -131,7 +134,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     mmc5983maDataSemaphore = xSemaphoreCreateBinary();
     if (mmc5983maDataSemaphore == NULL)
     {
-        Serial.println("Failed to create MMC5983MA data semaphore!");
+        ESP_LOGE(SC_TAG, "Failed to create MMC5983MA data semaphore!");
         while (1) delay(1000);
     }
     xSemaphoreGive(mmc5983maDataSemaphore);
@@ -139,26 +142,25 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     gnssDataSemaphore = xSemaphoreCreateBinary();
     if (gnssDataSemaphore == NULL)
     {
-        Serial.println("Failed to create GNSS data semaphore!");
+        ESP_LOGE(SC_TAG, "Failed to create GNSS data semaphore!");
         while (1) delay(1000);
     }
     xSemaphoreGive(gnssDataSemaphore);
 
     // ### Initialize Sensors ###
+    ESP_LOGI(SC_TAG, "Initializing BMP585...");
     if (use_bmp585)
     {
         uint32_t bmp_retry_count = 0;
         while (!bmp585.begin())
         {
-            Serial.print("BMP585 initialization failed, chip ID 0x");
-            Serial.println(bmp585.readChipIdCached(), HEX);
+            ESP_LOGW(SC_TAG, "BMP585 initialization failed, chip ID 0x%02X", bmp585.readChipIdCached());
             bmp_retry_count++;
 
             // Warm-reset recovery path: after MCU flash, sensor may still be
             // in active mode and not respond cleanly until a soft reset.
             const bool reset_ok = bmp585.forceSoftResetRaw();
-            Serial.print("BMP585 soft-reset recovery ");
-            Serial.println(reset_ok ? "OK" : "pending");
+            ESP_LOGI(SC_TAG, "BMP585 soft-reset recovery %s", reset_ok ? "OK" : "pending");
 
             // Re-drive CS high between retries to avoid bus ambiguity.
             pinMode(BMP585_CS, OUTPUT);
@@ -167,41 +169,44 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 
             if ((bmp_retry_count % 5U) == 0U)
             {
-                Serial.print("BMP585 retry count: ");
-                Serial.println(bmp_retry_count);
+                ESP_LOGW(SC_TAG, "BMP585 retry count: %lu", (unsigned long)bmp_retry_count);
             }
             delay(500);
         }
 
-        Serial.print("BMP585 OK. chip_id = 0x");
-        Serial.println(bmp585.readChipId(), HEX);
+        ESP_LOGI(SC_TAG, "BMP585 OK. chip_id = 0x%02X", bmp585.readChipId());
 
         bool bmp_ok = true;
-        bmp_ok = bmp_ok && bmp585.setPowerMode(TR_BMP585::PowerMode::Continuous);
+        // Continuous mode ignores the ODR register (datasheet §4.3.6).
+        // Throughput is set solely by OSR: x1/x1 ≈ 498 Hz theoretical.
+        // Continuous mode (§4.3.6) ignores the ODR register — throughput is
+        // determined solely by OSR settings.  OSR x1/x1 yields ~460 Hz.
         bmp_ok = bmp_ok && bmp585.setTemperatureOversampling(TR_BMP585::Oversampling::x1);
         bmp_ok = bmp_ok && bmp585.setPressureOversampling(TR_BMP585::Oversampling::x1);
         bmp_ok = bmp_ok && bmp585.setIirFilter(TR_BMP585::IirCoeff::Bypass,
                                                TR_BMP585::IirCoeff::Bypass);
         bmp_ok = bmp_ok && bmp585.enableDataReadyInterrupt(true, false, true, false);
+        bmp_ok = bmp_ok && bmp585.setPowerMode(TR_BMP585::PowerMode::Continuous);
 
         if (!bmp_ok)
         {
-            Serial.println("BMP585 configuration failed, stopping.");
+            ESP_LOGE(SC_TAG, "BMP585 configuration failed, stopping.");
             while (1) { delay(1000); }
         }
 
-        Serial.println("BMP585 continuous mode active; throughput set by OSR/filter (ODR ignored in this mode).");
+        ESP_LOGI(SC_TAG, "BMP585 continuous mode active; throughput set by OSR/filter (ODR ignored in this mode).");
 
         bmp585_instance = this;
         pinMode(BMP585_INT, INPUT);
         attachInterrupt(BMP585_INT, onBMP585IntTrampoline, RISING);
     }
 
+    ESP_LOGI(SC_TAG, "Initializing MMC5983MA...");
     if (use_mmc5983ma)
     {
         while (!mmc5983ma.begin())
         {
-            Serial.println("MMC5983MA did not respond. Retrying...");
+            ESP_LOGW(SC_TAG, "MMC5983MA did not respond. Retrying...");
             delay(500);
             (void)mmc5983ma.softReset();
             delay(500);
@@ -212,6 +217,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         delay(10);
         (void)mmc5983ma.performResetOperation();
         delay(10);
+        (void)mmc5983ma.enableAutomaticSetReset();  // Eliminates hysteresis drift
 
         bool mmc_ok = true;
         mmc_ok = mmc_ok && mmc5983ma.setFilterBandwidth((MMC5983MA_UPDATE_RATE >= 1000U) ? 800U : 400U);
@@ -227,14 +233,14 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 
         if (!mmc_ok)
         {
-            Serial.println("MMC5983MA configuration failed, stopping.");
+            ESP_LOGE(SC_TAG, "MMC5983MA configuration failed, stopping.");
             while (1) { delay(1000); }
         }
 
-        Serial.println("MMC5983MA found and initialized");
+        ESP_LOGI(SC_TAG, "MMC5983MA found and initialized");
         if (MMC5983MA_UPDATE_RATE >= 1000U)
         {
-            Serial.println("MMC5983MA max-rate mode: BW=800Hz, CM_FREQ=1000Hz, CMM_EN=1.");
+            ESP_LOGI(SC_TAG, "MMC5983MA max-rate mode: BW=800Hz, CM_FREQ=1000Hz, CMM_EN=1.");
         }
 
         uint8_t ctrl0 = 0;
@@ -258,21 +264,19 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         attachInterrupt(MMC5983MA_INT, onMMC5983MAIntTrampoline, RISING);
     }
 
+    ESP_LOGI(SC_TAG, "Initializing ISM6HG256...");
     if(use_ism6hg256)
     {
         uint8_t whoami = 0;
 
         if (ism6hg256.ReadWhoAmI(&whoami) != TR_ISM6HG256_OK)
         {
-            Serial.println("ISM6HG256 WHOAMI read failed, stopping.");
+            ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI read failed, stopping.");
             while (1) { delay(1000); }
         }
         if (whoami != ISM6HG256X_ID)
         {
-            Serial.print("ISM6HG256 WHOAMI mismatch, got 0x");
-            Serial.print(whoami, HEX);
-            Serial.print(" expected 0x");
-            Serial.println(ISM6HG256X_ID, HEX);
+            ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI mismatch, got 0x%02X expected 0x%02X", whoami, ISM6HG256X_ID);
             while (1) { delay(1000); }
         }
 
@@ -296,11 +300,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 
         if (status != TR_ISM6HG256_OK)
         {
-            Serial.println("ISM6HG256 initialization/configuration failed, stopping.");
+            ESP_LOGE(SC_TAG, "ISM6HG256 initialization/configuration failed, stopping.");
             while (1) { delay(1000); }
         }
 
-        Serial.println("ISM6HG256 found and initialized");
+        ESP_LOGI(SC_TAG, "ISM6HG256 found and initialized");
 
         // Route DRDY to MCU via INT1 and wake polling task from ISR.
         ism6hg256_instance = this;
@@ -308,6 +312,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         attachInterrupt(ISM6HG256_INT, onISM6HG256Int1Trampoline, RISING);
     }
 
+    ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
     if (use_gnss)
     {
         if (!gnss_receiver.begin((uint8_t)GNSS_UPDATE_RATE,
@@ -316,10 +321,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                                  GNSS_RESET_N,
                                  GNSS_SAFEBOOT_N))
         {
-            Serial.println("GNSS initialization failed, stopping.");
+            ESP_LOGE(SC_TAG, "GNSS initialization failed, stopping.");
             while (1) { delay(1000); }
         }
-        Serial.println("GNSS found and initialized");
+        ESP_LOGI(SC_TAG, "GNSS found and initialized");
     }
 
     // TODO Calibrate low and high g accel
@@ -334,7 +339,7 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
         "Poll IMU Data",     // Task name
         8096,                // Stack size
         this,                // Task parameter (pass 'this' pointer)
-        3,                   // Task priority
+        4,                   // Task priority (above I2C sender at 2)
         &pollIMUTaskHandle,  // Task handle
         imu_execution_core); // Core to run on
 
@@ -343,7 +348,7 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
         "Poll GNSS Data",    // Task name
         4096,                // Stack size (GNSS serial parsing only)
         this,                // Task parameter
-        2,                   // Priority (below IMU at 3)
+        3,                   // Priority (above I2C sender at 2, below IMU at 4)
         &pollGNSSTaskHandle, // Task handle
         imu_execution_core); // Same core — keeps Serial1 single-threaded
 }
@@ -351,7 +356,7 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
 void SensorCollector::pollIMUdata(void* parameter) 
 {
     SensorCollector* self = static_cast<SensorCollector*>(parameter);
-    Serial.println("Starting pollIMUdata");
+    ESP_LOGI(SC_TAG, "Starting pollIMUdata");
 
     while (true)
     {
@@ -369,80 +374,127 @@ void SensorCollector::pollIMUdata(void* parameter)
             self->ism6_notify_timeouts++;
         }
 
-        if (self->use_bmp585)
+        // === ISM6HG256 FIRST — highest rate sensor, latency-critical ===
+        // Use the ISR flag instead of an SPI DRDY register read.  The ISR
+        // fires when ANY routed DRDY goes high.  We read all three channels
+        // unconditionally — at the same ODR they're virtually synchronous,
+        // and BDU prevents partial-word tearing if one channel lags by a
+        // sample.  This eliminates the previous drdy_bits==0x07 gate that
+        // caused 50 % of samples to be skipped when hg lagged by 1 cycle.
+        if (self->use_ism6hg256 && self->ism6_isr_fired)
         {
-            const uint32_t bmp_t0 = micros();
+            self->ism6_isr_fired = false;
 
-            uint32_t bmp_pending = 0;
-            noInterrupts();
-            bmp_pending = self->bmp585_irq_pending_count;
-            self->bmp585_irq_pending_count = 0;
-            interrupts();
+            const uint32_t ism6_t0 = micros();
+            self->ism6_drdy_triplet_hits++;
 
-            while (bmp_pending > 0)
+            TR_ISM6HG256_AxesRaw_t lg_raw = {};
+            TR_ISM6HG256_AxesRaw_t hg_raw = {};
+            TR_ISM6HG256_AxesRaw_t g_raw = {};
+
+            // Bulk read: gyro + lg accel + hg accel in one 24-byte SPI transaction
+            (void)self->ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw);
+
+            if (xSemaphoreTake(self->ism6hg256DataSemaphore, 0) == pdTRUE)
             {
-                TR_BMP585::BmpCompFrame f = {};
-                if (self->bmp585.readCompFrame(f))
+                self->start_time = micros();
+                self->ism6hg256_data.time_us = self->start_time;
+
+                self->ism6hg256_data.acc_low_raw.x = lg_raw.x;
+                self->ism6hg256_data.acc_low_raw.y = lg_raw.y;
+                self->ism6hg256_data.acc_low_raw.z = lg_raw.z;
+
+                self->ism6hg256_data.acc_high_raw.x = hg_raw.x;
+                self->ism6hg256_data.acc_high_raw.y = hg_raw.y;
+                self->ism6hg256_data.acc_high_raw.z = hg_raw.z;
+
+                self->ism6hg256_data.gyro_raw.x = g_raw.x - self->gyro_cal_x;
+                self->ism6hg256_data.gyro_raw.y = g_raw.y - self->gyro_cal_y;
+                self->ism6hg256_data.gyro_raw.z = g_raw.z - self->gyro_cal_z;
+
+                // Track ISM6 timestamp gaps
+                const uint32_t this_time = self->start_time;
+                const uint32_t prev_time = self->pt_last_ism6_time_us;
+                if (prev_time != 0)
                 {
-                    if (xSemaphoreTake(self->bmp585DataSemaphore, 0) == pdTRUE)
+                    const uint32_t gap = this_time - prev_time;
+                    if (gap > GAP_THRESHOLD_US)
                     {
-                        self->bmp585_data.time_us = f.t_us;
-                        self->bmp585_data.temp_q16 = f.temp_q16;
-                        self->bmp585_data.press_q6 = f.press_q6;
-                        self->bmp585_data_ready = true;
-                        xSemaphoreGive(self->bmp585DataSemaphore);
+                        self->pt_gap_count++;
+                        if (gap > self->pt_gap_worst_us)
+                        {
+                            self->pt_gap_worst_us = gap;
+                        }
                     }
                 }
-                bmp_pending--;
+                self->pt_last_ism6_time_us = this_time;
+
+                self->ism6hg256_data_ready = true;
+                xSemaphoreGive(self->ism6hg256DataSemaphore);
             }
 
-            const uint32_t bmp_elapsed = micros() - bmp_t0;
-            if (bmp_elapsed > self->pt_bmp_max_us)
+            const uint32_t ism6_elapsed = micros() - ism6_t0;
+            if (ism6_elapsed > self->pt_ism6_read_max_us)
             {
-                self->pt_bmp_max_us = bmp_elapsed;
+                self->pt_ism6_read_max_us = ism6_elapsed;
             }
         }
 
+        // === BMP585 — only process when interrupt pending ===
+        if (self->use_bmp585)
+        {
+            uint32_t bmp_pending = 0;
+            noInterrupts();
+            bmp_pending = self->bmp585_irq_pending_count;
+            if (bmp_pending > 0) self->bmp585_irq_pending_count = 0;
+            interrupts();
+
+            if (bmp_pending > 0)
+            {
+                const uint32_t bmp_t0 = micros();
+
+                while (bmp_pending > 0)
+                {
+                    TR_BMP585::BmpCompFrame f = {};
+                    if (self->bmp585.readCompFrame(f))
+                    {
+                        if (xSemaphoreTake(self->bmp585DataSemaphore, 0) == pdTRUE)
+                        {
+                            self->bmp585_data.time_us = f.t_us;
+                            self->bmp585_data.temp_q16 = f.temp_q16;
+                            self->bmp585_data.press_q6 = f.press_q6;
+                            self->bmp585_data_ready = true;
+                            xSemaphoreGive(self->bmp585DataSemaphore);
+                        }
+                    }
+                    bmp_pending--;
+                }
+
+                const uint32_t bmp_elapsed = micros() - bmp_t0;
+                if (bmp_elapsed > self->pt_bmp_max_us)
+                {
+                    self->pt_bmp_max_us = bmp_elapsed;
+                }
+            }
+        }
+
+        // === MMC5983MA — only do SPI work when interrupt pending or stall recovery needed ===
         if (self->use_mmc5983ma)
         {
-            const uint32_t mmc_t0 = micros();
-            self->mmc5983ma_loop_checks++;
-
             uint32_t mmc_pending = 0;
             noInterrupts();
             mmc_pending = self->mmc5983ma_irq_pending_count;
-            self->mmc5983ma_irq_pending_count = 0;
+            if (mmc_pending > 0) self->mmc5983ma_irq_pending_count = 0;
             interrupts();
 
-            uint8_t mmc_status = 0;
-            const bool status_ok = self->mmc5983ma.readStatus(&mmc_status);
-            const bool status_done = status_ok && ((mmc_status & 0x01U) != 0U);
-
-            if (status_ok)
-            {
-                self->mmc5983ma_last_status = mmc_status;
-                if (status_done)
-                {
-                    self->mmc5983ma_status_done_hits++;
-                }
-                else
-                {
-                    self->mmc5983ma_status_not_ready_hits++;
-                }
-            }
-            else
-            {
-                self->mmc5983ma_status_read_failures++;
-            }
+            self->mmc5983ma_loop_checks++;
 
             if (mmc_pending > 0)
             {
+                const uint32_t mmc_t0 = micros();
                 self->mmc5983ma_irq_path_hits += mmc_pending;
-            }
-
-            if ((mmc_pending > 0) || status_done)
-            {
                 self->mmc5983ma_process_hits++;
+
                 uint32_t mx = 0;
                 uint32_t my = 0;
                 uint32_t mz = 0;
@@ -477,11 +529,14 @@ void SensorCollector::pollIMUdata(void* parameter)
                     self->mmc5983ma_clear_fail++;
                 }
 
-                // NOTE: enableInterrupt() removed - INT_MEAS_DONE_EN stays armed in CMM mode.
-                // Re-arming per sample was unnecessary and may have disrupted CMM stability.
-                // Counters (rearm_ok/rearm_fail) kept for compatibility but no longer incremented.
+                const uint32_t mmc_elapsed = micros() - mmc_t0;
+                if (mmc_elapsed > self->pt_mmc_max_us)
+                {
+                    self->pt_mmc_max_us = mmc_elapsed;
+                }
             }
 
+            // Stall recovery — infrequent, only when no data for several periods
             const uint32_t now_us = micros();
             const bool mmc_stalled = ((int32_t)(now_us - self->mmc_last_sample_time_us) > (int32_t)self->mmc_stall_threshold_us);
             const bool recover_due = ((int32_t)(now_us - self->mmc_last_recover_time_us) > (int32_t)self->mmc_recover_cooldown_us);
@@ -514,91 +569,6 @@ void SensorCollector::pollIMUdata(void* parameter)
                     self->mmc5983ma_recovery_success++;
                 }
             }
-
-            const uint32_t mmc_elapsed = micros() - mmc_t0;
-            if (mmc_elapsed > self->pt_mmc_max_us)
-            {
-                self->pt_mmc_max_us = mmc_elapsed;
-            }
-        }
-
-        // ISM6HG256 low-g, high-g, and gyro are read together when all are ready
-        if (self->use_ism6hg256)
-        {
-            ism6hg256x_data_ready_t drdy = {};
-            if (self->ism6hg256.Get_DRDY_Status(&drdy) != TR_ISM6HG256_OK)
-            {
-                taskYIELD();
-                continue;
-            }
-
-            const uint8_t drdy_bits = (drdy.drdy_xl ? 0x01 : 0x00)
-                                    | (drdy.drdy_hgxl ? 0x02 : 0x00)
-                                    | (drdy.drdy_gy ? 0x04 : 0x00);
-
-            if (drdy.drdy_xl) self->ism6_drdy_lg_hits++;
-            if (drdy.drdy_hgxl) self->ism6_drdy_hg_hits++;
-            if (drdy.drdy_gy) self->ism6_drdy_g_hits++;
-            self->ism6_drdy_histogram[drdy_bits & 0x07]++;
-
-            // Read when all three are ready
-            if (drdy_bits == 0x07)
-            {
-                const uint32_t ism6_t0 = micros();
-                self->ism6_drdy_triplet_hits++;
-
-                TR_ISM6HG256_AxesRaw_t lg_raw = {};
-                TR_ISM6HG256_AxesRaw_t hg_raw = {};
-                TR_ISM6HG256_AxesRaw_t g_raw = {};
-
-                (void)self->ism6hg256.Get_X_AxesRaw(&lg_raw);
-                (void)self->ism6hg256.Get_HG_X_AxesRaw(&hg_raw);
-                (void)self->ism6hg256.Get_G_AxesRaw(&g_raw);
-
-                if (xSemaphoreTake(self->ism6hg256DataSemaphore, 0) == pdTRUE)
-                {
-                    self->start_time = micros();
-                    self->ism6hg256_data.time_us = self->start_time;
-
-                    self->ism6hg256_data.acc_low_raw.x = lg_raw.x;
-                    self->ism6hg256_data.acc_low_raw.y = lg_raw.y;
-                    self->ism6hg256_data.acc_low_raw.z = lg_raw.z;
-
-                    self->ism6hg256_data.acc_high_raw.x = hg_raw.x;
-                    self->ism6hg256_data.acc_high_raw.y = hg_raw.y;
-                    self->ism6hg256_data.acc_high_raw.z = hg_raw.z;
-
-                    self->ism6hg256_data.gyro_raw.x = g_raw.x - self->gyro_cal_x;
-                    self->ism6hg256_data.gyro_raw.y = g_raw.y - self->gyro_cal_y;
-                    self->ism6hg256_data.gyro_raw.z = g_raw.z - self->gyro_cal_z;
-
-                    // Track ISM6 timestamp gaps
-                    const uint32_t this_time = self->start_time;
-                    const uint32_t prev_time = self->pt_last_ism6_time_us;
-                    if (prev_time != 0)
-                    {
-                        const uint32_t gap = this_time - prev_time;
-                        if (gap > GAP_THRESHOLD_US)
-                        {
-                            self->pt_gap_count++;
-                            if (gap > self->pt_gap_worst_us)
-                            {
-                                self->pt_gap_worst_us = gap;
-                            }
-                        }
-                    }
-                    self->pt_last_ism6_time_us = this_time;
-
-                    self->ism6hg256_data_ready = true;
-                    xSemaphoreGive(self->ism6hg256DataSemaphore);
-                }
-
-                const uint32_t ism6_elapsed = micros() - ism6_t0;
-                if (ism6_elapsed > self->pt_ism6_read_max_us)
-                {
-                    self->pt_ism6_read_max_us = ism6_elapsed;
-                }
-            }
         }
 
         // Track total iteration time (excluding the notification wait)
@@ -615,21 +585,25 @@ void SensorCollector::pollIMUdata(void* parameter)
 void SensorCollector::pollGNSSdata(void* parameter)
 {
     SensorCollector* self = static_cast<SensorCollector*>(parameter);
-    Serial.println("Starting pollGNSSdata");
+    ESP_LOGI(SC_TAG, "Starting pollGNSSdata (data-driven)");
 
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xPeriod = pdMS_TO_TICKS(1000 / self->GNSS_UPDATE_RATE);
+    // Poll interval: check for new PVT at ~2× the navigation rate so we
+    // never miss a fix.  E.g. 10 Hz nav → check every 50 ms.
+    const TickType_t xPollInterval = pdMS_TO_TICKS(
+        (1000U / self->GNSS_UPDATE_RATE) / 2U);
 
     while (true)
     {
-        vTaskDelayUntil(&xLastWakeTime, xPeriod);
+        vTaskDelay(xPollInterval);
 
         if (!self->use_gnss) continue;
 
         const uint32_t gnss_t0 = micros();
 
+        // Non-blocking: parse serial bytes, return true only if a
+        // brand-new NAV-PVT message was fully received.
         GNSSData gnss_sample = {};
-        self->gnss_receiver.getGNSSData(gnss_sample);
+        const bool have_new = self->gnss_receiver.pollNewPVT(gnss_sample);
 
         const uint32_t gnss_elapsed = micros() - gnss_t0;
         self->pt_gnss_calls++;
@@ -641,11 +615,14 @@ void SensorCollector::pollGNSSdata(void* parameter)
         if (gnss_elapsed > 5000)  self->pt_gnss_over_5ms++;
         if (gnss_elapsed > 10000) self->pt_gnss_over_10ms++;
 
-        if (xSemaphoreTake(self->gnssDataSemaphore, 0) == pdTRUE)
+        if (have_new)
         {
-            self->gnss_data = gnss_sample;
-            self->gnss_data_ready = true;
-            xSemaphoreGive(self->gnssDataSemaphore);
+            if (xSemaphoreTake(self->gnssDataSemaphore, 0) == pdTRUE)
+            {
+                self->gnss_data = gnss_sample;
+                self->gnss_data_ready = true;
+                xSemaphoreGive(self->gnssDataSemaphore);
+            }
         }
     }
 }
@@ -780,11 +757,11 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
 {
     if (!use_ism6hg256)
     {
-        Serial.println("[CAL] No ISM6HG256 — skipping calibration");
+        ESP_LOGW(SC_TAG, "No ISM6HG256 — skipping calibration");
         return;
     }
 
-    Serial.println("[CAL] Calibrating sensors (1000 samples)...");
+    ESP_LOGI(SC_TAG, "Calibrating sensors (1000 samples)...");
 
     // Suspend the IMU polling task to prevent SPI bus contention during calibration
     if (pollIMUTaskHandle != nullptr) {
@@ -804,22 +781,15 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
 
     for (int i = 0; i < num_samples; i++)
     {
-        // Read gyro
-        TR_ISM6HG256_AxesRaw_t g_raw;
-        if (ism6hg256.Get_G_AxesRaw(&g_raw) == TR_ISM6HG256_OK)
+        // Bulk read gyro + low-g accel + high-g accel
+        TR_ISM6HG256_AxesRaw_t g_raw, lg_raw, hg_raw;
+        if (ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw) == TR_ISM6HG256_OK)
         {
             sum_gx += g_raw.x;
             sum_gy += g_raw.y;
             sum_gz += g_raw.z;
             gyro_count++;
-        }
 
-        // Read low-g and high-g accel
-        TR_ISM6HG256_AxesRaw_t lg_raw, hg_raw;
-        bool lg_ok = (ism6hg256.Get_X_AxesRaw(&lg_raw) == TR_ISM6HG256_OK);
-        bool hg_ok = (ism6hg256.Get_HG_X_AxesRaw(&hg_raw) == TR_ISM6HG256_OK);
-        if (lg_ok && hg_ok)
-        {
             sum_lg_x += lg_raw.x;
             sum_lg_y += lg_raw.y;
             sum_lg_z += lg_raw.z;
@@ -838,12 +808,12 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
         gyro_cal_x = (int16_t)(sum_gx / gyro_count);
         gyro_cal_y = (int16_t)(sum_gy / gyro_count);
         gyro_cal_z = (int16_t)(sum_gz / gyro_count);
-        Serial.printf("[CAL] Gyro offsets: %d, %d, %d  (%d samples)\n",
+        ESP_LOGI(SC_TAG, "Gyro offsets: %d, %d, %d  (%d samples)",
                       gyro_cal_x, gyro_cal_y, gyro_cal_z, gyro_count);
     }
     else
     {
-        Serial.println("[CAL] WARNING: no gyro samples collected");
+        ESP_LOGW(SC_TAG, "No gyro samples collected");
     }
 
     // --- Accel cross-calibration ---
@@ -888,18 +858,18 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
                                 avg_lg_y * avg_lg_y +
                                 avg_lg_z * avg_lg_z);
 
-        Serial.printf("[CAL] Low-g  avg (body): %.3f, %.3f, %.3f m/s²\n",
+        ESP_LOGI(SC_TAG, "Low-g  avg (body): %.3f, %.3f, %.3f m/s²",
                       (double)lg_bx, (double)lg_by, (double)lg_bz);
-        Serial.printf("[CAL] High-g avg (body): %.3f, %.3f, %.3f m/s²\n",
+        ESP_LOGI(SC_TAG, "High-g avg (body): %.3f, %.3f, %.3f m/s²",
                       (double)hg_bx, (double)hg_by, (double)hg_bz);
-        Serial.printf("[CAL] HG bias:           %.3f, %.3f, %.3f m/s²\n",
+        ESP_LOGI(SC_TAG, "HG bias:           %.3f, %.3f, %.3f m/s²",
                       (double)hg_bias_x, (double)hg_bias_y, (double)hg_bias_z);
-        Serial.printf("[CAL] Gravity magnitude: %.3f m/s²  (%d samples)\n",
+        ESP_LOGI(SC_TAG, "Gravity magnitude: %.3f m/s²  (%d samples)",
                       (double)cal_gravity_mag, accel_count);
     }
     else
     {
-        Serial.println("[CAL] WARNING: no accel samples collected");
+        ESP_LOGW(SC_TAG, "No accel samples collected");
     }
 
     // Resume the IMU polling task
@@ -918,6 +888,7 @@ void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline()
 
 void IRAM_ATTR SensorCollector::onISM6HG256Int1()
 {
+    ism6_isr_fired = true;
     ism6_isr_hits++;
 
     BaseType_t higher_priority_task_woken = pdFALSE;

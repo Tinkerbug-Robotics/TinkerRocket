@@ -24,8 +24,13 @@ class TR_GNSSReceiverUBloxSerial
                    int8_t reset_n_pin = -1,
                    int8_t safeboot_n_pin = -1);
                
-        // Update a copy of GNSSData
+        // Update a copy of GNSSData (legacy timer-based path)
         void getGNSSData(GNSSData &data);
+
+        /// Non-blocking poll: parse any pending serial bytes and, if a
+        /// new NAV-PVT message has arrived, fill `data` and return true.
+        /// Call this at ≥2× the navigation rate for reliable capture.
+        bool pollNewPVT(GNSSData &data);
         
     private:
 

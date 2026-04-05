@@ -162,6 +162,35 @@ TR_ISM6HG256Status TR_ISM6HG256::Get_G_AxesRaw(TR_ISM6HG256_AxesRaw_t *Value)
     return TR_ISM6HG256_OK;
 }
 
+TR_ISM6HG256Status TR_ISM6HG256::Get_AllAxesRaw(TR_ISM6HG256_AxesRaw_t *gyro,
+                                                  TR_ISM6HG256_AxesRaw_t *acc_lg,
+                                                  TR_ISM6HG256_AxesRaw_t *acc_hg)
+{
+    // Single 24-byte read: 0x22 (OUTX_L_G) through 0x39 (OUTZ_H_A_OIS_HG).
+    // Layout: gyro[6] | lg_accel[6] | ois_eis_gyro[6](skip) | hg_accel[6]
+    uint8_t buf[24];
+    if (IO_Read(buf, ISM6HG256X_OUTX_L_G, 24) != 0) return TR_ISM6HG256_ERROR;
+
+    // Gyro: bytes 0-5
+    gyro->x = (int16_t)((uint16_t)buf[1]  << 8 | buf[0]);
+    gyro->y = (int16_t)((uint16_t)buf[3]  << 8 | buf[2]);
+    gyro->z = (int16_t)((uint16_t)buf[5]  << 8 | buf[4]);
+
+    // Low-G accel: bytes 6-11
+    acc_lg->x = (int16_t)((uint16_t)buf[7]  << 8 | buf[6]);
+    acc_lg->y = (int16_t)((uint16_t)buf[9]  << 8 | buf[8]);
+    acc_lg->z = (int16_t)((uint16_t)buf[11] << 8 | buf[10]);
+
+    // bytes 12-17: OIS/EIS gyro — skip
+
+    // High-G accel: bytes 18-23
+    acc_hg->x = (int16_t)((uint16_t)buf[19] << 8 | buf[18]);
+    acc_hg->y = (int16_t)((uint16_t)buf[21] << 8 | buf[20]);
+    acc_hg->z = (int16_t)((uint16_t)buf[23] << 8 | buf[22]);
+
+    return TR_ISM6HG256_OK;
+}
+
 TR_ISM6HG256Status TR_ISM6HG256::Get_DRDY_Status(ism6hg256x_data_ready_t *Status)
 {
     if (Status == nullptr) return TR_ISM6HG256_ERROR;
@@ -286,9 +315,10 @@ uint8_t TR_ISM6HG256::IO_Read(uint8_t *pBuffer, uint8_t RegisterAddr, uint16_t N
     dev_spi->beginTransaction(SPISettings(spi_speed, MSBFIRST, SPI_MODE3));
     digitalWrite(cs_pin, LOW);
     dev_spi->transfer(RegisterAddr | 0x80);
-    for (uint16_t i = 0; i < NumByteToRead; i++) {
-        pBuffer[i] = dev_spi->transfer(0x00);
-    }
+    // Bulk transfer: fill buffer with 0x00 (MOSI) and read MISO in-place.
+    // ESP32 SPI driver can use DMA for this, much faster than byte-by-byte.
+    memset(pBuffer, 0x00, NumByteToRead);
+    dev_spi->transfer(pBuffer, NumByteToRead);
     digitalWrite(cs_pin, HIGH);
     dev_spi->endTransaction();
     return 0;

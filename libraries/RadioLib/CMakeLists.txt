@@ -5,8 +5,9 @@ file(GLOB_RECURSE RADIOLIB_SOURCES
   "src/*.cpp"
 )
 
-# exclude all HAL source files
+# exclude all HAL source files except Arduino HAL (needed for Arduino-as-component builds)
 list(FILTER RADIOLIB_SOURCES EXCLUDE REGEX "src/hal/.*\\.cpp")
+list(APPEND RADIOLIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/hal/Arduino/ArduinoHal.cpp")
 
 if(ESP_PLATFORM)
   # Build RadioLib as an ESP-IDF component
@@ -15,7 +16,8 @@ if(ESP_PLATFORM)
 
   idf_component_register(
     SRCS ${RADIOLIB_SOURCES}
-    INCLUDE_DIRS . src 
+    INCLUDE_DIRS . src
+    REQUIRES arduino
   )
 
   return()
