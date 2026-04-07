@@ -7,5 +7,8 @@ managed_components/
 # Arduino component (added as submodule)
 # components/arduino/  -- tracked as submodule
 
+# Private submodule (separate repo)
+components/TR_GuidancePN/
+
 # OS files
 .DS_Store
