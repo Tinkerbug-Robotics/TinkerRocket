@@ -1,0 +1,1 @@
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/libraries/TR_INA230/TR_INA230.h

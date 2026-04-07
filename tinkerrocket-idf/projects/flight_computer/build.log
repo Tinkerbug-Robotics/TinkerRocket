@@ -1,0 +1,22 @@
+Executing action: all (aliases: build)
+Running cmake in directory /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/tinkerrocket-idf/projects/flight_computer/build
+Executing "cmake -G 'Unix Makefiles' -DPYTHON_DEPS_CHECKED=1 -DPYTHON=/Users/christianpedersen/.espressif/python_env/idf5.3_py3.13_env/bin/python -DESP_PLATFORM=1 -DCCACHE_ENABLE=0 /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/tinkerrocket-idf/projects/flight_computer"...
+-- IDF_TARGET is not set, guessed 'esp32p4' from sdkconfig '/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/tinkerrocket-idf/projects/flight_computer/sdkconfig'
+-- Found Git: /usr/bin/git (found version "2.50.1 (Apple Git-155)") 
+-- The C compiler identification is GNU 13.2.0
+-- The CXX compiler identification is GNU 13.2.0
+-- The ASM compiler identification is GNU
+-- Found assembler: /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-13.2.0_20240530/riscv32-esp-elf/bin/riscv32-esp-elf-gcc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-13.2.0_20240530/riscv32-esp-elf/bin/riscv32-esp-elf-gcc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-13.2.0_20240530/riscv32-esp-elf/bin/riscv32-esp-elf-g++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- git describe returned 'fatal: bad revision 'HEAD''
+-- Could not use 'git describe' to determine PROJECT_VER.
+-- Building ESP-IDF components for target esp32p4

@@ -1,0 +1,1 @@
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/libraries/TR_MMC5983MA/TR_MMC5983MA.cpp

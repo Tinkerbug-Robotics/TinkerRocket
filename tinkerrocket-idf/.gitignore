@@ -1,0 +1,11 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+
+# Arduino component (added as submodule)
+# components/arduino/  -- tracked as submodule
+
+# OS files
+.DS_Store

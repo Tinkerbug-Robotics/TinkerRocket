@@ -1,0 +1,10 @@
+CONFIG_IDF_TARGET="esp32p4"
+
+# No power management — runs at full speed
+CONFIG_PM_ENABLE=n
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Serial
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

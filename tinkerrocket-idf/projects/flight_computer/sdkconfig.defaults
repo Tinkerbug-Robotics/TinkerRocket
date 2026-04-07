@@ -1,0 +1,27 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# Arduino-as-component
+CONFIG_AUTOSTART_ARDUINO=y
+CONFIG_ARDUINO_LOOP_STACK_SIZE=16384
+
+# No power management — runs at full speed
+CONFIG_PM_ENABLE=n
+
+# No BLE on FlightComputer
+CONFIG_BT_ENABLED=n
+
+# Flash
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Serial
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Prevent Arduino min/max macros from conflicting with std::min/std::max
