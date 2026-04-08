@@ -289,6 +289,7 @@ static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
 static constexpr uint8_t PSF_CH2_CONT  = (1u << 1);
 static constexpr uint8_t PSF_CH1_FIRED = (1u << 2);
 static constexpr uint8_t PSF_CH2_FIRED = (1u << 3);
+static constexpr uint8_t PSF_REBOOT_RECOVERY = (1u << 4);  // mid-flight reboot recovery occurred
 
 typedef struct
 {
