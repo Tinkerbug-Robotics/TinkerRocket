@@ -57,6 +57,18 @@ struct EkfBaroData {
 };
 
 
+// Bulk snapshot of all EKF internal state for persistence across reboots.
+struct EkfStateSnapshot {
+    double pos_rrm[3];        // LLA position (rad, rad, m)
+    float  vel_ned_mps[3];    // NED velocity (m/s)
+    float  quat[4];           // body-to-NED quaternion (scalar-first)
+    float  accel_bias[3];     // accelerometer bias (m/s²)
+    float  gyro_bias[3];      // gyroscope bias (rad/s)
+    float  P[15][15];         // error covariance matrix
+    uint32_t t_prev_us;       // last time-update timestamp (µs)
+    float  euler[3];          // cached Euler angles (rad)
+};
+
 class GpsInsEKF {
 public:
     GpsInsEKF();
@@ -120,6 +132,36 @@ public:
     void getCovOrient(float (&r)[3]) const { r[0]=P_[6][6]; r[1]=P_[7][7]; r[2]=P_[8][8]; }
     void getCovAccelBias(float (&r)[3]) const { r[0]=P_[9][9]; r[1]=P_[10][10]; r[2]=P_[11][11]; }
     void getCovRotRateBias(float (&r)[3]) const { r[0]=P_[12][12]; r[1]=P_[13][13]; r[2]=P_[14][14]; }
+
+    // ─── Bulk state save/restore (reboot recovery) ─────────────────
+    void getState(EkfStateSnapshot& s) const {
+        std::memcpy(s.pos_rrm,     pEst_D_rrm_,   sizeof(s.pos_rrm));
+        std::memcpy(s.vel_ned_mps, vEst_NED_mps_,  sizeof(s.vel_ned_mps));
+        std::memcpy(s.quat,        quat_BL_,       sizeof(s.quat));
+        std::memcpy(s.accel_bias,  aBias_mps2_,    sizeof(s.accel_bias));
+        std::memcpy(s.gyro_bias,   wBias_rps_,     sizeof(s.gyro_bias));
+        std::memcpy(s.P,           P_,             sizeof(s.P));
+        s.t_prev_us = tPrev_us_;
+        std::memcpy(s.euler,       euler_BL_rad_,  sizeof(s.euler));
+    }
+
+    void setState(const EkfStateSnapshot& s) {
+        std::memcpy(pEst_D_rrm_,   s.pos_rrm,     sizeof(pEst_D_rrm_));
+        std::memcpy(vEst_NED_mps_,  s.vel_ned_mps, sizeof(vEst_NED_mps_));
+        std::memcpy(quat_BL_,       s.quat,        sizeof(quat_BL_));
+        std::memcpy(aBias_mps2_,    s.accel_bias,  sizeof(aBias_mps2_));
+        std::memcpy(wBias_rps_,     s.gyro_bias,   sizeof(wBias_rps_));
+        std::memcpy(P_,             s.P,           sizeof(P_));
+        tPrev_us_ = s.t_prev_us;
+        std::memcpy(euler_BL_rad_,  s.euler,       sizeof(euler_BL_rad_));
+        // Rebuild DCM from restored quaternion
+        Quat2DCM(T_B2NED, quat_BL_);
+    }
+
+    /// Add offset to covariance diagonal (inflate uncertainty after reboot)
+    void inflateCovDiag(int idx, float delta) {
+        if (idx >= 0 && idx < 15) P_[idx][idx] += delta;
+    }
 
 private:
     void timeUpdate();

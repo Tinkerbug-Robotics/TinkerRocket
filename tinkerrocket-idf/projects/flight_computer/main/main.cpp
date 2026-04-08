@@ -28,6 +28,8 @@
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <esp_task_wdt.h>
+#include <esp_system.h>
+#include <CRC32.h>
 static const char* TAG = "FC";
 
 // EKF timeUpdate()/measUpdate() allocate ~7.5 KB of temporary 15x15 matrices
@@ -227,6 +229,128 @@ static bool pyro2_fired = false;
 static uint32_t pyro2_fire_start_ms = 0;
 static bool pyro_apogee_detected = false;
 static uint32_t pyro_apogee_time_ms = 0;
+// --- Inflight reboot recovery ---
+// Snapshot of critical flight state, persisted to NVS at 10 Hz during INFLIGHT.
+// On unexpected reboot (brownout, watchdog), this allows resuming flight ops
+// with correct pyro state, EKF navigation, and flight phase.
+struct FlightSnapshot {
+    static constexpr uint32_t MAGIC   = 0xF1A7C0DE;
+    static constexpr uint8_t  VERSION = 1;
+
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  rocket_state;
+    uint8_t  pad[2];
+
+    // Timestamps stored as durations relative to launch (millis epoch changes on reboot)
+    uint32_t flight_elapsed_ms;   // now_ms - launch_time_millis
+    uint32_t apogee_elapsed_ms;   // pyro_apogee_time_ms - launch_time_millis (0 if no apogee)
+    uint32_t burnout_elapsed_ms;  // burnout_time_ms - launch_time_millis (0 if no burnout)
+
+    // Pyro state (safety-critical)
+    bool     pyro_apogee_detected;
+    bool     pyro1_armed;
+    bool     pyro1_fired;
+    bool     pyro2_armed;
+    bool     pyro2_fired;
+
+    // Flight references
+    float    ground_pressure_pa;
+    double   ref_lat_rad, ref_lon_rad, ref_alt_m;
+
+    // Control state
+    bool     ekf_initialized;
+    bool     guidance_enabled;
+    bool     burnout_detected;
+    bool     servo_enabled;
+
+    // EKF full state
+    EkfStateSnapshot ekf_state;
+
+    // Integrity check (CRC32 over all preceding bytes)
+    uint32_t crc32;
+};
+
+static bool     reboot_recovery = false;      // true during servo settle period after recovery
+static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
+static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
+static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
+
+static uint32_t computeSnapshotCRC(const FlightSnapshot& snap)
+{
+    CRC32 crc;
+    crc.add(reinterpret_cast<const uint8_t*>(&snap),
+            offsetof(FlightSnapshot, crc32));
+    return crc.calc();
+}
+
+static void saveFlightSnapshot(uint32_t now_ms)
+{
+    FlightSnapshot snap = {};
+    snap.magic   = FlightSnapshot::MAGIC;
+    snap.version = FlightSnapshot::VERSION;
+    snap.rocket_state = (uint8_t)rocket_state;
+
+    snap.flight_elapsed_ms  = now_ms - launch_time_millis;
+    snap.apogee_elapsed_ms  = pyro_apogee_detected
+                            ? (pyro_apogee_time_ms - launch_time_millis) : 0;
+    snap.burnout_elapsed_ms = burnout_detected
+                            ? (burnout_time_ms - launch_time_millis) : 0;
+
+    portENTER_CRITICAL(&pyro_spinlock);
+    snap.pyro_apogee_detected = pyro_apogee_detected;
+    snap.pyro1_armed = pyro1_armed;
+    snap.pyro1_fired = pyro1_fired;
+    snap.pyro2_armed = pyro2_armed;
+    snap.pyro2_fired = pyro2_fired;
+    portEXIT_CRITICAL(&pyro_spinlock);
+
+    snap.ground_pressure_pa = ground_pressure_pa;
+    snap.ref_lat_rad = ref_lat_rad;
+    snap.ref_lon_rad = ref_lon_rad;
+    snap.ref_alt_m   = ref_alt_m;
+
+    snap.ekf_initialized  = ekf_initialized;
+    snap.guidance_enabled  = guidance_enabled;
+    snap.burnout_detected  = burnout_detected;
+    snap.servo_enabled     = servo_enabled;
+
+    if (ekf_initialized) {
+        ekf.getState(snap.ekf_state);
+    }
+
+    snap.crc32 = computeSnapshotCRC(snap);
+
+    Preferences snap_prefs;
+    if (snap_prefs.begin("fsnap", false)) {
+        snap_prefs.putBytes("s", &snap, sizeof(snap));
+        snap_prefs.end();
+    }
+}
+
+static void clearFlightSnapshot()
+{
+    Preferences snap_prefs;
+    if (snap_prefs.begin("fsnap", false)) {
+        snap_prefs.remove("s");
+        snap_prefs.end();
+    }
+}
+
+static const char* resetReasonStr(esp_reset_reason_t r)
+{
+    switch (r) {
+        case ESP_RST_BROWNOUT:  return "BROWNOUT";
+        case ESP_RST_PANIC:     return "PANIC";
+        case ESP_RST_INT_WDT:   return "INT_WDT";
+        case ESP_RST_TASK_WDT:  return "TASK_WDT";
+        case ESP_RST_WDT:       return "WDT";
+        case ESP_RST_POWERON:   return "POWERON";
+        case ESP_RST_SW:        return "SW";
+        default:                return "OTHER";
+    }
+}
+
 enum class BootChirpPhase : uint8_t { Idle, GapAfterBeep1, WaitingBeep2End };
 static BootChirpPhase boot_chirp_phase = BootChirpPhase::Idle;
 static uint32_t boot_chirp_next_ms = 0;
@@ -1310,6 +1434,135 @@ static void setup_fc()
     {
         servo_enabled = false;
         ESP_LOGW(TAG, "Servo control disabled (set SERVO_PIN_* in config.h)");
+    }
+
+    // ── Inflight reboot recovery ────────────────────────────────────────────
+    // If the reset was unexpected (brownout, watchdog, panic), check for a
+    // valid flight snapshot in NVS and restore state to resume INFLIGHT ops.
+    {
+        esp_reset_reason_t rst = esp_reset_reason();
+        ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
+
+        bool unexpected_reset = (rst == ESP_RST_BROWNOUT ||
+                                 rst == ESP_RST_PANIC    ||
+                                 rst == ESP_RST_INT_WDT  ||
+                                 rst == ESP_RST_TASK_WDT ||
+                                 rst == ESP_RST_WDT);
+
+        if (unexpected_reset) {
+            Preferences snap_prefs;
+            FlightSnapshot snap = {};
+            bool valid = false;
+
+            if (snap_prefs.begin("fsnap", true)) {
+                size_t len = snap_prefs.getBytesLength("s");
+                if (len == sizeof(FlightSnapshot)) {
+                    snap_prefs.getBytes("s", &snap, sizeof(snap));
+                    if (snap.magic == FlightSnapshot::MAGIC &&
+                        snap.version == FlightSnapshot::VERSION &&
+                        snap.rocket_state == (uint8_t)INFLIGHT &&
+                        snap.crc32 == computeSnapshotCRC(snap)) {
+                        valid = true;
+                    } else {
+                        ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
+                                 (unsigned long)snap.magic, snap.rocket_state,
+                                 (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                    }
+                }
+                snap_prefs.end();
+            }
+
+            if (valid) {
+                ESP_LOGW(TAG, "========================================");
+                ESP_LOGW(TAG, "[RECOVERY] INFLIGHT REBOOT RECOVERY from %s", resetReasonStr(rst));
+                ESP_LOGW(TAG, "[RECOVERY] Flight elapsed: %lu ms", (unsigned long)snap.flight_elapsed_ms);
+                ESP_LOGW(TAG, "========================================");
+
+                const uint32_t now_ms = millis();
+
+                // Restore flight state
+                rocket_state = INFLIGHT;
+
+                // Rebase timestamps to new millis() epoch
+                launch_time_millis = now_ms - snap.flight_elapsed_ms;
+                if (snap.pyro_apogee_detected) {
+                    pyro_apogee_detected = true;
+                    pyro_apogee_time_ms = launch_time_millis + snap.apogee_elapsed_ms;
+                }
+                if (snap.burnout_detected) {
+                    burnout_detected = true;
+                    burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
+                }
+
+                // Restore pyro state (safety-critical: no double-fire, no missed fire)
+                portENTER_CRITICAL(&pyro_spinlock);
+                pyro1_fired = snap.pyro1_fired;
+                pyro2_fired = snap.pyro2_fired;
+                pyro1_fire_start_ms = 0;
+                pyro2_fire_start_ms = 0;
+                portEXIT_CRITICAL(&pyro_spinlock);
+
+                // Re-arm unfired pyro channels (GPIO ARM pins reset on reboot)
+                if (snap.pyro1_armed && !snap.pyro1_fired && pyro_config.ch1_enabled) {
+                    portENTER_CRITICAL(&pyro_spinlock);
+                    gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
+                    pyro1_armed = true;
+                    portEXIT_CRITICAL(&pyro_spinlock);
+                    ESP_LOGW(TAG, "[RECOVERY] CH1 re-armed");
+                }
+                if (snap.pyro2_armed && !snap.pyro2_fired && pyro_config.ch2_enabled) {
+                    portENTER_CRITICAL(&pyro_spinlock);
+                    gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 1);
+                    pyro2_armed = true;
+                    portEXIT_CRITICAL(&pyro_spinlock);
+                    ESP_LOGW(TAG, "[RECOVERY] CH2 re-armed");
+                }
+
+                ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d ch1_armed=%d ch1_fired=%d ch2_armed=%d ch2_fired=%d",
+                         pyro_apogee_detected, pyro1_armed, pyro1_fired, pyro2_armed, pyro2_fired);
+
+                // Restore flight references
+                ground_pressure_pa = snap.ground_pressure_pa;
+                ref_lat_rad = snap.ref_lat_rad;
+                ref_lon_rad = snap.ref_lon_rad;
+                ref_alt_m   = snap.ref_alt_m;
+                have_ref_pos = true;
+                ref_pos_frozen = true;
+                ground_pressure_found = true;
+
+                // Restore control state
+                ekf_initialized  = snap.ekf_initialized;
+                guidance_enabled = snap.guidance_enabled;
+                servo_enabled    = snap.servo_enabled;
+                landed_actions_done = false;
+                end_flight_sent = false;
+
+                // Restore EKF state and inflate covariance for reboot uncertainty
+                if (snap.ekf_initialized) {
+                    ekf.setState(snap.ekf_state);
+                    // Inflate position covariance (5m sigma → 25 m²)
+                    for (int i = 0; i < 3; i++) ekf.inflateCovDiag(i, 25.0f);
+                    // Inflate velocity covariance (5 m/s sigma → 25 m²/s²)
+                    for (int i = 3; i < 6; i++) ekf.inflateCovDiag(i, 25.0f);
+                    // Inflate attitude covariance (~10° sigma → 0.03 rad²)
+                    for (int i = 6; i < 9; i++) ekf.inflateCovDiag(i, 0.03f);
+                    ESP_LOGW(TAG, "[RECOVERY] EKF state restored (covariance inflated)");
+                }
+
+                // Hold servos neutral for 500ms while EKF settles
+                reboot_recovery = true;
+                reboot_recovery_telem = true;
+                servo_settle_end_ms = now_ms + 500;
+
+                // Mark launch flag so kinematic checks don't re-trigger launch detection
+                kinematics.launch_flag = true;
+            }
+        }
+
+        // Clear stale snapshot on normal boot (prevents recovery on next power cycle)
+        if (!reboot_recovery) {
+            clearFlightSnapshot();
+        }
     }
 
     ESP_LOGI(TAG, "Setup complete");
@@ -2582,13 +2835,25 @@ static void loop_fc()
                 // Service pyro channels (check triggers, manage fire pulses)
                 servicePyroChannels(now_ms);
 
+                // Save flight snapshot at 10 Hz for reboot recovery
+                if (now_ms - last_snapshot_ms >= 100U) {
+                    last_snapshot_ms = now_ms;
+                    saveFlightSnapshot(now_ms);
+                }
+
+                // Servo settling after reboot recovery — hold neutral until EKF stabilizes
+                if (reboot_recovery && now_ms >= servo_settle_end_ms) {
+                    reboot_recovery = false;  // keep PSF_REBOOT_RECOVERY flag in telemetry
+                    ESP_LOGI(TAG, "[RECOVERY] Servo settle complete, control resumed");
+                }
+
                 if (servo_enabled)
                 {
                     // Delay roll control activation after launch if configured
                     const uint32_t t_since_launch_ms = now_ms - launch_time_millis;
-                    if (t_since_launch_ms < roll_delay_ms)
+                    if (reboot_recovery || t_since_launch_ms < roll_delay_ms)
                     {
-                        // Hold fins neutral until delay elapses
+                        // Hold fins neutral until delay/settle elapses
                         servo_control.control(0.0f);
                     }
                     else if (have_ism6_si)
@@ -2779,6 +3044,7 @@ static void loop_fc()
                 {
                     landed_actions_done = true;
                     pyroSafeAll();
+                    clearFlightSnapshot();  // prevent stale recovery on next boot
                     if (servo_enabled)
                     {
                         servo_control.stowControl();
@@ -2788,6 +3054,8 @@ static void loop_fc()
                     control_mixer.reset();
                     roll_rate_pid_standalone.reset();
                     guidance_active = false;
+                    reboot_recovery = false;
+                    reboot_recovery_telem = false;
                     cameraStop(now_ms);
                     if (!end_flight_sent)
                     {
@@ -2840,6 +3108,9 @@ static void loop_fc()
                 burnout_detected = false;
                 burnout_time_ms = 0;
                 guidance_active = false;
+                reboot_recovery = false;
+                reboot_recovery_telem = false;
+                clearFlightSnapshot();
                 ESP_LOGI(TAG, "[STATE] Sim complete -> READY");
             }
             prev_sim_active = curr_sim_active;
@@ -2923,6 +3194,7 @@ static void loop_fc()
             // Update fired bits
             if (p1_fired) ps |= PSF_CH1_FIRED;
             if (p2_fired) ps |= PSF_CH2_FIRED;
+            if (reboot_recovery_telem) ps |= PSF_REBOOT_RECOVERY;
             non_sensor_data.pyro_status = ps;
         }
 
