@@ -1,20 +1,19 @@
 # TinkerRocket
 
-Active guidance and control system for high-power model rockets with real-time telemetry, ground station, and iOS companion app.
+Full featured flight computer with 1 kHz logging, remote control power 'WiFi' switch, four pyro channels, camera control, and control of up to six servos for active roll control, guidance, or other functions. Downlink and GPS tracking via a LoRa radio to ground station and companion iOS app for configuration, monitoring, and voice call outs during flight.
 
 <!-- TODO: Add hero photo of the rocket -->
 ![TinkerRocket](docs/images/rocket_hero.jpg)
 
 ## Overview
 
-TinkerRocket is a 6-DOF actively guided model rocket flight system. The onboard flight computer runs a 16-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 960 Hz. During coast phase, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling.
+The onboard flight computer runs a 16-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling.
 
 The system comprises four cooperating components:
 
 | Component | Hardware | Role |
 |-----------|----------|------|
-| **Flight Computer** | ESP32-S3 | Sensor fusion, EKF, guidance, servo control |
-| **Out Computer** | ESP32-S3 | Data logging, LoRa downlink, BLE telemetry |
+| **Flight Computer** | ESP32-P4 & ESP32-S3 | Sensor fusion, EKF, guidance, servo control, Data logging, LoRa downlink, BLE telemetry |
 | **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, SD card logging |
 | **iOS App** | iPhone/iPad | Real-time dashboard, file management, configuration |
 
