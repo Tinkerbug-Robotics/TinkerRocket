@@ -7,15 +7,21 @@ Full featured flight computer with 1 kHz logging, remote control power 'WiFi' sw
 
 ## Overview
 
-The onboard flight computer runs a 16-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling.
-
-The system comprises four cooperating components:
+The system comprises three physical cooperating components:
 
 | Component | Hardware | Role |
 |-----------|----------|------|
 | **Flight Computer** | ESP32-P4 & ESP32-S3 | Sensor fusion, EKF, guidance, servo control, Data logging, LoRa downlink, BLE telemetry |
 | **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, SD card logging |
 | **iOS App** | iPhone/iPad | Real-time dashboard, file management, configuration |
+
+The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 16-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
+
+Remove the need for a dedicated through wall power switch using the built in low power 'WiFi' type switch. After plugging in a battery the unit draws only 10-15 mA, which gives you over 2.5 days of battery life on a typical 600 mAh battery. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control recording remotely from the base station over LoRa as well.
+
+The base station relays data sent over LoRa from the flight computer to a nearby iOS device, giving the user a realtime view of telemetry data prior to launch, as well as telemetry and tracking data post launch. Use your phone's speakers to call out altitude, apogee, max speed, and descent rate during the flight and to locate the rocket via an arrow that points towards the rocket and/or a map view of where the rocket landed.
+
+Finally, manage the flight data intuitively by uploaded from the flight computer to an iOS device and then sharing that data using email, text, air drop, or any other iOS supported sharing means.
 
 ## Architecture
 
