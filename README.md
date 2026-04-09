@@ -64,7 +64,7 @@ Finally, manage the flight data intuitively by uploading from the flight compute
 |--------|------|-----------|------|-------|
 | **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 960 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
 | **BMP585** | Barometer | SPI | 500 Hz | 300-1250 hPa |
-| **MMC5983MA** | Magnetometer | SPI | 200 Hz | +/-8 Gauss |
+| **IIS2MDCTR** | Magnetometer | I2C | 150 Hz | +/-50 Gauss |
 | **u-blox M10** | GNSS | UART 115200 | 18 Hz | GPS/GLONASS/Galileo/BeiDou |
 | **INA230** | Power monitor | I2C | 10 Hz | Voltage, current, SOC |
 
@@ -72,14 +72,14 @@ Finally, manage the flight data intuitively by uploading from the flight compute
 
 | Radio | Protocol | Frequency | Data Rate | Purpose |
 |-------|----------|-----------|-----------|---------|
-| **LLCC68** | LoRa | 915 MHz | 2 Hz | Rocket-to-ground telemetry |
+| **LLCC68** | LoRa | 915 MHz | 2-10 Hz | Rocket-to-ground telemetry |
 | **NimBLE** | BLE 5.0 | 2.4 GHz | ~10 Hz | Ground-to-app telemetry |
 
 ### Control
 
-- **4x fin-tab servos** at 333 Hz PWM (1000-2000 us pulse)
-- **2x pyro channels** with continuity monitoring and configurable triggers
-- **RunCam Split 4** support via UART control
+- **1-4 fin-tab servos** configurable PWM control for roll or guide straight up
+- **4x pyro channels** with continuity monitoring and configurable triggers
+- **RunCam Split 4 and GoPro Hero 10 Black** support via UART/GPIO control
 
 ## Repository Structure
 
