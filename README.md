@@ -11,7 +11,7 @@ The system comprises three physical cooperating components:
 
 | Component | Hardware | Role |
 |-----------|----------|------|
-| **Flight Computer** | ESP32-P4 & ESP32-S3 | Sensor fusion, EKF, guidance, servo control, Data logging, LoRa downlink, BLE telemetry |
+| **Flight Computer** | ESP32-P4 & ESP32-S3 | Sensor fusion, EKF, guidance, servo control, data logging, LoRa downlink, BLE telemetry |
 | **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, SD card logging |
 | **iOS App** | iPhone/iPad | Real-time dashboard, file management, configuration |
 
@@ -21,7 +21,7 @@ Remove the need for a dedicated through wall power switch using the built in low
 
 The base station relays data sent over LoRa from the flight computer to a nearby iOS device, giving the user a realtime view of telemetry data prior to launch, as well as telemetry and tracking data post launch. Use your phone's speakers to call out altitude, apogee, max speed, and descent rate during the flight and to locate the rocket via an arrow that points towards the rocket and/or a map view of where the rocket landed.
 
-Finally, manage the flight data intuitively by uploaded from the flight computer to an iOS device and then sharing that data using email, text, air drop, or any other iOS supported sharing means.
+Finally, manage the flight data intuitively by uploading from the flight computer to an iOS device and then sharing that data using email, text, air drop, or any other iOS supported sharing means.
 
 ## Architecture
 
@@ -32,10 +32,10 @@ Finally, manage the flight data intuitively by uploaded from the flight computer
                         ┌─────────────────────────────────┐
                         │        FLIGHT COMPUTER          │
                         │                                 │
- ISM6HG256 (960 Hz) ──>│  Sensor       EKF        PID   │
- BMP585    (500 Hz) ──>│  Collector ──> (16-state) ──> Mixer ──> 4x Servos
- MMC5983MA (200 Hz) ──>│              Guidance PN        │
- u-blox M10 (18 Hz) ──>│                                 │
+ ISM6HG256 (1000 Hz) ──>│  Sensor       EKF        PID   │
+ BMP585    (500 Hz) ──>│  Collector ──> (16-state) ──> Mixer ──> 1-4x Servos
+ MMC5983MA (200 Hz) ──>│              Roll Control / Guidance PN        │
+ u-blox M10 (10-25 Hz) ──>│                                 │
                         └──────┬──────────────────────────┘
                                │ I2S (22 kHz DMA)
                                │ I2C (commands)
