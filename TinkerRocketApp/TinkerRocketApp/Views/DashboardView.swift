@@ -29,6 +29,7 @@ struct DashboardView: View {
     @StateObject private var flightAnnouncer = FlightAnnouncer()
     @StateObject private var locationManager = LocationManager()
     @State private var activeSheet: DashboardSheet?
+    @State private var showProvisioning = false
 
     var body: some View {
         NavigationView {
@@ -185,6 +186,19 @@ struct DashboardView: View {
                     DriftCastView(device: device)
                 }
             }
+        }
+        .sheet(isPresented: $showProvisioning) {
+            if let device = fleet.activeDevice {
+                DeviceProvisioningSheet(device: device)
+            }
+        }
+        .onChange(of: fleet.activeDevice?.unitID) { newID in
+            // When config_identity readback populates the unitID,
+            // show provisioning sheet if this is a new device.
+            guard let id = newID, !id.isEmpty,
+                  !DeviceProvisioningSheet.isDeviceKnown(id),
+                  !showProvisioning else { return }
+            showProvisioning = true
         }
     }
 }

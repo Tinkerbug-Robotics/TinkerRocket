@@ -125,9 +125,38 @@ struct SettingsView: View {
         && device.telemetry.state == "INITIALIZATION"
     }
 
+    @AppStorage("networkName") private var networkName: String = ""
+    @AppStorage("networkID") private var networkID: Int = 0
+    @State private var editingNetworkName: String = ""
+
     var body: some View {
         NavigationView {
             Form {
+                // Network settings
+                Section(header: Text("Network"),
+                        footer: Text("Changing the network name will require re-provisioning all devices.")) {
+                    HStack {
+                        TextField("Network name", text: $editingNetworkName)
+                            .onAppear { editingNetworkName = networkName }
+                        if editingNetworkName != networkName && !editingNetworkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button("Apply") {
+                                let trimmed = editingNetworkName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                networkName = trimmed
+                                networkID = Int(fnv1a8(trimmed))
+                                // Push to currently connected device
+                                device.sendSetNetworkID(UInt8(networkID))
+                            }
+                            .foregroundColor(.blue)
+                        }
+                    }
+                    HStack {
+                        Text("Network ID")
+                        Spacer()
+                        Text("\(networkID)")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 // Rocket computer settings (only when connected directly to rocket)
                 if !device.isBaseStation {
                     Section("Rocket Settings") {

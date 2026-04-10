@@ -7,9 +7,15 @@ import SwiftUI
 
 @main
 struct TinkerRocketAppApp: App {
+    @AppStorage("hasOnboarded") private var hasOnboarded: Bool = false
+
     var body: some Scene {
         WindowGroup {
-            DashboardView()
+            if hasOnboarded {
+                DashboardView()
+            } else {
+                OnboardingView()
+            }
         }
     }
 }
