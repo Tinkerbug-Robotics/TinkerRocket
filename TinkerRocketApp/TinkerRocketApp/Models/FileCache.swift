@@ -128,6 +128,25 @@ nonisolated class FileCache {
         )
     }
 
+    // MARK: - Device-scoped path helpers
+
+    /// Get the CSV cache directory for a given device (creates if needed).
+    /// If unitID is empty, returns the root CSVCache directory (legacy compat).
+    func csvDir(for unitID: String) -> URL {
+        if unitID.isEmpty { return csvCacheURL }
+        let dir = csvCacheURL.appendingPathComponent(unitID)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Get the binary cache directory for a given device (creates if needed).
+    func binaryDir(for unitID: String) -> URL {
+        if unitID.isEmpty { return binaryCacheURL }
+        let dir = binaryCacheURL.appendingPathComponent(unitID)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     /// Convert a binary filename to its CSV counterpart
     /// e.g. "flight_20260224_021306.bin" → "flight_20260224_021306.csv"
     private func csvName(for binaryFilename: String) -> String {

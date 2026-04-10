@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import CoreBluetooth
 import CoreLocation
 
 struct IdentifiableInt: Identifiable {
@@ -192,6 +193,25 @@ struct DashboardView: View {
                 DeviceProvisioningSheet(device: device)
             }
         }
+        .sheet(isPresented: Binding(
+            get: { fleet.isScanning && fleet.isConnected },
+            set: { if !$0 { fleet.stopScanning() } }
+        )) {
+            NavigationView {
+                VStack {
+                    DevicePickerView(fleet: fleet)
+                    Spacer()
+                }
+                .padding()
+                .navigationTitle("Add Device")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { fleet.stopScanning() }
+                    }
+                }
+            }
+        }
         .onChange(of: fleet.activeDevice?.unitID) { newID in
             // When config_identity readback populates the unitID,
             // show provisioning sheet if this is a new device.
@@ -213,13 +233,17 @@ struct ConnectedDashboardView: View {
     @Binding var activeSheet: DashboardSheet?
 
     var body: some View {
-        // Connection status
-        ConnectionStatusView(
-            isConnected: true,
-            isScanning: fleet.isScanning,
-            statusMessage: fleet.statusMessage,
-            connectedDeviceName: device.displayName
-        )
+        // Device chip bar (multi-device) or simple status (single device)
+        if fleet.devices.count > 1 {
+            DeviceChipBar(fleet: fleet, activeDevice: device)
+        } else {
+            ConnectionStatusView(
+                isConnected: true,
+                isScanning: fleet.isScanning,
+                statusMessage: fleet.statusMessage,
+                connectedDeviceName: device.displayName
+            )
+        }
 
         if !device.isBaseStation && !device.telemetry.pwr_pin_on {
             // --- Powered OFF (rocket only): show battery + power on button ---
@@ -350,6 +374,74 @@ struct ConnectionStatusView: View {
         .frame(maxWidth: .infinity)
         .background(isConnected ? Color.green.opacity(0.1) : Color(.systemGray6))
         .cornerRadius(10)
+    }
+}
+
+/// Horizontal scroll of device "chips" for switching between connected devices.
+struct DeviceChipBar: View {
+    @ObservedObject var fleet: BLEFleet
+    @ObservedObject var activeDevice: BLEDevice
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(fleet.devices, id: \.peripheral?.identifier) { device in
+                    let isActive = device.peripheral?.identifier == activeDevice.peripheral?.identifier
+
+                    Button {
+                        fleet.activeDeviceID = device.peripheral?.identifier
+                    } label: {
+                        HStack(spacing: 6) {
+                            if device.isBaseStation {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                                    .font(.caption)
+                            } else {
+                                Image("RocketIcon")
+                                    .resizable()
+                                    .renderingMode(.template)
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(height: 14)
+                            }
+                            Text(device.displayName)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isActive ? Color.blue : Color(.systemGray5))
+                        .foregroundColor(isActive ? .white : .primary)
+                        .cornerRadius(20)
+                    }
+                    .contextMenu {
+                        Button {
+                            fleet.disconnect(device)
+                        } label: {
+                            Label("Disconnect", systemImage: "xmark.circle")
+                        }
+                    }
+                }
+
+                // Scan button in chip bar
+                Button {
+                    fleet.startScanning()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                        Text("Add")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray5))
+                    .foregroundColor(.blue)
+                    .cornerRadius(20)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -781,8 +873,9 @@ struct DevicePickerView: View {
             }
 
             ForEach(fleet.discoveredDevices) { device in
+                let alreadyConnected = fleet.devices.contains { $0.peripheral?.identifier == device.id }
                 Button(action: {
-                    fleet.connect(to: device)
+                    if !alreadyConnected { fleet.connect(to: device) }
                 }) {
                     HStack {
                         Group {
@@ -811,15 +904,21 @@ struct DevicePickerView: View {
 
                         Spacer()
 
-                        // BLE signal strength indicator
-                        BLESignalIndicator(rssi: device.rssi)
+                        // BLE signal strength or connected badge
+                        if alreadyConnected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                        } else {
+                            BLESignalIndicator(rssi: device.rssi)
+                        }
                     }
                     .padding(.vertical, 8)
                     .padding(.horizontal, 12)
-                    .background(Color(.systemGray5))
+                    .background(alreadyConnected ? Color.green.opacity(0.1) : Color(.systemGray5))
                     .cornerRadius(10)
                 }
                 .buttonStyle(PlainButtonStyle())
+                .disabled(alreadyConnected)
             }
         }
         .padding()
