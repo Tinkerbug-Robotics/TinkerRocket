@@ -1,1 +1,0 @@
-/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/libraries/CRC/src/CrcParameters.h
