@@ -223,7 +223,8 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 Three GitHub Actions workflows run automatically on push:
 
-- **cpp-tests.yml** -- Triggered by changes to `libraries/` or `tests_cpp/`
+- **cpp-tests.yml** -- Triggered by changes to `libraries/`, `tests_cpp/`, or `tests/integration/`
+- **firmware-build.yml** -- Full ESP-IDF compilation of `out_computer` and `base_station` (Docker: `espressif/idf:v5.3.2`)
 - **sim-tests.yml** -- Triggered by changes to `tinkerrocket-sim/` or `libraries/`
 - **ios-tests.yml** -- Triggered by changes to `TinkerRocketApp/`
 
@@ -250,7 +251,7 @@ CRC-16 polynomial: 0x8001, initial: 0x0000.
 | 0xA4 | MMC5983MA (Mag) | 16 B | 200 Hz |
 | 0xA5 | NonSensor (EKF) | 43 B | 500 Hz |
 | 0xA6 | Power | 10 B | 10 Hz |
-| 0xF1 | LoRa Telemetry | 57 B | 2 Hz |
+| 0xF1 | LoRa Telemetry | 59 B | 2 Hz |
 
 ### I2S Telemetry Pipeline
 
@@ -286,6 +287,86 @@ The TinkerRocketApp is a SwiftUI companion app providing:
 - Audio/haptic flight event announcements
 
 Connects via BLE directly to the Out Computer (on-pad) or through the Base Station (in-flight via LoRa relay).
+
+## Multi-Device Support
+
+The system supports connecting to multiple flight computers and base stations simultaneously, with collision avoidance for multiple users operating at the same field.
+
+### Device Identity
+
+Every unit has a persistent identity stored in NVS flash:
+
+| Field | Size | Purpose |
+|-------|------|---------|
+| `unit_id` | 4 bytes | Hardware fingerprint (last 4 bytes of efuse MAC), immutable |
+| `unit_name` | 1-20 chars | User-settable nickname (e.g. "Atlas", "PadAlpha") |
+| `network_id` | 1 byte | LoRa network namespace (0-255), isolates different users |
+| `rocket_id` | 1 byte | Unique ID per rocket within a network (1-254) |
+
+BLE advertising names use the format `TR-R-<name>` for rockets and `TR-B-<name>` for base stations (e.g. `TR-R-Atlas`, `TR-B-PadAlpha`). The app configures identity on first connect via BLE commands 40/41/42.
+
+### Network Isolation
+
+Multiple users at the same field are isolated via three layers:
+
+1. **Network ID** -- each user picks a network name on first app launch, hashed to a 1-byte ID. Devices only process packets matching their network.
+2. **LoRa syncword** -- configurable via the app's LoRa settings. Different syncwords prevent radio-level decoding of other users' packets.
+3. **Rocket ID** -- within a network, each rocket has a unique ID (1-254) so the base station can track and route to individual rockets.
+
+### LoRa Frame Format
+
+Telemetry packets (rocket to base station) carry a 2-byte routing header:
+
+```
+[network_id:1][rocket_id:1][telemetry_payload:57] = 59 bytes total
+```
+
+Uplink commands (base station to rocket) are addressed:
+
+```
+[0xCA][network_id:1][target_rocket_id:1][cmd:1][len:1][payload:0-18]
+```
+
+Target rocket ID `0xFF` is broadcast (e.g., time sync). The rocket filters incoming uplinks and ignores packets for other networks or rocket IDs.
+
+### Base Station Multi-Rocket Tracker
+
+The base station maintains a tracker array of up to 4 rockets. Each slot stores the last-known telemetry, RSSI/SNR, GPS position, and unit name. Rockets announce their name via a LoRa beacon (`0xBE` sync byte) every 2 seconds while in READY or PRELAUNCH state. The tracker auto-evicts the oldest slot when all 4 are full.
+
+Telemetry relayed to the iOS app via BLE includes `rid` (rocket ID) and `run` (rocket unit name) fields so the app can demultiplex multiple rockets arriving through a single base station.
+
+### iOS App Architecture
+
+The app uses a fleet-based architecture for multi-device management:
+
+```
+BLEFleet (owns CBCentralManager, scanning, connection routing)
+  ├── devices: [BLEDevice]          -- directly connected via BLE
+  │   ├── BLEDevice (rocket)        -- telemetry, config, files, commands
+  │   └── BLEDevice (base station)  -- relays telemetry from remote rockets
+  │       └── remoteRockets: [RemoteRocket]  -- rockets seen via LoRa relay
+  └── activeDeviceID                -- which device the dashboard shows
+```
+
+- **BLEFleet** manages the shared `CBCentralManager`, scan/discovery, and connection routing
+- **BLEDevice** holds per-peripheral state (telemetry, config, file downloads, RSSI) and implements `CBPeripheralDelegate`
+- **RemoteRocket** holds telemetry forwarded by a base station, identified by `(baseStationID, rocketID)`
+
+When multiple devices are connected, the dashboard shows a horizontal chip bar for switching between them. Remote rockets appear as orange chips with an antenna icon.
+
+### First-Launch Onboarding
+
+On first app launch, the user picks a network name (e.g. "My Backyard", "Skyhawks Club"). This is hashed to a `network_id` and pushed to every device on first connect. When connecting to a new device (unknown `unit_id`), a provisioning sheet lets the user name the device and assign a rocket ID.
+
+### Command Relay
+
+Commands can be sent to a rocket either directly over BLE or relayed through a base station using BLE command 50:
+
+```
+Command 50: [target_rocket_id:1][inner_command:1][inner_payload:0-18]
+```
+
+The base station unpacks this and queues a LoRa uplink addressed to the target rocket. This enables controlling rockets that are out of BLE range but within LoRa range of the base station.
 
 ## Simulation
 
