@@ -93,6 +93,10 @@ struct TelemetryData: Codable {
     // Power rail state
     var pwr_pin_on: Bool = false      // FlightComputer + sensors powered on
 
+    // Source rocket identity (base station relay only, nil for direct BLE)
+    var source_rocket_id: Int?        // rocket_id from LoRa header
+    var source_unit_name: String?     // rocket unit name from LoRa beacon
+
     // Pyro channel status (packed bitfield from "ps" JSON key, decoded in init)
     var pyro_status_bits: Int = 0
     var pyro1_armed: Bool { (pyro_status_bits & 0x01) != 0 }
@@ -145,6 +149,8 @@ struct TelemetryData: Codable {
         case landed_flag = "land"
         case pwr_pin_on = "pwr"
         case pyro_status_bits = "ps"  // packed bitfield: b0=ch1_armed, b1=ch1_cont, b2=ch1_fired, b3=ch2_armed, b4=ch2_cont, b5=ch2_fired
+        case source_rocket_id = "rid"
+        case source_unit_name = "run"
     }
 
     // Custom decoder: non-optional fields with defaults need decodeIfPresent
@@ -195,6 +201,8 @@ struct TelemetryData: Codable {
         landed_flag = try c.decodeIfPresent(Bool.self, forKey: .landed_flag)
         pwr_pin_on = try c.decodeIfPresent(Bool.self, forKey: .pwr_pin_on) ?? false
         pyro_status_bits = try c.decodeIfPresent(Int.self, forKey: .pyro_status_bits) ?? 0
+        source_rocket_id = try c.decodeIfPresent(Int.self, forKey: .source_rocket_id)
+        source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
     }
 
     // Default memberwise init (for creating empty telemetry)

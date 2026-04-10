@@ -422,6 +422,28 @@ struct DeviceChipBar: View {
                     }
                 }
 
+                // Remote rockets (seen via base station)
+                ForEach(fleet.remoteRockets) { remote in
+                    HStack(spacing: 6) {
+                        Image("RocketIcon")
+                            .resizable()
+                            .renderingMode(.template)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(height: 14)
+                        Text(remote.displayName)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(.system(size: 8))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.2))
+                    .foregroundColor(.orange)
+                    .cornerRadius(20)
+                }
+
                 // Scan button in chip bar
                 Button {
                     fleet.startScanning()

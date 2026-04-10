@@ -1045,6 +1045,14 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
         if (ps != 0) { addInt("ps", ps); }
     }
 
+    // Source rocket identity (base station relay only)
+    if (data.source_rocket_id > 0) {
+        addInt("rid", data.source_rocket_id);
+        if (data.source_unit_name && data.source_unit_name[0]) {
+            addString("run", data.source_unit_name);
+        }
+    }
+
     buf[pos++] = '}';
     buf[pos] = '\0';
 

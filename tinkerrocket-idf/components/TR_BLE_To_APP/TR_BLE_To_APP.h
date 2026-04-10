@@ -85,6 +85,10 @@ public:
         bool pyro2_armed;
         bool pyro2_cont;
         bool pyro2_fired;
+
+        // Source rocket identity (base station only — for multi-rocket demux)
+        uint8_t source_rocket_id;       // 0 = not set (direct connection)
+        const char* source_unit_name;   // nullptr = not set
     };
 
     // Constructor

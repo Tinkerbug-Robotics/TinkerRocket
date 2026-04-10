@@ -31,6 +31,11 @@ class BLEFleet: NSObject, ObservableObject {
         return devices.first { $0.peripheral?.identifier == id }
     }
 
+    /// All remote rockets seen via connected base stations.
+    var remoteRockets: [RemoteRocket] {
+        devices.flatMap { $0.remoteRockets }
+    }
+
     /// True if any device is connected.
     var isConnected: Bool {
         !devices.isEmpty

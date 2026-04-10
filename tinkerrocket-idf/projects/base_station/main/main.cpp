@@ -653,6 +653,10 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.vel_u_apogee_flag = lora.vel_u_apogee_flag;
     out.alt_apogee_flag   = lora.alt_apogee_flag;
     out.alt_landed_flag   = lora.alt_landed_flag;
+
+    // Source rocket identity (for app-side multi-rocket demux)
+    out.source_rocket_id  = lora.rocket_id;
+    out.source_unit_name  = nullptr;  // Caller sets from tracker if available
 }
 
 static uint32_t last_telem_print_ms = 0;
@@ -1223,6 +1227,9 @@ static void loop_bs()
                 TR_BLE_To_APP::TelemetryData ble_telem = {};
                 buildBLETelemetry(decoded, ls.last_rssi, ls.last_snr,
                                   lat_deg, lon_deg, alt_m, ble_telem);
+                if (slot >= 0 && tracked_rockets[slot].unit_name[0]) {
+                    ble_telem.source_unit_name = tracked_rockets[slot].unit_name;
+                }
                 ble_app.sendTelemetry(ble_telem);
             }
         }
@@ -1271,6 +1278,9 @@ static void loop_bs()
                 TR_BLE_To_APP::TelemetryData ble_telem = {};
                 buildBLETelemetry(tr.last_data, tr.last_rssi, tr.last_snr,
                                   tr.last_lat_deg, tr.last_lon_deg, tr.last_alt_m, ble_telem);
+                if (tr.unit_name[0]) {
+                    ble_telem.source_unit_name = tr.unit_name;
+                }
                 ble_app.sendTelemetry(ble_telem);
             }
         }
@@ -1539,6 +1549,23 @@ static void loop_bs()
             id_prefs.end();
             sendCurrentConfig();
             ESP_LOGI(TAG, "[BLE] Network ID set: %u", (unsigned)network_id);
+        }
+    }
+    else if (ble_cmd == 50)
+    {
+        // Relay command to a specific rocket via LoRa uplink
+        // Payload: [target_rid:1][inner_cmd:1][inner_payload:0..18]
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen >= 2)
+        {
+            uint8_t target_rid = payload[0];
+            uint8_t inner_cmd  = payload[1];
+            const uint8_t* inner_payload = (plen > 2) ? &payload[2] : nullptr;
+            size_t inner_len = (plen > 2) ? (plen - 2) : 0;
+            buildUplinkPacket(inner_cmd, inner_payload, inner_len, target_rid);
+            ESP_LOGI(TAG, "[BLE->UPLINK] Relay cmd=%u -> rid=%u (%u bytes)",
+                     inner_cmd, target_rid, (unsigned)inner_len);
         }
     }
 

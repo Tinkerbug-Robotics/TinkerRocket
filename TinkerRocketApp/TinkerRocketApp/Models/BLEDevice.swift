@@ -64,6 +64,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         deviceType == .baseStation
     }
 
+    /// Rockets seen via this device's LoRa relay (base station only)
+    @Published var remoteRockets: [RemoteRocket] = []
+
     // Flight voice announcer (set by DashboardView)
     var flightAnnouncer: FlightAnnouncer?
 
@@ -393,6 +396,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func sendSetRocketID(_ rid: UInt8) {
         sendRawCommand(42, payload: Data([rid]))
+    }
+
+    /// Relay a command to a specific rocket via this base station.
+    /// Command 50: [target_rid:1][inner_cmd:1][inner_payload:0..18]
+    /// The base station unpacks this and queues a LoRa uplink.
+    func sendRelayCommand(targetRocketID: UInt8, innerCommand: UInt8, innerPayload: Data = Data()) {
+        var payload = Data([targetRocketID, innerCommand])
+        payload.append(innerPayload.prefix(18))
+        sendRawCommand(50, payload: payload)
     }
 
     // MARK: - File operations
@@ -799,6 +811,30 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // Regular telemetry
         do {
             let newTelemetry = try jsonDecoder.decode(TelemetryData.self, from: data)
+
+            // If telemetry has a source_rocket_id, it's relayed via base station
+            // → route to RemoteRocket instead of updating our own telemetry
+            if let rid = newTelemetry.source_rocket_id, rid > 0, isBaseStation,
+               let bsID = peripheral?.identifier {
+                let rocketID = UInt8(rid)
+                if let existing = remoteRockets.first(where: { $0.rocketID == rocketID }) {
+                    existing.updateTelemetry(newTelemetry, unitName: newTelemetry.source_unit_name)
+                } else {
+                    let remote = RemoteRocket(
+                        baseStationDeviceID: bsID,
+                        rocketID: rocketID,
+                        unitName: newTelemetry.source_unit_name ?? ""
+                    )
+                    remote.telemetry = newTelemetry
+                    remoteRockets.append(remote)
+                    print("[BS] New remote rocket: rid=\(rocketID) name=\(remote.unitName)")
+                }
+                // Still update base station's own telemetry for BS-specific fields
+                // (battery, logging state) but don't overwrite rocket telemetry
+                self.telemetry = newTelemetry
+                return
+            }
+
             if self.simLaunched {
                 if newTelemetry.state != "READY" && newTelemetry.state != "INITIALIZATION" {
                     self.simSawNonReady = true
