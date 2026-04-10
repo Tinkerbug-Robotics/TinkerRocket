@@ -469,6 +469,12 @@ def parse_binary_file(filepath):
         rec["mag_y"] = mx * s_mmc + my * c_mmc
         rec["mag_z"] = mz
 
+    # Sort each sensor type by timestamp so MRAM ring-buffer drain
+    # (which can interleave older pre-launch frames with newer ones)
+    # doesn't produce backward time jumps in plots or analysis.
+    for key in records:
+        records[key].sort(key=lambda r: r["time_us"])
+
     return records, stats, config
 
 

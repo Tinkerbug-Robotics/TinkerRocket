@@ -88,6 +88,11 @@ struct config
 
     // --- LoRa Uplink RX (commands from BaseStation) ---
     static constexpr uint8_t UPLINK_SYNC_BYTE = 0xCA;
+
+    // --- Device Identity (factory defaults, overridden by NVS on boot) ---
+    static constexpr uint8_t DEFAULT_NETWORK_ID = 0;
+    static constexpr uint8_t DEFAULT_ROCKET_ID  = 1;
+    static constexpr const char* DEVICE_TYPE     = "R";  // "R" = rocket
 };
 
 #endif

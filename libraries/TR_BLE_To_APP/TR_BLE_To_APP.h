@@ -88,8 +88,13 @@ public:
     };
 
     // Constructor
-    // device_name: BLE device name (e.g., "TinkerRocket")
+    // device_name: BLE device name (e.g., "TR-R-A1B2")
     explicit TR_BLE_To_APP(const char* device_name);
+
+    // Change the advertised BLE device name at runtime.
+    // Safe to call before or after begin().  If called after begin(),
+    // stops and restarts advertising so scanners see the new name.
+    void setName(const char* name);
 
     // Initialize BLE server and services
     // Returns true on success
@@ -149,7 +154,8 @@ public:
     size_t getMaxChunkDataSize() const;
 
 private:
-    const char* device_name_;
+    static constexpr size_t MAX_DEVICE_NAME_LEN = 29;   // BLE adv name limit
+    char device_name_[MAX_DEVICE_NAME_LEN + 1];          // mutable, null-terminated
 
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;
@@ -180,10 +186,12 @@ private:
     // Helper to build JSON string
     String buildTelemetryJSON(const TelemetryData& data);
 
+public:
     // ---- NimBLE callbacks (static, forwarded via user-data pointer) --------
     static int  gap_event_cb(struct ble_gap_event* event, void* arg);
     static int  gatt_svc_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                                    struct ble_gatt_access_ctxt* ctxt, void* arg);
+private:
     void onConnect(uint16_t conn_handle, const struct ble_gap_conn_desc* desc);
     void onDisconnect(uint16_t conn_handle, int reason);
     void onMtuChanged(uint16_t conn_handle, uint16_t mtu);

@@ -54,6 +54,10 @@ namespace config
     static constexpr int      I2C_SDA_PIN       = 38;
     static constexpr uint32_t I2C_FREQ_HZ       = 400'000;  // 400 kHz
 
+    // --- Device Identity (factory defaults, overridden by NVS on boot) ---
+    static constexpr uint8_t DEFAULT_NETWORK_ID = 0;
+    static constexpr const char* DEVICE_TYPE     = "B";  // "B" = base station
+
     // --- Battery Monitoring (MAX17205G) ---
     static constexpr uint16_t MAX17205_ADDR      = 0x36;     // Primary I2C address
     static constexpr int      NUM_BATTERY_CELLS  = 2;        // 2S NCR18650B

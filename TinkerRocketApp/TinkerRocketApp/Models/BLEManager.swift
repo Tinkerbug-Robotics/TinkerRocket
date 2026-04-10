@@ -86,7 +86,7 @@ struct DiscoveredDevice: Identifiable {
     var rssi: Int                   // BLE signal strength (not LoRa RSSI)
 
     var isBaseStation: Bool {
-        name.contains("Base") || name.contains("BS")
+        name.hasPrefix("TR-B-") || name.contains("Base") || name.contains("BS")
     }
 
     var typeLabel: String {
@@ -151,7 +151,7 @@ class BLEManager: NSObject, ObservableObject {
 
     // Whether connected device is a base station (no file/camera access)
     var isBaseStation: Bool {
-        connectedDeviceName.contains("Base") || connectedDeviceName.contains("BS")
+        connectedDeviceName.hasPrefix("TR-B-") || connectedDeviceName.contains("Base") || connectedDeviceName.contains("BS")
     }
 
     // Flight voice announcer (set by DashboardView)
@@ -1118,8 +1118,8 @@ extension BLEManager: CBCentralManagerDelegate {
         let name = peripheral.name ?? "Unknown"
         print("Discovered: \(name) RSSI: \(RSSI)")
 
-        // Only list Tinker devices (TinkerRocket, TinkerBaseStation)
-        guard name.contains("Tinker") else { return }
+        // Only list Tinker devices (legacy "TinkerRocket"/"TinkerBaseStation" + new "TR-R-"/"TR-B-")
+        guard name.hasPrefix("TR-") || name.contains("Tinker") else { return }
 
         // Update RSSI if already in list, otherwise add
         if let idx = discoveredDevices.firstIndex(where: { $0.id == peripheral.identifier }) {

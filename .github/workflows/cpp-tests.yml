@@ -5,13 +5,15 @@ on:
     paths:
       - 'libraries/**'
       - 'tests_cpp/**'
+      - 'tests/integration/**'
   pull_request:
     paths:
       - 'libraries/**'
       - 'tests_cpp/**'
+      - 'tests/integration/**'
 
 jobs:
-  test:
+  cpp-tests:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,3 +27,16 @@ jobs:
 
       - name: Test
         run: ctest --test-dir tests_cpp/build --output-on-failure
+
+  bench-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run integration tests (skip if no test data)
+        run: python -m pytest tests/integration/ -v --tb=short

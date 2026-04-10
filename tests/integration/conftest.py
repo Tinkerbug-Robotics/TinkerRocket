@@ -81,6 +81,11 @@ def parse_bin_file(path: Path) -> list:
 
         frames.append(ParsedFrame(msg_type, payload, ts, crc_valid))
 
+    # Sort by timestamp so MRAM ring-buffer drain (which can interleave
+    # older pre-launch frames with newer ones) doesn't cause spurious
+    # monotonicity or gap failures.
+    frames.sort(key=lambda f: f.timestamp_us)
+
     return frames
 
 

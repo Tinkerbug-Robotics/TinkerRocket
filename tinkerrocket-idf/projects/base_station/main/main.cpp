@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <esp_log.h>
+#include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
 #include <esp_vfs_fat.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
@@ -66,6 +67,11 @@ static float   cfg_pid_kd  = 0.0f;
 static float   cfg_pid_min = -20.0f;
 static float   cfg_pid_max = 20.0f;
 static bool    cfg_servo_enabled = true;
+
+// Device identity (loaded from NVS "identity" namespace)
+static char    unit_id_hex[9] = {0};              // last 4 bytes of MAC as "a1b2c3d4"
+static char    unit_name[24]  = "TinkerBaseStation"; // default until NVS loads
+static uint8_t network_id     = config::DEFAULT_NETWORK_ID;
 
 // LoRa uplink state (BaseStation → OutComputer)
 static uint8_t  uplink_buf[24];   // 3-byte header + up to 20 bytes payload (PID config needs 20)
@@ -691,6 +697,23 @@ static void sendCurrentConfig()
     String j(buf);
     ble_app.sendConfigJSON(j);
     ESP_LOGI(TAG, "[CFG] Sent config readback to app");
+
+    delay(50);
+
+    // Message 2: device identity ("config_identity" type)
+    char id_buf[128];
+    snprintf(id_buf, sizeof(id_buf),
+             "{\"type\":\"config_identity\""
+             ",\"uid\":\"%s\""
+             ",\"un\":\"%s\""
+             ",\"nid\":%u"
+             ",\"dt\":\"%s\"}",
+             unit_id_hex, unit_name,
+             (unsigned)network_id,
+             config::DEVICE_TYPE);
+    String id_json(id_buf);
+    ble_app.sendConfigJSON(id_json);
+    ESP_LOGI(TAG, "[CFG] Sent identity readback (%u bytes)", (unsigned)id_json.length());
 }
 
 static void cacheServoConfig(const uint8_t* payload, size_t len)
@@ -947,6 +970,37 @@ static void setup_bs()
     prefs.end();
     ESP_LOGI(TAG, "[NVS] Config cache: servo bias=%d hz=%d, PID Kp=%.4f",
              cfg_servo_bias1, cfg_servo_hz, cfg_pid_kp);
+
+    // --- Device Identity (NVS "identity" namespace) ---
+    {
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        snprintf(unit_id_hex, sizeof(unit_id_hex), "%02x%02x%02x%02x",
+                 mac[2], mac[3], mac[4], mac[5]);
+
+        prefs.begin("identity", false);
+        if (!prefs.isKey("un"))
+        {
+            char default_name[24];
+            snprintf(default_name, sizeof(default_name), "TR-B-%.4s", &unit_id_hex[4]);
+            prefs.putBytes("un", default_name, strlen(default_name) + 1);
+            prefs.putUChar("nid", config::DEFAULT_NETWORK_ID);
+            ESP_LOGI(TAG, "[CFG] Identity NVS empty — seeded: name=%s nid=%u",
+                     default_name, config::DEFAULT_NETWORK_ID);
+        }
+        char nvs_name_buf[24] = "TinkerBaseStation";
+        size_t un_len = prefs.getBytes("un", nvs_name_buf, sizeof(nvs_name_buf) - 1);
+        if (un_len > 0) nvs_name_buf[un_len] = '\0';
+        strncpy(unit_name, nvs_name_buf, sizeof(unit_name) - 1);
+        unit_name[sizeof(unit_name) - 1] = '\0';
+        network_id = prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
+        prefs.end();
+
+        ESP_LOGI(TAG, "[CFG] Identity: uid=%s name=%s nid=%u",
+                 unit_id_hex, unit_name, (unsigned)network_id);
+
+        ble_app.setName(unit_name);
+    }
 
     // Configure LoRa radio (uses NVS-saved config or factory defaults)
     TR_LoRa_Comms::Config lora_cfg = {};
@@ -1362,6 +1416,44 @@ static void loop_bs()
     {
         // Config readback request
         sendCurrentConfig();
+    }
+    // ---- Device Identity Commands ----
+    else if (ble_cmd == 40)
+    {
+        // Set unit name — payload is UTF-8 string, max 20 bytes
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen > 0 && plen <= 20)
+        {
+            char new_name[24];
+            memcpy(new_name, payload, plen);
+            new_name[plen] = '\0';
+            strncpy(unit_name, new_name, sizeof(unit_name) - 1);
+            unit_name[sizeof(unit_name) - 1] = '\0';
+            Preferences id_prefs;
+            id_prefs.begin("identity", false);
+            id_prefs.putBytes("un", new_name, strlen(new_name) + 1);
+            id_prefs.end();
+            ble_app.setName(unit_name);
+            sendCurrentConfig();
+            ESP_LOGI(TAG, "[BLE] Unit name set: %s", unit_name);
+        }
+    }
+    else if (ble_cmd == 41)
+    {
+        // Set network_id — payload: [nid:1]
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen >= 1)
+        {
+            network_id = payload[0];
+            Preferences id_prefs;
+            id_prefs.begin("identity", false);
+            id_prefs.putUChar("nid", network_id);
+            id_prefs.end();
+            sendCurrentConfig();
+            ESP_LOGI(TAG, "[BLE] Network ID set: %u", (unsigned)network_id);
+        }
     }
 
     // Service LoRa uplink retries (TX commands, then resume RX)

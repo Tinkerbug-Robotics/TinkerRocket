@@ -9,6 +9,7 @@
 #include <TR_NVS.h>
 #include <nvs_flash.h>
 #include <esp_log.h>
+#include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "freertos/queue.h"
 #include "host/ble_gap.h"       // ble_gap_update_params
@@ -132,6 +133,12 @@ static float   cfg_pyro1_trigger_value = 0.0f;
 static bool    cfg_pyro2_enabled = false;
 static uint8_t cfg_pyro2_trigger_mode = 0;
 static float   cfg_pyro2_trigger_value = 0.0f;
+
+// Device identity (loaded from NVS "identity" namespace)
+static char    unit_id_hex[9] = {0};           // last 4 bytes of MAC as "a1b2c3d4"
+static char    unit_name[24]  = "TinkerRocket"; // default until NVS loads
+static uint8_t network_id     = config::DEFAULT_NETWORK_ID;
+static uint8_t rocket_id      = config::DEFAULT_ROCKET_ID;
 
 static ISM6HG256Data latest_ism6_raw = {};
 static BMP585Data latest_bmp_raw = {};
@@ -1287,6 +1294,24 @@ static void sendCurrentConfig()
     p += "}";
     ble_app.sendConfigJSON(p);
     ESP_LOGI("CFG", "Sent pyro config readback (%u bytes)", (unsigned)p.length());
+
+    delay(50);
+
+    // Message 3: device identity ("config_identity" type)
+    char id_buf[128];
+    snprintf(id_buf, sizeof(id_buf),
+             "{\"type\":\"config_identity\""
+             ",\"uid\":\"%s\""
+             ",\"un\":\"%s\""
+             ",\"nid\":%u"
+             ",\"rid\":%u"
+             ",\"dt\":\"%s\"}",
+             unit_id_hex, unit_name,
+             (unsigned)network_id, (unsigned)rocket_id,
+             config::DEVICE_TYPE);
+    String id_json(id_buf);
+    ble_app.sendConfigJSON(id_json);
+    ESP_LOGI("CFG", "Sent identity readback (%u bytes)", (unsigned)id_json.length());
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -2150,7 +2175,10 @@ void initPeripherals()
         ESP_LOGI("CFG", "NVS Pyro: ch1=%u/%u/%.1f ch2=%u/%u/%.1f",
                  cfg_pyro1_enabled, cfg_pyro1_trigger_mode, (double)cfg_pyro1_trigger_value,
                  cfg_pyro2_enabled, cfg_pyro2_trigger_mode, (double)cfg_pyro2_trigger_value);
+    }
 
+    if (config::USE_LORA_RADIO)
+    {
         TR_LoRa_Comms::Config lora_cfg = {};
         lora_cfg.enabled = config::USE_LORA_RADIO;
         lora_cfg.cs_pin = config::LORA_CS_PIN;
@@ -2318,6 +2346,35 @@ static void setup_oc()
         cfg_use_angle_ctrl = prefs.getBool("ac", false);
         cfg_roll_delay_ms  = prefs.getUShort("rdly", 0);
         prefs.end();
+
+        // Early identity load (so config readback on first connect is correct)
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        snprintf(unit_id_hex, sizeof(unit_id_hex), "%02x%02x%02x%02x",
+                 mac[2], mac[3], mac[4], mac[5]);
+
+        prefs.begin("identity", false);
+        if (!prefs.isKey("un"))
+        {
+            char default_name[24];
+            snprintf(default_name, sizeof(default_name), "TR-R-%.4s", &unit_id_hex[4]);
+            prefs.putBytes("un", default_name, strlen(default_name) + 1);
+            prefs.putUChar("nid", config::DEFAULT_NETWORK_ID);
+            prefs.putUChar("rid", config::DEFAULT_ROCKET_ID);
+        }
+        // Read unit name from NVS (stored as blob with null terminator)
+        char nvs_name_buf[24] = "TinkerRocket";
+        size_t un_len = prefs.getBytes("un", nvs_name_buf, sizeof(nvs_name_buf) - 1);
+        if (un_len > 0) nvs_name_buf[un_len] = '\0';  // ensure null-terminated
+        strncpy(unit_name, nvs_name_buf, sizeof(unit_name) - 1);
+        unit_name[sizeof(unit_name) - 1] = '\0';
+        network_id = prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
+        rocket_id  = prefs.getUChar("rid", config::DEFAULT_ROCKET_ID);
+        prefs.end();
+
+        ESP_LOGI("CFG", "Identity early load: uid=%s name=%s nid=%u rid=%u",
+                 unit_id_hex, unit_name, (unsigned)network_id, (unsigned)rocket_id);
+        ble_app.setName(unit_name);
     }
 
     // --- INA230 power monitor (always-on, not behind PWR_PIN) ---
@@ -3211,6 +3268,63 @@ static void loop_oc()
             pending_config_msg_type = PYRO_FIRE_TEST;
             setPendingCommand(PYRO_FIRE_TEST);
             ESP_LOGI("BLE", "Pyro test fire CH%u", ch);
+        }
+        // ---- Device Identity Commands ----
+        else if (ble_cmd == 40)
+        {
+            // Set unit name — payload is UTF-8 string, max 20 bytes
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen > 0 && plen <= 20)
+            {
+                char new_name[24];
+                memcpy(new_name, payload, plen);
+                new_name[plen] = '\0';
+                strncpy(unit_name, new_name, sizeof(unit_name) - 1);
+                unit_name[sizeof(unit_name) - 1] = '\0';
+                // Persist to NVS
+                Preferences prefs;
+                prefs.begin("identity", false);
+                prefs.putBytes("un", new_name, strlen(new_name) + 1);
+                prefs.end();
+                // Update BLE advertising name
+                ble_app.setName(unit_name);
+                // Send updated identity readback to app
+                sendCurrentConfig();
+                ESP_LOGI("BLE", "Unit name set: %s", unit_name);
+            }
+        }
+        else if (ble_cmd == 41)
+        {
+            // Set network_id — payload: [nid:1]
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1)
+            {
+                network_id = payload[0];
+                Preferences prefs;
+                prefs.begin("identity", false);
+                prefs.putUChar("nid", network_id);
+                prefs.end();
+                sendCurrentConfig();
+                ESP_LOGI("BLE", "Network ID set: %u", (unsigned)network_id);
+            }
+        }
+        else if (ble_cmd == 42)
+        {
+            // Set rocket_id — payload: [rid:1]
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1 && payload[0] > 0 && payload[0] < 255)
+            {
+                rocket_id = payload[0];
+                Preferences prefs;
+                prefs.begin("identity", false);
+                prefs.putUChar("rid", rocket_id);
+                prefs.end();
+                sendCurrentConfig();
+                ESP_LOGI("BLE", "Rocket ID set: %u", (unsigned)rocket_id);
+            }
         }
     }
 

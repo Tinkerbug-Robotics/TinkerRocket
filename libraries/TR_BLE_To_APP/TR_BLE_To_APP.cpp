@@ -105,8 +105,7 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 // ============================================================================
 
 TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
-    : device_name_(device_name),
-      device_connected_(false),
+    : device_connected_(false),
       negotiated_mtu_(0),
       conn_handle_(0),
       pending_command_(0),
@@ -121,6 +120,25 @@ TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
       file_ops_val_handle_(0),
       file_transfer_val_handle_(0)
 {
+    // Copy initial name into the mutable buffer
+    strncpy(device_name_, device_name, MAX_DEVICE_NAME_LEN);
+    device_name_[MAX_DEVICE_NAME_LEN] = '\0';
+}
+
+void TR_BLE_To_APP::setName(const char* name)
+{
+    strncpy(device_name_, name, MAX_DEVICE_NAME_LEN);
+    device_name_[MAX_DEVICE_NAME_LEN] = '\0';
+
+    // If BLE stack is already running, update GAP name and restart advertising
+    // so scanners see the new name immediately.
+    if (s_instance_ == this)
+    {
+        ble_svc_gap_device_name_set(device_name_);
+        ble_gap_adv_stop();
+        startAdvertising();
+        ESP_LOGI(BLE_TAG, "BLE name changed to: %s", device_name_);
+    }
 }
 
 // ============================================================================

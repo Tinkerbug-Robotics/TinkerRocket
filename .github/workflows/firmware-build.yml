@@ -1,0 +1,36 @@
+name: Firmware Build (ESP-IDF)
+
+on:
+  push:
+    paths:
+      - 'tinkerrocket-idf/**'
+      - 'libraries/**'
+  pull_request:
+    paths:
+      - 'tinkerrocket-idf/**'
+      - 'libraries/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.3.2
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - out_computer
+          - base_station
+          # flight_computer excluded: uses Arduino-as-component with
+          # managed_components fetched at build time (gitignored).
+          # Add once we set up component caching in CI.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.project }}
+        working-directory: tinkerrocket-idf/projects/${{ matrix.project }}
+        shell: bash
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py build
