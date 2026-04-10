@@ -1133,6 +1133,10 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
     }
 
     LoRaDataSI lora = {};
+    // Routing header
+    lora.network_id = network_id;
+    lora.rocket_id  = rocket_id;
+
     if (latest_gnss_valid)
     {
         lora.num_sats = latest_gnss_si.num_sats;
@@ -1245,6 +1249,35 @@ static void serviceLoRa()
     {
         lora_tx_fail++;
     }
+}
+
+// Send a LoRa name beacon so the base station can learn this rocket's name.
+// Only sent during READY/PRELAUNCH (suppressed in flight to save airtime).
+static uint32_t last_beacon_ms = 0;
+
+static void sendLoRaBeacon()
+{
+    if (!config::USE_LORA_RADIO) return;
+
+    // Only beacon in idle states
+    if (latest_rocket_state != READY && latest_rocket_state != PRELAUNCH) return;
+
+    const uint32_t now_ms = millis();
+    if ((now_ms - last_beacon_ms) < 2000) return;
+    if (!lora_comms.canSend()) return;
+
+    // Beacon format: [0xBE][network_id][rocket_id][unit_name...]
+    uint8_t beacon[32];
+    beacon[0] = LORA_BEACON_SYNC;
+    beacon[1] = network_id;
+    beacon[2] = rocket_id;
+    size_t name_len = strlen(unit_name);
+    if (name_len > sizeof(beacon) - 3) name_len = sizeof(beacon) - 3;
+    memcpy(&beacon[3], unit_name, name_len);
+
+    last_beacon_ms = now_ms;
+    lora_in_rx_mode = false;
+    lora_comms.send(beacon, 3 + name_len);
 }
 
 // ============================================================================
@@ -1598,14 +1631,22 @@ static void serviceLoRaUplink()
 
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
     {
-        if (rx_len >= 3 && rx_buf[0] == config::UPLINK_SYNC_BYTE)
+        // Uplink format v1: [0xCA][network_id][target_rocket_id][cmd][len][payload...]
+        if (rx_len >= 5 && rx_buf[0] == config::UPLINK_SYNC_BYTE)
         {
-            uint8_t cmd = rx_buf[1];
-            uint8_t payload_len = rx_buf[2];
-            if (rx_len >= (size_t)(3 + payload_len))
+            uint8_t pkt_nid = rx_buf[1];
+            uint8_t pkt_rid = rx_buf[2];
+            // Filter: must match our network, and target us or broadcast (0xFF)
+            if (pkt_nid == network_id &&
+                (pkt_rid == rocket_id || pkt_rid == 0xFF))
             {
-                processUplinkCommand(cmd, &rx_buf[3], payload_len);
-                lora_uplink_rx_count++;
+                uint8_t cmd = rx_buf[3];
+                uint8_t payload_len = rx_buf[4];
+                if (rx_len >= (size_t)(5 + payload_len))
+                {
+                    processUplinkCommand(cmd, &rx_buf[5], payload_len);
+                    lora_uplink_rx_count++;
+                }
             }
         }
         // readPacket() internally re-enters RX mode after reading
@@ -2486,6 +2527,9 @@ static void loop_oc()
 
         // Check for LoRa uplink commands between TX cycles
         serviceLoRaUplink();
+
+        // Send name beacon so base station can identify us
+        sendLoRaBeacon();
     }
     else
     {

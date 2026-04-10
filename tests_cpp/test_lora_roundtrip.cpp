@@ -19,6 +19,8 @@ protected:
     // Fill with realistic mid-flight values
     LoRaDataSI makeNominal() {
         LoRaDataSI si{};
+        si.network_id = 1;
+        si.rocket_id = 1;
         si.num_sats = 12;
         si.pdop = 1.5f;
         si.ecef_x = -2430601.0;
@@ -229,12 +231,16 @@ TEST_F(LoRaRoundtripTest, FlagEncoding_AllCombinations) {
 TEST_F(LoRaRoundtripTest, ByteLevel_PackUnpack) {
     // Test the byte-level pack/unpack API used for actual LoRa TX/RX
     LoRaDataSI in = makeNominal();
-    uint8_t bytes[57];
+    in.network_id = 42;
+    in.rocket_id = 7;
+    uint8_t bytes[SIZE_OF_LORA_DATA];
     conv.packLoRaData(in, bytes);
 
     LoRaDataSI out{};
     conv.unpackLoRa(bytes, out);
 
+    EXPECT_EQ(out.network_id, 42);
+    EXPECT_EQ(out.rocket_id, 7);
     EXPECT_EQ(out.num_sats, 12);
     EXPECT_TRUE(out.launch_flag);
     EXPECT_NEAR(out.acc_z, 9.8f, 0.1f);

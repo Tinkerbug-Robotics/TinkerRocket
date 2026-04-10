@@ -338,9 +338,20 @@ typedef struct __attribute__((packed))
 } i24le_t;
 static_assert(sizeof(i24le_t) == 3, "i24le_t must be 3 bytes");
 
+// LoRa protocol version — bump on frame format changes
+static constexpr uint8_t LORA_PROTO_VERSION = 1;
+
+// LoRa name beacon sync byte (distinguishes from telemetry by size + prefix)
+static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;
+
 // LoRa data to send from rocket to ground station
 typedef struct __attribute__((packed))
 {
+    // --- Routing header (added in proto v1) ---
+    uint8_t network_id;      // LoRa network namespace (0..255)
+    uint8_t rocket_id;       // Source rocket ID within network (1..254, 0=unset, 255=broadcast)
+
+    // --- Telemetry payload (unchanged from proto v0) ---
     uint8_t num_sats;        // 0..255
     uint8_t pdop_u8;         // 0..100 (as you do now)
 
@@ -389,8 +400,8 @@ typedef struct __attribute__((packed))
 
 } LoRaData;
 
-static_assert(sizeof(LoRaData) == 57,
-              "LoRaDataPacked must be 57 bytes");
+static_assert(sizeof(LoRaData) == 59,
+              "LoRaData must be 59 bytes (2-byte header + 57-byte payload)");
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -405,6 +416,8 @@ static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
 // Readable LoRa data structure
 typedef struct
 {                                   // Precision    : Range
+    uint8_t network_id;             // Routing header: network namespace
+    uint8_t rocket_id;              // Routing header: source rocket ID
     uint8_t num_sats;               // int          : 0 to 255
     float   pdop;                   // meter        : 0 to 100
     double  ecef_x, ecef_y, ecef_z; // meter        : +/- 7,000,000

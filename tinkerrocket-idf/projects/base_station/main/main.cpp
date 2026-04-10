@@ -94,10 +94,56 @@ static uint32_t landed_time_ms = 0;     // When LANDED state first seen (0 = not
 static uint8_t  last_rocket_state = 0;  // Track state transitions
 static bool     last_known_camera_recording = false;  // Track rocket camera state for idempotent uplink
 static bool     last_known_rocket_logging = false;    // Actual rocket logging state from LoRa downlink
-static LoRaDataSI last_decoded = {};                  // Last-known LoRa telemetry for BLE relay
-static float    last_rssi = 0.0f;
-static float    last_snr  = 0.0f;
-static double   last_lat_deg = NAN, last_lon_deg = NAN, last_alt_m = NAN;
+
+// Per-rocket tracker (replaces single last_decoded for multi-rocket support)
+static constexpr int MAX_TRACKED_ROCKETS = 4;
+struct TrackedRocket {
+    bool       active = false;
+    uint8_t    rocket_id = 0;
+    char       unit_name[24] = {0};
+    LoRaDataSI last_data = {};
+    float      last_rssi = NAN;
+    float      last_snr  = NAN;
+    double     last_lat_deg = NAN;
+    double     last_lon_deg = NAN;
+    double     last_alt_m = NAN;
+    uint32_t   last_seen_ms = 0;
+};
+static TrackedRocket tracked_rockets[MAX_TRACKED_ROCKETS];
+static uint8_t active_rocket_idx = 0;  // Which rocket the BLE telemetry currently shows
+
+/// Find or allocate a tracker slot for a given rocket_id.
+/// Returns index, or -1 if all slots full.
+static int findOrAllocRocket(uint8_t rid) {
+    int free_slot = -1;
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++) {
+        if (tracked_rockets[i].active && tracked_rockets[i].rocket_id == rid)
+            return i;
+        if (!tracked_rockets[i].active && free_slot < 0)
+            free_slot = i;
+    }
+    if (free_slot >= 0) {
+        tracked_rockets[free_slot].active = true;
+        tracked_rockets[free_slot].rocket_id = rid;
+        tracked_rockets[free_slot].unit_name[0] = '\0';
+        tracked_rockets[free_slot].last_seen_ms = millis();
+        return free_slot;
+    }
+    // All slots full — evict oldest
+    uint32_t oldest_ms = UINT32_MAX;
+    int oldest_idx = 0;
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++) {
+        if (tracked_rockets[i].last_seen_ms < oldest_ms) {
+            oldest_ms = tracked_rockets[i].last_seen_ms;
+            oldest_idx = i;
+        }
+    }
+    tracked_rockets[oldest_idx].active = true;
+    tracked_rockets[oldest_idx].rocket_id = rid;
+    tracked_rockets[oldest_idx].unit_name[0] = '\0';
+    tracked_rockets[oldest_idx].last_seen_ms = millis();
+    return oldest_idx;
+}
 static char log_filename[64] = "";
 
 // Time sync state (UTC time reference from phone via BLE)
@@ -757,32 +803,34 @@ static void cachePIDConfig(const uint8_t* payload, size_t len)
 // LoRa Uplink (relay BLE commands to OutComputer)
 // ============================================================================
 
-static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payload_len)
+/// Build an uplink packet with routing header.
+/// target_rid: destination rocket_id (0xFF = broadcast to all rockets in network)
+static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payload_len,
+                              uint8_t target_rid = 0xFF)
 {
-    // If an uplink is already pending, discard it and overwrite with the new
-    // command.  This avoids a blocking spin-loop that could starve the main
-    // loop (BLE, LoRa RX, watchdog) when commands arrive faster than the
-    // radio can transmit them.
     if (uplink_pending)
     {
         ESP_LOGW(TAG, "[UPLINK] Discarding pending cmd=%u, replacing with cmd=%u",
-                 uplink_buf[1], cmd);
+                 uplink_buf[3], cmd);
     }
 
-    if (payload_len > 20) payload_len = 20;
+    if (payload_len > 18) payload_len = 18;  // max 18 bytes payload (was 20, now 2 bytes for routing)
+    // Uplink format v1: [0xCA][network_id][target_rocket_id][cmd][len][payload...]
     uplink_buf[0] = config::UPLINK_SYNC_BYTE;  // 0xCA
-    uplink_buf[1] = cmd;
-    uplink_buf[2] = (uint8_t)payload_len;
+    uplink_buf[1] = network_id;
+    uplink_buf[2] = target_rid;
+    uplink_buf[3] = cmd;
+    uplink_buf[4] = (uint8_t)payload_len;
     if (payload_len > 0 && payload != nullptr)
     {
-        memcpy(&uplink_buf[3], payload, payload_len);
+        memcpy(&uplink_buf[5], payload, payload_len);
     }
-    uplink_len = 3 + payload_len;
+    uplink_len = 5 + payload_len;
     uplink_retries_left = config::UPLINK_RETRIES;
     uplink_pending = true;
-    uplink_last_tx_ms = 0;  // Force immediate first send
-    ESP_LOGI(TAG, "[UPLINK] Queued cmd=%u payload=%u bytes, %u retries",
-             cmd, (unsigned)payload_len, config::UPLINK_RETRIES);
+    uplink_last_tx_ms = 0;
+    ESP_LOGI(TAG, "[UPLINK] Queued cmd=%u -> rid=%u payload=%u bytes, %u retries",
+             cmd, target_rid, (unsigned)payload_len, config::UPLINK_RETRIES);
 }
 
 static void serviceUplink()
@@ -1072,81 +1120,115 @@ static void loop_bs()
     {
         last_packet_ms = millis();
 
-        if (rx_len == SIZE_OF_LORA_DATA)
+        // --- Name beacon: [0xBE][network_id][rocket_id][unit_name...] ---
+        if (rx_len >= 3 && rx_buf[0] == LORA_BEACON_SYNC)
+        {
+            uint8_t bcn_nid = rx_buf[1];
+            uint8_t bcn_rid = rx_buf[2];
+            if (bcn_nid == network_id)
+            {
+                int slot = findOrAllocRocket(bcn_rid);
+                if (slot >= 0 && rx_len > 3)
+                {
+                    size_t name_len = rx_len - 3;
+                    if (name_len >= sizeof(tracked_rockets[slot].unit_name))
+                        name_len = sizeof(tracked_rockets[slot].unit_name) - 1;
+                    memcpy(tracked_rockets[slot].unit_name, &rx_buf[3], name_len);
+                    tracked_rockets[slot].unit_name[name_len] = '\0';
+                    tracked_rockets[slot].last_seen_ms = millis();
+                    ESP_LOGI(TAG, "[RX] Beacon: rid=%u name=%s",
+                             bcn_rid, tracked_rockets[slot].unit_name);
+                }
+            }
+        }
+        // --- Telemetry packet: SIZE_OF_LORA_DATA (59) bytes ---
+        else if (rx_len == SIZE_OF_LORA_DATA)
         {
             // Decode the telemetry packet
             LoRaDataSI decoded = {};
             sensor_converter.unpackLoRa(rx_buf, decoded);
 
-            TR_LoRa_Comms::Stats ls = {};
-            lora_comms.getStats(ls);
-
-            // Convert ECEF to lat/lon once (used by print, BLE, and CSV log)
-            double lat_deg = NAN, lon_deg = NAN, alt_m = NAN;
-            if (decoded.ecef_x != 0.0 || decoded.ecef_y != 0.0 || decoded.ecef_z != 0.0)
+            // Filter by network_id
+            if (decoded.network_id != network_id)
             {
-                coord.ecefToGeodetic(decoded.ecef_x, decoded.ecef_y, decoded.ecef_z,
-                                     lat_deg, lon_deg, alt_m);
+                // Not our network — ignore
             }
-
-            printTelemetry(decoded, ls.last_rssi, ls.last_snr, lat_deg, lon_deg, alt_m);
-
-            // Base station CSV logging: auto-start on PRELAUNCH transition.
-            // This is the base station's own logging (separate from rocket).
-            if (decoded.rocket_state == 2 && last_rocket_state != 2)
+            else
             {
-                startLogging();
+                // Route to per-rocket tracker
+                int slot = findOrAllocRocket(decoded.rocket_id);
+
+                TR_LoRa_Comms::Stats ls = {};
+                lora_comms.getStats(ls);
+
+                // Convert ECEF to lat/lon
+                double lat_deg = NAN, lon_deg = NAN, alt_m = NAN;
+                if (decoded.ecef_x != 0.0 || decoded.ecef_y != 0.0 || decoded.ecef_z != 0.0)
+                {
+                    coord.ecefToGeodetic(decoded.ecef_x, decoded.ecef_y, decoded.ecef_z,
+                                         lat_deg, lon_deg, alt_m);
+                }
+
+                printTelemetry(decoded, ls.last_rssi, ls.last_snr, lat_deg, lon_deg, alt_m);
+
+                // Base station CSV logging: auto-start on PRELAUNCH transition
+                if (decoded.rocket_state == 2 && last_rocket_state != 2)
+                {
+                    startLogging();
+                }
+
+                last_known_rocket_logging = decoded.logging_active;
+
+                if (logging_active)
+                {
+                    logLoRaPacket(decoded, ls.last_rssi, ls.last_snr,
+                                  lat_deg, lon_deg, alt_m);
+                }
+
+                // Track LANDED timing
+                if (decoded.rocket_state == 4 && landed_time_ms == 0)
+                {
+                    landed_time_ms = millis();
+                    ESP_LOGI(TAG, "[LOG] LANDED state detected, starting post-landing timer");
+                }
+                else if (decoded.rocket_state != 4)
+                {
+                    landed_time_ms = 0;
+                }
+
+                if (logging_active &&
+                    decoded.rocket_state == 1 && last_rocket_state >= 2)
+                {
+                    ESP_LOGI(TAG, "[LOG] Rocket returned to READY, closing base station log");
+                    stopLogging();
+                }
+
+                last_rocket_state = decoded.rocket_state;
+                last_known_camera_recording = decoded.camera_recording;
+
+                // Update per-rocket tracker
+                if (slot >= 0)
+                {
+                    tracked_rockets[slot].last_data = decoded;
+                    tracked_rockets[slot].last_rssi = ls.last_rssi;
+                    tracked_rockets[slot].last_snr  = ls.last_snr;
+                    tracked_rockets[slot].last_lat_deg = lat_deg;
+                    tracked_rockets[slot].last_lon_deg = lon_deg;
+                    tracked_rockets[slot].last_alt_m   = alt_m;
+                    tracked_rockets[slot].last_seen_ms = millis();
+                    active_rocket_idx = (uint8_t)slot;
+                }
+
+                // Forward telemetry to BLE app (with rocket_id for app-side demux)
+                TR_BLE_To_APP::TelemetryData ble_telem = {};
+                buildBLETelemetry(decoded, ls.last_rssi, ls.last_snr,
+                                  lat_deg, lon_deg, alt_m, ble_telem);
+                ble_app.sendTelemetry(ble_telem);
             }
-
-            // Track actual rocket logging state from LoRa downlink
-            last_known_rocket_logging = decoded.logging_active;
-
-            // Log packet if active
-            if (logging_active)
-            {
-                logLoRaPacket(decoded, ls.last_rssi, ls.last_snr,
-                              lat_deg, lon_deg, alt_m);
-            }
-
-            // Track LANDED timing
-            if (decoded.rocket_state == 4 && landed_time_ms == 0)
-            {
-                landed_time_ms = millis();
-                ESP_LOGI(TAG, "[LOG] LANDED state detected, starting post-landing timer");
-            }
-            else if (decoded.rocket_state != 4)
-            {
-                landed_time_ms = 0;  // Reset if state changes away from LANDED
-            }
-
-            // Auto-stop base station logging when rocket returns to READY after a flight
-            if (logging_active &&
-                decoded.rocket_state == 1 && last_rocket_state >= 2)
-            {
-                ESP_LOGI(TAG, "[LOG] Rocket returned to READY, closing base station log");
-                stopLogging();
-            }
-
-            last_rocket_state = decoded.rocket_state;
-            last_known_camera_recording = decoded.camera_recording;
-
-            // Cache for periodic BLE pushes between LoRa packets
-            last_decoded = decoded;
-            last_rssi = ls.last_rssi;
-            last_snr  = ls.last_snr;
-            last_lat_deg = lat_deg;
-            last_lon_deg = lon_deg;
-            last_alt_m   = alt_m;
-
-            // Forward telemetry to BLE app
-            TR_BLE_To_APP::TelemetryData ble_telem = {};
-            buildBLETelemetry(decoded, ls.last_rssi, ls.last_snr,
-                              lat_deg, lon_deg, alt_m, ble_telem);
-            ble_app.sendTelemetry(ble_telem);
         }
         else
         {
-            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u)",
+            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u or beacon)",
                      (unsigned)rx_len, (unsigned)SIZE_OF_LORA_DATA);
         }
     }
@@ -1183,10 +1265,14 @@ static void loop_bs()
         // Re-send last-known rocket telemetry so battery/RSSI stay up to date.
         if (ble_app.isConnected())
         {
-            TR_BLE_To_APP::TelemetryData ble_telem = {};
-            buildBLETelemetry(last_decoded, last_rssi, last_snr,
-                              last_lat_deg, last_lon_deg, last_alt_m, ble_telem);
-            ble_app.sendTelemetry(ble_telem);
+            auto& tr = tracked_rockets[active_rocket_idx];
+            if (tr.active)
+            {
+                TR_BLE_To_APP::TelemetryData ble_telem = {};
+                buildBLETelemetry(tr.last_data, tr.last_rssi, tr.last_snr,
+                                  tr.last_lat_deg, tr.last_lon_deg, tr.last_alt_m, ble_telem);
+                ble_app.sendTelemetry(ble_telem);
+            }
         }
     }
 

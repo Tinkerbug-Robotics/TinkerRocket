@@ -62,8 +62,10 @@ void SensorConverter::setHighGBias(float bx, float by, float bz)
     hg_bias_x_ = bx;
     hg_bias_y_ = by;
     hg_bias_z_ = bz;
-    Serial.printf("[Converter] High-G bias set: %.3f, %.3f, %.3f m/s²\n",
-                  (double)bx, (double)by, (double)bz);
+#ifdef ESP_PLATFORM
+    ESP_LOGI("Converter", "High-G bias set: %.3f, %.3f, %.3f m/s²",
+             (double)bx, (double)by, (double)bz);
+#endif
 }
 
 
@@ -279,6 +281,10 @@ void SensorConverter::convertNonSensorData(const NonSensorData& in, NonSensorDat
 // --- LoRa pack/unpack ---
 void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
 {
+    // Routing header
+    out.network_id = in.network_id;
+    out.rocket_id  = in.rocket_id;
+
     // num_sats (bits 0-6) + logging_active (bit 7)
     out.num_sats = (uint8_t)lroundi32(clampf((float)in.num_sats, 0.f, 127.f));
     if (in.logging_active) out.num_sats |= LORA_LOGGING_BIT;
@@ -403,6 +409,10 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
 
 void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
 {
+    // Routing header
+    out.network_id = in.network_id;
+    out.rocket_id  = in.rocket_id;
+
     out.num_sats = in.num_sats & 0x7F;  // bits 0-6
     out.logging_active = (in.num_sats & LORA_LOGGING_BIT) != 0;
     out.pdop = (float)in.pdop_u8;
