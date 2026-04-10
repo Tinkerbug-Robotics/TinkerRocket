@@ -438,42 +438,80 @@ def parse_serial(path: str) -> SerialStats:
 # ============================================================================
 
 def compute_rate_stats(ts_list: list, max_gap_us: int = 1_000_000) -> dict:
-    """Compute rate statistics from a list of uint32 microsecond timestamps.
+    """Compute rate statistics from a list of microsecond timestamps.
 
-    Gaps larger than max_gap_us are excluded from interval statistics
-    (they indicate logging dropouts, not sensor pauses).
+    Primary rate is computed as (count - 1) / span_s, where span is the
+    elapsed time from the first to the last timestamp.  This matches what
+    analyze_rates.py reports and is the only metric that's meaningful when
+    the log contains non-chronological data (e.g., ring-buffer dumps).
+
+    Interval statistics (median, P95, P99, gap counts) are computed from
+    forward-going intervals only.  Negative intervals (timestamps going
+    backwards) and intervals larger than max_gap_us are excluded from
+    interval stats but counted separately — a non-zero non_monotonic count
+    flags the log as out of order so the caller can warn the user.
     """
-    if len(ts_list) < 2:
-        return {'count': len(ts_list), 'rate_hz': 0, 'span_s': 0}
-
-    diffs = []
-    for i in range(1, len(ts_list)):
-        d = (ts_list[i] - ts_list[i - 1]) & 0xFFFFFFFF  # handle uint32 wrap
-        if 0 < d < max_gap_us:
-            diffs.append(d)
-
-    if not diffs:
-        return {'count': len(ts_list), 'rate_hz': 0, 'span_s': 0}
-
-    diffs_sorted = sorted(diffs)
-    n = len(diffs_sorted)
-    avg_us = sum(diffs) / n
-    span_s = (ts_list[-1] - ts_list[0]) / 1e6
-
-    return {
+    empty = {
         'count': len(ts_list),
-        'rate_hz': 1e6 / avg_us if avg_us > 0 else 0,
+        'rate_hz': 0,
+        'span_s': 0,
+        'non_monotonic': 0,
+        'valid_intervals': 0,
+    }
+    if len(ts_list) < 2:
+        return empty
+
+    # Classify every raw interval (signed, not uint32-masked).
+    forward_diffs = []          # 0 < d <= max_gap_us
+    large_forward = 0           # d > max_gap_us (dropouts, not stalls)
+    non_monotonic = 0           # d <= 0 (duplicates or time going backwards)
+    for i in range(1, len(ts_list)):
+        d = ts_list[i] - ts_list[i - 1]
+        if d <= 0:
+            non_monotonic += 1
+        elif d > max_gap_us:
+            large_forward += 1
+        else:
+            forward_diffs.append(d)
+
+    # Span: first-to-last timestamp.  If non-positive (e.g., the log ends
+    # earlier than it started — ring-buffer wrap), fall back to the sum of
+    # forward-going intervals as a best-effort "real elapsed time".
+    raw_span_us = ts_list[-1] - ts_list[0]
+    if raw_span_us > 0:
+        span_us = raw_span_us
+    else:
+        span_us = sum(forward_diffs)  # may still be 0 if nothing is sane
+
+    span_s = span_us / 1e6
+    # Primary rate: observed throughput over the span the data actually covers.
+    rate_hz = (len(ts_list) - 1) / span_s if span_s > 0 else 0
+
+    result = {
+        'count': len(ts_list),
+        'rate_hz': rate_hz,
         'span_s': span_s,
-        'avg_us': avg_us,
+        'non_monotonic': non_monotonic,
+        'large_forward': large_forward,
+        'valid_intervals': len(forward_diffs),
+    }
+
+    if not forward_diffs:
+        return result
+
+    diffs_sorted = sorted(forward_diffs)
+    n = len(diffs_sorted)
+    result.update({
+        'avg_us': sum(forward_diffs) / n,
         'median_us': diffs_sorted[n // 2],
         'min_us': diffs_sorted[0],
         'max_us': diffs_sorted[-1],
         'p95_us': diffs_sorted[int(0.95 * n)],
         'p99_us': diffs_sorted[int(0.99 * n)] if n >= 100 else diffs_sorted[-1],
-        'gaps_gt_2ms': sum(1 for d in diffs if d > 2000),
-        'gaps_gt_10ms': sum(1 for d in diffs if d > 10000),
-        'valid_intervals': n,
-    }
+        'gaps_gt_2ms': sum(1 for d in forward_diffs if d > 2000),
+        'gaps_gt_10ms': sum(1 for d in forward_diffs if d > 10000),
+    })
+    return result
 
 
 # ============================================================================
@@ -530,19 +568,33 @@ def report_binary(bs: BinaryStats):
     print(f"  {'Sensor':<14s} {'Rate':>8s} {'Target':>8s} {'Status':>6s}  {'Median':>8s} {'P99':>8s} {'Msgs':>8s} {'Span':>6s}")
     print(f"  {'-'*14} {'-'*8} {'-'*8} {'-'*6}  {'-'*8} {'-'*8} {'-'*8} {'-'*6}")
 
+    any_non_monotonic = False
     for name in ["ISM6", "BMP", "MMC", "GNSS", "NonSensor", "Power"]:
         ts = bs.timestamps.get(name, [])
         target = TARGET_RATES.get(name, -1)
         rs = compute_rate_stats(ts)
 
+        if rs.get('non_monotonic', 0) > 0:
+            any_non_monotonic = True
+
         if rs['rate_hz'] > 0:
             target_str = f"{target}" if target > 0 else "—"
             status = _status_icon(rs['rate_hz'], target) if target > 0 else " "
+            median = rs.get('median_us', 0)
+            p99    = rs.get('p99_us', 0)
+            flag = " *" if rs.get('non_monotonic', 0) > 0 else ""
             print(f"  {name:<14s} {rs['rate_hz']:>7.1f}  {target_str:>7s}   {status}   "
-                  f"{rs['median_us']:>7.0f}  {rs.get('p99_us', 0):>7.0f}  {rs['count']:>7,}  {rs['span_s']:>5.1f}s")
+                  f"{median:>7.0f}  {p99:>7.0f}  {rs['count']:>7,}  {rs['span_s']:>5.1f}s{flag}")
         elif len(ts) > 0:
             print(f"  {name:<14s}     —       —        —    (only {len(ts)} msgs)")
         # Skip if no messages at all
+
+    if any_non_monotonic:
+        print()
+        print("  * Non-monotonic timestamps detected — log is not chronological.")
+        print("    This is typical of a ring-buffer / recovery dump, not a live")
+        print("    flight log.  Rate is computed as (count-1)/span and is reliable;")
+        print("    individual gap stats reflect forward intervals only.")
 
     # ── Gap analysis for key sensors ──
     for sensor_name in ["ISM6", "BMP", "MMC", "NonSensor"]:
@@ -553,6 +605,11 @@ def report_binary(bs: BinaryStats):
 
         print_header(f"{sensor_name} GAP ANALYSIS")
         print(f"  Intervals:  {rs['valid_intervals']:,}")
+        skipped_nm = rs.get('non_monotonic', 0)
+        skipped_lg = rs.get('large_forward', 0)
+        if skipped_nm or skipped_lg:
+            print(f"  Excluded:   {skipped_nm:,} non-monotonic, "
+                  f"{skipped_lg:,} >1s (dropouts)")
         print(f"  Min gap:    {rs['min_us']:,.0f} µs  ({rs['min_us']/1000:.1f} ms)")
         print(f"  Median gap: {rs['median_us']:,.0f} µs  ({rs['median_us']/1000:.1f} ms)")
         print(f"  P95 gap:    {rs['p95_us']:,.0f} µs  ({rs['p95_us']/1000:.1f} ms)")
@@ -619,14 +676,20 @@ def report_binary(bs: BinaryStats):
         if 3 in states_seen:
             anomalies.append("Rocket entered INFLIGHT on bench!")
 
-    # Sensor rate anomalies
+    # Sensor rate anomalies + non-chronological log detection
+    log_non_chrono = False
     for name, target in TARGET_RATES.items():
         if target <= 0:
             continue
         ts = bs.timestamps.get(name, [])
         rs = compute_rate_stats(ts)
+        if rs.get('non_monotonic', 0) > 0:
+            log_non_chrono = True
         if rs['rate_hz'] > 0 and rs['rate_hz'] < target * 0.5:
             anomalies.append(f"{name} rate {rs['rate_hz']:.0f} Hz is <50% of target {target} Hz")
+    if log_non_chrono:
+        anomalies.append("Log contains non-monotonic timestamps — "
+                         "likely a ring-buffer / recovery dump, not a live flight log")
 
     # IMU saturation
     imu_frames = [(n, p) for n, p in bs.parsed_frames if n == "ISM6"]
