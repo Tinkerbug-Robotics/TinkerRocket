@@ -269,7 +269,10 @@ static void readINA230Power()
                   ? latest_non_sensor.time_us
                   : (uint32_t)micros();
     psi.voltage = bus_v;
-    psi.current = current_a * 1000.0f;
+    // Sign convention: negative = discharging (power consumed), positive = charging.
+    // The INA230 shunt is wired such that load current reads positive, so invert
+    // here to match the base-station battery convention.
+    psi.current = -current_a * 1000.0f;
     psi.soc     = soc_pct;
 
     sensor_converter.packPowerData(psi, latest_power_raw);
@@ -2455,7 +2458,8 @@ static void loop_oc()
                         POWERDataSI psi = {};
                         psi.time_us = (uint32_t)micros();
                         psi.voltage = bus_v;
-                        psi.current = current_a * 1000.0f;
+                        // Invert so negative = discharging, matching base-station convention.
+                        psi.current = -current_a * 1000.0f;
                         // SOC lookup (same as readINA230Power)
                         static constexpr float SOC_V[] = { 6.60f, 7.00f, 7.40f, 7.60f, 7.80f, 8.40f };
                         static constexpr float SOC_P[] = { 0.0f,  10.0f, 25.0f, 50.0f, 75.0f, 100.0f };
