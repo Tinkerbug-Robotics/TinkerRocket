@@ -51,7 +51,7 @@ private let loraPresets: [LoRaPreset] = [
 // MARK: - SettingsView
 
 struct SettingsView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
     // Persisted selections — LoRa
@@ -120,24 +120,24 @@ struct SettingsView: View {
 
     /// True when the connected rocket is still initializing (sensors/GPS starting up).
     private var isInitializing: Bool {
-        bleManager.isConnected
-        && !bleManager.isBaseStation
-        && bleManager.telemetry.state == "INITIALIZATION"
+        device.isConnected
+        && !device.isBaseStation
+        && device.telemetry.state == "INITIALIZATION"
     }
 
     var body: some View {
         NavigationView {
             Form {
                 // Rocket computer settings (only when connected directly to rocket)
-                if !bleManager.isBaseStation {
+                if !device.isBaseStation {
                     Section("Rocket Settings") {
                         Toggle("Enable Sounds", isOn: $soundsEnabled)
                             .onChange(of: soundsEnabled) { newValue in
-                                bleManager.sendSoundConfig(enabled: newValue)
+                                device.sendSoundConfig(enabled: newValue)
                             }
                         Toggle("Enable Servo Control", isOn: $servoControlEnabled)
                             .onChange(of: servoControlEnabled) { newValue in
-                                bleManager.sendServoControlConfig(enabled: newValue)
+                                device.sendServoControlConfig(enabled: newValue)
                             }
                         Text("Persists across reboots.")
                             .font(.caption)
@@ -204,7 +204,7 @@ struct SettingsView: View {
                 Section {
                     applyButton(
                         icon: "antenna.radiowaves.left.and.right",
-                        label: "Apply LoRa Config to \(bleManager.isBaseStation ? "Base Station" : "Rocket")",
+                        label: "Apply LoRa Config to \(device.isBaseStation ? "Base Station" : "Rocket")",
                         applied: loraApplied
                     ) {
                         applyLoRaConfig()
@@ -217,7 +217,7 @@ struct SettingsView: View {
 
                 // --- Servo & PID Settings (rocket only) ---
 
-                if !bleManager.isBaseStation {
+                if !device.isBaseStation {
                     Section("Servo Biases (\u{00B5}s)") {
                         stringRow("Servo 1", text: $sBias1)
                         stringRow("Servo 2", text: $sBias2)
@@ -249,7 +249,7 @@ struct SettingsView: View {
                         stringRow("Max Cmd", text: $sPidMaxCmd, unit: "deg")
                         Toggle("Velocity Gain Scheduling", isOn: $gainScheduleEnabled)
                             .onChange(of: gainScheduleEnabled) { newValue in
-                                bleManager.sendGainScheduleConfig(enabled: newValue)
+                                device.sendGainScheduleConfig(enabled: newValue)
                             }
                         Text("Scales PID gains with (V_ref/V)\u{00B2}. Disable for fixed gains at all speeds.")
                             .font(.caption)
@@ -270,7 +270,7 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .onChange(of: guidanceEnabled) { newValue in
-                            bleManager.sendGuidanceConfig(enabled: newValue)
+                            device.sendGuidanceConfig(enabled: newValue)
                         }
                         Text(guidanceEnabled
                             ? "Roll control during boost, PN guidance from coast to apogee. Guidance activates after burnout + delay, stops at closest approach."
@@ -290,7 +290,7 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .onChange(of: cameraType) { newValue in
-                            bleManager.sendCameraConfig(cameraType: UInt8(newValue))
+                            device.sendCameraConfig(cameraType: UInt8(newValue))
                         }
                         Text(cameraType == 1
                             ? "GoPro: controlled via GPIO pulse on shutter pin."
@@ -397,7 +397,7 @@ struct SettingsView: View {
                         Button(role: .destructive) {
                             rollWaypoints.removeAll()
                             saveRollWaypointsToStorage()
-                            bleManager.sendRollProfileClear()
+                            device.sendRollProfileClear()
                             showApplied($rollProfileApplied)
                         } label: {
                             HStack {
@@ -406,7 +406,7 @@ struct SettingsView: View {
                             }
                             .frame(maxWidth: .infinity)
                         }
-                        .disabled(!bleManager.isConnected)
+                        .disabled(!device.isConnected)
                     }
                 }
             }
@@ -448,7 +448,7 @@ struct SettingsView: View {
                 loadRollWaypointsFromStorage()
             }
             // Sync settings from rocket config received on BLE connect
-            .onReceive(bleManager.$rocketConfig.compactMap { $0 }) { cfg in
+            .onReceive(device.$rocketConfig.compactMap { $0 }) { cfg in
                 storedBias1 = Double(cfg.servoBias1)
                 storedServoHz = Double(cfg.servoHz)
                 storedServoMinUs = Double(cfg.servoMinUs)
@@ -555,7 +555,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
             .foregroundColor(applied ? .green : nil)
         }
-        .disabled(!bleManager.isConnected || applied)
+        .disabled(!device.isConnected || applied)
     }
 
     // MARK: - Apply actions
@@ -565,7 +565,7 @@ struct SettingsView: View {
         let preset = selectedPreset
         let cr: UInt8 = 5  // All presets use CR 4/5
 
-        bleManager.sendLoRaConfig(
+        device.sendLoRaConfig(
             freqMHz: channel.freqMHz,
             bwKHz: preset.bwKHz,
             sf: preset.sf,
@@ -588,7 +588,7 @@ struct SettingsView: View {
         storedBias1 = b1; storedBias2 = b2; storedBias3 = b3; storedBias4 = b4
         storedServoHz = hz; storedServoMinUs = mn; storedServoMaxUs = mx
 
-        bleManager.sendServoConfig(
+        device.sendServoConfig(
             biases: [Int16(b1), Int16(b2), Int16(b3), Int16(b4)],
             hz: Int16(hz),
             minUs: Int16(mn),
@@ -608,7 +608,7 @@ struct SettingsView: View {
         storedPidKp = kp; storedPidKi = ki; storedPidKd = kd
         storedPidMinCmd = mn; storedPidMaxCmd = mx
 
-        bleManager.sendPIDConfig(
+        device.sendPIDConfig(
             kp: Float(kp),
             ki: Float(ki),
             kd: Float(kd),
@@ -621,7 +621,7 @@ struct SettingsView: View {
     private func applyRollControlConfig() {
         let delayMs = UInt16(clamping: Int(Double(sRollDelayMs) ?? rollDelayMs))
         rollDelayMs = Double(delayMs)
-        bleManager.sendRollControlConfig(useAngleControl: useAngleControl, rollDelayMs: delayMs)
+        device.sendRollControlConfig(useAngleControl: useAngleControl, rollDelayMs: delayMs)
         showApplied($rollControlApplied)
     }
 
@@ -634,7 +634,7 @@ struct SettingsView: View {
         }
         // Sort by time
         waypoints.sort { $0.time < $1.time }
-        bleManager.sendRollProfile(waypoints: waypoints)
+        device.sendRollProfile(waypoints: waypoints)
         saveRollWaypointsToStorage()
         showApplied($rollProfileApplied)
     }

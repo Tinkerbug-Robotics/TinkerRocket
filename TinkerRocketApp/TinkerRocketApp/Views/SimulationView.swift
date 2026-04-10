@@ -10,7 +10,7 @@
 import SwiftUI
 
 struct SimulationView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
     // User inputs (persisted across sessions)
@@ -52,9 +52,9 @@ struct SimulationView: View {
                         Label("Launch Simulation", systemImage: "flame")
                             .foregroundColor(.orange)
                     }
-                    .disabled(!bleManager.isConnected || !inputsValid)
+                    .disabled(!device.isConnected || !inputsValid)
 
-                    if !bleManager.isConnected {
+                    if !device.isConnected {
                         Text("Not connected to rocket")
                             .font(.caption)
                             .foregroundColor(.red)
@@ -130,13 +130,13 @@ struct SimulationView: View {
         // Send config (command 5), then start (command 6) after a delay.
         // Use 1s when relaying via base station LoRa (uplink retries take ~300ms)
         // vs 0.3s for direct BLE to rocket.
-        let delay: Double = bleManager.isBaseStation ? 1.0 : 0.3
-        bleManager.sendTimeSync()  // Fresh phone time for unique sim filenames
-        bleManager.sendRawCommand(5, payload: payload)
+        let delay: Double = device.isBaseStation ? 1.0 : 0.3
+        device.sendTimeSync()  // Fresh phone time for unique sim filenames
+        device.sendRawCommand(5, payload: payload)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            bleManager.markSimLaunched()
-            bleManager.sendCommand(6)
+            device.markSimLaunched()
+            device.sendCommand(6)
             dismiss()  // Return to dashboard — countdown tile will appear
         }
     }

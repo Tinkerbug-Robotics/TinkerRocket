@@ -9,7 +9,6 @@ import SwiftUI
 
 struct FlightDetailView: View {
     let flight: CachedFlight
-    @ObservedObject var bleManager: BLEManager
     var onDelete: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false

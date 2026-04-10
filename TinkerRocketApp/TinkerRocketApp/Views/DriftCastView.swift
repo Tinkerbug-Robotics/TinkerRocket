@@ -524,7 +524,7 @@ struct Trajectory3DView: UIViewRepresentable {
 // MARK: - Main Drift Cast View
 
 struct DriftCastView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
     // Map state
@@ -615,7 +615,7 @@ struct DriftCastView: View {
     }
 
     private var canSend: Bool {
-        bleManager.isConnected && result != nil && result!.feasible
+        device.isConnected && result != nil && result!.feasible
     }
 
     // MARK: - Body
@@ -659,7 +659,7 @@ struct DriftCastView: View {
                 if let r = result {
                     Text(String(format: "Send guidance point (%.6f, %.6f) at %.0f ft AGL to %@?",
                                 r.guidanceLat, r.guidanceLon, r.apogeeFt,
-                                bleManager.connectedDeviceName))
+                                device.connectedDeviceName))
                 }
             }
         }
@@ -1040,15 +1040,11 @@ struct DriftCastView: View {
     private func sendToUnit() {
         guard let r = result else { return }
         let altM = Float(ftToM(r.apogeeFt))
-        bleManager.sendGuidancePoint(lat: r.guidanceLat, lon: r.guidanceLon, altitudeM: altM)
+        device.sendGuidancePoint(lat: r.guidanceLat, lon: r.guidanceLon, altitudeM: altM)
         showSentAlert = true
     }
 }
 
 // MARK: - Preview
 
-struct DriftCastView_Previews: PreviewProvider {
-    static var previews: some View {
-        DriftCastView(bleManager: BLEManager())
-    }
-}
+// Preview requires a connected BLEDevice — omitted for now.

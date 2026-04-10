@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct FlightLogsView: View {
-    @ObservedObject var bleManager: BLEManager
     @State private var cachedFlights: [CachedFlight] = []
 
     var body: some View {
@@ -31,7 +30,7 @@ struct FlightLogsView: View {
             } else {
                 List {
                     ForEach(cachedFlights) { flight in
-                        NavigationLink(destination: FlightDetailView(flight: flight, bleManager: bleManager, onDelete: {
+                        NavigationLink(destination: FlightDetailView(flight: flight, onDelete: {
                             FileCache.shared.deleteCachedFlight(flight)
                             cachedFlights = FileCache.shared.listCachedFlights()
                         })) {
@@ -161,7 +160,7 @@ struct FlightLogRow: View {
 struct FlightLogsView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationView {
-            FlightLogsView(bleManager: BLEManager())
+            FlightLogsView()
         }
     }
 }

@@ -8,18 +8,18 @@
 import SwiftUI
 
 struct FileManagerView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @State private var fileToDelete: FileInfo?
     @State private var showDeleteConfirm = false
 
     // ESP32 already excludes recovery files from the BLE file list
     private var displayedFiles: [FileInfo] {
-        bleManager.files
+        device.files
     }
 
     var body: some View {
         VStack(spacing: 20) {
-            if !bleManager.isConnected {
+            if !device.isConnected {
                 Text("Not connected")
                     .foregroundColor(.secondary)
                     .padding()
@@ -27,14 +27,14 @@ struct FileManagerView: View {
                 // Header with refresh button
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(bleManager.isBaseStation ? "LoRa Logs" : "Flights")
+                        Text(device.isBaseStation ? "LoRa Logs" : "Flights")
                             .font(.headline)
-                        if bleManager.currentPage > 0 || bleManager.hasMoreFiles {
-                            Text("Page \(bleManager.currentPage + 1)")
+                        if device.currentPage > 0 || device.hasMoreFiles {
+                            Text("Page \(device.currentPage + 1)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            Text("\(displayedFiles.count) \(bleManager.isBaseStation ? "logs" : "flights")")
+                            Text("\(displayedFiles.count) \(device.isBaseStation ? "logs" : "flights")")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -42,7 +42,7 @@ struct FileManagerView: View {
                     Spacer()
                     Button(action: {
                         print("Requesting file list...")
-                        bleManager.requestFileList(page: bleManager.currentPage)
+                        device.requestFileList(page: device.currentPage)
                     }) {
                         HStack {
                             Image(systemName: "arrow.clockwise")
@@ -58,18 +58,18 @@ struct FileManagerView: View {
                 .padding()
 
                 // Download progress
-                if bleManager.isDownloading {
+                if device.isDownloading {
                     VStack(spacing: 8) {
                         HStack {
-                            Text("Downloading \(bleManager.downloadingFilename ?? "file")...")
+                            Text("Downloading \(device.downloadingFilename ?? "file")...")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                             Spacer()
-                            Text("\(Int(bleManager.downloadProgress * 100))%")
+                            Text("\(Int(device.downloadProgress * 100))%")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
-                        ProgressView(value: bleManager.downloadProgress)
+                        ProgressView(value: device.downloadProgress)
                             .progressViewStyle(LinearProgressViewStyle())
                     }
                     .padding(.horizontal)
@@ -77,18 +77,18 @@ struct FileManagerView: View {
                 }
 
                 // CSV generation progress
-                if bleManager.downloadStates.values.contains(.generatingCSV) {
+                if device.downloadStates.values.contains(.generatingCSV) {
                     VStack(spacing: 8) {
                         HStack {
                             Text("Generating CSV...")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                             Spacer()
-                            Text("\(Int(bleManager.csvGenerationProgress * 100))%")
+                            Text("\(Int(device.csvGenerationProgress * 100))%")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
-                        ProgressView(value: bleManager.csvGenerationProgress)
+                        ProgressView(value: device.csvGenerationProgress)
                             .progressViewStyle(LinearProgressViewStyle())
                             .tint(.orange)
                     }
@@ -102,7 +102,7 @@ struct FileManagerView: View {
                         Image(systemName: "doc.text")
                             .font(.system(size: 48))
                             .foregroundColor(.secondary)
-                        Text(bleManager.isBaseStation ? "No LoRa logs found" : "No flights found")
+                        Text(device.isBaseStation ? "No LoRa logs found" : "No flights found")
                             .foregroundColor(.secondary)
                         Text("Tap Refresh to load files")
                             .font(.caption)
@@ -121,7 +121,7 @@ struct FileManagerView: View {
                                 onDownload: {
                                     print("Download button tapped for: \(file.name)")
 
-                                    bleManager.downloadAndCacheFlight(file.name) { success in
+                                    device.downloadAndCacheFlight(file.name) { success in
                                         if success {
                                             print("[DOWNLOAD] Success: \(file.name)")
                                         } else {
@@ -129,16 +129,16 @@ struct FileManagerView: View {
                                         }
                                     }
                                 },
-                                bleManager: bleManager
+                                device: device
                             )
                         }
                     }
                     .listStyle(InsetGroupedListStyle())
-                    .alert(bleManager.isBaseStation ? "Delete LoRa Log?" : "Delete Flight?",
+                    .alert(device.isBaseStation ? "Delete LoRa Log?" : "Delete Flight?",
                            isPresented: $showDeleteConfirm) {
                         Button("Delete", role: .destructive) {
                             if let file = fileToDelete {
-                                bleManager.deleteFile(file.name)
+                                device.deleteFile(file.name)
                             }
                             fileToDelete = nil
                         }
@@ -147,15 +147,15 @@ struct FileManagerView: View {
                         }
                     } message: {
                         if let file = fileToDelete {
-                            Text("Are you sure you want to delete \"\(file.displayTitle)\" from the \(bleManager.isBaseStation ? "base station" : "rocket")? This cannot be undone.")
+                            Text("Are you sure you want to delete \"\(file.displayTitle)\" from the \(device.isBaseStation ? "base station" : "rocket")? This cannot be undone.")
                         }
                     }
 
                     // Pagination controls
-                    if bleManager.currentPage > 0 || bleManager.hasMoreFiles {
+                    if device.currentPage > 0 || device.hasMoreFiles {
                         HStack(spacing: 20) {
                             Button(action: {
-                                bleManager.previousPage()
+                                device.previousPage()
                             }) {
                                 HStack {
                                     Image(systemName: "chevron.left")
@@ -163,16 +163,16 @@ struct FileManagerView: View {
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(bleManager.currentPage > 0 ? Color.blue : Color.gray)
+                                .background(device.currentPage > 0 ? Color.blue : Color.gray)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                             }
-                            .disabled(bleManager.currentPage == 0)
+                            .disabled(device.currentPage == 0)
 
                             Spacer()
 
                             Button(action: {
-                                bleManager.nextPage()
+                                device.nextPage()
                             }) {
                                 HStack {
                                     Text("Next")
@@ -180,11 +180,11 @@ struct FileManagerView: View {
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(bleManager.hasMoreFiles ? Color.blue : Color.gray)
+                                .background(device.hasMoreFiles ? Color.blue : Color.gray)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                             }
-                            .disabled(!bleManager.hasMoreFiles)
+                            .disabled(!device.hasMoreFiles)
                         }
                         .padding(.horizontal)
                         .padding(.bottom, 10)
@@ -192,19 +192,19 @@ struct FileManagerView: View {
                 }
             }
         }
-        .navigationTitle(bleManager.isBaseStation ? "LoRa Logs" : "Flights")
+        .navigationTitle(device.isBaseStation ? "LoRa Logs" : "Flights")
         .brandedToolbar()
         .onAppear {
             // Auto-load file list when view appears
-            print("FileManagerView appeared, connected: \(bleManager.isConnected)")
-            if bleManager.isConnected {
+            print("FileManagerView appeared, connected: \(device.isConnected)")
+            if device.isConnected {
                 print("Auto-requesting file list...")
-                bleManager.requestFileList()
+                device.requestFileList()
             }
         }
-        .onChange(of: bleManager.files) { files in
+        .onChange(of: device.files) { files in
             // Rebuild download states from cache when file list updates
-            bleManager.rebuildDownloadStates(for: files.map { $0.name })
+            device.rebuildDownloadStates(for: files.map { $0.name })
         }
     }
 }
@@ -213,7 +213,7 @@ struct FileRow: View {
     let file: FileInfo
     let onDelete: () -> Void
     let onDownload: () -> Void
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
 
     var body: some View {
         HStack {
@@ -248,7 +248,7 @@ struct FileRow: View {
     // Download button content based on state
     @ViewBuilder
     private var downloadButtonContent: some View {
-        let state = bleManager.getDownloadState(for: file.name)
+        let state = device.getDownloadState(for: file.name)
 
         switch state {
         case .notDownloaded:
@@ -271,8 +271,8 @@ struct FileRow: View {
     }
 
     private var downloadButtonDisabled: Bool {
-        if !bleManager.isConnected { return true }
-        let state = bleManager.getDownloadState(for: file.name)
+        if !device.isConnected { return true }
+        let state = device.getDownloadState(for: file.name)
         return state == .downloading || state == .generatingCSV || state == .completed
     }
 
@@ -287,13 +287,7 @@ struct FileRow: View {
     }
 }
 
-struct FileManagerView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            FileManagerView(bleManager: BLEManager())
-        }
-    }
-}
+// Preview requires a connected BLEDevice — omitted for now.
 
 // MARK: - Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen)
 

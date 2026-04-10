@@ -44,7 +44,7 @@ class TickCounter: ObservableObject {
 // MARK: - View
 
 struct PyroTestView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     let channel: Int
     @Environment(\.dismiss) var dismiss
 
@@ -60,7 +60,7 @@ struct PyroTestView: View {
     @State private var camera = SlowMoCameraManager()
 
     private var continuity: Bool {
-        channel == 1 ? bleManager.telemetry.pyro1_cont : bleManager.telemetry.pyro2_cont
+        channel == 1 ? device.telemetry.pyro1_cont : device.telemetry.pyro2_cont
     }
 
     var body: some View {
@@ -96,7 +96,7 @@ struct PyroTestView: View {
                 // Start recording + logging at T-5
                 if secondsRemaining == 5 {
                     cameraRecording = true
-                    bleManager.sendToggleLogging()
+                    device.sendToggleLogging()
                     camera.startRecording { url, error in
                         if let url = url {
                             saveToPhotoLibrary(url: url)
@@ -112,7 +112,7 @@ struct PyroTestView: View {
                 }
                 // Fire at T-0
                 if secondsRemaining <= 0 {
-                    bleManager.sendPyroFire(channel: UInt8(channel))
+                    device.sendPyroFire(channel: UInt8(channel))
                     state = .recording
                     recordSecondsRemaining = 5
                 }
@@ -120,7 +120,7 @@ struct PyroTestView: View {
                 recordSecondsRemaining -= 1
                 if recordSecondsRemaining <= 0 {
                     ticker.stop()
-                    bleManager.sendToggleLogging()
+                    device.sendToggleLogging()
                     camera.stopRecording()
                 }
             default:
@@ -129,7 +129,7 @@ struct PyroTestView: View {
         }
         .onAppear {
             camera.configure()
-            bleManager.sendPyroContTest(channel: UInt8(channel))
+            device.sendPyroContTest(channel: UInt8(channel))
         }
         .onDisappear {
             cancelAll()
@@ -276,7 +276,7 @@ struct PyroTestView: View {
     private func safeRocket() {
         ticker.stop()
         if cameraRecording {
-            bleManager.sendToggleLogging()
+            device.sendToggleLogging()
             camera.stopRecording()
             cameraRecording = false
         }
@@ -312,7 +312,7 @@ struct PyroTestView: View {
     private func cancelAll() {
         ticker.stop()
         if cameraRecording {
-            bleManager.sendToggleLogging()
+            device.sendToggleLogging()
             camera.stopRecording()
             cameraRecording = false
         }

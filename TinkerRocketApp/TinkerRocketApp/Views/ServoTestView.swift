@@ -10,7 +10,7 @@
 import SwiftUI
 
 struct ServoTestView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
     @State private var angles: [Double] = [0, 0, 0, 0]
@@ -77,12 +77,12 @@ struct ServoTestView: View {
             }
             .onDisappear {
                 // Stop servo test — servos return to midpoints
-                bleManager.sendServoTestStop()
+                device.sendServoTestStop()
             }
         }
     }
 
     private func sendAngles() {
-        bleManager.sendServoTestAngles(angles)
+        device.sendServoTestAngles(angles)
     }
 }

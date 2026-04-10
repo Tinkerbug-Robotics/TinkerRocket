@@ -98,7 +98,7 @@ struct RocketMapView: UIViewRepresentable {
 // MARK: - Main Map View
 
 struct MapView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
 
     @State private var mapType: MKMapType = .hybrid
     @State private var region = MKCoordinateRegion(
@@ -108,8 +108,8 @@ struct MapView: View {
     @State private var hasInitializedRegion = false
 
     private var rocketCoordinate: CLLocationCoordinate2D? {
-        guard let lat = bleManager.telemetry.latitude,
-              let lon = bleManager.telemetry.longitude,
+        guard let lat = device.telemetry.latitude,
+              let lon = device.telemetry.longitude,
               !(lat == 0 && lon == 0) else {
             return nil
         }
@@ -160,7 +160,7 @@ struct MapView: View {
         .navigationTitle("Rocket Map")
         .navigationBarTitleDisplayMode(.inline)
         .brandedToolbar()
-        .onChange(of: bleManager.telemetry.latitude) { _ in
+        .onChange(of: device.telemetry.latitude) { _ in
             if !hasInitializedRegion {
                 centerOnRocket()
                 hasInitializedRegion = true
@@ -182,10 +182,4 @@ struct MapView: View {
 
 // MARK: - Preview
 
-struct MapView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            MapView(bleManager: BLEManager())
-        }
-    }
-}
+// Preview requires a connected BLEDevice — omitted for now.

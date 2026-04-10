@@ -25,7 +25,7 @@ enum DashboardSheet: Identifiable {
 }
 
 struct DashboardView: View {
-    @StateObject private var bleManager = BLEManager()
+    @StateObject private var fleet = BLEFleet()
     @StateObject private var flightAnnouncer = FlightAnnouncer()
     @StateObject private var locationManager = LocationManager()
     @State private var activeSheet: DashboardSheet?
@@ -34,9 +34,17 @@ struct DashboardView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    // Saved flights & Drift Cast — front page only (hidden when connected)
-                    if !bleManager.isConnected {
-                        NavigationLink(destination: FlightLogsView(bleManager: bleManager)) {
+                    if let device = fleet.activeDevice {
+                        ConnectedDashboardView(
+                            device: device,
+                            fleet: fleet,
+                            flightAnnouncer: flightAnnouncer,
+                            locationManager: locationManager,
+                            activeSheet: $activeSheet
+                        )
+                    } else {
+                        // --- Not connected ---
+                        NavigationLink(destination: FlightLogsView()) {
                             HStack {
                                 Image(systemName: "archivebox.fill")
                                 Text("Saved Flights")
@@ -61,166 +69,43 @@ struct DashboardView: View {
                             .foregroundColor(.white)
                             .cornerRadius(10)
                         }
-                    }
 
-                    // Connection status with scan button
-                    if bleManager.isConnected {
-                        ConnectionStatusView(
-                            isConnected: bleManager.isConnected,
-                            isScanning: bleManager.isScanning,
-                            statusMessage: bleManager.statusMessage,
-                            connectedDeviceName: bleManager.connectedDeviceName
-                        )
-                    } else {
                         HStack(spacing: 12) {
                             Button {
-                                if bleManager.isScanning {
-                                    bleManager.stopScanning()
+                                if fleet.isScanning {
+                                    fleet.stopScanning()
                                 } else {
-                                    bleManager.startScanning()
+                                    fleet.startScanning()
                                 }
                             } label: {
-                                Text(bleManager.isScanning ? "Stop" : "Scan")
+                                Text(fleet.isScanning ? "Stop" : "Scan")
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 20)
                                     .padding(.vertical, 12)
-                                    .background(bleManager.isScanning ? Color.red : Color.green)
+                                    .background(fleet.isScanning ? Color.red : Color.green)
                                     .foregroundColor(.white)
                                     .cornerRadius(10)
                             }
 
                             ConnectionStatusView(
-                                isConnected: bleManager.isConnected,
-                                isScanning: bleManager.isScanning,
-                                statusMessage: bleManager.statusMessage,
-                                connectedDeviceName: bleManager.connectedDeviceName
+                                isConnected: false,
+                                isScanning: fleet.isScanning,
+                                statusMessage: fleet.statusMessage,
+                                connectedDeviceName: ""
                             )
                         }
-                    }
 
-                    if bleManager.isConnected {
-                        if !bleManager.isBaseStation && !bleManager.telemetry.pwr_pin_on {
-                            // --- Powered OFF (rocket only): show battery + power on button ---
-                            BatteryView(telemetry: bleManager.telemetry,
-                                        isBaseStation: false)
-
-                            Button {
-                                bleManager.sendPowerToggle()
-                            } label: {
-                                HStack {
-                                    Image(systemName: "bolt.fill")
-                                    Text("Power On")
-                                }
-                                .font(.system(.title2, design: .default).weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color.green)
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
-                            }
-                        } else {
-                            // --- Powered ON (or base station): full telemetry dashboard ---
-
-                            // Rocket State
-                            RocketStateView(state: bleManager.telemetry.state)
-
-                            // Sim mode banner (visible throughout simulation)
-                            if bleManager.simLaunched {
-                                SimModeBannerView {
-                                    bleManager.sendCommand(7)
-                                    bleManager.clearSimBanner()
-                                }
-                            }
-
-                            // Ground test banner (visible while ground test active)
-                            if bleManager.groundTestActive {
-                                GroundTestBannerView {
-                                    bleManager.sendCommand(16)
-                                    bleManager.groundTestActive = false
-                                }
-                            }
-
-                            // Flight summary (base station only)
-                            if bleManager.isBaseStation {
-                                FlightSummaryView(telemetry: bleManager.telemetry)
-                            }
-
-                            // Signal strength indicators
-                            SignalStrengthView(
-                                telemetry: bleManager.telemetry,
-                                bleRSSI: bleManager.connectedRSSI,
-                                isBaseStation: bleManager.isBaseStation,
-                                locationManager: bleManager.isBaseStation ? locationManager : nil
-                            )
-
-                            // Battery
-                            BatteryView(telemetry: bleManager.telemetry,
-                                        isBaseStation: bleManager.isBaseStation)
-
-                            // IMU
-                            IMUView(telemetry: bleManager.telemetry,
-                                    isBaseStation: bleManager.isBaseStation)
-
-                            // Flight summary (rocket: after IMU, base station: already shown above signal)
-                            if !bleManager.isBaseStation {
-                                FlightSummaryView(telemetry: bleManager.telemetry)
-                            }
-
-                            // GPS (compact on both)
-                            GPSView(telemetry: bleManager.telemetry,
-                                    compact: true)
-
-                            // Status Flags
-                            StatusFlagsView(telemetry: bleManager.telemetry,
-                                            isBaseStation: bleManager.isBaseStation)
-
-                            // Pyro Channels (rocket only)
-                            if !bleManager.isBaseStation {
-                                PyroChannelsView(bleManager: bleManager)
-                            }
-
-                            // Controls (works via direct BLE or relayed over LoRa from base station)
-                            ControlsView(bleManager: bleManager)
-
-                            // Testing (works via direct BLE or relayed over LoRa from base station)
-                            TestingControlsView(bleManager: bleManager, activeSheet: $activeSheet)
-
-                            // On Pad Calibration (rocket only)
-                            if !bleManager.isBaseStation {
-                                OnPadCalibrationView(bleManager: bleManager)
-                            }
-
-                            // Power Off button (rocket only)
-                            if !bleManager.isBaseStation {
-                                Button {
-                                    bleManager.sendPowerToggle()
-                                } label: {
-                                    HStack {
-                                        Image(systemName: "bolt.slash.fill")
-                                        Text("Power Off")
-                                    }
-                                    .font(.system(.body, design: .default).weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.red)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(10)
-                                }
-                            }
-                        }
-                    } else {
-                        // Device picker (auto-scan starts on launch)
-                        DevicePickerView(bleManager: bleManager)
+                        DevicePickerView(fleet: fleet)
                     }
                 }
                 .padding()
             }
-            .navigationTitle(bleManager.isConnected ? "" : "TinkerRocket")
+            .navigationTitle(fleet.isConnected ? "" : "TinkerRocket")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if bleManager.isConnected {
+                    if fleet.isConnected {
                         Button {
-                            bleManager.disconnect()
+                            fleet.disconnectAll()
                         } label: {
                             Image(systemName: "chevron.backward")
                         }
@@ -228,10 +113,9 @@ struct DashboardView: View {
                 }
 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if bleManager.isConnected {
+                    if let device = fleet.activeDevice {
                         HStack(spacing: 16) {
-                            // Flight list on connected device
-                            NavigationLink(destination: FileManagerView(bleManager: bleManager)) {
+                            NavigationLink(destination: FileManagerView(device: device)) {
                                 Image("RocketIcon")
                                     .resizable()
                                     .renderingMode(.template)
@@ -239,7 +123,7 @@ struct DashboardView: View {
                                     .frame(width: 22, height: 22)
                             }
 
-                            NavigationLink(destination: MapView(bleManager: bleManager)) {
+                            NavigationLink(destination: MapView(device: device)) {
                                 Image(systemName: "map.fill")
                             }
 
@@ -256,7 +140,6 @@ struct DashboardView: View {
                                 }
                             )
 
-                            // Settings
                             Button {
                                 activeSheet = .settings
                             } label: {
@@ -264,7 +147,6 @@ struct DashboardView: View {
                             }
                         }
                     } else {
-                        // Branded logo on front page only
                         Image("Small Tinkerbug Robotics Logo Vertical")
                             .resizable()
                             .aspectRatio(contentMode: .fit)
@@ -275,34 +157,145 @@ struct DashboardView: View {
         }
         .navigationViewStyle(.stack)
         .onAppear {
-            bleManager.flightAnnouncer = flightAnnouncer
+            fleet.activeDevice?.flightAnnouncer = flightAnnouncer
         }
-        .onChange(of: bleManager.isConnected) { connected in
-            if !connected && !bleManager.isScanning {
-                bleManager.startScanning()
+        .onChange(of: fleet.isConnected) { connected in
+            if connected {
+                fleet.activeDevice?.flightAnnouncer = flightAnnouncer
             }
-            // Start location updates only when connected to a base station
-            // (the only scenario that uses direction/distance to rocket).
-            // Keeps GPS + compass off otherwise, which avoids continuous
-            // @Published heading/location changes that trigger full
-            // DashboardView re-renders and steady memory growth.
-            if connected && bleManager.isBaseStation {
+            if !connected && !fleet.isScanning {
+                fleet.startScanning()
+            }
+            if connected, let dev = fleet.activeDevice, dev.isBaseStation {
                 locationManager.startUpdates()
             } else if !connected {
                 locationManager.stopUpdates()
-                bleManager.groundTestActive = false
             }
         }
         .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-            case .simulator:
-                SimulationView(bleManager: bleManager)
-            case .settings:
-                SettingsView(bleManager: bleManager)
-            case .servoTest:
-                ServoTestView(bleManager: bleManager)
-            case .driftCast:
-                DriftCastView(bleManager: bleManager)
+            if let device = fleet.activeDevice {
+                switch sheet {
+                case .simulator:
+                    SimulationView(device: device)
+                case .settings:
+                    SettingsView(device: device)
+                case .servoTest:
+                    ServoTestView(device: device)
+                case .driftCast:
+                    DriftCastView(device: device)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Connected device dashboard (observes the BLEDevice for live updates)
+
+struct ConnectedDashboardView: View {
+    @ObservedObject var device: BLEDevice
+    @ObservedObject var fleet: BLEFleet
+    @ObservedObject var flightAnnouncer: FlightAnnouncer
+    @ObservedObject var locationManager: LocationManager
+    @Binding var activeSheet: DashboardSheet?
+
+    var body: some View {
+        // Connection status
+        ConnectionStatusView(
+            isConnected: true,
+            isScanning: fleet.isScanning,
+            statusMessage: fleet.statusMessage,
+            connectedDeviceName: device.displayName
+        )
+
+        if !device.isBaseStation && !device.telemetry.pwr_pin_on {
+            // --- Powered OFF (rocket only): show battery + power on button ---
+            BatteryView(telemetry: device.telemetry, isBaseStation: false)
+
+            Button {
+                device.sendPowerToggle()
+            } label: {
+                HStack {
+                    Image(systemName: "bolt.fill")
+                    Text("Power On")
+                }
+                .font(.system(.title2, design: .default).weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.green)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+        } else {
+            // --- Powered ON (or base station): full telemetry dashboard ---
+            RocketStateView(state: device.telemetry.state)
+
+            if device.simLaunched {
+                SimModeBannerView {
+                    device.sendCommand(7)
+                    device.clearSimBanner()
+                }
+            }
+
+            if device.groundTestActive {
+                GroundTestBannerView {
+                    device.sendCommand(16)
+                    device.groundTestActive = false
+                }
+            }
+
+            if device.isBaseStation {
+                FlightSummaryView(telemetry: device.telemetry)
+            }
+
+            SignalStrengthView(
+                telemetry: device.telemetry,
+                bleRSSI: device.connectedRSSI,
+                isBaseStation: device.isBaseStation,
+                locationManager: device.isBaseStation ? locationManager : nil
+            )
+
+            BatteryView(telemetry: device.telemetry,
+                        isBaseStation: device.isBaseStation)
+
+            IMUView(telemetry: device.telemetry,
+                    isBaseStation: device.isBaseStation)
+
+            if !device.isBaseStation {
+                FlightSummaryView(telemetry: device.telemetry)
+            }
+
+            GPSView(telemetry: device.telemetry, compact: true)
+
+            StatusFlagsView(telemetry: device.telemetry,
+                            isBaseStation: device.isBaseStation)
+
+            if !device.isBaseStation {
+                PyroChannelsView(device: device)
+            }
+
+            ControlsView(device: device)
+
+            TestingControlsView(device: device, activeSheet: $activeSheet)
+
+            if !device.isBaseStation {
+                OnPadCalibrationView(device: device)
+            }
+
+            if !device.isBaseStation {
+                Button {
+                    device.sendPowerToggle()
+                } label: {
+                    HStack {
+                        Image(systemName: "bolt.slash.fill")
+                        Text("Power Off")
+                    }
+                    .font(.system(.body, design: .default).weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.red)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
             }
         }
     }
@@ -747,14 +740,14 @@ struct StatusFlagsView: View {
 }
 
 struct DevicePickerView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var fleet: BLEFleet
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Available Devices")
                 .font(.headline)
 
-            if bleManager.discoveredDevices.isEmpty && bleManager.isScanning {
+            if fleet.discoveredDevices.isEmpty && fleet.isScanning {
                 HStack {
                     Spacer()
                     VStack(spacing: 8) {
@@ -766,16 +759,16 @@ struct DevicePickerView: View {
                     Spacer()
                 }
                 .padding(.vertical, 20)
-            } else if bleManager.discoveredDevices.isEmpty {
+            } else if fleet.discoveredDevices.isEmpty {
                 Text("No devices found. Tap Scan to search.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.vertical, 10)
             }
 
-            ForEach(bleManager.discoveredDevices) { device in
+            ForEach(fleet.discoveredDevices) { device in
                 Button(action: {
-                    bleManager.connect(to: device)
+                    fleet.connect(to: device)
                 }) {
                     HStack {
                         Group {
@@ -1038,7 +1031,7 @@ struct RocketDirectionView: View {
 // MARK: - Pyro Channels
 
 struct PyroChannelsView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @State private var showPyroSheet = false
     @State private var editingChannel: Int = 1
     @State private var contTestChannel: Int = 0   // 0 = none, 1 = CH1, 2 = CH2
@@ -1052,22 +1045,22 @@ struct PyroChannelsView: View {
             HStack(spacing: 10) {
                 pyroTile(
                     channel: 1,
-                    enabled: bleManager.rocketConfig?.pyro1Enabled ?? false,
-                    armed: bleManager.telemetry.pyro1_armed,
-                    continuity: bleManager.telemetry.pyro1_cont,
-                    fired: bleManager.telemetry.pyro1_fired,
-                    mode: bleManager.rocketConfig?.pyro1TriggerMode ?? 0,
-                    value: bleManager.rocketConfig?.pyro1TriggerValue ?? 0
+                    enabled: device.rocketConfig?.pyro1Enabled ?? false,
+                    armed: device.telemetry.pyro1_armed,
+                    continuity: device.telemetry.pyro1_cont,
+                    fired: device.telemetry.pyro1_fired,
+                    mode: device.rocketConfig?.pyro1TriggerMode ?? 0,
+                    value: device.rocketConfig?.pyro1TriggerValue ?? 0
                 )
 
                 pyroTile(
                     channel: 2,
-                    enabled: bleManager.rocketConfig?.pyro2Enabled ?? false,
-                    armed: bleManager.telemetry.pyro2_armed,
-                    continuity: bleManager.telemetry.pyro2_cont,
-                    fired: bleManager.telemetry.pyro2_fired,
-                    mode: bleManager.rocketConfig?.pyro2TriggerMode ?? 0,
-                    value: bleManager.rocketConfig?.pyro2TriggerValue ?? 0
+                    enabled: device.rocketConfig?.pyro2Enabled ?? false,
+                    armed: device.telemetry.pyro2_armed,
+                    continuity: device.telemetry.pyro2_cont,
+                    fired: device.telemetry.pyro2_fired,
+                    mode: device.rocketConfig?.pyro2TriggerMode ?? 0,
+                    value: device.rocketConfig?.pyro2TriggerValue ?? 0
                 )
             }
         }
@@ -1076,13 +1069,13 @@ struct PyroChannelsView: View {
         .background(Color(.systemGray6))
         .cornerRadius(10)
         .sheet(isPresented: $showPyroSheet) {
-            PyroConfigSheet(bleManager: bleManager, channel: editingChannel)
+            PyroConfigSheet(device: device, channel: editingChannel)
         }
         .fullScreenCover(item: Binding<IdentifiableInt?>(
             get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
             set: { pyroTestChannel = $0?.value }
         )) { item in
-            PyroTestView(bleManager: bleManager, channel: item.value)
+            PyroTestView(device: device, channel: item.value)
         }
     }
 
@@ -1127,9 +1120,9 @@ struct PyroChannelsView: View {
             .buttonStyle(.plain)
 
             // Test continuity button (only when not in flight)
-            if !armed && !fired && bleManager.telemetry.state != "INFLIGHT" {
+            if !armed && !fired && device.telemetry.state != "INFLIGHT" {
                 Button {
-                    bleManager.sendPyroContTest(channel: UInt8(channel))
+                    device.sendPyroContTest(channel: UInt8(channel))
                     contTestChannel = channel
                     // Auto-hide result after 5 seconds
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
@@ -1168,7 +1161,7 @@ struct PyroChannelsView: View {
 }
 
 struct PyroConfigSheet: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     let channel: Int
     @Environment(\.dismiss) var dismiss
 
@@ -1210,7 +1203,7 @@ struct PyroConfigSheet: View {
     }
 
     func loadCurrent() {
-        guard let cfg = bleManager.rocketConfig else { return }
+        guard let cfg = device.rocketConfig else { return }
         if channel == 1 {
             enabled = cfg.pyro1Enabled
             triggerMode = Int(cfg.pyro1TriggerMode)
@@ -1224,7 +1217,7 @@ struct PyroConfigSheet: View {
 
     func saveAndSend() {
         let val = Float(triggerValue) ?? 0
-        guard var cfg = bleManager.rocketConfig else { return }
+        guard var cfg = device.rocketConfig else { return }
         if channel == 1 {
             cfg.pyro1Enabled = enabled
             cfg.pyro1TriggerMode = UInt8(triggerMode)
@@ -1234,8 +1227,8 @@ struct PyroConfigSheet: View {
             cfg.pyro2TriggerMode = UInt8(triggerMode)
             cfg.pyro2TriggerValue = val
         }
-        bleManager.rocketConfig = cfg
-        bleManager.sendPyroConfig(
+        device.rocketConfig = cfg
+        device.sendPyroConfig(
             ch1Enabled: cfg.pyro1Enabled, ch1Mode: cfg.pyro1TriggerMode, ch1Value: cfg.pyro1TriggerValue,
             ch2Enabled: cfg.pyro2Enabled, ch2Mode: cfg.pyro2TriggerMode, ch2Value: cfg.pyro2TriggerValue
         )
@@ -1245,7 +1238,7 @@ struct PyroConfigSheet: View {
 // MARK: - Controls
 
 struct ControlsView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1253,29 +1246,29 @@ struct ControlsView: View {
                 .font(.headline)
 
             Button(action: {
-                bleManager.sendCommand(1)
+                device.sendCommand(1)
             }) {
                 HStack {
-                    Image(systemName: bleManager.telemetry.camera_recording ? "video.fill" : "video")
-                    Text(bleManager.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
+                    Image(systemName: device.telemetry.camera_recording ? "video.fill" : "video")
+                    Text(device.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(bleManager.telemetry.camera_recording ? Color.red : Color.blue)
+                .background(device.telemetry.camera_recording ? Color.red : Color.blue)
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
 
             Button(action: {
-                bleManager.sendCommand(23)
+                device.sendCommand(23)
             }) {
                 HStack {
-                    Image(systemName: bleManager.telemetry.logging_active ? "stop.circle.fill" : "record.circle")
-                    Text(bleManager.telemetry.logging_active ? "Stop Logging" : "Start Logging")
+                    Image(systemName: device.telemetry.logging_active ? "stop.circle.fill" : "record.circle")
+                    Text(device.telemetry.logging_active ? "Stop Logging" : "Start Logging")
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(bleManager.telemetry.logging_active ? Color.red : Color.orange)
+                .background(device.telemetry.logging_active ? Color.red : Color.orange)
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
@@ -1288,7 +1281,7 @@ struct ControlsView: View {
 }
 
 struct TestingControlsView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @Binding var activeSheet: DashboardSheet?
     @State private var showSimWarning = false
 
@@ -1299,7 +1292,7 @@ struct TestingControlsView: View {
     @AppStorage("simDescentRateMps") private var descentRateMps: String = "5.0"
 
     private var isOnPadState: Bool {
-        let s = bleManager.telemetry.state
+        let s = device.telemetry.state
         return s == "READY" || s == "PRELAUNCH"
     }
 
@@ -1309,14 +1302,14 @@ struct TestingControlsView: View {
               let b = Float(burnTimeSeconds), b > 0,
               let d = Float(descentRateMps), d > 0 else { return false }
         return isOnPadState
-            && !bleManager.simLaunched
-            && !bleManager.groundTestActive
+            && !device.simLaunched
+            && !device.groundTestActive
     }
 
     private var canStartGroundTest: Bool {
         return isOnPadState
-            && !bleManager.simLaunched
-            && !bleManager.groundTestActive
+            && !device.simLaunched
+            && !device.groundTestActive
     }
 
     var body: some View {
@@ -1358,24 +1351,24 @@ struct TestingControlsView: View {
                 // Ground Test button
                 Button(action: toggleGroundTest) {
                     HStack {
-                        Image(systemName: bleManager.groundTestActive ? "stop.fill" : "gyroscope")
-                        Text(bleManager.groundTestActive ? "Stop Test" : "Ground Test")
+                        Image(systemName: device.groundTestActive ? "stop.fill" : "gyroscope")
+                        Text(device.groundTestActive ? "Stop Test" : "Ground Test")
                     }
                     .font(.system(.body, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .foregroundColor(.white)
-                    .background(bleManager.groundTestActive ? Color.red : (canStartGroundTest ? Color.blue : Color.blue.opacity(0.4)))
+                    .background(device.groundTestActive ? Color.red : (canStartGroundTest ? Color.blue : Color.blue.opacity(0.4)))
                     .cornerRadius(10)
                 }
-                .disabled(!canStartGroundTest && !bleManager.groundTestActive)
+                .disabled(!canStartGroundTest && !device.groundTestActive)
 
                 // GPS status hint when ground test is active but no attitude data
-                if bleManager.groundTestActive && bleManager.telemetry.num_sats < 4 {
+                if device.groundTestActive && device.telemetry.num_sats < 4 {
                     HStack(spacing: 6) {
                         ProgressView()
                             .scaleEffect(0.8)
-                        Text("Waiting for GPS fix (\(bleManager.telemetry.num_sats) sats) — ground test needs attitude from EKF")
+                        Text("Waiting for GPS fix (\(device.telemetry.num_sats) sats) — ground test needs attitude from EKF")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
@@ -1427,27 +1420,27 @@ struct TestingControlsView: View {
         payload.append(Data(bytes: &b, count: 4))
         payload.append(Data(bytes: &d, count: 4))
 
-        bleManager.sendTimeSync()  // Fresh phone time for unique sim filenames
-        bleManager.sendRawCommand(5, payload: payload)
+        device.sendTimeSync()  // Fresh phone time for unique sim filenames
+        device.sendRawCommand(5, payload: payload)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            bleManager.markSimLaunched()
-            bleManager.sendCommand(6)
+            device.markSimLaunched()
+            device.sendCommand(6)
         }
     }
 
     private func toggleGroundTest() {
-        if bleManager.groundTestActive {
-            bleManager.sendCommand(16)
-            bleManager.groundTestActive = false
+        if device.groundTestActive {
+            device.sendCommand(16)
+            device.groundTestActive = false
         } else {
-            bleManager.sendCommand(15)
-            bleManager.groundTestActive = true
+            device.sendCommand(15)
+            device.groundTestActive = true
         }
     }
 }
 
 struct OnPadCalibrationView: View {
-    @ObservedObject var bleManager: BLEManager
+    @ObservedObject var device: BLEDevice
     @State private var calibrating = false
     @State private var showGravityWarning = false
     @State private var gravityMag: Float = 0.0
@@ -1460,15 +1453,15 @@ struct OnPadCalibrationView: View {
 
             Button(action: {
                 calibrating = true
-                bleManager.sendCommand(21)
+                device.sendCommand(21)
                 // Calibration takes ~10 seconds (1000 samples x 10ms)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) {
                     calibrating = false
 
                     // Check gravity magnitude from low-g accelerometer
-                    let lx = bleManager.telemetry.low_g_x ?? 0
-                    let ly = bleManager.telemetry.low_g_y ?? 0
-                    let lz = bleManager.telemetry.low_g_z ?? 0
+                    let lx = device.telemetry.low_g_x ?? 0
+                    let ly = device.telemetry.low_g_y ?? 0
+                    let lz = device.telemetry.low_g_z ?? 0
                     let mag = sqrtf(lx * lx + ly * ly + lz * lz)
                     let expected: Float = 9.80665
                     let errorPct = fabsf(mag - expected) / expected * 100.0
@@ -1495,7 +1488,7 @@ struct OnPadCalibrationView: View {
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
-            .disabled(calibrating || !bleManager.isConnected)
+            .disabled(calibrating || !device.isConnected)
 
             Text("Place rocket on pad and keep still. Calibrates gyro bias and accelerometer offsets (~10 seconds).")
                 .font(.caption)
