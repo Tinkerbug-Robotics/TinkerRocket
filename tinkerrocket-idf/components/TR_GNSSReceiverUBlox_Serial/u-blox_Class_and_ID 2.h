@@ -1,1 +1,0 @@
-/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/libraries/TR_GNSSReceiverUBlox_Serial/u-blox_Class_and_ID.h

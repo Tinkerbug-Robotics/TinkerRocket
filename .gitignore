@@ -15,6 +15,12 @@ __pycache__/
 .DS_Store
 ._*
 
+# Finder / iCloud duplicates (files and dirs ending in " 2", " 3", etc.)
+* 2.*
+* 3.*
+* 2/
+* 3/
+
 # IDE
 .vscode/
 *.swp
