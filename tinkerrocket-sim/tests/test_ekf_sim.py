@@ -124,6 +124,8 @@ class TestEKFStationary:
             assert abs(v) < 0.5  # < 0.5 m/s
 
     def test_baro_reduces_alt_covariance(self):
+        # EKF is 15-state (baro offset dropped); baro updates now write
+        # directly into the altitude (down) component of position.
         t = 0
         for _ in range(100):
             t += 2000
@@ -131,9 +133,9 @@ class TestEKFStationary:
                                 make_stationary_imu(t),
                                 make_stationary_gnss_lla(t),
                                 make_stationary_mag(t))
-        cov_before = self.ekf.get_cov_baro_offset()
+        cov_before = self.ekf.get_cov_pos()[2]  # altitude covariance
         self.ekf.baro_meas_update(make_baro(t, ALT_M))
-        cov_after = self.ekf.get_cov_baro_offset()
+        cov_after = self.ekf.get_cov_pos()[2]
         assert cov_after <= cov_before
 
     def test_no_nan_after_60s(self):

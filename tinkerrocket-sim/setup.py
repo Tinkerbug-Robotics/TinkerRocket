@@ -1,11 +1,33 @@
-"""Build script for C++ pybind11 extensions (PID controller and EKF)."""
+"""Build script for C++ pybind11 extensions (PID controller, EKF, GuidancePN, ControlMixer).
+
+Shared component sources live under ``tinkerrocket-idf/components/`` — the
+canonical ESP-IDF component tree that is also flashed to the rocket. The
+host build of the migrated components unconditionally includes <compat.h>,
+so the pybind11 extensions add ``tests_cpp/host_shim`` (a small Arduino/
+compat shim shared with the cpp unit tests) to their include path.
+
+TR_GuidancePN is the lone exception: it is a separate git submodule whose
+sources still live under libraries/TR_GuidancePN/ and still use
+``#ifdef ARDUINO`` guards, so it builds on host without any shim. It will
+migrate to tinkerrocket-idf/components/TR_GuidancePN once the submodule is
+properly registered there — tracked alongside the libraries/ deletion PR.
+"""
 import os
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 from setuptools import setup
 
-# Path to shared Arduino libraries (one level up from TinkerRocket-Sim)
 _HERE = os.path.dirname(os.path.abspath(__file__))
-SHARED_LIB_DIR = os.path.relpath(os.path.join(_HERE, "..", "libraries"), _HERE)
+
+# Canonical ESP-IDF component sources (used for TR_GpsInsEKF, TR_ControlMixer, TR_PID).
+SHARED_LIB_DIR = os.path.relpath(
+    os.path.join(_HERE, "..", "tinkerrocket-idf", "components"), _HERE
+)
+# Legacy Arduino library tree (only TR_GuidancePN still sourced from here).
+LEGACY_LIB_DIR = os.path.relpath(os.path.join(_HERE, "..", "libraries"), _HERE)
+# Host-side shim providing Arduino.h/compat.h for components that #include <compat.h>.
+SHIM_DIR = os.path.relpath(
+    os.path.join(_HERE, "..", "tests_cpp", "host_shim"), _HERE
+)
 
 ext_modules = [
     Pybind11Extension(
@@ -26,13 +48,14 @@ if os.path.exists("cpp/ekf/ekf_bindings.cpp") and os.path.exists(ekf_lib_dir):
                 os.path.join(ekf_lib_dir, "TR_GpsInsEKF.cpp"),
                 "cpp/ekf/ekf_bindings.cpp",
             ],
-            include_dirs=[ekf_lib_dir, "cpp/ekf", "cpp/common"],
+            include_dirs=[SHIM_DIR, ekf_lib_dir, "cpp/ekf", "cpp/common"],
             cxx_std=17,
         ),
     )
 
-# GuidancePN: build from shared TR_GuidancePN library
-guidance_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN")
+# GuidancePN: TRANSITIONAL — still sourced from legacy libraries/ tree until
+# tinkerrocket-idf/components/TR_GuidancePN is set up as a proper submodule.
+guidance_lib_dir = os.path.join(LEGACY_LIB_DIR, "TR_GuidancePN")
 if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guidance_lib_dir):
     ext_modules.append(
         Pybind11Extension(
@@ -59,7 +82,7 @@ if (os.path.exists("cpp/mixer/mixer_bindings.cpp") and
                 os.path.join(pid_lib_dir, "TR_PID.cpp"),
                 "cpp/mixer/mixer_bindings.cpp",
             ],
-            include_dirs=[mixer_lib_dir, pid_lib_dir, "cpp/common"],
+            include_dirs=[SHIM_DIR, mixer_lib_dir, pid_lib_dir, "cpp/common"],
             cxx_std=17,
         ),
     )
