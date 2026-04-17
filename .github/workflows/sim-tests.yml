@@ -4,15 +4,18 @@ on:
   push:
     paths:
       - 'tinkerrocket-sim/**'
-      - 'libraries/TR_GpsInsEKF/**'
-      - 'libraries/TR_PID/**'
-      - 'libraries/TR_ControlMixer/**'
-      - 'libraries/TR_GuidancePN/**'
+      - 'tinkerrocket-idf/components/TR_GpsInsEKF/**'
+      - 'tinkerrocket-idf/components/TR_PID/**'
+      - 'tinkerrocket-idf/components/TR_ControlMixer/**'
+      - 'libraries/TR_GuidancePN/**'   # transitional: sim _guidance still sources from here
+      - 'tests_cpp/host_shim/**'       # sim reuses the host_shim compat headers
       - 'tests/integration/**'
   pull_request:
     paths:
       - 'tinkerrocket-sim/**'
+      - 'tinkerrocket-idf/components/**'
       - 'libraries/**'
+      - 'tests_cpp/host_shim/**'
 
 jobs:
   test:
@@ -20,6 +23,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:

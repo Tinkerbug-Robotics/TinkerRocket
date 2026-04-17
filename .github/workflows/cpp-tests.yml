@@ -3,11 +3,13 @@ name: C++ Unit Tests
 on:
   push:
     paths:
-      - 'libraries/**'
+      - 'tinkerrocket-idf/components/**'
+      - 'libraries/**'        # transitional: test_guidance_pn still sources from here
       - 'tests_cpp/**'
       - 'tests/integration/**'
   pull_request:
     paths:
+      - 'tinkerrocket-idf/components/**'
       - 'libraries/**'
       - 'tests_cpp/**'
       - 'tests/integration/**'
@@ -18,6 +20,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Configure
         run: cmake -S tests_cpp -B tests_cpp/build -DCMAKE_BUILD_TYPE=Debug
@@ -33,6 +37,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
