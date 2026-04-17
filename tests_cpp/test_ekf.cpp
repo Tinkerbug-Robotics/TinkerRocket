@@ -186,15 +186,20 @@ TEST_F(EKFTest, BaroUpdateReducesAltCovariance) {
         ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
     }
 
-    float cov_before = ekf.getCovBaroOffset();
+    // EKF is 15-state (baro offset was dropped); baro directly updates the
+    // altitude (down) component of position. Read cov[2] before/after.
+    float cov_pos[3];
+    ekf.getCovPos(cov_pos);
+    float cov_alt_before = cov_pos[2];
 
     EkfBaroData baro;
     baro.time_us = t;
     baro.altitude_m = ALT_M;
     ekf.baroMeasUpdate(baro);
 
-    float cov_after = ekf.getCovBaroOffset();
-    EXPECT_LE(cov_after, cov_before);
+    ekf.getCovPos(cov_pos);
+    float cov_alt_after = cov_pos[2];
+    EXPECT_LE(cov_alt_after, cov_alt_before);
 }
 
 TEST_F(EKFTest, InvertMatrix6x6_Identity) {
