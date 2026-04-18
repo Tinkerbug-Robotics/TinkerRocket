@@ -7,14 +7,13 @@ on:
       - 'tinkerrocket-idf/components/TR_GpsInsEKF/**'
       - 'tinkerrocket-idf/components/TR_PID/**'
       - 'tinkerrocket-idf/components/TR_ControlMixer/**'
-      - 'libraries/TR_GuidancePN/**'   # transitional: sim _guidance still sources from here
+      - 'tinkerrocket-idf/components/TR_GuidancePN/**'
       - 'tests_cpp/host_shim/**'       # sim reuses the host_shim compat headers
       - 'tests/integration/**'
   pull_request:
     paths:
       - 'tinkerrocket-sim/**'
       - 'tinkerrocket-idf/components/**'
-      - 'libraries/**'
       - 'tests_cpp/host_shim/**'
 
 jobs:

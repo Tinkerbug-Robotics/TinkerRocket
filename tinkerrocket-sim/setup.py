@@ -1,16 +1,14 @@
 """Build script for C++ pybind11 extensions (PID controller, EKF, GuidancePN, ControlMixer).
 
-Shared component sources live under ``tinkerrocket-idf/components/`` — the
-canonical ESP-IDF component tree that is also flashed to the rocket. The
-host build of the migrated components unconditionally includes <compat.h>,
-so the pybind11 extensions add ``tests_cpp/host_shim`` (a small Arduino/
-compat shim shared with the cpp unit tests) to their include path.
+All shared component sources live under ``tinkerrocket-idf/components/`` —
+the canonical ESP-IDF component tree that is also flashed to the rocket.
+TR_GuidancePN is a git submodule pointing at Tinkerbug-Robotics/TR_GuidancePN,
+registered as a first-class IDF component under components/.
 
-TR_GuidancePN is the lone exception: it is a separate git submodule whose
-sources still live under libraries/TR_GuidancePN/ and still use
-``#ifdef ARDUINO`` guards, so it builds on host without any shim. It will
-migrate to tinkerrocket-idf/components/TR_GuidancePN once the submodule is
-properly registered there — tracked alongside the libraries/ deletion PR.
+Migrated component headers unconditionally include <compat.h>, so the
+pybind11 extensions add ``tests_cpp/host_shim`` (a small Arduino/compat
+shim shared with the cpp unit tests) to their include path. TR_GuidancePN
+is framework-neutral (no <compat.h> include) and needs no shim.
 """
 import os
 from pybind11.setup_helpers import Pybind11Extension, build_ext
@@ -18,12 +16,10 @@ from setuptools import setup
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Canonical ESP-IDF component sources (used for TR_GpsInsEKF, TR_ControlMixer, TR_PID).
+# Canonical ESP-IDF component sources.
 SHARED_LIB_DIR = os.path.relpath(
     os.path.join(_HERE, "..", "tinkerrocket-idf", "components"), _HERE
 )
-# Legacy Arduino library tree (only TR_GuidancePN still sourced from here).
-LEGACY_LIB_DIR = os.path.relpath(os.path.join(_HERE, "..", "libraries"), _HERE)
 # Host-side shim providing Arduino.h/compat.h for components that #include <compat.h>.
 SHIM_DIR = os.path.relpath(
     os.path.join(_HERE, "..", "tests_cpp", "host_shim"), _HERE
@@ -53,9 +49,9 @@ if os.path.exists("cpp/ekf/ekf_bindings.cpp") and os.path.exists(ekf_lib_dir):
         ),
     )
 
-# GuidancePN: TRANSITIONAL — still sourced from legacy libraries/ tree until
-# tinkerrocket-idf/components/TR_GuidancePN is set up as a proper submodule.
-guidance_lib_dir = os.path.join(LEGACY_LIB_DIR, "TR_GuidancePN")
+# GuidancePN: submodule under components/. No compat shim needed — the
+# library is framework-neutral.
+guidance_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN")
 if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guidance_lib_dir):
     ext_modules.append(
         Pybind11Extension(

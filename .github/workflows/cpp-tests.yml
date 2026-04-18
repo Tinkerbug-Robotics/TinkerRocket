@@ -4,13 +4,11 @@ on:
   push:
     paths:
       - 'tinkerrocket-idf/components/**'
-      - 'libraries/**'        # transitional: test_guidance_pn still sources from here
       - 'tests_cpp/**'
       - 'tests/integration/**'
   pull_request:
     paths:
       - 'tinkerrocket-idf/components/**'
-      - 'libraries/**'
       - 'tests_cpp/**'
       - 'tests/integration/**'
 
