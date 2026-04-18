@@ -49,10 +49,13 @@ if os.path.exists("cpp/ekf/ekf_bindings.cpp") and os.path.exists(ekf_lib_dir):
         ),
     )
 
-# GuidancePN: submodule under components/. No compat shim needed — the
-# library is framework-neutral.
-guidance_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN")
-if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guidance_lib_dir):
+# GuidancePN: private submodule under components/. Optional — if the
+# submodule is not initialized, skip the _guidance pybind11 extension and
+# the sim still builds + tests run for everything else (PID, EKF, mixer).
+# No compat shim needed — the library is framework-neutral.
+guidance_src = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN", "TR_GuidancePN.cpp")
+if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guidance_src):
+    guidance_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN")
     ext_modules.append(
         Pybind11Extension(
             "tinkerrocket_sim._guidance",
@@ -63,6 +66,12 @@ if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guida
             include_dirs=[guidance_lib_dir, "cpp/common"],
             cxx_std=17,
         ),
+    )
+else:
+    print(
+        "NOTE: TR_GuidancePN submodule not initialized — skipping the _guidance "
+        "pybind11 extension. (To enable: "
+        "git submodule update --init tinkerrocket-idf/components/TR_GuidancePN)"
     )
 
 # ControlMixer: build from shared TR_ControlMixer + TR_PID libraries

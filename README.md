@@ -130,6 +130,20 @@ TinkerRocket/
 - Python 3.10+ for simulation
 - CMake 3.16+ for host-side tests
 
+### Guidance (optional)
+
+The proportional-navigation guidance law lives in a separate private submodule at [`tinkerrocket-idf/components/TR_GuidancePN`](https://github.com/Tinkerbug-Robotics/TR_GuidancePN). Everything else — roll control, EKF, sensor collection, telemetry, logging, LoRa, BLE, iOS integration, ground-test modes — builds and runs **without** it. Public contributors can clone, build, flash, and contribute to any non-guidance feature with a standard, non-recursive clone.
+
+When the submodule is not initialized:
+- Firmware compiles against a header-only no-op stub (`TR_GuidancePN_Stub`). At boot the flight computer logs `PN Guidance: NOT COMPILED IN (stub active)`. All `guidance.*` call sites still exist, but each method returns zero / false.
+- `tests_cpp`: the `test_guidance_pn` target is skipped at CMake configure time.
+- `tinkerrocket-sim`: the `_guidance` pybind11 extension is skipped at `pip install -e` time; `tests/test_guidance_pn.py` is skipped via `pytest.importorskip`.
+
+Contributors with access can opt in:
+```bash
+git submodule update --init tinkerrocket-idf/components/TR_GuidancePN
+```
+
 ### Firmware (ESP-IDF)
 
 ```bash

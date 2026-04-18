@@ -23,7 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # TR_GuidancePN is a private submodule. Recurse only when the
+          # TR_GUIDANCEPN_TOKEN repo secret is present (trusted branches).
+          # Forks / PRs without the secret skip the submodule; the
+          # _guidance pybind11 extension is skipped in setup.py and the
+          # test file uses pytest.importorskip to skip at test time.
+          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
+          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
 
       - uses: actions/setup-python@v5
         with:

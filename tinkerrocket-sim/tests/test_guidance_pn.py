@@ -1,11 +1,20 @@
 """
 Pybind11 GuidancePN tests.
 Mirrors C++ test_guidance_pn.cpp to ensure sim matches flight code.
+
+Skipped entirely when the private TR_GuidancePN submodule is not
+initialized (i.e. the _guidance pybind11 extension wasn't built).
 """
 import pytest
 import math
 
-from tinkerrocket_sim._guidance import GuidancePN
+_guidance = pytest.importorskip(
+    "tinkerrocket_sim._guidance",
+    reason="TR_GuidancePN submodule not initialized — _guidance extension "
+           "not built. To enable: git submodule update --init "
+           "tinkerrocket-idf/components/TR_GuidancePN",
+)
+GuidancePN = _guidance.GuidancePN
 
 
 TARGET_ALT = 600.0

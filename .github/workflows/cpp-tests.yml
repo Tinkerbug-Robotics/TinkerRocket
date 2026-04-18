@@ -12,6 +12,14 @@ on:
       - 'tests_cpp/**'
       - 'tests/integration/**'
 
+# TR_GuidancePN is a private submodule. When the repo secret
+# TR_GUIDANCEPN_TOKEN is set (this org, trusted branches), we recurse
+# submodules and include guidance coverage. For forks / PRs without the
+# secret, we skip the submodule and rely on the stub — guidance tests are
+# simply not discovered (tests_cpp/CMakeLists.txt handles that gracefully).
+env:
+  HAS_GUIDANCE_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' }}
+
 jobs:
   cpp-tests:
     runs-on: ubuntu-latest
@@ -19,7 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
+          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
 
       - name: Configure
         run: cmake -S tests_cpp -B tests_cpp/build -DCMAKE_BUILD_TYPE=Debug
@@ -36,7 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
+          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
 
       - uses: actions/setup-python@v5
         with:

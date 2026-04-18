@@ -26,7 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # TR_GuidancePN is a private submodule. Recurse only when the
+          # TR_GUIDANCEPN_TOKEN repo secret is present. Without it, the
+          # submodule is skipped and flight_computer's CMakeLists picks
+          # up the TR_GuidancePN_Stub component instead (no-op API).
+          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
+          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
 
       - name: Build ${{ matrix.project }}
         working-directory: tinkerrocket-idf/projects/${{ matrix.project }}
