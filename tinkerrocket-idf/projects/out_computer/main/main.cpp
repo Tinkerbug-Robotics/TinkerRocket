@@ -961,8 +961,23 @@ static void handleReceivedFrame(const uint8_t* frame, size_t frame_len,
 static void parseRxStream()
 {
     uint8_t payload[MAX_PAYLOAD];
+    // Yield to IDLE1 every N iterations so a backlogged drain doesn't
+    // starve the CPU-1 idle task and trip the task watchdog. I2S Parse
+    // runs at priority 1; IDLE1 is priority 0, so only a blocking delay
+    // (not taskYIELD) lets it run. Tick rate is 100 Hz by default, so
+    // vTaskDelay(1) ≈ 10 ms — cheap given we only hit it every 32 loop
+    // iterations, and it keeps WDT from firing under BLE-heavy load
+    // (observed: CPU 1 pinned in CRC loop during phone file downloads).
+    size_t iter_count = 0;
     while (rxLen() >= (4 + 1 + 1 + 2))
     {
+        // Yield every 32 iterations — placed at the top so resync/length-
+        // drop `continue` paths also hit it. See function-top comment.
+        if ((++iter_count & 0x1F) == 0)
+        {
+            vTaskDelay(1);
+        }
+
         if (!(rxPeek(0) == 0xAA &&
               rxPeek(1) == 0x55 &&
               rxPeek(2) == 0xAA &&
