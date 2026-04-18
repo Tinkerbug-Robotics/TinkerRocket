@@ -29,10 +29,11 @@ plots/
 # Test build artifacts
 tests_cpp/build/
 
-# Sim build artifacts
+# Sim build artifacts — pybind11 outputs land under src/tinkerrocket_sim/
+# (depth 3), so a single-segment `tinkerrocket-sim/*.so` would miss them.
 tinkerrocket-sim/build/
-tinkerrocket-sim/*.egg-info/
-tinkerrocket-sim/*.so
+tinkerrocket-sim/**/*.egg-info/
+tinkerrocket-sim/**/*.so
 
 # Xcode
 TinkerRocketApp/DerivedData/

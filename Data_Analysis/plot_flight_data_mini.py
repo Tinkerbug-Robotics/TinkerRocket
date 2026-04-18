@@ -13,7 +13,7 @@ Frame format: [0xAA][0x55][0xAA][0x55] + type(1) + length(1) + payload(N) + CRC1
 CRC-16: poly=0x8001, init=0x0000, no reflection, big-endian CRC bytes
 CRC computed over [type, length, payload]
 
-Data types defined in libraries/TR_RocketComputerTypes/RocketComputerTypes.h
+Data types defined in tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h
 
 Usage:
     1. Set BINARY_FILE, OUTPUT_DIR, SHOW_PLOTS, and PLOTS near the bottom
