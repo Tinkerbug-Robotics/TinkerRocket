@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../../components")
-set(EXCLUDE_COMPONENTS "TR_BLE_To_APP TR_OUT_Page TR_LogToFlash TR_LoRa_Comms RadioLib TR_Sensor_Collector TR_Sensor_Collector_Sim TR_GpsInsEKF TR_KinematicChecks TR_GuidancePN TR_ControlMixer TR_PID TR_ServoControl_ledc_mult TR_ISM6HG256 TR_BMP585 TR_MMC5983MA TR_GNSSReceiverUBlox_Serial TR_IMU_Int_V2 TR_INA230")
+set(EXCLUDE_COMPONENTS "TR_BLE_To_APP TR_LogToFlash TR_LoRa_Comms RadioLib TR_Sensor_Collector TR_Sensor_Collector_Sim TR_GpsInsEKF TR_KinematicChecks TR_GuidancePN TR_ControlMixer TR_PID TR_ServoControl_ledc_mult TR_ISM6HG256 TR_BMP585 TR_MMC5983MA TR_GNSSReceiverUBlox_Serial TR_IMU_Int_V2 TR_INA230")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(i2s_tx_test)
