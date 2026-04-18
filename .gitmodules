@@ -1,6 +1,3 @@
-[submodule "libraries/TR_GuidancePN"]
-	path = libraries/TR_GuidancePN
-	url = https://github.com/Tinkerbug-Robotics/TR_GuidancePN.git
 [submodule "tinkerrocket-idf/components/TR_GuidancePN"]
 	path = tinkerrocket-idf/components/TR_GuidancePN
 	url = https://github.com/Tinkerbug-Robotics/TR_GuidancePN.git
