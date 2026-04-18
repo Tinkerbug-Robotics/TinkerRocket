@@ -85,6 +85,19 @@ static uint8_t cmd_delivery_count = 0;
 static uint8_t cmd_delivery_id = 0;           // tracks which command the counter belongs to
 static bool camera_recording_requested = false;
 static volatile bool flash_op_active = false;   // set during blocking NAND ops (file list/delete/download)
+// Set alongside flash_op_active. Gates the I2S DMA recv callback so FC
+// sensor data stops being ingested while we're busy serving the phone.
+// FC sensor data is uninteresting during a file download (the rocket
+// isn't flying during a phone-side fetch), and draining + parsing it
+// hogs CPU 1, competing with BLE and flash access. Cleaner than trying
+// to make the parse loop yield aggressively: the parse task simply
+// doesn't get work queued at all, the ring stays quiescent, and we
+// discard any stale bytes before resuming.
+static volatile bool i2s_ingest_paused = false;
+
+// Forward declarations — defined after the rx ring buffer block below.
+static inline void beginPhoneIO();
+static inline void endPhoneIO();
 
 // Phone time sync (BLE Command 9) — used for sim file timestamps
 // so each sim run gets a unique filename instead of the hardcoded
@@ -577,6 +590,24 @@ static inline uint8_t rxPop()
     return b;
 }
 
+// beginPhoneIO / endPhoneIO — bracket a phone-serving operation (file
+// list / delete / download). Pauses both I2C servicing (flash_op_active)
+// and I2S ingest (i2s_ingest_paused), then drains the rx ring on resume
+// so stale sensor bytes from before the pause aren't processed as if
+// they were current. Must be called from a single task (oc_loop).
+static inline void beginPhoneIO()
+{
+    i2s_ingest_paused = true;
+    flash_op_active   = true;
+}
+static inline void endPhoneIO()
+{
+    // Drain while the ISR is still suppressed — race-free.
+    rx_tail = rx_head;
+    i2s_ingest_paused = false;
+    flash_op_active   = false;
+}
+
 // Commands that carry a config-data payload to be read via readConfigFrame
 static bool isConfigCommand(uint8_t cmd)
 {
@@ -961,23 +992,8 @@ static void handleReceivedFrame(const uint8_t* frame, size_t frame_len,
 static void parseRxStream()
 {
     uint8_t payload[MAX_PAYLOAD];
-    // Yield to IDLE1 every N iterations so a backlogged drain doesn't
-    // starve the CPU-1 idle task and trip the task watchdog. I2S Parse
-    // runs at priority 1; IDLE1 is priority 0, so only a blocking delay
-    // (not taskYIELD) lets it run. Tick rate is 100 Hz by default, so
-    // vTaskDelay(1) ≈ 10 ms — cheap given we only hit it every 32 loop
-    // iterations, and it keeps WDT from firing under BLE-heavy load
-    // (observed: CPU 1 pinned in CRC loop during phone file downloads).
-    size_t iter_count = 0;
     while (rxLen() >= (4 + 1 + 1 + 2))
     {
-        // Yield every 32 iterations — placed at the top so resync/length-
-        // drop `continue` paths also hit it. See function-top comment.
-        if ((++iter_count & 0x1F) == 0)
-        {
-            vTaskDelay(1);
-        }
-
         if (!(rxPeek(0) == 0xAA &&
               rxPeek(1) == 0x55 &&
               rxPeek(2) == 0xAA &&
@@ -1048,6 +1064,13 @@ static volatile size_t dma_dump_len = 0;
 
 static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user_ctx)
 {
+    // Early-exit while phone transfers are in flight: we deliberately
+    // drop FC sensor data so the I2S parse task doesn't compete with
+    // BLE + flash on CPU 1. DMA keeps writing its own internal buffers;
+    // we just skip the ring-push + task-notify work. See i2s_ingest_paused
+    // declaration for rationale.
+    if (i2s_ingest_paused) return false;
+
     dma_cb_count++;
     dma_total_bytes += len;
 
@@ -2650,7 +2673,7 @@ static void loop_oc()
         {
             // Send file list with pagination (5 files per page)
             // Timestamp is parsed from filename on the app side, keeping JSON compact.
-            flash_op_active = true;  // pause I2C servicing during blocking NAND reads
+            beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking NAND reads
             static constexpr size_t FILES_PER_PAGE = 5;
             uint8_t page = ble_app.getFileListPage();
             static TR_LogFileInfo infos[64];  // static to avoid stack overflow
@@ -2676,7 +2699,7 @@ static void loop_oc()
             json += "]";
 
             ble_app.sendFileList(json);
-            flash_op_active = false;
+            endPhoneIO();
 
             ESP_LOGI("BLE", "Sent file list page %u: %u files (%u of %u, %u bytes)",
                           page, (unsigned)n, (unsigned)start, (unsigned)total, json.length());
@@ -2724,7 +2747,7 @@ static void loop_oc()
             String filename = ble_app.getDeleteFilename();
             if (filename.length() > 0)
             {
-                flash_op_active = true;  // pause I2C servicing during blocking NAND erase + list
+                beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking NAND erase + list
                 bool success = logger.deleteFile(filename.c_str());
                 ESP_LOGI("BLE", "Delete file '%s': %s", filename.c_str(), success ? "SUCCESS" : "FAILED");
 
@@ -2748,7 +2771,7 @@ static void loop_oc()
                 json += "]";
 
                 ble_app.sendFileList(json);
-                flash_op_active = false;
+                endPhoneIO();
 
                 ESP_LOGI("BLE", "Sent updated file list: %u of %u files (%u bytes)",
                               (unsigned)n, (unsigned)total, json.length());
@@ -2759,7 +2782,7 @@ static void loop_oc()
         String download_filename = ble_app.getDownloadFilename();
         if (download_filename.length() > 0)
         {
-            flash_op_active = true;  // pause I2C servicing during blocking flash reads
+            beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking flash reads
             ESP_LOGI("BLE", "Download file request: %s", download_filename.c_str());
 
             // Dynamic chunk size based on negotiated MTU (falls back to 170 if not yet negotiated)
@@ -2887,7 +2910,7 @@ static void loop_oc()
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
                           elapsed_ms / 1000.0f, kbps);
             } // else (chunk_data_size > 0)
-            flash_op_active = false;
+            endPhoneIO();
         }
 
         // Flight simulator commands — relay to FlightComputer via I2C
