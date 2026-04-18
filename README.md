@@ -15,7 +15,7 @@ The system comprises three physical cooperating components:
 | **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, SD card logging |
 | **iOS App** | iPhone/iPad | Real-time dashboard, file management, configuration |
 
-The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 16-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
+The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
 
 Remove the need for a dedicated through wall power switch using the built in low power 'WiFi' type switch. After plugging in a battery the unit draws only 10-15 mA, which gives you over 2.5 days of battery life on a typical 600 mAh battery. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control recording remotely from the base station over LoRa as well.
 
@@ -33,7 +33,7 @@ Finally, manage the flight data intuitively by uploading from the flight compute
                         │        FLIGHT COMPUTER          │
                         │                                 │
  ISM6HG256 (1000 Hz) ──>│  Sensor       EKF        PID   │
- BMP585    (500 Hz) ──>│  Collector ──> (16-state) ──> Mixer ──> 1-4x Servos
+ BMP585    (500 Hz) ──>│  Collector ──> (15-state) ──> Mixer ──> 1-4x Servos
  MMC5983MA (200 Hz) ──>│              Roll Control / Guidance PN        │
  u-blox M10 (10-25 Hz) ──>│                                 │
                         └──────┬──────────────────────────┘
