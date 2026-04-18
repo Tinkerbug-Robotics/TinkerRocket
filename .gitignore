@@ -30,6 +30,7 @@ __pycache__/
 Data_Analysis/plots/
 tinkerrocket-sim/plots/
 tinkerrocket-sim/*.png
+tinkerrocket-sim/*.html
 plots/
 
 # Test build artifacts
