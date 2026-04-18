@@ -128,7 +128,8 @@ PYBIND11_MODULE(_ekf, m) {
         .def("get_cov_rot_rate_bias", [](const GpsInsEKF& self) {
             float r[3]; self.getCovRotRateBias(r);
             return py::make_tuple(r[0], r[1], r[2]);
-        })
-        .def("get_baro_offset", &GpsInsEKF::getBaroOffset)
-        .def("get_cov_baro_offset", &GpsInsEKF::getCovBaroOffset);
+        });
+    // NB: get_baro_offset / get_cov_baro_offset bindings removed — the
+    // component EKF is now 15-state (baro folded into position altitude).
+    // Altitude and its covariance can be read via get_pos_est()/get_cov_pos().
 }
