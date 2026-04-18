@@ -4,11 +4,9 @@ on:
   push:
     paths:
       - 'tinkerrocket-idf/**'
-      - 'libraries/**'
   pull_request:
     paths:
       - 'tinkerrocket-idf/**'
-      - 'libraries/**'
 
 jobs:
   build:
@@ -27,6 +25,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Build ${{ matrix.project }}
         working-directory: tinkerrocket-idf/projects/${{ matrix.project }}
