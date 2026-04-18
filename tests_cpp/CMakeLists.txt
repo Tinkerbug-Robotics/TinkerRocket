@@ -109,15 +109,23 @@ target_link_libraries(test_control_mixer GTest::gtest_main)
 gtest_discover_tests(test_control_mixer)
 
 # ---------- test_guidance_pn ----------
-add_executable(test_guidance_pn test_guidance_pn.cpp
-    ${LIB_DIR}/TR_GuidancePN/TR_GuidancePN.cpp
-)
-target_include_directories(test_guidance_pn PRIVATE
-    ${SHIM_DIR}
-    ${LIB_DIR}/TR_GuidancePN
-)
-target_link_libraries(test_guidance_pn GTest::gtest_main)
-gtest_discover_tests(test_guidance_pn)
+# TR_GuidancePN is a private submodule (optional). Only build the test if
+# the submodule is initialized. Contributors without access to the private
+# upstream can work on every other feature; guidance tests are skipped.
+if(EXISTS "${LIB_DIR}/TR_GuidancePN/TR_GuidancePN.cpp")
+    add_executable(test_guidance_pn test_guidance_pn.cpp
+        ${LIB_DIR}/TR_GuidancePN/TR_GuidancePN.cpp
+    )
+    target_include_directories(test_guidance_pn PRIVATE
+        ${SHIM_DIR}
+        ${LIB_DIR}/TR_GuidancePN
+    )
+    target_link_libraries(test_guidance_pn GTest::gtest_main)
+    gtest_discover_tests(test_guidance_pn)
+else()
+    message(STATUS "TR_GuidancePN submodule not initialized — skipping test_guidance_pn")
+    message(STATUS "  (to enable: git submodule update --init tinkerrocket-idf/components/TR_GuidancePN)")
+endif()
 
 # ============================================================
 # Phase 3: Data Path Tests (Coordinates, Sensor Converter, LoRa)

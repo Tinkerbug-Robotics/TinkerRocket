@@ -1231,7 +1231,11 @@ static void setup_fc()
     ESP_LOGI(TAG, "Gain scheduling: %s", gain_sched_enabled ? "ON" : "OFF");
     ESP_LOGI(TAG, "Angle control: %s  Roll delay: %u ms",
                   use_angle_control ? "ON" : "OFF", (unsigned)roll_delay_ms);
-    ESP_LOGI(TAG, "PN Guidance: %s", guidance_enabled ? "ON" : "OFF");
+#if TR_GUIDANCE_AVAILABLE
+    ESP_LOGI(TAG, "PN Guidance: %s (compiled in)", guidance_enabled ? "ON" : "OFF");
+#else
+    ESP_LOGW(TAG, "PN Guidance: NOT COMPILED IN (TR_GuidancePN submodule not initialized — stub active)");
+#endif
 
     // Configure guidance and control mixer
     guidance.configure(config::PN_NAV_GAIN,
