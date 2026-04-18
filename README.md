@@ -90,19 +90,21 @@ TinkerRocket/
 │   │   ├── flight_computer/    # Flight computer firmware
 │   │   ├── out_computer/       # Out computer firmware
 │   │   └── base_station/       # Base station firmware
-│   └── components/             # 27 reusable ESP-IDF components
+│   └── components/             # First-party + vendored ESP-IDF components
+│       ├── TR_GpsInsEKF/       # 15-state GPS/INS Extended Kalman Filter
+│       ├── TR_PID/             # PID controller (derivative-on-measurement)
+│       ├── TR_ControlMixer/    # 4-fin cruciform mixing + gain scheduling
+│       ├── TR_GuidancePN/      # Proportional navigation (git submodule)
+│       ├── TR_Coordinates/     # ECEF/LLA/ENU coordinate transforms
+│       ├── TR_KinematicChecks/ # Launch/apogee/landing event detection
+│       ├── TR_Sensor_Data_Converter/ # Raw sensor -> SI unit conversion
+│       ├── TR_RocketComputerTypes/ # Shared packed data structures
+│       ├── TR_Compat/          # Arduino-API shims backed by ESP-IDF
+│       ├── CRC/                # CRC16 for frame integrity
+│       └── ...                 # Sensor drivers, I2S, BLE, LoRa, etc.
 │
-├── libraries/                  # Shared C++ libraries (platform-independent)
-│   ├── TR_GpsInsEKF/           # 16-state GPS/INS Extended Kalman Filter
-│   ├── TR_PID/                 # PID controller (derivative-on-measurement)
-│   ├── TR_ControlMixer/        # 4-fin cruciform mixing + gain scheduling
-│   ├── TR_GuidancePN/          # Proportional navigation (private submodule)
-│   ├── TR_Coordinates/         # ECEF/LLA/ENU coordinate transforms
-│   ├── TR_KinematicChecks/     # Launch/apogee/landing event detection
-│   ├── TR_Sensor_Data_Converter/ # Raw sensor -> SI unit conversion
-│   ├── TR_RocketComputerTypes/ # Shared packed data structures
-│   ├── CRC/                    # CRC16 for frame integrity
-│   └── ...                     # Sensor drivers, I2S, BLE, LoRa, etc.
+├── tests_cpp/                  # GoogleTest host-side unit tests
+│   └── host_shim/              # Arduino.h/compat.h shim for non-IDF builds
 │
 ├── TinkerRocketApp/            # iOS companion app (SwiftUI)
 │
@@ -223,9 +225,9 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 Three GitHub Actions workflows run automatically on push:
 
-- **cpp-tests.yml** -- Triggered by changes to `libraries/`, `tests_cpp/`, or `tests/integration/`
+- **cpp-tests.yml** -- Triggered by changes to `tinkerrocket-idf/components/`, `tests_cpp/`, or `tests/integration/`
 - **firmware-build.yml** -- Full ESP-IDF compilation of `out_computer` and `base_station` (Docker: `espressif/idf:v5.3.2`)
-- **sim-tests.yml** -- Triggered by changes to `tinkerrocket-sim/` or `libraries/`
+- **sim-tests.yml** -- Triggered by changes to `tinkerrocket-sim/` or the component sources it builds from
 - **ios-tests.yml** -- Triggered by changes to `TinkerRocketApp/`
 
 ## Communication Protocols
