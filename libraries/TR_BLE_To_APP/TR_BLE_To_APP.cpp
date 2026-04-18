@@ -963,7 +963,7 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Battery
     addFloat("soc", data.soc, 1);
     addFloat("cur", data.current, 1);
-    addFloat("vol", data.voltage, 1);
+    addFloat("vol", data.voltage, 2);
 
     // GPS
     addDouble("lat", data.latitude, 7);
@@ -1027,7 +1027,7 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
 
     // Base station
     addFloat("bsoc", data.bs_soc, 1);
-    addFloat("bvol", data.bs_voltage, 1);
+    addFloat("bvol", data.bs_voltage, 2);
     addFloat("bcur", data.bs_current, 0);
     addBool("bslog", data.bs_logging_active);
 
