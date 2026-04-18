@@ -912,6 +912,24 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             pressure_alt_rate_mps = (float)latest_non_sensor.baro_alt_rate_dmps * 0.1f;
             updateEulerFromNonSensor();
             updateDerivedSpeedFromNonSensor();
+
+            // Adopt the FlightComputer's live guidance_enabled state (carried
+            // in pyro_status bit 5) as the source of truth. This prevents
+            // divergence between iOS @AppStorage, out_computer's cfg_guidance_en,
+            // and the FC's own NVS if any command push was missed.
+            const bool fc_guidance_en =
+                (latest_non_sensor.pyro_status & PSF_GUIDANCE_ENABLED) != 0;
+            if (fc_guidance_en != cfg_guidance_en)
+            {
+                ESP_LOGW("CFG", "Guidance state resync: out=%s -> fc=%s",
+                         cfg_guidance_en ? "ON" : "OFF",
+                         fc_guidance_en  ? "ON" : "OFF");
+                cfg_guidance_en = fc_guidance_en;
+                Preferences prefs_sync;
+                prefs_sync.begin("guid", false);
+                prefs_sync.putBool("en", cfg_guidance_en);
+                prefs_sync.end();
+            }
         }
     }
     else if (type == POWER_MSG)

@@ -38,14 +38,17 @@ TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
 }
 
 TEST(RocketComputerTypes, PSF_FlagBits_NoOverlap) {
-    uint8_t all = PSF_CH1_CONT | PSF_CH2_CONT | PSF_CH1_FIRED | PSF_CH2_FIRED;
-    // Bits 0-3 used, no overlap
-    EXPECT_EQ(all, 0x0F);
+    uint8_t all = PSF_CH1_CONT | PSF_CH2_CONT | PSF_CH1_FIRED | PSF_CH2_FIRED |
+                  PSF_REBOOT_RECOVERY | PSF_GUIDANCE_ENABLED;
+    // Bits 0-5 used, no overlap
+    EXPECT_EQ(all, 0x3F);
     // Each is a single bit
-    EXPECT_EQ(__builtin_popcount(PSF_CH1_CONT),  1);
-    EXPECT_EQ(__builtin_popcount(PSF_CH2_CONT),  1);
-    EXPECT_EQ(__builtin_popcount(PSF_CH1_FIRED), 1);
-    EXPECT_EQ(__builtin_popcount(PSF_CH2_FIRED), 1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH1_CONT),         1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH2_CONT),         1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH1_FIRED),        1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH2_FIRED),        1);
+    EXPECT_EQ(__builtin_popcount(PSF_REBOOT_RECOVERY),  1);
+    EXPECT_EQ(__builtin_popcount(PSF_GUIDANCE_ENABLED), 1);
 }
 
 TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {

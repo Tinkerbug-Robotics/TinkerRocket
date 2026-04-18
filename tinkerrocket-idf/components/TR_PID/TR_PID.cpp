@@ -57,6 +57,7 @@ float TR_PID::computePID(float setpoint, float actual, float dt_seconds)
         // Save data for next time
         last_error = error;
         last_measurement = actual;
+        d_filtered = 0.0f;
         return 0;
     }
 
@@ -69,7 +70,24 @@ float TR_PID::computePID(float setpoint, float actual, float dt_seconds)
 
     // Derivative-on-measurement to avoid kick on setpoint change.
     // Uses negative sign because d(measurement)/dt opposes d(error)/dt.
-    float D = -Kd * ((actual - last_measurement) / dt);
+    float D_raw = -Kd * ((actual - last_measurement) / dt);
+
+    // Optional 1-pole LP filter on the derivative term to reject high-
+    // frequency measurement noise that would otherwise saturate the PID
+    // output and cause servo flutter. alpha = dt / (dt + tau), where
+    // tau = 1/(2*pi*fc). fc_hz <= 0 disables the filter.
+    float D;
+    if (d_filter_fc_hz > 0.0f)
+    {
+        const float tau   = 1.0f / (2.0f * 3.14159265358979323846f * d_filter_fc_hz);
+        const float alpha = dt / (dt + tau);
+        d_filtered += alpha * (D_raw - d_filtered);
+        D = d_filtered;
+    }
+    else
+    {
+        D = D_raw;
+    }
 
     // Calculate command out
     float command_out = P + I + D;
@@ -96,6 +114,12 @@ void TR_PID::setKd(float kd)
     Kd = kd;
 }
 
+void TR_PID::setDerivativeFilterCutoffHz(float fc_hz)
+{
+    d_filter_fc_hz = (fc_hz > 0.0f) ? fc_hz : 0.0f;
+    d_filtered = 0.0f;
+}
+
 void TR_PID::setMinCmd(float min_in)
 {
     min_cmd = min_in;
@@ -113,6 +137,7 @@ void TR_PID::reset()
     last_measurement = 0.0;
     last_update_time = 0;
     first_call = true;
+    d_filtered = 0.0f;
 }
 
 void TR_PID::resetIntegral()

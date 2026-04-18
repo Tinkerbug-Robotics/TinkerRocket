@@ -152,3 +152,9 @@ void TR_ControlMixer::disableGainSchedule()
     yaw_rate_pid_.setKi(yaw_ki_base_);
     yaw_rate_pid_.setKd(yaw_kd_base_);
 }
+
+void TR_ControlMixer::setDerivativeFilterCutoffHz(float fc_hz)
+{
+    pitch_rate_pid_.setDerivativeFilterCutoffHz(fc_hz);
+    yaw_rate_pid_.setDerivativeFilterCutoffHz(fc_hz);
+}

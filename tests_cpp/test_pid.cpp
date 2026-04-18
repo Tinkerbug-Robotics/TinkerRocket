@@ -145,3 +145,71 @@ TEST_F(PIDTest, GainSetters) {
     // P = 2.0 * 5.0 = 10.0, but measurement unchanged so D ~ 0
     EXPECT_NEAR(out2, MAX, 1e-4f); // clamped at 10
 }
+
+TEST_F(PIDTest, DFilter_DisabledByDefault_MatchesRawDerivative) {
+    // With filter off (default), D term equals raw backward-difference.
+    // Impulse measurement: step from 0 to 1.0 in one sample should give
+    // D = -Kd * 1.0 / DT = -0.1 * 1.0 / 0.01 = -10 (clamped to MIN).
+    TR_PID d_only(0.0f, 0.0f, 0.1f, MAX, MIN);
+    d_only.computePID(0.0f, 0.0f, DT); // init, last_measurement = 0
+    float out = d_only.computePID(0.0f, 1.0f, DT);
+    EXPECT_NEAR(out, MIN, 1e-4f); // clamps
+}
+
+TEST_F(PIDTest, DFilter_Enabled_AttenuatesSingleSampleSpike) {
+    // Same impulse as above, with LPF at 10 Hz and dt=0.01 (100 Hz).
+    // alpha = dt / (dt + 1/(2*pi*10)) = 0.01 / (0.01 + 0.01592) = ~0.386
+    // d_filtered after one step = alpha * D_raw = 0.386 * -10 = -3.86 approx
+    // (unclamped math — output then clamped to [MIN, MAX]).
+    TR_PID d_only(0.0f, 0.0f, 0.1f, MAX, MIN);
+    d_only.setDerivativeFilterCutoffHz(10.0f);
+    d_only.computePID(0.0f, 0.0f, DT); // init
+    float out = d_only.computePID(0.0f, 1.0f, DT);
+    // Filter attenuates the spike - should NOT reach the MIN clamp anymore
+    EXPECT_GT(out, MIN + 1.0f);
+    EXPECT_LT(out, 0.0f);         // still negative (derivative is negative)
+    EXPECT_NEAR(out, -3.86f, 0.1f); // matches first-order IIR math
+}
+
+TEST_F(PIDTest, DFilter_WhiteNoise_ReducesStd) {
+    // Feed both filters (off vs on) the same pseudo-random measurement
+    // series; the filtered output should have much smaller std.
+    auto run = [](bool filtered) {
+        TR_PID p(0.0f, 0.0f, 0.1f, 1e9f, -1e9f); // unclamped
+        if (filtered) p.setDerivativeFilterCutoffHz(10.0f);
+        p.computePID(0.0f, 0.0f, DT);
+        unsigned rng = 0xC0FFEEu;
+        float sum = 0, sumsq = 0; int n = 0;
+        for (int i = 0; i < 500; ++i) {
+            rng = rng * 1103515245u + 12345u;
+            float noise = (int(rng >> 8) % 1000) / 1000.0f - 0.5f; // ±0.5
+            float out = p.computePID(0.0f, noise, DT);
+            sum += out; sumsq += out*out; n++;
+        }
+        float mean = sum/n;
+        float var = sumsq/n - mean*mean;
+        return var;
+    };
+    float var_raw = run(false);
+    float var_filt = run(true);
+    // Filter should cut variance by at least 4x at 10 Hz vs 100 Hz sampling.
+    EXPECT_LT(var_filt * 4.0f, var_raw);
+}
+
+TEST_F(PIDTest, DFilter_Reset_ClearsFilterState) {
+    // After reset, filter state should be cleared so the first post-reset
+    // call doesn't leak state from before.
+    TR_PID p(0.0f, 0.0f, 0.1f, MAX, MIN);
+    p.setDerivativeFilterCutoffHz(10.0f);
+    p.computePID(0.0f, 0.0f, DT);
+    for (int i = 0; i < 20; i++) {
+        p.computePID(0.0f, 1.0f, DT); // drive filter up
+    }
+    p.reset();
+    // First call after reset returns 0 (the first_call path) — verify.
+    float out = p.computePID(0.0f, 0.0f, DT);
+    EXPECT_EQ(out, 0.0f);
+    // Second call: measurement unchanged, so D should be 0 too.
+    out = p.computePID(0.0f, 0.0f, DT);
+    EXPECT_NEAR(out, 0.0f, 1e-6f);
+}

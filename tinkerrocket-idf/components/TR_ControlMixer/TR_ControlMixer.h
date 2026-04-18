@@ -60,6 +60,10 @@ public:
     void enableGainSchedule(float v_ref, float v_min);
     void disableGainSchedule();
 
+    // Apply a 1-pole LP filter on the pitch/yaw D terms to reject gyro
+    // measurement noise. See TR_PID::setDerivativeFilterCutoffHz.
+    void setDerivativeFilterCutoffHz(float fc_hz);
+
 private:
     TR_PID pitch_rate_pid_;
     TR_PID yaw_rate_pid_;
