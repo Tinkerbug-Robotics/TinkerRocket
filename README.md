@@ -113,7 +113,6 @@ TinkerRocket/
 │   ├── cpp/                    # pybind11 bindings for EKF, PID, mixer, guidance
 │   └── tests/                  # Pytest regression suite
 │
-├── tests_cpp/                  # GoogleTest host-side unit tests
 ├── tests/integration/          # Binary log replay integration tests
 ├── preflight/                  # Pre-flight go/no-go checklist
 │
