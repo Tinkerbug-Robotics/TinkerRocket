@@ -14,12 +14,20 @@ MSG_TYPES = {
     0xA2: ("ISM6HG256", 22),
     0xA3: ("BMP585", 12),
     0xA4: ("MMC5983MA", 16),
-    0xA5: ("NON_SENSOR", 42),
+    0xA5: ("NON_SENSOR", 43),
     0xA6: ("POWER", 10),
     0xA7: ("START_LOGGING", 0),
     0xA8: ("END_FLIGHT", 0),
     0xF1: ("LORA", 57),
 }
+
+# NonSensor pyro_status bit masks (must match RocketComputerTypes.h PSF_* constants)
+PSF_CH1_CONT         = 1 << 0
+PSF_CH2_CONT         = 1 << 1
+PSF_CH1_FIRED        = 1 << 2
+PSF_CH2_FIRED        = 1 << 3
+PSF_REBOOT_RECOVERY  = 1 << 4
+PSF_GUIDANCE_ENABLED = 1 << 5  # FC's live guidance_enabled config (bit 5)
 
 def crc16(data):
     """CRC-16 matching RobTillaart CRC library defaults: poly=0x8001, init=0, no reversal."""
@@ -70,7 +78,10 @@ def parse_mag(payload):
     }
 
 def parse_nonsensor(payload):
-    fields = struct.unpack('<I hhhh h iii iii BB h', payload)
+    # Struct: uint32 time, i16*4 quat, i16 roll_cmd, i32*3 pos, i32*3 vel,
+    #         u8 flags, u8 rocket_state, i16 baro_alt_rate_dmps, u8 pyro_status
+    fields = struct.unpack('<I hhhh h iii iii BB h B', payload)
+    pyro_status = fields[15]
     return {
         'time_us': fields[0],
         'q0': fields[1] / 10000.0, 'q1': fields[2] / 10000.0,
@@ -81,6 +92,8 @@ def parse_nonsensor(payload):
         'flags': fields[12],
         'rocket_state': fields[13],
         'baro_alt_rate_ms': fields[14] / 10.0,
+        'pyro_status': pyro_status,
+        'guidance_enabled': bool(pyro_status & PSF_GUIDANCE_ENABLED),
     }
 
 def parse_power(payload):
@@ -201,7 +214,7 @@ def parse_file(path):
             parsed = parse_baro(payload)
         elif msg_type == 0xA4 and msg_len == 16:
             parsed = parse_mag(payload)
-        elif msg_type == 0xA5 and msg_len == 42:
+        elif msg_type == 0xA5 and msg_len == 43:
             parsed = parse_nonsensor(payload)
         elif msg_type == 0xA6 and msg_len == 10:
             parsed = parse_power(payload)
@@ -373,6 +386,23 @@ def parse_file(path):
             print(f"  Apogee flag first set at t={apogee_times[0]:.2f}s")
         if landed_times:
             print(f"  Landed flag first set at t={landed_times[0]:.2f}s")
+
+        # Roll command (deg) — populated by servo_control PID in flight, and
+        # by the standalone roll PID during ground test.
+        roll_cmds = [p['roll_cmd_deg'] for _, p in ns_frames]
+        nonzero_rc = sum(1 for r in roll_cmds if abs(r) > 0.005)
+        print(f"  Roll cmd: {min(roll_cmds):+.2f} to {max(roll_cmds):+.2f} deg "
+              f"({nonzero_rc} samples non-zero)")
+
+        # Live guidance_enabled from FC (pyro_status bit 5). Should be stable
+        # during a session; a flip mid-run indicates a runtime toggle.
+        ge_vals = [p.get('guidance_enabled', False) for _, p in ns_frames]
+        ge_on = sum(1 for v in ge_vals if v)
+        ge_off = len(ge_vals) - ge_on
+        if ge_on and ge_off:
+            print(f"  FC guidance_enabled: MIXED ({ge_on} ON / {ge_off} OFF) — toggled during run")
+        else:
+            print(f"  FC guidance_enabled: {'ON' if ge_on else 'OFF'} (entire run)")
         print()
 
     # === LORA ANALYSIS ===

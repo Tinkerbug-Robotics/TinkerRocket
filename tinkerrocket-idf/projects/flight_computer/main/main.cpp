@@ -197,6 +197,11 @@ static bool mach_locked_out = false;    // promoted from baro block for apogee v
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool guidance_active = false;
 static bool ground_test_active = false;
+// Last roll fin command (deg) produced by the ground-test / guidance paths
+// that bypass servo_control's internal PID. Used to populate
+// NonSensorData.roll_cmd when those paths are active so telemetry reflects
+// what was actually sent to the servos.
+static float last_external_roll_cmd_deg = 0.0f;
 static bool servo_test_active = false;
 static float servo_test_angles[4] = {0, 0, 0, 0};
 static bool servo_replay_active = false;
@@ -1407,6 +1412,15 @@ static void setup_fc()
     }
 
     ESP_LOGI(TAG, "Servo init...");
+    // Derivative-term LPF for every flight-computer PID. Prevents sample-
+    // to-sample gyro noise from being amplified by the D term (raw
+    // backward-difference derivative) into visible servo flutter.
+    //   - roll_rate_pid_standalone: roll null (ground test & boost)
+    //   - servo_control's internal pid: INFLIGHT roll null
+    //   - control_mixer's pitch/yaw rate PIDs: guidance
+    roll_rate_pid_standalone.setDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
+    servo_control.setPIDDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
+    control_mixer.setDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
     // Servo setup — always init hardware if pins valid, gate enabled on NVS.
     if (servoPinsValid())
     {
@@ -2244,7 +2258,15 @@ static void loop_fc()
                 } else {
                     ground_test_active = true;
                     roll_rate_pid_standalone.reset();
-                    ESP_LOGI(TAG, "[GROUND TEST] Started - attitude hold + roll null");
+                    // Loudly report the live mode so a mismatch with what the
+                    // iOS app shows is obvious in the logs. Also report the
+                    // roll-rate deadband so its effect on test behavior is
+                    // obvious from the serial log.
+                    ESP_LOGI(TAG, "[GROUND TEST] Started - mode=%s (guidance_enabled=%s) "
+                                  "roll_rate_deadband=%.2f dps",
+                                  guidance_enabled ? "ATTITUDE_HOLD+ROLL" : "ROLL_ONLY",
+                                  guidance_enabled ? "true" : "false",
+                                  (double)config::GROUND_TEST_ROLL_RATE_DEADBAND_DPS);
                 }
             }
             else if (out_pending_command == GROUND_TEST_STOP)
@@ -2252,6 +2274,7 @@ static void loop_fc()
                 ground_test_active = false;
                 if (servo_enabled) servo_control.stowControl();
                 roll_rate_pid_standalone.reset();
+                last_external_roll_cmd_deg = 0.0f;
                 ESP_LOGI(TAG, "[GROUND TEST] Stopped - servos stowed");
             }
             else if (out_pending_command == GYRO_CAL_CMD)
@@ -2699,9 +2722,23 @@ static void loop_fc()
                 }
                 // else: Roll Only — pitch_fin and yaw_fin stay 0
 
-                // Roll rate nulling (both modes)
+                // Roll rate nulling (both modes).
+                // Apply a deadband on the measurement before the PID: on the
+                // bench the fins have zero aerodynamic authority, so the PID
+                // reacting to gyro noise causes the servos to vibrate the
+                // board, which amplifies the noise into a limit-cycle
+                // oscillation. The deadband breaks that positive-feedback
+                // loop. Real rolling motion is orders of magnitude larger
+                // than the deadband, so legitimate response is unaffected.
+                float gyro_x_db = roll_rate_dps;
+                if (fabsf(gyro_x_db) < config::GROUND_TEST_ROLL_RATE_DEADBAND_DPS)
+                    gyro_x_db = 0.0f;
                 float roll_fin_cmd = roll_rate_pid_standalone.computePID(
-                    config::ROLL_RATE_SET_POINT, -roll_rate_dps);
+                    config::ROLL_RATE_SET_POINT, -gyro_x_db);
+                // Publish the standalone PID output for telemetry — the
+                // servo_control path isn't used here so its cached roll_cmd
+                // would stay zero otherwise.
+                last_external_roll_cmd_deg = roll_fin_cmd;
 
                 // 4-fin cruciform mixing
                 float max_fin = config::PN_MAX_FIN_DEG;
@@ -3154,9 +3191,20 @@ static void loop_fc()
             non_sensor_data.n_vel = (int32_t)lroundf(imu_vel[1] * 100.0f);
             non_sensor_data.u_vel = (int32_t)lroundf(imu_vel[2] * 100.0f);
         }
-        non_sensor_data.roll_cmd = servo_enabled
-                                 ? (int16_t)lroundf(servo_control.getRollCmdDeg() * 100.0f)
-                                 : 0;
+        // During ground test the servo_control internal PID is bypassed —
+        // fins are driven via setServoAngles() — so publish the standalone
+        // roll PID output instead. Otherwise fall back to servo_control's
+        // cached command.
+        {
+            float rc_deg = 0.0f;
+            if (servo_enabled)
+            {
+                rc_deg = ground_test_active
+                       ? last_external_roll_cmd_deg
+                       : servo_control.getRollCmdDeg();
+            }
+            non_sensor_data.roll_cmd = (int16_t)lroundf(rc_deg * 100.0f);
+        }
         non_sensor_data.baro_alt_rate_dmps = (int16_t)lroundf(kinematics.d_alt_est_ * 10.0f);
         non_sensor_data.flags = 0;
         if (kinematics.alt_landed_flag || (rocket_state == LANDED)) non_sensor_data.flags |= NSF_ALT_LANDED;
@@ -3195,6 +3243,11 @@ static void loop_fc()
             if (p1_fired) ps |= PSF_CH1_FIRED;
             if (p2_fired) ps |= PSF_CH2_FIRED;
             if (reboot_recovery_telem) ps |= PSF_REBOOT_RECOVERY;
+            // Always report the live guidance_enabled config so the
+            // OutComputer can use it as the authoritative source of truth
+            // (prevents iOS/OUT/FC NVS caches from silently diverging).
+            ps &= ~PSF_GUIDANCE_ENABLED;
+            if (guidance_enabled) ps |= PSF_GUIDANCE_ENABLED;
             non_sensor_data.pyro_status = ps;
         }
 

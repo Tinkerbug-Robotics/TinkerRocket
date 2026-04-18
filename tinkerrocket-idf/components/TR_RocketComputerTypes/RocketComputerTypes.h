@@ -290,6 +290,10 @@ static constexpr uint8_t PSF_CH2_CONT  = (1u << 1);
 static constexpr uint8_t PSF_CH1_FIRED = (1u << 2);
 static constexpr uint8_t PSF_CH2_FIRED = (1u << 3);
 static constexpr uint8_t PSF_REBOOT_RECOVERY = (1u << 4);  // mid-flight reboot recovery occurred
+// Reuse of this byte for a non-pyro signal: the FlightComputer's live
+// guidance_enabled config. OutComputer uses this as the source of truth
+// to avoid iOS/OUT/FC NVS caches silently diverging.
+static constexpr uint8_t PSF_GUIDANCE_ENABLED = (1u << 5);
 
 typedef struct
 {

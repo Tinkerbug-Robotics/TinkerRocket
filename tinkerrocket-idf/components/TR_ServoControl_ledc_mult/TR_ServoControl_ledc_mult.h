@@ -47,6 +47,9 @@ public:
     void setServoTiming(int hz, int minUs, int maxUs);
     void setPIDGains(float kp, float ki, float kd);
     void setPIDLimits(float minCmd, float maxCmd);
+    // See TR_PID::setDerivativeFilterCutoffHz — rejects measurement noise
+    // on the D term. fc_hz<=0 disables.
+    void setPIDDerivativeFilterCutoffHz(float fc_hz);
 
     // Reset PID internal state (for replay / test sessions)
     void resetPID();

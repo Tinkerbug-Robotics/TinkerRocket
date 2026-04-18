@@ -30,6 +30,14 @@ public:
     // Set derivative gain
     void setKd(float Kd);
 
+    // Configure a 1-pole low-pass filter on the derivative term. Raw
+    // backward-difference derivatives amplify measurement noise (sample-to-
+    // sample jitter divided by a small dt); this filter rejects that HF
+    // noise while preserving phase lead at the frequencies that matter for
+    // closed-loop damping. Set fc_hz > 0 to enable, 0 to disable (default).
+    // Typical value: 5-20 Hz for PIDs running at ~500 Hz.
+    void setDerivativeFilterCutoffHz(float fc_hz);
+
     // Set output limits
     void setMinCmd(float min_in);
     void setMaxCmd(float max_in);
@@ -64,6 +72,11 @@ protected:
     // Min and max allowable controller outputs
     float max_cmd;
     float min_cmd;
+
+    // D-term low-pass filter state. d_filter_fc_hz <= 0 disables filtering
+    // (output equals raw backward-difference derivative).
+    float d_filter_fc_hz = 0.0f;
+    float d_filtered     = 0.0f;
 
 };
 

@@ -114,6 +114,13 @@ struct config
     static constexpr float KD = 0.0003f;
     static constexpr float MIN_CMD = -10.0f;
     static constexpr float MAX_CMD = 10.0f;
+    // 1-pole LP filter cutoff on the PID D-term. The raw backward-difference
+    // derivative amplifies sample-to-sample gyro noise (≈1 dps Δ / 2 ms =
+    // 500 dps/s "rate") into visible servo flutter even when the rocket is
+    // barely moving. Cutoff sits well above the 2.2 Hz crossover from the
+    // flight tune so damping is preserved, but below the 100+ Hz noise
+    // floor. 0 disables the filter (legacy behavior).
+    static constexpr float D_FILTER_CUTOFF_HZ = 10.0f;
 
     static constexpr bool USE_SERVO_CONTROL = true;
     static constexpr bool SERVO_WIGGLE_ON_BOOT = true;
@@ -198,6 +205,15 @@ struct config
     static constexpr float GROUND_TEST_TILT_GAIN = 10.0f;
     // Accel-to-fin gain used on the ground (same as flight accel_to_fin_deg)
     static constexpr float GROUND_TEST_ACCEL_TO_FIN = 4.0f;
+    // Roll-rate deadband (dps) for the ground-test roll PID input.
+    // On the bench there is no aerodynamic damping, so the PID will react
+    // to IMU noise with fin commands, the servo motion vibrates the board,
+    // the gyro sees more noise, and a positive-feedback limit cycle can
+    // drive the output to the ±MAX_CMD clamp even with the rocket still.
+    // Zeroing the rate below this threshold breaks the feedback loop.
+    // Stationary gyro noise is ~0.1 dps; any real roll you care about is
+    // many tens of dps — 2 dps is well clear of noise and far below signal.
+    static constexpr float GROUND_TEST_ROLL_RATE_DEADBAND_DPS = 2.0f;
 
     // ### Indicators (Piezo and LED) ###
     static constexpr bool ENABLE_SOUNDS = false;
