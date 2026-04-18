@@ -109,18 +109,12 @@ target_link_libraries(test_control_mixer GTest::gtest_main)
 gtest_discover_tests(test_control_mixer)
 
 # ---------- test_guidance_pn ----------
-# TRANSITIONAL: TR_GuidancePN still sourced from the legacy libraries/
-# tree because tinkerrocket-idf/components/TR_GuidancePN is not yet
-# properly registered in git (loose files only; .gitmodules entry is
-# a stub). Will switch to components/ once the submodule is set up
-# correctly — tracked alongside the libraries/ deletion PR.
-set(LEGACY_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libraries")
 add_executable(test_guidance_pn test_guidance_pn.cpp
-    ${LEGACY_LIB_DIR}/TR_GuidancePN/TR_GuidancePN.cpp
+    ${LIB_DIR}/TR_GuidancePN/TR_GuidancePN.cpp
 )
 target_include_directories(test_guidance_pn PRIVATE
     ${SHIM_DIR}
-    ${LEGACY_LIB_DIR}/TR_GuidancePN
+    ${LIB_DIR}/TR_GuidancePN
 )
 target_link_libraries(test_guidance_pn GTest::gtest_main)
 gtest_discover_tests(test_guidance_pn)
