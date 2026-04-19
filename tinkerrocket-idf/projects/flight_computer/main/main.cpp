@@ -3356,6 +3356,37 @@ static void loop_fc()
             dbg_bmp_reads = 0;
             dbg_mmc_reads = 0;
             dbg_gnss_reads = 0;
+
+            // MMC5983MA-specific diagnostic — we've been seeing mmc=0 reads/s
+            // with no visible cause from the [SENSOR] line alone. This surfaces
+            // the internal counters already maintained by TR_Sensor_Collector
+            // so we can tell where MMC data is getting stuck:
+            //   isr      = data-ready interrupts fired (ideally ~200/s)
+            //   proc     = ISR handler woke the task (should match isr)
+            //   read_ok  = SPI readFieldsXYZ returned true
+            //   read_fail= SPI read error
+            //   clr_ok/f = interrupt-clear SPI ops
+            //   lost     = stall-recovery tripped (sensor went silent)
+            //   rec ok/a = recovery-reinit attempts / successes
+            //   int_pin  = live state of MMC5983MA INT line
+            {
+                static MMC5983MADebugSnapshot prev_mmc_snap = {};
+                MMC5983MADebugSnapshot now_mmc_snap;
+                sensor_collector.getMMC5983MADebugSnapshot(now_mmc_snap);
+                ESP_LOGI(TAG, "[MMC DIAG] isr=%lu proc=%lu read ok/fail=%lu/%lu clr ok/fail=%lu/%lu "
+                              "lost=%lu rec %lu/%lu int_pin=%d",
+                              (unsigned long)(now_mmc_snap.isr_hits         - prev_mmc_snap.isr_hits),
+                              (unsigned long)(now_mmc_snap.process_hits     - prev_mmc_snap.process_hits),
+                              (unsigned long)(now_mmc_snap.read_ok          - prev_mmc_snap.read_ok),
+                              (unsigned long)(now_mmc_snap.read_fail        - prev_mmc_snap.read_fail),
+                              (unsigned long)(now_mmc_snap.clear_ok         - prev_mmc_snap.clear_ok),
+                              (unsigned long)(now_mmc_snap.clear_fail       - prev_mmc_snap.clear_fail),
+                              (unsigned long)(now_mmc_snap.cmm_lost_hits    - prev_mmc_snap.cmm_lost_hits),
+                              (unsigned long)(now_mmc_snap.recovery_success - prev_mmc_snap.recovery_success),
+                              (unsigned long)(now_mmc_snap.recovery_attempts- prev_mmc_snap.recovery_attempts),
+                              gpio_get_level((gpio_num_t)config::MMC5983MA_INT));
+                prev_mmc_snap = now_mmc_snap;
+            }
         }
     }
 
