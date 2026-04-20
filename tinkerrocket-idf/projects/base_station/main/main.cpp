@@ -5,6 +5,7 @@
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
 #include <esp_vfs_fat.h>
+#include <esp_spiffs.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
 #include <driver/i2c_master.h>
@@ -22,6 +23,7 @@
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
+#include <TR_MAX17205G.h>
 #include <RocketComputerTypes.h>
 
 static const char* TAG = "BS";
@@ -54,7 +56,8 @@ static float bs_current = NAN;
 static float bs_temperature = NAN;
 static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
-static i2c_master_dev_handle_t max17205_dev = nullptr;
+static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
+static bool fuel_gauge_present = false;
 
 // Servo/PID config cache (for BLE readback — mirrors what was sent to rocket)
 static int16_t cfg_servo_bias1 = 0;
@@ -80,9 +83,14 @@ static uint8_t  uplink_retries_left = 0;
 static uint32_t uplink_last_tx_ms = 0;
 static bool     uplink_pending = false;
 
-// SDMMC mount state
+// Storage mount state. Preferred backend is SD over SDMMC; if that fails at boot
+// we fall back to SPIFFS on internal flash (partitions.csv: "spiffs", ~5 MB).
+// The pointer is reassigned to /flash on fallback so all downstream paths
+// (logger, BLE file list/delete/download) keep working via VFS unchanged.
 static const char* SD_MOUNT_POINT = "/sdcard";
 static sdmmc_card_t* sd_card = nullptr;
+static bool using_internal_flash = false;
+static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
 // CSV logging state
 static FILE* log_file = nullptr;
@@ -154,38 +162,17 @@ static uint8_t  sync_month = 0, sync_day = 0;
 static uint8_t  sync_hour = 0, sync_minute = 0, sync_second = 0;
 
 // ── MAX17205G fuel gauge helpers ──
-
-static bool max17205_readReg16(uint8_t reg, uint16_t& value)
-{
-    if (max17205_dev == nullptr) return false;
-    uint8_t buf[2] = {};
-    esp_err_t err = i2c_master_transmit_receive(max17205_dev, &reg, 1, buf, 2, pdMS_TO_TICKS(100));
-    if (err != ESP_OK) return false;
-    value = ((uint16_t)buf[1] << 8) | buf[0];
-    return true;
-}
-
+// The chip is read/configured through the TR_MAX17205G component.
+// updateBattery() fans the latest readings into the global fields used by
+// the BLE telemetry builder.
 static void updateBattery()
 {
-    if (max17205_dev == nullptr) return;
-
-    uint16_t raw;
-
-    // Pack voltage from VCell register (lowest cell × nCells)
-    if (max17205_readReg16(0x09, raw))
-        bs_voltage = (float)raw * 0.078125f * config::NUM_BATTERY_CELLS / 1000.0f;
-
-    // State of charge (%)
-    if (max17205_readReg16(0x06, raw))
-        bs_soc = (float)raw / 256.0f;
-
-    // Current (mA) — signed
-    if (max17205_readReg16(0x0A, raw))
-        bs_current = (float)(int16_t)raw * 1.5625e-3f / (config::RSENSE_MOHM * 1e-3f);
-
-    // Temperature (°C) — signed
-    if (max17205_readReg16(0x08, raw))
-        bs_temperature = (float)(int16_t)raw / 256.0f;
+    if (!fuel_gauge_present) return;
+    fuel_gauge.update();
+    bs_voltage     = fuel_gauge.voltage();
+    bs_soc         = fuel_gauge.soc();
+    bs_current     = fuel_gauge.current();
+    bs_temperature = fuel_gauge.temperature();
 }
 
 // ============================================================================
@@ -340,22 +327,36 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
 {
     if (!logging_active) return;
 
-    // Periodic flash usage check (every 100 writes)
+    // Periodic storage usage check (every 100 writes)
     if (++log_write_count % 100 == 0)
     {
-        FATFS* fs;
-        DWORD free_clust;
-        if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+        uint64_t total = 0, used = 0;
+        if (using_internal_flash)
         {
-            uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
-            uint64_t free_bytes = (uint64_t)free_clust * fs->csize * 512;
-            uint64_t used = total - free_bytes;
-            if (total > 0 && used > (total * 9 / 10))
+            size_t t = 0, u = 0;
+            if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &t, &u) == ESP_OK)
             {
-                ESP_LOGW(TAG, "[LOG] SD card nearly full! %llu/%llu bytes (%.0f%%)",
-                         (unsigned long long)used, (unsigned long long)total,
-                         (double)used * 100.0 / (double)total);
+                total = t;
+                used  = u;
             }
+        }
+        else
+        {
+            FATFS* fs;
+            DWORD free_clust;
+            if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+            {
+                total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
+                uint64_t free_bytes = (uint64_t)free_clust * fs->csize * 512;
+                used = total - free_bytes;
+            }
+        }
+        if (total > 0 && used > (total * 9 / 10))
+        {
+            ESP_LOGW(TAG, "[LOG] %s nearly full! %llu/%llu bytes (%.0f%%)",
+                     using_internal_flash ? "Internal flash" : "SD card",
+                     (unsigned long long)used, (unsigned long long)total,
+                     (double)used * 100.0 / (double)total);
         }
     }
 
@@ -886,13 +887,13 @@ static void setup_bs()
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
     ESP_LOGI(TAG, "======================================");
 
-    // Initialize SD card (SDMMC 4-bit mode) via ESP-IDF VFS
+    // Initialize storage: prefer SD (SDMMC 4-bit), fall back to SPIFFS on internal flash.
     {
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
         sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-        slot.width = 4;  // 4-bit mode
+        slot.width = 4;
         slot.clk = (gpio_num_t)config::SD_CLK;
         slot.cmd = (gpio_num_t)config::SD_CMD;
         slot.d0  = (gpio_num_t)config::SD_D0;
@@ -908,13 +909,7 @@ static void setup_bs()
 
         esp_err_t ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot,
                                                  &mount_cfg, &sd_card);
-        if (ret != ESP_OK)
-        {
-            ESP_LOGE(TAG, "SD card mount FAILED (0x%x)! Check card is inserted and FAT32 formatted.",
-                     (int)ret);
-            sd_card = nullptr;
-        }
-        else
+        if (ret == ESP_OK)
         {
             sdmmc_card_print_info(stdout, sd_card);
 
@@ -930,8 +925,45 @@ static void setup_bs()
                          (unsigned long long)(used / (1024 * 1024)),
                          (unsigned long long)(free_bytes / (1024 * 1024)));
             }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "SD card mount failed (0x%x) — falling back to internal flash (SPIFFS)",
+                     (int)ret);
+            sd_card = nullptr;
 
-            // Verify SD card is writable
+            esp_vfs_spiffs_conf_t spiffs_conf = {};
+            spiffs_conf.base_path              = "/flash";
+            spiffs_conf.partition_label        = SPIFFS_PARTITION_LABEL;
+            spiffs_conf.max_files              = 5;
+            spiffs_conf.format_if_mount_failed = true;
+
+            esp_err_t sret = esp_vfs_spiffs_register(&spiffs_conf);
+            if (sret != ESP_OK)
+            {
+                ESP_LOGE(TAG, "SPIFFS fallback mount FAILED (0x%x) — no logging available",
+                         (int)sret);
+            }
+            else
+            {
+                SD_MOUNT_POINT = "/flash";
+                using_internal_flash = true;
+
+                size_t total = 0, used = 0;
+                if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &total, &used) == ESP_OK)
+                {
+                    ESP_LOGI(TAG, "SPIFFS mounted at %s: %u KB total, %u KB used, %u KB free",
+                             SD_MOUNT_POINT,
+                             (unsigned)(total / 1024),
+                             (unsigned)(used / 1024),
+                             (unsigned)((total - used) / 1024));
+                }
+            }
+        }
+
+        // Write test covers both backends
+        if (sd_card || using_internal_flash)
+        {
             char test_path[48];
             snprintf(test_path, sizeof(test_path), "%s/.write_test", SD_MOUNT_POINT);
             FILE* test = fopen(test_path, "w");
@@ -940,11 +972,12 @@ static void setup_bs()
                 fprintf(test, "ok\n");
                 fclose(test);
                 remove(test_path);
-                ESP_LOGI(TAG, "SD card write test: OK");
+                ESP_LOGI(TAG, "Storage write test: OK (%s)",
+                         using_internal_flash ? "internal flash" : "SD card");
             }
             else
             {
-                ESP_LOGE(TAG, "SD card write test FAILED! errno=%d (%s) — card may be write-protected",
+                ESP_LOGE(TAG, "Storage write test FAILED! errno=%d (%s)",
                          errno, strerror(errno));
             }
         }
@@ -961,24 +994,32 @@ static void setup_bs()
         bus_cfg.flags.enable_internal_pullup = false;
 
         esp_err_t err = i2c_new_master_bus(&bus_cfg, &i2c_bus);
-        if (err == ESP_OK)
+        if (err == ESP_OK &&
+            i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
         {
-            i2c_device_config_t dev_cfg = {};
-            dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-            dev_cfg.device_address  = config::MAX17205_ADDR;
-            dev_cfg.scl_speed_hz    = config::I2C_FREQ_HZ;
-            err = i2c_master_bus_add_device(i2c_bus, &dev_cfg, &max17205_dev);
-        }
+            TR_MAX17205G_Config fg_cfg;
+            fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
+            fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
+            fg_cfg.current_invert = true;   // R_SENSE reversed on this board
+            fg_cfg.num_cells      = config::NUM_BATTERY_CELLS;
 
-        if (err == ESP_OK && i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
-        {
-            ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
-            updateBattery();
+            if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+            {
+                fuel_gauge_present = true;
+                ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
+                fuel_gauge.initIfNeeded();
+                updateBattery();
+                ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
+                         (double)bs_voltage, (double)bs_soc, (double)bs_current);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "MAX17205G probe succeeded but begin() failed");
+            }
         }
         else
         {
             ESP_LOGW(TAG, "MAX17205G not found — battery readings unavailable");
-            max17205_dev = nullptr;
         }
     }
 
@@ -1272,17 +1313,25 @@ static void loop_bs()
         // Re-send last-known rocket telemetry so battery/RSSI stay up to date.
         if (ble_app.isConnected())
         {
+            TR_BLE_To_APP::TelemetryData ble_telem = {};
             auto& tr = tracked_rockets[active_rocket_idx];
             if (tr.active)
             {
-                TR_BLE_To_APP::TelemetryData ble_telem = {};
                 buildBLETelemetry(tr.last_data, tr.last_rssi, tr.last_snr,
                                   tr.last_lat_deg, tr.last_lon_deg, tr.last_alt_m, ble_telem);
                 if (tr.unit_name[0]) {
                     ble_telem.source_unit_name = tr.unit_name;
                 }
-                ble_app.sendTelemetry(ble_telem);
             }
+            else
+            {
+                // No rocket tracked — publish base-station-only fields so the
+                // app still sees BS battery/logging state. Rocket-side fields
+                // stay NaN/zero.
+                LoRaDataSI empty = {};
+                buildBLETelemetry(empty, NAN, NAN, NAN, NAN, NAN, ble_telem);
+            }
+            ble_app.sendTelemetry(ble_telem);
         }
     }
 
