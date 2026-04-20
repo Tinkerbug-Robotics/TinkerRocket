@@ -1397,13 +1397,16 @@ struct ControlsView: View {
             Button(action: {
                 device.sendCommand(23)
             }) {
+                // Cmd 23 starts/stops logging on BOTH rocket and base station, so
+                // reflect "logging in progress" if either side reports active.
+                let isLogging = device.telemetry.logging_active || device.telemetry.bs_logging_active
                 HStack {
-                    Image(systemName: device.telemetry.logging_active ? "stop.circle.fill" : "record.circle")
-                    Text(device.telemetry.logging_active ? "Stop Logging" : "Start Logging")
+                    Image(systemName: isLogging ? "stop.circle.fill" : "record.circle")
+                    Text(isLogging ? "Stop Logging" : "Start Logging")
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(device.telemetry.logging_active ? Color.red : Color.orange)
+                .background(isLogging ? Color.red : Color.orange)
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }

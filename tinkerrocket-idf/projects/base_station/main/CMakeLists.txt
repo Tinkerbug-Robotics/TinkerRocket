@@ -9,10 +9,12 @@ idf_component_register(
         TR_Coordinates
         TR_BLE_To_APP
         TR_LoRa_Comms
+        TR_MAX17205G
         driver
         esp_timer
         fatfs
         sdmmc
+        spiffs
         vfs
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)

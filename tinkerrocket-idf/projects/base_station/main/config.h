@@ -63,4 +63,8 @@ namespace config
     static constexpr int      NUM_BATTERY_CELLS  = 2;        // 2S NCR18650B
     static constexpr float    RSENSE_MOHM        = 10.0f;    // Sense resistor (mΩ)
     static constexpr uint32_t PWR_UPDATE_PERIOD_MS = 2000;   // Battery read interval
+    // Pack design capacity in mAh. Two 2800 mAh 18650 cells in 2S = 2800 mAh
+    // (series doubles voltage, capacity stays per-cell). Written to MAX17205
+    // DesignCap at boot to seed the ModelGauge m5 algorithm.
+    static constexpr uint16_t BATTERY_DESIGN_MAH = 2800;
 }
