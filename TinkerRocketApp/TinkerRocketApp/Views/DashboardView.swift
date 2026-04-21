@@ -21,6 +21,7 @@ enum DashboardSheet: Identifiable {
     case settings
     case servoTest
     case driftCast
+    case frequencyScan
 
     var id: Int { hashValue }
 }
@@ -185,6 +186,8 @@ struct DashboardView: View {
                     ServoTestView(device: device)
                 case .driftCast:
                     DriftCastView(device: device)
+                case .frequencyScan:
+                    NavigationView { FrequencyScanView(device: device) }
                 }
             }
         }
@@ -1529,6 +1532,24 @@ struct TestingControlsView: View {
                     .cornerRadius(10)
                 }
                 .disabled(!canStartGroundTest)
+
+                // Frequency Scan (base station radio only)
+                if device.isBaseStation {
+                    Button {
+                        activeSheet = .frequencyScan
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform.badge.magnifyingglass")
+                            Text("Frequency Scan")
+                        }
+                        .font(.system(.body, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(.white)
+                        .background(Color.purple)
+                        .cornerRadius(10)
+                    }
+                }
             }
         }
         .padding()

@@ -836,6 +836,32 @@ void TR_BLE_To_APP::sendFileList(const String& files_json)
              (unsigned)file_list_json_.length(), (unsigned long)file_list_send_count);
 }
 
+void TR_BLE_To_APP::sendScanResults(float start_mhz, float step_khz,
+                                     const int8_t* rssi, uint8_t n)
+{
+    if (!device_connected_ || rssi == nullptr) return;
+
+    uint8_t buf[10 + 128];
+    buf[0] = 0xAA;
+    memcpy(&buf[1], &start_mhz, 4);
+    memcpy(&buf[5], &step_khz,  4);
+    buf[9] = n;
+    for (uint8_t i = 0; i < n; ++i)
+    {
+        buf[10 + i] = (uint8_t)rssi[i];
+    }
+    const size_t total = 10u + (size_t)n;
+
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, total);
+    if (rc != 0)
+    {
+        ESP_LOGW(BLE_TAG, "Scan result notify failed, rc=%d", rc);
+        return;
+    }
+    ESP_LOGI(BLE_TAG, "Sent scan results (%u bytes, %u samples)",
+             (unsigned)total, (unsigned)n);
+}
+
 void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
                                    size_t len, bool eof)
 {

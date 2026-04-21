@@ -1617,6 +1617,52 @@ static void loop_bs()
                      inner_cmd, target_rid, (unsigned)inner_len);
         }
     }
+    else if (ble_cmd == 60)
+    {
+        // Frequency scan (base-station radio, pre-launch collision avoidance).
+        // Payload: [start_mhz f32][stop_mhz f32][step_khz u16][dwell_ms u16]
+        // All fields are little-endian.  A scan blocks normal LoRa RX for
+        // the scan duration — explicitly user-initiated and short (~1-3 s).
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen >= 12)
+        {
+            float start_mhz, stop_mhz;
+            uint16_t step_khz, dwell_ms;
+            memcpy(&start_mhz, payload + 0, 4);
+            memcpy(&stop_mhz,  payload + 4, 4);
+            memcpy(&step_khz,  payload + 8, 2);
+            memcpy(&dwell_ms,  payload + 10, 2);
+
+            if (lora_comms.startScan(start_mhz, stop_mhz, step_khz, dwell_ms))
+            {
+                ESP_LOGI(TAG, "[BLE] Scan started: %.1f..%.1f MHz, %u kHz, %u ms",
+                         (double)start_mhz, (double)stop_mhz,
+                         (unsigned)step_khz, (unsigned)dwell_ms);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "[BLE] Scan start rejected (busy or invalid range)");
+            }
+        }
+    }
+
+    // Service scan state machine (no-op when idle).  Must come before
+    // serviceUplink so a TX retry doesn't fire while we're mid-scan — the
+    // scan temporarily owns the radio's frequency.
+    lora_comms.serviceScan();
+    if (lora_comms.isScanDone())
+    {
+        const auto* samples = lora_comms.getScanSamples();
+        const size_t n = lora_comms.getScanSampleCount();
+        int8_t rssi[TR_LoRa_Comms::SCAN_MAX_SAMPLES];
+        const size_t n_send = (n > TR_LoRa_Comms::SCAN_MAX_SAMPLES) ? TR_LoRa_Comms::SCAN_MAX_SAMPLES : n;
+        for (size_t i = 0; i < n_send; ++i) rssi[i] = samples[i].rssi_dbm;
+        ble_app.sendScanResults(lora_comms.getScanStartMHz(),
+                                lora_comms.getScanStepKHz(),
+                                rssi, (uint8_t)n_send);
+        lora_comms.consumeScanDone();
+    }
 
     // Service LoRa uplink retries (TX commands, then resume RX)
     serviceUplink();
