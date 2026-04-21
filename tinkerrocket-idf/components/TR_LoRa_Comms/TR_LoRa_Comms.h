@@ -66,6 +66,29 @@ public:
     // Runtime reconfiguration (LLCC68: must set BW before SF)
     bool reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power);
 
+    // ---- Spectrum scan (pre-launch collision avoidance) ------------------
+    // Non-blocking channel-hopping RSSI scan. Step through a frequency range,
+    // dwell in RX mode for `dwell_ms` per channel, then read instantaneous
+    // RSSI.  Call serviceScan() from the main loop each iteration until
+    // isScanDone() returns true.  While active, normal RX is suspended; the
+    // previous frequency is restored on completion.
+    static constexpr size_t SCAN_MAX_SAMPLES = 128;
+    struct ScanSample
+    {
+        float  freq_mhz;
+        int8_t rssi_dbm;   // clamped to int8 (−128..0 dBm is well outside useful range)
+    };
+
+    bool startScan(float start_mhz, float stop_mhz, uint16_t step_khz, uint16_t dwell_ms);
+    void serviceScan();
+    bool isScanActive() const { return scan_state_ != ScanState::Idle && scan_state_ != ScanState::Done; }
+    bool isScanDone() const   { return scan_state_ == ScanState::Done; }
+    void consumeScanDone()    { scan_state_ = ScanState::Idle; }
+    size_t getScanSampleCount() const { return scan_count_; }
+    const ScanSample* getScanSamples() const { return scan_samples_; }
+    float getScanStartMHz() const { return scan_start_mhz_; }
+    float getScanStepKHz()  const { return scan_step_khz_; }
+
 private:
     static void IRAM_ATTR onDio1ISR();
 
@@ -91,4 +114,16 @@ private:
     Module* module_ = nullptr;
     LLCC68* radio_ = nullptr;
     Stats stats_ = {};
+
+    // ---- Scan state ------------------------------------------------------
+    enum class ScanState : uint8_t { Idle, SetFreq, Dwell, Done };
+    ScanState scan_state_    = ScanState::Idle;
+    uint16_t  scan_idx_      = 0;
+    uint16_t  scan_n_steps_  = 0;
+    uint16_t  scan_dwell_ms_ = 30;
+    uint32_t  scan_dwell_start_ms_ = 0;
+    float     scan_start_mhz_ = 0.0f;
+    float     scan_step_khz_  = 0.0f;
+    size_t    scan_count_    = 0;
+    ScanSample scan_samples_[SCAN_MAX_SAMPLES] = {};
 };

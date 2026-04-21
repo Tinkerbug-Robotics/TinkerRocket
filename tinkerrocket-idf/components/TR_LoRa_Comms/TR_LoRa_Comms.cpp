@@ -406,6 +406,119 @@ rollback:
 }
 
 // ============================================================================
+// Spectrum scan
+// ============================================================================
+
+bool TR_LoRa_Comms::startScan(float start_mhz, float stop_mhz, uint16_t step_khz, uint16_t dwell_ms)
+{
+    if (!enabled_ || radio_ == nullptr) return false;
+    if (scan_state_ != ScanState::Idle) return false;  // already scanning or result pending
+    if (step_khz == 0 || stop_mhz <= start_mhz) return false;
+
+    // Clamp dwell to a reasonable range.  Below ~5 ms the receiver front end
+    // hasn't fully settled after setFrequency, so RSSI readings drift high.
+    if (dwell_ms < 5)   dwell_ms = 5;
+    if (dwell_ms > 500) dwell_ms = 500;
+
+    const float span_khz = (stop_mhz - start_mhz) * 1000.0f;
+    uint32_t n = (uint32_t)(span_khz / (float)step_khz) + 1;
+    if (n > SCAN_MAX_SAMPLES) n = SCAN_MAX_SAMPLES;
+
+    // Refuse to scan while TX is still in flight — setFrequency mid-transmit
+    // corrupts the packet and can leave the radio in an undefined state.
+    if (tx_ongoing_) return false;
+
+    rx_mode_ = false;
+    rx_done_ = false;
+
+    scan_start_mhz_ = start_mhz;
+    scan_step_khz_  = (float)step_khz;
+    scan_n_steps_   = (uint16_t)n;
+    scan_idx_       = 0;
+    scan_dwell_ms_  = dwell_ms;
+    scan_count_     = 0;
+    scan_state_     = ScanState::SetFreq;
+
+    if (debug_)
+    {
+        ESP_LOGI(TAG, "Scan start: %.1f → %.1f MHz, %u kHz step, %u ms dwell, %u steps",
+                 (double)start_mhz, (double)stop_mhz,
+                 (unsigned)step_khz, (unsigned)dwell_ms, (unsigned)n);
+    }
+    return true;
+}
+
+void TR_LoRa_Comms::serviceScan()
+{
+    if (!enabled_ || radio_ == nullptr) return;
+    if (scan_state_ == ScanState::Idle || scan_state_ == ScanState::Done) return;
+
+    switch (scan_state_)
+    {
+        case ScanState::SetFreq:
+        {
+            const float f = scan_start_mhz_ + (scan_step_khz_ * (float)scan_idx_) / 1000.0f;
+            int16_t st = radio_->setFrequency(f);
+            if (st != RADIOLIB_ERR_NONE)
+            {
+                stats_.last_error = st;
+                // Record a sentinel and skip to next channel.
+                if (scan_count_ < SCAN_MAX_SAMPLES)
+                {
+                    scan_samples_[scan_count_++] = { f, -128 };
+                }
+                scan_idx_++;
+            }
+            else
+            {
+                // Enter RX so the front end is active and RSSI is meaningful.
+                (void)radio_->startReceive();
+                scan_dwell_start_ms_ = millis();
+                scan_state_ = ScanState::Dwell;
+            }
+            break;
+        }
+        case ScanState::Dwell:
+        {
+            if ((millis() - scan_dwell_start_ms_) >= scan_dwell_ms_)
+            {
+                const float rssi = radio_->getRSSI(false);  // instantaneous, not packet
+                int rssi_i = (int)rssi;
+                if (rssi_i < -128) rssi_i = -128;
+                if (rssi_i >  127) rssi_i =  127;
+                const float f = scan_start_mhz_ + (scan_step_khz_ * (float)scan_idx_) / 1000.0f;
+                if (scan_count_ < SCAN_MAX_SAMPLES)
+                {
+                    scan_samples_[scan_count_++] = { f, (int8_t)rssi_i };
+                }
+                scan_idx_++;
+                if (scan_idx_ >= scan_n_steps_)
+                {
+                    // Restore the operating frequency and return to RX so
+                    // normal comms with the OutComputer resume.
+                    (void)radio_->setFrequency(cfg_freq_mhz_);
+                    (void)radio_->startReceive();
+                    rx_mode_ = true;
+                    scan_state_ = ScanState::Done;
+                    if (debug_)
+                    {
+                        ESP_LOGI(TAG, "Scan done: %u samples, restored %.1f MHz",
+                                 (unsigned)scan_count_, (double)cfg_freq_mhz_);
+                    }
+                }
+                else
+                {
+                    scan_state_ = ScanState::SetFreq;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// ============================================================================
 // ISR
 // ============================================================================
 

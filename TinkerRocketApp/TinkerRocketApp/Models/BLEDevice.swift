@@ -47,6 +47,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var connectedRSSI: Int?
     @Published var rocketConfig: RocketConfig?
 
+    // Frequency scan state (base-station pre-launch collision avoidance)
+    @Published var scanSamples: [FrequencyScanSample] = []
+    @Published var isScanning: Bool = false
+
     // MARK: - Device identity (populated from config_identity readback)
 
     @Published var unitID: String = ""      // e.g. "a1b2c3d4" (immutable hardware ID)
@@ -185,6 +189,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         data.append(payload)
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
         print("Sent command \(command) with \(payload.count) bytes payload")
+    }
+
+    /// Kick off a base-station frequency scan.  Clears any previous results
+    /// and flips `isScanning` true; the result arrives asynchronously on the
+    /// FILE_OPS characteristic and resets `isScanning` when parsed.
+    func startFrequencyScan(startMHz: Float, stopMHz: Float, stepKHz: UInt16, dwellMs: UInt16) {
+        var payload = Data()
+        var start = startMHz
+        var stop  = stopMHz
+        var step  = stepKHz
+        var dwell = dwellMs
+        payload.append(Data(bytes: &start, count: 4))
+        payload.append(Data(bytes: &stop,  count: 4))
+        payload.append(Data(bytes: &step,  count: 2))
+        payload.append(Data(bytes: &dwell, count: 2))
+        scanSamples = []
+        isScanning = true
+        sendRawCommand(60, payload: payload)
     }
 
     func sendLoRaConfig(freqMHz: Float, bwKHz: Float, sf: UInt8, cr: UInt8, txPower: Int8) {
@@ -733,7 +755,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if characteristic.uuid == telemetryCharUUID {
             parseTelemetryData(characteristic.value)
         } else if characteristic.uuid == fileOpsCharUUID {
-            if let data = characteristic.value { parseFileList(data) }
+            if let data = characteristic.value {
+                // Scan results use a 0xAA binary prefix; JSON responses start
+                // with '{' or '[' so the first byte is enough to disambiguate.
+                if data.first == 0xAA {
+                    parseScanResult(data)
+                } else {
+                    parseFileList(data)
+                }
+            }
         } else if characteristic.uuid == fileTransferCharUUID {
             if let data = characteristic.value { handleFileChunk(data) }
         }
@@ -859,6 +889,45 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if let i = value as? Int { return Float(i) }
         if let s = value as? String { return Float(s) }
         return nil
+    }
+
+    /// Parse the base-station scan-result binary blob.
+    /// Format: [0xAA][start_mhz f32][step_khz f32][n u8][rssi i8 × n]
+    /// Floats live at unaligned offsets (1 and 5), so we use `loadUnaligned`
+    /// — plain `load` there is undefined behaviour and was silently failing.
+    /// We copy into a `[UInt8]` first so indexing is always zero-based, which
+    /// avoids the `Data` slice-startIndex footgun if CoreBluetooth ever hands
+    /// us a sliced buffer.
+    private func parseScanResult(_ data: Data) {
+        print("[SCAN] parseScanResult: \(data.count) bytes, first=\(data.first.map { String(format: "0x%02X", $0) } ?? "nil")")
+        let bytes = [UInt8](data)
+        guard bytes.count >= 10, bytes[0] == 0xAA else {
+            print("[SCAN] Malformed scan result (len=\(bytes.count))")
+            isScanning = false
+            return
+        }
+        let start: Float = bytes.withUnsafeBufferPointer {
+            UnsafeRawBufferPointer($0).loadUnaligned(fromByteOffset: 1, as: Float.self)
+        }
+        let stepKHz: Float = bytes.withUnsafeBufferPointer {
+            UnsafeRawBufferPointer($0).loadUnaligned(fromByteOffset: 5, as: Float.self)
+        }
+        let n = Int(bytes[9])
+        guard bytes.count >= 10 + n else {
+            print("[SCAN] Truncated scan result: need \(10 + n) bytes, got \(bytes.count)")
+            isScanning = false
+            return
+        }
+        var samples: [FrequencyScanSample] = []
+        samples.reserveCapacity(n)
+        for i in 0..<n {
+            let rssi = Int8(bitPattern: bytes[10 + i])
+            let freq = start + (stepKHz * Float(i)) / 1000.0
+            samples.append(FrequencyScanSample(freqMHz: freq, rssiDbm: Int(rssi)))
+        }
+        scanSamples = samples
+        isScanning = false
+        print("[SCAN] Parsed \(n) samples, start=\(start) MHz step=\(stepKHz) kHz")
     }
 
     private func parseFileList(_ data: Data?) {

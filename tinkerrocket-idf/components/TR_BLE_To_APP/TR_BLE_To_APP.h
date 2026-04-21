@@ -135,6 +135,15 @@ public:
     // files: JSON string like [{"name":"file1.bin","size":1234},...]
     void sendFileList(const String& files_json);
 
+    // Send frequency-scan result as a compact binary blob on the file-ops
+    // characteristic.  Format (little-endian):
+    //   [0][0xAA marker] [1..4][start_mhz f32] [5..8][step_khz f32]
+    //   [9][n u8] [10..10+n-1][rssi i8 dBm]
+    // The 0xAA leading byte disambiguates this from the JSON responses
+    // (file list, config) that also use this characteristic.
+    void sendScanResults(float start_mhz, float step_khz,
+                         const int8_t* rssi, uint8_t n);
+
     // Get pending download filename (empty if none)
     // Clears the filename after reading
     String getDownloadFilename();
