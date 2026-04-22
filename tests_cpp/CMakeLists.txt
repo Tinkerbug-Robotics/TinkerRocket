@@ -166,3 +166,53 @@ target_include_directories(test_lora_roundtrip PRIVATE
 )
 target_link_libraries(test_lora_roundtrip GTest::gtest_main)
 gtest_discover_tests(test_lora_roundtrip)
+
+# ============================================================
+# Phase 4: Flight-log layer (issue #50)
+# ============================================================
+
+# ---------- test_tr_flightlog_core ----------
+# Scaffold + FakeNandBackend sanity. Additional executables
+# (recovery, wire_format, property, timing) land as later steps in the
+# issue #50 implementation plan fill in behavior.
+add_executable(test_tr_flightlog_core
+    test_tr_flightlog_core.cpp
+    fakes/fake_nand_backend.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_FlightLog.cpp
+    ${LIB_DIR}/TR_FlightLog/BlockStateBitmap.cpp
+    ${LIB_DIR}/TR_FlightLog/FlightIndex.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_NandBackend_esp.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_tr_flightlog_core PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_FlightLog/include
+    ${LIB_DIR}/CRC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_tr_flightlog_core GTest::gtest_main)
+gtest_discover_tests(test_tr_flightlog_core)
+
+# ---------- test_tr_flightlog_wire_format ----------
+# Golden-file regression guard on the BLE wire formats iOS depends on.
+# Fixtures under tests_cpp/fixtures/ble_wire_format/ are the source of truth.
+add_executable(test_tr_flightlog_wire_format
+    test_tr_flightlog_wire_format.cpp
+    ${LIB_DIR}/TR_FlightLog/WireFormat.cpp
+)
+target_include_directories(test_tr_flightlog_wire_format PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_FlightLog/include
+)
+target_compile_definitions(test_tr_flightlog_wire_format PRIVATE
+    TR_FLIGHTLOG_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ble_wire_format"
+)
+target_link_libraries(test_tr_flightlog_wire_format GTest::gtest_main)
+gtest_discover_tests(test_tr_flightlog_wire_format)

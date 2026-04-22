@@ -6,6 +6,9 @@ build/
 *.hex
 *.map
 
+# Exception: binary test fixtures are source of truth for wire-format tests.
+!tests_cpp/fixtures/**/*.bin
+
 # Python
 __pycache__/
 *.pyc
