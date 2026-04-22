@@ -2028,6 +2028,29 @@ static void printStats()
     }
     } // End VERBOSE_DEBUG
 
+    // Always-on LFS/NAND stall instrumentation — prints the peak duration of
+    // each potentially-slow LittleFS/NAND op observed since the last stats
+    // window.  Complements the per-op ESP_LOGW("STALL: …") that fires live
+    // whenever any single op exceeds 100 ms.
+    ESP_LOGI("LOG TIMING",
+             "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
+             "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
+             "bad_blocks=%lu skips=%lu",
+             (unsigned long)s.write_max_us,
+             (unsigned long)s.sync_max_us,
+             (unsigned long)s.erase_max_us,
+             (unsigned long)s.open_max_us,
+             (unsigned long)s.close_max_us,
+             (unsigned long)s.activate_max_us,
+             (unsigned long)s.clear_ring_max_us,
+             (unsigned long)s.flush_iter_max_us,
+             (unsigned long)s.syncs_performed,
+             (unsigned long)s.nand_erase_ops,
+             (unsigned long)interval_ring_fill_peak,
+             (unsigned long)s.known_bad_blocks,
+             (unsigned long)s.bad_block_skips);
+    logger.resetIntervalTimings();
+
     // Send telemetry to BLE app
     TR_BLE_To_APP::TelemetryData ble_telem = {};
     ble_telem.soc = NAN;
@@ -2163,6 +2186,37 @@ void initPeripherals()
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
     }
+
+    // -------------------------------------------------------------------
+    // DIAGNOSTIC ONE-SHOT — wipes the entire filesystem at boot.
+    // Flip FORMAT_FS_ON_BOOT to 1, rebuild, flash, boot once, set
+    // back to 0, rebuild, flash.  Or leave it on if you want every
+    // boot to start with a clean FS (for stress testing).
+    // LEAVES ALL EXISTING FLIGHT LOGS PERMANENTLY DELETED.
+    //
+    // Rationale: confirm whether the multi-hundred-ms LFS stalls we've
+    // been chasing (#47) come from accumulated file-metadata bloat on
+    // the chip vs from inherent LFS-on-NAND behaviour.  If stalls
+    // vanish on a fresh FS, we know fill-up is the cause and can plan
+    // the custom log-layer rewrite.  Turn back off once confirmed.
+    #define FORMAT_FS_ON_BOOT 0   // ← flip to 1 to wipe the chip at boot
+    #if FORMAT_FS_ON_BOOT
+    ESP_LOGW("LOG", "============================================");
+    ESP_LOGW("LOG", "   FORMAT_FS_ON_BOOT IS SET!");
+    ESP_LOGW("LOG", "   WIPING ALL FLIGHT LOGS.");
+    ESP_LOGW("LOG", "============================================");
+    delay(500);  // make sure the warning hits the serial log before we wipe
+    if (!logger.formatFilesystem())
+    {
+        ESP_LOGE("LOG", "Format failed — continuing with whatever state exists");
+    }
+    else
+    {
+        ESP_LOGW("LOG", "Format complete — filesystem is now empty");
+    }
+    #endif
+    // -------------------------------------------------------------------
+
     // Start the NAND flush task on Core 0 — decouples LittleFS writes from
     // the main loop so the RAM ring can buffer during NAND stalls.
     logger.startFlushTask(/* core */ 0, /* stackSize */ 8192, /* priority */ 1);

@@ -43,6 +43,26 @@ struct TR_LogToFlashStats
     bool logging_active = false;
     uint32_t nand_page = 0;
     uint32_t nand_block = 0;
+
+    // Interval-peak wall times for slow NAND/LFS operations (µs).
+    // Useful for catching the cause of a multi-hundred-ms stall — each of
+    // these is wrapped around its underlying call and the max seen since
+    // the last resetIntervalTimings() is reported here.
+    uint32_t write_max_us = 0;         // max lfs_file_write duration
+    uint32_t sync_max_us = 0;          // max lfs_file_sync duration
+    uint32_t erase_max_us = 0;         // max lfsBlockErase (NAND block erase) duration
+    uint32_t open_max_us = 0;          // max lfs_file_open duration
+    uint32_t close_max_us = 0;         // max lfs_file_close duration
+    uint32_t activate_max_us = 0;      // max activateLogging() wall time
+    uint32_t clear_ring_max_us = 0;    // max clearRing() wall time
+    uint32_t flush_iter_max_us = 0;    // max single flushTaskLoop iteration
+    uint32_t syncs_performed = 0;      // cumulative lfs_file_sync calls since begin()
+
+    // Persistent bad-block avoidance (#47): once a NAND block is known bad,
+    // the LFS callbacks short-circuit with LFS_ERR_CORRUPT in ~µs instead of
+    // paying the several-hundred-ms LFS remap cost every encounter.
+    uint32_t known_bad_blocks = 0;     // blocks marked bad in the persistent bitmap
+    uint32_t bad_block_skips = 0;      // cumulative short-circuits since begin()
 };
 
 struct TR_LogToFlashRecoveryInfo
@@ -79,6 +99,10 @@ public:
     void startFlushTask(uint8_t core = 0, uint32_t stackSize = 8192, uint8_t priority = 1);
 
     void getStats(TR_LogToFlashStats& out) const;
+    /// Zero the *_max_us fields so the next getStats() reflects only peaks
+    /// seen since this call.  Intended to be called right after the caller
+    /// has read and logged the interval stats.
+    void resetIntervalTimings();
     void getRecoveryInfo(TR_LogToFlashRecoveryInfo& out) const;
     size_t listFiles(TR_LogFileInfo* out, size_t max_files) const;
     bool readFileChunk(const char* filename,
@@ -170,11 +194,68 @@ private:
     uint8_t page_buf[NAND_PAGE_SIZE];
     uint32_t page_buf_idx = 0;
 
-    // Periodic sync — commit LittleFS metadata to NAND every N pages so that
-    // a hard reset only loses at most sync_interval pages (~256 KB default).
-    // The ring buffer absorbs incoming data during the sync stall (~5-50 ms).
-    static constexpr uint32_t SYNC_INTERVAL_PAGES = 128;  // ~256 KB between syncs
+    // Periodic sync — commits LittleFS metadata to NAND every N pages.  The
+    // sync interval bounds the data-loss window on an unexpected reset: any
+    // pages written since the last sync exist in NAND but are orphaned
+    // because the FS metadata doesn't point at them.
+    //
+    // Initially tried 16 pages (0.45 s loss window) but that forced LFS to
+    // commit its internal metadata cache every iteration, and each commit
+    // has a large fixed cost (rewrite a metadata block) that doesn't scale
+    // down — produced continuous 200-600 ms per-write stalls and doubled
+    // NAND write amplification.  64 pages is the compromise: still cuts
+    // the pre-patch 3.7 s loss window in half while letting LFS batch its
+    // metadata commits.
+    static constexpr uint32_t SYNC_INTERVAL_PAGES = 64;   // ~128 KB / 1.8 s
     uint32_t pages_since_sync_ = 0;
+
+    // Interval-peak timing instrumentation (µs) — reset by
+    // resetIntervalTimings() after each stats dump.  Any single op taking
+    // longer than STALL_THRESHOLD_US is ESP_LOGW'd immediately so we can
+    // spot the guilty op without having to wait for the next stats window.
+    static constexpr uint64_t STALL_THRESHOLD_US = 100'000;  // 100 ms
+    uint32_t write_max_us_ = 0;
+    uint32_t sync_max_us_ = 0;
+    uint32_t erase_max_us_ = 0;
+    uint32_t open_max_us_ = 0;
+    uint32_t close_max_us_ = 0;
+    uint32_t activate_max_us_ = 0;
+    uint32_t clear_ring_max_us_ = 0;
+    uint32_t flush_iter_max_us_ = 0;
+    uint32_t syncs_performed_ = 0;
+
+    // Cumulative LFS-callback op counters (#47 follow-up).  Used to break
+    // down *what* a slow lfs_file_write actually did — lots of reads with
+    // few writes points at a lookahead scan or CTZ walk; lots of writes
+    // points at metadata compaction.  The LFS callbacks each increment
+    // their own counter; flushRingToNand snapshots before+after around
+    // each lfs_file_write so a stall can log the delta.
+    uint32_t lfs_cb_reads_  = 0;
+    uint32_t lfs_cb_progs_  = 0;
+    uint32_t lfs_cb_erases_ = 0;
+
+    // --- Persistent bad-block bitmap (#47) -------------------------------
+    // One bit per NAND block: 0 = unknown-or-good, 1 = known-bad.
+    // Loaded from NVS at begin().  Written back at closeLogSession and by
+    // persistBadBlocksIfDirty() (called only outside the hot path).
+    static constexpr uint32_t BAD_BLOCK_BITMAP_BYTES = NAND_BLOCK_COUNT / 8;
+    uint8_t bad_block_bitmap_[BAD_BLOCK_BITMAP_BYTES] = {};
+    bool     bad_block_bitmap_dirty_ = false;
+    uint32_t bad_block_skips_ = 0;   // cumulative short-circuits
+
+    bool isBlockBad(uint32_t block) const;
+    void markBlockBad(uint32_t block);
+    void loadBadBlocksFromNVS();
+    void persistBadBlocksIfDirty();
+    uint32_t countBadBlocks() const;
+    /// Boot-time non-destructive bad-block scan: for every block not yet in
+    /// the persistent map, PAGEREAD page 0 to catch NAND-reported read
+    /// errors (Option A), and read the first byte of the spare area on
+    /// pages 0 and 1 to detect factory bad-block markers (Option B).
+    /// Any new finds get `markBlockBad`'d and will be persisted to NVS.
+    /// Returns the number of newly-discovered bad blocks; logs the total
+    /// and wall time.
+    uint32_t scanBadBlocksAtBoot();
 
     // counters
     uint64_t bytes_received = 0;
@@ -255,6 +336,11 @@ private:
     bool nandEraseBlock(uint32_t blockIndex);
     bool nandProgramPage(uint32_t rowPageAddr, const uint8_t* data, uint32_t len);
     bool nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t len);
+    /// Read `len` bytes from `column` within a page — used to access the OOB /
+    /// spare area (column ≥ NAND_PAGE_SIZE) where factory bad-block markers
+    /// live.  Returns false if the PAGEREAD status polls out (suspect block).
+    bool nandReadBytesAt(uint32_t rowPageAddr, uint32_t column,
+                         uint8_t* out, uint32_t len);
     bool nandInit();
 
     // LittleFS block device adapter callbacks (static to access from C API)

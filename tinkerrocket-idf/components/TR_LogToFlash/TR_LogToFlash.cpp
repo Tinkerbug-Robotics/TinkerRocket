@@ -1,10 +1,24 @@
 #include <TR_LogToFlash.h>
 #include <CRC.h>
+#include <TR_NVS.h>
 #include <cstring>
 #include <cstdio>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <esp_log.h>
+#include <esp_timer.h>
+
+// Helpers for the stall-instrumentation below.  esp_timer_get_time() is
+// a ~sub-microsecond monotonic clock, cheaper than millis() for short ops.
+#define LFS_TIMING_START()   const int64_t _t0 = esp_timer_get_time()
+#define LFS_TIMING_END(peak_field, op_name)                                     \
+    do {                                                                        \
+        uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);                  \
+        if (_dt > (peak_field)) (peak_field) = _dt;                             \
+        if (_dt > (uint32_t)STALL_THRESHOLD_US) {                               \
+            ESP_LOGW(TAG, "STALL: %s took %lu us", (op_name), (unsigned long)_dt); \
+        }                                                                       \
+    } while (0)
 
 static const char* TAG = "LOG";
 
@@ -85,10 +99,21 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     memset(recovery_filename, 0, sizeof(recovery_filename));
     memset(current_filename, 0, sizeof(current_filename));
 
+    // Load persistent bad-block bitmap (#47) before any NAND I/O so the LFS
+    // callbacks can short-circuit known-bad blocks from the very first mount.
+    loadBadBlocksFromNVS();
+
     if (!nandInit())
     {
         return false;
     }
+
+    // Boot-time non-destructive bad-block scan (#47): walks every not-yet-
+    // known-bad block and probes for read errors + factory bad markers.
+    // Findings get markBlockBad'd; we persist right away so a reboot during
+    // the scan doesn't lose the discoveries.
+    scanBadBlocksAtBoot();
+    persistBadBlocksIfDirty();
 
     // Allocate LittleFS buffers on heap to avoid stack overflow
     lfs_read_buffer = (uint8_t*)malloc(NAND_PAGE_SIZE);
@@ -293,6 +318,31 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.logging_active = logging_active;
     out.nand_page = nand_page;
     out.nand_block = log_curr_block;
+
+    out.write_max_us = write_max_us_;
+    out.sync_max_us = sync_max_us_;
+    out.erase_max_us = erase_max_us_;
+    out.open_max_us = open_max_us_;
+    out.close_max_us = close_max_us_;
+    out.activate_max_us = activate_max_us_;
+    out.clear_ring_max_us = clear_ring_max_us_;
+    out.flush_iter_max_us = flush_iter_max_us_;
+    out.syncs_performed = syncs_performed_;
+
+    out.known_bad_blocks = countBadBlocks();
+    out.bad_block_skips = bad_block_skips_;
+}
+
+void TR_LogToFlash::resetIntervalTimings()
+{
+    write_max_us_ = 0;
+    sync_max_us_ = 0;
+    erase_max_us_ = 0;
+    open_max_us_ = 0;
+    close_max_us_ = 0;
+    activate_max_us_ = 0;
+    clear_ring_max_us_ = 0;
+    flush_iter_max_us_ = 0;
 }
 
 void TR_LogToFlash::getRecoveryInfo(TR_LogToFlashRecoveryInfo& out) const
@@ -1002,6 +1052,55 @@ bool TR_LogToFlash::nandReadPage(uint32_t rowPageAddr, uint8_t* out, uint32_t le
     return true;
 }
 
+bool TR_LogToFlash::nandReadBytesAt(uint32_t rowPageAddr, uint32_t column,
+                                     uint8_t* out, uint32_t len)
+{
+    if (len == 0 || out == nullptr) return false;
+
+    // Stage 1: load the target page into the chip's cache.
+    spiAcquire();
+    spi->beginTransaction(spi_nand);
+    csLow(cfg.nand_cs);
+    spi->transfer(NAND_PAGEREAD);
+    spi->transfer((rowPageAddr >> 16) & 0xFF);
+    spi->transfer((rowPageAddr >> 8) & 0xFF);
+    spi->transfer(rowPageAddr & 0xFF);
+    csHigh(cfg.nand_cs);
+    spi->endTransaction();
+    spiRelease();
+
+    if (!nandWaitReady())
+    {
+        return false;  // treat a stuck page-read as a suspect block
+    }
+
+    // Stage 2: stream `len` bytes out of the cache starting at `column`.
+    // MT29F READCACHE (0x03) takes a 2-byte column address then 1 dummy byte.
+    spiAcquire();
+    spi->beginTransaction(spi_nand);
+    csLow(cfg.nand_cs);
+    spi->transfer(NAND_READCACHE);
+    spi->transfer((column >> 8) & 0xFF);
+    spi->transfer(column & 0xFF);
+    spi->transfer(0x00);  // dummy
+
+    uint8_t dummy[64];
+    memset(dummy, 0x00, sizeof(dummy));
+    uint32_t remaining = len;
+    uint8_t* dst = out;
+    while (remaining > 0)
+    {
+        const uint32_t chunk = (remaining > sizeof(dummy)) ? sizeof(dummy) : remaining;
+        spi->transferBytes(dummy, dst, chunk);
+        dst += chunk;
+        remaining -= chunk;
+    }
+    csHigh(cfg.nand_cs);
+    spi->endTransaction();
+    spiRelease();
+    return true;
+}
+
 bool TR_LogToFlash::nandInit()
 {
     nandSetFeature(FEAT_PROT, 0x00);
@@ -1029,6 +1128,16 @@ int TR_LogToFlash::lfsBlockRead(const struct lfs_config *c, lfs_block_t block,
                                  lfs_off_t off, void *buffer, lfs_size_t size)
 {
     TR_LogToFlash* self = (TR_LogToFlash*)c->context;
+
+    self->lfs_cb_reads_++;
+
+    // Short-circuit known-bad blocks without touching NAND (#47).
+    if (self->isBlockBad(block))
+    {
+        self->bad_block_skips_++;
+        return LFS_ERR_CORRUPT;
+    }
+
     uint8_t* buf = (uint8_t*)buffer;
     lfs_size_t bytes_read = 0;
 
@@ -1049,7 +1158,10 @@ int TR_LogToFlash::lfsBlockRead(const struct lfs_config *c, lfs_block_t block,
         uint8_t page_buf[NAND_PAGE_SIZE];
         if (!self->nandReadPage(row_page, page_buf, NAND_PAGE_SIZE))
         {
-            return LFS_ERR_IO;
+            // Read failure — the block is suspect.  Tell LFS it's bad so it
+            // relocates, and remember it so we skip on future mounts.
+            self->markBlockBad(block);
+            return LFS_ERR_CORRUPT;
         }
 
         // Copy requested portion
@@ -1067,6 +1179,16 @@ int TR_LogToFlash::lfsBlockProg(const struct lfs_config *c, lfs_block_t block,
                                  lfs_off_t off, const void *buffer, lfs_size_t size)
 {
     TR_LogToFlash* self = (TR_LogToFlash*)c->context;
+
+    self->lfs_cb_progs_++;
+
+    // Short-circuit known-bad blocks (#47) — returns ~µs instead of paying
+    // the full LFS remap cost that would otherwise fire on every encounter.
+    if (self->isBlockBad(block))
+    {
+        self->bad_block_skips_++;
+        return LFS_ERR_CORRUPT;
+    }
 
     // IMPORTANT: NAND pages can only be programmed ONCE after erase
     // We cannot do read-modify-write on NAND
@@ -1090,7 +1212,11 @@ int TR_LogToFlash::lfsBlockProg(const struct lfs_config *c, lfs_block_t block,
         // Write full page directly (no read-modify-write)
         if (!self->nandProgramPage(row_page, buf + bytes_written, NAND_PAGE_SIZE))
         {
-            return LFS_ERR_IO;
+            // Program failed (STAT_PFAIL or timeout).  Mark the block bad
+            // and tell LFS to relocate — CORRUPT (not IO) triggers the
+            // remap path rather than propagating a hard FS error.
+            self->markBlockBad(block);
+            return LFS_ERR_CORRUPT;
         }
 
         bytes_written += NAND_PAGE_SIZE;
@@ -1103,12 +1229,33 @@ int TR_LogToFlash::lfsBlockErase(const struct lfs_config *c, lfs_block_t block)
 {
     TR_LogToFlash* self = (TR_LogToFlash*)c->context;
 
+    self->lfs_cb_erases_++;
+
+    // Short-circuit known-bad blocks (#47).
+    if (self->isBlockBad(block))
+    {
+        self->bad_block_skips_++;
+        return LFS_ERR_CORRUPT;
+    }
+
     // Yield before erase — this is the slowest NAND operation (~2ms per block)
     vTaskDelay(1);
 
-    if (!self->nandEraseBlock(block))
+    const int64_t _t0 = esp_timer_get_time();
+    bool ok = self->nandEraseBlock(block);
+    uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
+    if (_dt > self->erase_max_us_) self->erase_max_us_ = _dt;
+    if (_dt > (uint32_t)STALL_THRESHOLD_US) {
+        ESP_LOGW(TAG, "STALL: nandEraseBlock(%lu) took %lu us",
+                 (unsigned long)block, (unsigned long)_dt);
+    }
+
+    if (!ok)
     {
-        return LFS_ERR_IO;
+        // Erase failed (STAT_EFAIL or timeout) — mark bad and let LFS
+        // relocate rather than bubble an I/O error up.
+        self->markBlockBad(block);
+        return LFS_ERR_CORRUPT;
     }
     return LFS_ERR_OK;
 }
@@ -1143,8 +1290,13 @@ void TR_LogToFlash::openLogSession()
     }
 
     // Open file for writing — this is the expensive NAND operation
-    int err = lfs_file_open(&lfs, &file, current_filename,
+    int err;
+    {
+        LFS_TIMING_START();
+        err = lfs_file_open(&lfs, &file, current_filename,
                             LFS_O_WRONLY | LFS_O_CREAT | LFS_O_EXCL);
+        LFS_TIMING_END(open_max_us_, "lfs_file_open");
+    }
     if (err)
     {
         if (cfg.debug) ESP_LOGE(TAG, "File open failed: %d", err);
@@ -1158,6 +1310,26 @@ void TR_LogToFlash::openLogSession()
     pages_since_sync_ = 0;
     end_flight_requested = false;
 
+    // Pre-warm LFS's free-block allocator (#47 follow-up).  During flight
+    // the first lfs_file_write after activate used to stall for 1.76 s
+    // scanning metadata (reads=718) to rebuild the lookahead buffer.
+    // Running a full traverse here, on the pad, moves that scan to
+    // PRELAUNCH where timing doesn't matter — the lookahead ends up
+    // populated with this FS's free-block bitmap, so the first few
+    // in-flight allocations come from the buffer instead of triggering
+    // another scan.
+    {
+        const uint32_t t0 = millis();
+        auto noop_cb = [](void*, lfs_block_t) -> int { return 0; };
+        int tr_err = lfs_fs_traverse(&lfs, noop_cb, nullptr);
+        const uint32_t dt = millis() - t0;
+        if (cfg.debug)
+        {
+            ESP_LOGI(TAG, "lfs_fs_traverse (allocator pre-warm): %lu ms, err=%d",
+                          (unsigned long)dt, tr_err);
+        }
+    }
+
     // NOTE: logging_active and ring_prelaunch_cap_ are NOT set here.
     // They are set by activateLogging() when launch is actually detected.
     // This allows pre-creating the file during PRELAUNCH without switching
@@ -1169,6 +1341,8 @@ void TR_LogToFlash::openLogSession()
 /// PRELAUNCH, this is the only thing that needs to happen at launch time.
 void TR_LogToFlash::activateLogging()
 {
+    LFS_TIMING_START();
+
     // Clear stale pre-launch data from the ring buffer so only
     // fresh data from this moment forward gets logged.
     clearRing();
@@ -1177,6 +1351,8 @@ void TR_LogToFlash::activateLogging()
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
     if (cfg.debug) ESP_LOGI(TAG, "Logging activated (ring cleared + cap raised)");
+
+    LFS_TIMING_END(activate_max_us_, "activateLogging");
 }
 
 void TR_LogToFlash::closeLogSession()
@@ -1195,12 +1371,24 @@ void TR_LogToFlash::closeLogSession()
     }
 
     // Sync and close file
-    lfs_file_sync(&lfs, &file);
-    lfs_file_close(&lfs, &file);
+    {
+        LFS_TIMING_START();
+        lfs_file_sync(&lfs, &file);
+        LFS_TIMING_END(sync_max_us_, "lfs_file_sync(close)");
+    }
+    {
+        LFS_TIMING_START();
+        lfs_file_close(&lfs, &file);
+        LFS_TIMING_END(close_max_us_, "lfs_file_close");
+    }
 
     file_open = false;
     logging_active = false;
     clearDirty();
+
+    // Flush any new bad-block discoveries to NVS now — no longer in the
+    // hot path, and the next session should see the same list.
+    persistBadBlocksIfDirty();
 
     // Restore pre-launch ring cap so the buffer doesn't fill completely
     // before the next launch — leaves headroom for the initial flush.
@@ -1245,6 +1433,8 @@ bool TR_LogToFlash::checkDirtyOnStartup()
 
 void TR_LogToFlash::clearRing()
 {
+    LFS_TIMING_START();
+
     portENTER_CRITICAL(&ring_mux_);
     rb_head = 0;
     rb_tail = 0;
@@ -1255,11 +1445,21 @@ void TR_LogToFlash::clearRing()
     // a previous session from leaking into the log file.  MRAM is non-volatile,
     // so clearRing() resetting pointers alone is not sufficient — the flush task
     // could read stale bytes if rb_count becomes inconsistent due to any race.
-    // At 40 MHz SPI, zeroing 128 KB takes ~26 ms — acceptable at launch time.
+    //
+    // Throughput is transaction-overhead-limited: at 40 MHz SPI the 128 KB of
+    // data is only 26 ms, but each SPI call adds ~200 µs of CS/mode/command
+    // overhead.  At 4 KB chunks that's 32 × 200 µs = 6 ms overhead vs. 512 ×
+    // 200 µs = 100 ms with 256 B chunks — see #48.
+    //
+    // `zeros` MUST be static: the flush task has only 8 KB of stack, and a
+    // stack-allocated 4 KB array left just enough for a deep LFS call chain
+    // to overflow into the return address — which crashed the board with a
+    // double-exception on 4/22.  BSS placement costs 4 KB of RAM but it's a
+    // once-ever cost.
     if (use_mram_)
     {
-        static constexpr size_t ZERO_CHUNK = 256;
-        uint8_t zeros[ZERO_CHUNK] = {};
+        static constexpr size_t ZERO_CHUNK = 4096;
+        static uint8_t zeros[ZERO_CHUNK] = {};
         for (uint32_t addr = 0; addr < ring_size_; addr += ZERO_CHUNK)
         {
             uint32_t len = (ring_size_ - addr < ZERO_CHUNK)
@@ -1267,6 +1467,148 @@ void TR_LogToFlash::clearRing()
             mramWriteBytes(addr, zeros, len);
         }
     }
+
+    LFS_TIMING_END(clear_ring_max_us_, "clearRing");
+}
+
+// ============================================================================
+// Persistent bad-block bitmap (#47)
+// ============================================================================
+//
+// NAND blocks wear out.  When LittleFS hits a failing block it does a
+// synchronous remap (write-fail / erase-to-test / mark-bad / realloc) that
+// can take several hundred ms on the hot log-write path — we measured up to
+// 928 ms in bench testing.  Persisting the bad-block list across boots means
+// the cost is paid once per block per chip lifetime; every subsequent
+// encounter short-circuits in the LFS callback with LFS_ERR_CORRUPT before
+// any SPI traffic.
+
+bool TR_LogToFlash::isBlockBad(uint32_t block) const
+{
+    if (block >= NAND_BLOCK_COUNT) return true;  // treat OOB as bad
+    return (bad_block_bitmap_[block / 8] & (uint8_t)(1u << (block % 8))) != 0;
+}
+
+void TR_LogToFlash::markBlockBad(uint32_t block)
+{
+    if (block >= NAND_BLOCK_COUNT) return;
+    uint8_t& byte = bad_block_bitmap_[block / 8];
+    const uint8_t mask = (uint8_t)(1u << (block % 8));
+    if (!(byte & mask))
+    {
+        byte |= mask;
+        bad_block_bitmap_dirty_ = true;
+        ESP_LOGW(TAG, "Marking NAND block %lu as bad (total bad: %lu)",
+                 (unsigned long)block, (unsigned long)countBadBlocks());
+    }
+}
+
+uint32_t TR_LogToFlash::countBadBlocks() const
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < BAD_BLOCK_BITMAP_BYTES; ++i)
+    {
+        n += (uint32_t)__builtin_popcount(bad_block_bitmap_[i]);
+    }
+    return n;
+}
+
+void TR_LogToFlash::loadBadBlocksFromNVS()
+{
+    Preferences prefs;
+    if (!prefs.begin("bblk", true))  // read-only
+    {
+        // First boot, namespace doesn't exist yet — nothing to load.
+        memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+        bad_block_bitmap_dirty_ = false;
+        if (cfg.debug) ESP_LOGI(TAG, "Bad-block NVS namespace not found, starting clean");
+        return;
+    }
+    const size_t got = prefs.getBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
+    prefs.end();
+    if (got != sizeof(bad_block_bitmap_))
+    {
+        memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+    }
+    bad_block_bitmap_dirty_ = false;
+    const uint32_t n_bad = countBadBlocks();
+    if (cfg.debug) ESP_LOGI(TAG, "Loaded bad-block map: %lu known-bad blocks",
+                                  (unsigned long)n_bad);
+}
+
+void TR_LogToFlash::persistBadBlocksIfDirty()
+{
+    if (!bad_block_bitmap_dirty_) return;
+    Preferences prefs;
+    if (!prefs.begin("bblk", false))  // read-write
+    {
+        if (cfg.debug) ESP_LOGW(TAG, "Bad-block NVS open failed, will retry next close");
+        return;
+    }
+    prefs.putBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
+    prefs.end();
+    bad_block_bitmap_dirty_ = false;
+    if (cfg.debug) ESP_LOGI(TAG, "Persisted bad-block map (%lu bad)",
+                                  (unsigned long)countBadBlocks());
+}
+
+uint32_t TR_LogToFlash::scanBadBlocksAtBoot()
+{
+    const uint32_t t0 = millis();
+    uint32_t n_new = 0;
+    uint32_t n_scanned = 0;
+    uint8_t main_byte = 0xFF;
+    uint8_t spare_byte[2] = { 0xFF, 0xFF };
+
+    for (uint32_t b = 0; b < NAND_BLOCK_COUNT; ++b)
+    {
+        // Already-known bad blocks from NVS or this run — skip, no NAND work.
+        if (isBlockBad(b)) continue;
+        ++n_scanned;
+
+        const uint32_t page_0_row = b * NAND_PAGES_PER_BLK;
+        const uint32_t page_1_row = page_0_row + 1;
+
+        // Option A — any read error on page 0 is a dead-block signal.
+        // A 1-byte read at column 0 is essentially the same cost as reading
+        // the whole page, because PAGEREAD + status-poll dominates.
+        if (!nandReadBytesAt(page_0_row, 0, &main_byte, 1))
+        {
+            markBlockBad(b);
+            ++n_new;
+            continue;
+        }
+
+        // Option B — factory bad-block markers live at column NAND_PAGE_SIZE
+        // (first byte of the spare/OOB area) on pages 0 and 1 per the MT29F
+        // datasheet.  A fresh good block reads 0xFF in both; any other value
+        // means the manufacturer flagged it.  A read failure here also
+        // counts as a suspect block.
+        if (!nandReadBytesAt(page_0_row, NAND_PAGE_SIZE, &spare_byte[0], 1) ||
+            !nandReadBytesAt(page_1_row, NAND_PAGE_SIZE, &spare_byte[1], 1))
+        {
+            markBlockBad(b);
+            ++n_new;
+            continue;
+        }
+        if (spare_byte[0] != 0xFF || spare_byte[1] != 0xFF)
+        {
+            markBlockBad(b);
+            ++n_new;
+        }
+    }
+
+    const uint32_t dt_ms = millis() - t0;
+    if (cfg.debug)
+    {
+        ESP_LOGI(TAG, "Bad-block boot scan: %lu blocks scanned, %lu new bad, "
+                      "%lu total bad, took %lu ms",
+                      (unsigned long)n_scanned,
+                      (unsigned long)n_new,
+                      (unsigned long)countBadBlocks(),
+                      (unsigned long)dt_ms);
+    }
+    return n_new;
 }
 
 void TR_LogToFlash::runStartupRecovery()
@@ -1381,7 +1723,27 @@ void TR_LogToFlash::flushRingToNand()
         // Write full page to LittleFS
         if (page_buf_idx == NAND_PAGE_SIZE)
         {
-            lfs_ssize_t written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
+            // Snapshot callback counters so we can break down what a slow
+            // lfs_file_write actually did underneath — reads vs progs vs
+            // erases tells us lookahead-scan / CTZ-walk vs compaction.
+            const uint32_t cb_reads_before  = lfs_cb_reads_;
+            const uint32_t cb_progs_before  = lfs_cb_progs_;
+            const uint32_t cb_erases_before = lfs_cb_erases_;
+
+            lfs_ssize_t written;
+            const int64_t _t0 = esp_timer_get_time();
+            written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
+            const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
+            if (_dt > write_max_us_) write_max_us_ = _dt;
+            if (_dt > (uint32_t)STALL_THRESHOLD_US)
+            {
+                ESP_LOGW(TAG, "STALL: lfs_file_write took %lu us "
+                              "(reads=%lu progs=%lu erases=%lu)",
+                              (unsigned long)_dt,
+                              (unsigned long)(lfs_cb_reads_  - cb_reads_before),
+                              (unsigned long)(lfs_cb_progs_  - cb_progs_before),
+                              (unsigned long)(lfs_cb_erases_ - cb_erases_before));
+            }
             if (written != NAND_PAGE_SIZE)
             {
                 if (cfg.debug) ESP_LOGE(TAG, "Write failed: %d", written);
@@ -1397,7 +1759,12 @@ void TR_LogToFlash::flushRingToNand()
             // The ring buffer absorbs incoming frames during the sync stall.
             if (++pages_since_sync_ >= SYNC_INTERVAL_PAGES)
             {
-                lfs_file_sync(&lfs, &file);
+                {
+                    LFS_TIMING_START();
+                    lfs_file_sync(&lfs, &file);
+                    LFS_TIMING_END(sync_max_us_, "lfs_file_sync");
+                }
+                syncs_performed_++;
                 pages_since_sync_ = 0;
             }
         }
@@ -1425,6 +1792,8 @@ void TR_LogToFlash::flushTaskLoop()
 {
     while (!flush_task_stop_)
     {
+        const int64_t iter_t0 = esp_timer_get_time();
+
         // Handle deferred pre-create request (from PRELAUNCH state)
         if (prepare_file_requested_ && !file_open && !logging_active)
         {
@@ -1510,6 +1879,17 @@ void TR_LogToFlash::flushTaskLoop()
             {
                 flushRingToNand();
                 vTaskDelay(1);  // 1ms yield — enough for WDT, no BLE contention
+            }
+        }
+
+        // Iteration wall time — peaks indicate the flush loop itself
+        // blocked for a long time (not just a single LFS op).
+        {
+            uint32_t iter_dt = (uint32_t)(esp_timer_get_time() - iter_t0);
+            if (iter_dt > flush_iter_max_us_) flush_iter_max_us_ = iter_dt;
+            if (iter_dt > (uint32_t)STALL_THRESHOLD_US) {
+                ESP_LOGW(TAG, "STALL: flushTaskLoop iteration took %lu us",
+                         (unsigned long)iter_dt);
             }
         }
 
