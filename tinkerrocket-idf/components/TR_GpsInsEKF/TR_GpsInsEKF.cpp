@@ -508,7 +508,15 @@ void GpsInsEKF::timeUpdate() {
         P_MAX_ABIAS, P_MAX_ABIAS, P_MAX_ABIAS,
         P_MAX_GBIAS, P_MAX_GBIAS, P_MAX_GBIAS
     };
+    // Floor diagonals at a tiny positive value so float32 drift can't drive
+    // them negative or NaN — downstream sqrt(P)/1/P would then propagate NaN
+    // through the whole filter. Well below any legitimate filter state, so
+    // it only fires as a numerical safety net.
+    constexpr float P_MIN_DIAG = 1e-12f;
     for (int i = 0; i < 15; i++) {
+        if (!std::isfinite(P_[i][i]) || P_[i][i] < P_MIN_DIAG) {
+            P_[i][i] = P_MIN_DIAG;
+        }
         if (P_[i][i] > pmax[i]) {
             float scale = std::sqrt(pmax[i] / P_[i][i]);
             for (int j = 0; j < 15; j++) {
