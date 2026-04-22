@@ -498,9 +498,15 @@ void GpsInsEKF::timeUpdate() {
             P_[i][j] = s; P_[j][i] = s;
         }
 
-    // Clamp P diagonals to prevent float32 overflow when states are
-    // unobservable (no GPS).  Off-diagonal elements are scaled
-    // proportionally to maintain correlation structure.
+    stabilizeP();
+}
+
+void GpsInsEKF::stabilizeP() {
+    // Floor diagonals at a tiny positive value so float32 drift can't drive
+    // them negative or NaN — downstream sqrt(P)/1/P would then propagate NaN
+    // through the whole filter. Well below any legitimate filter state, so
+    // it only fires as a numerical safety net.
+    constexpr float P_MIN_DIAG = 1e-12f;
     static constexpr float pmax[15] = {
         P_MAX_POS, P_MAX_POS, P_MAX_POS,
         P_MAX_VEL, P_MAX_VEL, P_MAX_VEL,
@@ -508,14 +514,13 @@ void GpsInsEKF::timeUpdate() {
         P_MAX_ABIAS, P_MAX_ABIAS, P_MAX_ABIAS,
         P_MAX_GBIAS, P_MAX_GBIAS, P_MAX_GBIAS
     };
-    // Floor diagonals at a tiny positive value so float32 drift can't drive
-    // them negative or NaN — downstream sqrt(P)/1/P would then propagate NaN
-    // through the whole filter. Well below any legitimate filter state, so
-    // it only fires as a numerical safety net.
-    constexpr float P_MIN_DIAG = 1e-12f;
     for (int i = 0; i < 15; i++) {
         if (!std::isfinite(P_[i][i]) || P_[i][i] < P_MIN_DIAG) {
+            // Zero the whole row and column so correlation terms can't carry
+            // NaN forward even if this diagonal was non-finite.
+            for (int j = 0; j < 15; j++) { P_[i][j] = 0.0f; P_[j][i] = 0.0f; }
             P_[i][i] = P_MIN_DIAG;
+            continue;
         }
         if (P_[i][i] > pmax[i]) {
             float scale = std::sqrt(pmax[i] / P_[i][i]);
@@ -650,6 +655,8 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
             float s = 0.5f * (P_[i][j] + P_[j][i]);
             P_[i][j] = s; P_[j][i] = s;
         }
+
+    stabilizeP();
 }
 
 // ─── Magnetometer Heading Update ─────────────────────────────────────
@@ -847,6 +854,8 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         float s=0.5f*(P_[i][j]+P_[j][i]); P_[i][j]=s; P_[j][i]=s;
     }
 
+    stabilizeP();
+
     // State update: x = K * y
     float xk[15]={};
     for (int i=0;i<15;i++) for (int j=0;j<6;j++) xk[i]+=K[i][j]*y[j];
@@ -946,6 +955,8 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
             float s = 0.5f * (P_[i][j] + P_[j][i]);
             P_[i][j] = s; P_[j][i] = s;
         }
+
+    stabilizeP();
 }
 
 // ─── Set Quaternion ─────────────────────────────────────────────────

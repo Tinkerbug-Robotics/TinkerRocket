@@ -169,6 +169,12 @@ private:
     void accelMeasUpdate(const float aMeas[3]);
     void magHeadingUpdate(const float aMeas[3], const float magMeas[3]);
 
+    // Numerical safety net: floor P diagonals at a tiny positive value and
+    // cap them at the per-state P_MAX_* values. Call after every path that
+    // mutates P so float32 drift can't leave a negative or NaN on the diagonal
+    // to propagate through sqrt(P) / 1/P downstream.
+    void stabilizeP();
+
     // Shared core of update() — called after converting GNSS to LLA + NED
     void updateCore(bool use_ahrs_acc,
                     EkfIMUData imu_data,
