@@ -14,6 +14,16 @@
 #include "freertos/queue.h"
 #include "host/ble_gap.h"       // ble_gap_update_params
 
+// Nimble's os.h (pulled in by host/ble_gap.h) defines `max` and `min` as
+// function-style macros, which collide with std::max / std::min. Undo them
+// here so subsequent <algorithm> calls compile cleanly.
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
+
 // std::string is used as "String" in non-Arduino builds (same typedef as TR_BLE_To_APP.h)
 using String = std::string;
 
