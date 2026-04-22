@@ -107,11 +107,18 @@ class TestBinReplay:
         assert rate > 400, f"Baro median rate {rate:.0f} Hz < 400 Hz"
 
     def test_no_large_imu_gaps(self, binfile):
-        """No IMU timestamp gaps > 10ms (excluding NAND flush stalls).
+        """IMU timestamp gap budget.
 
-        Allows up to 2 gaps > 10ms from NAND page writes / file close.
-        A clean bench run should have zero, but the log-stop flush can
-        cause one or two isolated stalls.
+        Two thresholds are checked:
+        - Count: at most 2 gaps > 10 ms (lets NAND page writes / file close
+          cause one or two isolated stalls).
+        - Hard cap: no single gap > 50 ms.  A stall that long means the
+          flight loop blocked in something that's not a normal flush, e.g.
+          a synchronous log-close, a GNSS parse spike, or an I2C lockup.
+          At 1 kHz we lose 50+ IMU samples in that window, which is
+          visible as a step in the EKF.  The 4/21 bench run had a single
+          746 ms stall on file close; that is the class of failure we
+          need to catch here, not tolerate.
         """
         frames = sensor_frames(parse_bin_file(binfile))
         imu_ts = [f.timestamp_us for f in frames if f.msg_type == 0xA2]
@@ -120,11 +127,18 @@ class TestBinReplay:
             pytest.skip("Insufficient IMU data")
 
         large_gaps = []
+        max_gap_ms = 0.0
         for i in range(len(imu_ts) - 1):
             dt_ms = (imu_ts[i+1] - imu_ts[i]) / 1000.0
             if dt_ms > 10.0:
                 large_gaps.append(dt_ms)
+            if dt_ms > max_gap_ms:
+                max_gap_ms = dt_ms
 
+        assert max_gap_ms <= 50.0, (
+            f"IMU stalled for {max_gap_ms:.1f} ms (hard cap 50 ms). "
+            f"Log-close / NAND-flush should finish in < 50 ms."
+        )
         assert len(large_gaps) <= 2, (
             f"{len(large_gaps)} IMU gaps > 10ms (max 2 allowed): "
             f"{[f'{g:.1f}ms' for g in large_gaps]}"
