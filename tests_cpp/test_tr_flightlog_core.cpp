@@ -7,6 +7,7 @@
 #include "fakes/fake_nand_backend.h"
 #include "fakes/memory_bitmap_store.h"
 
+#include <cstdio>
 #include <cstring>
 #include <vector>
 

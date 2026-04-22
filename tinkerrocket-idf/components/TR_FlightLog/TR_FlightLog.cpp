@@ -2,6 +2,7 @@
 
 #include "CRC.h"
 
+#include <cstdio>
 #include <cstring>
 
 namespace tr_flightlog {
