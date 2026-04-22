@@ -14,6 +14,9 @@ struct FrequencyScanView: View {
     @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
+    @State private var showApplyConfirm = false
+    @State private var applyStatus: String? = nil    // transient "Applying…" / "Done" feedback
+
     // Scan parameters, persisted so the user gets the same range next time.
     @AppStorage("scanStartMHz")  private var startMHz: Double = 902.0
     @AppStorage("scanStopMHz")   private var stopMHz:  Double = 928.0
@@ -34,6 +37,17 @@ struct FrequencyScanView: View {
 
     var body: some View {
         Form {
+            if device.hasAutoSelectedChannel {
+                Section {
+                    Label {
+                        Text("A quiet channel was auto-selected when this base station connected. Run another scan below to pick a new one.")
+                            .font(.caption)
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    }
+                }
+            }
+
             Section("Scan Range") {
                 HStack {
                     Text("Start")
@@ -118,6 +132,37 @@ struct FrequencyScanView: View {
                         .padding(.vertical, 4)
                     summary
                 }
+
+                if let quiet = quietestSample {
+                    Section("Auto-Apply") {
+                        Button {
+                            showApplyConfirm = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "wand.and.stars")
+                                Text("Apply \(String(format: "%.2f", quiet.freqMHz)) MHz to Rocket + Base")
+                                Spacer()
+                            }
+                        }
+                        .disabled(!canApply || applyStatus != nil)
+
+                        if let s = applyStatus {
+                            Text(s).font(.caption).foregroundColor(.secondary)
+                        } else if !canApply {
+                            Text("Waiting for base-station config readback…")
+                                .font(.caption).foregroundColor(.secondary)
+                        } else {
+                            Text("Relays the new frequency to every tracked rocket, then switches the base station. Keeps current SF/BW/CR/power.")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+
+                        if device.remoteRockets.isEmpty {
+                            Text("No rockets online — only the base station will be switched.")
+                                .font(.caption).foregroundColor(.orange)
+                        }
+                    }
+                }
             }
         }
         .navigationTitle("Frequency Scan")
@@ -126,6 +171,34 @@ struct FrequencyScanView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Done") { dismiss() }
             }
+        }
+        .alert("Switch frequency?", isPresented: $showApplyConfirm) {
+            Button("Apply", role: .destructive) { applyQuietest() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            if let q = quietestSample {
+                Text("The rocket and base station will both switch to \(String(format: "%.2f", q.freqMHz)) MHz. If the rocket misses the relay packet it will be stranded on the old channel.")
+            }
+        }
+    }
+
+    private var canApply: Bool {
+        device.isBaseStation && device.rocketConfig?.loraFreqMHz != nil
+    }
+
+    private func applyQuietest() {
+        guard let q = quietestSample else { return }
+        applyStatus = "Applying \(String(format: "%.2f", q.freqMHz)) MHz…"
+        let ok = device.autoApplyFrequency(q.freqMHz)
+        if !ok {
+            applyStatus = "Failed: base-station config unavailable"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { applyStatus = nil }
+            return
+        }
+        // Retry window (uplink retries) + BS switch delay + a little slack.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+            applyStatus = "Done"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { applyStatus = nil }
         }
     }
 

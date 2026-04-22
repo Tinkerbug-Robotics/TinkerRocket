@@ -51,6 +51,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var scanSamples: [FrequencyScanSample] = []
     @Published var isScanning: Bool = false
 
+    /// Set once per connected-session after the first-time-seen base station
+    /// has auto-picked and pushed a quiet channel.  Gates the auto-pick so it
+    /// only runs once per session; cleared on disconnect so that a BS reboot
+    /// (which bounces BLE) re-triggers the flow.  User-initiated rescans
+    /// from FrequencyScanView go through autoApplyFrequency directly and do
+    /// not touch this flag.
+    @Published private(set) var hasAutoSelectedChannel: Bool = false
+
+    /// When true, the pending scan was kicked off by triggerAutoChannelSelect
+    /// and its result should be auto-applied (pick quietest + push to both
+    /// sides).  User-initiated scans leave this false so results just sit in
+    /// the chart for review.
+    private var pendingAutoApply: Bool = false
+
     // MARK: - Device identity (populated from config_identity readback)
 
     @Published var unitID: String = ""      // e.g. "a1b2c3d4" (immutable hardware ID)
@@ -131,6 +145,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         hasMoreFiles = false
         clearSimBanner()
         rocketConfig = nil
+        // Reset so the next reconnect (including after a BS reboot) triggers
+        // another auto-pick.  Any pending scan-and-apply is also dropped —
+        // a scan kicked off just before disconnect would not be able to
+        // finish anyway.
+        hasAutoSelectedChannel = false
+        pendingAutoApply = false
         flightAnnouncer?.reset()
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -207,6 +227,91 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         scanSamples = []
         isScanning = true
         sendRawCommand(60, payload: payload)
+    }
+
+    /// If this base-station session has not auto-picked a channel yet, and
+    /// we now have both a config readback and at least one tracked rocket,
+    /// kick off a scan-and-apply cycle so the link lands on the quietest
+    /// channel automatically.  Safe to call as often as needed — it no-ops
+    /// after the first successful trigger.
+    ///
+    /// Rocket must be on-air because the config change is relayed over the
+    /// existing LoRa link; if the rocket has not yet been heard, the BS has
+    /// no way to tell it about the new channel and would strand it.
+    func triggerAutoChannelSelectIfNeeded() {
+        guard isBaseStation,
+              !hasAutoSelectedChannel,
+              rocketConfig?.loraFreqMHz != nil,
+              !remoteRockets.isEmpty,
+              !isScanning,
+              !pendingAutoApply else { return }
+
+        hasAutoSelectedChannel = true
+        pendingAutoApply = true
+
+        // 5 s breathing room so the user sees "Connected" before the scan
+        // interrupts telemetry for ~1.6 s.  Without this delay the dashboard
+        // flashes into view and immediately stalls, which looks broken.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            guard let self = self,
+                  self.pendingAutoApply,
+                  self.isConnected,
+                  !self.remoteRockets.isEmpty else { return }
+            print("[FREQ] Auto-selecting channel (first-time session)")
+            self.startFrequencyScan(startMHz: 902.0, stopMHz: 928.0, stepKHz: 500, dwellMs: 30)
+        }
+    }
+
+    /// Relay a LoRa reconfig to every tracked rocket, then apply the same
+    /// config to this base station after the uplink retries have had time
+    /// to land.  Keeps SF/BW/CR/power from the current base-station config
+    /// — only the frequency changes.
+    ///
+    /// Returns false if no base-station config has been read back yet; we
+    /// need it to pick SF/BW/CR that the rocket will also accept.
+    @discardableResult
+    func autoApplyFrequency(_ freqMHz: Float) -> Bool {
+        guard isBaseStation,
+              let cfg = rocketConfig,
+              let bw = cfg.loraBwKHz,
+              let sf = cfg.loraSF,
+              let cr = cfg.loraCR,
+              let pwr = cfg.loraTxPower else {
+            print("[FREQ] Auto-apply refused: no base-station LoRa config yet")
+            return false
+        }
+
+        // cmd-10 payload (same layout as sendLoRaConfig)
+        var loraPayload = Data()
+        var f = freqMHz
+        var b = bw
+        loraPayload.append(Data(bytes: &f, count: 4))
+        loraPayload.append(Data(bytes: &b, count: 4))
+        loraPayload.append(sf)
+        loraPayload.append(cr)
+        loraPayload.append(UInt8(bitPattern: pwr))
+
+        // Relay to each tracked rocket.  The BS retries each uplink packet
+        // up to 8 times over ~800 ms; a missed relay is rare but possible,
+        // in which case the rocket stays on the old channel and must be
+        // reconfigured manually over BLE.
+        for rocket in remoteRockets {
+            var relay = Data()
+            relay.append(rocket.rocketID)
+            relay.append(10)          // inner cmd = LoRa config
+            relay.append(loraPayload)
+            sendRawCommand(50, payload: relay)
+        }
+
+        // Switch the base station last.  Wait long enough for the uplink
+        // retries (8 × 100 ms + TX time ≈ 1.5 s) to complete first so the
+        // rocket has already hopped before we leave the old channel.
+        let delay = remoteRockets.isEmpty ? 0.0 : 2.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self else { return }
+            self.sendLoRaConfig(freqMHz: freqMHz, bwKHz: bw, sf: sf, cr: cr, txPower: pwr)
+        }
+        return true
     }
 
     func sendLoRaConfig(freqMHz: Float, bwKHz: Float, sf: UInt8, cr: UInt8, txPower: Int8) {
@@ -807,6 +912,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 cfg.pyro2TriggerValue = existing.pyro2TriggerValue
             }
             self.rocketConfig = cfg
+            triggerAutoChannelSelectIfNeeded()
             return
         }
 
@@ -858,6 +964,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     remote.telemetry = newTelemetry
                     remoteRockets.append(remote)
                     print("[BS] New remote rocket: rid=\(rocketID) name=\(remote.unitName)")
+                    triggerAutoChannelSelectIfNeeded()
                 }
                 // Still update base station's own telemetry for BS-specific fields
                 // (battery, logging state) but don't overwrite rocket telemetry
@@ -928,6 +1035,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         scanSamples = samples
         isScanning = false
         print("[SCAN] Parsed \(n) samples, start=\(start) MHz step=\(stepKHz) kHz")
+
+        // If this scan was kicked off by the automatic first-time-connection
+        // flow, apply the quietest channel now.  User-initiated scans leave
+        // pendingAutoApply false, so the chart just sits there for review.
+        if pendingAutoApply {
+            pendingAutoApply = false
+            if let quiet = samples.min(by: { $0.rssiDbm < $1.rssiDbm }) {
+                print("[FREQ] Auto-applying quietest channel: \(quiet.freqMHz) MHz (\(quiet.rssiDbm) dBm)")
+                _ = autoApplyFrequency(quiet.freqMHz)
+            }
+        }
     }
 
     private func parseFileList(_ data: Data?) {
