@@ -2,6 +2,7 @@
 
 #include "BlockStateBitmap.h"
 #include "FlightIndex.h"
+#include "NvsBitmapStore.h"
 #include "TR_FlightLog.h"
 #include "TR_NandBackend_esp.h"
 #include "fakes/fake_nand_backend.h"
@@ -1376,6 +1377,33 @@ TEST(TRNandBackendEsp, StubInstantiatesAndReturnsFailures) {
     EXPECT_FALSE(backend.eraseBlock(0));
     EXPECT_FALSE(backend.markBlockBad(0));
     EXPECT_TRUE(backend.isBlockBad(0));  // conservative — all blocks "bad"
+}
+
+// ================================================================
+// NvsBitmapStore — real implementation only exists on ESP-IDF; host
+// compiles to a stub so TR_FlightLog::begin() falls back to a fresh
+// chip + seed-from-backend. These tests guard that contract so the
+// host build behaves the same as a first-boot-on-new-firmware path.
+// ================================================================
+
+TEST(NvsBitmapStore, HostStubReturnsFalseForBothOps) {
+    tr_flightlog::NvsBitmapStore store;
+    uint8_t buf[tr_flightlog::BlockStateBitmap::SERIALIZED_SIZE] = {};
+    EXPECT_FALSE(store.load(buf, sizeof(buf)));
+    EXPECT_FALSE(store.save(buf, sizeof(buf)));
+}
+
+TEST(NvsBitmapStore, TRFlightLogAcceptsNvsStoreOnHostWithFreshSeed) {
+    // Using an NvsBitmapStore on host should behave identically to passing
+    // nullptr — begin() sees load() fail, seeds from backend, (tries to)
+    // persist via save() which also fails silently. No crash.
+    FakeNandBackend nand;
+    nand.injectFactoryBadBlock(77);
+    tr_flightlog::NvsBitmapStore store;
+
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    EXPECT_EQ(fl.bitmap().get(77), BLOCK_BAD);
 }
 
 TEST(TRFlightLogBrownout, FinalizedFlightsAreNotRecovered) {
