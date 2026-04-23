@@ -1458,6 +1458,16 @@ void TR_LogToFlash::closeLogSession()
 
 void TR_LogToFlash::markDirty()
 {
+    // Sink mode (issue #50 Stage 2c-3c): the "dirty" marker file exists so
+    // checkDirtyOnStartup() can detect an unclean shutdown and replay the MRAM
+    // ring into LFS. With the write_sink in place, the ring drains into
+    // TR_FlightLog, not LFS — and TR_FlightLog has its own brownout recovery
+    // (PageHeader + scanForBrownoutRecovery). Touching LFS here just hammers
+    // block 0/1 superblock metadata for no gain ("Bad block at 0x1 /
+    // Superblock 0x1 has become unwritable" warnings on chips that have been
+    // reformatted many times during development).
+    if (cfg.write_sink != nullptr) return;
+
     lfs_file_t f;
     int err = lfs_file_open(&lfs, &f, "/.dirty",
                             LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
@@ -1471,6 +1481,9 @@ void TR_LogToFlash::markDirty()
 
 void TR_LogToFlash::clearDirty()
 {
+    // See markDirty() — symmetric skip in sink mode.
+    if (cfg.write_sink != nullptr) return;
+
     lfs_remove(&lfs, "/.dirty");
 }
 
