@@ -151,7 +151,10 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     lfs_cfg->read_size = NAND_PAGE_SIZE;      // 2048
     lfs_cfg->prog_size = NAND_PAGE_SIZE;      // 2048
     lfs_cfg->block_size = NAND_BLOCK_SIZE;    // 128KB
-    lfs_cfg->block_count = NAND_BLOCK_COUNT;  // 1024
+    // Default to the full chip; caller may shrink (issue #50 Stage 2c) so the
+    // trailing blocks can be owned by TR_FlightLog.
+    lfs_cfg->block_count = (cfg.lfs_block_count > 0) ? cfg.lfs_block_count
+                                                     : NAND_BLOCK_COUNT;
     lfs_cfg->cache_size = NAND_PAGE_SIZE;     // 2048
     lfs_cfg->lookahead_size = 128;            // 128 bytes = 1024 bits
     lfs_cfg->block_cycles = 500;              // Wear leveling

@@ -2200,10 +2200,49 @@ void initPeripherals()
     log_cfg.spi_hz_mram = config::SPI_HZ_MRAM;
     log_cfg.spi_mode_mram = config::SPI_MODE_MRAM;
     log_cfg.mram_size = config::MRAM_SIZE;
+
+    // --- LFS partition shrink (issue #50 Stage 2c-2) ------------------------
+    // When TR_FlightLog is active we restrict LFS to the first 32 blocks
+    // (4 MB) so the flight-log allocator can own the remaining 988 blocks
+    // plus the metadata blocks. First boot under the shrunk layout force-
+    // formats (wipes any legacy flight_*.bin files) — that's the accepted
+    // upgrade cost. Subsequent boots read the NVS marker and skip the wipe.
+    bool lfs_wipe_pending = false;
+    if (config::ENABLE_FLIGHTLOG_SHADOW)
+    {
+        log_cfg.lfs_block_count = 32;
+
+        Preferences fl_prefs;
+        bool already_shrunk = false;
+        if (fl_prefs.begin("flightlog", /*readOnly=*/true))
+        {
+            already_shrunk = fl_prefs.getBool("lfs_shrunk", false);
+            fl_prefs.end();
+        }
+        if (!already_shrunk)
+        {
+            log_cfg.force_format = true;
+            lfs_wipe_pending = true;
+            ESP_LOGW("FLIGHTLOG", "First boot of shrunk-LFS firmware — will wipe legacy flight files");
+        }
+    }
+
     if (!logger.begin(SPI, log_cfg))
     {
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
+    }
+
+    // Record the shrunk-layout marker so subsequent boots skip the force_format.
+    if (lfs_wipe_pending)
+    {
+        Preferences fl_prefs;
+        if (fl_prefs.begin("flightlog", /*readOnly=*/false))
+        {
+            fl_prefs.putBool("lfs_shrunk", true);
+            fl_prefs.end();
+            ESP_LOGI("FLIGHTLOG", "Recorded shrunk-LFS marker in NVS");
+        }
     }
 
     // --- TR_FlightLog shadow (issue #50 Stage 2b) ---------------------------
@@ -2211,7 +2250,7 @@ void initPeripherals()
     // At this point the SPI bus + bad-block bitmap are initialized by
     // logger.begin(); the shadow just reads state (no NAND writes) and logs
     // its view so bench tests can verify it loads cleanly. Hot-path writes
-    // still go through LFS until Stage 2c.
+    // still go through LFS until Stage 2c-3.
     if (config::ENABLE_FLIGHTLOG_SHADOW)
     {
         flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
