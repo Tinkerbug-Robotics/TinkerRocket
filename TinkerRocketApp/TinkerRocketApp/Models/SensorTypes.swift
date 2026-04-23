@@ -234,7 +234,9 @@ nonisolated struct MMC5983MAData {
     }
 }
 
-// Non-Sensor Data (38 bytes)
+// Non-Sensor Data (43 bytes)
+// Wire layout mirrors C++ NonSensorData in RocketComputerTypes.h — bump the
+// size guard + add the matching field here whenever a byte is appended.
 nonisolated struct NonSensorData {
     let time_us: UInt32
 
@@ -262,9 +264,18 @@ nonisolated struct NonSensorData {
     // KF-filtered barometric altitude rate (dm/s = 0.1 m/s)
     let baro_alt_rate_dmps: Int16
 
+    // Pyro channel status bitfield (appended in #34):
+    //   bit 0 PSF_CH1_CONT  — ch1 continuity
+    //   bit 1 PSF_CH2_CONT
+    //   bit 2 PSF_CH1_FIRED
+    //   bit 3 PSF_CH2_FIRED
+    //   bit 4 PSF_REBOOT_RECOVERY  — mid-flight reboot recovery occurred
+    //   bit 5 PSF_GUIDANCE_ENABLED — FC's live guidance_enabled config
+    let pyro_status: UInt8
+
     init(from data: Data) throws {
-        guard data.count >= 42 else {
-            throw ParseError.invalidSize(expected: 42, got: data.count)
+        guard data.count >= 43 else {
+            throw ParseError.invalidSize(expected: 43, got: data.count)
         }
 
         var offset = 0
@@ -289,6 +300,8 @@ nonisolated struct NonSensorData {
         rocket_state = data.readUInt8(at: &offset)
 
         baro_alt_rate_dmps = data.readInt16LE(at: &offset)
+
+        pyro_status = data.readUInt8(at: &offset)
     }
 }
 
@@ -535,6 +548,15 @@ nonisolated struct NonSensorDataSI {
     let launch_flag: Bool
 
     let rocket_state: RocketState
+
+    // Derived from NonSensorData.pyro_status (raw byte is kept here so
+    // downstream consumers can inspect individual bits as needed).
+    let pyro1_continuity: Bool
+    let pyro2_continuity: Bool
+    let pyro1_fired: Bool
+    let pyro2_fired: Bool
+    let reboot_recovery: Bool
+    let guidance_enabled: Bool
 }
 
 // MARK: - Parsing Errors

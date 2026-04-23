@@ -486,6 +486,14 @@ nonisolated class CSVGenerator {
         columns.append("Velocity Apogee Flag")
         columns.append("Launch Flag")
 
+        // Pyro status bits (appended in #34 wire format; legacy files emit 0s)
+        columns.append("Pyro 1 Continuity")
+        columns.append("Pyro 2 Continuity")
+        columns.append("Pyro 1 Fired")
+        columns.append("Pyro 2 Fired")
+        columns.append("Reboot Recovery")
+        columns.append("FC Guidance Enabled")
+
         return columns.joined(separator: ",") + "\n"
     }
 
@@ -568,6 +576,14 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.alt_apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.vel_u_apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.launch_flag ? "1" : "0" } ?? "")
+
+        // Pyro status bits
+        values.append(nonSensor.map { $0.pyro1_continuity ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro2_continuity ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro1_fired ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro2_fired ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.reboot_recovery ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.guidance_enabled ? "1" : "0" } ?? "")
 
         return values.joined(separator: ",") + "\n"
     }
