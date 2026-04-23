@@ -54,6 +54,7 @@ static inline std::string itos(int v)
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
 #include <TR_NandBackend_esp.h>
+#include <NvsBitmapStore.h>
 // FlightSimulator.h removed — sim now runs on FlightComputer via TR_Sensor_Collector_Sim
 
 static TR_I2C_Interface i2c_interface(config::I2C_ADDRESS);
@@ -67,6 +68,9 @@ static TR_LogToFlash logger;
 // copy index. Nothing on the flight hot path touches it yet.
 static tr_flightlog::TR_NandBackend_esp flightlog_backend;
 static tr_flightlog::TR_FlightLog flightlog;
+// Stage 2c-3a: persistent bitmap store wired into begin() so bad-block state
+// and (future) allocated-block state survive reboots.
+static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
 static TR_BLE_To_APP ble_app("TinkerRocket");
 static TR_LoRa_Comms lora_comms;
 static SensorConverter sensor_converter;
@@ -2256,7 +2260,7 @@ void initPeripherals()
         flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
         auto st = flightlog.begin(flightlog_backend,
                                   tr_flightlog::TR_FlightLog::Config{},
-                                  /*bitmap_store=*/nullptr);
+                                  &flightlog_bitmap_store);
         if (st == tr_flightlog::Status::Ok)
         {
             ESP_LOGI("FLIGHTLOG", "shadow up: %zu flight(s) in index, %zu bad blocks",
