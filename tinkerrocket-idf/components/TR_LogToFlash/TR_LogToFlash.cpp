@@ -1277,6 +1277,23 @@ void TR_LogToFlash::openLogSession()
 {
     if (file_open) return;
 
+    // Write-sink mode (issue #50 Stage 2c-3c): TR_FlightLog owns the hot path
+    // and LFS has no role in flight logging. Skip all LFS operations — the
+    // filename is synthesized for log messages only; the flush task will drain
+    // into the sink, not into an lfs_file_t.
+    if (cfg.write_sink != nullptr)
+    {
+        snprintf(current_filename, sizeof(current_filename), "/flight.bin");
+        file_open = true;
+        current_file_bytes = 0;
+        current_file_has_timestamp = false;
+        page_buf_idx = 0;
+        pages_since_sync_ = 0;
+        end_flight_requested = false;
+        if (cfg.debug) ESP_LOGI(TAG, "openLogSession (sink mode, LFS skipped)");
+        return;
+    }
+
     // Generate filename - find next unused number
     struct lfs_info info;
 
@@ -1361,6 +1378,35 @@ void TR_LogToFlash::activateLogging()
 void TR_LogToFlash::closeLogSession()
 {
     if (!file_open) return;
+
+    // Write-sink mode: the flush task wrote via the sink, so there's no open
+    // lfs_file_t to flush/close. Any partial page in page_buf gets handed to
+    // the sink too — matches what the LFS path does for partial final pages.
+    if (cfg.write_sink != nullptr)
+    {
+        if (page_buf_idx > 0)
+        {
+            // Pad the tail chunk with the existing 0xFF fill from NAND prior
+            // state is not possible here (page_buf is just RAM), so we pass
+            // whatever bytes we have — the sink (writeFrame) wraps payload
+            // in a PageHeader and programs a full 2048-byte page, zero-
+            // padding the unused payload tail. Accepted small loss.
+            (void)cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
+            page_buf_idx = 0;
+        }
+        file_open = false;
+        logging_active = false;
+        clearDirty();
+        persistBadBlocksIfDirty();
+        ring_prelaunch_cap_ = ring_size_ / 2;
+        if (cfg.debug)
+        {
+            ESP_LOGI(TAG, "closeLogSession (sink mode): %lu bytes handed off",
+                     (unsigned long)current_file_bytes);
+        }
+        current_file_bytes = 0;
+        return;
+    }
 
     // Write any remaining data in page staging buffer
     if (page_buf_idx > 0)
