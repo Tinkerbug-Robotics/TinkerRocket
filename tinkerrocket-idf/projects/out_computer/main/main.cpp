@@ -55,6 +55,7 @@ static inline std::string itos(int v)
 #include <TR_FlightLog.h>
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
+#include <WireFormat.h>
 // FlightSimulator.h removed — sim now runs on FlightComputer via TR_Sensor_Collector_Sim
 
 static TR_I2C_Interface i2c_interface(config::I2C_ADDRESS);
@@ -87,6 +88,71 @@ static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload
 {
     auto* fl = static_cast<tr_flightlog::TR_FlightLog*>(ctx);
     return fl->writeFrame(payload, payload_len) == tr_flightlog::Status::Ok;
+}
+
+// Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
+// Fills up to `max_bytes` of the downloader's scratch buffer by issuing
+// successive readFlightPage calls (each one returns at most 2032 payload
+// bytes — the portion of a single NAND page past its PageHeader). Matches
+// the logger.readFileChunk contract: sets eof=true when the last byte of
+// the flight has been read; returns false only on underlying NAND I/O error.
+static bool flightlogReadChunk(const char* filename, uint32_t offset,
+                               uint8_t* buf, size_t max_bytes,
+                               size_t& out_bytes, bool& eof)
+{
+    out_bytes = 0;
+    eof = false;
+    while (out_bytes < max_bytes)
+    {
+        size_t got = 0;
+        auto st = flightlog.readFlightPage(
+            filename, offset + out_bytes,
+            buf + out_bytes, max_bytes - out_bytes, got);
+        if (st == tr_flightlog::Status::NotFound) return false;
+        if (st != tr_flightlog::Status::Ok) return false;
+        if (got == 0)
+        {
+            eof = true;
+            break;
+        }
+        out_bytes += got;
+    }
+    return true;
+}
+
+// Builds the cmd 2 / cmd 3 response JSON. Pulls all index entries, reverses
+// to newest-first (flight_id is monotonic, so index order is oldest-first),
+// paginates at FILES_PER_PAGE, and encodes via the byte-stable
+// wire_format::encodeFileListJson helper (golden-fixture tested in Stage 1).
+// Returns the JSON string; caller passes it to ble_app.sendFileList.
+static std::string flightlogBuildFileListJson(uint8_t page)
+{
+    static constexpr size_t FILES_PER_PAGE = 5;
+
+    static tr_flightlog::FlightIndexEntry entries[
+        tr_flightlog::FlightIndex::MAX_ENTRIES];
+    const size_t total = flightlog.listFlights(
+        entries, tr_flightlog::FlightIndex::MAX_ENTRIES,
+        /*page=*/0, /*per_page=*/tr_flightlog::FlightIndex::MAX_ENTRIES);
+
+    // Reverse for newest-first display order (matches legacy qsort behavior).
+    for (size_t i = 0; i < total / 2; ++i)
+    {
+        tr_flightlog::FlightIndexEntry tmp = entries[i];
+        entries[i] = entries[total - 1 - i];
+        entries[total - 1 - i] = tmp;
+    }
+
+    const size_t start = (size_t)page * FILES_PER_PAGE;
+    const size_t end_raw = start + FILES_PER_PAGE;
+    const size_t s = (start < total) ? start : total;
+    const size_t e = (end_raw < total) ? end_raw : total;
+    const size_t n = e - s;
+
+    static char json[512];
+    const size_t json_len = tr_flightlog::wire_format::encodeFileListJson(
+        entries + s, n, json, sizeof(json));
+    return std::string(json, json_len);
 }
 
 static void shadowPrepareFlight()
@@ -2899,38 +2965,42 @@ static void loop_oc()
         }
         else if (ble_cmd == 2)
         {
-            // Send file list with pagination (5 files per page)
-            // Timestamp is parsed from filename on the app side, keeping JSON compact.
-            beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking NAND reads
-            static constexpr size_t FILES_PER_PAGE = 5;
+            // Send file list with pagination (5 files per page).
+            // Stage 3b: when TR_FlightLog is the source of truth, the encoder
+            // lives in wire_format:: and is byte-tested against golden fixtures.
+            beginPhoneIO();
             uint8_t page = ble_app.getFileListPage();
-            static TR_LogFileInfo infos[64];  // static to avoid stack overflow
-            size_t total = logger.listFiles(infos, 64);
-            qsort(infos, total, sizeof(TR_LogFileInfo), compareFilesDescending);  // Sort newest first
-
-            // Calculate offset and count for this page
-            size_t offset = page * FILES_PER_PAGE;
-            size_t start = (offset < total) ? offset : total;
-            size_t end = (start + FILES_PER_PAGE < total) ? start + FILES_PER_PAGE : total;
-            size_t n = end - start;
-
-            String json = "[";
-            for (size_t i = start; i < end; ++i)
+            String json;
+            if (config::ENABLE_FLIGHTLOG_SHADOW)
             {
-                if (i > start) json += ",";
-                json += "{\"name\":\"";
-                json += infos[i].filename;
-                json += "\",\"size\":";
-                json += std::to_string(infos[i].size_bytes);
-                json += "}";
+                json = flightlogBuildFileListJson(page);
             }
-            json += "]";
-
+            else
+            {
+                static constexpr size_t FILES_PER_PAGE = 5;
+                static TR_LogFileInfo infos[64];
+                size_t total = logger.listFiles(infos, 64);
+                qsort(infos, total, sizeof(TR_LogFileInfo), compareFilesDescending);
+                size_t offset = page * FILES_PER_PAGE;
+                size_t start = (offset < total) ? offset : total;
+                size_t end = (start + FILES_PER_PAGE < total) ? start + FILES_PER_PAGE : total;
+                json = "[";
+                for (size_t i = start; i < end; ++i)
+                {
+                    if (i > start) json += ",";
+                    json += "{\"name\":\"";
+                    json += infos[i].filename;
+                    json += "\",\"size\":";
+                    json += std::to_string(infos[i].size_bytes);
+                    json += "}";
+                }
+                json += "]";
+            }
             ble_app.sendFileList(json);
             endPhoneIO();
-
-            ESP_LOGI("BLE", "Sent file list page %u: %u files (%u of %u, %u bytes)",
-                          page, (unsigned)n, (unsigned)start, (unsigned)total, json.length());
+            ESP_LOGI("BLE", "Sent file list page %u: %u bytes (%s)",
+                     page, (unsigned)json.length(),
+                     config::ENABLE_FLIGHTLOG_SHADOW ? "TR_FlightLog" : "LFS");
         }
         else if (ble_cmd == 23)
         {
@@ -2973,38 +3043,43 @@ static void loop_oc()
         }
         else if (ble_cmd == 3)
         {
-            // Delete file
+            // Delete file, then return the refreshed page-0 listing.
             String filename = ble_app.getDeleteFilename();
             if (filename.length() > 0)
             {
-                beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking NAND erase + list
-                bool success = logger.deleteFile(filename.c_str());
-                ESP_LOGI("BLE", "Delete file '%s': %s", filename.c_str(), success ? "SUCCESS" : "FAILED");
-
-                // Send updated file list after deletion (page 0)
-                static TR_LogFileInfo infos[64];  // static to avoid stack overflow
-                size_t total = logger.listFiles(infos, 64);
-                qsort(infos, total, sizeof(TR_LogFileInfo), compareFilesDescending);  // Sort newest first
-
-                size_t n = (total > 5) ? 5 : total;
-
-                String json = "[";
-                for (size_t i = 0; i < n; ++i)
+                beginPhoneIO();
+                bool success = false;
+                String json;
+                if (config::ENABLE_FLIGHTLOG_SHADOW)
                 {
-                    if (i > 0) json += ",";
-                    json += "{\"name\":\"";
-                    json += infos[i].filename;
-                    json += "\",\"size\":";
-                    json += std::to_string(infos[i].size_bytes);
-                    json += "}";
+                    auto st = flightlog.deleteFlight(filename.c_str());
+                    success = (st == tr_flightlog::Status::Ok);
+                    json = flightlogBuildFileListJson(/*page=*/0);
                 }
-                json += "]";
-
+                else
+                {
+                    success = logger.deleteFile(filename.c_str());
+                    static TR_LogFileInfo infos[64];
+                    size_t total = logger.listFiles(infos, 64);
+                    qsort(infos, total, sizeof(TR_LogFileInfo), compareFilesDescending);
+                    size_t n = (total > 5) ? 5 : total;
+                    json = "[";
+                    for (size_t i = 0; i < n; ++i)
+                    {
+                        if (i > 0) json += ",";
+                        json += "{\"name\":\"";
+                        json += infos[i].filename;
+                        json += "\",\"size\":";
+                        json += std::to_string(infos[i].size_bytes);
+                        json += "}";
+                    }
+                    json += "]";
+                }
+                ESP_LOGI("BLE", "Delete '%s': %s (%s)", filename.c_str(),
+                         success ? "OK" : "FAIL",
+                         config::ENABLE_FLIGHTLOG_SHADOW ? "TR_FlightLog" : "LFS");
                 ble_app.sendFileList(json);
                 endPhoneIO();
-
-                ESP_LOGI("BLE", "Sent updated file list: %u of %u files (%u bytes)",
-                              (unsigned)n, (unsigned)total, json.length());
             }
         }
 
@@ -3062,9 +3137,20 @@ static void loop_oc()
             {
                 // Read next block from flash, appended after any carryover bytes
                 size_t flash_bytes_read = 0;
-                if (!logger.readFileChunk(download_filename.c_str(), file_offset,
-                                          read_buf + carryover, FLASH_READ_SIZE,
-                                          flash_bytes_read, eof))
+                bool read_ok;
+                if (config::ENABLE_FLIGHTLOG_SHADOW)
+                {
+                    read_ok = flightlogReadChunk(download_filename.c_str(), file_offset,
+                                                 read_buf + carryover, FLASH_READ_SIZE,
+                                                 flash_bytes_read, eof);
+                }
+                else
+                {
+                    read_ok = logger.readFileChunk(download_filename.c_str(), file_offset,
+                                                   read_buf + carryover, FLASH_READ_SIZE,
+                                                   flash_bytes_read, eof);
+                }
+                if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
                     ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
