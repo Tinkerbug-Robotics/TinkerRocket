@@ -10,6 +10,15 @@ struct config
     static constexpr bool VERBOSE_DEBUG = false;  // Temporarily disabled to see BLE output
     static constexpr uint32_t STATS_PERIOD_MS = 1000;
 
+    // --- TR_FlightLog shadow construction (issue #50 Stage 2b) ---
+    // When true, construct a TR_FlightLog instance alongside TR_LogToFlash
+    // and call its begin() to validate the new append-only NAND layer loads
+    // cleanly on real hardware (bitmap + dual-copy index). The hot path still
+    // writes via LittleFS — this flag only exercises construction + state
+    // load, not prepareFlight/writeFrame/finalizeFlight. Default off until
+    // bench-validated.
+    static constexpr bool ENABLE_FLIGHTLOG_SHADOW = false;
+
     // --- Power rail switch ---
     static constexpr int PWR_PIN = 6;
 
