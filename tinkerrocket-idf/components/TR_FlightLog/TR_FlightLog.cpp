@@ -2,6 +2,11 @@
 
 #include "CRC.h"
 
+#ifdef ESP_PLATFORM
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
+
 #include <cstdio>
 #include <cstring>
 
@@ -20,6 +25,15 @@ bool page_is_all_ones(const uint8_t* page) {
         if (page[i] != 0xFF) return false;
     }
     return true;
+}
+
+// Brownout scan can sweep thousands of NAND pages on a single boot. Yield to
+// other tasks every block's worth of reads so IDLE1 (task_wdt) doesn't starve.
+// On host / in tests this is a no-op.
+inline void yield_to_scheduler() {
+#ifdef ESP_PLATFORM
+    vTaskDelay(1);  // ~10 ms; allows IDLE to run and resets the watchdog
+#endif
 }
 
 }  // namespace
@@ -113,7 +127,33 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         for (uint32_t i = 0; i < run_len; ++i) {
             const uint32_t blk = run_start + i;
             if (bitmap_.get(blk) == BLOCK_BAD) continue;
-            for (uint32_t p = 0; p < NAND_PAGES_PER_BLK; ++p) {
+
+            // Fast-path: read just the first page of the block. If its header
+            // doesn't carry FPAG_MAGIC, no writeFrame ever ran in this block
+            // (the rest is 0xFF by contract — each block in an allocated
+            // range was erased before use). Skip the 63 remaining reads.
+            if (!nand_->readPage(blk, 0, page)) continue;
+            {
+                PageHeader hdr0;
+                std::memcpy(&hdr0, page, sizeof(hdr0));
+                if (hdr0.magic != FPAG_MAGIC)
+                {
+                    // Block was erased but never programmed — nothing to find.
+                    yield_to_scheduler();
+                    continue;
+                }
+                // First page looked valid; handle it below along with the rest.
+                if (hdr0.crc32 == page_crc(page))
+                {
+                    if (!saw_any || hdr0.seq_number > last_seq) {
+                        last_seq           = hdr0.seq_number;
+                        last_flight_id     = hdr0.flight_id;
+                        last_good_page_rel = static_cast<int32_t>(i * NAND_PAGES_PER_BLK);
+                        saw_any            = true;
+                    }
+                }
+            }
+            for (uint32_t p = 1; p < NAND_PAGES_PER_BLK; ++p) {
                 if (!nand_->readPage(blk, p, page)) continue;
                 if (page_is_all_ones(page)) continue;   // unwritten
 
@@ -129,6 +169,9 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                     saw_any            = true;
                 }
             }
+            // Yield after each block so the per-block scan cost can be
+            // absorbed without starving IDLE1 and tripping task_wdt.
+            yield_to_scheduler();
         }
 
         if (!saw_any) {

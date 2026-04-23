@@ -23,6 +23,17 @@ struct TR_LogToFlashConfig
     // partition) so the flight-log allocator can safely use the remainder.
     uint32_t lfs_block_count = 0;  // 0 = full chip (NAND_BLOCK_COUNT)
 
+    // Optional hot-path write override (issue #50 Stage 2c-3c). When set,
+    // the flush task calls `write_sink(write_sink_ctx, payload, len)` for
+    // each page drained from the ring instead of lfs_file_write. `len` is
+    // fixed at NAND_PAGE_SIZE - 16 (2032) so the sink can prepend a 16-byte
+    // TR_FlightLog PageHeader and still land on a NAND page boundary. The
+    // sink should return true on success; false drops the page (same as an
+    // LFS write failure). When the sink is set, periodic lfs_file_sync calls
+    // are suppressed — each page is self-describing via its PageHeader CRC.
+    bool (*write_sink)(void* ctx, const uint8_t* payload, size_t payload_len) = nullptr;
+    void* write_sink_ctx = nullptr;
+
     // MRAM ring buffer (optional — set mram_cs >= 0 to enable).
     // When enabled the ring buffer lives in SPI MRAM instead of ESP32 RAM,
     // providing larger capacity (128 KB) and power-loss survivability.
@@ -110,6 +121,10 @@ public:
     bool eraseNandBlock(uint32_t block);
     bool isNandBlockBad(uint32_t block) const;
     bool markNandBlockBad(uint32_t block);
+
+    // Bytes drained from the ring into the current flight so far (reset at
+    // openLogSession, incremented as pages are pushed to the sink/LFS).
+    uint32_t currentFileBytes() const { return current_file_bytes; }
     void startLogging();
     void endLogging(); // request close after buffered data is flushed
     void prepareLogFile();  // Pre-create log file (call during PRELAUNCH to avoid NAND stall at launch)

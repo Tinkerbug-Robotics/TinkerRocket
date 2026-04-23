@@ -1277,6 +1277,23 @@ void TR_LogToFlash::openLogSession()
 {
     if (file_open) return;
 
+    // Write-sink mode (issue #50 Stage 2c-3c): TR_FlightLog owns the hot path
+    // and LFS has no role in flight logging. Skip all LFS operations — the
+    // filename is synthesized for log messages only; the flush task will drain
+    // into the sink, not into an lfs_file_t.
+    if (cfg.write_sink != nullptr)
+    {
+        snprintf(current_filename, sizeof(current_filename), "/flight.bin");
+        file_open = true;
+        current_file_bytes = 0;
+        current_file_has_timestamp = false;
+        page_buf_idx = 0;
+        pages_since_sync_ = 0;
+        end_flight_requested = false;
+        if (cfg.debug) ESP_LOGI(TAG, "openLogSession (sink mode, LFS skipped)");
+        return;
+    }
+
     // Generate filename - find next unused number
     struct lfs_info info;
 
@@ -1361,6 +1378,35 @@ void TR_LogToFlash::activateLogging()
 void TR_LogToFlash::closeLogSession()
 {
     if (!file_open) return;
+
+    // Write-sink mode: the flush task wrote via the sink, so there's no open
+    // lfs_file_t to flush/close. Any partial page in page_buf gets handed to
+    // the sink too — matches what the LFS path does for partial final pages.
+    if (cfg.write_sink != nullptr)
+    {
+        if (page_buf_idx > 0)
+        {
+            // Pad the tail chunk with the existing 0xFF fill from NAND prior
+            // state is not possible here (page_buf is just RAM), so we pass
+            // whatever bytes we have — the sink (writeFrame) wraps payload
+            // in a PageHeader and programs a full 2048-byte page, zero-
+            // padding the unused payload tail. Accepted small loss.
+            (void)cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
+            page_buf_idx = 0;
+        }
+        file_open = false;
+        logging_active = false;
+        clearDirty();
+        persistBadBlocksIfDirty();
+        ring_prelaunch_cap_ = ring_size_ / 2;
+        if (cfg.debug)
+        {
+            ESP_LOGI(TAG, "closeLogSession (sink mode): %lu bytes handed off",
+                     (unsigned long)current_file_bytes);
+        }
+        current_file_bytes = 0;
+        return;
+    }
 
     // Write any remaining data in page staging buffer
     if (page_buf_idx > 0)
@@ -1699,6 +1745,15 @@ void TR_LogToFlash::flushRingToNand()
     // this is a dedicated task that won't stall sensor reads on Core 1.
     // When running single-threaded (startup recovery), we drain everything too.
 
+    // Hot-path target size: full NAND page for LFS, or page - 16 B for the
+    // TR_FlightLog sink (leaves room for a PageHeader it will prepend).
+    // The 16-byte figure must match sizeof(tr_flightlog::PageHeader); a
+    // constant literal is used here to avoid pulling TR_FlightLog headers
+    // into TR_LogToFlash and creating a dependency cycle.
+    const uint32_t chunk_target = (cfg.write_sink != nullptr)
+        ? (NAND_PAGE_SIZE - 16u)
+        : NAND_PAGE_SIZE;
+
     // Read current count
     portENTER_CRITICAL(&ring_mux_);
     uint32_t avail = rb_count;
@@ -1707,7 +1762,7 @@ void TR_LogToFlash::flushRingToNand()
     // Drain RAM ring buffer to page staging buffer
     while (avail > 0)
     {
-        const uint32_t need = NAND_PAGE_SIZE - page_buf_idx;
+        const uint32_t need = chunk_target - page_buf_idx;
         const uint32_t chunk = (avail < need) ? avail : need;
         if (chunk == 0)
         {
@@ -1723,44 +1778,59 @@ void TR_LogToFlash::flushRingToNand()
         page_buf_idx += popped;
         current_file_bytes += popped;
 
-        // Write full page to LittleFS
-        if (page_buf_idx == NAND_PAGE_SIZE)
+        // Full chunk ready — ship it either to the TR_FlightLog sink or to LFS.
+        if (page_buf_idx == chunk_target)
         {
-            // Snapshot callback counters so we can break down what a slow
-            // lfs_file_write actually did underneath — reads vs progs vs
-            // erases tells us lookahead-scan / CTZ-walk vs compaction.
-            const uint32_t cb_reads_before  = lfs_cb_reads_;
-            const uint32_t cb_progs_before  = lfs_cb_progs_;
-            const uint32_t cb_erases_before = lfs_cb_erases_;
-
-            lfs_ssize_t written;
+            bool ok = false;
             const int64_t _t0 = esp_timer_get_time();
-            written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
-            const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
-            if (_dt > write_max_us_) write_max_us_ = _dt;
-            if (_dt > (uint32_t)STALL_THRESHOLD_US)
+
+            if (cfg.write_sink != nullptr)
             {
-                ESP_LOGW(TAG, "STALL: lfs_file_write took %lu us "
-                              "(reads=%lu progs=%lu erases=%lu)",
-                              (unsigned long)_dt,
-                              (unsigned long)(lfs_cb_reads_  - cb_reads_before),
-                              (unsigned long)(lfs_cb_progs_  - cb_progs_before),
-                              (unsigned long)(lfs_cb_erases_ - cb_erases_before));
+                ok = cfg.write_sink(cfg.write_sink_ctx, page_buf, chunk_target);
+                const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
+                if (_dt > write_max_us_) write_max_us_ = _dt;
+                if (_dt > (uint32_t)STALL_THRESHOLD_US)
+                {
+                    ESP_LOGW(TAG, "STALL: write_sink took %lu us", (unsigned long)_dt);
+                }
             }
-            if (written != NAND_PAGE_SIZE)
+            else
             {
-                if (cfg.debug) ESP_LOGE(TAG, "Write failed: %d", written);
+                // Legacy LFS path — unchanged from before Stage 2c-3c.
+                const uint32_t cb_reads_before  = lfs_cb_reads_;
+                const uint32_t cb_progs_before  = lfs_cb_progs_;
+                const uint32_t cb_erases_before = lfs_cb_erases_;
+
+                lfs_ssize_t written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
+                const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
+                if (_dt > write_max_us_) write_max_us_ = _dt;
+                if (_dt > (uint32_t)STALL_THRESHOLD_US)
+                {
+                    ESP_LOGW(TAG, "STALL: lfs_file_write took %lu us "
+                                  "(reads=%lu progs=%lu erases=%lu)",
+                                  (unsigned long)_dt,
+                                  (unsigned long)(lfs_cb_reads_  - cb_reads_before),
+                                  (unsigned long)(lfs_cb_progs_  - cb_progs_before),
+                                  (unsigned long)(lfs_cb_erases_ - cb_erases_before));
+                }
+                ok = (written == NAND_PAGE_SIZE);
+                if (!ok && cfg.debug) ESP_LOGE(TAG, "Write failed: %d", written);
+            }
+
+            if (!ok)
+            {
                 nand_prog_fail++;
                 return;
             }
-            nand_bytes_written += NAND_PAGE_SIZE;
+            nand_bytes_written += chunk_target;
             nand_prog_ops++;
             page_buf_idx = 0;
 
-            // Periodic sync: commit LittleFS metadata to NAND so that a hard
-            // reset loses at most SYNC_INTERVAL_PAGES worth of data (~256 KB).
-            // The ring buffer absorbs incoming frames during the sync stall.
-            if (++pages_since_sync_ >= SYNC_INTERVAL_PAGES)
+            // Periodic LFS sync — only meaningful when LFS is the destination.
+            // TR_FlightLog pages are self-describing (PageHeader + CRC32), so
+            // brownout recovery rebuilds the index scan-side; no sync needed.
+            if (cfg.write_sink == nullptr &&
+                ++pages_since_sync_ >= SYNC_INTERVAL_PAGES)
             {
                 {
                     LFS_TIMING_START();
