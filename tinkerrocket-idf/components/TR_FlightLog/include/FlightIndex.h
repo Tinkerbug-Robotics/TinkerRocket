@@ -29,7 +29,13 @@ constexpr uint32_t META_MAGIC = 0x4154454D;  // 'META' little-endian
 // MAX_ENTRIES is conservative — practical chip usage is tens of flights.
 class FlightIndex {
 public:
-    static constexpr size_t MAX_ENTRIES = 256;
+    // 64 entries × 48 B + 16 B header = 3088 B serialized. The serialize/
+    // deserialize helpers allocate this as a stack buffer, so it must comfortably
+    // fit the smallest task stack that calls begin()/save()/load() — that's the
+    // ESP-IDF main task at 4 KB default. 256 entries (the Stage 1 figure) put
+    // ~12 KB on the stack and crashed on the bench with the classic 0x55aa...
+    // canary smear. Chip capacity is ~8 full flights anyway; 64 is still ample.
+    static constexpr size_t MAX_ENTRIES = 64;
     static constexpr size_t MAX_SERIALIZED_BYTES =
         sizeof(MetadataHeader) + MAX_ENTRIES * sizeof(FlightIndexEntry);
 
