@@ -17,6 +17,12 @@ struct TR_LogToFlashConfig
     bool debug = false;
     bool force_format = false;  // Erase entire NAND before mount (recovery from corruption)
 
+    // LittleFS block-count. Defaults to the full chip for backward compat.
+    // When sharing the NAND with TR_FlightLog (issue #50 Stage 2c) the caller
+    // shrinks this to just the blocks LFS owns (e.g. 32 for a 4 MB LFS
+    // partition) so the flight-log allocator can safely use the remainder.
+    uint32_t lfs_block_count = 0;  // 0 = full chip (NAND_BLOCK_COUNT)
+
     // MRAM ring buffer (optional — set mram_cs >= 0 to enable).
     // When enabled the ring buffer lives in SPI MRAM instead of ESP32 RAM,
     // providing larger capacity (128 KB) and power-loss survivability.
