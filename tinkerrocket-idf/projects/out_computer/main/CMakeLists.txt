@@ -10,6 +10,7 @@ idf_component_register(
         TR_I2C_Interface
         TR_I2S_Stream
         TR_LogToFlash
+        TR_FlightLog
         TR_LoRa_Comms
         TR_Sensor_Data_Converter
         TR_Coordinates

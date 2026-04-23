@@ -52,12 +52,21 @@ static inline std::string itos(int v)
 #include <TR_BLE_To_APP.h>
 #include <RocketComputerTypes.h>
 #include <TR_INA230.h>
+#include <TR_FlightLog.h>
+#include <TR_NandBackend_esp.h>
 // FlightSimulator.h removed — sim now runs on FlightComputer via TR_Sensor_Collector_Sim
 
 static TR_I2C_Interface i2c_interface(config::I2C_ADDRESS);
 static bool i2c_slave_initialized = false;
 static TR_I2S_Stream i2s_stream;
 static TR_LogToFlash logger;
+
+// Stage 2b (issue #50): shadow TR_FlightLog instance. Constructed with a nullptr
+// backend by default; setup() re-wires the backend to `logger` when
+// ENABLE_FLIGHTLOG_SHADOW is on, then calls begin() to load the bitmap + dual-
+// copy index. Nothing on the flight hot path touches it yet.
+static tr_flightlog::TR_NandBackend_esp flightlog_backend;
+static tr_flightlog::TR_FlightLog flightlog;
 static TR_BLE_To_APP ble_app("TinkerRocket");
 static TR_LoRa_Comms lora_comms;
 static SensorConverter sensor_converter;
@@ -2195,6 +2204,31 @@ void initPeripherals()
     {
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
+    }
+
+    // --- TR_FlightLog shadow (issue #50 Stage 2b) ---------------------------
+    // Bring up the new append-only NAND layer alongside the legacy LFS path.
+    // At this point the SPI bus + bad-block bitmap are initialized by
+    // logger.begin(); the shadow just reads state (no NAND writes) and logs
+    // its view so bench tests can verify it loads cleanly. Hot-path writes
+    // still go through LFS until Stage 2c.
+    if (config::ENABLE_FLIGHTLOG_SHADOW)
+    {
+        flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
+        auto st = flightlog.begin(flightlog_backend,
+                                  tr_flightlog::TR_FlightLog::Config{},
+                                  /*bitmap_store=*/nullptr);
+        if (st == tr_flightlog::Status::Ok)
+        {
+            ESP_LOGI("FLIGHTLOG", "shadow up: %zu flight(s) in index, %zu bad blocks",
+                     flightlog.index().size(),
+                     flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD));
+        }
+        else
+        {
+            ESP_LOGE("FLIGHTLOG", "shadow begin failed: %s",
+                     tr_flightlog::to_string(st));
+        }
     }
 
     // -------------------------------------------------------------------
