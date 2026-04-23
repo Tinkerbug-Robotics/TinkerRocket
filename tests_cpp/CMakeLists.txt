@@ -182,6 +182,7 @@ add_executable(test_tr_flightlog_core
     ${LIB_DIR}/TR_FlightLog/BlockStateBitmap.cpp
     ${LIB_DIR}/TR_FlightLog/FlightIndex.cpp
     ${LIB_DIR}/TR_FlightLog/TR_NandBackend_esp.cpp
+    ${LIB_DIR}/TR_FlightLog/NvsBitmapStore.cpp
     ${LIB_DIR}/CRC/CRC.cpp
     ${LIB_DIR}/CRC/CRC8.cpp
     ${LIB_DIR}/CRC/CRC12.cpp
