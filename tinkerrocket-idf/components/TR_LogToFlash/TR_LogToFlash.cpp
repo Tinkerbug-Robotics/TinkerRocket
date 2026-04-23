@@ -2054,9 +2054,10 @@ void TR_LogToFlash::applyPendingTimestamp()
     __sync_synchronize();  // Ensure timestamp fields are read after flag
     pending_timestamp_ = false;
 
-    // Sink mode (issue #50 Stage 2c-3c): no LFS file exists for this flight,
-    // so setattr/rename would hit a phantom filename. The TR_FlightLog layer
-    // synthesizes its own timestamped name in shadowFinalizeFlight.
+    // Sink mode (issue #50): no LFS file exists for this flight, so
+    // setattr/rename would hit a phantom filename. The sink owner
+    // (TR_FlightLog in out_computer) synthesizes its own timestamped name on
+    // finalize.
     if (cfg.write_sink != nullptr) return;
 
     applyPendingTimestamp_impl(pending_ts_filename_,

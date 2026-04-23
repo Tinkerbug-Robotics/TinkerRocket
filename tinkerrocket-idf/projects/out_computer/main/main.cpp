@@ -63,31 +63,19 @@ static bool i2c_slave_initialized = false;
 static TR_I2S_Stream i2s_stream;
 static TR_LogToFlash logger;
 
-// Stage 2b (issue #50): shadow TR_FlightLog instance. Constructed with a nullptr
-// backend by default; setup() re-wires the backend to `logger` when
-// ENABLE_FLIGHTLOG_SHADOW is on, then calls begin() to load the bitmap + dual-
-// copy index. Nothing on the flight hot path touches it yet.
+// TR_FlightLog (issue #50) owns the flight-log hot path — append-only NAND
+// writes via writeFrame(), with dual-copy index metadata in blocks 1020-1023
+// and a persistent 3-state bitmap in NVS. TR_LogToFlash keeps the ring/flush
+// machinery and shelled-down 4 MB LFS partition for config; a write_sink
+// fn-pointer routes each drained 2032 B page into flightlog.writeFrame().
 static tr_flightlog::TR_NandBackend_esp flightlog_backend;
 static tr_flightlog::TR_FlightLog flightlog;
-// Stage 2c-3a: persistent bitmap store wired into begin() so bad-block state
-// and (future) allocated-block state survive reboots.
 static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
-
-// --- Stage 2c-3 (issue #50): TR_FlightLog lifecycle + hot-path write sink --
-// Stage 2c-3b added the lifecycle shadows (prepareFlight / finalizeFlight
-// alongside LFS). Stage 2c-3c wires the flush task's per-page write through
-// TR_FlightLog::writeFrame so the flight-log layer owns the hot path and LFS
-// only still holds the config region + an empty placeholder file. Each page
-// drained from the ring is wrapped in a PageHeader (CRC32 over the payload,
-// monotonic seq number, flight_id) and programmed directly to NAND —
-// deterministic <1 ms per page instead of LFS's variable multi-hundred-ms
-// stalls. Legacy BLE cmd 2/3/4 still point at LFS (see iOS regression
-// window) until Stage 3 re-backs them on the TR_FlightLog index.
 
 // Phone time sync (BLE Command 9) — used for flight-filename timestamps
 // so each flight gets a unique filename instead of the hardcoded
 // GNSS sentinel date (2025-01-01 12:00). Defined here (earlier than the
-// original site) because shadowFinalizeFlight below reads these fields.
+// original site) because flightlogEndFlight below reads these fields.
 static uint16_t phone_utc_year   = 0;
 static uint8_t  phone_utc_month  = 0;
 static uint8_t  phone_utc_day    = 0;
@@ -168,9 +156,9 @@ static std::string flightlogBuildFileListJson(uint8_t page)
     return std::string(json, json_len);
 }
 
-static void shadowPrepareFlight()
+static void flightlogBeginFlight()
 {
-    if (!config::ENABLE_FLIGHTLOG_SHADOW || !flightlog.isInitialized()) return;
+    if (!flightlog.isInitialized()) return;
     if (flightlog.isFlightActive())
     {
         ESP_LOGW("FLIGHTLOG", "prepareFlight: already active, skipping");
@@ -194,9 +182,9 @@ static void shadowPrepareFlight()
     }
 }
 
-static void shadowFinalizeFlight()
+static void flightlogEndFlight()
 {
-    if (!config::ENABLE_FLIGHTLOG_SHADOW || !flightlog.isInitialized()) return;
+    if (!flightlog.isInitialized()) return;
     if (!flightlog.isFlightActive())
     {
         // Can happen if prepareFlight failed, or if called twice. No-op.
@@ -569,13 +557,6 @@ static void requestFastBLEParams(uint16_t conn_handle)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
     ble_gap_update_params(conn_handle, &params);
-}
-
-static int compareFilesDescending(const void* a, const void* b)
-{
-    const TR_LogFileInfo* fa = (const TR_LogFileInfo*)a;
-    const TR_LogFileInfo* fb = (const TR_LogFileInfo*)b;
-    return strcmp(fb->filename, fa->filename);  // Reversed for descending (most recent first)
 }
 
 static void updateDerivedAltitudeFromBMP()
@@ -1131,7 +1112,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
 
                 // Pre-create log file now so there's no NAND stall at launch
                 logger.prepareLogFile();
-                shadowPrepareFlight();
+                flightlogBeginFlight();
                 ESP_LOGI("OC", "PRELAUNCH - pre-creating log file");
             }
             // KF-filtered altitude rate from FlightComputer (or sim equivalent)
@@ -1168,7 +1149,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     {
         msg_count_end_flight++;
         logger.endLogging();
-        shadowFinalizeFlight();
+        flightlogEndFlight();
     }
     else
     {
@@ -1688,7 +1669,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         else if (!want_on && logger.isLoggingActive())
         {
             logger.endLogging();
-            shadowFinalizeFlight();
+            flightlogEndFlight();
             ESP_LOGI("LORA", "UPLINK Logging stopped");
         }
         else
@@ -1741,7 +1722,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     else if (cmd == 7)
     {
         logger.endLogging();
-        shadowFinalizeFlight();
+        flightlogEndFlight();
         setPendingCommand(SIM_STOP_CMD);
         ESP_LOGI("LORA", "UPLINK Sim stop queued for FlightComputer (logging ended)");
     }
@@ -2380,26 +2361,21 @@ void initPeripherals()
     log_cfg.spi_mode_mram = config::SPI_MODE_MRAM;
     log_cfg.mram_size = config::MRAM_SIZE;
 
-    // --- LFS partition shrink (issue #50 Stage 2c-2) ------------------------
-    // When TR_FlightLog is active we restrict LFS to the first 32 blocks
-    // (4 MB) so the flight-log allocator can own the remaining 988 blocks
-    // plus the metadata blocks. First boot under the shrunk layout force-
-    // formats (wipes any legacy flight_*.bin files) — that's the accepted
-    // upgrade cost. Subsequent boots read the NVS marker and skip the wipe.
+    // --- LFS shrunk to 4 MB + hot-path write sink (issue #50) ---------------
+    // LFS holds 32 blocks for config/placeholder use; TR_FlightLog owns the
+    // remaining 988 blocks plus the metadata blocks 1020-1023. Each 2032 B
+    // chunk the flush task drains from the ring is routed through
+    // flightlogWriteSink → flightlog.writeFrame(), which wraps it in a
+    // PageHeader (CRC32 + seq + flight_id) and programs one NAND page
+    // directly. First boot of this firmware under the shrunk layout force-
+    // formats (wipes any legacy flight_*.bin); subsequent boots skip the
+    // wipe via the NVS "lfs_shrunk" marker.
+    log_cfg.lfs_block_count = 32;
+    log_cfg.write_sink = flightlogWriteSink;
+    log_cfg.write_sink_ctx = &flightlog;
+
     bool lfs_wipe_pending = false;
-    if (config::ENABLE_FLIGHTLOG_SHADOW)
     {
-        log_cfg.lfs_block_count = 32;
-
-        // Stage 2c-3c: route hot-path writes to TR_FlightLog::writeFrame.
-        // flushRingToNand will hand each 2032-byte chunk to the sink instead
-        // of lfs_file_write; the sink wraps it in a PageHeader and programs
-        // one NAND page. LFS is kept open to preserve the existing BLE cmd
-        // 2/3/4 machinery — empty files show up until Stage 3 re-backs those
-        // handlers on the TR_FlightLog index.
-        log_cfg.write_sink = flightlogWriteSink;
-        log_cfg.write_sink_ctx = &flightlog;
-
         Preferences fl_prefs;
         bool already_shrunk = false;
         if (fl_prefs.begin("flightlog", /*readOnly=*/true))
@@ -2433,27 +2409,24 @@ void initPeripherals()
         }
     }
 
-    // --- TR_FlightLog shadow (issue #50 Stage 2b) ---------------------------
-    // Bring up the new append-only NAND layer alongside the legacy LFS path.
-    // At this point the SPI bus + bad-block bitmap are initialized by
-    // logger.begin(); the shadow just reads state (no NAND writes) and logs
-    // its view so bench tests can verify it loads cleanly. Hot-path writes
-    // still go through LFS until Stage 2c-3.
-    if (config::ENABLE_FLIGHTLOG_SHADOW)
+    // --- TR_FlightLog begin (issue #50) -------------------------------------
+    // SPI bus + physical bad-block bitmap are initialized by logger.begin();
+    // flightlog.begin() loads the persistent 3-state bitmap from NVS and the
+    // newest-valid of the dual-copy index from metadata blocks 1020-1023.
+    flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
     {
-        flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
         auto st = flightlog.begin(flightlog_backend,
                                   tr_flightlog::TR_FlightLog::Config{},
                                   &flightlog_bitmap_store);
         if (st == tr_flightlog::Status::Ok)
         {
-            ESP_LOGI("FLIGHTLOG", "shadow up: %zu flight(s) in index, %zu bad blocks",
+            ESP_LOGI("FLIGHTLOG", "up: %zu flight(s) in index, %zu bad blocks",
                      flightlog.index().size(),
                      flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD));
         }
         else
         {
-            ESP_LOGE("FLIGHTLOG", "shadow begin failed: %s",
+            ESP_LOGE("FLIGHTLOG", "begin failed: %s",
                      tr_flightlog::to_string(st));
         }
     }
@@ -2996,42 +2969,15 @@ static void loop_oc()
         }
         else if (ble_cmd == 2)
         {
-            // Send file list with pagination (5 files per page).
-            // Stage 3b: when TR_FlightLog is the source of truth, the encoder
-            // lives in wire_format:: and is byte-tested against golden fixtures.
+            // Send file list with pagination (5 files per page). Encoder lives
+            // in wire_format:: and is byte-tested against golden fixtures.
             beginPhoneIO();
             uint8_t page = ble_app.getFileListPage();
-            String json;
-            if (config::ENABLE_FLIGHTLOG_SHADOW)
-            {
-                json = flightlogBuildFileListJson(page);
-            }
-            else
-            {
-                static constexpr size_t FILES_PER_PAGE = 5;
-                static TR_LogFileInfo infos[64];
-                size_t total = logger.listFiles(infos, 64);
-                qsort(infos, total, sizeof(TR_LogFileInfo), compareFilesDescending);
-                size_t offset = page * FILES_PER_PAGE;
-                size_t start = (offset < total) ? offset : total;
-                size_t end = (start + FILES_PER_PAGE < total) ? start + FILES_PER_PAGE : total;
-                json = "[";
-                for (size_t i = start; i < end; ++i)
-                {
-                    if (i > start) json += ",";
-                    json += "{\"name\":\"";
-                    json += infos[i].filename;
-                    json += "\",\"size\":";
-                    json += std::to_string(infos[i].size_bytes);
-                    json += "}";
-                }
-                json += "]";
-            }
+            String json = flightlogBuildFileListJson(page).c_str();
             ble_app.sendFileList(json);
             endPhoneIO();
-            ESP_LOGI("BLE", "Sent file list page %u: %u bytes (%s)",
-                     page, (unsigned)json.length(),
-                     config::ENABLE_FLIGHTLOG_SHADOW ? "TR_FlightLog" : "LFS");
+            ESP_LOGI("BLE", "Sent file list page %u: %u bytes",
+                     page, (unsigned)json.length());
         }
         else if (ble_cmd == 23)
         {
@@ -3039,13 +2985,13 @@ static void loop_oc()
             if (logger.isLoggingActive())
             {
                 logger.endLogging();
-                shadowFinalizeFlight();
+                flightlogEndFlight();
                 ESP_LOGI("OC_CMD", "Logging STOPPED (manual)");
             }
             else
             {
                 logger.prepareLogFile();
-                shadowPrepareFlight();
+                flightlogBeginFlight();
                 logger.startLogging();
                 dma_dump_requested = true;  // trigger DMA hex dump
                 dma_dump_done = false;
@@ -3079,36 +3025,11 @@ static void loop_oc()
             if (filename.length() > 0)
             {
                 beginPhoneIO();
-                bool success = false;
-                String json;
-                if (config::ENABLE_FLIGHTLOG_SHADOW)
-                {
-                    auto st = flightlog.deleteFlight(filename.c_str());
-                    success = (st == tr_flightlog::Status::Ok);
-                    json = flightlogBuildFileListJson(/*page=*/0);
-                }
-                else
-                {
-                    success = logger.deleteFile(filename.c_str());
-                    static TR_LogFileInfo infos[64];
-                    size_t total = logger.listFiles(infos, 64);
-                    qsort(infos, total, sizeof(TR_LogFileInfo), compareFilesDescending);
-                    size_t n = (total > 5) ? 5 : total;
-                    json = "[";
-                    for (size_t i = 0; i < n; ++i)
-                    {
-                        if (i > 0) json += ",";
-                        json += "{\"name\":\"";
-                        json += infos[i].filename;
-                        json += "\",\"size\":";
-                        json += std::to_string(infos[i].size_bytes);
-                        json += "}";
-                    }
-                    json += "]";
-                }
-                ESP_LOGI("BLE", "Delete '%s': %s (%s)", filename.c_str(),
-                         success ? "OK" : "FAIL",
-                         config::ENABLE_FLIGHTLOG_SHADOW ? "TR_FlightLog" : "LFS");
+                auto st = flightlog.deleteFlight(filename.c_str());
+                bool success = (st == tr_flightlog::Status::Ok);
+                String json = flightlogBuildFileListJson(/*page=*/0).c_str();
+                ESP_LOGI("BLE", "Delete '%s': %s", filename.c_str(),
+                         success ? "OK" : "FAIL");
                 ble_app.sendFileList(json);
                 endPhoneIO();
             }
@@ -3168,19 +3089,9 @@ static void loop_oc()
             {
                 // Read next block from flash, appended after any carryover bytes
                 size_t flash_bytes_read = 0;
-                bool read_ok;
-                if (config::ENABLE_FLIGHTLOG_SHADOW)
-                {
-                    read_ok = flightlogReadChunk(download_filename.c_str(), file_offset,
-                                                 read_buf + carryover, FLASH_READ_SIZE,
-                                                 flash_bytes_read, eof);
-                }
-                else
-                {
-                    read_ok = logger.readFileChunk(download_filename.c_str(), file_offset,
-                                                   read_buf + carryover, FLASH_READ_SIZE,
-                                                   flash_bytes_read, eof);
-                }
+                bool read_ok = flightlogReadChunk(download_filename.c_str(), file_offset,
+                                                  read_buf + carryover, FLASH_READ_SIZE,
+                                                  flash_bytes_read, eof);
                 if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
@@ -3295,7 +3206,7 @@ static void loop_oc()
         else if (ble_cmd == 7)
         {
             logger.endLogging();
-            shadowFinalizeFlight();
+            flightlogEndFlight();
             setPendingCommand(SIM_STOP_CMD);
             ESP_LOGI("OC", "SIM Stop queued for FlightComputer (logging ended)");
         }

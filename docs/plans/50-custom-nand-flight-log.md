@@ -1,12 +1,25 @@
 # Custom append-only NAND flight-log layer
 
-**Issue:** [#50](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/50)
-**Status:** Stage 1 complete (191 tests passing) — Stage 2 pending
-**Last updated:** 2026-04-22
+**Issue:** [#50](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/50) (closed — root cause of [#47](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/47) eliminated)
+**Status:** Shipped. All 4 stages complete; bench-validated; legacy LFS hot path removed.
+**Last updated:** 2026-04-23
 
-Replace LittleFS on the flight-logging hot path with a deterministic append-only NAND layer. Preserves the iOS app's existing BLE file-management flow (cmd 2 list / cmd 3 delete / cmd 4 download).
+Replaced LittleFS on the flight-logging hot path with a deterministic append-only NAND layer (`TR_FlightLog`). Preserves the iOS app's existing BLE file-management flow (cmd 2 list / cmd 3 delete / cmd 4 download).
 
-Root cause & context are in [#50](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/50); this doc is the implementation plan.
+Root cause & context are in [#50](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/50); this doc is the implementation record.
+
+## Outcome (bench-measured)
+
+| Metric | Before (LFS) | After (TR_FlightLog) |
+|---|---|---|
+| `write_max_us` mid-flight | 598 000 µs | 5 000-9 000 µs |
+| `flushTaskLoop` worst iteration | 6 006 000 µs | < 11 000 µs |
+| Close-flight stall | 2 471 000 µs | 13 000 µs |
+| Ring peak bytes | up to 1 773 608 | 69-432 |
+| Gaps >10 ms per flight | ~327 at ~80 ms intervals | 0 across all sensors |
+| Frame drops | periodic | 0 |
+
+Follow-up: none required; the legacy LFS branches were removed in Stage 4 once validation completed.
 
 ## Resolved design decisions
 
@@ -22,10 +35,12 @@ See the [resolution comment on #50](https://github.com/Tinkerbug-Robotics/Tinker
 
 ## Stages
 
-- **Stage 1** — new `TR_FlightLog` component + unit tests (isolated library, feature-flag gated).
-- **Stage 2** — wire into flush task; legacy LFS wipe-on-first-boot; flip feature flag.
-- **Stage 3** — re-back BLE cmd 2/3/4 on the new index.
-- **Stage 4** — bench validation on hardware (reproduce the 15+ flight stall scenario from #47).
+All stages complete (✅).
+
+- ✅ **Stage 1** — new `TR_FlightLog` component + unit tests (isolated library, feature-flag gated). 194 host tests.
+- ✅ **Stage 2** — wire into flush task; shrink LFS to 4 MB with first-boot wipe; write_sink routes ring drains into `writeFrame()`. Sub-stages 2a (host scaffold), 2b (shadow construction), 2c-1 (NvsBitmapStore), 2c-2 (LFS shrink), 2c-3a (bitmap wire-in), 2c-3b (lifecycle shadow), 2c-3c (hot-path sink).
+- ✅ **Stage 3** — re-back BLE cmd 2/3/4 on the new index. Sub-stages 3a (readFlightPage PageHeader-aware), 3b (cmd 2/3/4 re-backing), 3c (timestamped filenames + LFS error silencing), 3d (skip `.dirty` marker in sink mode), 3e/Stage 4 (flip + delete legacy branches).
+- ✅ **Stage 4** — bench validation on hardware. Multiple flight captures confirmed zero frame drops and zero gaps >10 ms. Legacy LFS branches deleted; `ENABLE_FLIGHTLOG_SHADOW` gate retired.
 
 ---
 
