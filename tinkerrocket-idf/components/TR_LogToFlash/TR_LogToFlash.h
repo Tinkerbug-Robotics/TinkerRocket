@@ -92,6 +92,18 @@ public:
 
     bool begin(SPIClass& spi, const TR_LogToFlashConfig& cfg);
     bool enqueueFrame(const uint8_t* frame, size_t len);
+
+    // --- Raw NAND access (bridge for TR_FlightLog, issue #50 Stage 2) --------
+    // These expose the private nand* primitives as full-page (2 KB) ops keyed
+    // by (block, page_in_block). They share the same SPI bus + bad-block
+    // bitmap as the LFS-backed flush path, so both layers stay consistent.
+    // Intended only for the TR_NandBackend_esp adapter; internal callers keep
+    // using the rowPageAddr variants.
+    bool readNandPage(uint32_t block, uint32_t page_in_block, uint8_t* out);
+    bool programNandPage(uint32_t block, uint32_t page_in_block, const uint8_t* data);
+    bool eraseNandBlock(uint32_t block);
+    bool isNandBlockBad(uint32_t block) const;
+    bool markNandBlockBad(uint32_t block);
     void startLogging();
     void endLogging(); // request close after buffered data is flushed
     void prepareLogFile();  // Pre-create log file (call during PRELAUNCH to avoid NAND stall at launch)
