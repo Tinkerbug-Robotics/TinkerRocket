@@ -71,6 +71,74 @@ static tr_flightlog::TR_FlightLog flightlog;
 // Stage 2c-3a: persistent bitmap store wired into begin() so bad-block state
 // and (future) allocated-block state survive reboots.
 static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
+
+// --- Stage 2c-3b (issue #50): shadow lifecycle hooks -----------------------
+// These fire alongside the legacy LFS prepareLogFile / endLogging so we can
+// exercise TR_FlightLog::prepareFlight and finalizeFlight end-to-end on real
+// hardware while the hot path is still LFS. The shadow finalize immediately
+// deletes the empty index entry so repeated prepare/finalize cycles on the
+// bench do not exhaust the flight region (each shadow prepare reserves 32 MB;
+// 2c-3c fills those blocks with real data and we stop the delete).
+
+static void shadowPrepareFlight()
+{
+    if (!config::ENABLE_FLIGHTLOG_SHADOW || !flightlog.isInitialized()) return;
+    if (flightlog.isFlightActive())
+    {
+        ESP_LOGW("FLIGHTLOG", "shadow prepareFlight: already active, skipping");
+        return;
+    }
+    uint32_t id = 0;
+    auto st = flightlog.prepareFlight(id);
+    if (st == tr_flightlog::Status::Ok)
+    {
+        ESP_LOGI("FLIGHTLOG",
+                 "shadow prepareFlight OK: id=%u, range=[%u..%u), pages=%u",
+                 (unsigned)id,
+                 (unsigned)flightlog.activeStartBlock(),
+                 (unsigned)(flightlog.activeStartBlock() + flightlog.activeBlockCount()),
+                 (unsigned)flightlog.activeBlockCount());
+    }
+    else
+    {
+        ESP_LOGW("FLIGHTLOG", "shadow prepareFlight: %s",
+                 tr_flightlog::to_string(st));
+    }
+}
+
+static void shadowFinalizeFlight()
+{
+    if (!config::ENABLE_FLIGHTLOG_SHADOW || !flightlog.isInitialized()) return;
+    if (!flightlog.isFlightActive())
+    {
+        // Can happen if prepareFlight failed, or if this is called twice.
+        // Not a warning — just a no-op.
+        return;
+    }
+    char name[24];
+    std::snprintf(name, sizeof(name), "shadow_%lu.bin",
+                  (unsigned long)flightlog.activeFlightId());
+    auto st = flightlog.finalizeFlight(name, 0);  // 2c-3b: 0 bytes (hot path still LFS)
+    if (st == tr_flightlog::Status::Ok)
+    {
+        ESP_LOGI("FLIGHTLOG", "shadow finalizeFlight OK: %s", name);
+    }
+    else
+    {
+        ESP_LOGW("FLIGHTLOG", "shadow finalizeFlight: %s",
+                 tr_flightlog::to_string(st));
+        return;
+    }
+    // Release the allocated blocks immediately so repeat bench tests don't
+    // consume chip capacity. 2c-3c will skip this delete once writeFrame
+    // starts producing real data.
+    auto dl = flightlog.deleteFlight(name);
+    if (dl != tr_flightlog::Status::Ok)
+    {
+        ESP_LOGW("FLIGHTLOG", "shadow deleteFlight: %s",
+                 tr_flightlog::to_string(dl));
+    }
+}
 static TR_BLE_To_APP ble_app("TinkerRocket");
 static TR_LoRa_Comms lora_comms;
 static SensorConverter sensor_converter;
@@ -960,6 +1028,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
 
                 // Pre-create log file now so there's no NAND stall at launch
                 logger.prepareLogFile();
+                shadowPrepareFlight();
                 ESP_LOGI("OC", "PRELAUNCH - pre-creating log file");
             }
             // KF-filtered altitude rate from FlightComputer (or sim equivalent)
@@ -996,6 +1065,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     {
         msg_count_end_flight++;
         logger.endLogging();
+        shadowFinalizeFlight();
     }
     else
     {
@@ -1515,6 +1585,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         else if (!want_on && logger.isLoggingActive())
         {
             logger.endLogging();
+            shadowFinalizeFlight();
             ESP_LOGI("LORA", "UPLINK Logging stopped");
         }
         else
@@ -1567,6 +1638,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     else if (cmd == 7)
     {
         logger.endLogging();
+        shadowFinalizeFlight();
         setPendingCommand(SIM_STOP_CMD);
         ESP_LOGI("LORA", "UPLINK Sim stop queued for FlightComputer (logging ended)");
     }
@@ -2851,11 +2923,13 @@ static void loop_oc()
             if (logger.isLoggingActive())
             {
                 logger.endLogging();
+                shadowFinalizeFlight();
                 ESP_LOGI("OC_CMD", "Logging STOPPED (manual)");
             }
             else
             {
                 logger.prepareLogFile();
+                shadowPrepareFlight();
                 logger.startLogging();
                 dma_dump_requested = true;  // trigger DMA hex dump
                 dma_dump_done = false;
@@ -3089,6 +3163,7 @@ static void loop_oc()
         else if (ble_cmd == 7)
         {
             logger.endLogging();
+            shadowFinalizeFlight();
             setPendingCommand(SIM_STOP_CMD);
             ESP_LOGI("OC", "SIM Stop queued for FlightComputer (logging ended)");
         }
