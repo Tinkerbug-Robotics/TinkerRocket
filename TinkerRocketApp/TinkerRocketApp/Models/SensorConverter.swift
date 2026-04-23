@@ -345,7 +345,14 @@ nonisolated class SensorConverter {
             alt_apogee_flag: raw.alt_apogee_flag,
             vel_u_apogee_flag: raw.vel_u_apogee_flag,
             launch_flag: raw.launch_flag,
-            rocket_state: rocket_state
+            rocket_state: rocket_state,
+            // Legacy wire format never carried pyro_status — leave unset.
+            pyro1_continuity: false,
+            pyro2_continuity: false,
+            pyro1_fired: false,
+            pyro2_fired: false,
+            reboot_recovery: false,
+            guidance_enabled: false
         )
     }
 
@@ -388,6 +395,14 @@ nonisolated class SensorConverter {
         // dm/s -> m/s
         let altitude_rate = Double(raw.baro_alt_rate_dmps) * 0.1
 
+        // Pyro status byte — mirror the C++ PSF_ masks in RocketComputerTypes.h
+        let PSF_CH1_CONT: UInt8         = (1 << 0)
+        let PSF_CH2_CONT: UInt8         = (1 << 1)
+        let PSF_CH1_FIRED: UInt8        = (1 << 2)
+        let PSF_CH2_FIRED: UInt8        = (1 << 3)
+        let PSF_REBOOT_RECOVERY: UInt8  = (1 << 4)
+        let PSF_GUIDANCE_ENABLED: UInt8 = (1 << 5)
+
         return NonSensorDataSI(
             time_us: raw.time_us,
             roll: roll,
@@ -405,7 +420,13 @@ nonisolated class SensorConverter {
             alt_apogee_flag: alt_apogee_flag,
             vel_u_apogee_flag: vel_u_apogee_flag,
             launch_flag: launch_flag,
-            rocket_state: rocket_state
+            rocket_state: rocket_state,
+            pyro1_continuity: (raw.pyro_status & PSF_CH1_CONT) != 0,
+            pyro2_continuity: (raw.pyro_status & PSF_CH2_CONT) != 0,
+            pyro1_fired:      (raw.pyro_status & PSF_CH1_FIRED) != 0,
+            pyro2_fired:      (raw.pyro_status & PSF_CH2_FIRED) != 0,
+            reboot_recovery:  (raw.pyro_status & PSF_REBOOT_RECOVERY) != 0,
+            guidance_enabled: (raw.pyro_status & PSF_GUIDANCE_ENABLED) != 0
         )
     }
 }

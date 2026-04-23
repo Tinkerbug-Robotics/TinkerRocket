@@ -35,10 +35,7 @@ final class SensorTypesTests: XCTestCase {
         assertSize(10) { try POWERData(from: $0) }
     }
 
-    // Swift parser currently reads 42 bytes.  The C++ wire format grew to
-    // 43 bytes in commit 7d214f8 (#34) but the iOS side has not been
-    // updated — tracked separately as an iOS/firmware sync bug.
-    func testNonSensorData_Size42() {
-        assertSize(42) { try NonSensorData(from: $0) }
+    func testNonSensorData_Size43() {
+        assertSize(43) { try NonSensorData(from: $0) }
     }
 }
