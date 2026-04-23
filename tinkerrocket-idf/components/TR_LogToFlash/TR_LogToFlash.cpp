@@ -2039,3 +2039,39 @@ void TR_LogToFlash::applyPendingTimestamp_impl(const char* filename, uint16_t ye
         }
     }
 }
+
+// ─── Raw NAND bridge (TR_FlightLog, issue #50 Stage 2) ───────────────────
+// Forwarders that convert (block, page_in_block) -> rowPageAddr and always
+// operate on a full NAND_PAGE_SIZE page. See TR_LogToFlash.h for rationale.
+
+bool TR_LogToFlash::readNandPage(uint32_t block, uint32_t page_in_block, uint8_t* out)
+{
+    if (block >= NAND_BLOCK_COUNT || page_in_block >= NAND_PAGES_PER_BLK) return false;
+    uint32_t rowPageAddr = block * NAND_PAGES_PER_BLK + page_in_block;
+    return nandReadPage(rowPageAddr, out, NAND_PAGE_SIZE);
+}
+
+bool TR_LogToFlash::programNandPage(uint32_t block, uint32_t page_in_block, const uint8_t* data)
+{
+    if (block >= NAND_BLOCK_COUNT || page_in_block >= NAND_PAGES_PER_BLK) return false;
+    uint32_t rowPageAddr = block * NAND_PAGES_PER_BLK + page_in_block;
+    return nandProgramPage(rowPageAddr, data, NAND_PAGE_SIZE);
+}
+
+bool TR_LogToFlash::eraseNandBlock(uint32_t block)
+{
+    if (block >= NAND_BLOCK_COUNT) return false;
+    return nandEraseBlock(block);
+}
+
+bool TR_LogToFlash::isNandBlockBad(uint32_t block) const
+{
+    return isBlockBad(block);
+}
+
+bool TR_LogToFlash::markNandBlockBad(uint32_t block)
+{
+    if (block >= NAND_BLOCK_COUNT) return false;
+    markBlockBad(block);
+    return true;
+}
