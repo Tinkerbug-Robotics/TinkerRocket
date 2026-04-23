@@ -189,9 +189,39 @@ static void shadowFinalizeFlight()
         // Can happen if prepareFlight failed, or if called twice. No-op.
         return;
     }
-    char name[24];
-    std::snprintf(name, sizeof(name), "flight_%lu.bin",
-                  (unsigned long)flightlog.activeFlightId());
+
+    // Match the legacy LFS filename scheme: when BLE cmd 9 has delivered a
+    // phone-synced wall clock, compute "now" = sync_ts + (millis() - sync_millis)
+    // and format flight_YYYYMMDD_HHMMSS.bin. Falls back to flight_N.bin when
+    // the app has not yet sent a time sync.
+    char name[28];  // matches FlightIndexEntry::filename[28]
+    if (phone_time_valid)
+    {
+        uint32_t elapsed_s = (millis() - phone_sync_millis) / 1000;
+        uint32_t total_s = (uint32_t)phone_utc_hour * 3600U +
+                           (uint32_t)phone_utc_minute * 60U +
+                           (uint32_t)phone_utc_second + elapsed_s;
+        uint16_t y = phone_utc_year;
+        uint8_t  mo = phone_utc_month;
+        uint8_t  d = phone_utc_day;
+        if (total_s >= 86400U)
+        {
+            d += (uint8_t)(total_s / 86400U);  // days rolling over within a month — good enough
+            total_s %= 86400U;
+        }
+        uint8_t h  = (uint8_t)(total_s / 3600U);
+        uint8_t mi = (uint8_t)((total_s % 3600U) / 60U);
+        uint8_t s  = (uint8_t)(total_s % 60U);
+        std::snprintf(name, sizeof(name),
+                      "flight_%04u%02u%02u_%02u%02u%02u.bin",
+                      (unsigned)y, (unsigned)mo, (unsigned)d,
+                      (unsigned)h, (unsigned)mi, (unsigned)s);
+    }
+    else
+    {
+        std::snprintf(name, sizeof(name), "flight_%lu.bin",
+                      (unsigned long)flightlog.activeFlightId());
+    }
     // Real byte count now that writeFrame is the hot path — logger.currentFileBytes()
     // tracks bytes popped from the ring, which equals bytes handed to the sink.
     const uint32_t bytes = logger.currentFileBytes();
