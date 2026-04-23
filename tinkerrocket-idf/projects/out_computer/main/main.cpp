@@ -72,20 +72,29 @@ static tr_flightlog::TR_FlightLog flightlog;
 // and (future) allocated-block state survive reboots.
 static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
 
-// --- Stage 2c-3b (issue #50): shadow lifecycle hooks -----------------------
-// These fire alongside the legacy LFS prepareLogFile / endLogging so we can
-// exercise TR_FlightLog::prepareFlight and finalizeFlight end-to-end on real
-// hardware while the hot path is still LFS. The shadow finalize immediately
-// deletes the empty index entry so repeated prepare/finalize cycles on the
-// bench do not exhaust the flight region (each shadow prepare reserves 32 MB;
-// 2c-3c fills those blocks with real data and we stop the delete).
+// --- Stage 2c-3 (issue #50): TR_FlightLog lifecycle + hot-path write sink --
+// Stage 2c-3b added the lifecycle shadows (prepareFlight / finalizeFlight
+// alongside LFS). Stage 2c-3c wires the flush task's per-page write through
+// TR_FlightLog::writeFrame so the flight-log layer owns the hot path and LFS
+// only still holds the config region + an empty placeholder file. Each page
+// drained from the ring is wrapped in a PageHeader (CRC32 over the payload,
+// monotonic seq number, flight_id) and programmed directly to NAND —
+// deterministic <1 ms per page instead of LFS's variable multi-hundred-ms
+// stalls. Legacy BLE cmd 2/3/4 still point at LFS (see iOS regression
+// window) until Stage 3 re-backs them on the TR_FlightLog index.
+
+static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload_len)
+{
+    auto* fl = static_cast<tr_flightlog::TR_FlightLog*>(ctx);
+    return fl->writeFrame(payload, payload_len) == tr_flightlog::Status::Ok;
+}
 
 static void shadowPrepareFlight()
 {
     if (!config::ENABLE_FLIGHTLOG_SHADOW || !flightlog.isInitialized()) return;
     if (flightlog.isFlightActive())
     {
-        ESP_LOGW("FLIGHTLOG", "shadow prepareFlight: already active, skipping");
+        ESP_LOGW("FLIGHTLOG", "prepareFlight: already active, skipping");
         return;
     }
     uint32_t id = 0;
@@ -93,7 +102,7 @@ static void shadowPrepareFlight()
     if (st == tr_flightlog::Status::Ok)
     {
         ESP_LOGI("FLIGHTLOG",
-                 "shadow prepareFlight OK: id=%u, range=[%u..%u), pages=%u",
+                 "prepareFlight OK: id=%u, range=[%u..%u), pages=%u",
                  (unsigned)id,
                  (unsigned)flightlog.activeStartBlock(),
                  (unsigned)(flightlog.activeStartBlock() + flightlog.activeBlockCount()),
@@ -101,7 +110,7 @@ static void shadowPrepareFlight()
     }
     else
     {
-        ESP_LOGW("FLIGHTLOG", "shadow prepareFlight: %s",
+        ESP_LOGW("FLIGHTLOG", "prepareFlight: %s",
                  tr_flightlog::to_string(st));
     }
 }
@@ -111,33 +120,30 @@ static void shadowFinalizeFlight()
     if (!config::ENABLE_FLIGHTLOG_SHADOW || !flightlog.isInitialized()) return;
     if (!flightlog.isFlightActive())
     {
-        // Can happen if prepareFlight failed, or if this is called twice.
-        // Not a warning — just a no-op.
+        // Can happen if prepareFlight failed, or if called twice. No-op.
         return;
     }
     char name[24];
-    std::snprintf(name, sizeof(name), "shadow_%lu.bin",
+    std::snprintf(name, sizeof(name), "flight_%lu.bin",
                   (unsigned long)flightlog.activeFlightId());
-    auto st = flightlog.finalizeFlight(name, 0);  // 2c-3b: 0 bytes (hot path still LFS)
+    // Real byte count now that writeFrame is the hot path — logger.currentFileBytes()
+    // tracks bytes popped from the ring, which equals bytes handed to the sink.
+    const uint32_t bytes = logger.currentFileBytes();
+    auto st = flightlog.finalizeFlight(name, bytes);
     if (st == tr_flightlog::Status::Ok)
     {
-        ESP_LOGI("FLIGHTLOG", "shadow finalizeFlight OK: %s", name);
+        ESP_LOGI("FLIGHTLOG", "finalizeFlight OK: %s (%u bytes, %u extensions)",
+                 name, (unsigned)bytes,
+                 (unsigned)flightlog.overflowExtensionCount());
     }
     else
     {
-        ESP_LOGW("FLIGHTLOG", "shadow finalizeFlight: %s",
+        ESP_LOGW("FLIGHTLOG", "finalizeFlight: %s",
                  tr_flightlog::to_string(st));
-        return;
     }
-    // Release the allocated blocks immediately so repeat bench tests don't
-    // consume chip capacity. 2c-3c will skip this delete once writeFrame
-    // starts producing real data.
-    auto dl = flightlog.deleteFlight(name);
-    if (dl != tr_flightlog::Status::Ok)
-    {
-        ESP_LOGW("FLIGHTLOG", "shadow deleteFlight: %s",
-                 tr_flightlog::to_string(dl));
-    }
+    // 2c-3c: do NOT delete — the flight has real data now. Index entries
+    // accumulate across reboots; deletion becomes an explicit BLE cmd 3
+    // operation (re-backed on TR_FlightLog in Stage 3).
 }
 static TR_BLE_To_APP ble_app("TinkerRocket");
 static TR_LoRa_Comms lora_comms;
@@ -2287,6 +2293,15 @@ void initPeripherals()
     if (config::ENABLE_FLIGHTLOG_SHADOW)
     {
         log_cfg.lfs_block_count = 32;
+
+        // Stage 2c-3c: route hot-path writes to TR_FlightLog::writeFrame.
+        // flushRingToNand will hand each 2032-byte chunk to the sink instead
+        // of lfs_file_write; the sink wraps it in a PageHeader and programs
+        // one NAND page. LFS is kept open to preserve the existing BLE cmd
+        // 2/3/4 machinery — empty files show up until Stage 3 re-backs those
+        // handlers on the TR_FlightLog index.
+        log_cfg.write_sink = flightlogWriteSink;
+        log_cfg.write_sink_ctx = &flightlog;
 
         Preferences fl_prefs;
         bool already_shrunk = false;
