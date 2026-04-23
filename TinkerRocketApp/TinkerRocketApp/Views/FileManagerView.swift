@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 struct FileManagerView: View {
     @ObservedObject var device: BLEDevice
@@ -292,6 +294,21 @@ struct FileRow: View {
 // MARK: - Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen)
 
 struct ShareHelper {
+    /// Share items. File URLs (usually from Documents/CSVCache or
+    /// Documents/BinaryCache) are first copied into the app's
+    /// temporaryDirectory — LaunchServices can't reliably access
+    /// app-private cache subdirectories (Code=256 / Code=-10814), which
+    /// otherwise stalls the share sheet and spams the log. See #67.
+    ///
+    /// Each URL is then wrapped in a `FlightFileItemSource` that:
+    ///  - declares an explicit UTType (skips LaunchServices'
+    ///    extension-based type inference)
+    ///  - returns a nil Quick Look thumbnail (suppresses preview
+    ///    generation for the multi-MB CSV, which dominates first-share
+    ///    latency after a fresh install)
+    ///  - supplies a Mail-friendly subject derived from the filename
+    ///
+    /// Non-URL items pass through untouched.
     static func share(items: [Any]) {
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let rootVC = windowScene.windows.first?.rootViewController else { return }
@@ -302,10 +319,94 @@ struct ShareHelper {
             topVC = presented
         }
 
+        let preparedItems: [Any] = items.map { item -> Any in
+            guard let url = item as? URL, url.isFileURL else { return item }
+            let shareURL = copyToTemp(url) ?? url
+            return FlightFileItemSource(fileURL: shareURL,
+                                        utType: utType(for: shareURL.pathExtension))
+        }
+
         let activityVC = UIActivityViewController(
-            activityItems: items,
+            activityItems: preparedItems,
             applicationActivities: nil
         )
         topVC.present(activityVC, animated: true)
+    }
+
+    /// Copy a source file URL into the app's temporaryDirectory, preserving
+    /// filename + extension. Returns the temp URL on success, or nil on
+    /// failure (in which case callers fall back to the original URL).
+    private static func copyToTemp(_ src: URL) -> URL? {
+        let fm = FileManager.default
+        let dst = fm.temporaryDirectory.appendingPathComponent(src.lastPathComponent)
+        do {
+            if fm.fileExists(atPath: dst.path) {
+                try fm.removeItem(at: dst)
+            }
+            try fm.copyItem(at: src, to: dst)
+            return dst
+        } catch {
+            print("ShareHelper.copyToTemp failed for \(src.lastPathComponent): \(error)")
+            return nil
+        }
+    }
+
+    /// Map a filename extension to a UTType. Declared explicitly for the
+    /// flight-data file types so LaunchServices doesn't need to infer them.
+    private static func utType(for pathExtension: String) -> UTType {
+        switch pathExtension.lowercased() {
+        case "csv":  return .commaSeparatedText
+        case "json": return .json
+        case "bin":  return .data
+        default:     return UTType(filenameExtension: pathExtension) ?? .data
+        }
+    }
+}
+
+/// UIActivityItemSource wrapper used by ShareHelper. See the doc comment on
+/// ShareHelper.share for rationale. Minimal overrides — just enough to
+/// declare a UTType up front and suppress the Quick Look thumbnail that
+/// otherwise blocks first-share latency while iOS renders the full CSV.
+final class FlightFileItemSource: NSObject, UIActivityItemSource {
+    let fileURL: URL
+    let declaredUTType: UTType
+
+    init(fileURL: URL, utType: UTType) {
+        self.fileURL = fileURL
+        self.declaredUTType = utType
+    }
+
+    // Placeholder shown while the activity picker is being built. Returning
+    // the file URL lets the picker know what kind of thing is being shared
+    // without triggering a full file read.
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return fileURL
+    }
+
+    // Actual item once an activity is selected.
+    func activityViewController(_ activityViewController: UIActivityViewController,
+                                itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        return fileURL
+    }
+
+    // Pre-declared UTI — skips LaunchServices' extension-based inference,
+    // which is what's logging the Code=-10814 noise.
+    func activityViewController(_ activityViewController: UIActivityViewController,
+                                dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return declaredUTType.identifier
+    }
+
+    // Default email subject — Mail uses this when the share destination is Mail.
+    func activityViewController(_ activityViewController: UIActivityViewController,
+                                subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
+        return fileURL.deletingPathExtension().lastPathComponent
+    }
+
+    // Return nil thumbnail — iOS otherwise reads + renders the multi-MB CSV
+    // for a preview, which is the bulk of first-share latency.
+    func activityViewController(_ activityViewController: UIActivityViewController,
+                                thumbnailImageForActivityType activityType: UIActivity.ActivityType?,
+                                suggestedSize size: CGSize) -> UIImage? {
+        return nil
     }
 }
