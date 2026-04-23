@@ -1041,6 +1041,11 @@ TEST(TRFlightLogRead, UnknownFilenameReturnsNotFound) {
     EXPECT_EQ(out_len, 0u);
 }
 
+// readFlightPage is now PageHeader-aware: logical offsets index into the
+// concatenated payload stream produced by writeFrame, with 2032 payload
+// bytes per physical NAND page.
+constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - 16;  // sizeof(PageHeader)
+
 TEST(TRFlightLogRead, OffsetPastEndReturnsEOF) {
     FakeNandBackend nand;
     MemoryBitmapStore store;
@@ -1048,13 +1053,14 @@ TEST(TRFlightLogRead, OffsetPastEndReturnsEOF) {
     ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
     uint32_t id = 0;
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
-    std::vector<uint8_t> page(NAND_PAGE_SIZE, 0x88);
-    ASSERT_EQ(fl.writePage(page.data()), Status::Ok);
-    ASSERT_EQ(fl.finalizeFlight("f.bin", NAND_PAGE_SIZE), Status::Ok);
+    std::vector<uint8_t> payload(PAYLOAD_PER_PAGE, 0x88);
+    ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+    ASSERT_EQ(fl.finalizeFlight("f.bin", PAYLOAD_PER_PAGE), Status::Ok);
 
     uint8_t out[16];
     size_t out_len = 42;
-    EXPECT_EQ(fl.readFlightPage("f.bin", NAND_PAGE_SIZE, out, sizeof(out), out_len),
+    EXPECT_EQ(fl.readFlightPage("f.bin", PAYLOAD_PER_PAGE,
+                                 out, sizeof(out), out_len),
               Status::Ok);
     EXPECT_EQ(out_len, 0u);
 }
@@ -1067,26 +1073,64 @@ TEST(TRFlightLogRead, RoundTripMatchesWrittenBytes) {
     uint32_t id = 0;
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
 
-    // Write 3 distinct pages.
-    std::vector<uint8_t> p0(NAND_PAGE_SIZE, 0xAA);
-    std::vector<uint8_t> p1(NAND_PAGE_SIZE, 0xBB);
-    std::vector<uint8_t> p2(NAND_PAGE_SIZE, 0xCC);
+    // Write 3 distinct payloads via writeFrame. Each frame is PAYLOAD_PER_PAGE
+    // bytes so the read-side mapping is 1 frame = 1 physical page.
+    std::vector<uint8_t> p0(PAYLOAD_PER_PAGE, 0xAA);
+    std::vector<uint8_t> p1(PAYLOAD_PER_PAGE, 0xBB);
+    std::vector<uint8_t> p2(PAYLOAD_PER_PAGE, 0xCC);
     for (auto& buf : {&p0, &p1, &p2}) {
-        ASSERT_EQ(fl.writePage(buf->data()), Status::Ok);
+        ASSERT_EQ(fl.writeFrame(buf->data(), buf->size()), Status::Ok);
     }
-    ASSERT_EQ(fl.finalizeFlight("f.bin", 3 * NAND_PAGE_SIZE), Status::Ok);
+    ASSERT_EQ(fl.finalizeFlight("f.bin", 3 * PAYLOAD_PER_PAGE), Status::Ok);
 
-    // Read each page back.
+    // Read each frame's payload back via the logical offset stream.
     for (uint32_t p = 0; p < 3; ++p) {
-        std::vector<uint8_t> out(NAND_PAGE_SIZE);
+        std::vector<uint8_t> out(PAYLOAD_PER_PAGE);
         size_t out_len = 0;
-        ASSERT_EQ(fl.readFlightPage("f.bin", p * NAND_PAGE_SIZE,
+        ASSERT_EQ(fl.readFlightPage("f.bin", p * PAYLOAD_PER_PAGE,
                                      out.data(), out.size(), out_len),
                   Status::Ok);
-        EXPECT_EQ(out_len, NAND_PAGE_SIZE);
+        EXPECT_EQ(out_len, PAYLOAD_PER_PAGE);
         uint8_t expected = (p == 0) ? 0xAA : (p == 1) ? 0xBB : 0xCC;
         for (auto b : out) EXPECT_EQ(b, expected) << "page " << p;
     }
+}
+
+TEST(TRFlightLogRead, ReadAcrossPageBoundary) {
+    // Straddle a frame/page boundary to verify the mapping advances correctly.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+
+    std::vector<uint8_t> p0(PAYLOAD_PER_PAGE, 0x11);
+    std::vector<uint8_t> p1(PAYLOAD_PER_PAGE, 0x22);
+    ASSERT_EQ(fl.writeFrame(p0.data(), p0.size()), Status::Ok);
+    ASSERT_EQ(fl.writeFrame(p1.data(), p1.size()), Status::Ok);
+    ASSERT_EQ(fl.finalizeFlight("f.bin", 2 * PAYLOAD_PER_PAGE), Status::Ok);
+
+    // Read a window that starts 10 bytes before the end of page 0 and
+    // extends 10 bytes into page 1 — should see both fill bytes.
+    constexpr size_t STRADDLE = 20;
+    std::vector<uint8_t> out(STRADDLE, 0);
+    size_t out_len = 0;
+    ASSERT_EQ(fl.readFlightPage("f.bin", PAYLOAD_PER_PAGE - 10,
+                                 out.data(), out.size(), out_len),
+              Status::Ok);
+    // readFlightPage caps at one physical page at a time — confirms the
+    // first half of the window comes back, the caller would re-issue for
+    // the remainder.
+    EXPECT_EQ(out_len, 10u);
+    for (size_t i = 0; i < 10; ++i) EXPECT_EQ(out[i], 0x11) << i;
+
+    // Second read, straight into page 1.
+    ASSERT_EQ(fl.readFlightPage("f.bin", PAYLOAD_PER_PAGE,
+                                 out.data(), out.size(), out_len),
+              Status::Ok);
+    EXPECT_EQ(out_len, STRADDLE);
+    for (size_t i = 0; i < STRADDLE; ++i) EXPECT_EQ(out[i], 0x22) << i;
 }
 
 // ================================================================
@@ -1453,9 +1497,10 @@ TEST(TRFlightLogRead, CapsReadAtFileEnd) {
     uint32_t id = 0;
     ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
 
-    // Write one page but declare final_bytes = 100.
-    std::vector<uint8_t> page(NAND_PAGE_SIZE, 0x5A);
-    ASSERT_EQ(fl.writePage(page.data()), Status::Ok);
+    // Write a full-payload frame but declare final_bytes = 100 to prove
+    // the read caps at the declared file size even when more NAND data exists.
+    std::vector<uint8_t> payload(PAYLOAD_PER_PAGE, 0x5A);
+    ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
     ASSERT_EQ(fl.finalizeFlight("f.bin", 100), Status::Ok);
 
     uint8_t out[NAND_PAGE_SIZE] = {};
