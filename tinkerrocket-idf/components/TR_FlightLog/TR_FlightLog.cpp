@@ -401,24 +401,30 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
     if (entry == nullptr) return Status::NotFound;
     if (offset >= entry->final_bytes) return Status::Ok;  // EOF, 0 bytes
 
-    // Linear offset-to-page mapping. Note: if a bad block was skipped mid-
-    // flight, the page at the skipped position is 0xFF — callers should
-    // validate the PageHeader (FPAG_MAGIC + seq_number) before trusting bytes.
-    const uint32_t logical_page = offset / NAND_PAGE_SIZE;
-    const uint32_t byte_in_page = offset % NAND_PAGE_SIZE;
+    // Pages written via writeFrame have a 16 B PageHeader at the start, so the
+    // *logical* payload size per NAND page is PAYLOAD_PER_PAGE = 2032 bytes.
+    // `offset` is a byte index into the concatenated payload stream (what the
+    // caller originally enqueued via writeFrame / what iOS expects to
+    // download). The mapping hops the 16 B header on each physical page.
+    constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+
+    const uint32_t logical_page = offset / PAYLOAD_PER_PAGE;
+    const uint32_t byte_in_pl   = offset % PAYLOAD_PER_PAGE;
     const uint32_t abs_block    = entry->start_block + logical_page / NAND_PAGES_PER_BLK;
     const uint32_t page_in_blk  = logical_page % NAND_PAGES_PER_BLK;
 
     uint8_t page[NAND_PAGE_SIZE];
     if (!nand_->readPage(abs_block, page_in_blk, page)) return Status::BackendFailed;
 
-    size_t avail_in_page = NAND_PAGE_SIZE - byte_in_page;
-    size_t avail_in_file = entry->final_bytes - offset;
+    // Payload starts right after the PageHeader on the physical page.
+    const uint32_t src_off = static_cast<uint32_t>(sizeof(PageHeader)) + byte_in_pl;
+    const uint32_t avail_in_page = PAYLOAD_PER_PAGE - byte_in_pl;
+    const uint32_t avail_in_file = entry->final_bytes - offset;
     size_t copy_len = buf_len;
     if (copy_len > avail_in_page) copy_len = avail_in_page;
     if (copy_len > avail_in_file) copy_len = avail_in_file;
 
-    std::memcpy(buf, page + byte_in_page, copy_len);
+    std::memcpy(buf, page + src_off, copy_len);
     out_len = copy_len;
     return Status::Ok;
 }
