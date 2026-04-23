@@ -292,6 +292,16 @@ struct FileRow: View {
 // MARK: - Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen)
 
 struct ShareHelper {
+    /// Share items. File URLs (usually pointing into Documents/CSVCache or
+    /// Documents/BinaryCache) are copied into the app's temporaryDirectory
+    /// before presenting the share sheet — see issue #67. LaunchServices'
+    /// eligibility probe struggles to read URLs inside app-private cache
+    /// subdirectories (Code=-10814 / NSCocoaErrorDomain Code=256), which
+    /// used to stall the share sheet for several seconds and spam the log.
+    /// Files in temporaryDirectory are broadly accessible to LaunchServices
+    /// and are cleaned up by iOS on its own schedule.
+    ///
+    /// Non-URL items (e.g. plain strings) are passed through untouched.
     static func share(items: [Any]) {
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let rootVC = windowScene.windows.first?.rootViewController else { return }
@@ -302,10 +312,33 @@ struct ShareHelper {
             topVC = presented
         }
 
+        let preparedItems: [Any] = items.map { item -> Any in
+            guard let url = item as? URL, url.isFileURL else { return item }
+            return copyToTemp(url) ?? url
+        }
+
         let activityVC = UIActivityViewController(
-            activityItems: items,
+            activityItems: preparedItems,
             applicationActivities: nil
         )
         topVC.present(activityVC, animated: true)
+    }
+
+    /// Copy a source file URL into the app's temporaryDirectory, preserving
+    /// filename + extension. Returns the temp URL on success, or nil on
+    /// failure (in which case callers fall back to the original URL).
+    private static func copyToTemp(_ src: URL) -> URL? {
+        let fm = FileManager.default
+        let dst = fm.temporaryDirectory.appendingPathComponent(src.lastPathComponent)
+        do {
+            if fm.fileExists(atPath: dst.path) {
+                try fm.removeItem(at: dst)
+            }
+            try fm.copyItem(at: src, to: dst)
+            return dst
+        } catch {
+            print("ShareHelper.copyToTemp failed for \(src.lastPathComponent): \(error)")
+            return nil
+        }
     }
 }
