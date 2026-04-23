@@ -84,6 +84,19 @@ static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
 // stalls. Legacy BLE cmd 2/3/4 still point at LFS (see iOS regression
 // window) until Stage 3 re-backs them on the TR_FlightLog index.
 
+// Phone time sync (BLE Command 9) — used for flight-filename timestamps
+// so each flight gets a unique filename instead of the hardcoded
+// GNSS sentinel date (2025-01-01 12:00). Defined here (earlier than the
+// original site) because shadowFinalizeFlight below reads these fields.
+static uint16_t phone_utc_year   = 0;
+static uint8_t  phone_utc_month  = 0;
+static uint8_t  phone_utc_day    = 0;
+static uint8_t  phone_utc_hour   = 0;
+static uint8_t  phone_utc_minute = 0;
+static uint8_t  phone_utc_second = 0;
+static uint32_t phone_sync_millis = 0;
+static bool     phone_time_valid = false;
+
 static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload_len)
 {
     auto* fl = static_cast<tr_flightlog::TR_FlightLog*>(ctx);
@@ -291,18 +304,6 @@ static volatile bool i2s_ingest_paused = false;
 // Forward declarations — defined after the rx ring buffer block below.
 static inline void beginPhoneIO();
 static inline void endPhoneIO();
-
-// Phone time sync (BLE Command 9) — used for sim file timestamps
-// so each sim run gets a unique filename instead of the hardcoded
-// GNSS sentinel date (2025-01-01 12:00).
-static uint16_t phone_utc_year   = 0;
-static uint8_t  phone_utc_month  = 0;
-static uint8_t  phone_utc_day    = 0;
-static uint8_t  phone_utc_hour   = 0;
-static uint8_t  phone_utc_minute = 0;
-static uint8_t  phone_utc_second = 0;
-static uint32_t phone_sync_millis = 0;
-static bool     phone_time_valid = false;
 
 // NVS persistence for LoRa settings (config.h values are factory defaults)
 static Preferences prefs;
