@@ -201,6 +201,16 @@ private:
     uint32_t rb_overruns = 0;
     uint32_t rb_drop_oldest_bytes = 0;
     uint32_t rb_highwater = 0;
+
+    // Issue #74 diagnostic: compare total bytes pushed vs popped. A healthy
+    // ring has pop <= push at all times (residual frames left unflushed at
+    // end of flight). pop > push proves the same MRAM region is being drained
+    // twice — i.e. a ring-pointer race is re-exposing stale prelaunch data.
+    uint64_t ringpush_bytes_ = 0;
+    uint64_t ringpop_bytes_ = 0;
+    // Remaining per-drain diagnostic prints allowed after the most recent
+    // activateLogging(). Set to 20 on activate, decremented per drain.
+    uint32_t flush_log_remaining_ = 0;
     // Before logging starts, cap the ring at 50% so the initial flush at
     // launch detection doesn't stall the main loop.  Raised to full size
     // once logging is active (see openLogSession / closeLogSession).
