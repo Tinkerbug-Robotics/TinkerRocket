@@ -1663,6 +1663,14 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                                           : !logger.isLoggingActive();
         if (want_on && !logger.isLoggingActive())
         {
+            // Mirror the BLE cmd 23 start path: prepareLogFile opens the sink
+            // session (file_open=true so enqueueFrame accepts frames) and
+            // flightlogBeginFlight allocates the TR_FlightLog block range.
+            // startLogging alone would flip logging_active without either, so
+            // every incoming frame would be rejected at enqueue and the flight
+            // would never land on NAND (#72).
+            logger.prepareLogFile();
+            flightlogBeginFlight();
             logger.startLogging();
             ESP_LOGI("LORA", "UPLINK Logging started");
         }
