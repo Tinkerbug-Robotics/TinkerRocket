@@ -354,21 +354,50 @@ Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) 
     if (!flight_active_)  return Status::Error;
     if (filename == nullptr) return Status::OutOfRange;
 
+    // Trim unused tail blocks from the preallocated range. prepareFlight
+    // reserves 32 MB of headroom for long flights, but most flights are far
+    // shorter — without trimming, the bitmap caps out at floor(region / 32MB)
+    // simultaneous flights regardless of their actual size. Round up to cover
+    // any partial trailing page.
+    constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+    const uint32_t used_pages = (final_bytes == 0) ? 0
+        : (final_bytes + PAYLOAD_PER_PAGE - 1) / PAYLOAD_PER_PAGE;
+    uint32_t used_blocks = (used_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
+    if (used_blocks > active_n_blocks_) used_blocks = active_n_blocks_;
+
     FlightIndexEntry entry{};
     entry.magic       = FLGT_MAGIC;
     entry.flight_id   = active_flight_id_;
     std::strncpy(entry.filename, filename, sizeof(entry.filename) - 1);
     entry.start_block = static_cast<uint16_t>(active_start_block_);
-    entry.n_blocks    = static_cast<uint16_t>(active_n_blocks_);
+    entry.n_blocks    = static_cast<uint16_t>(used_blocks);
     entry.final_bytes = final_bytes;
 
+    // Release the tail in the in-memory bitmap before the index save so the
+    // two stay consistent; roll back if the save fails.
+    const uint32_t free_start = active_start_block_ + used_blocks;
+    const uint32_t free_count = active_n_blocks_ - used_blocks;
+    if (free_count > 0) {
+        bitmap_.markFreeRange(free_start, free_count);
+    }
+
     Status st = index_.append(entry);
-    if (st != Status::Ok) return st;
+    if (st != Status::Ok) {
+        if (free_count > 0) bitmap_.markAllocatedRange(free_start, free_count);
+        return st;
+    }
     st = index_.save(*nand_, cfg_.metadata_blocks[0], cfg_.metadata_blocks[1]);
     if (st != Status::Ok) {
         index_.removeByFilename(entry.filename);  // roll back the in-memory add
+        if (free_count > 0) bitmap_.markAllocatedRange(free_start, free_count);
         return st;
     }
+
+    // Both RAM structures are committed; persist the bitmap change to NAND.
+    // If this fails the on-disk bitmap just keeps the tail marked allocated;
+    // startup recovery handles orphan-allocated blocks by detecting them as
+    // not-in-index and releasing them on the next boot.
+    if (free_count > 0) persistBitmap();
 
     flight_active_    = false;
     active_flight_id_ = 0;
