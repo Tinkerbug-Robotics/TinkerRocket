@@ -78,6 +78,17 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     }
     ring_prelaunch_cap_ = ring_size_ / 2;
 
+    // Mutex to serialize ringPush callers and to block clearRing from
+    // running concurrently with an in-flight push (#74). Unconditionally
+    // created — parser + oc_loop can race on Core 1 regardless of ring
+    // backing, so RAM and MRAM paths both need it.
+    push_mutex_ = xSemaphoreCreateMutex();
+    if (!push_mutex_)
+    {
+        if (cfg.debug) ESP_LOGE(TAG, "Failed to create push mutex");
+        return false;
+    }
+
     rb_head = rb_tail = rb_count = 0;
     rb_overruns = rb_highwater = 0;
     rb_drop_oldest_bytes = 0;
@@ -663,6 +674,12 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
         return false;
     }
 
+    // Serialize against concurrent pushes (parser and oc_loop can preempt
+    // each other on Core 1) and against clearRing (Core 0 flush task). This
+    // closes the #74 race where a push snapshotted rb_head before clearRing
+    // ran and then wrote a stale rb_head value, clobbering the reset.
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+
     // Read current count under spinlock
     portENTER_CRITICAL(&ring_mux_);
     const uint32_t count_now = rb_count;
@@ -675,6 +692,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
         if (ring_prelaunch_cap_ - count_now < len)
         {
             rb_overruns++;
+            if (push_mutex_) xSemaphoreGive(push_mutex_);
             return false;
         }
     }
@@ -689,7 +707,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
             if (local_count < 6)
             {
                 rb_drop_oldest_bytes += local_count;
-                clearRing();
+                clearRingLocked();
                 local_count = 0;
                 break;
             }
@@ -704,7 +722,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                     ESP_LOGW(TAG, "ringPush: bad SOF at tail, clearing ring");
                 }
                 rb_drop_oldest_bytes += local_count;
-                clearRing();
+                clearRingLocked();
                 local_count = 0;
                 break;
             }
@@ -720,7 +738,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                                   (unsigned long)frame_size, (unsigned long)local_count);
                 }
                 rb_drop_oldest_bytes += local_count;
-                clearRing();
+                clearRingLocked();
                 local_count = 0;
                 break;
             }
@@ -782,6 +800,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
     {
         rb_highwater = new_count;
     }
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
     return true;
 }
 
@@ -1513,6 +1532,18 @@ bool TR_LogToFlash::checkDirtyOnStartup()
 }
 
 void TR_LogToFlash::clearRing()
+{
+    // Public entry point: acquire push_mutex_ so any in-flight ringPush on
+    // Core 1 finishes before we start, and no new push can start until we
+    // return. Without this guard, a push that already snapshotted rb_head
+    // would clobber our reset back to a prelaunch value on its trailing
+    // rb_head assignment (the #74 race).
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+    clearRingLocked();
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
+}
+
+void TR_LogToFlash::clearRingLocked()
 {
     LFS_TIMING_START();
 
