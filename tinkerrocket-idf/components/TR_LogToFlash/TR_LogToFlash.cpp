@@ -248,10 +248,17 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
         return false;
     }
     // Accept frames when logging is active OR when the log file has been
-    // pre-created (PRELAUNCH).  Pre-launch frames buffer in the ring
-    // (capped at 50%) and are flushed once activateLogging() fires.
-    // Stale MRAM data is no longer a concern: clearRing() now zeros
-    // the MRAM, and processFrame() has a timestamp monotonicity filter.
+    // pre-created (PRELAUNCH). Pre-launch frames buffer in the ring
+    // (capped at prelaunch_cap = ring_size_/2 via drop-oldest in ringPush)
+    // and ARE preserved into the flight log when activateLogging() fires —
+    // #74 removed the clearRing call that previously wiped them. The
+    // preserved window gives post-flight analysis ~the last several
+    // seconds of ground data for baseline / ground-pressure purposes.
+    //
+    // Cross-session contamination is handled at boot (runStartupRecovery
+    // calls clearRing once on clean startup) plus the per-type monotonic
+    // filter in processFrame (issue #69) that rejects any frame with
+    // ts <= prev_time_type.
     if (!logging_active && !file_open)
     {
         return false;
@@ -1363,14 +1370,24 @@ void TR_LogToFlash::activateLogging()
 {
     LFS_TIMING_START();
 
-    // Clear stale pre-launch data from the ring buffer so only
-    // fresh data from this moment forward gets logged.
-    clearRing();
+    // Deliberately do NOT clearRing() here. The ring has been accumulating
+    // pre-launch sensor frames (capped at prelaunch_cap via drop-oldest in
+    // ringPush) specifically so the last few seconds of ground data land in
+    // the flight log. Wiping the ring at launch would discard that window.
+    // Cross-session contamination is handled upstream: boot runs clearRing
+    // once (see runStartupRecovery), and the per-type monotonic filter in
+    // processFrame (issue #69) rejects any frame with ts <= prev_time_type
+    // so stale entries from a prior session cannot leak into the stream
+    // even if the MRAM content survived a reboot.
+    //
+    // Also deliberately avoided: the 33 ms SPI-serialized MRAM zero-fill
+    // that clearRing performs here used to race with live Core 1 ingest,
+    // producing the duplicate startup segments documented in #74.
 
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
-    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (ring cleared + cap raised)");
+    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (ring cap raised, pre-launch data preserved)");
 
     LFS_TIMING_END(activate_max_us_, "activateLogging");
 }
