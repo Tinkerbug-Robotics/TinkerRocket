@@ -261,8 +261,9 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
     // Accept frames when logging is active OR when the log file has been
     // pre-created (PRELAUNCH).  Pre-launch frames buffer in the ring
     // (capped at 50%) and are flushed once activateLogging() fires.
-    // Stale MRAM data is no longer a concern: clearRing() now zeros
-    // the MRAM, and processFrame() has a timestamp monotonicity filter.
+    // Cross-session stale MRAM is handled by runStartupRecovery() at boot;
+    // within a session, processFrame() has a timestamp monotonicity filter
+    // that catches anything that would look like a replay from the ring.
     if (!logging_active && !file_open)
     {
         return false;
@@ -1391,14 +1392,13 @@ void TR_LogToFlash::activateLogging()
              (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count,
              (unsigned long long)ringpush_bytes_, (unsigned long long)ringpop_bytes_);
 
-    // Clear stale pre-launch data from the ring buffer so only
-    // fresh data from this moment forward gets logged.
-    clearRing();
-
-    ESP_LOGW(TAG, "ACT1 post-clear h=%lu t=%lu c=%lu push=%llu pop=%llu",
-             (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count,
-             (unsigned long long)ringpush_bytes_, (unsigned long long)ringpop_bytes_);
-
+    // Preserve the prelaunch ring contents. The next flushRingToNand drains
+    // from rb_tail forward, so the flight file starts with ~500 ms of
+    // pre-command sensor data (the drop-oldest cap bounds the window).
+    // clearRing is intentionally NOT called here — it was the source of the
+    // clobber race in #74, and the monotonic dedup filter in processFrame
+    // already rejects any stale MRAM frames that cross session boundaries.
+    // Cross-boot stale MRAM is handled by runStartupRecovery at begin().
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
@@ -1408,7 +1408,7 @@ void TR_LogToFlash::activateLogging()
     ESP_LOGW(TAG, "ACT2 exit      h=%lu t=%lu c=%lu (logging_active=1)",
              (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count);
 
-    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (ring cleared + cap raised)");
+    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (prelaunch buffer preserved)");
 
     LFS_TIMING_END(activate_max_us_, "activateLogging");
 }
