@@ -976,13 +976,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     if (!isKnownMessageType(type))
         return;
 
-    // ── Duplicate & stale frame detection for I2S DMA ──
-    // 1. Skip exact-duplicate frames (same type, same time_us) caused by
-    //    DMA buffer replay.
-    // 2. Skip stale frames whose timestamp is more than 5 seconds behind
-    //    the latest seen timestamp.  These can appear when MRAM ring buffer
-    //    data from a previous logging session leaks into the current one
-    //    (clearRing resets pointers but doesn't zero MRAM contents).
+    // ── Duplicate, replay & stale frame detection for I2S DMA ──
+    // Within a boot session, each FC-side time_us (= micros() on the FC) is
+    // strictly monotonically increasing for a given sensor type. So for each
+    // type, any incoming frame whose time_us is <= the last-seen value for
+    // that type is either an exact duplicate (== prev) or an older replay
+    // (< prev). Both cases are safe to drop. This catches I2S DMA buffer
+    // replays observed at boot — issue #69 documented ~170 replayed frames
+    // covering the first ~70 ms of every flight log (first 65 IMU frames
+    // byte-identical to frames 70-134). The cross-type 5-second stale filter
+    // remains as a second line of defence against large cross-session leaks.
     if (payload_len >= 4)
     {
         static uint32_t prev_time_ism6 = 0, prev_time_bmp = 0,
@@ -1005,21 +1008,24 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         if (prev != nullptr)
         {
-            if (time_us == *prev && time_us != 0)
+            // Non-monotonic or exact-duplicate frame for this type — drop.
+            // time_us == 0 is excluded so the very first frame of each type
+            // (which finds *prev == 0) still passes.
+            if (time_us != 0 && time_us <= *prev)
             {
                 dedup_drops++;
-                return;  // duplicate — skip
+                return;
             }
 
-            // Reject stale frames: if we've seen timestamps > 5s ahead of this
-            // frame, it's from a previous session.  The 5s threshold avoids
-            // false positives from minor jitter or sensor startup delays.
+            // Cross-type stale filter: ts more than 5 s behind the global
+            // high-water mark is almost certainly from a prior session.
+            // Avoids false positives on minor jitter between sensor streams.
             static constexpr uint32_t STALE_THRESHOLD_US = 5'000'000;
             if (time_us != 0 && max_time_us > STALE_THRESHOLD_US &&
                 time_us < (max_time_us - STALE_THRESHOLD_US))
             {
                 stale_drops++;
-                return;  // stale — skip
+                return;
             }
 
             *prev = time_us;
