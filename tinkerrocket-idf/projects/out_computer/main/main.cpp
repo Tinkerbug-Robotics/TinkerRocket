@@ -703,7 +703,8 @@ static uint64_t parser_len_drops = 0;
 
 static uint32_t frames_bad_crc = 0;
 static volatile uint32_t dma_cb_count = 0;      // DMA callback invocations
-static uint32_t dedup_drops = 0;                 // timestamp dedup rejects
+static uint32_t dedup_drops_lt = 0;              // ts strictly less than prev (replay / reorder)
+static uint32_t dedup_drops_eq = 0;              // ts exactly equal to prev (byte-duplicate)
 static uint32_t stale_drops = 0;                 // stale timestamp rejects
 static uint32_t raw_i2c_reads = 0;
 static uint64_t raw_i2c_bytes = 0;
@@ -992,18 +993,27 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                          prev_time_mmc = 0, prev_time_gnss = 0,
                          prev_time_ns = 0, prev_time_pwr = 0,
                          prev_time_guid = 0;
+        // dma_cb_count snapshot taken when each prev_time_* was last updated.
+        // Used to diagnose issue #74: when a duplicate frame arrives, compare
+        // its current dma_cb_count to the prev_cb value to tell whether the
+        // duplicate came from the same DMA delivery or a different one.
+        static uint32_t prev_cb_ism6 = 0, prev_cb_bmp = 0,
+                         prev_cb_mmc = 0, prev_cb_gnss = 0,
+                         prev_cb_ns = 0, prev_cb_pwr = 0,
+                         prev_cb_guid = 0;
         static uint32_t max_time_us = 0;  // Monotonic high-water mark across all types
         uint32_t time_us;
         memcpy(&time_us, payload, sizeof(time_us));
         uint32_t* prev = nullptr;
+        uint32_t* prev_cb = nullptr;
         switch (type) {
-            case ISM6HG256_MSG:       prev = &prev_time_ism6; break;
-            case BMP585_MSG:          prev = &prev_time_bmp;  break;
-            case MMC5983MA_MSG:       prev = &prev_time_mmc;  break;
-            case GNSS_MSG:            prev = &prev_time_gnss; break;
-            case NON_SENSOR_MSG:      prev = &prev_time_ns;   break;
-            case POWER_MSG:           prev = &prev_time_pwr;  break;
-            case GUIDANCE_TELEM_MSG:  prev = &prev_time_guid; break;
+            case ISM6HG256_MSG:       prev = &prev_time_ism6; prev_cb = &prev_cb_ism6; break;
+            case BMP585_MSG:          prev = &prev_time_bmp;  prev_cb = &prev_cb_bmp;  break;
+            case MMC5983MA_MSG:       prev = &prev_time_mmc;  prev_cb = &prev_cb_mmc;  break;
+            case GNSS_MSG:            prev = &prev_time_gnss; prev_cb = &prev_cb_gnss; break;
+            case NON_SENSOR_MSG:      prev = &prev_time_ns;   prev_cb = &prev_cb_ns;   break;
+            case POWER_MSG:           prev = &prev_time_pwr;  prev_cb = &prev_cb_pwr;  break;
+            case GUIDANCE_TELEM_MSG:  prev = &prev_time_guid; prev_cb = &prev_cb_guid; break;
             default: break;
         }
         if (prev != nullptr)
@@ -1013,7 +1023,28 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // (which finds *prev == 0) still passes.
             if (time_us != 0 && time_us <= *prev)
             {
-                dedup_drops++;
+                const uint32_t cur_cb = dma_cb_count;
+                const bool is_eq = (time_us == *prev);
+                if (is_eq) dedup_drops_eq++;
+                else       dedup_drops_lt++;
+
+                // Log the first N drops of this boot with prev/cur cb values
+                // so we can tell whether the duplicate came from the same DMA
+                // callback (cur_cb == prev_cb) or a later one. Rate-limited
+                // to avoid flooding the console during a stall-triggered burst.
+                static uint32_t logged_count = 0;
+                if (logged_count < 50)
+                {
+                    ESP_LOGW("DEDUP", "drop type=%u %s prev_ts=%lu cur_ts=%lu prev_cb=%lu cur_cb=%lu (dcb=%lu)",
+                             (unsigned)type,
+                             is_eq ? "==" : "<",
+                             (unsigned long)*prev,
+                             (unsigned long)time_us,
+                             (unsigned long)*prev_cb,
+                             (unsigned long)cur_cb,
+                             (unsigned long)(cur_cb - *prev_cb));
+                    logged_count++;
+                }
                 return;
             }
 
@@ -1029,6 +1060,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
 
             *prev = time_us;
+            *prev_cb = dma_cb_count;
             if (time_us > max_time_us)
                 max_time_us = time_us;
         }
@@ -2154,13 +2186,16 @@ static void printStats()
     }
     // I2S pipeline stats
     {
-        static uint32_t prev_dma_cb = 0, prev_ring_ovf = 0, prev_dedup = 0, prev_stale = 0, prev_parsed = 0;
+        static uint32_t prev_dma_cb = 0, prev_ring_ovf = 0,
+                         prev_dedup_eq = 0, prev_dedup_lt = 0,
+                         prev_stale = 0, prev_parsed = 0;
         static uint64_t prev_dma_bytes = 0;
         uint32_t d_cb = dma_cb_count - prev_dma_cb;
         uint64_t d_bytes = raw_i2c_bytes - prev_dma_bytes;
         uint32_t d_ovf = rx_ring_overflow_drops - prev_ring_ovf;
         uint32_t d_stale = stale_drops - prev_stale;
-        uint32_t d_dedup = dedup_drops - prev_dedup;
+        uint32_t d_dedup_eq = dedup_drops_eq - prev_dedup_eq;
+        uint32_t d_dedup_lt = dedup_drops_lt - prev_dedup_lt;
         uint32_t d_parsed = msg_count_ism6 + msg_count_bmp + msg_count_mmc + msg_count_non_sensor + msg_count_gnss;
         static uint32_t prev_total_parsed = 0;
         uint32_t d_p = d_parsed - prev_total_parsed;
@@ -2171,12 +2206,13 @@ static void printStats()
         uint32_t d_tot = dma_total_bytes - prev_tot;
         float nz_pct = (d_tot > 0) ? (d_nz * 100.0f / d_tot) : 0;
 
-        ESP_LOGI("I2S", "dma_cb=%lu KB=%.1f nz=%.1f%% ovf=%lu dedup=%lu stale=%lu parsed=%lu frx=%lu fdr=%lu",
+        ESP_LOGI("I2S", "dma_cb=%lu KB=%.1f nz=%.1f%% ovf=%lu dedup_eq=%lu dedup_lt=%lu stale=%lu parsed=%lu frx=%lu fdr=%lu",
                  (unsigned long)d_cb,
                  (double)(d_bytes / 1024.0),
                  (double)nz_pct,
                  (unsigned long)d_ovf,
-                 (unsigned long)d_dedup,
+                 (unsigned long)d_dedup_eq,
+                 (unsigned long)d_dedup_lt,
                  (unsigned long)d_stale,
                  (unsigned long)d_p,
                  (unsigned long)s.frames_received,
@@ -2213,7 +2249,8 @@ static void printStats()
         prev_dma_cb = dma_cb_count;
         prev_dma_bytes = raw_i2c_bytes;
         prev_ring_ovf = rx_ring_overflow_drops;
-        prev_dedup = dedup_drops;
+        prev_dedup_eq = dedup_drops_eq;
+        prev_dedup_lt = dedup_drops_lt;
         prev_stale = stale_drops;
         prev_total_parsed = d_parsed;
         prev_nz = dma_nonzero_bytes;
