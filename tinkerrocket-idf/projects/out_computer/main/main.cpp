@@ -1207,6 +1207,15 @@ static void handleReceivedFrame(const uint8_t* frame, size_t frame_len,
 static void parseRxStream()
 {
     uint8_t payload[MAX_PAYLOAD];
+    // Issue #74 follow-up: when the prelaunch ring is at cap, every ringPush
+    // triggers drop-oldest which does an MRAM peek (~150 us SPI) on top of the
+    // normal MRAM write. Under sustained 72 KB/s ingest that pushes per-frame
+    // work above 400 us / 2400 fps = 416 us budget. rx_ring fills faster than
+    // this loop drains, the while condition never goes false, Core 1 stays
+    // 100% busy in this task, IDLE1 never runs, task_wdt trips. Yield a tick
+    // every N frames so IDLE can pet the watchdog even under that load.
+    static constexpr size_t YIELD_EVERY_N_FRAMES = 64;
+    size_t frames_this_call = 0;
     while (rxLen() >= (4 + 1 + 1 + 2))
     {
         if (!(rxPeek(0) == 0xAA &&
@@ -1259,6 +1268,12 @@ static void parseRxStream()
             (void)rxPop();
         }
         handleReceivedFrame(frame, frame_len, type, payload, out_payload_len);
+
+        if (++frames_this_call >= YIELD_EVERY_N_FRAMES)
+        {
+            frames_this_call = 0;
+            vTaskDelay(1);
+        }
     }
 }
 
