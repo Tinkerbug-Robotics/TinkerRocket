@@ -78,6 +78,17 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     }
     ring_prelaunch_cap_ = ring_size_ / 2;
 
+    // Mutex to serialize ringPush callers and to block clearRing from
+    // running concurrently with an in-flight push (#74). Unconditionally
+    // created — parser + oc_loop can race on Core 1 regardless of ring
+    // backing, so RAM and MRAM paths both need it.
+    push_mutex_ = xSemaphoreCreateMutex();
+    if (!push_mutex_)
+    {
+        if (cfg.debug) ESP_LOGE(TAG, "Failed to create push mutex");
+        return false;
+    }
+
     rb_head = rb_tail = rb_count = 0;
     rb_overruns = rb_highwater = 0;
     rb_drop_oldest_bytes = 0;
@@ -250,8 +261,9 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
     // Accept frames when logging is active OR when the log file has been
     // pre-created (PRELAUNCH).  Pre-launch frames buffer in the ring
     // (capped at 50%) and are flushed once activateLogging() fires.
-    // Stale MRAM data is no longer a concern: clearRing() now zeros
-    // the MRAM, and processFrame() has a timestamp monotonicity filter.
+    // Cross-session stale MRAM is handled by runStartupRecovery() at boot;
+    // within a session, processFrame() has a timestamp monotonicity filter
+    // that catches anything that would look like a replay from the ring.
     if (!logging_active && !file_open)
     {
         return false;
@@ -663,6 +675,12 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
         return false;
     }
 
+    // Serialize against concurrent pushes (parser and oc_loop can preempt
+    // each other on Core 1) and against clearRing (Core 0 flush task). This
+    // closes the #74 race where a push snapshotted rb_head before clearRing
+    // ran and then wrote a stale rb_head value, clobbering the reset.
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+
     // Read current count under spinlock
     portENTER_CRITICAL(&ring_mux_);
     const uint32_t count_now = rb_count;
@@ -675,6 +693,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
         if (ring_prelaunch_cap_ - count_now < len)
         {
             rb_overruns++;
+            if (push_mutex_) xSemaphoreGive(push_mutex_);
             return false;
         }
     }
@@ -689,7 +708,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
             if (local_count < 6)
             {
                 rb_drop_oldest_bytes += local_count;
-                clearRing();
+                clearRingLocked();
                 local_count = 0;
                 break;
             }
@@ -704,7 +723,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                     ESP_LOGW(TAG, "ringPush: bad SOF at tail, clearing ring");
                 }
                 rb_drop_oldest_bytes += local_count;
-                clearRing();
+                clearRingLocked();
                 local_count = 0;
                 break;
             }
@@ -720,7 +739,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                                   (unsigned long)frame_size, (unsigned long)local_count);
                 }
                 rb_drop_oldest_bytes += local_count;
-                clearRing();
+                clearRingLocked();
                 local_count = 0;
                 break;
             }
@@ -776,10 +795,13 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
     const uint32_t new_count = rb_count;
     portEXIT_CRITICAL(&ring_mux_);
 
+    ringpush_bytes_ += len;
+
     if (new_count > rb_highwater)
     {
         rb_highwater = new_count;
     }
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
     return true;
 }
 
@@ -826,6 +848,8 @@ uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
     portENTER_CRITICAL(&ring_mux_);
     rb_count -= len;
     portEXIT_CRITICAL(&ring_mux_);
+
+    ringpop_bytes_ += len;
 
     return len;
 }
@@ -1363,14 +1387,28 @@ void TR_LogToFlash::activateLogging()
 {
     LFS_TIMING_START();
 
-    // Clear stale pre-launch data from the ring buffer so only
-    // fresh data from this moment forward gets logged.
-    clearRing();
+    // Issue #74 diagnostic: log pointer state at entry (end of prelaunch).
+    ESP_LOGW(TAG, "ACT0 entry     h=%lu t=%lu c=%lu push=%llu pop=%llu",
+             (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count,
+             (unsigned long long)ringpush_bytes_, (unsigned long long)ringpop_bytes_);
 
+    // Preserve the prelaunch ring contents. The next flushRingToNand drains
+    // from rb_tail forward, so the flight file starts with ~500 ms of
+    // pre-command sensor data (the drop-oldest cap bounds the window).
+    // clearRing is intentionally NOT called here — it was the source of the
+    // clobber race in #74, and the monotonic dedup filter in processFrame
+    // already rejects any stale MRAM frames that cross session boundaries.
+    // Cross-boot stale MRAM is handled by runStartupRecovery at begin().
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
-    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (ring cleared + cap raised)");
+    // Arm per-drain diagnostic logs for the first 20 flushRingToNand drains.
+    flush_log_remaining_ = 20;
+
+    ESP_LOGW(TAG, "ACT2 exit      h=%lu t=%lu c=%lu (logging_active=1)",
+             (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count);
+
+    if (cfg.debug) ESP_LOGI(TAG, "Logging activated (prelaunch buffer preserved)");
 
     LFS_TIMING_END(activate_max_us_, "activateLogging");
 }
@@ -1495,13 +1533,34 @@ bool TR_LogToFlash::checkDirtyOnStartup()
 
 void TR_LogToFlash::clearRing()
 {
+    // Public entry point: acquire push_mutex_ so any in-flight ringPush on
+    // Core 1 finishes before we start, and no new push can start until we
+    // return. Without this guard, a push that already snapshotted rb_head
+    // would clobber our reset back to a prelaunch value on its trailing
+    // rb_head assignment (the #74 race).
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+    clearRingLocked();
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
+}
+
+void TR_LogToFlash::clearRingLocked()
+{
     LFS_TIMING_START();
+
+    // Issue #74 diagnostic: log pointer state going in so we can see what
+    // the prelaunch ring looked like before the reset.
+    ESP_LOGW(TAG, "CR0 pre-reset  h=%lu t=%lu c=%lu push=%llu pop=%llu",
+             (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count,
+             (unsigned long long)ringpush_bytes_, (unsigned long long)ringpop_bytes_);
 
     portENTER_CRITICAL(&ring_mux_);
     rb_head = 0;
     rb_tail = 0;
     rb_count = 0;
     portEXIT_CRITICAL(&ring_mux_);
+
+    ESP_LOGW(TAG, "CR1 post-reset h=%lu t=%lu c=%lu (MRAM zero-sweep next)",
+             (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count);
 
     // When using MRAM, zero-fill the entire ring to prevent stale data from
     // a previous session from leaking into the log file.  MRAM is non-volatile,
@@ -1529,6 +1588,12 @@ void TR_LogToFlash::clearRing()
             mramWriteBytes(addr, zeros, len);
         }
     }
+
+    // Issue #74 diagnostic: log pointer state after the 33 ms zero-sweep
+    // to detect if ringPush races clobbered the reset.
+    ESP_LOGW(TAG, "CR2 post-sweep h=%lu t=%lu c=%lu push=%llu pop=%llu",
+             (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count,
+             (unsigned long long)ringpush_bytes_, (unsigned long long)ringpop_bytes_);
 
     LFS_TIMING_END(clear_ring_max_us_, "clearRing");
 }
@@ -1780,6 +1845,25 @@ void TR_LogToFlash::flushRingToNand()
         if (chunk == 0)
         {
             break;
+        }
+
+        // Issue #74 diagnostic: for the first 20 drains after activateLogging,
+        // peek the first 8 bytes at rb_tail and log with pointer state.
+        // `AA 55 AA 55 <type> <len>` = real frame; all-zero = post-clearRing
+        // zeroed MRAM; anything else = stale prelaunch data being re-exposed.
+        if (flush_log_remaining_ > 0)
+        {
+            uint8_t peek[8] = {0};
+            if (chunk >= 8) ringPeekAt(rb_tail, peek, 8);
+            ESP_LOGW(TAG, "FL%02lu h=%lu t=%lu c=%lu len=%lu peek=%02X%02X%02X%02X%02X%02X%02X%02X push=%llu pop=%llu",
+                     (unsigned long)(20 - flush_log_remaining_),
+                     (unsigned long)rb_head, (unsigned long)rb_tail,
+                     (unsigned long)rb_count, (unsigned long)chunk,
+                     peek[0], peek[1], peek[2], peek[3],
+                     peek[4], peek[5], peek[6], peek[7],
+                     (unsigned long long)ringpush_bytes_,
+                     (unsigned long long)ringpop_bytes_);
+            flush_log_remaining_--;
         }
 
         const uint32_t popped = ringPop(page_buf + page_buf_idx, chunk);

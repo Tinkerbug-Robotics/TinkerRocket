@@ -921,8 +921,11 @@ TEST(TRFlightLogWrite, OverflowExtendFailsWhenAdjacentAllocated) {
 }
 
 TEST(TRFlightLogPrepare, PicksNextRangeAfterFirstAllocation) {
-    // Prepare+finalize a first flight, then prepare again — second range
-    // should start right after the first.
+    // Prepare+finalize a first flight, then prepare again — the second
+    // range should start right after the first flight's TRIMMED extent.
+    // finalizeFlight releases unused tail blocks (#74), so a tiny first
+    // flight (1000 B = 1 page = 1 block) only keeps 1 block, freeing
+    // blocks 1..255 for the next prepareFlight to pick from.
     FakeNandBackend nand;
     MemoryBitmapStore store;
     TR_FlightLog fl;
@@ -936,7 +939,7 @@ TEST(TRFlightLogPrepare, PicksNextRangeAfterFirstAllocation) {
     uint32_t second_id = 0;
     ASSERT_EQ(fl.prepareFlight(second_id), Status::Ok);
     EXPECT_EQ(fl.activeStartBlock(),
-              cfg.flight_region_start + cfg.prealloc_blocks);
+              cfg.flight_region_start + 1u);
 }
 
 // ================================================================
@@ -970,7 +973,10 @@ TEST(TRFlightLogFinalize, AppendsEntryAndClearsActiveState) {
     auto* e = fl.index().findByFilename("flight_001.bin");
     ASSERT_NE(e, nullptr);
     EXPECT_EQ(e->flight_id, id);
-    EXPECT_EQ(e->n_blocks, 256u);
+    // n_blocks reflects the trimmed extent (#74). final_bytes=5*2048=10240
+    // payload bytes / 2032 B per page = 6 logical pages, /64 pages per
+    // block = 1 block. The remaining 255 prealloc blocks are released.
+    EXPECT_EQ(e->n_blocks, 1u);
     EXPECT_EQ(e->final_bytes, 5u * NAND_PAGE_SIZE);
 }
 

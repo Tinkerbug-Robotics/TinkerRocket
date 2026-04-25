@@ -201,6 +201,25 @@ private:
     uint32_t rb_overruns = 0;
     uint32_t rb_drop_oldest_bytes = 0;
     uint32_t rb_highwater = 0;
+
+    // Issue #74 diagnostic: compare total bytes pushed vs popped. A healthy
+    // ring has pop <= push at all times (residual frames left unflushed at
+    // end of flight). pop > push proves the same MRAM region is being drained
+    // twice — i.e. a ring-pointer race is re-exposing stale prelaunch data.
+    uint64_t ringpush_bytes_ = 0;
+    uint64_t ringpop_bytes_ = 0;
+    // Remaining per-drain diagnostic prints allowed after the most recent
+    // activateLogging(). Set to 20 on activate, decremented per drain.
+    uint32_t flush_log_remaining_ = 0;
+
+    // Serializes ringPush against itself (parser and oc_loop can both push
+    // from Core 1 and preempt each other on priority boundaries) and against
+    // clearRing (Core 0 flush task). Without this, rb_head read-write pairs
+    // race with the pointer reset in clearRing — the snapshot of rb_head
+    // taken before mramWriteBytes gets written back AFTER clearRing has
+    // reset it to 0, clobbering the reset with a prelaunch value.
+    // See #74 bench trace (CR1 h=0 → CR2 h=50771 despite zero-sweep).
+    SemaphoreHandle_t push_mutex_ = nullptr;
     // Before logging starts, cap the ring at 50% so the initial flush at
     // launch detection doesn't stall the main loop.  Raised to full size
     // once logging is active (see openLogSession / closeLogSession).
@@ -393,6 +412,10 @@ private:
     void clearDirty();          // Remove LittleFS marker file on log close
     bool checkDirtyOnStartup(); // Check if previous session was dirty
     void clearRing();
+    // Internal variant: caller holds push_mutex_. Used by ringPush()'s
+    // drop-oldest fallback so it doesn't re-acquire the mutex it already
+    // holds (regular FreeRTOS mutexes are not recursive).
+    void clearRingLocked();
     void runStartupRecovery();
 };
 
