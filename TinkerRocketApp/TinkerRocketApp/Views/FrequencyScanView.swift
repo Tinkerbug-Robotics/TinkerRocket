@@ -145,21 +145,16 @@ struct FrequencyScanView: View {
                                 Spacer()
                             }
                         }
-                        .disabled(!canApply || applyStatus != nil)
+                        .disabled(applyRefusal != nil || applyStatus != nil)
 
                         if let s = applyStatus {
                             Text(s).font(.caption).foregroundColor(.secondary)
-                        } else if !canApply {
-                            Text("Waiting for base-station config readback…")
-                                .font(.caption).foregroundColor(.secondary)
-                        } else {
-                            Text("Relays the new frequency to every tracked rocket, then switches the base station. Keeps current SF/BW/CR/power.")
-                                .font(.caption).foregroundColor(.secondary)
-                        }
-
-                        if device.remoteRockets.isEmpty {
-                            Text("No rockets online — only the base station will be switched.")
+                        } else if let refusal = applyRefusal {
+                            Text(refusal.rawValue)
                                 .font(.caption).foregroundColor(.orange)
+                        } else {
+                            Text("The base station relays the new frequency to every tracked rocket, verifies they hopped, and only then commits. A failed verification rolls both sides back to the current channel.")
+                                .font(.caption).foregroundColor(.secondary)
                         }
                     }
                 }
@@ -177,13 +172,15 @@ struct FrequencyScanView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             if let q = quietestSample {
-                Text("The rocket and base station will both switch to \(String(format: "%.2f", q.freqMHz)) MHz. If the rocket misses the relay packet it will be stranded on the old channel.")
+                Text("The rocket and base station will both switch to \(String(format: "%.2f", q.freqMHz)) MHz. The base station verifies the rocket joined the new channel before committing — if verification fails, both sides roll back to the current channel.")
             }
         }
     }
 
-    private var canApply: Bool {
-        device.isBaseStation && device.rocketConfig?.loraFreqMHz != nil
+    /// Re-evaluated on every view update so the button enables as soon as
+    /// the rocket beacons in and disables again if it goes silent.
+    private var applyRefusal: BLEDevice.AutoApplyRefusal? {
+        device.autoApplyRefusalReason()
     }
 
     private func applyQuietest() {
@@ -191,11 +188,14 @@ struct FrequencyScanView: View {
         applyStatus = "Applying \(String(format: "%.2f", q.freqMHz)) MHz…"
         let ok = device.autoApplyFrequency(q.freqMHz)
         if !ok {
-            applyStatus = "Failed: base-station config unavailable"
+            applyStatus = applyRefusal.map { "Failed: \($0.rawValue)" } ?? "Failed"
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { applyStatus = nil }
             return
         }
-        // Retry window (uplink retries) + BS switch delay + a little slack.
+        // Base station's transactional handler takes ~3 s (relay retries +
+        // beacon verify window).  Give it a little slack before we clear
+        // the banner; the real commit/rollback status shows up in the next
+        // config readback.
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
             applyStatus = "Done"
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { applyStatus = nil }

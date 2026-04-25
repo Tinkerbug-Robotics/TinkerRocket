@@ -305,6 +305,22 @@ static RocketState latest_rocket_state = INITIALIZATION;
 static bool pwr_pin_on = false;              // Power rail state — starts OFF
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 
+// Frequency is locked once the rocket enters flight (issue #71).  Any
+// Cmd 10 uplink received in flight is ignored, and the slow-rendezvous
+// recovery cycle is suppressed — we cannot afford to leave the operating
+// frequency mid-flight, and momentary silence during flight is usually
+// an SNR dip, not real divergence.
+//
+// The transition logic itself is pure and lives in the shared header
+// (computeFreqLockForFlight) so both the rocket and base station follow
+// identical, unit-tested rules.
+static bool freq_locked_for_flight = false;
+
+static inline void updateFreqLockFromState(RocketState s)
+{
+    freq_locked_for_flight = computeFreqLockForFlight(freq_locked_for_flight, s);
+}
+
 // Servo/PID config cache (mirrored from FlightComputer for BLE readback)
 static int16_t cfg_servo_bias1 = 0;
 static int16_t cfg_servo_hz    = 50;
@@ -364,6 +380,13 @@ static uint32_t lora_tx_fail = 0;
 static uint32_t last_lora_tx_ms = 0;
 static bool     lora_in_rx_mode = false;
 static uint32_t lora_uplink_rx_count = 0;
+
+// Slow-rendezvous trackers (issue #71).  last_uplink_rx_ms bumps on every
+// successfully-parsed uplink packet; ready_entry_ms latches on each
+// INITIALIZATION→READY transition so we don't fire rendezvous just
+// because the rocket briefly sat silent before READY.
+static uint32_t last_uplink_rx_ms = 0;
+static uint32_t ready_entry_ms    = 0;
 
 static OutStatusQueryData last_query_cfg = {};
 
@@ -1141,6 +1164,18 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             memcpy(&latest_non_sensor, payload, sizeof(NonSensorData));
             latest_non_sensor_valid = true;
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
+            // Update the flight-freeze sticky flag whenever the state
+            // changes (issue #71).  Safe to call on every frame — the
+            // function only flips the bool on INFLIGHT / READY edges.
+            updateFreqLockFromState(latest_rocket_state);
+
+            // Latch the moment we entered READY so the slow-rendezvous
+            // silence timer has a fair starting point.  Boot-time READY
+            // (first frame from FC) also triggers this.
+            if (latest_rocket_state == READY && prev_state != READY)
+            {
+                ready_entry_ms = millis();
+            }
             if (latest_rocket_state != prev_state && latest_rocket_state == PRELAUNCH)
             {
                 max_alt_m = 0.0f;
@@ -1537,8 +1572,16 @@ static void sendLoRaBeacon()
 {
     if (!config::USE_LORA_RADIO) return;
 
-    // Only beacon in idle states
-    if (latest_rocket_state != READY && latest_rocket_state != PRELAUNCH) return;
+    // Beacon in any state EXCEPT INFLIGHT.  We used to gate on
+    // READY/PRELAUNCH only, but that meant a rocket whose FlightComputer
+    // was slow to report state (or never did, e.g. I2C hiccup) would
+    // never advertise itself — leaving the base station's recovery
+    // scanning forever (issue #71 field test).  INITIALIZATION beaconing
+    // costs ~25 ms TOA every 2 s = < 2% duty, so the trade is trivial.
+    // INFLIGHT is still suppressed: telemetry needs the airtime, and
+    // we don't change channel mid-flight anyway.  Logic shared with
+    // tests via shouldBeaconInState() in RocketComputerTypes.h.
+    if (!shouldBeaconInState(latest_rocket_state)) return;
 
     const uint32_t now_ms = millis();
     if ((now_ms - last_beacon_ms) < 2000) return;
@@ -1790,6 +1833,19 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     else if (cmd == 10 && payload_len >= 11)
     {
         // LoRa reconfiguration via uplink: [freq:4f][bw:4f][sf:1][cr:1][txpwr:1]
+
+        // Inflight freeze (issue #71): refuse to change frequency once we
+        // are in flight.  Momentary silence in flight is almost always an
+        // SNR dip, not divergence, and hopping channels mid-flight would
+        // guarantee we lose the rest of the telemetry stream.  The base
+        // station is also expected to suppress its own recovery while
+        // rocket is in flight, so this branch is defence-in-depth.
+        if (freq_locked_for_flight)
+        {
+            ESP_LOGW("LORA", "UPLINK Cmd 10 ignored: frequency locked for flight");
+            return;
+        }
+
         float new_freq, new_bw;
         memcpy(&new_freq, payload + 0, 4);
         memcpy(&new_bw,   payload + 4, 4);
@@ -1876,6 +1932,14 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         setPendingCommand(enabled ? GUIDANCE_ENABLE : GUIDANCE_DISABLE);
         ESP_LOGI("LORA", "UPLINK Guidance: %s", enabled ? "ENABLE" : "DISABLE");
     }
+    else if (cmd == LORA_CMD_HEARTBEAT)
+    {
+        // Heartbeat from BS (issue #71).  No action — last_uplink_rx_ms
+        // is already updated in the caller, which is all this command
+        // exists to do.  Verbose-level log only, since these fire every
+        // 30 s during normal operation.
+        ESP_LOGV("LORA", "UPLINK heartbeat");
+    }
     else
     {
         ESP_LOGW("LORA", "UPLINK Unknown cmd %u", cmd);
@@ -1934,10 +1998,176 @@ static void serviceLoRaUplink()
                 {
                     processUplinkCommand(cmd, &rx_buf[5], payload_len);
                     lora_uplink_rx_count++;
+                    last_uplink_rx_ms = millis();
                 }
             }
         }
         // readPacket() internally re-enters RX mode after reading
+    }
+}
+
+// ============================================================================
+// Slow Rendezvous Cycle (issue #71)
+// ============================================================================
+// If the rocket has been silent (no uplink received) for long enough, hop
+// briefly to LORA_RENDEZVOUS_MHZ on a duty cycle so the base station's
+// Phase-A recovery has a guaranteed meeting point even when the two NVS
+// freqs disagree by more than the BS's ±2 MHz scan range (e.g. the rocket
+// kept a previously-scanned channel like 921.5 MHz while the BS rebooted
+// to a fresh 915 MHz default).
+//
+// Trigger is adaptive:
+//   • If we've never received an uplink (last_uplink_rx_ms == 0), fire
+//     after just RENDEZVOUS_TRIGGER_INITIAL_MS — the BS may genuinely be
+//     lost and we want to find it quickly.
+//   • Once we've seen at least one uplink, fall back to the longer
+//     RENDEZVOUS_TRIGGER_QUIET_MS — the BS is alive, it's just being
+//     idle; no need to thrash the channel.
+//
+// Cycle (30 s period) is sized so a 30 s BS Phase A on the rendezvous
+// freq always overlaps at least one full rocket window:
+//   10 s on rendezvous → 20 s back on NVS → repeat.
+//
+// Suppressed while freq_locked_for_flight (set on INFLIGHT, cleared on
+// LANDED/READY).  Allowed from any other state — including INITIALIZATION,
+// so a rocket whose FlightComputer hasn't booted yet can still surface
+// itself on the rendezvous channel.
+
+enum class RocketRendezvousState : uint8_t {
+    IDLE,
+    ON_RENDEZVOUS,    // RENDEZVOUS_WINDOW_MS on LORA_RENDEZVOUS_MHZ
+    ON_SAVED,         // RENDEZVOUS_SAVED_MS back on lora_freq_mhz (NVS)
+};
+
+static RocketRendezvousState rendezvous_state = RocketRendezvousState::IDLE;
+static uint32_t rendezvous_phase_start_ms = 0;
+
+static constexpr uint32_t RENDEZVOUS_TRIGGER_INITIAL_MS = 30000;  // never heard BS yet
+static constexpr uint32_t RENDEZVOUS_TRIGGER_QUIET_MS   = 120000; // BS seen, just idle
+static constexpr uint32_t RENDEZVOUS_WINDOW_MS          = 10000;  // on rendezvous freq
+static constexpr uint32_t RENDEZVOUS_SAVED_MS           = 20000;  // back on saved freq
+
+// Hop the radio to the full rendezvous mode (freq + SF/BW/CR/power).
+// Uses ALL the rendezvous constants — frequency alone isn't enough if
+// the user has configured a non-Standard preset (e.g. Long Range = SF10/
+// BW125).  Both sides need to agree on every modulation parameter to
+// decode each other; the rendezvous mode is the shared known-good
+// fallback.
+static void rendezvousHopToRendezvousMode()
+{
+    if (lora_comms.reconfigure(config::LORA_RENDEZVOUS_MHZ,
+                                config::LORA_RENDEZVOUS_SF,
+                                config::LORA_RENDEZVOUS_BW_KHZ,
+                                config::LORA_RENDEZVOUS_CR,
+                                config::LORA_RENDEZVOUS_TX_POWER_DBM))
+    {
+        lora_comms.startReceive();
+        lora_in_rx_mode = true;
+    }
+    else
+    {
+        ESP_LOGE("OC", "[RENDEZVOUS] reconfigure to rendezvous mode failed");
+    }
+}
+
+// Hop the radio back to whatever NVS says — i.e. the working config the
+// user picked (or factory defaults if NVS empty).  Called when exiting
+// rendezvous and at the end of each ON_RENDEZVOUS window.
+static void rendezvousHopToSavedMode()
+{
+    if (lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
+                                lora_cr, lora_tx_power))
+    {
+        lora_comms.startReceive();
+        lora_in_rx_mode = true;
+    }
+    else
+    {
+        ESP_LOGE("OC", "[RENDEZVOUS] reconfigure to saved mode failed");
+    }
+}
+
+static void rendezvousExit(const char* why)
+{
+    if (rendezvous_state == RocketRendezvousState::IDLE) return;
+    rendezvousHopToSavedMode();
+    rendezvous_state = RocketRendezvousState::IDLE;
+    ESP_LOGI("OC", "[RENDEZVOUS] Exit (%s); back on saved mode %.2f MHz SF%u",
+             why, (double)lora_freq_mhz, (unsigned)lora_sf);
+}
+
+static void serviceRocketRendezvous()
+{
+    if (!config::USE_LORA_RADIO)  return;
+    if (!peripherals_initialized) return;
+    // Suppress only in flight — INITIALIZATION/READY/PRELAUNCH/LANDED are
+    // all valid times to hunt for the BS via rendezvous.  Allowing
+    // INITIALIZATION matters: if the rocket booted before its FC came up
+    // (or the FC is unhappy), we'd otherwise never visit the rendezvous
+    // mode and the BS would never find us.
+    if (freq_locked_for_flight)
+    {
+        rendezvousExit("flight locked");
+        return;
+    }
+
+    const uint32_t now = millis();
+
+    // Adaptive trigger: short window if we've never received an uplink
+    // (BS may genuinely be lost), longer otherwise (BS exists, just idle).
+    const uint32_t trigger_ms = (last_uplink_rx_ms == 0)
+        ? RENDEZVOUS_TRIGGER_INITIAL_MS
+        : RENDEZVOUS_TRIGGER_QUIET_MS;
+
+    // Silence reference: most-recent uplink receipt or, failing that,
+    // most-recent READY entry.  If neither has happened (fresh boot,
+    // never reached READY), measure from boot itself.
+    const uint32_t last_activity_ms = (last_uplink_rx_ms > ready_entry_ms)
+        ? last_uplink_rx_ms : ready_entry_ms;
+    const uint32_t silent_for = (last_activity_ms > 0)
+        ? (now - last_activity_ms) : now;
+
+    // Any fresh uplink breaks silence and returns us to the saved mode.
+    if (rendezvous_state != RocketRendezvousState::IDLE &&
+        silent_for < trigger_ms)
+    {
+        rendezvousExit("silence broke");
+        return;
+    }
+
+    switch (rendezvous_state)
+    {
+        case RocketRendezvousState::IDLE:
+            if (silent_for >= trigger_ms)
+            {
+                rendezvousHopToRendezvousMode();
+                rendezvous_phase_start_ms = now;
+                rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
+                ESP_LOGW("OC", "[RENDEZVOUS] Silent %u s; hop to rendezvous mode %.2f MHz SF%u BW%.0f",
+                         (unsigned)(silent_for / 1000),
+                         (double)config::LORA_RENDEZVOUS_MHZ,
+                         (unsigned)config::LORA_RENDEZVOUS_SF,
+                         (double)config::LORA_RENDEZVOUS_BW_KHZ);
+            }
+            break;
+
+        case RocketRendezvousState::ON_RENDEZVOUS:
+            if ((now - rendezvous_phase_start_ms) >= RENDEZVOUS_WINDOW_MS)
+            {
+                rendezvousHopToSavedMode();
+                rendezvous_phase_start_ms = now;
+                rendezvous_state = RocketRendezvousState::ON_SAVED;
+            }
+            break;
+
+        case RocketRendezvousState::ON_SAVED:
+            if ((now - rendezvous_phase_start_ms) >= RENDEZVOUS_SAVED_MS)
+            {
+                rendezvousHopToRendezvousMode();
+                rendezvous_phase_start_ms = now;
+                rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
+            }
+            break;
     }
 }
 
@@ -2940,6 +3170,11 @@ static void loop_oc()
         // Check for LoRa uplink commands between TX cycles
         serviceLoRaUplink();
 
+        // Slow-rendezvous cycle: brief visits to LORA_RENDEZVOUS_MHZ when
+        // the rocket has been silent in READY for a long time, so the base
+        // station's Phase-A recovery has a meeting point (issue #71).
+        serviceRocketRendezvous();
+
         // Send name beacon so base station can identify us
         sendLoRaBeacon();
     }
@@ -3391,7 +3626,16 @@ static void loop_oc()
             // LoRa reconfiguration: [freq:4f][bw:4f][sf:1][cr:1][txpwr:1]
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= 11)
+            // Inflight freeze (issue #71): refuse direct BLE reconfig in
+            // flight.  The iOS app already hides the apply button, but
+            // belt-and-braces in case of version skew.  We still send a
+            // readback so the app's UI reverts to the actual values.
+            if (plen >= 11 && freq_locked_for_flight)
+            {
+                ESP_LOGW("BLE", "Cmd 10 ignored: frequency locked for flight");
+                sendCurrentConfig();
+            }
+            else if (plen >= 11)
             {
                 float new_freq, new_bw;
                 memcpy(&new_freq, payload + 0, 4);

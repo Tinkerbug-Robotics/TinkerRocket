@@ -28,6 +28,23 @@ namespace config
     static constexpr bool    LORA_RX_BOOSTED_GAIN = true;
     static constexpr bool    LORA_SYNCWORD_PRIVATE = true;
 
+    // Known-good rendezvous mode (issue #71).  When the rocket and base
+    // station drift apart, both fall back to this complete LoRa config
+    // — frequency AND modulation parameters.  Frequency alone isn't
+    // enough: the user can configure SF/BW/CR/TX power via the iOS app
+    // ("Fast" / "Standard" / "Long Range" presets), and a divergence on
+    // those is just as fatal as a frequency mismatch.  All five values
+    // must be identical on both firmware builds; the constants below are
+    // the "Standard" preset, which is also the NVS factory default — so
+    // a fresh-NVS device is already in rendezvous mode at boot.  Never
+    // persisted to NVS; NVS holds the working config and this is always
+    // the same compile-time fallback.
+    static constexpr float   LORA_RENDEZVOUS_MHZ          = 915.0f;
+    static constexpr uint8_t LORA_RENDEZVOUS_SF           = 8;
+    static constexpr float   LORA_RENDEZVOUS_BW_KHZ       = 250.0f;
+    static constexpr uint8_t LORA_RENDEZVOUS_CR           = 5;
+    static constexpr int8_t  LORA_RENDEZVOUS_TX_POWER_DBM = 12;
+
     // --- LoRa Uplink (BaseStation → OutComputer) ---
     static constexpr uint8_t  UPLINK_SYNC_BYTE        = 0xCA;
     static constexpr uint8_t  UPLINK_RETRIES           = 8;     // TX attempts per command

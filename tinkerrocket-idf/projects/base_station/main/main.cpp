@@ -103,6 +103,24 @@ static uint8_t  last_rocket_state = 0;  // Track state transitions
 static bool     last_known_camera_recording = false;  // Track rocket camera state for idempotent uplink
 static bool     last_known_rocket_logging = false;    // Actual rocket logging state from LoRa downlink
 
+// Frequency lock for flight (issue #71).  Set when any tracked rocket
+// reports INFLIGHT; cleared on LANDED or READY (matches the rocket-side
+// sticky flag).  PRELAUNCH does NOT clear, since a post-flight
+// LANDED → PRELAUNCH transition (rocket regains GPS on the ground) would
+// otherwise leave the lock stuck on indefinitely.  While set:
+//   • Silence recovery is suppressed (we don't hop/scan during flight).
+//   • Silence tolerance is extended so momentary SNR dips don't alarm.
+//   • Transactional Cmd 10 handler still refuses on the rocket side, but
+//     we refuse on the base station side too as belt-and-braces.
+// The transition logic is shared with the rocket side via
+// computeFreqLockForFlight() in RocketComputerTypes.h.
+static bool freq_locked_for_flight = false;
+
+static inline void updateFreqLockFromRocketState(uint8_t s)
+{
+    freq_locked_for_flight = computeFreqLockForFlight(freq_locked_for_flight, s);
+}
+
 // Per-rocket tracker (replaces single last_decoded for multi-rocket support)
 static constexpr int MAX_TRACKED_ROCKETS = 4;
 struct TrackedRocket {
@@ -708,9 +726,21 @@ static void printStats()
     const float rx_hz = (dt > 0) ? ((float)rx_delta * 1000.0f / (float)dt) : 0.0f;
     last_rx_count = ls.rx_count;
 
-    const uint32_t since_last = (last_packet_ms > 0) ? (now - last_packet_ms) : 0;
+    // "Last pkt N ms ago" was misleading when N == 0 (looked like "just
+    // received" but actually meant "never received").  Print "never" in
+    // that case so a fresh-BS-no-rocket scenario is unambiguous in logs.
+    char last_pkt_str[24];
+    if (last_packet_ms > 0)
+    {
+        snprintf(last_pkt_str, sizeof(last_pkt_str), "%lu ms ago",
+                 (unsigned long)(now - last_packet_ms));
+    }
+    else
+    {
+        snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
+    }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | ISR: %lu | rx_mode: %d | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %lu ms ago",
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | ISR: %lu | rx_mode: %d | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
@@ -718,7 +748,7 @@ static void printStats()
              (int)ls.rx_mode,
              (double)ls.last_rssi,
              (double)ls.last_snr,
-             (unsigned long)since_last);
+             last_pkt_str);
 }
 
 // ============================================================================
@@ -810,8 +840,12 @@ static void cachePIDConfig(const uint8_t* payload, size_t len)
 
 /// Build an uplink packet with routing header.
 /// target_rid: destination rocket_id (0xFF = broadcast to all rockets in network)
+/// retries: number of TX attempts.  Defaults to config::UPLINK_RETRIES (8) for
+///   reliability on important commands; heartbeat-style traffic can pass a
+///   smaller value to keep airtime low.
 static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payload_len,
-                              uint8_t target_rid = 0xFF)
+                              uint8_t target_rid = 0xFF,
+                              uint8_t retries = config::UPLINK_RETRIES)
 {
     if (uplink_pending)
     {
@@ -831,11 +865,11 @@ static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payloa
         memcpy(&uplink_buf[5], payload, payload_len);
     }
     uplink_len = 5 + payload_len;
-    uplink_retries_left = config::UPLINK_RETRIES;
+    uplink_retries_left = retries;
     uplink_pending = true;
     uplink_last_tx_ms = 0;
     ESP_LOGI(TAG, "[UPLINK] Queued cmd=%u -> rid=%u payload=%u bytes, %u retries",
-             cmd, target_rid, (unsigned)payload_len, config::UPLINK_RETRIES);
+             cmd, target_rid, (unsigned)payload_len, (unsigned)retries);
 }
 
 static void serviceUplink()
@@ -878,6 +912,469 @@ static void serviceUplink()
     {
         ESP_LOGW(TAG, "[UPLINK] send() failed, will retry");
     }
+}
+
+// ============================================================================
+// LoRa Config Transaction (issue #71)
+// ============================================================================
+// Transactional commit of a new LoRa config (freq / bw / sf / cr / pwr).
+// Sequence:
+//   1. On BLE Cmd 10 the base station takes a rollback snapshot, then queues
+//      a broadcast uplink of inner Cmd 10 to every rocket on the OLD channel.
+//   2. Once the uplink retries finish (or the upper-bound timer fires), the
+//      base station switches its radio to the NEW channel and listens for
+//      proof of life (any rocket beacon or telemetry packet bumps
+//      last_packet_ms).
+//   3. On proof → commit to NVS + send BLE readback.
+//      On timeout → reconfigure back to OLD, send BLE readback with OLD
+//      values, and leave NVS untouched.  The silence-recovery layer is
+//      then responsible for healing any residual divergence.
+// The handler is a non-blocking state machine serviced from loop_bs();
+// the whole transaction takes ~3 s under normal conditions.
+
+enum class LoRaTxnState : uint8_t {
+    IDLE,
+    RELAYING,       // Uplink retries in flight on OLD channel
+    VERIFYING,      // Listening for rocket beacon/telem on NEW channel
+    ROLLING_BACK,   // Restoring OLD channel after verify timed out
+};
+
+static LoRaTxnState lora_txn_state = LoRaTxnState::IDLE;
+
+// Target config
+static float   txn_new_freq = 0.0f, txn_new_bw = 0.0f;
+static uint8_t txn_new_sf = 0, txn_new_cr = 0;
+static int8_t  txn_new_pwr = 0;
+// Rollback snapshot
+static float   txn_old_freq = 0.0f, txn_old_bw = 0.0f;
+static uint8_t txn_old_sf = 0, txn_old_cr = 0;
+static int8_t  txn_old_pwr = 0;
+
+static uint32_t txn_phase_start_ms = 0;
+// last_packet_ms value at the moment we switched to NEW.  Any increase
+// during the verify window proves the rocket joined us on NEW.
+static uint32_t txn_verify_baseline_packet_ms = 0;
+
+static constexpr uint32_t TXN_VERIFY_WINDOW_MS = 5000;  // Listen 5 s on NEW
+static constexpr uint32_t TXN_MAX_RELAY_MS     = 3000;  // Upper bound on relay phase
+
+/// Begin a transactional LoRa reconfigure.  Returns false (and leaves the
+/// BS config unchanged, BLE readback sent) if the preconditions fail.
+static bool startLoRaTransaction(float new_freq, float new_bw,
+                                 uint8_t new_sf, uint8_t new_cr, int8_t new_pwr)
+{
+    if (freq_locked_for_flight)
+    {
+        ESP_LOGW(TAG, "[TXN] Refused: frequency locked for flight");
+        sendCurrentConfig();
+        return false;
+    }
+    if (lora_txn_state != LoRaTxnState::IDLE)
+    {
+        ESP_LOGW(TAG, "[TXN] Refused: transaction already in progress");
+        sendCurrentConfig();
+        return false;
+    }
+
+    // Take rollback snapshot BEFORE queuing the uplink, so we can always
+    // restore whatever was active when the transaction started.
+    txn_old_freq = lora_freq_mhz;
+    txn_old_bw   = lora_bw_khz;
+    txn_old_sf   = lora_sf;
+    txn_old_cr   = lora_cr;
+    txn_old_pwr  = lora_tx_power;
+
+    txn_new_freq = new_freq;
+    txn_new_bw   = new_bw;
+    txn_new_sf   = new_sf;
+    txn_new_cr   = new_cr;
+    txn_new_pwr  = new_pwr;
+
+    // Broadcast uplink to every rocket in the network on the OLD channel.
+    // buildUplinkPacket queues + runs 8 retries on its own (~800 ms total).
+    uint8_t loraPayload[11];
+    memcpy(loraPayload + 0, &new_freq, 4);
+    memcpy(loraPayload + 4, &new_bw,   4);
+    loraPayload[8]  = new_sf;
+    loraPayload[9]  = new_cr;
+    loraPayload[10] = (uint8_t)new_pwr;
+    buildUplinkPacket(10, loraPayload, 11, /* target_rid = broadcast */ 0xFF);
+
+    lora_txn_state = LoRaTxnState::RELAYING;
+    txn_phase_start_ms = millis();
+    ESP_LOGI(TAG, "[TXN] Start: relay %.2f MHz SF%u BW%.0f on OLD, then verify on NEW",
+             (double)new_freq, (unsigned)new_sf, (double)new_bw);
+    return true;
+}
+
+/// Run the transaction state machine — call from loop_bs() every iteration.
+static void serviceLoRaTransaction()
+{
+    switch (lora_txn_state)
+    {
+        case LoRaTxnState::IDLE:
+            return;
+
+        case LoRaTxnState::RELAYING:
+        {
+            const uint32_t now = millis();
+            // serviceUplink() clears uplink_pending once the last retry has
+            // fired; at that point the rocket has either joined NEW or not.
+            // TXN_MAX_RELAY_MS is a safety net in case uplink state is stuck.
+            const bool relay_done   = !uplink_pending;
+            const bool relay_timeout = (now - txn_phase_start_ms) > TXN_MAX_RELAY_MS;
+            if (!relay_done && !relay_timeout) return;
+
+            if (!lora_comms.reconfigure(txn_new_freq, txn_new_sf, txn_new_bw,
+                                        txn_new_cr, txn_new_pwr))
+            {
+                ESP_LOGE(TAG, "[TXN] reconfigure(NEW) failed — rolling back");
+                lora_txn_state = LoRaTxnState::ROLLING_BACK;
+                txn_phase_start_ms = now;
+                return;
+            }
+            lora_comms.startReceive();  // listen on NEW freq
+
+            txn_verify_baseline_packet_ms = last_packet_ms;
+            lora_txn_state = LoRaTxnState::VERIFYING;
+            txn_phase_start_ms = now;
+            ESP_LOGI(TAG, "[TXN] On NEW %.2f MHz; verifying for %u ms",
+                     (double)txn_new_freq, (unsigned)TXN_VERIFY_WINDOW_MS);
+            break;
+        }
+
+        case LoRaTxnState::VERIFYING:
+        {
+            const uint32_t now = millis();
+            // Any packet (beacon or telem) received after we switched proves
+            // the rocket joined us on NEW.  The RX path unconditionally
+            // bumps last_packet_ms on every successful receive.
+            if (last_packet_ms > txn_verify_baseline_packet_ms)
+            {
+                // COMMIT: radio already on NEW; persist to NVS + update
+                // runtime vars so the rest of the firmware sees the new
+                // config in readbacks.
+                lora_freq_mhz = txn_new_freq;
+                lora_bw_khz   = txn_new_bw;
+                lora_sf       = txn_new_sf;
+                lora_cr       = txn_new_cr;
+                lora_tx_power = txn_new_pwr;
+
+                prefs.begin("lora", false);
+                prefs.putFloat("freq",  lora_freq_mhz);
+                prefs.putFloat("bw",    lora_bw_khz);
+                prefs.putUChar("sf",    lora_sf);
+                prefs.putUChar("cr",    lora_cr);
+                prefs.putChar("txpwr",  lora_tx_power);
+                prefs.end();
+
+                ESP_LOGI(TAG, "[TXN] COMMIT: heard rocket on NEW %.2f MHz, saved",
+                         (double)lora_freq_mhz);
+                lora_txn_state = LoRaTxnState::IDLE;
+                sendCurrentConfig();
+                return;
+            }
+            if ((now - txn_phase_start_ms) >= TXN_VERIFY_WINDOW_MS)
+            {
+                ESP_LOGW(TAG, "[TXN] TIMEOUT: no rocket on NEW %.2f MHz, rolling back",
+                         (double)txn_new_freq);
+                lora_txn_state = LoRaTxnState::ROLLING_BACK;
+                txn_phase_start_ms = now;
+            }
+            break;
+        }
+
+        case LoRaTxnState::ROLLING_BACK:
+        {
+            // Restore the OLD config.  If this fails the radio may be stuck;
+            // log loudly and return to IDLE — silence recovery is the last
+            // line of defence.
+            if (lora_comms.reconfigure(txn_old_freq, txn_old_sf, txn_old_bw,
+                                       txn_old_cr, txn_old_pwr))
+            {
+                lora_freq_mhz = txn_old_freq;
+                lora_bw_khz   = txn_old_bw;
+                lora_sf       = txn_old_sf;
+                lora_cr       = txn_old_cr;
+                lora_tx_power = txn_old_pwr;
+                lora_comms.startReceive();
+                ESP_LOGI(TAG, "[TXN] ROLLED BACK to %.2f MHz", (double)txn_old_freq);
+            }
+            else
+            {
+                ESP_LOGE(TAG, "[TXN] Rollback reconfigure FAILED — radio may be stuck");
+            }
+            lora_txn_state = LoRaTxnState::IDLE;
+            sendCurrentConfig();
+            break;
+        }
+    }
+}
+
+// ============================================================================
+// LoRa Silence Recovery (issue #71)
+// ============================================================================
+// If the base station hears nothing from any rocket for RECOVERY_SILENCE_MS
+// while on the ground (not freq_locked_for_flight), hop through known-good
+// frequencies looking for the rocket:
+//   Phase A (rendezvous): tune to LORA_RENDEZVOUS_MHZ and listen 3 s.  If a
+//     beacon / telem arrives, relay Cmd 10 with the saved NVS config to
+//     push the rocket back, then return to the saved NVS freq.
+//   Phase B (grid scan): if Phase A was silent, scan the saved NVS freq ±
+//     2 MHz in 200 kHz steps (21 channels), dwelling one beacon cycle per
+//     step.  On hit, relay Cmd 10 on that channel and return to NVS.
+//     If the grid completes with nothing heard, give up this cycle and
+//     wait for the next silence trip.
+// While in flight (freq_locked_for_flight) recovery is fully disabled —
+// momentary silence during flight is expected (SNR dips) and hopping would
+// guarantee we lose the rest of the telemetry stream.
+
+enum class RecoveryState : uint8_t {
+    IDLE,
+    PHASE_A_RENDEZVOUS,
+    PHASE_B_SCAN,
+    COMPLETE,               // Relay in flight; hop home once it drains
+};
+
+static RecoveryState recovery_state = RecoveryState::IDLE;
+static uint32_t recovery_phase_start_ms     = 0;
+static uint32_t recovery_baseline_packet_ms = 0;
+static int      recovery_scan_index         = 0;
+static float    recovery_scan_current_mhz   = 0.0f;
+
+static constexpr uint32_t RECOVERY_SILENCE_MS       = 10000; // idle trigger
+// Phase A dwells on the rendezvous frequency long enough to (a) catch
+// many beacons from a rocket sitting permanently on rendezvous (factory
+// default case, ~15 beacons in 30 s) and (b) deterministically overlap
+// the rocket's 5 s slow-rendezvous window when the two NVS freqs differ.
+// Anything shorter than ~10 s is statistical and was the root of the
+// "BS comes up, never sees rocket" symptom from the field test.
+static constexpr uint32_t RECOVERY_PHASE_A_DWELL_MS = 30000;
+static constexpr uint32_t RECOVERY_PHASE_B_DWELL_MS = 2500;  // one beacon cycle + slack
+static constexpr int      RECOVERY_PHASE_B_CHANNELS = 21;    // ±10 steps of 200 kHz
+static constexpr float    RECOVERY_PHASE_B_STEP_MHZ = 0.200f;
+static constexpr float    RECOVERY_PHASE_B_SPAN_MHZ = 2.0f;  // ±2 MHz around NVS
+
+// Hop to the full rendezvous mode (freq + SF/BW/CR/power).  Used for
+// Phase A — both ends agree on this exact config as a known-good
+// fallback, regardless of what the user set in NVS.
+static void recoveryHopToRendezvousMode()
+{
+    if (lora_comms.reconfigure(config::LORA_RENDEZVOUS_MHZ,
+                                config::LORA_RENDEZVOUS_SF,
+                                config::LORA_RENDEZVOUS_BW_KHZ,
+                                config::LORA_RENDEZVOUS_CR,
+                                config::LORA_RENDEZVOUS_TX_POWER_DBM))
+    {
+        lora_comms.startReceive();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "[RECOVER] reconfigure to rendezvous mode failed");
+    }
+}
+
+// Hop to a target frequency keeping the user-configured NVS modulation
+// (SF/BW/CR/power).  Used for Phase B local scan and the post-recovery
+// return to the saved channel.  This catches the common case of "rocket
+// is on a slightly off frequency but same SF/BW as the BS".
+static void recoveryHopToFreq(float freq_mhz)
+{
+    if (lora_comms.reconfigure(freq_mhz, lora_sf, lora_bw_khz, lora_cr, lora_tx_power))
+    {
+        lora_comms.startReceive();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "[RECOVER] reconfigure to %.2f MHz failed", (double)freq_mhz);
+    }
+}
+
+static void recoveryEnterPhaseA()
+{
+    recoveryHopToRendezvousMode();
+    recovery_baseline_packet_ms = last_packet_ms;
+    recovery_phase_start_ms     = millis();
+    recovery_state              = RecoveryState::PHASE_A_RENDEZVOUS;
+    ESP_LOGW(TAG, "[RECOVER] Silent — Phase A rendezvous mode (%.2f MHz SF%u BW%.0f) for %u ms",
+             (double)config::LORA_RENDEZVOUS_MHZ,
+             (unsigned)config::LORA_RENDEZVOUS_SF,
+             (double)config::LORA_RENDEZVOUS_BW_KHZ,
+             (unsigned)RECOVERY_PHASE_A_DWELL_MS);
+}
+
+static void recoveryEnterPhaseB()
+{
+    recovery_scan_index       = 0;
+    recovery_scan_current_mhz = lora_freq_mhz - RECOVERY_PHASE_B_SPAN_MHZ;
+    recoveryHopToFreq(recovery_scan_current_mhz);
+    recovery_baseline_packet_ms = last_packet_ms;
+    recovery_phase_start_ms     = millis();
+    recovery_state              = RecoveryState::PHASE_B_SCAN;
+    ESP_LOGW(TAG, "[RECOVER] Phase B scan: %d channels around %.2f MHz",
+             RECOVERY_PHASE_B_CHANNELS, (double)lora_freq_mhz);
+}
+
+static void recoveryEnd(const char* why)
+{
+    // Always come back to the saved NVS frequency so we're either settled
+    // on the committed channel or poised to hear the rocket once it
+    // returns there.
+    recoveryHopToFreq(lora_freq_mhz);
+    recovery_state = RecoveryState::IDLE;
+    ESP_LOGI(TAG, "[RECOVER] Done (%s). Back on %.2f MHz",
+             why, (double)lora_freq_mhz);
+}
+
+/// Relay Cmd 10 on the current channel to push the rocket back to the
+/// saved NVS config.  Used when we re-locate the rocket during recovery.
+static void recoveryPushRocketHome()
+{
+    uint8_t payload[11];
+    memcpy(payload + 0, &lora_freq_mhz, 4);
+    memcpy(payload + 4, &lora_bw_khz,   4);
+    payload[8]  = lora_sf;
+    payload[9]  = lora_cr;
+    payload[10] = (uint8_t)lora_tx_power;
+    buildUplinkPacket(10, payload, 11, /* target_rid = broadcast */ 0xFF);
+    ESP_LOGI(TAG, "[RECOVER] Relay Cmd 10 -> %.2f MHz (saved NVS)",
+             (double)lora_freq_mhz);
+}
+
+static void serviceRecovery()
+{
+    // While locked for flight, accept silence — no hopping, no alarms.
+    if (freq_locked_for_flight)
+    {
+        if (recovery_state != RecoveryState::IDLE) recoveryEnd("flight locked");
+        return;
+    }
+    // Transactional reconfigure takes priority.  A BLE Cmd 10 arriving
+    // mid-recovery aborts the recovery cycle; the transaction then
+    // self-rolls-back-or-commits, and any residual divergence is healed
+    // by the next recovery pass.
+    if (lora_txn_state != LoRaTxnState::IDLE)
+    {
+        if (recovery_state != RecoveryState::IDLE) recoveryEnd("transaction");
+        return;
+    }
+
+    const uint32_t now = millis();
+
+    switch (recovery_state)
+    {
+        case RecoveryState::IDLE:
+        {
+            // Avoid firing during the first RECOVERY_SILENCE_MS after boot
+            // — it's normal to be silent while the rocket is still booting.
+            if (last_packet_ms == 0 && now < RECOVERY_SILENCE_MS) return;
+            const uint32_t silent_for = (last_packet_ms > 0)
+                ? (now - last_packet_ms)
+                : now;
+            if (silent_for >= RECOVERY_SILENCE_MS) recoveryEnterPhaseA();
+            break;
+        }
+
+        case RecoveryState::PHASE_A_RENDEZVOUS:
+        {
+            if (last_packet_ms > recovery_baseline_packet_ms)
+            {
+                recoveryPushRocketHome();
+                recovery_phase_start_ms = now;
+                recovery_state = RecoveryState::COMPLETE;
+                break;
+            }
+            if ((now - recovery_phase_start_ms) >= RECOVERY_PHASE_A_DWELL_MS)
+            {
+                recoveryEnterPhaseB();
+            }
+            break;
+        }
+
+        case RecoveryState::PHASE_B_SCAN:
+        {
+            if (last_packet_ms > recovery_baseline_packet_ms)
+            {
+                recoveryPushRocketHome();
+                recovery_phase_start_ms = now;
+                recovery_state = RecoveryState::COMPLETE;
+                break;
+            }
+            if ((now - recovery_phase_start_ms) >= RECOVERY_PHASE_B_DWELL_MS)
+            {
+                recovery_scan_index++;
+                if (recovery_scan_index >= RECOVERY_PHASE_B_CHANNELS)
+                {
+                    // Exhausted grid with no hits — give up this cycle.
+                    // Silence will trip us again after RECOVERY_SILENCE_MS.
+                    recoveryEnd("scan exhausted");
+                    return;
+                }
+                recovery_scan_current_mhz += RECOVERY_PHASE_B_STEP_MHZ;
+                recoveryHopToFreq(recovery_scan_current_mhz);
+                recovery_baseline_packet_ms = last_packet_ms;
+                recovery_phase_start_ms = now;
+            }
+            break;
+        }
+
+        case RecoveryState::COMPLETE:
+        {
+            // Give uplink retries time to land on the current channel
+            // before we hop back to NVS — otherwise the rocket might miss
+            // the push command and we'd just rediscover it next cycle.
+            if (!uplink_pending ||
+                (now - recovery_phase_start_ms) > TXN_MAX_RELAY_MS)
+            {
+                recoveryEnd("pushed rocket home");
+            }
+            break;
+        }
+    }
+}
+
+// ============================================================================
+// Heartbeat (issue #71)
+// ============================================================================
+// Periodic uplink that gives the rocket positive proof of comms.  Without
+// this, a rocket happily streaming telemetry to a base station that's
+// receiving fine would still fall into its slow-rendezvous cycle every
+// time the user goes a couple of minutes without sending a command —
+// because beacons go one way and the rocket has no signal that anyone is
+// listening.
+//
+// Only sent while we ARE hearing the rocket (last_packet_ms recent).  If
+// rocket goes silent, the recovery state machine takes over and we stop
+// heartbeating until comms are restored.  Uses 2 retries instead of 8 to
+// keep airtime negligible (<0.1%) — losing one heartbeat is fine, the
+// next one comes 30 s later, well inside the rocket's tolerance.
+// (Defined here, after the LoRa transaction & recovery sections, so the
+// state-machine enums it depends on are in scope.)
+
+static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 30000;  // every 30 s
+static constexpr uint32_t HEARTBEAT_RX_FRESH_MS = 5000;   // rocket "alive"
+static constexpr uint8_t  HEARTBEAT_RETRIES     = 2;
+static uint32_t last_heartbeat_tx_ms = 0;
+
+static void serviceHeartbeat()
+{
+    if (freq_locked_for_flight)                return;  // No heartbeats in flight
+    if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
+    if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
+    if (uplink_pending)                        return;  // Don't clobber a real cmd
+
+    const uint32_t now = millis();
+    // Only heartbeat when we've recently heard the rocket.  If rocket has
+    // gone silent, recovery will engage and ramp through rendezvous/scan;
+    // beating into the void during that is just wasted airtime.
+    if (last_packet_ms == 0)                                  return;
+    if ((now - last_packet_ms) > HEARTBEAT_RX_FRESH_MS)       return;
+    if ((now - last_heartbeat_tx_ms) < HEARTBEAT_INTERVAL_MS) return;
+
+    buildUplinkPacket(LORA_CMD_HEARTBEAT, nullptr, 0,
+                      /* target_rid = broadcast */ 0xFF,
+                      /* retries */ HEARTBEAT_RETRIES);
+    last_heartbeat_tx_ms = now;
 }
 
 static void setup_bs()
@@ -1249,6 +1746,7 @@ static void loop_bs()
                 }
 
                 last_rocket_state = decoded.rocket_state;
+                updateFreqLockFromRocketState(decoded.rocket_state);
                 last_known_camera_recording = decoded.camera_recording;
 
                 // Update per-rocket tracker
@@ -1471,8 +1969,11 @@ static void loop_bs()
     }
     else if (ble_cmd == 10)
     {
-        // LoRa reconfiguration (BaseStation only — NOT relayed over uplink)
-        // Changing BS frequency over LoRa would break the link to OutComputer.
+        // LoRa reconfiguration — transactional (issue #71).  The base
+        // station relays the new config to every rocket on the OLD channel,
+        // then switches to NEW and verifies the rocket joined before
+        // committing to NVS.  On timeout, both sides stay on OLD and the
+        // silence-recovery layer heals any residual divergence.
         const uint8_t* payload = ble_app.getCommandPayload();
         size_t payload_len = ble_app.getCommandPayloadLength();
         if (payload_len >= 11)
@@ -1483,41 +1984,7 @@ static void loop_bs()
             uint8_t new_sf   = payload[8];
             uint8_t new_cr   = payload[9];
             int8_t  new_pwr  = (int8_t)payload[10];
-
-            if (lora_comms.reconfigure(new_freq, new_sf, new_bw, new_cr, new_pwr))
-            {
-                // Update runtime vars
-                lora_freq_mhz = new_freq;
-                lora_bw_khz   = new_bw;
-                lora_sf        = new_sf;
-                lora_cr        = new_cr;
-                lora_tx_power  = new_pwr;
-
-                // Persist to NVS
-                prefs.begin("lora", false);  // read-write
-                prefs.putFloat("freq",  lora_freq_mhz);
-                prefs.putFloat("bw",    lora_bw_khz);
-                prefs.putUChar("sf",    lora_sf);
-                prefs.putUChar("cr",    lora_cr);
-                prefs.putChar("txpwr",  lora_tx_power);
-                prefs.end();
-
-                // Re-enter RX mode after reconfiguration
-                lora_comms.startReceive();
-
-                ESP_LOGI(TAG, "[BLE] LoRa reconfigured + saved: %.1f MHz SF%u BW%.0f CR%u %d dBm",
-                         (double)lora_freq_mhz, (unsigned)lora_sf,
-                         (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
-
-                // Send config readback so app can confirm the actual values applied
-                sendCurrentConfig();
-            }
-            else
-            {
-                ESP_LOGE(TAG, "[BLE] LoRa reconfigure FAILED");
-                // Send readback with OLD config so app reverts its display
-                sendCurrentConfig();
-            }
+            startLoRaTransaction(new_freq, new_bw, new_sf, new_cr, new_pwr);
         }
     }
     else if (ble_cmd == 12)
@@ -1666,6 +2133,20 @@ static void loop_bs()
 
     // Service LoRa uplink retries (TX commands, then resume RX)
     serviceUplink();
+
+    // Advance the transactional reconfigure state machine (issue #71).
+    // Must run after serviceUplink so we observe uplink_pending transitions
+    // to false in the same loop iteration they happen.
+    serviceLoRaTransaction();
+
+    // Silence recovery runs after the transaction service so a freshly
+    // started transaction always wins over any pending recovery cycle.
+    serviceRecovery();
+
+    // Heartbeat — quietly tells the rocket "we're hearing you" so its
+    // slow-rendezvous timer doesn't expire during normal idle operation.
+    // Gates itself on recovery/transaction state internally.
+    serviceHeartbeat();
 
     printStats();
 
