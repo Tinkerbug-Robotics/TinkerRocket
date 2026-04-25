@@ -47,6 +47,44 @@ enum RocketState : uint8_t
     LANDED
 };
 
+// ============================================================================
+// Shared LoRa-recovery helpers (issue #71)
+// ============================================================================
+// Pure functions used by both the rocket and base station firmware so the
+// behaviour stays bit-for-bit identical and is unit-testable from the host
+// side without dragging in the radio/state machinery.
+
+// Sticky frequency-lock-for-flight transition.  Given the previous lock
+// state and the latest rocket state, returns the new lock state:
+//   • INFLIGHT       → true  (latch on)
+//   • READY/LANDED   → false (clear: back on the ground)
+//   • everything else (INITIALIZATION/PRELAUNCH) → unchanged
+// PRELAUNCH explicitly does NOT clear, so a post-flight LANDED→PRELAUNCH
+// transition (rocket regains GPS while still on the ground) doesn't drop
+// the lock prematurely.  Overload taking uint8_t exists because the base
+// station receives state numerically from the LoRa downlink.
+static inline bool computeFreqLockForFlight(bool prev_locked, RocketState s)
+{
+    if (s == INFLIGHT)                  return true;
+    if (s == LANDED || s == READY)      return false;
+    return prev_locked;
+}
+
+static inline bool computeFreqLockForFlight(bool prev_locked, uint8_t s)
+{
+    return computeFreqLockForFlight(prev_locked, (RocketState)s);
+}
+
+// Whether the rocket should be transmitting LoRa name beacons in this
+// state.  Suppress only in INFLIGHT — telemetry needs that airtime, and
+// the BS already knows where we are.  All other states (including
+// INITIALIZATION) beacon: this lets the BS find the rocket even before
+// the FlightComputer has finished booting and reported READY.
+static inline bool shouldBeaconInState(RocketState s)
+{
+    return s != INFLIGHT;
+}
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
@@ -347,6 +385,16 @@ static constexpr uint8_t LORA_PROTO_VERSION = 1;
 
 // LoRa name beacon sync byte (distinguishes from telemetry by size + prefix)
 static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;
+
+// Heartbeat uplink command (issue #71).  Sent by the base station roughly
+// every 30 s while it's actively hearing rocket telemetry, so the rocket
+// has positive proof of comms in the absence of any user-initiated
+// uplink.  Without this, the rocket's slow-rendezvous timer would expire
+// during a passive monitoring session and waste airtime visiting the
+// rendezvous frequency.  The handler is a no-op — last_uplink_rx_ms
+// updates unconditionally on any successfully decoded uplink, which is
+// all the rocket needs to keep the timer reset.
+static constexpr uint8_t LORA_CMD_HEARTBEAT = 0xFE;
 
 // LoRa data to send from rocket to ground station
 typedef struct __attribute__((packed))

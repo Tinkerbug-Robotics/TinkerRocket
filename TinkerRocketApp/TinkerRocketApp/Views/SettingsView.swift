@@ -10,13 +10,14 @@
 import SwiftUI
 import Combine
 
-// MARK: - Channel & Preset Definitions
-
-struct LoRaChannel: Identifiable {
-    let id: Int
-    let label: String
-    let freqMHz: Float
-}
+// MARK: - Preset Definitions
+//
+// Manual frequency selection was removed in issue #71 — letting the user
+// type any frequency is the #1 way the base station and rocket end up on
+// different channels.  The only path to change frequency now is the
+// Frequency Scan view, which picks the quietest channel and uses the
+// transactional apply flow.  SF/BW/CR/power presets remain user-editable
+// because they change rarely and are relayed atomically.
 
 struct LoRaPreset: Identifiable {
     let id: Int
@@ -27,18 +28,6 @@ struct LoRaPreset: Identifiable {
     let maxTxHz: String        // Max TX rate
     let approxRange: String    // Approximate LOS range
 }
-
-private let loraChannels: [LoRaChannel] = [
-    LoRaChannel(id: 0, label: "Ch 1 \u{00B7} 903.0 MHz", freqMHz: 903.0),
-    LoRaChannel(id: 1, label: "Ch 2 \u{00B7} 904.6 MHz", freqMHz: 904.6),
-    LoRaChannel(id: 2, label: "Ch 3 \u{00B7} 906.2 MHz", freqMHz: 906.2),
-    LoRaChannel(id: 3, label: "Ch 4 \u{00B7} 907.8 MHz", freqMHz: 907.8),
-    LoRaChannel(id: 4, label: "Ch 5 \u{00B7} 909.4 MHz", freqMHz: 909.4),
-    LoRaChannel(id: 5, label: "Ch 6 \u{00B7} 911.0 MHz", freqMHz: 911.0),
-    LoRaChannel(id: 6, label: "Ch 7 \u{00B7} 912.6 MHz", freqMHz: 912.6),
-    LoRaChannel(id: 7, label: "Ch 8 \u{00B7} 914.2 MHz", freqMHz: 914.2),
-    LoRaChannel(id: 8, label: "Ch 9 \u{00B7} 915.0 MHz", freqMHz: 915.0),
-]
 
 private let loraPresets: [LoRaPreset] = [
     LoRaPreset(id: 0, name: "Fast",       sf: 7,  bwKHz: 500.0, approxToA: "25 ms",  maxTxHz: "25 Hz", approxRange: "~3 km"),
@@ -54,8 +43,7 @@ struct SettingsView: View {
     @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
-    // Persisted selections — LoRa
-    @AppStorage("loraChannelId")        private var channelId: Int = 8          // Default: Ch 9 (915.0 MHz)
+    // Persisted selections — LoRa (frequency no longer user-settable; see note above)
     @AppStorage("loraPresetId")         private var presetId: Int = 1           // Default: Standard
     @AppStorage("loraTxPower")          private var txPower: Double = 12.0      // Default: 12 dBm
 
@@ -110,12 +98,15 @@ struct SettingsView: View {
     @State private var servoApplied = false
     @State private var pidApplied = false
 
-    private var selectedChannel: LoRaChannel {
-        loraChannels.first(where: { $0.id == channelId }) ?? loraChannels[8]
-    }
-
     private var selectedPreset: LoRaPreset {
         loraPresets.first(where: { $0.id == presetId }) ?? loraPresets[1]
+    }
+
+    /// Current active frequency for the connected device, read from the most
+    /// recent config readback.  Falls back to the factory default so the
+    /// Summary section has something to show before the first readback lands.
+    private var currentFreqMHz: Float {
+        device.rocketConfig?.loraFreqMHz ?? 915.0
     }
 
     /// True when the connected rocket is still initializing (sensors/GPS starting up).
@@ -177,71 +168,110 @@ struct SettingsView: View {
 
                 // --- LoRa Settings ---
 
-                // Channel picker (default Form style = navigation link, avoids
-                // UIContextMenuInteraction issues that .menu causes in sheets)
-                Section("LoRa Channel") {
-                    Picker("Frequency", selection: $channelId) {
-                        ForEach(loraChannels) { ch in
-                            Text(ch.label).tag(ch.id)
-                        }
+                // Frequency is read-only here — it changes only via the
+                // Frequency Scan view (issue #71).  Show the currently active
+                // value so the user can confirm both devices match.
+                Section(header: Text("LoRa Frequency"),
+                        footer: Text(device.isBaseStation
+                            ? "To change frequency, run a Frequency Scan on the base station. The scan picks the quietest channel and applies it transactionally to both devices."
+                            : "Frequency is managed from the base station. Connect to the base station to change it.")) {
+                    HStack {
+                        Text("Current")
+                        Spacer()
+                        Text(String(format: "%.2f MHz", currentFreqMHz))
+                            .foregroundColor(.secondary)
+                            .font(.system(.body, design: .monospaced))
                     }
                 }
 
-                // Preset picker
-                Section("LoRa Range / Rate Preset") {
-                    Picker("Preset", selection: $presetId) {
-                        ForEach(loraPresets) { preset in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(preset.name)
-                                Text("\(preset.approxRange) \u{00B7} \(preset.maxTxHz) \u{00B7} \(preset.approxToA)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                // LoRa modulation (preset + TX power) is editable ONLY on the
+                // base station.  The base station relays its config to every
+                // tracked rocket via the transactional Cmd 10 path, keeping
+                // both ends in lockstep.  On a direct rocket connection we
+                // show the loaded values read-only so the user can verify
+                // they match — but never edit, eliminating the "I changed
+                // it on the rocket but not the BS" footgun.
+                if device.isBaseStation {
+                    // Preset picker
+                    Section("LoRa Range / Rate Preset") {
+                        Picker("Preset", selection: $presetId) {
+                            ForEach(loraPresets) { preset in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(preset.name)
+                                    Text("\(preset.approxRange) \u{00B7} \(preset.maxTxHz) \u{00B7} \(preset.approxToA)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .tag(preset.id)
                             }
-                            .tag(preset.id)
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    }
+
+                    // TX Power slider
+                    Section("LoRa TX Power") {
+                        VStack {
+                            HStack {
+                                Text("Power")
+                                Spacer()
+                                Text("\(Int(txPower)) dBm")
+                                    .foregroundColor(.secondary)
+                                    .font(.system(.body, design: .monospaced))
+                            }
+                            Slider(value: $txPower, in: 2...22, step: 1)
                         }
                     }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
                 }
 
-                // TX Power slider
-                Section("LoRa TX Power") {
-                    VStack {
-                        HStack {
-                            Text("Power")
-                            Spacer()
-                            Text("\(Int(txPower)) dBm")
-                                .foregroundColor(.secondary)
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        Slider(value: $txPower, in: 2...22, step: 1)
-                    }
-                }
-
-                // Summary
+                // Summary — what the user is about to apply (BS) vs. what
+                // the rocket has loaded right now (rocket-direct).
                 Section("LoRa Summary") {
-                    infoRow(label: "Frequency", value: String(format: "%.1f MHz", selectedChannel.freqMHz))
-                    infoRow(label: "Spreading Factor", value: "SF\(selectedPreset.sf)")
-                    infoRow(label: "Bandwidth", value: String(format: "%.0f kHz", selectedPreset.bwKHz))
-                    infoRow(label: "Coding Rate", value: "4/5")
-                    infoRow(label: "TX Power", value: "\(Int(txPower)) dBm")
-                    infoRow(label: "Time on Air", value: selectedPreset.approxToA)
-                    infoRow(label: "Est. Range (LOS)", value: selectedPreset.approxRange)
+                    infoRow(label: "Frequency", value: String(format: "%.2f MHz", currentFreqMHz))
+                    if device.isBaseStation {
+                        infoRow(label: "Spreading Factor", value: "SF\(selectedPreset.sf)")
+                        infoRow(label: "Bandwidth", value: String(format: "%.0f kHz", selectedPreset.bwKHz))
+                        infoRow(label: "Coding Rate", value: "4/5")
+                        infoRow(label: "TX Power", value: "\(Int(txPower)) dBm")
+                        infoRow(label: "Time on Air", value: selectedPreset.approxToA)
+                        infoRow(label: "Est. Range (LOS)", value: selectedPreset.approxRange)
+                    } else if let cfg = device.rocketConfig {
+                        // Read-only view of whatever the rocket actually has.
+                        if let sf = cfg.loraSF {
+                            infoRow(label: "Spreading Factor", value: "SF\(sf)")
+                        }
+                        if let bw = cfg.loraBwKHz {
+                            infoRow(label: "Bandwidth", value: String(format: "%.0f kHz", bw))
+                        }
+                        if let cr = cfg.loraCR {
+                            infoRow(label: "Coding Rate", value: "4/\(cr)")
+                        }
+                        if let pwr = cfg.loraTxPower {
+                            infoRow(label: "TX Power", value: "\(pwr) dBm")
+                        }
+                    } else {
+                        Text("Waiting for rocket config readback…")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                 }
 
-                // Apply LoRa button
-                Section {
-                    applyButton(
-                        icon: "antenna.radiowaves.left.and.right",
-                        label: "Apply LoRa Config to \(device.isBaseStation ? "Base Station" : "Rocket")",
-                        applied: loraApplied
-                    ) {
-                        applyLoRaConfig()
-                    }
+                // Apply button — base station only.  Rocket gets its config
+                // via the BS's transactional Cmd 10 relay; there's no
+                // direct-apply path on a rocket connection.
+                if device.isBaseStation {
+                    Section {
+                        applyButton(
+                            icon: "antenna.radiowaves.left.and.right",
+                            label: "Apply LoRa Config",
+                            applied: loraApplied
+                        ) {
+                            applyLoRaConfig()
+                        }
 
-                    Text("Both devices must use matching LoRa settings. Connect to each device separately and apply the same config.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        Text("Applies to the base station and relays to every tracked rocket. Frequency is preserved — change it via Frequency Scan.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 // --- Servo & PID Settings (rocket only) ---
@@ -493,12 +523,9 @@ struct SettingsView: View {
                 rollDelayMs = Double(cfg.rollDelayMs)
                 guidanceEnabled = cfg.guidanceEnabled
                 cameraType = Int(cfg.cameraType)
-                // Sync LoRa settings from device (reverse-map raw values to channel/preset IDs)
-                if let freq = cfg.loraFreqMHz {
-                    if let ch = loraChannels.first(where: { abs($0.freqMHz - freq) < 0.1 }) {
-                        channelId = ch.id
-                    }
-                }
+                // Sync LoRa preset + TX power from device.  Frequency is
+                // displayed read-only via `currentFreqMHz` and doesn't need
+                // reverse-mapping to any picker.
                 if let sf = cfg.loraSF, let bw = cfg.loraBwKHz {
                     if let preset = loraPresets.first(where: { $0.sf == sf && abs($0.bwKHz - bw) < 1.0 }) {
                         presetId = preset.id
@@ -590,12 +617,15 @@ struct SettingsView: View {
     // MARK: - Apply actions
 
     private func applyLoRaConfig() {
-        let channel = selectedChannel
+        // Keep the currently active frequency — only preset + power change
+        // here.  Frequency is managed exclusively by the Frequency Scan view
+        // so that every frequency change goes through the transactional
+        // apply path (issue #71).
         let preset = selectedPreset
         let cr: UInt8 = 5  // All presets use CR 4/5
 
         device.sendLoRaConfig(
-            freqMHz: channel.freqMHz,
+            freqMHz: currentFreqMHz,
             bwKHz: preset.bwKHz,
             sf: preset.sf,
             cr: cr,

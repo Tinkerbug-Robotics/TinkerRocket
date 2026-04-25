@@ -577,9 +577,44 @@ def plot_gap_analysis(result):
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    # Allow the FLIGHTS list to be overridden from the command line.  A
+    # bare `python3 analyze_gaps.py` runs the hard-coded analyses (useful
+    # for the curated reference flights); passing a path runs the same
+    # analysis pipeline on a one-off binary, with output written next to
+    # it under <stem>_analysis/.  Keeps the canonical FLIGHTS list intact
+    # so reproducing a published analysis is still a no-arg invocation.
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Gap analysis for TinkerRocket binary flight logs.")
+    parser.add_argument("binary", nargs="?",
+                        help="Optional path to a single .bin to analyze. "
+                             "If omitted, runs the FLIGHTS list at the top of "
+                             "this file.")
+    parser.add_argument("--name", default=None,
+                        help="Display name (defaults to the file basename).")
+    parser.add_argument("--out", default=None,
+                        help="Output directory for plots (defaults to "
+                             "<binary_stem>_analysis/ next to the input).")
+    parser.add_argument("--no-show", action="store_true",
+                        help="Skip plt.show() — useful for headless runs / CI.")
+    args = parser.parse_args()
+
+    if args.binary:
+        bin_path = os.path.abspath(args.binary)
+        stem = os.path.splitext(os.path.basename(bin_path))[0]
+        out_dir = args.out or os.path.join(os.path.dirname(bin_path),
+                                            f"{stem}_analysis")
+        flights = [{
+            "name": args.name or stem,
+            "bin_path": bin_path,
+            "output_dir": out_dir,
+        }]
+    else:
+        flights = FLIGHTS
+
     all_plot_paths = []
 
-    for flight in FLIGHTS:
+    for flight in flights:
         result = analyze_one_flight(flight)
         if result is not None:
             paths = plot_gap_analysis(result)
@@ -593,8 +628,8 @@ def main():
     print("  (See individual flight sections above for detailed gap tables)")
     print()
 
-    # Show all plots
-    plt.show()
+    if not args.no_show:
+        plt.show()
 
     return all_plot_paths
 

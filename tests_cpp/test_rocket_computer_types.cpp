@@ -82,3 +82,117 @@ TEST(RocketComputerTypes, LoRaFlagEncoding) {
         EXPECT_EQ(decoded, s);
     }
 }
+
+// ============================================================================
+// Issue #71: rendezvous protocol & lock-for-flight helpers
+// ============================================================================
+
+TEST(RocketComputerTypes, RocketState_NumericValues) {
+    // The wire protocol depends on these exact values — both ends must
+    // agree, and the host-side BS firmware decodes uint8_t state directly.
+    // If the enum order changes, the BS's freq-lock logic + everything
+    // downstream breaks silently.
+    EXPECT_EQ(static_cast<uint8_t>(INITIALIZATION), 0u);
+    EXPECT_EQ(static_cast<uint8_t>(READY),          1u);
+    EXPECT_EQ(static_cast<uint8_t>(PRELAUNCH),      2u);
+    EXPECT_EQ(static_cast<uint8_t>(INFLIGHT),       3u);
+    EXPECT_EQ(static_cast<uint8_t>(LANDED),         4u);
+}
+
+TEST(RocketComputerTypes, LoRaCmdHeartbeat_DoesNotCollide) {
+    // The heartbeat cmd must not collide with any of the existing command
+    // bytes the rocket / base station already use.  Existing commands
+    // span 1..60 today; 0xFE was chosen as deliberately out-of-band so
+    // we have headroom for new low-numbered commands.
+    EXPECT_EQ(LORA_CMD_HEARTBEAT, 0xFE);
+    EXPECT_NE(LORA_CMD_HEARTBEAT, LORA_BEACON_SYNC);
+    // Above the highest currently-used command byte (60 = freq scan)
+    EXPECT_GT(LORA_CMD_HEARTBEAT, 60);
+}
+
+TEST(FreqLockForFlight, InflightLatchesOn) {
+    // Any state transition into INFLIGHT must set the lock, regardless
+    // of the previous value.
+    EXPECT_TRUE(computeFreqLockForFlight(false, INFLIGHT));
+    EXPECT_TRUE(computeFreqLockForFlight(true,  INFLIGHT));
+}
+
+TEST(FreqLockForFlight, ReadyClearsLock) {
+    // Returning to READY (e.g. user reset between flights) clears the
+    // lock so recovery / config changes are allowed again.
+    EXPECT_FALSE(computeFreqLockForFlight(true,  READY));
+    EXPECT_FALSE(computeFreqLockForFlight(false, READY));
+}
+
+TEST(FreqLockForFlight, LandedClearsLock) {
+    // Critical post-flight transition: rocket lands, state goes
+    // INFLIGHT → LANDED.  The lock must clear so silence recovery is
+    // available again to relocate a rocket that drifted to a field 800m
+    // away.  Symmetrical with READY for clearing.
+    EXPECT_FALSE(computeFreqLockForFlight(true,  LANDED));
+    EXPECT_FALSE(computeFreqLockForFlight(false, LANDED));
+}
+
+TEST(FreqLockForFlight, PrelaunchPreservesLock) {
+    // PRELAUNCH must NOT clear the lock.  The "rocket regains GPS lock
+    // on the ground after a flight" path goes LANDED → PRELAUNCH on
+    // the FlightComputer; if PRELAUNCH cleared the lock we'd have
+    // already cleared it on LANDED, but this guarantees the same
+    // input-output if e.g. the FC briefly oscillates LANDED↔PRELAUNCH
+    // around the boundary.
+    EXPECT_TRUE(computeFreqLockForFlight(true,  PRELAUNCH));
+    EXPECT_FALSE(computeFreqLockForFlight(false, PRELAUNCH));
+}
+
+TEST(FreqLockForFlight, InitializationPreservesLock) {
+    // INITIALIZATION shouldn't toggle the lock either way — the rocket
+    // is just booting and we don't have enough info to make a call.
+    EXPECT_TRUE(computeFreqLockForFlight(true,  INITIALIZATION));
+    EXPECT_FALSE(computeFreqLockForFlight(false, INITIALIZATION));
+}
+
+TEST(FreqLockForFlight, FullFlightSequence) {
+    // Walk a typical flight start-to-finish and verify the lock is on
+    // exactly during INFLIGHT (and stays on through any LANDED→PRELAUNCH
+    // glitch — though here we go straight LANDED → READY for the next
+    // flight prep, which clears it).
+    bool locked = false;
+
+    locked = computeFreqLockForFlight(locked, INITIALIZATION);
+    EXPECT_FALSE(locked);
+    locked = computeFreqLockForFlight(locked, READY);
+    EXPECT_FALSE(locked);
+    locked = computeFreqLockForFlight(locked, PRELAUNCH);
+    EXPECT_FALSE(locked);  // unchanged from previous unlocked state
+    locked = computeFreqLockForFlight(locked, INFLIGHT);
+    EXPECT_TRUE(locked);   // latch on
+    locked = computeFreqLockForFlight(locked, LANDED);
+    EXPECT_FALSE(locked);  // post-flight clear
+    locked = computeFreqLockForFlight(locked, PRELAUNCH);
+    EXPECT_FALSE(locked);  // next flight: prelaunch keeps unlocked
+    locked = computeFreqLockForFlight(locked, INFLIGHT);
+    EXPECT_TRUE(locked);   // and re-locks for the next flight
+}
+
+TEST(FreqLockForFlight, Uint8Overload_MatchesEnumOverload) {
+    // The base station receives state numerically over LoRa.  The two
+    // overloads must produce identical output for every valid state.
+    for (uint8_t s = 0; s <= 4; ++s) {
+        for (bool prev : {false, true}) {
+            EXPECT_EQ(computeFreqLockForFlight(prev, s),
+                      computeFreqLockForFlight(prev, static_cast<RocketState>(s)))
+                << "state=" << (int)s << " prev=" << prev;
+        }
+    }
+}
+
+TEST(ShouldBeaconInState, AllowsAllExceptInflight) {
+    // Beaconing during INITIALIZATION is the key fix that lets the BS
+    // find a rocket whose FC hasn't booted yet.  Suppressed only in
+    // INFLIGHT to give telemetry every available slot.
+    EXPECT_TRUE(shouldBeaconInState(INITIALIZATION));
+    EXPECT_TRUE(shouldBeaconInState(READY));
+    EXPECT_TRUE(shouldBeaconInState(PRELAUNCH));
+    EXPECT_FALSE(shouldBeaconInState(INFLIGHT));
+    EXPECT_TRUE(shouldBeaconInState(LANDED));
+}

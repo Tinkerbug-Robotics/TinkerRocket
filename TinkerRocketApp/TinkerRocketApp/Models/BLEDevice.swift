@@ -239,12 +239,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// existing LoRa link; if the rocket has not yet been heard, the BS has
     /// no way to tell it about the new channel and would strand it.
     func triggerAutoChannelSelectIfNeeded() {
-        guard isBaseStation,
-              !hasAutoSelectedChannel,
-              rocketConfig?.loraFreqMHz != nil,
-              !remoteRockets.isEmpty,
+        // Same gating as manual apply — no point scanning if we couldn't
+        // apply the result anyway.
+        guard !hasAutoSelectedChannel,
               !isScanning,
-              !pendingAutoApply else { return }
+              !pendingAutoApply,
+              autoApplyRefusalReason() == nil else { return }
 
         hasAutoSelectedChannel = true
         pendingAutoApply = true
@@ -262,55 +262,90 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// Reasons an auto-apply can be refused, surfaced to the UI so the user
+    /// gets a concrete next step instead of a silent no-op.
+    enum AutoApplyRefusal: String {
+        case notBaseStation       = "Connect to the base station first."
+        case notConnected         = "Base station is not connected over BLE."
+        case configMissing        = "Waiting for base-station config readback."
+        case noRocketPresent      = "No rocket has beaconed recently — power it on and wait for it to show up."
+    }
+
+    /// Maximum age of the most-recent rocket beacon for auto-apply to be
+    /// allowed.  The whole point of the gating is to prevent the app from
+    /// pushing a new frequency to a base station while the rocket is off or
+    /// out of range — doing so strands the rocket on the old channel.
+    /// 10 s comfortably covers the ~2 Hz beacon cadence.
+    static let autoApplyMaxBeaconAgeSeconds: TimeInterval = 10.0
+
+    /// Pure decision logic for whether auto-apply should proceed.  Lives
+    /// here as a static so it can be unit-tested without standing up a
+    /// CoreBluetooth peripheral, and so the rules stay in one place
+    /// rather than getting duplicated between this method and the view.
+    static func autoApplyRefusalReason(
+        isBaseStation: Bool,
+        isConnected: Bool,
+        config: RocketConfig?,
+        rocketLastSeenTimes: [Date],
+        now: Date = Date()
+    ) -> AutoApplyRefusal? {
+        if !isBaseStation { return .notBaseStation }
+        if !isConnected   { return .notConnected }
+        guard let cfg = config,
+              cfg.loraBwKHz != nil, cfg.loraSF != nil,
+              cfg.loraCR != nil, cfg.loraTxPower != nil else {
+            return .configMissing
+        }
+        // At least one tracked rocket beaconed within the freshness window.
+        // Beacons fire at ~0.5 Hz in READY/PRELAUNCH/INIT, so "silent > 10 s"
+        // is a strong signal the rocket isn't on-air.
+        let cutoff = now.addingTimeInterval(-autoApplyMaxBeaconAgeSeconds)
+        let haveFreshRocket = rocketLastSeenTimes.contains { $0 >= cutoff }
+        if !haveFreshRocket { return .noRocketPresent }
+        return nil
+    }
+
+    /// Returns `.none` if auto-apply is currently allowed, otherwise the
+    /// specific reason it's being refused.  Called by the Frequency Scan
+    /// view to decide whether to enable the Apply button and what message
+    /// to surface if it's disabled.
+    func autoApplyRefusalReason() -> AutoApplyRefusal? {
+        return Self.autoApplyRefusalReason(
+            isBaseStation: isBaseStation,
+            isConnected:   isConnected,
+            config:        rocketConfig,
+            rocketLastSeenTimes: remoteRockets.map { $0.lastSeen }
+        )
+    }
+
     /// Relay a LoRa reconfig to every tracked rocket, then apply the same
     /// config to this base station after the uplink retries have had time
     /// to land.  Keeps SF/BW/CR/power from the current base-station config
     /// — only the frequency changes.
     ///
-    /// Returns false if no base-station config has been read back yet; we
-    /// need it to pick SF/BW/CR that the rocket will also accept.
+    /// Refuses unless `autoApplyRefusalReason()` returns nil.  The base
+    /// station's transactional Cmd 10 handler (issue #71) will commit the
+    /// new frequency only after verifying the rocket joined the new
+    /// channel, so a missed relay rolls back instead of stranding.
     @discardableResult
     func autoApplyFrequency(_ freqMHz: Float) -> Bool {
-        guard isBaseStation,
-              let cfg = rocketConfig,
+        if let refusal = autoApplyRefusalReason() {
+            print("[FREQ] Auto-apply refused: \(refusal.rawValue)")
+            return false
+        }
+        guard let cfg = rocketConfig,
               let bw = cfg.loraBwKHz,
               let sf = cfg.loraSF,
               let cr = cfg.loraCR,
-              let pwr = cfg.loraTxPower else {
-            print("[FREQ] Auto-apply refused: no base-station LoRa config yet")
-            return false
-        }
+              let pwr = cfg.loraTxPower else { return false }
 
-        // cmd-10 payload (same layout as sendLoRaConfig)
-        var loraPayload = Data()
-        var f = freqMHz
-        var b = bw
-        loraPayload.append(Data(bytes: &f, count: 4))
-        loraPayload.append(Data(bytes: &b, count: 4))
-        loraPayload.append(sf)
-        loraPayload.append(cr)
-        loraPayload.append(UInt8(bitPattern: pwr))
-
-        // Relay to each tracked rocket.  The BS retries each uplink packet
-        // up to 8 times over ~800 ms; a missed relay is rare but possible,
-        // in which case the rocket stays on the old channel and must be
-        // reconfigured manually over BLE.
-        for rocket in remoteRockets {
-            var relay = Data()
-            relay.append(rocket.rocketID)
-            relay.append(10)          // inner cmd = LoRa config
-            relay.append(loraPayload)
-            sendRawCommand(50, payload: relay)
-        }
-
-        // Switch the base station last.  Wait long enough for the uplink
-        // retries (8 × 100 ms + TX time ≈ 1.5 s) to complete first so the
-        // rocket has already hopped before we leave the old channel.
-        let delay = remoteRockets.isEmpty ? 0.0 : 2.5
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self = self else { return }
-            self.sendLoRaConfig(freqMHz: freqMHz, bwKHz: bw, sf: sf, cr: cr, txPower: pwr)
-        }
+        // Send a single Cmd 10 to the base station carrying the new config.
+        // The base station (firmware) now owns the relay + verify handshake:
+        // it issues Cmd 50 → inner Cmd 10 uplink to every tracked rocket,
+        // switches to the new frequency, listens for a beacon on the new
+        // channel, and either commits or rolls back atomically.  The app
+        // no longer has to coordinate the 2-step dance.
+        sendLoRaConfig(freqMHz: freqMHz, bwKHz: bw, sf: sf, cr: cr, txPower: pwr)
         return true
     }
 
