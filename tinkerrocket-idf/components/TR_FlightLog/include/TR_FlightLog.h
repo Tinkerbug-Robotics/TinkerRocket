@@ -54,7 +54,34 @@ public:
 
     // Pre-launch: pick + erase a free contiguous range. May stall ~770 ms.
     // Writes the assigned flight_id to `flight_id_out` on success.
+    //
+    // This is the synchronous form. On hardware, prefer
+    // requestPrepareFlight() + servicePendingPrepareFlight() so the 256-block
+    // erase loop runs on the flush task's core (Core 0) instead of blocking
+    // sensor ingest on the calling core (issue #77).
     Status prepareFlight(uint32_t& flight_id_out);
+
+    // Defer a prepareFlight call. Sets a flag and returns immediately; the
+    // ~770 ms erase loop is performed by a later servicePendingPrepareFlight()
+    // call (typically from the flush task on Core 0). Idempotent — calling
+    // multiple times before service queues at most one prepare. No-op if a
+    // flight is already active.
+    void requestPrepareFlight();
+
+    // True iff requestPrepareFlight() has been called and the request has not
+    // yet been picked up by servicePendingPrepareFlight().
+    bool isPrepareFlightPending() const { return prepare_request_pending_; }
+
+    // If a request is pending and no flight is currently active, runs
+    // prepareFlight() inline and reports its outcome via id_out / status_out.
+    // Returns true when work was done; false when there was nothing to do
+    // (no request pending, or a flight is already active). The pending flag
+    // is cleared in either case so a stale request can't fire after the
+    // flight has been started by some other path.
+    //
+    // Intended call site: once per flush-task iteration on the same core that
+    // owns expensive NAND I/O.
+    bool servicePendingPrepareFlight(uint32_t& id_out, Status& status_out);
 
     // Hot path: deterministic page write. Called by flush task.
     // `page` must be exactly NAND_PAGE_SIZE bytes. No allocation, no metadata.
@@ -97,6 +124,12 @@ private:
     uint32_t active_next_page_    = 0;  // absolute page index within the flight range
     uint32_t extension_count_     = 0;
     bool     flight_active_       = false;
+
+    // Single-producer (any task) / single-consumer (flush task) request flag
+    // for the deferred prepareFlight path. `volatile` is sufficient because
+    // the consumer is idempotent: a missed clear at worst causes one extra
+    // service call that no-ops via the flight_active_ check.
+    volatile bool prepare_request_pending_ = false;
 
     void persistBitmap();
     void seedBitmapFromBackend();  // initial bad-block scan into the fresh bitmap

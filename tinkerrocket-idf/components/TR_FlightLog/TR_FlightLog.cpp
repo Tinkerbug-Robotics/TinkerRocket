@@ -230,6 +230,26 @@ void TR_FlightLog::persistBitmap() {
     bitmap_store_->save(buf, sizeof(buf));
 }
 
+void TR_FlightLog::requestPrepareFlight() {
+    // Idempotent: extra calls collapse into one pending flag.
+    // Skip when a flight is already active so the consumer doesn't see a
+    // request that would immediately be rejected anyway.
+    if (flight_active_) return;
+    prepare_request_pending_ = true;
+}
+
+bool TR_FlightLog::servicePendingPrepareFlight(uint32_t& id_out, Status& status_out) {
+    if (!prepare_request_pending_) return false;
+    // Always clear the flag — even when we won't run prepareFlight — so a
+    // stale request can't fire on a later iteration after the flight has
+    // started through another path (e.g. a host-test direct call).
+    prepare_request_pending_ = false;
+    if (flight_active_) return false;
+
+    status_out = prepareFlight(id_out);
+    return true;
+}
+
 Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
     if (!initialized_) return Status::NotInitialized;
     if (flight_active_)  return Status::Error;  // already flying

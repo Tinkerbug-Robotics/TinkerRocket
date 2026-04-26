@@ -34,6 +34,16 @@ struct TR_LogToFlashConfig
     bool (*write_sink)(void* ctx, const uint8_t* payload, size_t payload_len) = nullptr;
     void* write_sink_ctx = nullptr;
 
+    // Optional periodic hook called once per flushTaskLoop iteration on the
+    // flush task's core. Used to drive deferred work that needs to run on
+    // Core 0 instead of the original requesting task — specifically, the
+    // TR_FlightLog deferred prepareFlight (issue #77). The hook fires after
+    // the prepareLogFile request is processed and before the startLogging
+    // request is processed, so a deferred prepareFlight completes between
+    // file_open=true and logging_active=true.
+    void (*flush_task_hook)(void* ctx) = nullptr;
+    void* flush_task_hook_ctx = nullptr;
+
     // MRAM ring buffer (optional — set mram_cs >= 0 to enable).
     // When enabled the ring buffer lives in SPI MRAM instead of ESP32 RAM,
     // providing larger capacity (128 KB) and power-loss survivability.

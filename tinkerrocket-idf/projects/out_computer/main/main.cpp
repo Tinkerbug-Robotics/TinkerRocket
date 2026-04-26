@@ -164,12 +164,29 @@ static void flightlogBeginFlight()
         ESP_LOGW("FLIGHTLOG", "prepareFlight: already active, skipping");
         return;
     }
+    // Defer the 256-block erase loop (~770 ms) to the flush task on Core 0
+    // (issue #77). Running it inline here used to block whatever Core 1
+    // task was on the call stack — loop_oc, the BLE/LoRa cmd 23 handler,
+    // or the I2S/I2C parse path — which starved the parser task and
+    // produced multi-hundred-ms gaps in the recorded sensor stream. The
+    // actual prepareFlight runs from flightlogFlushTaskHook below.
+    flightlog.requestPrepareFlight();
+}
+
+// Drives the deferred Core-0 work for TR_FlightLog. Wired into
+// TR_LogToFlash::flushTaskLoop via cfg.flush_task_hook so it executes on the
+// flush task's core (Core 0). Logs the prepareFlight outcome here because
+// TR_FlightLog itself stays free of ESP_LOG dependencies (host-testable).
+static void flightlogFlushTaskHook(void* /*ctx*/)
+{
     uint32_t id = 0;
-    auto st = flightlog.prepareFlight(id);
+    tr_flightlog::Status st = tr_flightlog::Status::Ok;
+    if (!flightlog.servicePendingPrepareFlight(id, st)) return;
+
     if (st == tr_flightlog::Status::Ok)
     {
         ESP_LOGI("FLIGHTLOG",
-                 "prepareFlight OK: id=%u, range=[%u..%u), pages=%u",
+                 "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
                  (unsigned)id,
                  (unsigned)flightlog.activeStartBlock(),
                  (unsigned)(flightlog.activeStartBlock() + flightlog.activeBlockCount()),
@@ -177,7 +194,7 @@ static void flightlogBeginFlight()
     }
     else
     {
-        ESP_LOGW("FLIGHTLOG", "prepareFlight: %s",
+        ESP_LOGW("FLIGHTLOG", "prepareFlight (deferred): %s",
                  tr_flightlog::to_string(st));
     }
 }
@@ -2669,6 +2686,7 @@ void initPeripherals()
     log_cfg.lfs_block_count = 32;
     log_cfg.write_sink = flightlogWriteSink;
     log_cfg.write_sink_ctx = &flightlog;
+    log_cfg.flush_task_hook = flightlogFlushTaskHook;
 
     bool lfs_wipe_pending = false;
     {
@@ -3136,6 +3154,13 @@ static void loop_oc()
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
             if (ns_launch && !prev_ns_launch)
             {
+                // Mirror the cmd 23 lifecycle so a launch detected without a
+                // prior PRELAUNCH transition still gets a flightlog flight
+                // and an opened sink session. Each call is a no-op when the
+                // matching state has already been set, so the normal
+                // PRELAUNCH→LAUNCH path is unaffected.
+                logger.prepareLogFile();
+                flightlogBeginFlight();
                 logger.startLogging();
                 ESP_LOGI("OC", "Launch detected - logging started");
             }
