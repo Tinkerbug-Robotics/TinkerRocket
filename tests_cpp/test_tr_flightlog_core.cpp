@@ -773,6 +773,150 @@ TEST(TRFlightLogPrepare, PersistsBitmapOnSuccess) {
 }
 
 // ================================================================
+// Deferred prepareFlight — issue #77
+// requestPrepareFlight() sets a flag; servicePendingPrepareFlight() does
+// the work. Lets the ~770 ms 256-block erase loop run on the flush task's
+// core (Core 0) instead of blocking sensor ingest on Core 1.
+// ================================================================
+
+TEST(TRFlightLogDeferredPrepare, RequestDoesNotEraseUntilServiced) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+
+    const uint64_t erases_before = nand.eraseCount();
+    fl.requestPrepareFlight();
+
+    // Pure flag-set: no NAND I/O, no flight active.
+    EXPECT_EQ(nand.eraseCount(), erases_before);
+    EXPECT_FALSE(fl.isFlightActive());
+    EXPECT_TRUE(fl.isPrepareFlightPending());
+}
+
+TEST(TRFlightLogDeferredPrepare, ServiceRunsPrepareWhenPending) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    fl.requestPrepareFlight();
+
+    uint32_t id = 0;
+    Status st = Status::Error;
+    EXPECT_TRUE(fl.servicePendingPrepareFlight(id, st));
+    EXPECT_EQ(st, Status::Ok);
+    EXPECT_EQ(id, 1u);
+    EXPECT_TRUE(fl.isFlightActive());
+    EXPECT_FALSE(fl.isPrepareFlightPending());
+
+    // Bitmap was updated and the chosen range was actually erased — i.e.
+    // the deferred path produced the same end state as a direct
+    // prepareFlight() call.
+    EXPECT_EQ(fl.activeBlockCount(), cfg.prealloc_blocks);
+    for (uint32_t b = fl.activeStartBlock();
+         b < fl.activeStartBlock() + fl.activeBlockCount(); ++b) {
+        EXPECT_EQ(fl.bitmap().get(b), BLOCK_ALLOCATED) << "block " << b;
+    }
+    EXPECT_TRUE(rangeIsErased(nand, fl.activeStartBlock(), fl.activeBlockCount()));
+}
+
+TEST(TRFlightLogDeferredPrepare, ServiceWithoutRequestIsNoOp) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+
+    const uint64_t erases_before = nand.eraseCount();
+    uint32_t id = 0;
+    Status st = Status::Error;
+    EXPECT_FALSE(fl.servicePendingPrepareFlight(id, st));
+    EXPECT_EQ(nand.eraseCount(), erases_before);
+    EXPECT_FALSE(fl.isFlightActive());
+}
+
+TEST(TRFlightLogDeferredPrepare, RequestIsIdempotent) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+
+    // Multiple requests collapse into one pending flag → at most one
+    // prepareFlight runs per service call.
+    fl.requestPrepareFlight();
+    fl.requestPrepareFlight();
+    fl.requestPrepareFlight();
+
+    uint32_t id = 0;
+    Status st = Status::Error;
+    EXPECT_TRUE(fl.servicePendingPrepareFlight(id, st));
+    EXPECT_EQ(st, Status::Ok);
+    EXPECT_TRUE(fl.isFlightActive());
+
+    // A second service call after the flight is active does nothing.
+    uint32_t id2 = 99;
+    Status st2 = Status::Ok;
+    EXPECT_FALSE(fl.servicePendingPrepareFlight(id2, st2));
+    EXPECT_EQ(id2, 99u);  // untouched
+}
+
+TEST(TRFlightLogDeferredPrepare, RequestIgnoredWhileFlightActive) {
+    // Once a flight is active, requestPrepareFlight() must not arm a
+    // pending request — otherwise a stale flag could fire on the next
+    // service call after finalizeFlight, claiming a fresh range without
+    // the caller asking for it.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    ASSERT_TRUE(fl.isFlightActive());
+
+    fl.requestPrepareFlight();
+    EXPECT_FALSE(fl.isPrepareFlightPending());
+
+    uint32_t id2 = 0;
+    Status st2 = Status::Error;
+    EXPECT_FALSE(fl.servicePendingPrepareFlight(id2, st2));
+}
+
+TEST(TRFlightLogDeferredPrepare, ServiceClearsRequestEvenIfFlightActive) {
+    // Race condition guard: if some other path activates a flight between
+    // the request being set and service running, the flag must still be
+    // cleared so it can't fire after the flight finalizes.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+
+    // Direct-prepare to simulate an alternate code path landing first,
+    // then forcibly arm the deferred flag (white-box scenario for what
+    // would otherwise require multi-task scheduling).
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    // requestPrepareFlight bails when active, so reach in via a fresh
+    // request that lands before activation: simulate by using a separate
+    // instance and forcing flag through the public API in a non-active
+    // window first.
+    // (Easiest concrete way: finalize + then request + activate-by-direct.)
+    ASSERT_EQ(fl.finalizeFlight("flight_001.bin", 0), Status::Ok);
+    fl.requestPrepareFlight();
+    ASSERT_TRUE(fl.isPrepareFlightPending());
+    // Now activate via direct call before service runs — service must still
+    // clear the stale flag.
+    uint32_t direct_id = 0;
+    ASSERT_EQ(fl.prepareFlight(direct_id), Status::Ok);
+
+    uint32_t serviced_id = 0;
+    Status st = Status::Error;
+    EXPECT_FALSE(fl.servicePendingPrepareFlight(serviced_id, st));
+    EXPECT_FALSE(fl.isPrepareFlightPending());
+}
+
+// ================================================================
 // writePage — hot path, bad-block skip, overflow extend
 // ================================================================
 
