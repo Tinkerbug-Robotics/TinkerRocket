@@ -232,8 +232,11 @@ esp_err_t TR_MAX17205G::update()
     if (readReg(Reg::VCELL, raw))
         _data.voltage = (float)raw * 0.078125e-3f * (float)_cfg.num_cells;
 
-    // RepSOC: 1/256 % per LSB
-    if (readReg(Reg::REP_SOC, raw))
+    // VFSOC (1/256 % per LSB) -- voltage-driven SoC. We read VFSOC instead
+    // of RepSOC because on boards where CSP/CSN are swapped (current_invert),
+    // the chip's internal m5 algorithm integrates current with the wrong
+    // sign and RepSOC walks down during charge. VFSOC is largely immune.
+    if (readReg(Reg::VFSOC, raw))
         _data.soc = (float)raw / 256.0f;
 
     // Current: signed, 1.5625 µV per LSB / Rsense. Result in mA.
@@ -280,6 +283,20 @@ void TR_MAX17205G::logDiagnostics(const char* log_tag)
     if (readReg(Reg::FULL_CAP_NOM, raw)) ESP_LOGI(log_tag, "[FG-DIAG] FullCapNom (0x23) = %.0f mAh (raw=0x%04X)", raw * cap_lsb_mah, raw);
     if (readReg(Reg::DESIGN_CAP,   raw)) ESP_LOGI(log_tag, "[FG-DIAG] DesignCap  (0x18) = %.0f mAh (raw=0x%04X)", raw * cap_lsb_mah, raw);
     if (readReg(Reg::PACK_CFG,     raw)) ESP_LOGI(log_tag, "[FG-DIAG] PackCfg    (0xBD) = 0x%04X", raw);
+    if (readReg(Reg::CURRENT,      raw)) {
+        const int16_t signed_raw = (int16_t)raw;
+        const float ma = (float)signed_raw * 1.5625e-3f / (_cfg.rsense_mohm * 1e-3f);
+        ESP_LOGI(log_tag, "[FG-DIAG] Current    (0x0A) = %d (raw signed) -> %.0f mA chip-frame, %.0f mA app-frame (invert=%d)",
+                 signed_raw, (double)ma,
+                 _cfg.current_invert ? -(double)ma : (double)ma,
+                 _cfg.current_invert);
+    }
+    if (readReg(Reg::AVG_CUR,      raw)) {
+        const int16_t signed_raw = (int16_t)raw;
+        const float ma = (float)signed_raw * 1.5625e-3f / (_cfg.rsense_mohm * 1e-3f);
+        ESP_LOGI(log_tag, "[FG-DIAG] AvgCurrent (0x0B) = %d (raw signed) -> %.0f mA chip-frame", signed_raw, (double)ma);
+    }
+    if (readReg(Reg::VCELL,        raw)) ESP_LOGI(log_tag, "[FG-DIAG] VCell      (0x09) = %.1f mV (raw=0x%04X)", (double)((float)raw * 0.078125f), raw);
     ESP_LOGI(log_tag, "[FG-DIAG] Pack: %u cells series, design %u mAh, Rsense %.1f mΩ",
              (unsigned)_cfg.num_cells, (unsigned)_cfg.design_mah, (double)_cfg.rsense_mohm);
     ESP_LOGI(log_tag, "[FG-DIAG] --------------------------------");

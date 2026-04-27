@@ -1497,7 +1497,11 @@ static void setup_bs()
             TR_MAX17205G_Config fg_cfg;
             fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
             fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
-            fg_cfg.current_invert = true;   // R_SENSE reversed on this board
+            fg_cfg.current_invert = true;   // CSP/CSN swapped on schematic (U7) vs.
+                                            //   datasheet typical app circuit; flips
+                                            //   displayed current so charge reads
+                                            //   positive. Driver uses VFSOC for SoC
+                                            //   because the chip's m5 can't be told.
             fg_cfg.num_cells      = config::NUM_BATTERY_CELLS;
 
             if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
@@ -1508,6 +1512,7 @@ static void setup_bs()
                 updateBattery();
                 ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
                          (double)bs_voltage, (double)bs_soc, (double)bs_current);
+                fuel_gauge.logDiagnostics(TAG);
             }
             else
             {
