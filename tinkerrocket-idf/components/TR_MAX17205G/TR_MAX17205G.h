@@ -53,8 +53,16 @@ struct TR_MAX17205G_Config
 {
     uint16_t design_mah     = 2800;   // Pack design capacity in mAh (series = per-cell)
     float    rsense_mohm    = 10.0f;  // Sense resistor value
-    bool     current_invert = true;   // Flip sign (use true if R_SENSE polarity reversed
-                                      //   vs datasheet, so charge reads positive)
+    bool     current_invert = true;   // Flip the *displayed* current sign. Set true on
+                                      //   boards where CSP/CSN are swapped vs. the
+                                      //   MAX17205 typical app circuit (which expects
+                                      //   CSP→BATT-, CSN→GND for charge to read positive).
+                                      //   NOTE: this only affects the value returned by
+                                      //   current(); the chip's internal m5 algorithm uses
+                                      //   the raw register and cannot be told about the
+                                      //   swap, so RepSOC integrates current the wrong way.
+                                      //   Driver reads VFSOC (voltage-based) for soc() to
+                                      //   sidestep this.
     uint8_t  num_cells      = 2;      // Series cell count (for pack-voltage scaling
                                       //   off the VCell register)
 };
