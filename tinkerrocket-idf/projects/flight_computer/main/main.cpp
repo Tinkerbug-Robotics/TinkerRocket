@@ -3397,13 +3397,19 @@ static void loop_fc()
         {
             last_ekf_diag_ms = now_ms_for_sound;
 
-            // Quaternion-based roll (gimbal-lock-free): azimuth of body-Z in NED
+            // Horizontal azimuth of the rocket's body-Z axis in NED. This is *not*
+            // a roll in the Euler sense -- it's only a useful roll proxy when the
+            // rocket is near vertical (body-Z ≈ world-Z, so its horizontal
+            // projection rotates with vehicle roll about the vertical axis).
+            // At low pitch this is dominated by yaw and will diverge from
+            // euler_roll arbitrarily; that divergence is itself a useful informal
+            // indicator of how close euler_roll is to gimbal lock.
             float quat[4];
             ekf.getQuaternion(quat);
             float qw = quat[0], qx = quat[1], qy = quat[2], qz = quat[3];
             float z_n = 2.0f * (qx * qz + qw * qy);
             float z_e = 2.0f * (qy * qz - qw * qx);
-            float quat_roll_deg = -atan2f(z_e, z_n) * (180.0f / (float)M_PI);
+            float bodyZ_az_deg = -atan2f(z_e, z_n) * (180.0f / (float)M_PI);
 
             // Euler angles (erratic near pitch=90° due to gimbal lock)
             float rpy[3];
@@ -3431,9 +3437,9 @@ static void loop_fc()
             float gb[3];
             ekf.getRotRateBias(gb);
 
-            ESP_LOGI(TAG, "[EKF DIAG] quat_roll=%.1f euler_roll=%.1f pitch=%.1f yaw=%.1f cos2p=%.4f",
-                          (double)quat_roll_deg,
+            ESP_LOGI(TAG, "[EKF DIAG] roll(euler)=%.1f roll(bodyZ_az)=%.1f pitch=%.1f yaw=%.1f cos2p=%.4f",
                           (double)euler_roll_deg,
+                          (double)bodyZ_az_deg,
                           (double)pitch_deg,
                           (double)yaw_deg,
                           (double)cos2p);
