@@ -775,6 +775,7 @@ static uint64_t prev_bytes_nand = 0;
 static uint64_t prev_raw_i2c_bytes = 0;
 static uint32_t prev_ring_overruns = 0;
 static uint32_t prev_ring_drop_oldest_bytes = 0;
+static uint32_t prev_ring_bad_sof_clears = 0;
 static uint32_t interval_ring_fill_peak = 0;
 
 static inline size_t rxLen()
@@ -2341,11 +2342,13 @@ static void printStats()
     const uint64_t raw_i2c_delta = raw_i2c_bytes - prev_raw_i2c_bytes;
     const uint32_t ring_overrun_delta = s.ring_overruns - prev_ring_overruns;
     const uint32_t ring_drop_oldest_delta = s.ring_drop_oldest_bytes - prev_ring_drop_oldest_bytes;
+    const uint32_t ring_bad_sof_delta = s.ring_bad_sof_clears - prev_ring_bad_sof_clears;
     prev_bytes_rx = s.bytes_received;
     prev_bytes_nand = s.bytes_written_nand;
     prev_raw_i2c_bytes = raw_i2c_bytes;
     prev_ring_overruns = s.ring_overruns;
     prev_ring_drop_oldest_bytes = s.ring_drop_oldest_bytes;
+    prev_ring_bad_sof_clears = s.ring_bad_sof_clears;
 
     const float rx_kbs = (dt > 0) ? ((float)rx_delta / (float)dt) : 0.0f;
     const float wr_kbs = (dt > 0) ? ((float)nand_delta / (float)dt) : 0.0f;
@@ -2393,10 +2396,12 @@ static void printStats()
                   (unsigned long)s.ring_fill,
                   (unsigned long)config::RAM_RING_SIZE,
                   (unsigned long)s.ring_highwater);
-    ESP_LOGI("OC", "RING interval peak/overrun/drop_oldest_bytes=%lu/%lu/%lu",
+    ESP_LOGI("OC", "RING interval peak/overrun/drop_oldest_bytes/bad_sof=%lu/%lu/%lu/%lu (bad_sof_total=%lu)",
                   (unsigned long)interval_ring_fill_peak,
                   (unsigned long)ring_overrun_delta,
-                  (unsigned long)ring_drop_oldest_delta);
+                  (unsigned long)ring_drop_oldest_delta,
+                  (unsigned long)ring_bad_sof_delta,
+                  (unsigned long)s.ring_bad_sof_clears);
     ESP_LOGI("OC", "i2c raw reads/bytes=%lu/%llu",
                   (unsigned long)raw_i2c_reads,
                   (unsigned long long)raw_i2c_bytes);

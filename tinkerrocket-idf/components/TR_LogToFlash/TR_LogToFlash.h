@@ -59,6 +59,10 @@ struct TR_LogToFlashStats
     uint32_t ring_highwater = 0;
     uint32_t ring_overruns = 0;
     uint32_t ring_drop_oldest_bytes = 0;
+    uint32_t ring_bad_sof_clears = 0;   // Issue #46: count of clearRing fires from
+                                        //   the drop-oldest path due to a corrupt
+                                        //   tail (bad SOF or truncated frame).
+                                        //   Distinct from happy-path drop-oldest.
     uint64_t bytes_received = 0;
     uint32_t frames_received = 0;
     uint32_t frames_dropped = 0;
@@ -211,6 +215,7 @@ private:
     uint32_t rb_overruns = 0;
     uint32_t rb_drop_oldest_bytes = 0;
     uint32_t rb_highwater = 0;
+    uint32_t rb_bad_sof_clears = 0;
 
     // Issue #74 diagnostic: compare total bytes pushed vs popped. A healthy
     // ring has pop <= push at all times (residual frames left unflushed at

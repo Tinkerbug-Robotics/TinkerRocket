@@ -92,6 +92,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     rb_head = rb_tail = rb_count = 0;
     rb_overruns = rb_highwater = 0;
     rb_drop_oldest_bytes = 0;
+    rb_bad_sof_clears = 0;
     nand_page = nand_block = 0;
     nand_bytes_written = 0;
     nand_prog_fail = nand_erase_fail = 0;
@@ -322,6 +323,7 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.ring_highwater = rb_highwater;
     out.ring_overruns = rb_overruns;
     out.ring_drop_oldest_bytes = rb_drop_oldest_bytes;
+    out.ring_bad_sof_clears = rb_bad_sof_clears;
     out.bytes_received = bytes_received;
     out.frames_received = frames_received;
     out.frames_dropped = frames_dropped;
@@ -723,6 +725,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                     ESP_LOGW(TAG, "ringPush: bad SOF at tail, clearing ring");
                 }
                 rb_drop_oldest_bytes += local_count;
+                rb_bad_sof_clears++;
                 clearRingLocked();
                 local_count = 0;
                 break;
@@ -739,6 +742,7 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                                   (unsigned long)frame_size, (unsigned long)local_count);
                 }
                 rb_drop_oldest_bytes += local_count;
+                rb_bad_sof_clears++;
                 clearRingLocked();
                 local_count = 0;
                 break;
