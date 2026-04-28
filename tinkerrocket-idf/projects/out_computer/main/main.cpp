@@ -378,6 +378,16 @@ static uint32_t         hop_fallback_phase_start_ms = 0;
 static uint32_t         hop_active_entered_ms       = 0;
 static uint32_t         hop_session_uplink_count    = 0;  // resets each hop session
 
+// Channel-set state pushed by the BS via LORA_CMD_CHANNEL_SET (#40 / #41
+// phase 3).  rendezvous_mhz_ replaces the hardcoded LORA_RENDEZVOUS_MHZ
+// constant for both slow_rendezvous and hop-silence visits.  skip_mask_
+// is consulted in the per-packet next_channel_idx advance so the hop
+// sequence skips noisy channels.
+static float   rendezvous_mhz_     = config::LORA_RENDEZVOUS_MHZ;
+static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
+static uint8_t skip_mask_n_        = 0;        // 0 = no mask (all active)
+static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
+
 // Tracks whether the radio is currently in RX mode.  Forward-declared
 // here so updateHopFromState() (just below) can reset it cleanly when
 // we exit a rendezvous visit.  Initialized at file scope further down
@@ -1583,14 +1593,30 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
         {
             // Bootstrap: this packet still goes out on lora_freq_mhz.
             // Tell the BS to follow us to channel 0 for the next one.
+            // (Channel 0 is intentionally always considered active even
+            // if the skip-mask covers it, since it's the bootstrap
+            // anchor — the next non-bootstrap packet will skip-advance.)
             lora.next_channel_idx = 0;
         }
         else
         {
             const uint8_t n = loraChannelCount(lora_bw_khz);
-            lora.next_channel_idx = (n > 0)
-                ? (uint8_t)((hop_idx_ + 1) % n)
-                : LORA_NEXT_CH_NO_HOP;
+            if (n == 0)
+            {
+                lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;
+            }
+            else
+            {
+                // Skip-mask aware advance (#40 / #41 phase 3).  When no
+                // valid mask is loaded (n_chan == 0 or BW mismatch), the
+                // skip_mask_ is all-zeros so loraNextActiveChannelIdx
+                // degenerates to (idx + 1) % n.
+                const bool mask_valid = (skip_mask_n_ == n &&
+                                          channel_set_bw_khz_ == lora_bw_khz);
+                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                lora.next_channel_idx = loraNextActiveChannelIdx(hop_idx_, mask, n);
+            }
         }
     }
     else
@@ -1735,8 +1761,19 @@ static void serviceLoRa()
             }
             else
             {
+                // Skip-mask aware advance — must match the value we
+                // just wrote into the packet's next_channel_idx field
+                // in buildLoRaPayload, otherwise rocket and BS land on
+                // different channels.
                 const uint8_t n = loraChannelCount(lora_bw_khz);
-                if (n > 0) hop_idx_ = (uint8_t)((hop_idx_ + 1) % n);
+                if (n > 0)
+                {
+                    const bool mask_valid = (skip_mask_n_ == n &&
+                                              channel_set_bw_khz_ == lora_bw_khz);
+                    static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+                    const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                    hop_idx_ = loraNextActiveChannelIdx(hop_idx_, mask, n);
+                }
             }
             hop_needs_retune_ = true;
         }
@@ -2039,6 +2076,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
 
         if (lora_comms.reconfigure(new_freq, new_sf, new_bw, new_cr, new_pwr))
         {
+            const float old_bw = lora_bw_khz;
             lora_freq_mhz = new_freq;
             lora_bw_khz   = new_bw;
             lora_sf        = new_sf;
@@ -2051,6 +2089,19 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             prefs.putUChar("sf",    lora_sf);
             prefs.putUChar("cr",    lora_cr);
             prefs.putChar("txpwr",  lora_tx_power);
+            // BW change invalidates the channel-set skip-mask (#40/#41
+            // phase 3): the mask is sized for the OLD hop table.  The
+            // BS will re-push after its own state settles + a new scan.
+            if (old_bw != lora_bw_khz)
+            {
+                skip_mask_n_        = 0;
+                channel_set_bw_khz_ = 0.0f;
+                for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
+                prefs.remove("chset_n");
+                prefs.remove("chset_bw");
+                prefs.remove("chset_mask");
+                ESP_LOGI("LORA", "UPLINK [CHSET] BW changed — skip-mask invalidated");
+            }
             prefs.end();
 
             ESP_LOGI("LORA", "UPLINK LoRa reconfigured + saved: %.1f MHz SF%u BW%.0f CR%u %d dBm",
@@ -2115,6 +2166,57 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         cfg_guidance_en = enabled;
         setPendingCommand(enabled ? GUIDANCE_ENABLE : GUIDANCE_DISABLE);
         ESP_LOGI("LORA", "UPLINK Guidance: %s", enabled ? "ENABLE" : "DISABLE");
+    }
+    else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 9)
+    {
+        // Channel-set push from BS (#40 / #41 phase 3).  Wire format:
+        //   [rdv:f4][bw:f4][n_channels:u1][skip_mask: ceil(n/8) bytes]
+        float new_rdv, new_bw;
+        memcpy(&new_rdv, payload + 0, 4);
+        memcpy(&new_bw,  payload + 4, 4);
+        const uint8_t new_n = payload[8];
+        const size_t  mask_bytes = (size_t)(new_n + 7) / 8;
+        if (payload_len < 9 + mask_bytes || mask_bytes > LORA_SKIP_MASK_MAX_BYTES)
+        {
+            ESP_LOGW("LORA", "UPLINK Cmd 15 ignored: payload truncated (len=%u, need %u)",
+                     (unsigned)payload_len, (unsigned)(9 + mask_bytes));
+            return;
+        }
+        // Reject if BW doesn't match — the BS sent a mask sized for a
+        // different hop table.  Either the user just changed BW and
+        // we're racing the cmd-10 transaction, or the BS NVS is stale.
+        // Either way, drop this push; the BS will re-push after its
+        // own state settles.
+        if (new_bw != lora_bw_khz)
+        {
+            ESP_LOGW("LORA", "UPLINK Cmd 15 ignored: BW mismatch "
+                              "(payload=%.0f kHz, ours=%.0f kHz)",
+                     (double)new_bw, (double)lora_bw_khz);
+            return;
+        }
+        rendezvous_mhz_     = new_rdv;
+        skip_mask_n_        = new_n;
+        channel_set_bw_khz_ = new_bw;
+        for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
+        for (size_t i = 0; i < mask_bytes;          i++) skip_mask_[i] = payload[9 + i];
+
+        // Persist
+        Preferences p;
+        if (p.begin("lora", false))
+        {
+            p.putFloat("rdv_mhz", rendezvous_mhz_);
+            p.putUChar("chset_n", skip_mask_n_);
+            p.putFloat("chset_bw", channel_set_bw_khz_);
+            p.putBytes("chset_mask", skip_mask_, mask_bytes);
+            p.end();
+        }
+
+        uint8_t active = 0;
+        for (uint8_t i = 0; i < skip_mask_n_; i++)
+            if (!loraSkipMaskTest(skip_mask_, i)) active++;
+        ESP_LOGI("LORA", "UPLINK Cmd 15: rendezvous=%.2f MHz, %u/%u active at BW=%.0f kHz",
+                 (double)rendezvous_mhz_, (unsigned)active,
+                 (unsigned)skip_mask_n_, (double)channel_set_bw_khz_);
     }
     else if (cmd == LORA_CMD_HEARTBEAT)
     {
@@ -2242,7 +2344,10 @@ static constexpr uint32_t RENDEZVOUS_SAVED_MS           = 20000;  // back on sav
 // fallback.
 static void rendezvousHopToRendezvousMode()
 {
-    if (lora_comms.reconfigure(config::LORA_RENDEZVOUS_MHZ,
+    // rendezvous_mhz_ is scan-selected (#40 / #41 phase 3) and falls
+    // back to config::LORA_RENDEZVOUS_MHZ when no scan-pushed value is
+    // in NVS.
+    if (lora_comms.reconfigure(rendezvous_mhz_,
                                 config::LORA_RENDEZVOUS_SF,
                                 config::LORA_RENDEZVOUS_BW_KHZ,
                                 config::LORA_RENDEZVOUS_CR,
@@ -2334,7 +2439,7 @@ static void serviceRocketRendezvous()
                 rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
                 ESP_LOGW("OC", "[RENDEZVOUS] Silent %u s; hop to rendezvous mode %.2f MHz SF%u BW%.0f",
                          (unsigned)(silent_for / 1000),
-                         (double)config::LORA_RENDEZVOUS_MHZ,
+                         (double)rendezvous_mhz_,
                          (unsigned)config::LORA_RENDEZVOUS_SF,
                          (double)config::LORA_RENDEZVOUS_BW_KHZ);
             }
@@ -2418,7 +2523,7 @@ static void serviceHopFallback()
             // BW/SF/CR/freq atomically (with rollback on failure) —
             // same machinery as slow_rendezvous so the radio handling
             // is identical and well-tested.
-            if (!lora_comms.reconfigure(config::LORA_RENDEZVOUS_MHZ,
+            if (!lora_comms.reconfigure(rendezvous_mhz_,
                                          config::LORA_RENDEZVOUS_SF,
                                          config::LORA_RENDEZVOUS_BW_KHZ,
                                          config::LORA_RENDEZVOUS_CR,
@@ -2433,7 +2538,7 @@ static void serviceHopFallback()
             hop_fallback_state = HopFallbackState::VISITING_RENDEZVOUS;
             ESP_LOGW("OC", "[HOP] Silence %u s — visiting rendezvous %.2f MHz for %u s",
                      (unsigned)((now - ref) / 1000),
-                     (double)config::LORA_RENDEZVOUS_MHZ,
+                     (double)rendezvous_mhz_,
                      (unsigned)(HOP_FALLBACK_VISIT_MS / 1000));
             break;
         }
@@ -3095,10 +3200,43 @@ void initPeripherals()
         lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
         lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
+
+        // Channel-set restore (#40 / #41 phase 3): rendezvous freq +
+        // skip-mask pushed by the BS via cmd 15.  Skip-mask is keyed
+        // off the BW it was generated for; if NVS BW != active BW,
+        // discard the mask (the BS will re-push after the user re-runs
+        // the scan).
+        rendezvous_mhz_ = prefs.getFloat("rdv_mhz", config::LORA_RENDEZVOUS_MHZ);
+        const uint8_t chset_n  = prefs.getUChar("chset_n", 0);
+        const float   chset_bw = prefs.getFloat("chset_bw", 0.0f);
+        if (chset_n > 0 && chset_bw == lora_bw_khz)
+        {
+            const size_t mask_bytes = (size_t)(chset_n + 7) / 8;
+            size_t got = prefs.getBytes("chset_mask", skip_mask_, mask_bytes);
+            if (got == mask_bytes)
+            {
+                skip_mask_n_        = chset_n;
+                channel_set_bw_khz_ = chset_bw;
+            }
+        }
         prefs.end();
         ESP_LOGI("CFG", "LoRa NVS: %.1f MHz SF%u BW%.0f CR%u %d dBm",
                       (double)lora_freq_mhz, (unsigned)lora_sf,
                       (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+        if (skip_mask_n_ > 0)
+        {
+            uint8_t active = 0;
+            for (uint8_t i = 0; i < skip_mask_n_; i++)
+                if (!loraSkipMaskTest(skip_mask_, i)) active++;
+            ESP_LOGI("CFG", "[CHSET] NVS: rendezvous=%.2f MHz, %u/%u channels active",
+                     (double)rendezvous_mhz_, (unsigned)active,
+                     (unsigned)skip_mask_n_);
+        }
+        else
+        {
+            ESP_LOGI("CFG", "[CHSET] NVS: rendezvous=%.2f MHz (default), no skip-mask",
+                     (double)rendezvous_mhz_);
+        }
 
         // Load cached servo config from NVS
         prefs.begin("servo", false);  // read-write (creates namespace on first boot)
@@ -3996,6 +4134,7 @@ static void loop_oc()
                 // Always update runtime vars and persist to NVS, even if the
                 // radio isn't initialized yet (e.g. config sent before power-on).
                 // The saved values will be loaded by initPeripherals() on next boot.
+                const float old_bw = lora_bw_khz;
                 lora_freq_mhz = new_freq;
                 lora_bw_khz   = new_bw;
                 lora_sf        = new_sf;
@@ -4008,6 +4147,18 @@ static void loop_oc()
                 prefs.putUChar("sf",    lora_sf);
                 prefs.putUChar("cr",    lora_cr);
                 prefs.putChar("txpwr",  lora_tx_power);
+                // BW change invalidates the channel-set skip-mask (#40 / #41
+                // phase 3): the mask is sized for the OLD hop table.
+                if (old_bw != lora_bw_khz)
+                {
+                    skip_mask_n_        = 0;
+                    channel_set_bw_khz_ = 0.0f;
+                    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
+                    prefs.remove("chset_n");
+                    prefs.remove("chset_bw");
+                    prefs.remove("chset_mask");
+                    ESP_LOGI("BLE", "[CHSET] BW changed — skip-mask invalidated");
+                }
                 prefs.end();
 
                 // Verify NVS write by reading back

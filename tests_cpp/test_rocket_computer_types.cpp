@@ -84,6 +84,143 @@ TEST(RocketComputerTypes, LoRaFlagEncoding) {
 }
 
 // ============================================================================
+// Issues #40 / #41 phase 3: channel-set selection from scan
+// ============================================================================
+
+TEST(LoraNextActiveChannel, BasicWraparoundNoMask) {
+    // Empty mask → just (idx + 1) mod n.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    EXPECT_EQ(loraNextActiveChannelIdx(0,  mask, 10), 1);
+    EXPECT_EQ(loraNextActiveChannelIdx(9,  mask, 10), 0);  // wrap
+    EXPECT_EQ(loraNextActiveChannelIdx(5,  mask, 10), 6);
+}
+
+TEST(LoraNextActiveChannel, SkipsMaskedChannels) {
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    // Skip channels 1, 2, 3 — from idx 0 we should jump to idx 4.
+    loraSkipMaskSet(mask, 1);
+    loraSkipMaskSet(mask, 2);
+    loraSkipMaskSet(mask, 3);
+    EXPECT_EQ(loraNextActiveChannelIdx(0, mask, 10), 4);
+    // From the last unmasked we should wrap past masked back to 0.
+    EXPECT_EQ(loraNextActiveChannelIdx(9, mask, 10), 0);
+}
+
+TEST(LoraNextActiveChannel, SkipsAcrossWrap) {
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    // Skip 9 (last) — from 8, wrap should go to 0, not 9.
+    loraSkipMaskSet(mask, 9);
+    EXPECT_EQ(loraNextActiveChannelIdx(8, mask, 10), 0);
+}
+
+TEST(LoraNextActiveChannel, AllMaskedDegenerateSafe) {
+    // Defensive — should never happen in practice (FCC floor prevents
+    // it), but loraNextActiveChannelIdx must still make progress.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES];
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) mask[i] = 0xFF;
+    const uint8_t next = loraNextActiveChannelIdx(0, mask, 10);
+    EXPECT_LT(next, 10);  // Some valid index in range; just don't crash.
+}
+
+TEST(LoraSelectChannelSet, NoScanResultsFallbacks) {
+    // No scan input: rendezvous = fallback, mask all-zero.
+    LoRaChannelSetSelection out{};
+    loraSelectChannelSet(nullptr, nullptr, 0, /*bw_khz=*/250.0f,
+                          /*fallback=*/915.0f, &out);
+    EXPECT_FLOAT_EQ(out.rendezvous_mhz, 915.0f);
+    EXPECT_EQ(out.n_channels, loraChannelCount(250.0f));
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++)
+        EXPECT_EQ(out.skip_mask[i], 0u) << "byte " << i;
+}
+
+TEST(LoraSelectChannelSet, RendezvousIsScanMinimum) {
+    // Three scan points; pick the lowest-RSSI one as rendezvous.
+    const float   freqs[] = { 910.0f, 915.0f, 920.0f };
+    const int8_t  rssi[]  = {  -75,    -95,    -80 };  // 915 quietest
+    LoRaChannelSetSelection out{};
+    loraSelectChannelSet(freqs, rssi, 3, 250.0f, 915.0f, &out);
+    EXPECT_FLOAT_EQ(out.rendezvous_mhz, 915.0f);
+}
+
+TEST(LoraSelectChannelSet, NoiseAboveThresholdGetsSkipped) {
+    // Build a synthetic scan that covers the BW=125 hop table (139
+    // channels, FCC floor 50).  Every grid point quiet at -110 dBm
+    // except a couple loud spikes well above median + 15.  Loud
+    // channels should be skipped while the floor stays satisfied.
+    const uint8_t n_chan = loraChannelCount(125.0f);
+    const size_t  N      = n_chan;
+    float  freqs[160];   // > LORA_SKIP_MASK_MAX_BYTES * 8 for safety
+    int8_t rssi[160];
+    for (size_t i = 0; i < N; i++) {
+        freqs[i] = loraChannelMHz(125.0f, (uint8_t)i);
+        rssi[i]  = -110;
+    }
+    rssi[10] = -60;   // very loud
+    rssi[55] = -50;   // very loud
+    LoRaChannelSetSelection out{};
+    loraSelectChannelSet(freqs, rssi, N, 125.0f, 915.0f, &out);
+
+    EXPECT_EQ(out.n_channels, n_chan);
+    EXPECT_TRUE (loraSkipMaskTest(out.skip_mask, 10));
+    EXPECT_TRUE (loraSkipMaskTest(out.skip_mask, 55));
+    EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, 11));
+    EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, 0));
+
+    // Rendezvous picks one of the quiet -110 channels (any is fine).
+    EXPECT_NE(out.rendezvous_mhz, freqs[10]);
+    EXPECT_NE(out.rendezvous_mhz, freqs[55]);
+}
+
+TEST(LoraSelectChannelSet, FccFloorEnforced_BW250) {
+    // BW=250 → fhss_min=50.  If the relative threshold would skip more
+    // than (n - 50), enforce the floor by keeping the K quietest active.
+    const uint8_t n = loraChannelCount(250.0f);
+    ASSERT_GE(n, 50u);
+
+    constexpr size_t M = 70;  // assume n ≥ 50; build at-channel-rate scan
+    ASSERT_GE(n, M / 2);
+    float  freqs[M];
+    int8_t rssi[M];
+    for (size_t i = 0; i < M; i++) {
+        freqs[i] = 902.125f + (float)i * 0.375f;
+        // Make almost every channel "loud" — this would naively skip
+        // them all.  A handful are quiet.
+        rssi[i] = (i % 5 == 0) ? -100 : -50;
+    }
+    LoRaChannelSetSelection out{};
+    loraSelectChannelSet(freqs, rssi, M, 250.0f, 915.0f, &out);
+
+    // Count active (non-skipped).  Must be ≥ fhss_min = 50.
+    uint8_t active = 0;
+    for (uint8_t i = 0; i < out.n_channels; i++)
+        if (!loraSkipMaskTest(out.skip_mask, i)) active++;
+    EXPECT_GE(active, loraFhssMinChannels(250.0f));
+}
+
+TEST(LoraSelectChannelSet, AllQuietSkipsNothing) {
+    // If every scan point is roughly the same RSSI, no channel exceeds
+    // median+15 and the mask stays empty.
+    constexpr size_t N = 53;
+    float  freqs[N];
+    int8_t rssi[N];
+    for (size_t i = 0; i < N; i++) {
+        freqs[i] = 902.0f + (float)i * 0.5f;
+        rssi[i]  = -105 + (int8_t)(i % 3);  // tiny variation
+    }
+    LoRaChannelSetSelection out{};
+    loraSelectChannelSet(freqs, rssi, N, 250.0f, 915.0f, &out);
+
+    for (uint8_t i = 0; i < out.n_channels; i++)
+        EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, i)) << "channel " << (int)i;
+}
+
+TEST(LoraFhssMinChannels, BoundaryValues) {
+    EXPECT_EQ(loraFhssMinChannels(125.0f), 50u);  // narrow → strict
+    EXPECT_EQ(loraFhssMinChannels(250.0f), 50u);  // exactly 250 — at boundary
+    EXPECT_EQ(loraFhssMinChannels(500.0f), 25u);  // wide → relaxed
+}
+
+// ============================================================================
 // Issues #40 / #41: per-packet channel hopping — state gate
 // ============================================================================
 
