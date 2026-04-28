@@ -3586,40 +3586,70 @@ static void loop_oc()
             }
             else
             {
-                // Power off: shut down peripherals to return to low-power state
-                ESP_LOGI("PWR", "Shutting down peripherals...");
-
+                // Power off: drop the FC rail and reset the OC.
+                //
+                // Surgically tearing down each peripheral on power-off
+                // (I2S DMA + APB lock, SPI bus, I2C master+slave bus,
+                // logger flush task, LittleFS, NAND/MRAM driver state,
+                // dedup filter prev_ts, BLE connection) is error-prone
+                // and leaves residual state that breaks the next
+                // power-on cycle (#9 — observed: I2S APB lock held,
+                // i2c_new_slave_device fails because bus is still
+                // acquired, dedup drops every post-reset frame). A
+                // clean reset gets us to the same idle state as cold
+                // boot (~16 mA baseline, BLE advertising, all driver
+                // state freshly initialised).
+                //
+                // The iOS app already handles the brief disconnect /
+                // reconnect because the existing brownout-on-power-on
+                // hardware quirk exercises the same recovery path.
+                ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
                 digitalWrite(config::PWR_PIN, LOW);
 
-                // Delete the I2S receiver task
-                if (i2s_rx_task_handle != nullptr)
-                {
-                    vTaskDelete(i2s_rx_task_handle);
-                    i2s_rx_task_handle = nullptr;
-                    ESP_LOGI("PWR", "I2S receiver task deleted");
+                // Drive every signal that goes from the OC to the switched-
+                // rail peripherals (LoRa, NAND, MRAM) LOW so back-feed current
+                // can't flow from the still-powered OC side through the
+                // peripherals' input ESD diodes into their now-unpowered VCC
+                // (TPS22918 OUT is being actively discharged via QOD, so any
+                // injected current shows up as steady draw on the OC's input
+                // rail). gpio_reset_pin detaches the pad from any SPI /
+                // peripheral matrix routing left over from initPeripherals();
+                // gpio_set_level(0) holds the pad LOW for the brief window
+                // before the reset. Post-reset, IOs default to high-Z, which
+                // is also fine — high-Z is not a back-feed source. (#9)
+                static const gpio_num_t kSwitchedRailPins[] = {
+                    (gpio_num_t)config::SPI_SCK,
+                    (gpio_num_t)config::SPI_MOSI,
+                    (gpio_num_t)config::SPI_MISO,
+                    (gpio_num_t)config::NAND_CS,
+                    (gpio_num_t)config::MRAM_CS,
+                    (gpio_num_t)config::LORA_SPI_SCK,
+                    (gpio_num_t)config::LORA_SPI_MOSI,
+                    (gpio_num_t)config::LORA_SPI_MISO,
+                    (gpio_num_t)config::LORA_CS_PIN,
+                    (gpio_num_t)config::LORA_RST_PIN,
+                    (gpio_num_t)config::LORA_DIO1_PIN,
+                    (gpio_num_t)config::LORA_BUSY_PIN,
+                    // I2S signals from FC (slave RX on OC). FC's outputs go
+                    // high-Z when unpowered, but pinning these LOW removes
+                    // any residual matrix routing and avoids noise on
+                    // floating inputs that could spuriously draw through the
+                    // OC's input buffer / pull-up network. (#9)
+                    (gpio_num_t)config::I2S_BCLK_PIN,
+                    (gpio_num_t)config::I2S_WS_PIN,
+                    (gpio_num_t)config::I2S_DIN_PIN,
+                    (gpio_num_t)config::I2S_FSYNC_PIN,
+                };
+                for (gpio_num_t pin : kSwitchedRailPins) {
+                    gpio_reset_pin(pin);
+                    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
+                    gpio_set_pull_mode(pin, GPIO_FLOATING);
+                    gpio_set_level(pin, 0);
                 }
-                // Skip I2S destructor — it blocks waiting for DMA.
-                // The FC (clock master) is powered off, so the slave
-                // peripheral is harmlessly idle.
 
-                // I2C slave cleanup is handled by i2c_del_slave_device
-                // when the interface is destroyed. No explicit cleanup needed here.
-                i2c_slave_initialized = false;
-                ESP_LOGI("PWR", "I2C slave stopped");
-
-                // End SPI bus (stops LoRa, NAND, MRAM)
-                SPI.end();
-                ESP_LOGI("PWR", "SPI bus stopped");
-
-                peripherals_initialized = false;
-
-                // Re-enter low-power mode
-                enterLowPowerMode();
-                if (ble_app.isConnected())
-                {
-                    requestSlowBLEParams(0);
-                }
-                ESP_LOGI("PWR", "Low-power mode restored");
+                vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
+                esp_restart();
+                // not reached
             }
 
             ESP_LOGI("BLE", "Power rail toggled: %s", pwr_pin_on ? "ON" : "OFF");
