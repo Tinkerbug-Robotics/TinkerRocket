@@ -1465,8 +1465,9 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
 
     LoRaDataSI lora = {};
     // Routing header
-    lora.network_id = network_id;
-    lora.rocket_id  = rocket_id;
+    lora.network_id       = network_id;
+    lora.rocket_id        = rocket_id;
+    lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;  // phase 1: hop logic deferred
 
     if (latest_gnss_valid)
     {
@@ -2001,8 +2002,8 @@ static void serviceLoRaUplink()
 
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
     {
-        // Uplink format v1: [0xCA][network_id][target_rocket_id][cmd][len][payload...]
-        if (rx_len >= 5 && rx_buf[0] == config::UPLINK_SYNC_BYTE)
+        // Uplink format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
+        if (rx_len >= 6 && rx_buf[0] == config::UPLINK_SYNC_BYTE)
         {
             uint8_t pkt_nid = rx_buf[1];
             uint8_t pkt_rid = rx_buf[2];
@@ -2010,11 +2011,13 @@ static void serviceLoRaUplink()
             if (pkt_nid == network_id &&
                 (pkt_rid == rocket_id || pkt_rid == 0xFF))
             {
-                uint8_t cmd = rx_buf[3];
-                uint8_t payload_len = rx_buf[4];
-                if (rx_len >= (size_t)(5 + payload_len))
+                // rx_buf[3] = next_channel_idx — phase 1 ignores it (sentinel only).
+                // Phase 2 will hop to loraChannelMHz(bw, idx) here unless == 0xFF.
+                uint8_t cmd = rx_buf[4];
+                uint8_t payload_len = rx_buf[5];
+                if (rx_len >= (size_t)(6 + payload_len))
                 {
-                    processUplinkCommand(cmd, &rx_buf[5], payload_len);
+                    processUplinkCommand(cmd, &rx_buf[6], payload_len);
                     lora_uplink_rx_count++;
                     last_uplink_rx_ms = millis();
                 }

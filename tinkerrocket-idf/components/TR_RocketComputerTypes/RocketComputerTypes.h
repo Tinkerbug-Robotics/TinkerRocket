@@ -85,6 +85,62 @@ static inline bool shouldBeaconInState(RocketState s)
     return s != INFLIGHT;
 }
 
+// ============================================================================
+// Channel-set generator for per-packet frequency hopping (issues #40 / #41)
+// ============================================================================
+// The rocket and base station derive an identical channel table from the
+// active LoRa bandwidth.  Both sides hold the same NVS preset (set via cmd
+// 10), so neither side has to push the table over the wire — the agreement
+// falls out of the existing modulation-config sync.
+//
+// Layout: channel centers are spaced at 1.5 × BW so each channel keeps a
+// half-BW guard from its neighbours.  Channel 0 sits half a BW above the
+// low band edge; the last channel sits half a BW below the high edge.  The
+// US 902-928 MHz ISM band fits 35/69/130 channels at the Fast/250kHz/Max
+// Range presets respectively.  All three counts comfortably exceed the
+// FCC Part 15.247 FHSS thresholds (25 channels for BW > 250 kHz, 50 for
+// BW ≤ 250 kHz) — though we operate as digital modulation (DTS), not
+// FHSS, so those thresholds are headroom rather than a binding constraint.
+//
+// next_channel_idx in the LoRa header is 1 byte (0..N-1).  The sentinel
+// LORA_NEXT_CH_NO_HOP means "stay on the current channel for one more
+// window".  Phase 1 wires the byte through but always sends the sentinel;
+// Phase 2 will start emitting real indices.
+static constexpr float   LORA_BAND_LO_MHZ        = 902.0f;  // US ISM band low edge
+static constexpr float   LORA_BAND_HI_MHZ        = 928.0f;  // US ISM band high edge
+static constexpr float   LORA_CHANNEL_SPACING_X  = 1.5f;    // spacing as multiple of BW
+static constexpr uint8_t LORA_NEXT_CH_NO_HOP     = 0xFF;    // sentinel: don't hop
+
+// Number of channels available for a given LoRa bandwidth.  Returns 0 if
+// the BW would not fit a single channel inside the band.
+static inline uint8_t loraChannelCount(float bw_khz)
+{
+    if (bw_khz <= 0.0f) return 0;
+    const float bw_mhz   = bw_khz / 1000.0f;
+    const float spacing  = bw_mhz * LORA_CHANNEL_SPACING_X;
+    const float min_f    = LORA_BAND_LO_MHZ + bw_mhz * 0.5f;
+    const float max_f    = LORA_BAND_HI_MHZ - bw_mhz * 0.5f;
+    if (max_f <= min_f) return 0;
+    const float span     = max_f - min_f;
+    const int   n        = (int)(span / spacing) + 1;
+    if (n < 1)   return 0;
+    if (n > 255) return 255;  // cap so idx fits in the 1-byte header field
+    return (uint8_t)n;
+}
+
+// Center frequency of channel `idx` for the given bandwidth.  Returns 0.0
+// if idx is out of range — callers should treat that as "fall back to
+// rendezvous".
+static inline float loraChannelMHz(float bw_khz, uint8_t idx)
+{
+    const uint8_t n = loraChannelCount(bw_khz);
+    if (idx >= n) return 0.0f;
+    const float bw_mhz  = bw_khz / 1000.0f;
+    const float spacing = bw_mhz * LORA_CHANNEL_SPACING_X;
+    const float min_f   = LORA_BAND_LO_MHZ + bw_mhz * 0.5f;
+    return min_f + spacing * (float)idx;
+}
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
@@ -399,9 +455,10 @@ static constexpr uint8_t LORA_CMD_HEARTBEAT = 0xFE;
 // LoRa data to send from rocket to ground station
 typedef struct __attribute__((packed))
 {
-    // --- Routing header (added in proto v1) ---
+    // --- Routing header (proto v2: hop byte added for #40/#41) ---
     uint8_t network_id;      // LoRa network namespace (0..255)
     uint8_t rocket_id;       // Source rocket ID within network (1..254, 0=unset, 255=broadcast)
+    uint8_t next_channel_idx;// 0..N-1 = hop to that channel after this RX; 0xFF = stay
 
     // --- Telemetry payload (unchanged from proto v0) ---
     uint8_t num_sats;        // 0..255
@@ -452,8 +509,8 @@ typedef struct __attribute__((packed))
 
 } LoRaData;
 
-static_assert(sizeof(LoRaData) == 59,
-              "LoRaData must be 59 bytes (2-byte header + 57-byte payload)");
+static_assert(sizeof(LoRaData) == 60,
+              "LoRaData must be 60 bytes (3-byte header + 57-byte payload)");
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -470,6 +527,7 @@ typedef struct
 {                                   // Precision    : Range
     uint8_t network_id;             // Routing header: network namespace
     uint8_t rocket_id;              // Routing header: source rocket ID
+    uint8_t next_channel_idx;       // Routing header: 0..N-1 hop target, 0xFF = stay
     uint8_t num_sats;               // int          : 0 to 255
     float   pdop;                   // meter        : 0 to 100
     double  ecef_x, ecef_y, ecef_z; // meter        : +/- 7,000,000
