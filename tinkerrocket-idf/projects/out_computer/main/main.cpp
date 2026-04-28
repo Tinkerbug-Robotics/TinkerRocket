@@ -378,6 +378,10 @@ static inline void updateHopFromState(RocketState s)
         hop_first_pkt_    = true;
         hop_idx_          = 0;
         hop_needs_retune_ = true;  // ensure we're on lora_freq_mhz before TXing
+        ESP_LOGI("OC", "[HOP] Active: bootstrap on %.2f MHz, then idx=0 "
+                       "(%u channels at BW=%.0f kHz)",
+                 (double)lora_freq_mhz, (unsigned)loraChannelCount(lora_bw_khz),
+                 (double)lora_bw_khz);
     }
     else if (!want_active && hop_active_)
     {
@@ -387,6 +391,7 @@ static inline void updateHopFromState(RocketState s)
         hop_active_       = false;
         hop_first_pkt_    = false;
         hop_needs_retune_ = true;
+        ESP_LOGI("OC", "[HOP] Inactive: returning to %.2f MHz", (double)lora_freq_mhz);
     }
 }
 

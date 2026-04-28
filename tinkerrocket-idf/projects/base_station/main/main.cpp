@@ -1402,6 +1402,14 @@ static uint32_t last_heartbeat_tx_ms = 0;
 static void serviceHeartbeat()
 {
     if (freq_locked_for_flight)                return;  // No heartbeats in flight
+    // Suppress while channel hopping is active (#40 / #41 phase 2a).
+    // Heartbeats only exist to reset the rocket's slow-rendezvous timer
+    // (#71), and that timer is already suppressed during hopping — so a
+    // heartbeat here is pure airtime noise.  Worse, the 2-retry pattern
+    // (~200 ms total TX window) is large enough to collide with the
+    // rocket's ~500 ms-spaced TX slot, and a collision desyncs the hop
+    // state until the 3 s silence fallback fires.  Bench-confirmed.
+    if (hop_active_)                           return;
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (uplink_pending)                        return;  // Don't clobber a real cmd
@@ -1839,10 +1847,19 @@ static void loop_bs()
                         const uint8_t n = loraChannelCount(lora_bw_khz);
                         if (n > 0 && decoded.next_channel_idx < n)
                         {
+                            const bool was_active = hop_active_;
                             hop_idx_           = decoded.next_channel_idx;
                             hop_active_        = true;
                             hop_needs_retune_  = true;
                             hop_last_rx_ms_    = millis();
+                            if (!was_active)
+                            {
+                                ESP_LOGI(TAG, "[HOP] Active: %u channels at BW=%.0f kHz, "
+                                              "first hop -> idx=%u (%.3f MHz)",
+                                         (unsigned)n, (double)lora_bw_khz,
+                                         (unsigned)hop_idx_,
+                                         (double)loraChannelMHz(lora_bw_khz, hop_idx_));
+                            }
                         }
                     }
                 }
@@ -1853,6 +1870,8 @@ static void loop_bs()
                     // comms resume on a known frequency.
                     hop_active_       = false;
                     hop_needs_retune_ = true;
+                    ESP_LOGI(TAG, "[HOP] Inactive (rocket state changed): "
+                                  "returning to %.2f MHz", (double)lora_freq_mhz);
                 }
 
                 last_known_camera_recording = decoded.camera_recording;
