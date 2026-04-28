@@ -1,5 +1,6 @@
 #include "TR_LoRa_Comms.h"
 #include <esp_log.h>
+#include <cmath>
 
 static const char* TAG = "LORA";
 
@@ -403,6 +404,57 @@ rollback:
     if (steps_done >= 2) (void)radio_->setSpreadingFactor(old_sf);
     if (steps_done >= 1) (void)radio_->setBandwidth(old_bw);
     return false;
+}
+
+// ============================================================================
+// Lightweight frequency-only retune for per-packet hopping (#40 / #41)
+// ============================================================================
+
+bool TR_LoRa_Comms::hopToFrequencyMHz(float freq_mhz)
+{
+    if (!enabled_ || radio_ == nullptr)         return false;
+    if (tx_ongoing_)                            return false;  // can't retune mid-TX
+    if (scan_state_ != ScanState::Idle &&
+        scan_state_ != ScanState::Done)         return false;  // can't retune mid-scan
+
+    // No-op fast path: already on the requested frequency (within
+    // floating-point slop).  Avoids unnecessary radio churn when the
+    // hop state machine asks for the channel we're already on.
+    if (fabsf(freq_mhz - cfg_freq_mhz_) < 0.0005f) return true;
+
+    // Mirror the established pattern from reconfigure() / startScan():
+    // mark RX as exited *before* issuing any SPI to the radio.  Two
+    // reasons:
+    //   1. RadioLib's setFrequency on SX126x is multi-step (standby →
+    //      calibrateImage → setRfFreq → setOutputPower).  Field testing
+    //      crashed inside ESP-IDF's spi_bus_lock_bg_exit (NULL deref on
+    //      lock->acquiring_dev — a TOCTOU race in the driver's
+    //      ISR-completion path) when these bursts overlapped with
+    //      DIO1-ISR-triggered rx_done_ handling.
+    //   2. Without this, our own DIO1 ISR (gated on rx_mode_) would
+    //      latch rx_done_ on any spurious DIO1 edge during the retune,
+    //      causing the main loop to fire off a readPacket() SPI burst
+    //      on top of the in-flight ones.
+    const bool was_rx = rx_mode_;
+    rx_mode_ = false;
+    rx_done_ = false;
+
+    int16_t st = radio_->setFrequency(freq_mhz);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        if (debug_) ESP_LOGE(TAG, "LoRa hopToFrequency failed: %d", st);
+        // Best-effort: if we were in RX, try to get back so a single
+        // failed retune doesn't strand the radio in standby.
+        if (was_rx) (void)startReceive();
+        return false;
+    }
+    cfg_freq_mhz_ = freq_mhz;
+
+    // Re-enter RX via the canonical wrapper so internal flag state
+    // matches what the rest of the codebase expects after a fresh RX.
+    if (was_rx) (void)startReceive();
+    return true;
 }
 
 // ============================================================================

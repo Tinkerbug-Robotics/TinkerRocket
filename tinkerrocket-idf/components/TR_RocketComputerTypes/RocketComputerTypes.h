@@ -85,6 +85,30 @@ static inline bool shouldBeaconInState(RocketState s)
     return s != INFLIGHT;
 }
 
+// Whether per-packet channel hopping should be active in this state.
+// PRELAUNCH and INFLIGHT only — ground states (READY/LANDED/INITIALIZATION)
+// stay on the static configured channel so configuration, recovery, and
+// initial handshake stay simple and predictable.
+//
+// Hopping starts at PRELAUNCH (rather than INFLIGHT) so the behaviour gets
+// real ground-test airtime before the rocket leaves the pad — that's the
+// window where defects are cheap to find.
+//
+// Edge case: a post-flight LANDED → PRELAUNCH transition (rocket regains
+// GPS without a power cycle) would also activate hopping, which is
+// suboptimal for recovery.  The existing rendezvous fallback recovers
+// from this gracefully if it ever happens; revisit with a sticky
+// "post-flight" gate if it bites.
+static inline bool shouldHopInState(RocketState s)
+{
+    return s == PRELAUNCH || s == INFLIGHT;
+}
+
+static inline bool shouldHopInState(uint8_t s)
+{
+    return shouldHopInState((RocketState)s);
+}
+
 // ============================================================================
 // Channel-set generator for per-packet frequency hopping (issues #40 / #41)
 // ============================================================================
