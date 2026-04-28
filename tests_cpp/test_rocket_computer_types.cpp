@@ -24,7 +24,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
     EXPECT_EQ(sizeof(NonSensorData),  43u);
-    EXPECT_EQ(sizeof(LoRaData),       59u);  // 2-byte routing header + 57-byte payload
+    EXPECT_EQ(sizeof(LoRaData),       60u);  // 3-byte routing header + 57-byte payload
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
 }
@@ -81,6 +81,57 @@ TEST(RocketComputerTypes, LoRaFlagEncoding) {
         uint8_t decoded = (encoded >> LORA_STATE_SHIFT) & 0x07;
         EXPECT_EQ(decoded, s);
     }
+}
+
+// ============================================================================
+// Issues #40 / #41: per-packet channel hopping channel-set helpers
+// ============================================================================
+
+TEST(LoRaChannelSet, FastPreset_BW500) {
+    // BW=500 kHz at 1.5× spacing covers 902-928 MHz with ~35 channels.
+    // Channel 0 sits half a BW above 902.0 (=902.25); channels never
+    // straddle either band edge.
+    const float bw_khz = 500.0f;
+    const uint8_t n = loraChannelCount(bw_khz);
+    EXPECT_GE(n, 25);  // FCC FHSS minimum for BW > 250 kHz
+    EXPECT_LE(n, 60);  // sanity ceiling
+
+    EXPECT_NEAR(loraChannelMHz(bw_khz, 0), 902.25f, 1e-3f);
+    // First channel's lower edge must not cross the band low edge.
+    EXPECT_GE(loraChannelMHz(bw_khz, 0) - bw_khz / 2000.0f, LORA_BAND_LO_MHZ);
+    // Last channel's upper edge must not cross the band high edge.
+    EXPECT_LE(loraChannelMHz(bw_khz, n - 1) + bw_khz / 2000.0f, LORA_BAND_HI_MHZ);
+    // Out-of-range index returns 0.0 sentinel.
+    EXPECT_FLOAT_EQ(loraChannelMHz(bw_khz, n), 0.0f);
+}
+
+TEST(LoRaChannelSet, StandardPreset_BW250) {
+    const uint8_t n = loraChannelCount(250.0f);
+    EXPECT_GE(n, 50);  // FCC FHSS minimum for BW ≤ 250 kHz
+    EXPECT_NEAR(loraChannelMHz(250.0f, 0), 902.125f, 1e-3f);
+    EXPECT_LE(loraChannelMHz(250.0f, n - 1) + 0.125f, LORA_BAND_HI_MHZ);
+}
+
+TEST(LoRaChannelSet, MaxRangePreset_BW125) {
+    const uint8_t n = loraChannelCount(125.0f);
+    EXPECT_GE(n, 100);  // narrow BW packs many channels
+    EXPECT_LE(loraChannelMHz(125.0f, n - 1) + 0.0625f, LORA_BAND_HI_MHZ);
+}
+
+TEST(LoRaChannelSet, ChannelsAreEvenlySpaced) {
+    // Adjacent centres differ by exactly 1.5 × BW.
+    const float bw_khz = 250.0f;
+    const float expected_step_mhz = (bw_khz / 1000.0f) * LORA_CHANNEL_SPACING_X;
+    EXPECT_NEAR(loraChannelMHz(bw_khz, 1) - loraChannelMHz(bw_khz, 0),
+                expected_step_mhz, 1e-4f);
+    EXPECT_NEAR(loraChannelMHz(bw_khz, 10) - loraChannelMHz(bw_khz, 9),
+                expected_step_mhz, 1e-4f);
+}
+
+TEST(LoRaChannelSet, ZeroOrNegativeBwReturnsZero) {
+    // Defensive: callers shouldn't hit this, but we don't want UB.
+    EXPECT_EQ(loraChannelCount(0.0f),  0);
+    EXPECT_EQ(loraChannelCount(-1.0f), 0);
 }
 
 // ============================================================================
