@@ -21,6 +21,7 @@ protected:
         LoRaDataSI si{};
         si.network_id = 1;
         si.rocket_id = 1;
+        si.next_channel_idx = 47;  // realistic mid-table hop target
         si.num_sats = 12;
         si.pdop = 1.5f;
         si.ecef_x = -2430601.0;
@@ -69,6 +70,9 @@ TEST_F(LoRaRoundtripTest, NominalFlight_Roundtrip) {
     conv.unpackLoRa(packed, out);
 
     // Verify all fields survive roundtrip within quantization
+    EXPECT_EQ(out.network_id, 1);
+    EXPECT_EQ(out.rocket_id, 1);
+    EXPECT_EQ(out.next_channel_idx, 47);  // hop byte must roundtrip exactly
     EXPECT_EQ(out.num_sats, 12);
     EXPECT_NEAR(out.pdop, 2.0f, 0.6f); // u8 0..100, integer only
     EXPECT_NEAR(out.ecef_x, in.ecef_x, 1.0);
