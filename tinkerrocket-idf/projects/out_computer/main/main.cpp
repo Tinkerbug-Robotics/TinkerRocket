@@ -365,6 +365,25 @@ static uint8_t hop_idx_           = 0;
 static bool    hop_first_pkt_     = false;
 static bool    hop_needs_retune_  = false;
 
+// Hop-silence rendezvous fallback state (#40 / #41 phase 2b).
+// Definitions of HOP_FALLBACK_*_MS constants and the serviceHopFallback()
+// function live further down with the other rendezvous machinery.
+enum class HopFallbackState : uint8_t {
+    NORMAL,
+    VISITING_RENDEZVOUS,
+};
+
+static HopFallbackState hop_fallback_state          = HopFallbackState::NORMAL;
+static uint32_t         hop_fallback_phase_start_ms = 0;
+static uint32_t         hop_active_entered_ms       = 0;
+static uint32_t         hop_session_uplink_count    = 0;  // resets each hop session
+
+// Tracks whether the radio is currently in RX mode.  Forward-declared
+// here so updateHopFromState() (just below) can reset it cleanly when
+// we exit a rendezvous visit.  Initialized at file scope further down
+// alongside the other LoRa-stats vars.
+static bool lora_in_rx_mode = false;
+
 static inline void updateHopFromState(RocketState s)
 {
     const bool want_active = shouldHopInState(s);
@@ -374,10 +393,13 @@ static inline void updateHopFromState(RocketState s)
         // lora_freq_mhz with next_channel_idx = 0 so the BS sees the
         // transition; we retune to channel 0 only after that packet is
         // in the air.
-        hop_active_       = true;
-        hop_first_pkt_    = true;
-        hop_idx_          = 0;
-        hop_needs_retune_ = true;  // ensure we're on lora_freq_mhz before TXing
+        hop_active_              = true;
+        hop_first_pkt_           = true;
+        hop_idx_                 = 0;
+        hop_needs_retune_        = true;  // ensure we're on lora_freq_mhz before TXing
+        hop_active_entered_ms    = millis();
+        hop_session_uplink_count = 0;
+        hop_fallback_state       = HopFallbackState::NORMAL;
         ESP_LOGI("OC", "[HOP] Active: bootstrap on %.2f MHz, then idx=0 "
                        "(%u channels at BW=%.0f kHz)",
                  (double)lora_freq_mhz, (unsigned)loraChannelCount(lora_bw_khz),
@@ -387,7 +409,17 @@ static inline void updateHopFromState(RocketState s)
     {
         // ON → OFF (e.g. INFLIGHT → LANDED): leave the table and return
         // to the static configured channel so recovery / ground comms
-        // resume on a known frequency.
+        // resume on a known frequency.  If we were mid-rendezvous-visit,
+        // come out of that first so the radio ends up with the saved
+        // modulation, not the rendezvous one.
+        if (hop_fallback_state == HopFallbackState::VISITING_RENDEZVOUS)
+        {
+            (void)lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
+                                          lora_cr, lora_tx_power);
+            (void)lora_comms.startReceive();
+            lora_in_rx_mode = true;
+            hop_fallback_state = HopFallbackState::NORMAL;
+        }
         hop_active_       = false;
         hop_first_pkt_    = false;
         hop_needs_retune_ = true;
@@ -466,7 +498,7 @@ static float max_speed_mps = 0.0f;
 static uint32_t lora_tx_ok = 0;
 static uint32_t lora_tx_fail = 0;
 static uint32_t last_lora_tx_ms = 0;
-static bool     lora_in_rx_mode = false;
+// lora_in_rx_mode forward-declared up with the hop state.
 static uint32_t lora_uplink_rx_count = 0;
 
 // Slow-rendezvous trackers (issue #71).  last_uplink_rx_ms bumps on every
@@ -1541,9 +1573,11 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
     // Routing header
     lora.network_id = network_id;
     lora.rocket_id  = rocket_id;
-    // Hop byte (#40 / #41 phase 2a).  Either tell the BS where we'll be
-    // for the next packet, or send the no-hop sentinel if hopping is off.
-    if (hop_active_)
+    // Hop byte (#40 / #41).  Either tell the BS where we'll be for the
+    // next packet, or send the no-hop sentinel.  During a rendezvous
+    // visit (phase 2b) we explicitly send the sentinel — we're parked
+    // on rendezvous, not following the hop schedule.
+    if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL)
     {
         if (hop_first_pkt_)
         {
@@ -1651,8 +1685,11 @@ static void serviceLoRa()
     // Honour any pending hop retune as soon as the radio is idle.  The
     // post-TX path below sets hop_needs_retune_ when the previous TX
     // completed, since send() returns when the TX *starts*, not when it
-    // finishes — canSend() going true is our "TX done" signal.
-    if (hop_needs_retune_ && lora_comms.canSend())
+    // finishes — canSend() going true is our "TX done" signal.  Skip
+    // during a rendezvous visit; the radio is being managed by
+    // serviceHopFallback() in that case.
+    if (hop_needs_retune_ && lora_comms.canSend() &&
+        hop_fallback_state == HopFallbackState::NORMAL)
     {
         (void)lora_comms.hopToFrequencyMHz(hopTargetFreqMHz());
         hop_needs_retune_ = false;
@@ -1684,8 +1721,10 @@ static void serviceLoRa()
 
         // Advance hop state and schedule the post-TX retune.  We can't
         // retune here directly (TX is still in progress); the top of
-        // the next serviceLoRa iteration will catch it.
-        if (hop_active_)
+        // the next serviceLoRa iteration will catch it.  Skip during a
+        // rendezvous visit — the radio is on rendezvous mode, not in
+        // the hop sequence.
+        if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL)
         {
             if (hop_first_pkt_)
             {
@@ -2146,6 +2185,7 @@ static void serviceLoRaUplink()
                     processUplinkCommand(cmd, &rx_buf[6], payload_len);
                     lora_uplink_rx_count++;
                     last_uplink_rx_ms = millis();
+                    if (hop_active_) hop_session_uplink_count++;
                 }
             }
         }
@@ -2317,6 +2357,116 @@ static void serviceRocketRendezvous()
                 rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
             }
             break;
+    }
+}
+
+// ============================================================================
+// Hop-silence rendezvous fallback (#40 / #41 phase 2b)
+// ============================================================================
+// While hop_active_, periodically check whether we've heard *anything*
+// from the base station recently.  If we haven't, briefly park on the
+// rendezvous channel/preset so a desynced BS — one whose 3 s
+// hop-silence fallback (loop_bs) fired and dropped to its static
+// channel — can find us via its existing recovery scan, which sweeps
+// to the rendezvous frequency in Phase A.
+//
+// This mirrors slow_rendezvous (#71) but with hop-aware triggers:
+//   • Reference time is the most recent LoRa uplink during the
+//     current hop session (or hop entry, if no uplink heard yet).
+//     Heartbeats from the BS — newly safe-window-scheduled in this
+//     phase — bump last_uplink_rx_ms every 30 s in nominal operation,
+//     so this trigger fires only when comms have actually broken.
+//   • Visit is a single short window (no on/off oscillation), then we
+//     re-bootstrap hopping with a fresh transition packet on
+//     lora_freq_mhz so the BS sees a clean re-entry.
+//
+// Suppressed when slow_rendezvous is busy (it owns the radio in that
+// case) and when not actually hopping.  HopFallbackState and its module
+// variables live up with the other hop_* state; constants live here
+// alongside the service function that uses them.
+
+static constexpr uint32_t HOP_FALLBACK_TRIGGER_INITIAL_MS = 30000;  // never heard BS yet
+static constexpr uint32_t HOP_FALLBACK_TRIGGER_QUIET_MS   = 60000;  // BS seen, then silent
+static constexpr uint32_t HOP_FALLBACK_VISIT_MS           = 3000;   // park 3 s on rendezvous
+
+static void serviceHopFallback()
+{
+    if (!hop_active_) return;
+    if (rendezvous_state != RocketRendezvousState::IDLE) return;  // slow_rendezvous owns the radio
+
+    const uint32_t now = millis();
+
+    switch (hop_fallback_state)
+    {
+        case HopFallbackState::NORMAL:
+        {
+            uint32_t ref;
+            uint32_t trigger;
+            if (hop_session_uplink_count == 0)
+            {
+                ref     = hop_active_entered_ms;
+                trigger = HOP_FALLBACK_TRIGGER_INITIAL_MS;
+            }
+            else
+            {
+                ref     = last_uplink_rx_ms;
+                trigger = HOP_FALLBACK_TRIGGER_QUIET_MS;
+            }
+            if ((now - ref) < trigger) return;
+
+            // Trigger: visit rendezvous.  reconfigure() switches
+            // BW/SF/CR/freq atomically (with rollback on failure) —
+            // same machinery as slow_rendezvous so the radio handling
+            // is identical and well-tested.
+            if (!lora_comms.reconfigure(config::LORA_RENDEZVOUS_MHZ,
+                                         config::LORA_RENDEZVOUS_SF,
+                                         config::LORA_RENDEZVOUS_BW_KHZ,
+                                         config::LORA_RENDEZVOUS_CR,
+                                         config::LORA_RENDEZVOUS_TX_POWER_DBM))
+            {
+                ESP_LOGE("OC", "[HOP] Visit failed: reconfigure to rendezvous mode");
+                return;
+            }
+            (void)lora_comms.startReceive();
+            lora_in_rx_mode = true;
+            hop_fallback_phase_start_ms = now;
+            hop_fallback_state = HopFallbackState::VISITING_RENDEZVOUS;
+            ESP_LOGW("OC", "[HOP] Silence %u s — visiting rendezvous %.2f MHz for %u s",
+                     (unsigned)((now - ref) / 1000),
+                     (double)config::LORA_RENDEZVOUS_MHZ,
+                     (unsigned)(HOP_FALLBACK_VISIT_MS / 1000));
+            break;
+        }
+        case HopFallbackState::VISITING_RENDEZVOUS:
+        {
+            if ((now - hop_fallback_phase_start_ms) < HOP_FALLBACK_VISIT_MS) return;
+
+            // Visit done.  Reconfigure back to the saved params and
+            // restart hopping with a fresh bootstrap so the BS sees a
+            // clean transition packet on lora_freq_mhz with
+            // next_channel_idx = 0.
+            if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
+                                         lora_cr, lora_tx_power))
+            {
+                ESP_LOGE("OC", "[HOP] Visit failed: reconfigure back to saved params");
+                // Stay in VISITING_RENDEZVOUS; will retry on next call.
+                return;
+            }
+            (void)lora_comms.startReceive();
+            lora_in_rx_mode = true;
+
+            hop_first_pkt_    = true;
+            hop_idx_          = 0;
+            hop_needs_retune_ = false;  // already on lora_freq_mhz from reconfigure
+            hop_fallback_state = HopFallbackState::NORMAL;
+            // Restart trigger reference so the next visit fires only
+            // after a fresh QUIET window (or INITIAL if nothing
+            // arrives during this pass either).
+            hop_active_entered_ms = now;
+            hop_session_uplink_count = 0;
+            ESP_LOGI("OC", "[HOP] Visit done — resuming hop with fresh bootstrap");
+            break;
+        }
     }
 }
 
@@ -3335,6 +3485,11 @@ static void loop_oc()
         // the rocket has been silent in READY for a long time, so the base
         // station's Phase-A recovery has a meeting point (issue #71).
         serviceRocketRendezvous();
+
+        // Hop-silence rendezvous: same idea but gated for the hopping
+        // case (#40 / #41 phase 2b).  Active only while hop_active_ and
+        // suppressed when slow_rendezvous owns the radio.
+        serviceHopFallback();
 
         // Send name beacon so base station can identify us
         sendLoRaBeacon();

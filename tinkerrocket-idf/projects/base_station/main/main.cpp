@@ -1399,20 +1399,34 @@ static constexpr uint32_t HEARTBEAT_RX_FRESH_MS = 5000;   // rocket "alive"
 static constexpr uint8_t  HEARTBEAT_RETRIES     = 2;
 static uint32_t last_heartbeat_tx_ms = 0;
 
+// Safe-window guard for BS uplinks while the rocket is hopping
+// (#40 / #41 phase 2b).  The rocket TXes telemetry at a fixed rate
+// (typ. 2 Hz = 500 ms cycle); after we RX a packet, we know the
+// rocket is in RX mode for the rest of its slot.  TXing within
+// ~150 ms of that RX guarantees we finish well before the rocket's
+// next TX, avoiding the desync collision pattern that broke the
+// link in phase 2a bench testing.
+static constexpr uint32_t HOP_BS_TX_SAFE_WINDOW_MS = 150;
+
+static inline bool inHopSafeWindow()
+{
+    if (!hop_active_) return true;             // not hopping → always safe
+    if (last_packet_ms == 0) return false;     // never RX'd → no anchor
+    return (millis() - last_packet_ms) <= HOP_BS_TX_SAFE_WINDOW_MS;
+}
+
 static void serviceHeartbeat()
 {
     if (freq_locked_for_flight)                return;  // No heartbeats in flight
-    // Suppress while channel hopping is active (#40 / #41 phase 2a).
-    // Heartbeats only exist to reset the rocket's slow-rendezvous timer
-    // (#71), and that timer is already suppressed during hopping — so a
-    // heartbeat here is pure airtime noise.  Worse, the 2-retry pattern
-    // (~200 ms total TX window) is large enough to collide with the
-    // rocket's ~500 ms-spaced TX slot, and a collision desyncs the hop
-    // state until the 3 s silence fallback fires.  Bench-confirmed.
-    if (hop_active_)                           return;
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (uplink_pending)                        return;  // Don't clobber a real cmd
+    // While hopping, only TX in the safe window right after a fresh
+    // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  Without this,
+    // the heartbeat's 2-retry burst (~200 ms) collides with the
+    // rocket's ~500 ms-spaced TX, desyncs the hop sequence, and the
+    // link drops until the 3 s hop-silence fallback fires.
+    if (!inHopSafeWindow())                    return;
 
     const uint32_t now = millis();
     // Only heartbeat when we've recently heard the rocket.  If rocket has
