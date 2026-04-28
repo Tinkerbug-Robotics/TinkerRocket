@@ -66,6 +66,22 @@ public:
     // Runtime reconfiguration (LLCC68: must set BW before SF)
     bool reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power);
 
+    // Lightweight frequency-only retune for per-packet hopping (#40 / #41).
+    // Unlike reconfigure(), this does not touch BW/SF/CR/power — those
+    // remain locked across hops within a session.  Returns false if the
+    // radio is mid-TX, mid-scan, or the underlying setFrequency call fails;
+    // in those cases the caller should keep its current channel state and
+    // try again on the next packet boundary.  If the radio was in RX mode,
+    // it re-enters RX after the retune so the next packet is received on
+    // the new frequency without an extra startReceive() call from the
+    // caller.
+    bool hopToFrequencyMHz(float freq_mhz);
+
+    // Reports the radio's currently-tuned frequency in MHz (the last value
+    // accepted by reconfigure() or hopToFrequencyMHz()).  Useful for the
+    // hop state machine to detect whether a retune is actually required.
+    float currentFrequencyMHz() const { return cfg_freq_mhz_; }
+
     // ---- Spectrum scan (pre-launch collision avoidance) ------------------
     // Non-blocking channel-hopping RSSI scan. Step through a frequency range,
     // dwell in RX mode for `dwell_ms` per channel, then read instantaneous

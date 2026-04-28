@@ -1,5 +1,6 @@
 #include "TR_LoRa_Comms.h"
 #include <esp_log.h>
+#include <cmath>
 
 static const char* TAG = "LORA";
 
@@ -403,6 +404,42 @@ rollback:
     if (steps_done >= 2) (void)radio_->setSpreadingFactor(old_sf);
     if (steps_done >= 1) (void)radio_->setBandwidth(old_bw);
     return false;
+}
+
+// ============================================================================
+// Lightweight frequency-only retune for per-packet hopping (#40 / #41)
+// ============================================================================
+
+bool TR_LoRa_Comms::hopToFrequencyMHz(float freq_mhz)
+{
+    if (!enabled_ || radio_ == nullptr)         return false;
+    if (tx_ongoing_)                            return false;  // can't retune mid-TX
+    if (scan_state_ != ScanState::Idle &&
+        scan_state_ != ScanState::Done)         return false;  // can't retune mid-scan
+
+    // No-op fast path: already on the requested frequency (within
+    // floating-point slop).  Avoids unnecessary radio churn when the
+    // hop state machine asks for the channel we're already on.
+    if (fabsf(freq_mhz - cfg_freq_mhz_) < 0.0005f) return true;
+
+    int16_t st = radio_->setFrequency(freq_mhz);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        if (debug_) ESP_LOGE(TAG, "LoRa hopToFrequency failed: %d", st);
+        return false;
+    }
+    cfg_freq_mhz_ = freq_mhz;
+
+    // Re-enter RX so a packet on the new frequency lands without an
+    // explicit caller-side startReceive().  Mirrors what reconfigure()
+    // does after a successful parameter change.
+    if (rx_mode_)
+    {
+        rx_done_ = false;
+        radio_->startReceive();
+    }
+    return true;
 }
 
 // ============================================================================

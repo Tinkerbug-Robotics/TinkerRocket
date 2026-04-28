@@ -338,6 +338,72 @@ static inline void updateFreqLockFromState(RocketState s)
     freq_locked_for_flight = computeFreqLockForFlight(freq_locked_for_flight, s);
 }
 
+// ----------------------------------------------------------------------------
+// Per-packet channel-hop state (issues #40 / #41, phase 2a)
+// ----------------------------------------------------------------------------
+// hop_active_       = true once we've started hopping (PRELAUNCH/INFLIGHT).
+// hop_idx_          = index into the channel table for the channel we're
+//                     currently tuned to (or, equivalently, the channel of
+//                     the packet most recently transmitted).  Meaningless
+//                     while inactive.
+// hop_first_pkt_    = true on the very first TX after activating: that
+//                     packet still goes out on the static lora_freq_mhz
+//                     channel with next_channel_idx = 0, so the BS sees
+//                     the transition and follows without needing time
+//                     sync.  Cleared after the packet is queued.
+// hop_needs_retune_ = a retune is owed (e.g. just transitioned, or just
+//                     finished a TX and need to step to the next channel).
+//                     Honoured at the top of serviceLoRa as soon as the
+//                     radio is idle (canSend()).
+//
+// The hop sequence in v2a is intentionally simple: linear (idx, idx+1, …)
+// mod the channel-set count from the active BW.  Replacing this with a
+// PRNG seeded by network_id is a follow-up; the wire format does not
+// change so it can drop in without coordination.
+static bool    hop_active_        = false;
+static uint8_t hop_idx_           = 0;
+static bool    hop_first_pkt_     = false;
+static bool    hop_needs_retune_  = false;
+
+static inline void updateHopFromState(RocketState s)
+{
+    const bool want_active = shouldHopInState(s);
+    if (want_active && !hop_active_)
+    {
+        // OFF → ON.  Bootstrap: the next TX still goes out on
+        // lora_freq_mhz with next_channel_idx = 0 so the BS sees the
+        // transition; we retune to channel 0 only after that packet is
+        // in the air.
+        hop_active_       = true;
+        hop_first_pkt_    = true;
+        hop_idx_          = 0;
+        hop_needs_retune_ = true;  // ensure we're on lora_freq_mhz before TXing
+    }
+    else if (!want_active && hop_active_)
+    {
+        // ON → OFF (e.g. INFLIGHT → LANDED): leave the table and return
+        // to the static configured channel so recovery / ground comms
+        // resume on a known frequency.
+        hop_active_       = false;
+        hop_first_pkt_    = false;
+        hop_needs_retune_ = true;
+    }
+}
+
+// Frequency the radio should currently be tuned to, given the hop state.
+// First-packet bootstrap and inactive both stay on lora_freq_mhz; the
+// active steady state uses the channel table for the current BW.
+static inline float hopTargetFreqMHz()
+{
+    if (hop_active_ && !hop_first_pkt_)
+    {
+        const float f = loraChannelMHz(lora_bw_khz, hop_idx_);
+        if (f > 0.0f) return f;
+        // Channel table empty (BW invalid) — fall through to static.
+    }
+    return lora_freq_mhz;
+}
+
 // Servo/PID config cache (mirrored from FlightComputer for BLE readback)
 static int16_t cfg_servo_bias1 = 0;
 static int16_t cfg_servo_hz    = 50;
@@ -1186,6 +1252,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // changes (issue #71).  Safe to call on every frame — the
             // function only flips the bool on INFLIGHT / READY edges.
             updateFreqLockFromState(latest_rocket_state);
+            // Drive the per-packet hop state machine off the same edge
+            // (issues #40 / #41).  Pure function; idempotent per state.
+            updateHopFromState(latest_rocket_state);
 
             // Latch the moment we entered READY so the slow-rendezvous
             // silence timer has a fair starting point.  Boot-time READY
@@ -1465,9 +1534,30 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
 
     LoRaDataSI lora = {};
     // Routing header
-    lora.network_id       = network_id;
-    lora.rocket_id        = rocket_id;
-    lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;  // phase 1: hop logic deferred
+    lora.network_id = network_id;
+    lora.rocket_id  = rocket_id;
+    // Hop byte (#40 / #41 phase 2a).  Either tell the BS where we'll be
+    // for the next packet, or send the no-hop sentinel if hopping is off.
+    if (hop_active_)
+    {
+        if (hop_first_pkt_)
+        {
+            // Bootstrap: this packet still goes out on lora_freq_mhz.
+            // Tell the BS to follow us to channel 0 for the next one.
+            lora.next_channel_idx = 0;
+        }
+        else
+        {
+            const uint8_t n = loraChannelCount(lora_bw_khz);
+            lora.next_channel_idx = (n > 0)
+                ? (uint8_t)((hop_idx_ + 1) % n)
+                : LORA_NEXT_CH_NO_HOP;
+        }
+    }
+    else
+    {
+        lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;
+    }
 
     if (latest_gnss_valid)
     {
@@ -1553,6 +1643,16 @@ static void serviceLoRa()
 
     lora_comms.service();
 
+    // Honour any pending hop retune as soon as the radio is idle.  The
+    // post-TX path below sets hop_needs_retune_ when the previous TX
+    // completed, since send() returns when the TX *starts*, not when it
+    // finishes — canSend() going true is our "TX done" signal.
+    if (hop_needs_retune_ && lora_comms.canSend())
+    {
+        (void)lora_comms.hopToFrequencyMHz(hopTargetFreqMHz());
+        hop_needs_retune_ = false;
+    }
+
     const uint32_t now_ms = millis();
     const uint32_t period_ms = (config::LORA_TX_RATE_HZ > 0)
         ? (1000U / config::LORA_TX_RATE_HZ)
@@ -1576,6 +1676,26 @@ static void serviceLoRa()
     if (lora_comms.send(payload, sizeof(payload)))
     {
         lora_tx_ok++;
+
+        // Advance hop state and schedule the post-TX retune.  We can't
+        // retune here directly (TX is still in progress); the top of
+        // the next serviceLoRa iteration will catch it.
+        if (hop_active_)
+        {
+            if (hop_first_pkt_)
+            {
+                // Bootstrap packet just went out on lora_freq_mhz.
+                // hop_idx_ is already 0; clear the first-packet flag so
+                // the upcoming retune lands us on channel 0.
+                hop_first_pkt_ = false;
+            }
+            else
+            {
+                const uint8_t n = loraChannelCount(lora_bw_khz);
+                if (n > 0) hop_idx_ = (uint8_t)((hop_idx_ + 1) % n);
+            }
+            hop_needs_retune_ = true;
+        }
     }
     else
     {
@@ -1853,15 +1973,16 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     {
         // LoRa reconfiguration via uplink: [freq:4f][bw:4f][sf:1][cr:1][txpwr:1]
 
-        // Inflight freeze (issue #71): refuse to change frequency once we
-        // are in flight.  Momentary silence in flight is almost always an
-        // SNR dip, not divergence, and hopping channels mid-flight would
-        // guarantee we lose the rest of the telemetry stream.  The base
-        // station is also expected to suppress its own recovery while
-        // rocket is in flight, so this branch is defence-in-depth.
-        if (freq_locked_for_flight)
+        // Reject reconfigures while the link is "committed" — either
+        // freq-locked for flight (issue #71) or actively hopping
+        // (#40 / #41).  Either case, changing modulation underneath the
+        // hop state machine would desynchronise the channel set on the
+        // two sides; the user must drop back to READY first.
+        if (freq_locked_for_flight || hop_active_)
         {
-            ESP_LOGW("LORA", "UPLINK Cmd 10 ignored: frequency locked for flight");
+            ESP_LOGW("LORA", "UPLINK Cmd 10 ignored: %s",
+                     freq_locked_for_flight ? "frequency locked for flight"
+                                            : "channel hopping active");
             return;
         }
 
@@ -2121,14 +2242,16 @@ static void serviceRocketRendezvous()
 {
     if (!config::USE_LORA_RADIO)  return;
     if (!peripherals_initialized) return;
-    // Suppress only in flight — INITIALIZATION/READY/PRELAUNCH/LANDED are
-    // all valid times to hunt for the BS via rendezvous.  Allowing
-    // INITIALIZATION matters: if the rocket booted before its FC came up
-    // (or the FC is unhappy), we'd otherwise never visit the rendezvous
-    // mode and the BS would never find us.
-    if (freq_locked_for_flight)
+    // Suppress while in flight (#71) or actively hopping (#40 / #41).
+    // The hop state machine and the slow-rendezvous cycle both want to
+    // own the radio frequency; running them concurrently would have the
+    // rocket disappear from the hop sequence every 30 s to visit the
+    // rendezvous freq, which defeats the point.
+    // INITIALIZATION/READY/LANDED stay eligible — those are recovery /
+    // pre-handshake situations where rendezvous is the right behaviour.
+    if (freq_locked_for_flight || hop_active_)
     {
-        rendezvousExit("flight locked");
+        rendezvousExit(freq_locked_for_flight ? "flight locked" : "hopping active");
         return;
     }
 
@@ -3689,13 +3812,16 @@ static void loop_oc()
             // LoRa reconfiguration: [freq:4f][bw:4f][sf:1][cr:1][txpwr:1]
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            // Inflight freeze (issue #71): refuse direct BLE reconfig in
-            // flight.  The iOS app already hides the apply button, but
-            // belt-and-braces in case of version skew.  We still send a
-            // readback so the app's UI reverts to the actual values.
-            if (plen >= 11 && freq_locked_for_flight)
+            // Refuse direct BLE reconfig while either (a) freq-locked
+            // for flight (#71) or (b) channel hopping is active
+            // (#40 / #41).  iOS app should already hide the apply button
+            // in both cases, but we belt-and-brace for version skew.
+            // Either way we send a readback so the app's UI reverts.
+            if (plen >= 11 && (freq_locked_for_flight || hop_active_))
             {
-                ESP_LOGW("BLE", "Cmd 10 ignored: frequency locked for flight");
+                ESP_LOGW("BLE", "Cmd 10 ignored: %s",
+                         freq_locked_for_flight ? "frequency locked for flight"
+                                                : "channel hopping active");
                 sendCurrentConfig();
             }
             else if (plen >= 11)

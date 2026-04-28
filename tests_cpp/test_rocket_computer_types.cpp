@@ -84,7 +84,33 @@ TEST(RocketComputerTypes, LoRaFlagEncoding) {
 }
 
 // ============================================================================
-// Issues #40 / #41: per-packet channel hopping channel-set helpers
+// Issues #40 / #41: per-packet channel hopping — state gate
+// ============================================================================
+
+TEST(ShouldHopInState, OnlyPrelaunchAndInflight) {
+    // Hopping is intentionally gated to the two states where the rocket
+    // is committed to its modulation config and isn't in a recovery /
+    // pre-handshake situation.  Ground states (READY/LANDED/INIT) stay
+    // on the static channel so config and recovery work as before.
+    EXPECT_FALSE(shouldHopInState(INITIALIZATION));
+    EXPECT_FALSE(shouldHopInState(READY));
+    EXPECT_TRUE (shouldHopInState(PRELAUNCH));
+    EXPECT_TRUE (shouldHopInState(INFLIGHT));
+    EXPECT_FALSE(shouldHopInState(LANDED));
+}
+
+TEST(ShouldHopInState, Uint8OverloadMatchesEnum) {
+    // The BS receives state numerically from the LoRa downlink, so the
+    // uint8_t overload must agree bit-for-bit with the enum overload.
+    for (uint8_t s = 0; s <= 4; s++)
+    {
+        EXPECT_EQ(shouldHopInState(s),
+                  shouldHopInState((RocketState)s)) << "state=" << (int)s;
+    }
+}
+
+// ============================================================================
+// Issues #40 / #41: channel-set helpers
 // ============================================================================
 
 TEST(LoRaChannelSet, FastPreset_BW500) {

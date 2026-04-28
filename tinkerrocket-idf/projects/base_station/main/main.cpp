@@ -121,6 +121,31 @@ static inline void updateFreqLockFromRocketState(uint8_t s)
     freq_locked_for_flight = computeFreqLockForFlight(freq_locked_for_flight, s);
 }
 
+// ----------------------------------------------------------------------------
+// Per-packet channel-hop state (issues #40 / #41, phase 2a — BS side)
+// ----------------------------------------------------------------------------
+// The BS is purely reactive: the rocket owns the hop sequence, and the BS
+// retunes after each successful RX based on the packet's next_channel_idx.
+// hop_active_ tracks whether we're currently following a hopping rocket;
+// hop_idx_ is the channel we're (about to be) tuned to for the next RX.
+//
+// Multi-rocket caveat (deliberately punted to a follow-up): if the BS is
+// tracking more than one rocket, only one of them can drive the hop
+// sequence at a time.  v2a follows whichever rocket's packet arrived
+// most recently, which works fine when there's just one rocket on the
+// link — the dominant case for our setup.
+static bool     hop_active_       = false;
+static uint8_t  hop_idx_          = 0;
+static bool     hop_needs_retune_ = false;
+static uint32_t hop_last_rx_ms_   = 0;
+
+// If we're following a hopping rocket and packets dry up for this long,
+// give up and fall back to lora_freq_mhz so the existing silence /
+// recovery machinery can take over.  Sized to swallow a handful of
+// missed hop windows even at the slowest preset (Long Range = ~2 Hz),
+// without holding the radio hostage if the rocket really has vanished.
+static constexpr uint32_t HOP_SILENCE_FALLBACK_MS = 3000;
+
 // Per-rocket tracker (replaces single last_decoded for multi-rocket support)
 static constexpr int MAX_TRACKED_ROCKETS = 4;
 struct TrackedRocket {
@@ -975,9 +1000,11 @@ static constexpr uint32_t TXN_MAX_RELAY_MS     = 3000;  // Upper bound on relay 
 static bool startLoRaTransaction(float new_freq, float new_bw,
                                  uint8_t new_sf, uint8_t new_cr, int8_t new_pwr)
 {
-    if (freq_locked_for_flight)
+    if (freq_locked_for_flight || hop_active_)
     {
-        ESP_LOGW(TAG, "[TXN] Refused: frequency locked for flight");
+        ESP_LOGW(TAG, "[TXN] Refused: %s",
+                 freq_locked_for_flight ? "frequency locked for flight"
+                                        : "channel hopping active");
         sendCurrentConfig();
         return false;
     }
@@ -1255,10 +1282,14 @@ static void recoveryPushRocketHome()
 
 static void serviceRecovery()
 {
-    // While locked for flight, accept silence — no hopping, no alarms.
-    if (freq_locked_for_flight)
+    // While locked for flight, or while actively hopping with the rocket,
+    // accept silence — neither is a recovery scenario.  In flight, momentary
+    // SNR dips look like silence; while hopping (#40 / #41), the recovery
+    // hop scan and the hop sequence would fight each other for the radio.
+    if (freq_locked_for_flight || hop_active_)
     {
-        if (recovery_state != RecoveryState::IDLE) recoveryEnd("flight locked");
+        if (recovery_state != RecoveryState::IDLE)
+            recoveryEnd(freq_locked_for_flight ? "flight locked" : "hopping active");
         return;
     }
     // Transactional reconfigure takes priority.  A BLE Cmd 10 arriving
@@ -1671,6 +1702,37 @@ static void loop_bs()
     lora_comms.service();
     lora_comms.pollDio1();  // Fallback if DIO1 interrupt doesn't fire
 
+    // Hop-silence fallback: if we've been following a hopping rocket but
+    // haven't heard from it in HOP_SILENCE_FALLBACK_MS, drop back to the
+    // static channel so the standard silence / recovery machinery can
+    // take over.  Without this, hop_active_ would pin the BS to a hop
+    // channel forever after a lost rocket — recovery itself is
+    // suppressed while hop_active_ for the opposite reason (don't
+    // recover during normal hop misses).
+    if (hop_active_ && hop_last_rx_ms_ != 0 &&
+        (millis() - hop_last_rx_ms_) > HOP_SILENCE_FALLBACK_MS)
+    {
+        ESP_LOGW(TAG, "[HOP] Silence > %u ms — falling back to static channel",
+                 (unsigned)HOP_SILENCE_FALLBACK_MS);
+        hop_active_       = false;
+        hop_needs_retune_ = true;
+    }
+
+    // Honour any pending hop retune — the RX path defers the actual
+    // setFrequency call to here so the radio finishes any in-flight
+    // operation first (#40 / #41 phase 2a).
+    if (hop_needs_retune_ && lora_comms.canSend())
+    {
+        const float target = hop_active_
+            ? loraChannelMHz(lora_bw_khz, hop_idx_)
+            : lora_freq_mhz;
+        if (target > 0.0f)
+        {
+            (void)lora_comms.hopToFrequencyMHz(target);
+        }
+        hop_needs_retune_ = false;
+    }
+
     // Check for received packet
     uint8_t rx_buf[256];
     size_t rx_len = 0;
@@ -1764,6 +1826,35 @@ static void loop_bs()
 
                 last_rocket_state = decoded.rocket_state;
                 updateFreqLockFromRocketState(decoded.rocket_state);
+
+                // Hop state follow (#40 / #41 phase 2a).  The rocket owns
+                // the schedule; we just retune to wherever its packet says
+                // we should be next.  Honoured as soon as the radio is
+                // idle (top of serviceLoRa) — we don't retune in the RX
+                // callback path because the radio still has work to do.
+                if (shouldHopInState(decoded.rocket_state))
+                {
+                    if (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP)
+                    {
+                        const uint8_t n = loraChannelCount(lora_bw_khz);
+                        if (n > 0 && decoded.next_channel_idx < n)
+                        {
+                            hop_idx_           = decoded.next_channel_idx;
+                            hop_active_        = true;
+                            hop_needs_retune_  = true;
+                            hop_last_rx_ms_    = millis();
+                        }
+                    }
+                }
+                else if (hop_active_)
+                {
+                    // Rocket is no longer in a hop state — return to the
+                    // static configured channel so recovery / ground
+                    // comms resume on a known frequency.
+                    hop_active_       = false;
+                    hop_needs_retune_ = true;
+                }
+
                 last_known_camera_recording = decoded.camera_recording;
 
                 // Update per-rocket tracker
