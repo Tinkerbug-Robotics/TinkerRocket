@@ -77,7 +77,7 @@ static char    unit_name[24]  = "TinkerBaseStation"; // default until NVS loads
 static uint8_t network_id     = config::DEFAULT_NETWORK_ID;
 
 // LoRa uplink state (BaseStation → OutComputer)
-static uint8_t  uplink_buf[24];   // 3-byte header + up to 20 bytes payload (PID config needs 20)
+static uint8_t  uplink_buf[32];   // 6-byte header + up to ~26 bytes payload (PID config = 20)
 static size_t   uplink_len = 0;
 static uint8_t  uplink_retries_left = 0;
 static uint32_t uplink_last_tx_ms = 0;
@@ -693,7 +693,17 @@ static void printTelemetry(const LoRaDataSI& data, float rssi, float snr,
     last_telem_print_ms = now;
     last_printed_state  = data.rocket_state;
 
-    ESP_LOGI(TAG, "[RX] %s | alt=%.0fm spd=%.1fm/s | %.0fdBm SNR=%.1f | sats=%u | %.2fV %.0f%%",
+    // next_channel_idx is logged so we can verify the framing byte is
+    // crossing the wire correctly before phase 2 starts using it.  0xFF
+    // ("--") is the phase-1 sentinel meaning "no hop"; anything else is
+    // already a hop intent.
+    char hop_str[8];
+    if (data.next_channel_idx == LORA_NEXT_CH_NO_HOP)
+        snprintf(hop_str, sizeof(hop_str), "--");
+    else
+        snprintf(hop_str, sizeof(hop_str), "%u", (unsigned)data.next_channel_idx);
+
+    ESP_LOGI(TAG, "[RX] %s | alt=%.0fm spd=%.1fm/s | %.0fdBm SNR=%.1f | sats=%u | %.2fV %.0f%% | nextCh=%s",
              rocketStateToString(data.rocket_state),
              (double)data.pressure_alt,
              (double)data.max_speed,
@@ -701,7 +711,8 @@ static void printTelemetry(const LoRaDataSI& data, float rssi, float snr,
              (double)snr,
              (unsigned)data.num_sats,
              (double)data.voltage,
-             (double)data.soc);
+             (double)data.soc,
+             hop_str);
 }
 
 static void printStats()
@@ -850,21 +861,22 @@ static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payloa
     if (uplink_pending)
     {
         ESP_LOGW(TAG, "[UPLINK] Discarding pending cmd=%u, replacing with cmd=%u",
-                 uplink_buf[3], cmd);
+                 uplink_buf[4], cmd);
     }
 
-    if (payload_len > 18) payload_len = 18;  // max 18 bytes payload (was 20, now 2 bytes for routing)
-    // Uplink format v1: [0xCA][network_id][target_rocket_id][cmd][len][payload...]
+    if (payload_len > 25) payload_len = 25;  // 32-byte buf − 6-byte header − 1 byte slack
+    // Uplink format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
     uplink_buf[0] = config::UPLINK_SYNC_BYTE;  // 0xCA
     uplink_buf[1] = network_id;
     uplink_buf[2] = target_rid;
-    uplink_buf[3] = cmd;
-    uplink_buf[4] = (uint8_t)payload_len;
+    uplink_buf[3] = LORA_NEXT_CH_NO_HOP;       // phase 1: hop logic deferred
+    uplink_buf[4] = cmd;
+    uplink_buf[5] = (uint8_t)payload_len;
     if (payload_len > 0 && payload != nullptr)
     {
-        memcpy(&uplink_buf[5], payload, payload_len);
+        memcpy(&uplink_buf[6], payload, payload_len);
     }
-    uplink_len = 5 + payload_len;
+    uplink_len = 6 + payload_len;
     uplink_retries_left = retries;
     uplink_pending = true;
     uplink_last_tx_ms = 0;
