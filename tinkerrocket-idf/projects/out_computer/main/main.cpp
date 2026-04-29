@@ -371,12 +371,14 @@ static bool    hop_needs_retune_  = false;
 enum class HopFallbackState : uint8_t {
     NORMAL,
     VISITING_RENDEZVOUS,
+    PAUSED_FOR_SCAN,        // BS-coordinated cmd 16 pause (#90)
 };
 
 static HopFallbackState hop_fallback_state          = HopFallbackState::NORMAL;
 static uint32_t         hop_fallback_phase_start_ms = 0;
 static uint32_t         hop_active_entered_ms       = 0;
 static uint32_t         hop_session_uplink_count    = 0;  // resets each hop session
+static uint32_t         hop_pause_until_ms          = 0;  // wall-clock deadline for PAUSED_FOR_SCAN
 
 // Channel-set state pushed by the BS via LORA_CMD_CHANNEL_SET (#40 / #41
 // phase 3).  rendezvous_mhz_ replaces the hardcoded LORA_RENDEZVOUS_MHZ
@@ -430,6 +432,14 @@ static inline void updateHopFromState(RocketState s)
             lora_in_rx_mode = true;
             hop_fallback_state = HopFallbackState::NORMAL;
         }
+        else if (hop_fallback_state == HopFallbackState::PAUSED_FOR_SCAN)
+        {
+            // We're already on lora_freq_mhz with the operating preset
+            // (cmd 16 reconfigured us there).  No radio-side cleanup
+            // needed — just clear the pause state.
+            hop_fallback_state = HopFallbackState::NORMAL;
+            hop_pause_until_ms = 0;
+        }
         hop_active_       = false;
         hop_first_pkt_    = false;
         hop_needs_retune_ = true;
@@ -438,11 +448,13 @@ static inline void updateHopFromState(RocketState s)
 }
 
 // Frequency the radio should currently be tuned to, given the hop state.
-// First-packet bootstrap and inactive both stay on lora_freq_mhz; the
-// active steady state uses the channel table for the current BW.
+// First-packet bootstrap, PAUSED_FOR_SCAN (#90), and inactive all stay on
+// lora_freq_mhz; the active steady state uses the channel table for the
+// current BW.
 static inline float hopTargetFreqMHz()
 {
-    if (hop_active_ && !hop_first_pkt_)
+    if (hop_active_ && !hop_first_pkt_ &&
+        hop_fallback_state == HopFallbackState::NORMAL)
     {
         const float f = loraChannelMHz(lora_bw_khz, hop_idx_);
         if (f > 0.0f) return f;
@@ -2218,6 +2230,53 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                  (double)rendezvous_mhz_, (unsigned)active,
                  (unsigned)skip_mask_n_, (double)channel_set_bw_khz_);
     }
+    else if (cmd == LORA_CMD_HOP_PAUSE && payload_len >= 2)
+    {
+        // Coordinated hop pause from BS (#90).  The BS asks us to park
+        // on lora_freq_mhz with our operating preset for N ms, so it can
+        // run a noise scan + push cmd 15 without the link dropping.
+        // Wire format: [duration_ms:u2 little-endian].
+        uint16_t dur_ms;
+        memcpy(&dur_ms, payload + 0, 2);
+        if (dur_ms == 0)
+        {
+            ESP_LOGW("LORA", "UPLINK Cmd 16 ignored: zero duration");
+            return;
+        }
+        if (dur_ms > LORA_HOP_PAUSE_MAX_MS) dur_ms = LORA_HOP_PAUSE_MAX_MS;
+        // Only meaningful while we're hopping.  In non-hop states the
+        // BS uses the existing direct-scan path and never sends cmd 16.
+        // Slow-rendezvous (#71) doesn't need to be checked here: while
+        // it's parking the radio on rendezvous_mhz_, the BS is on a
+        // hop channel and physically can't deliver cmd 16 to us.
+        if (!hop_active_)
+        {
+            ESP_LOGI("LORA", "UPLINK Cmd 16 ignored: not hopping");
+            return;
+        }
+        // Idempotent if we're already paused — extend the deadline.
+        if (hop_fallback_state == HopFallbackState::PAUSED_FOR_SCAN)
+        {
+            hop_pause_until_ms = millis() + dur_ms;
+            ESP_LOGI("OC", "[HOP] Pause extended: +%u ms", (unsigned)dur_ms);
+            return;
+        }
+        // From any other fallback state (NORMAL or mid VISITING_RENDEZVOUS)
+        // we move to PAUSED_FOR_SCAN.  Reconfigure with the operating
+        // preset on lora_freq_mhz; this is *not* a rendezvous visit.
+        if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
+                                     lora_cr, lora_tx_power))
+        {
+            ESP_LOGE("LORA", "UPLINK Cmd 16: reconfigure to lora_freq_mhz failed");
+            return;
+        }
+        (void)lora_comms.startReceive();
+        lora_in_rx_mode = true;
+        hop_pause_until_ms = millis() + dur_ms;
+        hop_fallback_state = HopFallbackState::PAUSED_FOR_SCAN;
+        ESP_LOGW("OC", "[HOP] Paused for scan: %.2f MHz for %u ms",
+                 (double)lora_freq_mhz, (unsigned)dur_ms);
+    }
     else if (cmd == LORA_CMD_HEARTBEAT)
     {
         // Heartbeat from BS (issue #71).  No action — last_uplink_rx_ms
@@ -2570,6 +2629,26 @@ static void serviceHopFallback()
             hop_active_entered_ms = now;
             hop_session_uplink_count = 0;
             ESP_LOGI("OC", "[HOP] Visit done — resuming hop with fresh bootstrap");
+            break;
+        }
+        case HopFallbackState::PAUSED_FOR_SCAN:
+        {
+            // Coordinated pause for BS scan (#90).  We're parked on
+            // lora_freq_mhz with the operating preset; the BS is
+            // sweeping for noise + pushing cmd 15.  When the deadline
+            // hits, re-bootstrap hopping identical to a fresh
+            // PRELAUNCH entry — including the channel(0) anchor — so
+            // both sides re-enter the table cleanly.  Use signed delta
+            // to handle millis() wrap.
+            if ((int32_t)(now - hop_pause_until_ms) < 0) return;
+            hop_first_pkt_           = true;
+            hop_idx_                 = 0;
+            hop_needs_retune_        = false;  // already on lora_freq_mhz
+            hop_active_entered_ms    = now;
+            hop_session_uplink_count = 0;
+            hop_fallback_state       = HopFallbackState::NORMAL;
+            hop_pause_until_ms       = 0;
+            ESP_LOGI("OC", "[HOP] Pause done — resuming hop with fresh bootstrap");
             break;
         }
     }

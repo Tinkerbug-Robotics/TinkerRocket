@@ -1511,6 +1511,56 @@ static float    scan_param_stop_mhz_  = 0.0f;
 static uint16_t scan_param_step_khz_  = 0;
 static uint16_t scan_param_dwell_ms_  = 0;
 
+// ----------------------------------------------------------------------------
+// Coordinated hop pause for in-flight scan (#90)
+// ----------------------------------------------------------------------------
+// When a BLE cmd 60 arrives while we're already following a hopping rocket
+// (hop_active_ == true), running the scan directly would silence the link
+// for ~9 s and trip the rocket's hop fallback.  Instead, we ask the rocket
+// to park on lora_freq_mhz for a known window via cmd 16, then run the
+// scan + push cmd 15 inside that window, then both sides re-bootstrap hop.
+//
+// State flow:
+//   IDLE          → AWAITING_PAUSE  (cmd 16 queued; wait for retries done)
+//   AWAITING_PAUSE → SCANNING       (reconfigure to lora_freq_mhz, kick scan)
+//   SCANNING       → PUSHING_CHSET  (scan finalized, cmd 15 queued)
+//   PUSHING_CHSET  → RESUMING       (cmd 15 retries done)
+//   RESUMING       → IDLE           (rocket bootstrap RX, or timeout)
+enum class CoordScanState : uint8_t {
+    IDLE,
+    AWAITING_PAUSE,
+    SCANNING,
+    PUSHING_CHSET,
+    RESUMING,
+};
+
+static CoordScanState coord_scan_state_       = CoordScanState::IDLE;
+static uint32_t       coord_scan_phase_ms_    = 0;
+static uint32_t       coord_scan_resume_anchor_ms_ = 0;  // hop_last_rx_ms_ snapshot at RESUMING entry
+// Stored scan params so we can re-issue startNoiseScan() after the pause is acked.
+static float    coord_scan_start_mhz_ = 0.0f;
+static float    coord_scan_stop_mhz_  = 0.0f;
+static uint16_t coord_scan_step_khz_  = 0;
+static uint16_t coord_scan_dwell_ms_  = 0;
+
+// After cmd 16 retries finish, give the rocket a moment to actually swap
+// to lora_freq_mhz before we reconfigure the BS radio.
+static constexpr uint32_t COORD_SCAN_PAUSE_GRACE_MS  = 500;
+// If the rocket never resumes hopping after we push cmd 15, give up so
+// the normal silence/recovery machinery can take over.
+static constexpr uint32_t COORD_SCAN_RESUMING_MAX_MS = 5000;
+// Slack on top of the computed scan + cmd 15 retry budget so the rocket's
+// pause comfortably outlasts our work window.
+static constexpr uint32_t COORD_SCAN_PAUSE_SLACK_MS  = 2000;
+// "Recent enough" window for treating a non-hop_active_ rocket as still
+// in a hop state (#90).  A packet within this window showing PRELAUNCH
+// or INFLIGHT means the rocket is conceptually hopping (possibly
+// bootstrapping or visiting rendezvous) and a direct scan would still
+// drop the link — so route through the coordinated-pause path.  Sized
+// to match RECOVERY_SILENCE_MS (10 s): beyond that the recovery layer
+// has already taken over and we don't presume anything.
+static constexpr uint32_t COORD_HOP_RECENT_MS        = 10000;
+
 // Persist channel-set selection to NVS.  Skip-mask is keyed off the BW
 // it was generated for so a later cmd-10 BW change invalidates it
 // cleanly (loadChannelSetFromNvs detects mismatch and clears).
@@ -1697,6 +1747,154 @@ static void finalizeNoiseScan()
                             scan_peak_rssi_, (uint8_t)scan_peak_count_);
     scan_results_valid_ = true;
     analyzeAndPushFromCachedScan();
+}
+
+// Compute the cmd 16 pause duration (ms) for a coordinated scan.  Sized
+// to comfortably cover scan + cmd 15 retries + slack, and capped to the
+// rocket-side max so a too-large value doesn't silently get truncated
+// to a different value than we accounted for.
+static uint16_t computeCoordPauseMs(float start_mhz, float stop_mhz,
+                                     uint16_t step_khz, uint16_t dwell_ms)
+{
+    if (step_khz == 0 || stop_mhz <= start_mhz) return LORA_HOP_PAUSE_MAX_MS;
+    const uint32_t span_khz   = (uint32_t)((stop_mhz - start_mhz) * 1000.0f);
+    const uint32_t channels   = span_khz / step_khz + 1;
+    const uint32_t scan_ms    = (uint32_t)LORA_NOISE_SCAN_PASSES * channels
+                                * (uint32_t)dwell_ms;
+    const uint32_t cmd15_ms   = (uint32_t)config::UPLINK_RETRIES
+                                * (uint32_t)config::UPLINK_RETRY_INTERVAL_MS;
+    uint32_t total = scan_ms + cmd15_ms + COORD_SCAN_PAUSE_GRACE_MS
+                     + COORD_SCAN_PAUSE_SLACK_MS;
+    if (total > LORA_HOP_PAUSE_MAX_MS) total = LORA_HOP_PAUSE_MAX_MS;
+    return (uint16_t)total;
+}
+
+// Kick off a coordinated scan: queue cmd 16 to the rocket and stash the
+// scan params for use once retries finish.  Caller has already verified
+// hop_active_ and that no coordinated scan is in progress.
+static void startCoordinatedScan(float start_mhz, float stop_mhz,
+                                  uint16_t step_khz, uint16_t dwell_ms)
+{
+    coord_scan_start_mhz_ = start_mhz;
+    coord_scan_stop_mhz_  = stop_mhz;
+    coord_scan_step_khz_  = step_khz;
+    coord_scan_dwell_ms_  = dwell_ms;
+
+    const uint16_t pause_ms = computeCoordPauseMs(start_mhz, stop_mhz,
+                                                   step_khz, dwell_ms);
+    uint8_t payload[2];
+    memcpy(payload, &pause_ms, 2);
+    buildUplinkPacket(LORA_CMD_HOP_PAUSE, payload, 2,
+                      /*target_rid=*/0xFF, config::UPLINK_RETRIES);
+    coord_scan_state_    = CoordScanState::AWAITING_PAUSE;
+    coord_scan_phase_ms_ = millis();
+    ESP_LOGI(TAG, "[CHSET] Coordinated scan start: pausing rocket for %u ms "
+                  "(scan range %.1f..%.1f MHz, %u kHz, %u ms dwell)",
+             (unsigned)pause_ms, (double)start_mhz, (double)stop_mhz,
+             (unsigned)step_khz, (unsigned)dwell_ms);
+}
+
+// Drive the coordinated-scan state machine.  Called every loop iteration
+// before the scan-done detection so that AWAITING_PAUSE → SCANNING can
+// kick off a fresh scan in the same iteration where it transitions.
+static void serviceCoordinatedScan()
+{
+    if (coord_scan_state_ == CoordScanState::IDLE) return;
+
+    const uint32_t now = millis();
+    switch (coord_scan_state_)
+    {
+        case CoordScanState::IDLE: return;
+        case CoordScanState::AWAITING_PAUSE:
+        {
+            // Cmd 16 retries still going — push out the grace anchor so
+            // we wait COORD_SCAN_PAUSE_GRACE_MS after the *last* retry,
+            // not after we queued the command.
+            if (uplink_pending)
+            {
+                coord_scan_phase_ms_ = now;
+                return;
+            }
+            if ((now - coord_scan_phase_ms_) < COORD_SCAN_PAUSE_GRACE_MS) return;
+
+            // Cmd 16 has been pushed (8 retries / ~800 ms).  We don't
+            // get an explicit ack — the rocket pause is fire-and-forget.
+            // Reconfigure the BS radio to lora_freq_mhz so we (a) can
+            // verify the rocket is actually parked there, and (b) the
+            // scan starts from a known frequency.
+            if (!lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
+                                         lora_cr, lora_tx_power))
+            {
+                ESP_LOGE(TAG, "[CHSET] Coord scan: reconfigure to %.2f MHz failed — abandoning",
+                         (double)lora_freq_mhz);
+                coord_scan_state_ = CoordScanState::IDLE;
+                return;
+            }
+            (void)lora_comms.startReceive();
+            // Drop hop tracking flags so the post-scan packet from the
+            // rocket re-enters hop following cleanly (matching a fresh
+            // bootstrap, not a continuation).
+            hop_active_       = false;
+            hop_needs_retune_ = false;
+
+            if (!startNoiseScan(coord_scan_start_mhz_, coord_scan_stop_mhz_,
+                                 coord_scan_step_khz_, coord_scan_dwell_ms_))
+            {
+                ESP_LOGE(TAG, "[CHSET] Coord scan: startNoiseScan failed — abandoning");
+                coord_scan_state_ = CoordScanState::IDLE;
+                return;
+            }
+            coord_scan_state_    = CoordScanState::SCANNING;
+            coord_scan_phase_ms_ = now;
+            ESP_LOGI(TAG, "[CHSET] Coord scan: rocket should be parked, scan started");
+            break;
+        }
+        case CoordScanState::SCANNING:
+        {
+            // finalizeNoiseScan() runs from the existing scan-done path
+            // and (a) sets scan_results_valid_ = true, (b) queues cmd 15
+            // via applyAndPushChannelSet().  Either signal works as a
+            // transition trigger; combining them is most precise.
+            if (scan_results_valid_ && uplink_pending)
+            {
+                coord_scan_state_    = CoordScanState::PUSHING_CHSET;
+                coord_scan_phase_ms_ = now;
+            }
+            break;
+        }
+        case CoordScanState::PUSHING_CHSET:
+        {
+            if (uplink_pending) return;  // cmd 15 retries still going
+            // Cmd 15 has been delivered (or all retries exhausted).
+            // Rocket should resume hopping when its pause deadline hits.
+            // Snapshot hop_last_rx_ms_ so we can detect a fresh RX.
+            coord_scan_resume_anchor_ms_ = hop_last_rx_ms_;
+            coord_scan_state_            = CoordScanState::RESUMING;
+            coord_scan_phase_ms_         = now;
+            ESP_LOGI(TAG, "[CHSET] Coord scan: cmd 15 pushed, awaiting rocket hop resume");
+            break;
+        }
+        case CoordScanState::RESUMING:
+        {
+            // The rocket-side pause expires and a bootstrap packet hits
+            // us on lora_freq_mhz.  The existing RX path adopts the new
+            // hop_idx_ and sets hop_active_ + hop_last_rx_ms_.  Detect
+            // either: a fresh RX (anchor changed) or a timeout.
+            if (hop_last_rx_ms_ != coord_scan_resume_anchor_ms_)
+            {
+                ESP_LOGI(TAG, "[CHSET] Coord scan complete — hop resumed");
+                coord_scan_state_ = CoordScanState::IDLE;
+            }
+            else if ((now - coord_scan_phase_ms_) > COORD_SCAN_RESUMING_MAX_MS)
+            {
+                ESP_LOGW(TAG, "[CHSET] Coord scan: rocket did not resume hop within %u ms — "
+                              "letting normal recovery take over",
+                         (unsigned)COORD_SCAN_RESUMING_MAX_MS);
+                coord_scan_state_ = CoordScanState::IDLE;
+            }
+            break;
+        }
+    }
 }
 
 static void setup_bs()
@@ -2000,14 +2198,22 @@ static void loop_bs()
     lora_comms.service();
     lora_comms.pollDio1();  // Fallback if DIO1 interrupt doesn't fire
 
+    // Drive the coordinated-scan state machine first so AWAITING_PAUSE
+    // → SCANNING transitions can kick off a scan in the same iteration
+    // serviceUplink finishes the cmd 16 retries (#90).
+    serviceCoordinatedScan();
+
     // Hop-silence fallback: if we've been following a hopping rocket but
     // haven't heard from it in HOP_SILENCE_FALLBACK_MS, drop back to the
     // static channel so the standard silence / recovery machinery can
     // take over.  Without this, hop_active_ would pin the BS to a hop
     // channel forever after a lost rocket — recovery itself is
     // suppressed while hop_active_ for the opposite reason (don't
-    // recover during normal hop misses).
-    if (hop_active_ && hop_last_rx_ms_ != 0 &&
+    // recover during normal hop misses).  Suppressed during a
+    // coordinated scan (#90): the BS sweeps off the hop channel and the
+    // rocket is parked on lora_freq_mhz, so silence is expected.
+    if (hop_active_ && coord_scan_state_ == CoordScanState::IDLE &&
+        hop_last_rx_ms_ != 0 &&
         (millis() - hop_last_rx_ms_) > HOP_SILENCE_FALLBACK_MS)
     {
         ESP_LOGW(TAG, "[HOP] Silence > %u ms — falling back to static channel",
@@ -2505,8 +2711,19 @@ static void loop_bs()
     {
         // Frequency scan (base-station radio, pre-launch collision avoidance).
         // Payload: [start_mhz f32][stop_mhz f32][step_khz u16][dwell_ms u16]
-        // All fields are little-endian.  A scan blocks normal LoRa RX for
-        // the scan duration — explicitly user-initiated and short (~1-3 s).
+        // All fields are little-endian.
+        //
+        // Two paths (#90):
+        //   • Direct: rocket isn't presumed to be hopping (no recent RX, or
+        //     last seen in READY/INIT/LANDED) — scan immediately.
+        //   • Coordinated: rocket is presumed hopping → cmd 16 to park it
+        //     on lora_freq_mhz, scan, push cmd 15, then re-bootstrap hop.
+        //
+        // The coordinated trigger uses rocketLikelyHopping() so it also
+        // fires when the BS recently caught the rocket in a hop state but
+        // the packet's next_channel_idx was NO_HOP (bootstrap, visiting
+        // rendezvous, or paused).  In all those cases a direct scan would
+        // still drop the link, even though hop_active_ is currently false.
         const uint8_t* payload = ble_app.getCommandPayload();
         const size_t plen = ble_app.getCommandPayloadLength();
         if (plen >= 12)
@@ -2518,16 +2735,35 @@ static void loop_bs()
             memcpy(&step_khz,  payload + 8, 2);
             memcpy(&dwell_ms,  payload + 10, 2);
 
-            if (startNoiseScan(start_mhz, stop_mhz, step_khz, dwell_ms))
+            const bool need_coord = rocketLikelyHopping(
+                hop_active_, last_packet_ms, millis(),
+                last_rocket_state, COORD_HOP_RECENT_MS);
+
+            if (!need_coord)
             {
-                ESP_LOGI(TAG, "[BLE] Scan started: %.1f..%.1f MHz, %u kHz, %u ms (×%u passes)",
-                         (double)start_mhz, (double)stop_mhz,
-                         (unsigned)step_khz, (unsigned)dwell_ms,
-                         (unsigned)LORA_NOISE_SCAN_PASSES);
+                if (startNoiseScan(start_mhz, stop_mhz, step_khz, dwell_ms))
+                {
+                    ESP_LOGI(TAG, "[BLE] Scan started: %.1f..%.1f MHz, %u kHz, %u ms (×%u passes)",
+                             (double)start_mhz, (double)stop_mhz,
+                             (unsigned)step_khz, (unsigned)dwell_ms,
+                             (unsigned)LORA_NOISE_SCAN_PASSES);
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[BLE] Scan start rejected (busy or invalid range)");
+                }
+            }
+            else if (coord_scan_state_ != CoordScanState::IDLE)
+            {
+                ESP_LOGW(TAG, "[BLE] Scan rejected: coordinated scan already in progress");
+            }
+            else if (uplink_pending)
+            {
+                ESP_LOGW(TAG, "[BLE] Scan rejected: uplink busy — retry shortly");
             }
             else
             {
-                ESP_LOGW(TAG, "[BLE] Scan start rejected (busy or invalid range)");
+                startCoordinatedScan(start_mhz, stop_mhz, step_khz, dwell_ms);
             }
         }
     }
