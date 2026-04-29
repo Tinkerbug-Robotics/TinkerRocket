@@ -157,6 +157,7 @@ static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
 // boot-time NVS load) need them earlier in the file.
 static void loadChannelSetFromNvs();
 static void invalidateSkipMaskForBwChange();
+static void analyzeAndPushFromCachedScan();
 
 // If we're following a hopping rocket and packets dry up for this long,
 // give up and fall back to lora_freq_mhz so the existing silence /
@@ -1134,6 +1135,15 @@ static void serviceLoRaTransaction()
                     invalidateSkipMaskForBwChange();
                 }
 
+                // Re-push the channel-set if we have a recent scan
+                // (#40 / #41 phase 3).  The original post-scan cmd-15
+                // would have been displaced from the uplink queue by
+                // this very cmd-10 transaction; re-pushing here is the
+                // simplest way to guarantee delivery, and it also
+                // re-sizes the skip-mask if BW just changed.  Inert if
+                // no scan has happened this session.
+                analyzeAndPushFromCachedScan();
+
                 ESP_LOGI(TAG, "[TXN] COMMIT: heard rocket on NEW %.2f MHz, saved",
                          (double)lora_freq_mhz);
                 lora_txn_state = LoRaTxnState::IDLE;
@@ -1489,6 +1499,11 @@ static size_t   scan_peak_count_ = 0;
 static float    scan_peak_start_mhz_ = 0.0f;
 static float    scan_peak_step_khz_  = 0.0f;
 static uint8_t  scan_passes_remaining_ = 0;
+// Set true after a multi-pass scan completes; used by the cmd-10
+// commit path to re-push the channel-set selection (the original
+// post-scan push gets clobbered when the iOS app's auto-channel-select
+// queues cmd 10 immediately after seeing scan results).
+static bool     scan_results_valid_ = false;
 
 // Held across passes so subsequent calls re-use the same parameters.
 static float    scan_param_start_mhz_ = 0.0f;
@@ -1610,6 +1625,7 @@ static bool startNoiseScan(float start_mhz, float stop_mhz,
     scan_param_step_khz_   = step_khz;
     scan_param_dwell_ms_   = dwell_ms;
     scan_peak_count_       = 0;  // signals "first pass, copy not max"
+    scan_results_valid_    = false;  // becomes true on finalize
     for (size_t i = 0; i < TR_LoRa_Comms::SCAN_MAX_SAMPLES; i++)
         scan_peak_rssi_[i] = INT8_MIN;
 
@@ -1651,26 +1667,36 @@ static bool absorbScanPass()
     return (--scan_passes_remaining_) > 0;
 }
 
-// All passes done.  Ship results to BLE (preserving the existing
-// single-result protocol so the iOS app doesn't need to change),
-// run the channel-set analyzer, push the result to the rocket.
-static void finalizeNoiseScan()
+// Re-run the channel-set analyzer over the most recent scan grid using
+// `lora_bw_khz` (whatever it is right now), then push to the rocket.
+// Used by both finalizeNoiseScan() and the cmd-10 commit path — the
+// latter to re-push after the auto-select cmd-10 race clobbered the
+// initial cmd-15 in the uplink queue.
+static void analyzeAndPushFromCachedScan()
 {
-    ble_app.sendScanResults(scan_peak_start_mhz_, scan_peak_step_khz_,
-                            scan_peak_rssi_, (uint8_t)scan_peak_count_);
+    if (!scan_results_valid_ || scan_peak_count_ == 0) return;
 
-    // Build the parallel scan_freqs[] from start/step
     float scan_freqs[TR_LoRa_Comms::SCAN_MAX_SAMPLES];
     for (size_t i = 0; i < scan_peak_count_; i++)
     {
         scan_freqs[i] = scan_peak_start_mhz_
                         + (scan_peak_step_khz_ * (float)i) / 1000.0f;
     }
-
     LoRaChannelSetSelection sel{};
     loraSelectChannelSet(scan_freqs, scan_peak_rssi_, scan_peak_count_,
                           lora_bw_khz, config::LORA_RENDEZVOUS_MHZ, &sel);
     applyAndPushChannelSet(sel, lora_bw_khz);
+}
+
+// All passes done.  Ship results to BLE (preserving the existing
+// single-result protocol so the iOS app doesn't need to change), then
+// run the analyzer + push to the rocket.
+static void finalizeNoiseScan()
+{
+    ble_app.sendScanResults(scan_peak_start_mhz_, scan_peak_step_khz_,
+                            scan_peak_rssi_, (uint8_t)scan_peak_count_);
+    scan_results_valid_ = true;
+    analyzeAndPushFromCachedScan();
 }
 
 static void setup_bs()
