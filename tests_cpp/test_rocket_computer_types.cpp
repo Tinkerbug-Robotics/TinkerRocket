@@ -446,3 +446,42 @@ TEST(LoraCmdHopPause, WireFormatRoundtrip) {
         EXPECT_EQ(decoded, dur);
     }
 }
+
+TEST(RocketLikelyHopping, HopActiveAlwaysWins) {
+    // hop_active=true short-circuits — recency / state irrelevant.
+    EXPECT_TRUE(rocketLikelyHopping(/*hop_active=*/true,
+                                     /*last_packet_ms=*/0,
+                                     /*now_ms=*/100000,
+                                     /*last_rocket_state=*/READY,
+                                     /*recent_threshold_ms=*/10000));
+}
+
+TEST(RocketLikelyHopping, NeverRxFalse) {
+    // Fresh boot, never received a packet → not presumed hopping.
+    EXPECT_FALSE(rocketLikelyHopping(false, /*last_packet_ms=*/0,
+                                      100000, PRELAUNCH, 10000));
+}
+
+TEST(RocketLikelyHopping, RecentHopStateTrue) {
+    // The #90 case: hop_active false (e.g., last packet had NO_HOP), but
+    // we caught it 5 s ago in PRELAUNCH.  Treat as hopping for cmd 60.
+    EXPECT_TRUE (rocketLikelyHopping(false, /*last_packet_ms=*/95000,
+                                      100000, PRELAUNCH, 10000));
+    EXPECT_TRUE (rocketLikelyHopping(false,  95000, 100000, INFLIGHT, 10000));
+}
+
+TEST(RocketLikelyHopping, RecentNonHopStateFalse) {
+    // Recent RX but in READY/INIT/LANDED — direct scan path is correct.
+    EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, READY,         10000));
+    EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, INITIALIZATION,10000));
+    EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, LANDED,        10000));
+}
+
+TEST(RocketLikelyHopping, StaleRxFalseEvenInHopState) {
+    // Same recency window: ON the boundary should still pass; one ms
+    // past it should fail.  Keeps the threshold intent unambiguous.
+    EXPECT_TRUE (rocketLikelyHopping(false, /*last_packet_ms=*/90000,
+                                      100000, PRELAUNCH, 10000));   // exactly 10 s — inclusive
+    EXPECT_FALSE(rocketLikelyHopping(false, /*last_packet_ms=*/89999,
+                                      100000, PRELAUNCH, 10000));   // 10001 ms ago — too stale
+}

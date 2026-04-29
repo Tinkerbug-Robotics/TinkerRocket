@@ -1552,6 +1552,14 @@ static constexpr uint32_t COORD_SCAN_RESUMING_MAX_MS = 5000;
 // Slack on top of the computed scan + cmd 15 retry budget so the rocket's
 // pause comfortably outlasts our work window.
 static constexpr uint32_t COORD_SCAN_PAUSE_SLACK_MS  = 2000;
+// "Recent enough" window for treating a non-hop_active_ rocket as still
+// in a hop state (#90).  A packet within this window showing PRELAUNCH
+// or INFLIGHT means the rocket is conceptually hopping (possibly
+// bootstrapping or visiting rendezvous) and a direct scan would still
+// drop the link — so route through the coordinated-pause path.  Sized
+// to match RECOVERY_SILENCE_MS (10 s): beyond that the recovery layer
+// has already taken over and we don't presume anything.
+static constexpr uint32_t COORD_HOP_RECENT_MS        = 10000;
 
 // Persist channel-set selection to NVS.  Skip-mask is keyed off the BW
 // it was generated for so a later cmd-10 BW change invalidates it
@@ -2706,11 +2714,16 @@ static void loop_bs()
         // All fields are little-endian.
         //
         // Two paths (#90):
-        //   • Direct: rocket is in a non-hop state (READY/INIT/LANDED) so we
-        //     can scan immediately without dropping the link.
-        //   • Coordinated: rocket is hopping → tell it to park on
-        //     lora_freq_mhz via cmd 16, *then* scan + push cmd 15, *then*
-        //     let both sides re-bootstrap hop.
+        //   • Direct: rocket isn't presumed to be hopping (no recent RX, or
+        //     last seen in READY/INIT/LANDED) — scan immediately.
+        //   • Coordinated: rocket is presumed hopping → cmd 16 to park it
+        //     on lora_freq_mhz, scan, push cmd 15, then re-bootstrap hop.
+        //
+        // The coordinated trigger uses rocketLikelyHopping() so it also
+        // fires when the BS recently caught the rocket in a hop state but
+        // the packet's next_channel_idx was NO_HOP (bootstrap, visiting
+        // rendezvous, or paused).  In all those cases a direct scan would
+        // still drop the link, even though hop_active_ is currently false.
         const uint8_t* payload = ble_app.getCommandPayload();
         const size_t plen = ble_app.getCommandPayloadLength();
         if (plen >= 12)
@@ -2722,7 +2735,11 @@ static void loop_bs()
             memcpy(&step_khz,  payload + 8, 2);
             memcpy(&dwell_ms,  payload + 10, 2);
 
-            if (!hop_active_)
+            const bool need_coord = rocketLikelyHopping(
+                hop_active_, last_packet_ms, millis(),
+                last_rocket_state, COORD_HOP_RECENT_MS);
+
+            if (!need_coord)
             {
                 if (startNoiseScan(start_mhz, stop_mhz, step_khz, dwell_ms))
                 {

@@ -192,6 +192,35 @@ static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezv
 static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 
+// "Is the rocket presumed to be hopping right now, from the BS's
+// perspective?" — used to decide whether a BLE cmd 60 should take the
+// direct-scan or coordinated-pause path (#90).
+//
+// Returns true when:
+//   • we're actively following the hop sequence (hop_active = true), OR
+//   • we caught a recent packet (within recent_threshold_ms) showing the
+//     rocket in PRELAUNCH/INFLIGHT, even if its next_channel_idx was
+//     LORA_NEXT_CH_NO_HOP.  The latter case covers a rocket that is
+//     bootstrapping (hop_first_pkt_ true but the BS missed it), visiting
+//     rendezvous as a hop-silence fallback (#41 phase 2b), or already
+//     paused for an earlier coordinated scan.  In all of those, a direct
+//     scan would still drop the link — the rocket is conceptually
+//     hopping, just momentarily off the regular schedule.
+//
+// Pure helper so we can unit-test the predicate without spinning up the
+// BS module-statics that real code reads from.
+static inline bool rocketLikelyHopping(bool hop_active,
+                                        uint32_t last_packet_ms,
+                                        uint32_t now_ms,
+                                        uint8_t last_rocket_state,
+                                        uint32_t recent_threshold_ms)
+{
+    if (hop_active) return true;
+    if (last_packet_ms == 0) return false;
+    if ((now_ms - last_packet_ms) > recent_threshold_ms) return false;
+    return shouldHopInState(last_rocket_state);
+}
+
 // FCC Part 15.247 minimum channel count for FHSS classification.  We
 // operate as digital modulation (DTS) so this isn't strictly binding,
 // but keeping ≥ this many channels active also preserves the diversity
