@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <cstring>
 #include "RocketComputerTypes.h"
 
 // Verify packed struct sizes match the SIZE_OF_* constants.
@@ -409,4 +410,39 @@ TEST(ShouldBeaconInState, AllowsAllExceptInflight) {
     EXPECT_TRUE(shouldBeaconInState(PRELAUNCH));
     EXPECT_FALSE(shouldBeaconInState(INFLIGHT));
     EXPECT_TRUE(shouldBeaconInState(LANDED));
+}
+
+// ============================================================================
+// Issue #90: coordinated hop pause (cmd 16)
+// ============================================================================
+
+TEST(LoraCmdHopPause, IdAndCapAreStable) {
+    // Wire constants pinned by the BS-rocket protocol.  Bumping either
+    // requires a coordinated firmware update on both sides + iOS app.
+    EXPECT_EQ(LORA_CMD_HOP_PAUSE, 16u);
+    EXPECT_GT(LORA_HOP_PAUSE_MAX_MS, 0u);
+    EXPECT_LE(LORA_HOP_PAUSE_MAX_MS, 65535u);  // must fit u16 wire field
+    // Cmd-15 and cmd-16 must not collide.
+    EXPECT_NE(LORA_CMD_CHANNEL_SET, LORA_CMD_HOP_PAUSE);
+}
+
+TEST(LoraCmdHopPause, WireFormatRoundtrip) {
+    // BS-side encode (mirrors startCoordinatedScan in base_station/main.cpp):
+    //   payload[0..1] = duration_ms little-endian.
+    // Rocket-side decode (mirrors processUplinkCommand cmd 16 arm):
+    //   memcpy(&dur, payload, 2).
+    for (uint16_t dur : {(uint16_t)1, (uint16_t)100, (uint16_t)12000,
+                         (uint16_t)LORA_HOP_PAUSE_MAX_MS, (uint16_t)65535})
+    {
+        uint8_t payload[2];
+        std::memcpy(payload, &dur, 2);
+        // Independently verify little-endian byte order so a host with
+        // a hypothetical big-endian compiler would catch a regression.
+        EXPECT_EQ(payload[0], (uint8_t)(dur & 0xFF));
+        EXPECT_EQ(payload[1], (uint8_t)((dur >> 8) & 0xFF));
+
+        uint16_t decoded;
+        std::memcpy(&decoded, payload, 2);
+        EXPECT_EQ(decoded, dur);
+    }
 }

@@ -189,6 +189,8 @@ static inline float loraChannelMHz(float bw_khz, uint8_t idx)
 static constexpr size_t  LORA_SKIP_MASK_MAX_BYTES = 18;   // 18*8 = 144 bits ≥ 139 channels
 static constexpr uint8_t LORA_NOISE_THRESHOLD_DB  = 15;   // skip if peak > median + this
 static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezvous + mask
+static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
+static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 
 // FCC Part 15.247 minimum channel count for FHSS classification.  We
 // operate as digital modulation (DTS) so this isn't strictly binding,
