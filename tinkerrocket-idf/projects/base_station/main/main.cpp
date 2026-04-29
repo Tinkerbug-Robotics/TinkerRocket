@@ -77,7 +77,7 @@ static char    unit_name[24]  = "TinkerBaseStation"; // default until NVS loads
 static uint8_t network_id     = config::DEFAULT_NETWORK_ID;
 
 // LoRa uplink state (BaseStation → OutComputer)
-static uint8_t  uplink_buf[32];   // 6-byte header + up to ~26 bytes payload (PID config = 20)
+static uint8_t  uplink_buf[40];   // 6-byte header + up to ~33 bytes payload (cmd 15 channel-set push needs 27 at BW=125)
 static size_t   uplink_len = 0;
 static uint8_t  uplink_retries_left = 0;
 static uint32_t uplink_last_tx_ms = 0;
@@ -138,6 +138,26 @@ static bool     hop_active_       = false;
 static uint8_t  hop_idx_          = 0;
 static bool     hop_needs_retune_ = false;
 static uint32_t hop_last_rx_ms_   = 0;
+
+// ----------------------------------------------------------------------------
+// Channel-set state (#40 / #41 phase 3)
+// ----------------------------------------------------------------------------
+// Selected by `loraSelectChannelSet()` after the pre-launch scan finishes,
+// persisted to NVS, and pushed to the rocket via LORA_CMD_CHANNEL_SET.
+// `channel_set_bw_khz_` is the BW the mask was generated against — used
+// to detect when a cmd-10 BW change invalidates the mask (we revert to
+// "no skips" until the user re-runs the scan on the new BW).
+static float   rendezvous_mhz_     = config::LORA_RENDEZVOUS_MHZ;
+static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
+static uint8_t skip_mask_n_        = 0;        // 0 = no mask yet
+static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
+
+// Forward declarations — definitions live further down with the other
+// channel-set machinery, but a couple of call sites (cmd-10 commit,
+// boot-time NVS load) need them earlier in the file.
+static void loadChannelSetFromNvs();
+static void invalidateSkipMaskForBwChange();
+static void analyzeAndPushFromCachedScan();
 
 // If we're following a hopping rocket and packets dry up for this long,
 // give up and fall back to lora_freq_mhz so the existing silence /
@@ -889,7 +909,7 @@ static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payloa
                  uplink_buf[4], cmd);
     }
 
-    if (payload_len > 25) payload_len = 25;  // 32-byte buf − 6-byte header − 1 byte slack
+    if (payload_len > 33) payload_len = 33;  // 40-byte buf − 6-byte header − 1 byte slack
     // Uplink format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
     uplink_buf[0] = config::UPLINK_SYNC_BYTE;  // 0xCA
     uplink_buf[1] = network_id;
@@ -1093,6 +1113,7 @@ static void serviceLoRaTransaction()
                 // COMMIT: radio already on NEW; persist to NVS + update
                 // runtime vars so the rest of the firmware sees the new
                 // config in readbacks.
+                const float old_bw = lora_bw_khz;
                 lora_freq_mhz = txn_new_freq;
                 lora_bw_khz   = txn_new_bw;
                 lora_sf       = txn_new_sf;
@@ -1106,6 +1127,22 @@ static void serviceLoRaTransaction()
                 prefs.putUChar("cr",    lora_cr);
                 prefs.putChar("txpwr",  lora_tx_power);
                 prefs.end();
+
+                // BW change invalidates the skip-mask (it's sized for
+                // the old hop table).  Rendezvous freq survives.
+                if (old_bw != lora_bw_khz)
+                {
+                    invalidateSkipMaskForBwChange();
+                }
+
+                // Re-push the channel-set if we have a recent scan
+                // (#40 / #41 phase 3).  The original post-scan cmd-15
+                // would have been displaced from the uplink queue by
+                // this very cmd-10 transaction; re-pushing here is the
+                // simplest way to guarantee delivery, and it also
+                // re-sizes the skip-mask if BW just changed.  Inert if
+                // no scan has happened this session.
+                analyzeAndPushFromCachedScan();
 
                 ESP_LOGI(TAG, "[TXN] COMMIT: heard rocket on NEW %.2f MHz, saved",
                          (double)lora_freq_mhz);
@@ -1199,7 +1236,9 @@ static constexpr float    RECOVERY_PHASE_B_SPAN_MHZ = 2.0f;  // ±2 MHz around N
 // fallback, regardless of what the user set in NVS.
 static void recoveryHopToRendezvousMode()
 {
-    if (lora_comms.reconfigure(config::LORA_RENDEZVOUS_MHZ,
+    // rendezvous_mhz_ is scan-selected (#40 / #41 phase 3) and falls
+    // back to config::LORA_RENDEZVOUS_MHZ when no scan has been run.
+    if (lora_comms.reconfigure(rendezvous_mhz_,
                                 config::LORA_RENDEZVOUS_SF,
                                 config::LORA_RENDEZVOUS_BW_KHZ,
                                 config::LORA_RENDEZVOUS_CR,
@@ -1236,7 +1275,7 @@ static void recoveryEnterPhaseA()
     recovery_phase_start_ms     = millis();
     recovery_state              = RecoveryState::PHASE_A_RENDEZVOUS;
     ESP_LOGW(TAG, "[RECOVER] Silent — Phase A rendezvous mode (%.2f MHz SF%u BW%.0f) for %u ms",
-             (double)config::LORA_RENDEZVOUS_MHZ,
+             (double)rendezvous_mhz_,
              (unsigned)config::LORA_RENDEZVOUS_SF,
              (double)config::LORA_RENDEZVOUS_BW_KHZ,
              (unsigned)RECOVERY_PHASE_A_DWELL_MS);
@@ -1442,6 +1481,224 @@ static void serviceHeartbeat()
     last_heartbeat_tx_ms = now;
 }
 
+// ============================================================================
+// Channel-set: multi-pass scan + auto-analyze + push to rocket (#40/#41 phase 3)
+// ============================================================================
+// On BLE cmd 60 we run a 5-pass noise scan (max-RSSI accumulation per
+// channel) instead of a single sweep, so an intermittent jammer that
+// only fires every couple of seconds is more likely to be captured.
+// When all passes complete, we ship the accumulated grid to the iOS app
+// (preserving the existing single-result protocol), run the channel-set
+// analyzer locally, persist the result to NVS, and push it to the
+// rocket via LORA_CMD_CHANNEL_SET.
+
+static constexpr uint8_t LORA_NOISE_SCAN_PASSES = 5;
+
+static int8_t   scan_peak_rssi_[TR_LoRa_Comms::SCAN_MAX_SAMPLES] = {0};
+static size_t   scan_peak_count_ = 0;
+static float    scan_peak_start_mhz_ = 0.0f;
+static float    scan_peak_step_khz_  = 0.0f;
+static uint8_t  scan_passes_remaining_ = 0;
+// Set true after a multi-pass scan completes; used by the cmd-10
+// commit path to re-push the channel-set selection (the original
+// post-scan push gets clobbered when the iOS app's auto-channel-select
+// queues cmd 10 immediately after seeing scan results).
+static bool     scan_results_valid_ = false;
+
+// Held across passes so subsequent calls re-use the same parameters.
+static float    scan_param_start_mhz_ = 0.0f;
+static float    scan_param_stop_mhz_  = 0.0f;
+static uint16_t scan_param_step_khz_  = 0;
+static uint16_t scan_param_dwell_ms_  = 0;
+
+// Persist channel-set selection to NVS.  Skip-mask is keyed off the BW
+// it was generated for so a later cmd-10 BW change invalidates it
+// cleanly (loadChannelSetFromNvs detects mismatch and clears).
+static void saveChannelSetToNvs(const LoRaChannelSetSelection& sel,
+                                float bw_khz)
+{
+    Preferences p;
+    if (!p.begin("lora", false)) return;
+    p.putFloat("rdv_mhz", sel.rendezvous_mhz);
+    p.putUChar("chset_n", sel.n_channels);
+    p.putFloat("chset_bw", bw_khz);
+    const size_t bytes_used = (sel.n_channels + 7) / 8;
+    p.putBytes("chset_mask", sel.skip_mask, bytes_used);
+    p.end();
+}
+
+// Restore channel-set selection from NVS.  If the stored BW doesn't
+// match the active operating BW, the skip-mask is treated as stale and
+// the runtime state is reset to "no skips".  Rendezvous freq survives
+// a BW change (it isn't tied to the operating channel table).
+static void loadChannelSetFromNvs()
+{
+    Preferences p;
+    if (!p.begin("lora", true)) return;
+    rendezvous_mhz_ = p.getFloat("rdv_mhz", config::LORA_RENDEZVOUS_MHZ);
+    const uint8_t n_stored  = p.getUChar("chset_n", 0);
+    const float   bw_stored = p.getFloat("chset_bw", 0.0f);
+    if (n_stored > 0 && bw_stored > 0.0f && bw_stored == lora_bw_khz)
+    {
+        const size_t bytes_used = (n_stored + 7) / 8;
+        size_t got = p.getBytes("chset_mask", skip_mask_, bytes_used);
+        if (got == bytes_used)
+        {
+            skip_mask_n_        = n_stored;
+            channel_set_bw_khz_ = bw_stored;
+        }
+    }
+    else
+    {
+        skip_mask_n_        = 0;
+        channel_set_bw_khz_ = 0.0f;
+        for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
+    }
+    p.end();
+}
+
+// Clear stored skip-mask (rendezvous_mhz_ unchanged) — called on cmd-10
+// BW change so the rocket doesn't follow a stale skip-mask sized for
+// the previous BW.
+static void invalidateSkipMaskForBwChange()
+{
+    skip_mask_n_        = 0;
+    channel_set_bw_khz_ = 0.0f;
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
+    Preferences p;
+    if (p.begin("lora", false))
+    {
+        p.remove("chset_n");
+        p.remove("chset_bw");
+        p.remove("chset_mask");
+        p.end();
+    }
+    ESP_LOGI(TAG, "[CHSET] BW changed — skip-mask invalidated");
+}
+
+// Apply a freshly computed selection to runtime state and queue a push
+// to the rocket so the rocket's NVS + runtime mirrors ours.
+static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
+                                    float bw_khz)
+{
+    // Adopt locally
+    rendezvous_mhz_     = sel.rendezvous_mhz;
+    skip_mask_n_        = sel.n_channels;
+    channel_set_bw_khz_ = bw_khz;
+    const size_t bytes_used = (sel.n_channels + 7) / 8;
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
+    for (size_t i = 0; i < bytes_used; i++) skip_mask_[i] = sel.skip_mask[i];
+
+    saveChannelSetToNvs(sel, bw_khz);
+
+    // Wire format: [rdv:f4][bw:f4][n:u1][mask: ceil(n/8)]
+    uint8_t payload[40] = {0};
+    size_t  off = 0;
+    memcpy(payload + off, &sel.rendezvous_mhz, 4); off += 4;
+    memcpy(payload + off, &bw_khz,             4); off += 4;
+    payload[off++] = sel.n_channels;
+    for (size_t i = 0; i < bytes_used; i++) payload[off++] = sel.skip_mask[i];
+
+    // Count active for the log so user sees how many channels survived
+    uint8_t active = 0;
+    for (uint8_t i = 0; i < sel.n_channels; i++)
+        if (!loraSkipMaskTest(sel.skip_mask, i)) active++;
+    ESP_LOGI(TAG, "[CHSET] rendezvous=%.2f MHz, %u/%u channels active at BW=%.0f kHz "
+                  "(min FCC floor %u) — pushing to rocket",
+             (double)sel.rendezvous_mhz, (unsigned)active,
+             (unsigned)sel.n_channels, (double)bw_khz,
+             (unsigned)loraFhssMinChannels(bw_khz));
+
+    buildUplinkPacket(LORA_CMD_CHANNEL_SET, payload, off, /*target_rid=*/0xFF,
+                      /*retries=*/config::UPLINK_RETRIES);
+}
+
+// Called on a fresh BLE cmd-60 to start the multi-pass scan sequence.
+// Returns true if the first pass started successfully.
+static bool startNoiseScan(float start_mhz, float stop_mhz,
+                            uint16_t step_khz, uint16_t dwell_ms)
+{
+    if (scan_passes_remaining_ != 0) return false;  // already scanning
+
+    scan_param_start_mhz_  = start_mhz;
+    scan_param_stop_mhz_   = stop_mhz;
+    scan_param_step_khz_   = step_khz;
+    scan_param_dwell_ms_   = dwell_ms;
+    scan_peak_count_       = 0;  // signals "first pass, copy not max"
+    scan_results_valid_    = false;  // becomes true on finalize
+    for (size_t i = 0; i < TR_LoRa_Comms::SCAN_MAX_SAMPLES; i++)
+        scan_peak_rssi_[i] = INT8_MIN;
+
+    if (!lora_comms.startScan(start_mhz, stop_mhz, step_khz, dwell_ms))
+        return false;
+
+    scan_passes_remaining_ = LORA_NOISE_SCAN_PASSES;
+    ESP_LOGI(TAG, "[CHSET] Noise scan started: %u passes × %u ms dwell, %.1f..%.1f MHz",
+             (unsigned)LORA_NOISE_SCAN_PASSES, (unsigned)dwell_ms,
+             (double)start_mhz, (double)stop_mhz);
+    return true;
+}
+
+// Merge the just-completed pass's samples into scan_peak_rssi_[] (max).
+// On the first pass we also capture the geometry (start_mhz, step_khz)
+// for the analyzer.  Returns true if more passes are needed.
+static bool absorbScanPass()
+{
+    const auto* samples = lora_comms.getScanSamples();
+    const size_t n = lora_comms.getScanSampleCount();
+
+    if (scan_peak_count_ == 0)
+    {
+        scan_peak_start_mhz_ = lora_comms.getScanStartMHz();
+        scan_peak_step_khz_  = lora_comms.getScanStepKHz();
+        scan_peak_count_     = (n > TR_LoRa_Comms::SCAN_MAX_SAMPLES)
+                                ? TR_LoRa_Comms::SCAN_MAX_SAMPLES : n;
+        for (size_t i = 0; i < scan_peak_count_; i++)
+            scan_peak_rssi_[i] = samples[i].rssi_dbm;
+    }
+    else
+    {
+        const size_t cap = (n < scan_peak_count_) ? n : scan_peak_count_;
+        for (size_t i = 0; i < cap; i++)
+            if (samples[i].rssi_dbm > scan_peak_rssi_[i])
+                scan_peak_rssi_[i] = samples[i].rssi_dbm;
+    }
+    lora_comms.consumeScanDone();
+    return (--scan_passes_remaining_) > 0;
+}
+
+// Re-run the channel-set analyzer over the most recent scan grid using
+// `lora_bw_khz` (whatever it is right now), then push to the rocket.
+// Used by both finalizeNoiseScan() and the cmd-10 commit path — the
+// latter to re-push after the auto-select cmd-10 race clobbered the
+// initial cmd-15 in the uplink queue.
+static void analyzeAndPushFromCachedScan()
+{
+    if (!scan_results_valid_ || scan_peak_count_ == 0) return;
+
+    float scan_freqs[TR_LoRa_Comms::SCAN_MAX_SAMPLES];
+    for (size_t i = 0; i < scan_peak_count_; i++)
+    {
+        scan_freqs[i] = scan_peak_start_mhz_
+                        + (scan_peak_step_khz_ * (float)i) / 1000.0f;
+    }
+    LoRaChannelSetSelection sel{};
+    loraSelectChannelSet(scan_freqs, scan_peak_rssi_, scan_peak_count_,
+                          lora_bw_khz, config::LORA_RENDEZVOUS_MHZ, &sel);
+    applyAndPushChannelSet(sel, lora_bw_khz);
+}
+
+// All passes done.  Ship results to BLE (preserving the existing
+// single-result protocol so the iOS app doesn't need to change), then
+// run the analyzer + push to the rocket.
+static void finalizeNoiseScan()
+{
+    ble_app.sendScanResults(scan_peak_start_mhz_, scan_peak_step_khz_,
+                            scan_peak_rssi_, (uint8_t)scan_peak_count_);
+    scan_results_valid_ = true;
+    analyzeAndPushFromCachedScan();
+}
+
 static void setup_bs()
 {
     delay(500);
@@ -1611,6 +1868,25 @@ static void setup_bs()
     ESP_LOGI(TAG, "[CFG] LoRa NVS: %.1f MHz SF%u BW%.0f CR%u %d dBm",
              (double)lora_freq_mhz, (unsigned)lora_sf,
              (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+
+    // Channel-set: rendezvous freq + skip-mask from the most recent
+    // pre-launch scan (#40 / #41 phase 3).  Falls back to defaults if
+    // never scanned, or if the stored mask was generated for a
+    // different BW.
+    loadChannelSetFromNvs();
+    if (skip_mask_n_ > 0)
+    {
+        uint8_t active = 0;
+        for (uint8_t i = 0; i < skip_mask_n_; i++)
+            if (!loraSkipMaskTest(skip_mask_, i)) active++;
+        ESP_LOGI(TAG, "[CHSET] NVS: rendezvous=%.2f MHz, %u/%u channels active",
+                 (double)rendezvous_mhz_, (unsigned)active, (unsigned)skip_mask_n_);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "[CHSET] NVS: rendezvous=%.2f MHz (default), no skip-mask",
+                 (double)rendezvous_mhz_);
+    }
 
     // Load cached servo config from NVS
     prefs.begin("servo", true);
@@ -2242,11 +2518,12 @@ static void loop_bs()
             memcpy(&step_khz,  payload + 8, 2);
             memcpy(&dwell_ms,  payload + 10, 2);
 
-            if (lora_comms.startScan(start_mhz, stop_mhz, step_khz, dwell_ms))
+            if (startNoiseScan(start_mhz, stop_mhz, step_khz, dwell_ms))
             {
-                ESP_LOGI(TAG, "[BLE] Scan started: %.1f..%.1f MHz, %u kHz, %u ms",
+                ESP_LOGI(TAG, "[BLE] Scan started: %.1f..%.1f MHz, %u kHz, %u ms (×%u passes)",
                          (double)start_mhz, (double)stop_mhz,
-                         (unsigned)step_khz, (unsigned)dwell_ms);
+                         (unsigned)step_khz, (unsigned)dwell_ms,
+                         (unsigned)LORA_NOISE_SCAN_PASSES);
             }
             else
             {
@@ -2256,20 +2533,37 @@ static void loop_bs()
     }
 
     // Service scan state machine (no-op when idle).  Must come before
-    // serviceUplink so a TX retry doesn't fire while we're mid-scan — the
-    // scan temporarily owns the radio's frequency.
+    // serviceUplink so a TX retry doesn't fire while we're mid-scan —
+    // the scan temporarily owns the radio's frequency.
     lora_comms.serviceScan();
     if (lora_comms.isScanDone())
     {
-        const auto* samples = lora_comms.getScanSamples();
-        const size_t n = lora_comms.getScanSampleCount();
-        int8_t rssi[TR_LoRa_Comms::SCAN_MAX_SAMPLES];
-        const size_t n_send = (n > TR_LoRa_Comms::SCAN_MAX_SAMPLES) ? TR_LoRa_Comms::SCAN_MAX_SAMPLES : n;
-        for (size_t i = 0; i < n_send; ++i) rssi[i] = samples[i].rssi_dbm;
-        ble_app.sendScanResults(lora_comms.getScanStartMHz(),
-                                lora_comms.getScanStepKHz(),
-                                rssi, (uint8_t)n_send);
-        lora_comms.consumeScanDone();
+        if (scan_passes_remaining_ > 0)
+        {
+            // Multi-pass mode (#40 / #41 phase 3): merge this pass's
+            // samples into the running max-RSSI accumulator, then
+            // either kick off the next pass or finalize.
+            const bool more = absorbScanPass();
+            if (more)
+            {
+                (void)lora_comms.startScan(scan_param_start_mhz_,
+                                           scan_param_stop_mhz_,
+                                           scan_param_step_khz_,
+                                           scan_param_dwell_ms_);
+            }
+            else
+            {
+                finalizeNoiseScan();
+            }
+        }
+        else
+        {
+            // Defensive: a scan finished but we have no pass count
+            // (shouldn't happen — startNoiseScan is the only path that
+            // starts a scan).  Drain to keep the radio sane.
+            (void)lora_comms.getScanSampleCount();
+            lora_comms.consumeScanDone();
+        }
     }
 
     // Service LoRa uplink retries (TX commands, then resume RX)

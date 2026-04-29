@@ -165,6 +165,181 @@ static inline float loraChannelMHz(float bw_khz, uint8_t idx)
     return min_f + spacing * (float)idx;
 }
 
+// ============================================================================
+// Channel-set selection from pre-launch scan (#40 / #41 phase 3)
+// ============================================================================
+// After the pre-launch frequency scan (#6), the BS analyzes the result to
+// pick (a) a rendezvous channel — the quietest frequency in the scanned
+// range — and (b) a per-preset skip-mask of channels too noisy to use for
+// hopping.  Both are then pushed to the rocket via LORA_CMD_CHANNEL_SET
+// so the per-packet hop sequence skips noisy channels and the
+// slow-rendezvous fallback uses the quietest meeting point.
+//
+// Skip-mask packing: bit i of byte (i / 8) represents channel i, LSB
+// first.  A 1 means "skip this channel."  The mask is sized for the
+// largest hop table we generate (139 channels at Max Range / BW=125,
+// rounded up to 18 bytes = 144 bits).
+//
+// Threshold rule: a channel is marked as skip if its peak RSSI exceeds
+// median(all channel peaks) + LORA_NOISE_THRESHOLD_DB.  An FCC floor
+// (loraFhssMinChannels) is applied last — if the relative rule would
+// take the active count below the floor, we instead keep the K quietest
+// channels and skip the rest, regardless of absolute level.
+
+static constexpr size_t  LORA_SKIP_MASK_MAX_BYTES = 18;   // 18*8 = 144 bits ≥ 139 channels
+static constexpr uint8_t LORA_NOISE_THRESHOLD_DB  = 15;   // skip if peak > median + this
+static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezvous + mask
+
+// FCC Part 15.247 minimum channel count for FHSS classification.  We
+// operate as digital modulation (DTS) so this isn't strictly binding,
+// but keeping ≥ this many channels active also preserves the diversity
+// that motivates hopping in the first place.
+static inline uint8_t loraFhssMinChannels(float bw_khz)
+{
+    return (bw_khz <= 250.0f) ? 50 : 25;
+}
+
+// Skip-mask bit accessors (LSB-first within each byte).
+static inline bool loraSkipMaskTest(const uint8_t* mask, uint8_t idx)
+{
+    return (mask[idx >> 3] >> (idx & 7)) & 1u;
+}
+
+static inline void loraSkipMaskSet(uint8_t* mask, uint8_t idx)
+{
+    mask[idx >> 3] |= (uint8_t)(1u << (idx & 7));
+}
+
+// Given the current channel index and a skip-mask, returns the next
+// active (non-skipped) channel index, wrapping at n_channels.  Used by
+// both sides when computing next_channel_idx for the hop header.  If
+// every channel were masked (defensive — the FCC floor prevents this),
+// returns (current + 1) % n_channels so we still make progress.
+static inline uint8_t loraNextActiveChannelIdx(
+    uint8_t current_idx, const uint8_t* mask, uint8_t n_channels)
+{
+    if (n_channels == 0) return 0;
+    for (uint8_t step = 1; step <= n_channels; step++)
+    {
+        const uint8_t cand = (uint8_t)((current_idx + step) % n_channels);
+        if (!loraSkipMaskTest(mask, cand)) return cand;
+    }
+    return (uint8_t)((current_idx + 1) % n_channels);
+}
+
+typedef struct
+{
+    float   rendezvous_mhz;                     // best-quietest scan freq, or fallback
+    uint8_t n_channels;                         // hop table size for the given BW
+    uint8_t skip_mask[LORA_SKIP_MASK_MAX_BYTES]; // 1 = skip, LSB-first
+} LoRaChannelSetSelection;
+
+// Find the scan grid point with frequency closest to center_mhz; return
+// its RSSI.  Returns INT8_MIN if scan_count is zero.
+static inline int8_t loraScanRssiAtMHz(
+    const float* scan_freqs, const int8_t* scan_rssi,
+    size_t scan_count, float center_mhz)
+{
+    if (scan_count == 0) return INT8_MIN;
+    size_t best = 0;
+    float best_dist = scan_freqs[0] - center_mhz;
+    if (best_dist < 0) best_dist = -best_dist;
+    for (size_t i = 1; i < scan_count; i++)
+    {
+        float d = scan_freqs[i] - center_mhz;
+        if (d < 0) d = -d;
+        if (d < best_dist) { best = i; best_dist = d; }
+    }
+    return scan_rssi[best];
+}
+
+// Insertion-sort + median.  In-place.  n ≤ 130 in practice, so O(n²)
+// is fine (~17k ops, microseconds on ESP32).
+static inline int8_t loraI8MedianInPlace(int8_t* arr, size_t n)
+{
+    if (n == 0) return INT8_MIN;
+    for (size_t i = 1; i < n; i++)
+    {
+        const int8_t key = arr[i];
+        size_t j = i;
+        while (j > 0 && arr[j - 1] > key) { arr[j] = arr[j - 1]; j--; }
+        arr[j] = key;
+    }
+    return arr[n / 2];
+}
+
+// Pure orchestrator.  Computes rendezvous freq + skip-mask for the
+// current operating BW from a (freq, rssi) scan grid.  See the comment
+// block above for the threshold rule and FCC-floor handling.
+//
+// fallback_rendezvous_mhz is used when scan_count == 0 (e.g., scan
+// never run yet, or skipped).  In that case skip_mask is left all-zero
+// (no skips) and n_channels reflects the BW table.
+static inline void loraSelectChannelSet(
+    const float* scan_freqs, const int8_t* scan_rssi, size_t scan_count,
+    float bw_khz, float fallback_rendezvous_mhz,
+    LoRaChannelSetSelection* out)
+{
+    out->n_channels = loraChannelCount(bw_khz);
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) out->skip_mask[i] = 0;
+
+    if (scan_count == 0 || out->n_channels == 0)
+    {
+        out->rendezvous_mhz = fallback_rendezvous_mhz;
+        return;
+    }
+
+    // (1) Rendezvous = lowest-RSSI scan point.
+    {
+        size_t best = 0;
+        for (size_t i = 1; i < scan_count; i++)
+        {
+            if (scan_rssi[i] < scan_rssi[best]) best = i;
+        }
+        out->rendezvous_mhz = scan_freqs[best];
+    }
+
+    // (2) Per-channel peak RSSI from the nearest scan grid point.
+    int8_t peak[LORA_SKIP_MASK_MAX_BYTES * 8];
+    for (uint8_t i = 0; i < out->n_channels; i++)
+    {
+        const float c = loraChannelMHz(bw_khz, i);
+        peak[i] = loraScanRssiAtMHz(scan_freqs, scan_rssi, scan_count, c);
+    }
+
+    // (3) Median + threshold.
+    int8_t sorted[LORA_SKIP_MASK_MAX_BYTES * 8];
+    for (uint8_t i = 0; i < out->n_channels; i++) sorted[i] = peak[i];
+    const int8_t median    = loraI8MedianInPlace(sorted, out->n_channels);
+    const int    threshold = (int)median + (int)LORA_NOISE_THRESHOLD_DB;
+
+    // (4) Initial mask: channels above threshold.
+    uint8_t skip_count = 0;
+    for (uint8_t i = 0; i < out->n_channels; i++)
+    {
+        if ((int)peak[i] > threshold)
+        {
+            loraSkipMaskSet(out->skip_mask, i);
+            skip_count++;
+        }
+    }
+
+    // (5) FCC floor: keep at least fhss_min channels active.  If the
+    // relative rule wants more than that skipped, fall back to "keep
+    // the quietest fhss_min" by re-deriving from the sorted peaks.
+    const uint8_t fhss_min = loraFhssMinChannels(bw_khz);
+    const uint8_t active   = (uint8_t)(out->n_channels - skip_count);
+    if (active < fhss_min && fhss_min <= out->n_channels)
+    {
+        const int8_t cutoff = sorted[fhss_min - 1];
+        for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) out->skip_mask[i] = 0;
+        for (uint8_t i = 0; i < out->n_channels; i++)
+        {
+            if (peak[i] > cutoff) loraSkipMaskSet(out->skip_mask, i);
+        }
+    }
+}
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
