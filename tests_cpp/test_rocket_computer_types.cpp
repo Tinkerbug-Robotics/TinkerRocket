@@ -485,3 +485,45 @@ TEST(RocketLikelyHopping, StaleRxFalseEvenInHopState) {
     EXPECT_FALSE(rocketLikelyHopping(false, /*last_packet_ms=*/89999,
                                       100000, PRELAUNCH, 10000));   // 10001 ms ago — too stale
 }
+
+// ============================================================================
+// LoRa RX SNR floor (#90 follow-up)
+// ============================================================================
+
+TEST(LoraMinValidSnrDb, MatchesPerSfTheoreticalFloor) {
+    // Per-SF demod-floor − 2 dB margin.  Pinned so a typo in the formula
+    // is caught immediately.
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(6),   -7.0f);
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(7),   -9.5f);
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(8),  -12.0f);
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(9),  -14.5f);
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(10), -17.0f);
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(11), -19.5f);
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(12), -22.0f);
+}
+
+TEST(LoraMinValidSnrDb, ClampsOutOfRange) {
+    // Defensive: a stale SF reading (e.g., uninitialised radio) shouldn't
+    // produce a NaN threshold or wrap into a positive number.
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(0),   loraMinValidSnrDb(6));
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(5),   loraMinValidSnrDb(6));
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(13),  loraMinValidSnrDb(12));
+    EXPECT_FLOAT_EQ(loraMinValidSnrDb(255), loraMinValidSnrDb(12));
+}
+
+TEST(LoraMinValidSnrDb, RejectsFieldLogFalsePositive) {
+    // The motivating case: 2026-04-29 field log saw a CRC-passing
+    // decode at SNR=-12.8 dB on SF8 that was clearly garbage (zeroed
+    // payload, RSSI=-110 dBm).  Threshold for SF8 must reject it.
+    constexpr float field_log_snr = -12.8f;
+    EXPECT_LT(field_log_snr, loraMinValidSnrDb(8));
+}
+
+TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
+    // Conversely, a genuine packet at the SF8 sensitivity floor (-10 dB)
+    // must pass, plus a small margin for noise on the SNR estimate.
+    EXPECT_GE(-10.0f, loraMinValidSnrDb(8));   // sensitivity floor passes
+    EXPECT_GE(-11.0f, loraMinValidSnrDb(8));   // 1 dB below sensitivity still passes
+    // SF12 at sensitivity (-20 dB) must also pass.
+    EXPECT_GE(-20.0f, loraMinValidSnrDb(12));
+}

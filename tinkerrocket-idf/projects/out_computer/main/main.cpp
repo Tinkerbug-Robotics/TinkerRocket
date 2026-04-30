@@ -522,6 +522,11 @@ static uint32_t lora_tx_fail = 0;
 static uint32_t last_lora_tx_ms = 0;
 // lora_in_rx_mode forward-declared up with the hop state.
 static uint32_t lora_uplink_rx_count = 0;
+// CRC-passing decodes whose SNR was below loraMinValidSnrDb(current_sf)
+// — almost certainly noise-floor false positives.  Counted but otherwise
+// dropped so they can't act on a fake uplink command (cmd 10 reconfigure
+// on garbage payload would be especially bad).  #90 follow-up.
+static uint32_t lora_low_snr_drops = 0;
 
 // Slow-rendezvous trackers (issue #71).  last_uplink_rx_ms bumps on every
 // successfully-parsed uplink packet; ready_entry_ms latches on each
@@ -2328,6 +2333,24 @@ static void serviceLoRaUplink()
 
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
     {
+        // SNR floor (#90 follow-up).  Drop noise-floor false positives
+        // before they can fire processUplinkCommand — a fake cmd 10 on
+        // garbage payload could put the radio on a bad channel that
+        // breaks the link entirely.  Threshold tracks the current SF
+        // (rendezvous + operating use different presets).
+        TR_LoRa_Comms::Stats ls = {};
+        lora_comms.getStats(ls);
+        const float min_snr = loraMinValidSnrDb(lora_comms.currentSpreadingFactor());
+        if (ls.last_snr < min_snr)
+        {
+            lora_low_snr_drops++;
+            ESP_LOGW("LORA", "RX drop: SNR %.1f dB < %.1f dB floor (SF%u) "
+                              "— likely noise-floor false positive",
+                     (double)ls.last_snr, (double)min_snr,
+                     (unsigned)lora_comms.currentSpreadingFactor());
+            return;  // skip uplink processing for this iteration
+        }
+
         // Uplink format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
         if (rx_len >= 6 && rx_buf[0] == config::UPLINK_SYNC_BYTE)
         {
@@ -2968,11 +2991,12 @@ static void printStats()
         {
             TR_LoRa_Comms::Stats ls = {};
             lora_comms.getStats(ls);
-            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu isr=%lu uplink_rx=%lu rxmode=%c",
+            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu rxmode=%c",
                           (unsigned long)ls.tx_ok,
                           (unsigned long)ls.tx_fail,
                           (unsigned long)ls.rx_count,
                           (unsigned long)ls.rx_crc_fail,
+                          (unsigned long)lora_low_snr_drops,
                           (unsigned long)ls.isr_count,
                           (unsigned long)lora_uplink_rx_count,
                           ls.rx_mode ? 'Y' : 'N');

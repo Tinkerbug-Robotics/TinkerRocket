@@ -48,6 +48,12 @@ static int8_t  lora_tx_power   = config::LORA_TX_POWER_DBM;
 static uint32_t last_stats_ms = 0;
 static uint32_t last_rx_count = 0;
 static uint32_t last_packet_ms = 0;
+// CRC-passing decodes whose SNR was below loraMinValidSnrDb(current_sf)
+// — almost certainly noise-floor false positives.  Counted but otherwise
+// dropped so they don't update last_packet_ms / hop / recovery state.
+// (#90 follow-up; the field-confirmed t=79 -12.8 dB SF8 catch is the
+// motivating example.)
+static uint32_t lora_low_snr_drops = 0;
 
 // Base station battery (MAX17205G fuel gauge via I2C)
 static float bs_voltage = NAN;
@@ -796,10 +802,11 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | ISR: %lu | rx_mode: %d | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
+             (unsigned long)lora_low_snr_drops,
              (unsigned long)ls.isr_count,
              (int)ls.rx_mode,
              (double)ls.last_rssi,
@@ -2241,7 +2248,35 @@ static void loop_bs()
     uint8_t rx_buf[256];
     size_t rx_len = 0;
 
+    bool rx_packet_accepted = false;
     if (lora_comms.readPacket(rx_buf, sizeof(rx_buf), rx_len))
+    {
+        // SNR floor (#90 follow-up).  Defends against noise-floor
+        // false-positive decodes that confuse recovery + hop tracking.
+        // The threshold tracks the radio's currently-configured SF
+        // because Phase A rendezvous can run at a different SF than
+        // operating mode.
+        TR_LoRa_Comms::Stats ls_pre = {};
+        lora_comms.getStats(ls_pre);
+        const float min_snr = loraMinValidSnrDb(lora_comms.currentSpreadingFactor());
+        if (ls_pre.last_snr < min_snr)
+        {
+            lora_low_snr_drops++;
+            ESP_LOGW(TAG, "[RX] Drop: SNR %.1f dB < %.1f dB floor "
+                          "(SF%u) — likely noise-floor false positive",
+                     (double)ls_pre.last_snr, (double)min_snr,
+                     (unsigned)lora_comms.currentSpreadingFactor());
+            // Fall through; the `if (rx_packet_accepted)` guard below
+            // skips state updates while letting the rest of loop_bs
+            // (serviceUplink etc.) keep running on schedule.
+        }
+        else
+        {
+            rx_packet_accepted = true;
+        }
+    }
+
+    if (rx_packet_accepted)
     {
         last_packet_ms = millis();
 

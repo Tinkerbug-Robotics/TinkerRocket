@@ -82,6 +82,12 @@ public:
     // hop state machine to detect whether a retune is actually required.
     float currentFrequencyMHz() const { return cfg_freq_mhz_; }
 
+    // Reports the radio's currently-configured spreading factor.  The
+    // application uses this to compute an SF-aware SNR floor for RX
+    // (#90 follow-up): rendezvous mode and operating mode can run at
+    // different SFs, so the threshold needs to follow the radio.
+    uint8_t currentSpreadingFactor() const { return cfg_sf_; }
+
     // ---- Spectrum scan (pre-launch collision avoidance) ------------------
     // Non-blocking channel-hopping RSSI scan. Step through a frequency range,
     // dwell in RX mode for `dwell_ms` per channel, then read instantaneous

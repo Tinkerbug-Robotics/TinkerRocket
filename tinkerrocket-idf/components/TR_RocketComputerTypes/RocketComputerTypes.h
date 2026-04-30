@@ -192,6 +192,33 @@ static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezv
 static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 
+// Minimum SNR (dB) for an RX packet to be considered trustworthy at the
+// given spreading factor.  Bench-confirmed in #90 follow-up: a CRC-
+// passing decode at -12.8 dB SNR on SF8 (sensitivity -10 dB) was a
+// noise-floor false positive that confused recovery + hop tracking for
+// 50+ s.  Any decode below this threshold is treated as garbage and
+// dropped before it touches application state.
+//
+// LoRa modulation theory gives demod sensitivity per SF (SNR floor at
+// PER ~10%):
+//   SF6:  -5    SF7:  -7.5   SF8:  -10    SF9:  -12.5
+//   SF10: -15   SF11: -17.5  SF12: -20    (in dB)
+//
+// We keep a 2 dB margin BELOW that floor so the cutoff doesn't reject
+// borderline-but-real packets that the radio happens to demod a touch
+// below the theoretical limit.  Floor − 2 dB lands at:
+//   SF6:  -7    SF7:  -9.5   SF8:  -12    SF9:  -14.5
+//   SF10: -17   SF11: -19.5  SF12: -22
+// — enough to drop the field-log -12.8 dB SF8 false positive while
+// preserving every genuine decode within the demod's working range.
+static inline float loraMinValidSnrDb(uint8_t sf)
+{
+    if (sf < 6)  sf = 6;
+    if (sf > 12) sf = 12;
+    const float sensitivity = -2.5f * (float)(sf - 6) - 5.0f;
+    return sensitivity - 2.0f;
+}
+
 // "Is the rocket presumed to be hopping right now, from the BS's
 // perspective?" — used to decide whether a BLE cmd 60 should take the
 // direct-scan or coordinated-pause path (#90).
