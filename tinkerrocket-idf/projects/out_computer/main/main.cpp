@@ -3629,10 +3629,32 @@ static void setup_oc()
     ESP_LOGI("OC", "OutComputer ready (PWR_PIN OFF, waiting for power-on command).");
 }
 
+// ============================================================================
+// loop_oc stall instrumentation (#90 follow-up — periodic 745 ms Core-1 stall)
+// ============================================================================
+// Bench analysis showed all six sensor streams freezing for ~745 ms every
+// ~15 s with the Core-1 sensor pipeline resuming within 5 ms across streams
+// — a single Core-1 blocker preempting the I2S parser long enough to
+// overflow the DMA ring.  These macros log any blocking call inside loop_oc
+// (or the LoRa internals) that exceeds LOOP_STALL_THRESHOLD_US so the next
+// bench run names the offending op directly.  Modeled on the existing
+// LFS_TIMING / STALL_THRESHOLD_US instrumentation in TR_LogToFlash.cpp.
+static constexpr int64_t LOOP_STALL_THRESHOLD_US = 100'000;  // 100 ms
+
+#define LOOP_STALL_INSTR(name, expr) do {                                       \
+    const int64_t _stall_t0_ = esp_timer_get_time();                            \
+    expr;                                                                       \
+    const int64_t _stall_dt_ = esp_timer_get_time() - _stall_t0_;               \
+    if (_stall_dt_ > LOOP_STALL_THRESHOLD_US) {                                 \
+        ESP_LOGW("LOOP_STALL", "%s took %lld us", (name), (long long)_stall_dt_); \
+    }                                                                           \
+} while (0)
+
 static void loop_oc()
 {
     // Serial debug console removed (was Arduino Serial.available/read).
     // Use ESP-IDF console component or BLE commands for debug interaction.
+    const int64_t _loop_oc_t0 = esp_timer_get_time();
 
     // --- Active mode: FlightComputer + sensors powered on ---
     if (pwr_pin_on)
@@ -3648,7 +3670,7 @@ static void loop_oc()
         // Skip during blocking flash ops (file list/delete/download) to avoid
         // stalling the I2C slave response and causing FC timeout storms.
         if (i2c_slave_initialized && !flash_op_active)
-            serviceI2CIngress();
+            LOOP_STALL_INSTR("serviceI2CIngress", serviceI2CIngress());
 
         // Launch-triggered logging: start when NSF_LAUNCH appears in NonSensorData
         {
@@ -3669,7 +3691,7 @@ static void loop_oc()
             }
             prev_ns_launch = ns_launch;
         }
-        logger.service();
+        LOOP_STALL_INSTR("logger.service", logger.service());
 
         // Read power data at ~100 Hz (always, so BLE telemetry has fresh data
         // even before launch).  Only log to flash when logging is active.
@@ -3678,7 +3700,7 @@ static void loop_oc()
             uint32_t now_ms = millis();
             if ((now_ms - last_pwr_log_ms) >= 10) {
                 last_pwr_log_ms = now_ms;
-                readINA230Power();
+                LOOP_STALL_INSTR("readINA230Power", readINA230Power());
                 if (latest_power_valid && logger.isLoggingActive()) {
                     uint8_t pwr_frame[MAX_FRAME];
                     size_t  pwr_frame_len = 0;
@@ -3687,29 +3709,30 @@ static void loop_oc()
                                                        sizeof(POWERData),
                                                        pwr_frame, sizeof(pwr_frame),
                                                        pwr_frame_len)) {
-                        logger.enqueueFrame(pwr_frame, pwr_frame_len);
+                        LOOP_STALL_INSTR("logger.enqueueFrame(pwr)",
+                                         logger.enqueueFrame(pwr_frame, pwr_frame_len));
                     }
                 }
             }
         }
 
-        serviceLoRa();
+        LOOP_STALL_INSTR("serviceLoRa", serviceLoRa());
 
         // Check for LoRa uplink commands between TX cycles
-        serviceLoRaUplink();
+        LOOP_STALL_INSTR("serviceLoRaUplink", serviceLoRaUplink());
 
         // Slow-rendezvous cycle: brief visits to LORA_RENDEZVOUS_MHZ when
         // the rocket has been silent in READY for a long time, so the base
         // station's Phase-A recovery has a meeting point (issue #71).
-        serviceRocketRendezvous();
+        LOOP_STALL_INSTR("serviceRocketRendezvous", serviceRocketRendezvous());
 
         // Hop-silence rendezvous: same idea but gated for the hopping
         // case (#40 / #41 phase 2b).  Active only while hop_active_ and
         // suppressed when slow_rendezvous owns the radio.
-        serviceHopFallback();
+        LOOP_STALL_INSTR("serviceHopFallback", serviceHopFallback());
 
         // Send name beacon so base station can identify us
-        sendLoRaBeacon();
+        LOOP_STALL_INSTR("sendLoRaBeacon", sendLoRaBeacon());
     }
     else
     {
@@ -4568,7 +4591,17 @@ static void loop_oc()
         }
     }
 
-    printStats();
+    LOOP_STALL_INSTR("printStats", printStats());
+
+    // Catch-all: any iteration whose total wall time exceeds the threshold
+    // gets logged even if no individual wrapped callsite tripped.  This
+    // surfaces blocking work outside the named LOOP_STALL_INSTR sites.
+    const int64_t _loop_oc_dt = esp_timer_get_time() - _loop_oc_t0;
+    if (_loop_oc_dt > LOOP_STALL_THRESHOLD_US) {
+        ESP_LOGW("LOOP_STALL", "loop_oc iteration took %lld us (catch-all)",
+                 (long long)_loop_oc_dt);
+    }
+
     vTaskDelay(1);  // yield to FreeRTOS scheduler
 }
 

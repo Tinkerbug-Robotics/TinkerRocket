@@ -1,8 +1,28 @@
 #include "TR_LoRa_Comms.h"
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <cmath>
 
 static const char* TAG = "LORA";
+
+// SPI-bus / RadioLib stall instrumentation (#90 follow-up).  Bench logs
+// showed every-15 s, ~745 ms blocking on Core 1 with all six rocket sensor
+// streams freezing together — the resume sync points to a single Core-1
+// blocker.  reconfigure() is the prime suspect (its TX-wait loop has a 2 s
+// deadline; individual SPI calls can stack behind a slow NAND op via the
+// shared bus mutex).  Anything inside this file that takes longer than
+// LORA_STALL_THRESHOLD_US is logged with its step name so the next bench
+// run names the offending op.
+static constexpr int64_t LORA_STALL_THRESHOLD_US = 50'000;  // 50 ms
+
+#define LORA_STALL_INSTR(name, expr) do {                                      \
+    const int64_t _stall_t0_ = esp_timer_get_time();                           \
+    expr;                                                                      \
+    const int64_t _stall_dt_ = esp_timer_get_time() - _stall_t0_;              \
+    if (_stall_dt_ > LORA_STALL_THRESHOLD_US) {                                \
+        ESP_LOGW(TAG, "STALL: %s took %lld us", (name), (long long)_stall_dt_); \
+    }                                                                          \
+} while (0)
 
 TR_LoRa_Comms* TR_LoRa_Comms::instance_ = nullptr;
 
@@ -111,7 +131,8 @@ void TR_LoRa_Comms::service()
     }
 
     tx_done_ = false;
-    const int16_t st = radio_->finishTransmit();
+    int16_t st;
+    LORA_STALL_INSTR("service finishTransmit", st = radio_->finishTransmit());
     stats_.last_error = st;
     if (st == RADIOLIB_ERR_NONE)
     {
@@ -147,7 +168,8 @@ bool TR_LoRa_Comms::send(const uint8_t* payload, size_t len)
     rx_mode_ = false;
     rx_done_ = false;
 
-    const int16_t st = radio_->startTransmit(payload, len);
+    int16_t st;
+    LORA_STALL_INSTR("send startTransmit", st = radio_->startTransmit(payload, len));
     stats_.last_error = st;
     if (st != RADIOLIB_ERR_NONE)
     {
@@ -192,7 +214,8 @@ bool TR_LoRa_Comms::startReceive()
     rx_done_ = false;
     tx_ongoing_ = false;
 
-    const int16_t st = radio_->startReceive();
+    int16_t st;
+    LORA_STALL_INSTR("startReceive radio_->startReceive", st = radio_->startReceive());
     stats_.last_error = st;
     if (st != RADIOLIB_ERR_NONE)
     {
@@ -231,7 +254,8 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
     }
 
     // Read the packet data
-    const int16_t st = radio_->readData(buf, pkt_len);
+    int16_t st;
+    LORA_STALL_INSTR("readPacket readData", st = radio_->readData(buf, pkt_len));
     stats_.last_error = st;
 
     if (st == RADIOLIB_ERR_NONE)
@@ -309,17 +333,29 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
         return false;
     }
 
+    // Whole-call timing — gives an easy upper-bound number for the bench
+    // logs even before any per-step warning fires.
+    const int64_t _reconf_t0 = esp_timer_get_time();
+
     // Wait for any in-progress TX to complete (up to 2 s).
     // Without this, reconfigure silently fails ~18% of the time when
     // the radio happens to be mid-transmit, and NVS never gets updated.
     if (tx_ongoing_)
     {
+        const int64_t _wait_t0 = esp_timer_get_time();
         const uint32_t deadline = millis() + 2000;
         while (tx_ongoing_ && millis() < deadline)
         {
             pollDio1();
             if (tx_done_) { service(); }
             vTaskDelay(1);
+        }
+        const int64_t _wait_dt = esp_timer_get_time() - _wait_t0;
+        if (_wait_dt > LORA_STALL_THRESHOLD_US) {
+            ESP_LOGW(TAG, "STALL: reconfigure wait-for-TX took %lld us "
+                          "(tx_ongoing=%d, hit_deadline=%d)",
+                     (long long)_wait_dt, tx_ongoing_ ? 1 : 0,
+                     tx_ongoing_ ? 1 : 0);
         }
         if (tx_ongoing_) { return false; }  // TX stuck -- give up
     }
@@ -337,7 +373,8 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     int steps_done = 0;
 
     // LLCC68 validates SF against the current BW, so set BW first
-    int16_t st = radio_->setBandwidth(bw_khz);
+    int16_t st;
+    LORA_STALL_INSTR("reconfigure setBandwidth", st = radio_->setBandwidth(bw_khz));
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
@@ -346,7 +383,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     }
     steps_done = 1;
 
-    st = radio_->setSpreadingFactor(sf);
+    LORA_STALL_INSTR("reconfigure setSpreadingFactor", st = radio_->setSpreadingFactor(sf));
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
@@ -355,7 +392,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     }
     steps_done = 2;
 
-    st = radio_->setFrequency(freq_mhz);
+    LORA_STALL_INSTR("reconfigure setFrequency", st = radio_->setFrequency(freq_mhz));
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
@@ -364,7 +401,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     }
     steps_done = 3;
 
-    st = radio_->setCodingRate(cr);
+    LORA_STALL_INSTR("reconfigure setCodingRate", st = radio_->setCodingRate(cr));
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
@@ -373,7 +410,7 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     }
     steps_done = 4;
 
-    st = radio_->setOutputPower(tx_power);
+    LORA_STALL_INSTR("reconfigure setOutputPower", st = radio_->setOutputPower(tx_power));
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
@@ -394,6 +431,15 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
                       (double)freq_mhz, (unsigned)sf, (double)bw_khz, (unsigned)cr, (int)tx_power);
     }
 
+    {
+        const int64_t _reconf_dt = esp_timer_get_time() - _reconf_t0;
+        if (_reconf_dt > LORA_STALL_THRESHOLD_US) {
+            ESP_LOGW(TAG, "STALL: reconfigure(total) took %lld us "
+                          "(target %.2f MHz SF%u BW%.0f)",
+                     (long long)_reconf_dt,
+                     (double)freq_mhz, (unsigned)sf, (double)bw_khz);
+        }
+    }
     return true;
 
 rollback:
@@ -439,7 +485,8 @@ bool TR_LoRa_Comms::hopToFrequencyMHz(float freq_mhz)
     rx_mode_ = false;
     rx_done_ = false;
 
-    int16_t st = radio_->setFrequency(freq_mhz);
+    int16_t st;
+    LORA_STALL_INSTR("hopToFrequency setFrequency", st = radio_->setFrequency(freq_mhz));
     if (st != RADIOLIB_ERR_NONE)
     {
         stats_.last_error = st;
