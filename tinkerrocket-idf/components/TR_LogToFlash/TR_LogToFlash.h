@@ -310,6 +310,12 @@ private:
     bool     bad_block_bitmap_dirty_ = false;
     uint32_t bad_block_skips_ = 0;   // cumulative short-circuits
 
+    // Persisted alongside the bitmap. RDID = (MID << 8) | DID. When the
+    // RDID read at boot doesn't match this, the chip has been replaced
+    // (or this is a first boot under firmware that records it) and the
+    // bitmap is wiped — see nandInit().
+    uint16_t bad_block_chip_id_ = 0;
+
     bool isBlockBad(uint32_t block) const;
     void markBlockBad(uint32_t block);
     void loadBadBlocksFromNVS();

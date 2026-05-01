@@ -1139,6 +1139,9 @@ bool TR_LogToFlash::nandInit()
     spi->beginTransaction(spi_nand);
     csLow(cfg.nand_cs);
     spi->transfer(NAND_RDID);
+    // SPI NAND parts (Macronix MX35LF, Winbond W25N, Micron MT29F) require a
+    // dummy / address byte after 0x9F before the MID/DID stream begins.
+    (void)spi->transfer(0x00);
     const uint8_t mid = spi->transfer(0x00);
     const uint8_t did = spi->transfer(0x00);
     csHigh(cfg.nand_cs);
@@ -1148,6 +1151,29 @@ bool TR_LogToFlash::nandInit()
     {
         ESP_LOGI(TAG, "RDID MID=0x%02X DID=0x%02X", mid, did);
     }
+
+    // Detect chip replacement (or first boot under firmware that records the
+    // chip ID) and wipe the persisted bad-block bitmap so a fresh chip isn't
+    // tarnished by the previous chip's bad-block history. Skip when RDID looks
+    // like a dead bus (0x0000 / 0xFFFF) — leave the bitmap alone and let the
+    // rest of begin() surface the real error.
+    const uint16_t current_chip_id = (uint16_t)(((uint16_t)mid << 8) | (uint16_t)did);
+    const bool dead_bus = (current_chip_id == 0x0000) || (current_chip_id == 0xFFFF);
+    if (!dead_bus && current_chip_id != bad_block_chip_id_)
+    {
+        if (cfg.debug)
+        {
+            ESP_LOGW(TAG, "NAND chip changed (saved=0x%04X, current=0x%04X) — clearing bad-block map",
+                     (unsigned)bad_block_chip_id_, (unsigned)current_chip_id);
+        }
+        memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+        bad_block_chip_id_ = current_chip_id;
+        bad_block_bitmap_dirty_ = true;
+        // Persist immediately so a reboot during the rest of begin() doesn't
+        // re-load the stale bitmap on next start.
+        persistBadBlocksIfDirty();
+    }
+
     return true;
 }
 
@@ -1651,11 +1677,13 @@ void TR_LogToFlash::loadBadBlocksFromNVS()
     {
         // First boot, namespace doesn't exist yet — nothing to load.
         memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+        bad_block_chip_id_ = 0;
         bad_block_bitmap_dirty_ = false;
         if (cfg.debug) ESP_LOGI(TAG, "Bad-block NVS namespace not found, starting clean");
         return;
     }
     const size_t got = prefs.getBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
+    bad_block_chip_id_ = prefs.getUShort("chip", 0);
     prefs.end();
     if (got != sizeof(bad_block_bitmap_))
     {
@@ -1663,8 +1691,8 @@ void TR_LogToFlash::loadBadBlocksFromNVS()
     }
     bad_block_bitmap_dirty_ = false;
     const uint32_t n_bad = countBadBlocks();
-    if (cfg.debug) ESP_LOGI(TAG, "Loaded bad-block map: %lu known-bad blocks",
-                                  (unsigned long)n_bad);
+    if (cfg.debug) ESP_LOGI(TAG, "Loaded bad-block map: %lu known-bad blocks (saved chip=0x%04X)",
+                                  (unsigned long)n_bad, (unsigned)bad_block_chip_id_);
 }
 
 void TR_LogToFlash::persistBadBlocksIfDirty()
@@ -1677,10 +1705,12 @@ void TR_LogToFlash::persistBadBlocksIfDirty()
         return;
     }
     prefs.putBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
+    prefs.putUShort("chip", bad_block_chip_id_);
     prefs.end();
     bad_block_bitmap_dirty_ = false;
-    if (cfg.debug) ESP_LOGI(TAG, "Persisted bad-block map (%lu bad)",
-                                  (unsigned long)countBadBlocks());
+    if (cfg.debug) ESP_LOGI(TAG, "Persisted bad-block map (%lu bad, chip=0x%04X)",
+                                  (unsigned long)countBadBlocks(),
+                                  (unsigned)bad_block_chip_id_);
 }
 
 uint32_t TR_LogToFlash::scanBadBlocksAtBoot()
