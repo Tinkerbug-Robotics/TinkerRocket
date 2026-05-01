@@ -19,6 +19,11 @@ SensorCollector::SensorCollector(
                            uint8_t MMC5983MA_CS,
                            uint8_t MMC5983MA_INT,
                            uint16_t MMC5983MA_UPDATE_RATE,
+                           uint8_t IIS2MDC_SDA,
+                           uint8_t IIS2MDC_SCL,
+                           uint8_t IIS2MDC_INT,
+                           uint32_t IIS2MDC_I2C_FREQ_HZ,
+                           uint8_t IIS2MDC_I2C_ADDR,
                            uint16_t GNSS_UPDATE_RATE,
                            uint8_t GNSS_RX,
                            uint8_t GNSS_TX,
@@ -26,6 +31,7 @@ SensorCollector::SensorCollector(
                            int8_t GNSS_SAFEBOOT_N,
                            bool use_bmp585,
                            bool use_mmc5983ma,
+                           bool use_iis2mdc,
                            bool use_gnss,
                            bool use_ism6hg256,
                            SPIClass &spi,
@@ -39,6 +45,11 @@ SensorCollector::SensorCollector(
       MMC5983MA_CS(MMC5983MA_CS),
       MMC5983MA_INT(MMC5983MA_INT),
       MMC5983MA_UPDATE_RATE(MMC5983MA_UPDATE_RATE),
+      IIS2MDC_SDA(IIS2MDC_SDA),
+      IIS2MDC_SCL(IIS2MDC_SCL),
+      IIS2MDC_INT(IIS2MDC_INT),
+      IIS2MDC_I2C_FREQ_HZ(IIS2MDC_I2C_FREQ_HZ),
+      IIS2MDC_I2C_ADDR(IIS2MDC_I2C_ADDR),
       GNSS_UPDATE_RATE(GNSS_UPDATE_RATE),
       GNSS_RX(GNSS_RX),
       GNSS_TX(GNSS_TX),
@@ -46,12 +57,14 @@ SensorCollector::SensorCollector(
       GNSS_SAFEBOOT_N(GNSS_SAFEBOOT_N),
       use_bmp585(use_bmp585),
       use_mmc5983ma(use_mmc5983ma),
+      use_iis2mdc(use_iis2mdc),
       use_gnss(use_gnss),
       use_ism6hg256(use_ism6hg256),
       spi(spi),
       spi_speed(spi_speed),
       bmp585(this->spi, BMP585_CS, SPISettings(spi_speed, MSBFIRST, SPI_MODE0)),
       mmc5983ma(this->spi, MMC5983MA_CS, SPISettings(2000000, MSBFIRST, SPI_MODE0)),  // MMC5983MA supports Mode 0 and Mode 3
+      iis2mdc(IIS2MDC_I2C_ADDR),
       ism6hg256(&this->spi, ISM6HG256_CS, spi_speed),
       gyro_cal_x(0), gyro_cal_y(0), gyro_cal_z(0) {}
 
@@ -203,9 +216,93 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         attachInterrupt(BMP585_INT, onBMP585IntTrampoline, RISING);
     }
 
-    ESP_LOGI(SC_TAG, "Initializing MMC5983MA...");
-    if (use_mmc5983ma)
+    // ### Magnetometer auto-detection ###
+    // New PCB rev replaces the MMC5983MA (SPI) with an IIS2MDC (I2C).
+    // Pin 13 is shared between MMC5983MA_CS and IIS2MDC_SDA, so we probe
+    // I2C first; only if WHO_AM_I returns 0x40 do we keep the I2C bus
+    // alive. On miss we tear the bus down (freeing pin 13 for SPI CS use)
+    // and fall through to the legacy MMC5983MA path.
+    if (use_iis2mdc && use_mmc5983ma)
     {
+        ESP_LOGI(SC_TAG, "Probing for IIS2MDC on I2C SDA=%d SCL=%d addr=0x%02X...",
+                 (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
+
+        i2c_master_bus_config_t bus_cfg = {};
+        bus_cfg.i2c_port = I2C_NUM_1;  // FC->OC bus already owns I2C_NUM_0
+        bus_cfg.sda_io_num = (gpio_num_t)IIS2MDC_SDA;
+        bus_cfg.scl_io_num = (gpio_num_t)IIS2MDC_SCL;
+        bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+        bus_cfg.glitch_ignore_cnt = 7;
+        bus_cfg.flags.enable_internal_pullup = true;
+
+        esp_err_t bus_err = i2c_new_master_bus(&bus_cfg, &iis2mdc_bus);
+        if (bus_err != ESP_OK)
+        {
+            ESP_LOGW(SC_TAG, "IIS2MDC I2C bus init failed (%s) — falling back to MMC5983MA",
+                     esp_err_to_name(bus_err));
+            iis2mdc_bus = nullptr;
+        }
+        else if (iis2mdc.begin(iis2mdc_bus, IIS2MDC_I2C_FREQ_HZ) == TR_IIS2MDC_OK)
+        {
+            // Configure: 100 Hz continuous, high-resolution, offset cancel on,
+            // BDU on, DRDY pin off (we'll add interrupt routing in a follow-up).
+            if (iis2mdc.configure() != TR_IIS2MDC_OK)
+            {
+                ESP_LOGE(SC_TAG, "IIS2MDC configuration failed, stopping.");
+                while (1) { delay(1000); }
+            }
+
+            iis2mdc_active = true;
+            ESP_LOGI(SC_TAG, "IIS2MDC found and initialized (100 Hz continuous, BDU on)");
+
+            // Dump OFFSET_X/Y/Z hard-iron correction registers — should be all
+            // zero after softReset(); non-zero values would be subtracted from
+            // every reading and could explain a fixed offset.
+            uint8_t off[6] = {0};
+            for (int i = 0; i < 6; i++)
+            {
+                (void)iis2mdc.readRegister(IIS2MDC_Reg::OFFSET_X_REG_L + i, &off[i]);
+            }
+            ESP_LOGI(SC_TAG,
+                "IIS2MDC OFFSET regs: X=%02X%02X Y=%02X%02X Z=%02X%02X",
+                off[1], off[0], off[3], off[2], off[5], off[4]);
+
+            // Sanity print — read a few samples to confirm the part is alive.
+            // Continuous mode at 100 Hz means a fresh sample is ready every 10 ms.
+            delay(20);  // allow the first conversion to complete
+            for (int s = 0; s < 5; s++)
+            {
+                float x_uT = 0.0f, y_uT = 0.0f, z_uT = 0.0f;
+                if (iis2mdc.readFieldsXYZ_uT(&x_uT, &y_uT, &z_uT) == TR_IIS2MDC_OK)
+                {
+                    const float mag = sqrtf(x_uT * x_uT + y_uT * y_uT + z_uT * z_uT);
+                    ESP_LOGI(SC_TAG, "IIS2MDC sample %d: x=%.2f y=%.2f z=%.2f uT  |B|=%.2f uT",
+                             s, (double)x_uT, (double)y_uT, (double)z_uT, (double)mag);
+                }
+                else
+                {
+                    ESP_LOGW(SC_TAG, "IIS2MDC sample %d read failed", s);
+                }
+                delay(15);
+            }
+        }
+        else
+        {
+            ESP_LOGI(SC_TAG, "IIS2MDC not detected — falling back to MMC5983MA");
+            // Tear down the bus so pin 13 is free for SPI CS.
+            (void)i2c_del_master_bus(iis2mdc_bus);
+            iis2mdc_bus = nullptr;
+        }
+    }
+
+    ESP_LOGI(SC_TAG, "Initializing MMC5983MA...");
+    if (use_mmc5983ma && !iis2mdc_active)
+    {
+        // Pin 13 was potentially driven by the I2C probe above; restore CS high.
+        pinMode(MMC5983MA_CS, OUTPUT);
+        digitalWrite(MMC5983MA_CS, HIGH);
+        delay(2);
+
         while (!mmc5983ma.begin())
         {
             ESP_LOGW(SC_TAG, "MMC5983MA did not respond. Retrying...");
@@ -503,7 +600,10 @@ void SensorCollector::pollIMUdata(void* parameter)
         }
 
         // === MMC5983MA — only do SPI work when interrupt pending or stall recovery needed ===
-        if (self->use_mmc5983ma)
+        // Skip entirely on boards where the IIS2MDC was detected at boot — the
+        // MMC5983MA isn't populated, so polling and stall-recovery just burn
+        // SPI cycles trying to talk to a chip that isn't there.
+        if (self->use_mmc5983ma && !self->iis2mdc_active)
         {
             uint32_t mmc_pending = 0;
             noInterrupts();

@@ -24,16 +24,32 @@ struct config
     static constexpr uint8_t BMP585_CS = 6;
     static constexpr uint8_t ISM6HG256_CS = 7;
 
+    // IIS2MDC magnetometer (replaces MMC5983MA on the new PCB rev).
+    // Pin 13 is shared with MMC5983MA_CS — only one of the two parts is
+    // populated on any given board.  Auto-detection at boot picks the
+    // right driver: probe IIS2MDC over I2C first; on no-ack, tear the
+    // bus down and fall through to MMC5983MA over SPI.
+    static constexpr uint8_t IIS2MDC_SDA = 13;
+    static constexpr uint8_t IIS2MDC_SCL = 20;
+    static constexpr uint32_t IIS2MDC_I2C_FREQ_HZ = 400'000;
+    static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x1E;
+
     // ### Sensors to use ###
     static constexpr bool USE_BMP585 = true;
     static constexpr bool USE_MMC5983MA = true;
     static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
+    // When USE_MMC5983MA is true, the magnetometer slot first probes for
+    // an IIS2MDC over I2C; if not detected, the MMC5983MA SPI path runs.
+    // Setting USE_IIS2MDC=false forces the legacy MMC5983MA path even on
+    // boards that have the IIS2MDC populated.
+    static constexpr bool USE_IIS2MDC = true;
 
     // ### Sensor Interrupt Pins ###
     static constexpr uint8_t ISM6HG256_INT = 21;
     static constexpr uint8_t BMP585_INT = 11;
     static constexpr uint8_t MMC5983MA_INT = 12;
+    static constexpr uint8_t IIS2MDC_INT = 12;  // shared with MMC5983MA_INT
 
     // ### Data Update Rates (Hz) ###
     static constexpr uint16_t FLIGHT_LOOP_UPDATE_RATE = 1000;
