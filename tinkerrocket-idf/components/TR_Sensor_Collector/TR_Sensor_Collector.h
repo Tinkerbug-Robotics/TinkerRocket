@@ -2,9 +2,11 @@
 #define SENSORCOLLECTOR_H
 
 #include <compat.h>
+#include <driver/i2c_master.h>
 #include <TR_ISM6HG256.h>
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
+#include <TR_IIS2MDC.h>
 #include <TR_GNSSReceiverUBlox_Serial.h>
 #include <RocketComputerTypes.h>
 
@@ -72,6 +74,11 @@ public:
                     uint8_t MMC5983MA_CS,
                     uint8_t MMC5983MA_INT,
                     uint16_t MMC5983MA_UPDATE_RATE,
+                    uint8_t IIS2MDC_SDA,
+                    uint8_t IIS2MDC_SCL,
+                    uint8_t IIS2MDC_INT,
+                    uint32_t IIS2MDC_I2C_FREQ_HZ,
+                    uint8_t IIS2MDC_I2C_ADDR,
                     uint16_t GNSS_UPDATE_RATE,
                     uint8_t GNSS_RX,
                     uint8_t GNSS_TX,
@@ -79,6 +86,7 @@ public:
                     int8_t GNSS_SAFEBOOT_N,
                     bool use_bmp585,
                     bool use_mmc5983ma,
+                    bool use_iis2mdc,
                     bool use_gnss,
                     bool use_ism6hg256,
                     SPIClass &spi,
@@ -129,6 +137,11 @@ private:
     uint8_t MMC5983MA_CS;
     uint8_t MMC5983MA_INT;
     uint16_t MMC5983MA_UPDATE_RATE;
+    uint8_t IIS2MDC_SDA;
+    uint8_t IIS2MDC_SCL;
+    uint8_t IIS2MDC_INT;
+    uint32_t IIS2MDC_I2C_FREQ_HZ;
+    uint8_t IIS2MDC_I2C_ADDR;
     uint16_t GNSS_UPDATE_RATE;
     uint8_t GNSS_RX;
     uint8_t GNSS_TX;
@@ -136,12 +149,19 @@ private:
     int8_t GNSS_SAFEBOOT_N;
     bool use_bmp585;
     bool use_mmc5983ma;
+    bool use_iis2mdc;
     bool use_gnss;
     bool use_ism6hg256;
+
+    // Set true after IIS2MDC is detected and configured at boot. When true,
+    // the legacy MMC5983MA SPI path is skipped.
+    bool iis2mdc_active = false;
+    i2c_master_bus_handle_t iis2mdc_bus = nullptr;
 
     TR_ISM6HG256 ism6hg256;
     TR_BMP585 bmp585;
     TR_MMC5983MA mmc5983ma;
+    TR_IIS2MDC iis2mdc;
     TR_GNSSReceiverUBloxSerial gnss_receiver;
     ISM6HG256Data ism6hg256_data;
     BMP585Data bmp585_data;
