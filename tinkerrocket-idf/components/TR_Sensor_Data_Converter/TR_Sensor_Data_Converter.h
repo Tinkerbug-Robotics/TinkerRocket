@@ -43,6 +43,7 @@ public:
                                      ISM6GyroFullScale gyro_fs);
     void configureISM6HG256RotationZ(float rotation_z_deg);
     void configureMMC5983MARotationZ(float rotation_z_deg);
+    void configureIIS2MDCRotationZ(float rotation_z_deg);
 
     // Set high-g accelerometer bias (m/s², in body frame).
     // Subtracted from ISM6HG256 high-g output during conversion.
@@ -58,8 +59,10 @@ public:
                            BMP585DataSI& out);
     void convertISM6HG256Data(const ISM6HG256Data& in, 
                               ISM6HG256DataSI& out);
-    void convertMMC5983MAData(const MMC5983MAData& in, 
+    void convertMMC5983MAData(const MMC5983MAData& in,
                               MMC5983MADataSI& out);
+    void convertIIS2MDCData(const IIS2MDCData& in,
+                            IIS2MDCDataSI& out);
     void convertNonSensorData(const NonSensorData& in, 
                               NonSensorDataSI& out);
     
@@ -83,6 +86,7 @@ private:
     float gyro_dps_per_lsb     = 0.0f;
     float ism6_rot_z_rad       = 0.0f;
     float mmc_rot_z_rad        = 0.0f;
+    float iis2mdc_rot_z_rad    = 0.0f;
 
     // High-g accelerometer bias (m/s², body frame)
     float hg_bias_x_ = 0.0f, hg_bias_y_ = 0.0f, hg_bias_z_ = 0.0f;

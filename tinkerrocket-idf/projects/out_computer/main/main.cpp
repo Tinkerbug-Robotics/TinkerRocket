@@ -504,8 +504,8 @@ static MMC5983MADataSI latest_mmc_si = {};
 static bool latest_mmc_valid = false;
 
 static IIS2MDCData latest_iis2mdc_raw = {};
+static IIS2MDCDataSI latest_iis2mdc_si = {};
 static bool latest_iis2mdc_valid = false;
-// IIS2MDCDataSI populated in Stage 2 (converter integration).
 
 static bool latest_ism6_valid = false;
 static bool latest_bmp_valid = false;
@@ -1309,11 +1309,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(IIS2MDCData))
         {
             memcpy(&latest_iis2mdc_raw, payload, sizeof(IIS2MDCData));
+            sensor_converter.convertIIS2MDCData(latest_iis2mdc_raw, latest_iis2mdc_si);
             latest_iis2mdc_valid = true;
-            // Conversion to SI is deferred to Stage 2.
-            // Frame is already enqueued for the binary log via the
-            // logger.enqueueFrame above; downstream consumers (BLE telemetry,
-            // EKF) get wired in Stage 2/3.
         }
     }
     else if (type == GNSS_MSG)
