@@ -6,7 +6,16 @@ To add test data:
     git lfs track "tests/test_data/*.bin"
     cp /path/to/bench_log.bin tests/test_data/bench_static_60s.bin
     git add tests/test_data/bench_static_60s.bin
+
+Board variant metadata (optional):
+    Each <binfile>.bin may have a companion <binfile>.meta.json with the
+    schema {"board": "old" | "new"}. Captures from the legacy MMC5983MA
+    PCB are "old"; captures from the IIS2MDC PCB rev are "new". When the
+    sidecar is absent the variant defaults to "old" so legacy logs keep
+    their existing assertions. The companion <binfile>.json (no .meta)
+    is the iOS app's flight summary and is unrelated.
 """
+import json
 import pytest
 import struct
 from pathlib import Path
@@ -24,6 +33,7 @@ MSG_TYPES = {
     0xA4: "MMC5983MA",
     0xA5: "NON_SENSOR",
     0xA6: "POWER",
+    0xD1: "IIS2MDC",
     0xF1: "LORA",
 }
 
@@ -90,6 +100,53 @@ def parse_bin_file(path: Path) -> list:
 
 
 TEST_DATA_DIR = Path(__file__).parent.parent / "test_data"
+
+
+# Board variants for sensor-suite differences:
+#   "old" — MMC5983MA over SPI (pin 13 CS).  Mag frames type 0xA4 are emitted.
+#   "new" — IIS2MDC over I2C  (pins 13 SDA, 20 SCL).  MMC poll path is
+#            gated off via SensorCollector::iis2mdc_active, so the new board
+#            emits zero 0xA4 frames.  IIS2MDC polling integration is a
+#            follow-up; once it lands a new MSG type will be added here.
+BOARD_OLD = "old"
+BOARD_NEW = "new"
+BOARD_DEFAULT = BOARD_OLD
+KNOWN_BOARDS = (BOARD_OLD, BOARD_NEW)
+
+
+def sidecar_path(binfile: Path) -> Path:
+    """Return the expected sidecar metadata path for a given binfile."""
+    return binfile.with_suffix(".meta.json")
+
+
+def load_sidecar(binfile: Path) -> dict:
+    """Load <binfile>.meta.json, or return {} if missing/unreadable.
+
+    The companion <binfile>.json (no .meta) is the iOS flight-summary
+    file written by TinkerRocketApp and intentionally not consulted here.
+    """
+    path = sidecar_path(binfile)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def board_variant(binfile: Path) -> str:
+    """Return the declared board variant for a binfile.
+
+    Reads the sidecar metadata if present, falling back to BOARD_DEFAULT
+    so legacy logs (no sidecar) keep their pre-existing assertions. An
+    unknown value in the sidecar is treated as missing — log a warning
+    via pytest if/when we ever care, for now silently fall through.
+    """
+    meta = load_sidecar(binfile)
+    declared = meta.get("board")
+    if declared in KNOWN_BOARDS:
+        return declared
+    return BOARD_DEFAULT
 
 
 @pytest.fixture

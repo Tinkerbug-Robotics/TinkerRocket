@@ -76,7 +76,9 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ism6hg256_data_ready = false;
     bmp585_data_ready = false;
     mmc5983ma_data_ready = false;
+    iis2mdc_data_ready = false;
     gnss_data_ready = false;
+    iis2mdc_last_sample_us = 0;
     bmp585_irq_pending_count = 0;
     mmc5983ma_irq_pending_count = 0;
     ism6_isr_fired = false;
@@ -153,6 +155,14 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         while (1) delay(1000);
     }
     xSemaphoreGive(mmc5983maDataSemaphore);
+
+    iis2mdcDataSemaphore = xSemaphoreCreateBinary();
+    if (iis2mdcDataSemaphore == NULL)
+    {
+        ESP_LOGE(SC_TAG, "Failed to create IIS2MDC data semaphore!");
+        while (1) delay(1000);
+    }
+    xSemaphoreGive(iis2mdcDataSemaphore);
 
     gnssDataSemaphore = xSemaphoreCreateBinary();
     if (gnssDataSemaphore == NULL)
@@ -695,6 +705,34 @@ void SensorCollector::pollIMUdata(void* parameter)
             }
         }
 
+        // === IIS2MDC — time-gated I2C poll at ODR (default 100 Hz) ===
+        // No DRDY pin yet; we throttle reads to IIS2MDC_PERIOD_US so we don't
+        // spam the I2C bus from the ~1 kHz polling task. BDU is on, so a
+        // partial read across an internal sample boundary returns the prior
+        // complete sample instead of tearing.
+        if (self->iis2mdc_active)
+        {
+            const uint32_t iis2_now_us = micros();
+            if ((int32_t)(iis2_now_us - self->iis2mdc_last_sample_us) >=
+                (int32_t)IIS2MDC_PERIOD_US)
+            {
+                IIS2MDC_RawData iis2_raw = {};
+                if (self->iis2mdc.readRawXYZ(&iis2_raw) == TR_IIS2MDC_OK)
+                {
+                    if (xSemaphoreTake(self->iis2mdcDataSemaphore, 0) == pdTRUE)
+                    {
+                        self->iis2mdc_data.time_us = iis2_now_us;
+                        self->iis2mdc_data.mag_x = iis2_raw.x;
+                        self->iis2mdc_data.mag_y = iis2_raw.y;
+                        self->iis2mdc_data.mag_z = iis2_raw.z;
+                        self->iis2mdc_data_ready = true;
+                        xSemaphoreGive(self->iis2mdcDataSemaphore);
+                    }
+                    self->iis2mdc_last_sample_us = iis2_now_us;
+                }
+            }
+        }
+
         // Track total iteration time (excluding the notification wait)
         const uint32_t iter_elapsed = micros() - iter_start_us;
         if (iter_elapsed > self->pt_iter_max_us)
@@ -783,6 +821,18 @@ bool SensorCollector::getMMC5983MAData(MMC5983MAData& mmc5983ma_out)
         mmc5983ma_out = mmc5983ma_data;
         xSemaphoreGive(mmc5983maDataSemaphore);
         mmc5983ma_data_ready = false;
+        return true;
+    }
+    return false;
+}
+
+bool SensorCollector::getIIS2MDCData(IIS2MDCData& iis2mdc_out)
+{
+    if (iis2mdc_data_ready && xSemaphoreTake(iis2mdcDataSemaphore, 0) == pdTRUE)
+    {
+        iis2mdc_out = iis2mdc_data;
+        xSemaphoreGive(iis2mdcDataSemaphore);
+        iis2mdc_data_ready = false;
         return true;
     }
     return false;

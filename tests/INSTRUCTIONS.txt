@@ -24,6 +24,21 @@ After a bench test, you typically have:
   - A binary flight log:  ~/Downloads/flight_YYYYMMDD_HHMMSS.bin
   - Serial monitor output: copy-pasted or saved from Arduino Serial Monitor
 
+Optional board-variant sidecar:
+  Drop a <binfile>.meta.json next to the .bin to declare which PCB rev
+  produced the capture.  The integration tests and analyze_bench.py use
+  it to apply the right invariants (e.g. expect zero MMC5983MA frames
+  on the new IIS2MDC board, where the MMC poll path is gated off).
+
+  Schema:
+      {"board": "old"}     # MMC5983MA SPI mag (legacy PCB)
+      {"board": "new"}     # IIS2MDC I2C mag (current PCB rev)
+
+  Missing/invalid sidecar -> defaults to "old" so legacy logs assert
+  unchanged.  The companion <binfile>.json (no .meta) is the iOS
+  flight-summary file written by TinkerRocketApp; do not put board
+  metadata there -- it is on a different schema and may get overwritten.
+
 Run the unified analyzer:
 
     python3 tests/analyze_bench.py <binary.bin>

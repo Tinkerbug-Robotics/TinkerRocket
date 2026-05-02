@@ -178,6 +178,14 @@ bool SensorCollectorSim::getMMC5983MAData(MMC5983MAData& data_out)
     return true;
 }
 
+bool SensorCollectorSim::getIIS2MDCData(IIS2MDCData& data_out)
+{
+    // No sim model for IIS2MDC yet — pass through real data only.
+    // When sim is active, IIS2MDC frames are simply not produced (sim flights
+    // populate MMC instead via encodeMMC5983MA above).
+    return real_.getIIS2MDCData(data_out);
+}
+
 bool SensorCollectorSim::getGNSSData(GNSSData& data_out)
 {
     bool have_data = real_.getGNSSData(data_out);

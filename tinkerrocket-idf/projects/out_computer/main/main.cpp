@@ -503,6 +503,10 @@ static MMC5983MAData latest_mmc_raw = {};
 static MMC5983MADataSI latest_mmc_si = {};
 static bool latest_mmc_valid = false;
 
+static IIS2MDCData latest_iis2mdc_raw = {};
+static bool latest_iis2mdc_valid = false;
+// IIS2MDCDataSI populated in Stage 2 (converter integration).
+
 static bool latest_ism6_valid = false;
 static bool latest_bmp_valid = false;
 static GNSSDataSI latest_gnss_si = {};
@@ -882,6 +886,7 @@ static uint32_t msg_count_query = 0;
 static uint32_t msg_count_ism6 = 0;
 static uint32_t msg_count_bmp = 0;
 static uint32_t msg_count_mmc = 0;
+static uint32_t msg_count_iis2mdc = 0;
 static uint32_t msg_count_gnss = 0;
 static uint32_t msg_count_non_sensor = 0;
 static uint32_t msg_count_power = 0;
@@ -893,6 +898,7 @@ static uint32_t prev_msg_count_query = 0;
 static uint32_t prev_msg_count_ism6 = 0;
 static uint32_t prev_msg_count_bmp = 0;
 static uint32_t prev_msg_count_mmc = 0;
+static uint32_t prev_msg_count_iis2mdc = 0;
 static uint32_t prev_msg_count_gnss = 0;
 static uint32_t prev_msg_count_non_sensor = 0;
 static uint32_t prev_msg_count_power = 0;
@@ -1102,6 +1108,7 @@ static bool isKnownMessageType(uint8_t type)
         case ISM6HG256_MSG:
         case BMP585_MSG:
         case MMC5983MA_MSG:
+        case IIS2MDC_MSG:
         case NON_SENSOR_MSG:
         case POWER_MSG:
         case START_LOGGING:
@@ -1161,7 +1168,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     if (payload_len >= 4)
     {
         static uint32_t prev_time_ism6 = 0, prev_time_bmp = 0,
-                         prev_time_mmc = 0, prev_time_gnss = 0,
+                         prev_time_mmc = 0, prev_time_iis2mdc = 0,
+                         prev_time_gnss = 0,
                          prev_time_ns = 0, prev_time_pwr = 0,
                          prev_time_guid = 0;
         // dma_cb_count snapshot taken when each prev_time_* was last updated.
@@ -1169,7 +1177,8 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // its current dma_cb_count to the prev_cb value to tell whether the
         // duplicate came from the same DMA delivery or a different one.
         static uint32_t prev_cb_ism6 = 0, prev_cb_bmp = 0,
-                         prev_cb_mmc = 0, prev_cb_gnss = 0,
+                         prev_cb_mmc = 0, prev_cb_iis2mdc = 0,
+                         prev_cb_gnss = 0,
                          prev_cb_ns = 0, prev_cb_pwr = 0,
                          prev_cb_guid = 0;
         static uint32_t max_time_us = 0;  // Monotonic high-water mark across all types
@@ -1181,6 +1190,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             case ISM6HG256_MSG:       prev = &prev_time_ism6; prev_cb = &prev_cb_ism6; break;
             case BMP585_MSG:          prev = &prev_time_bmp;  prev_cb = &prev_cb_bmp;  break;
             case MMC5983MA_MSG:       prev = &prev_time_mmc;  prev_cb = &prev_cb_mmc;  break;
+            case IIS2MDC_MSG:         prev = &prev_time_iis2mdc; prev_cb = &prev_cb_iis2mdc; break;
             case GNSS_MSG:            prev = &prev_time_gnss; prev_cb = &prev_cb_gnss; break;
             case NON_SENSOR_MSG:      prev = &prev_time_ns;   prev_cb = &prev_cb_ns;   break;
             case POWER_MSG:           prev = &prev_time_pwr;  prev_cb = &prev_cb_pwr;  break;
@@ -1291,6 +1301,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             memcpy(&latest_mmc_raw, payload, sizeof(MMC5983MAData));
             sensor_converter.convertMMC5983MAData(latest_mmc_raw, latest_mmc_si);
             latest_mmc_valid = true;
+        }
+    }
+    else if (type == IIS2MDC_MSG)
+    {
+        msg_count_iis2mdc++;
+        if (payload_len >= sizeof(IIS2MDCData))
+        {
+            memcpy(&latest_iis2mdc_raw, payload, sizeof(IIS2MDCData));
+            latest_iis2mdc_valid = true;
+            // Conversion to SI is deferred to Stage 2.
+            // Frame is already enqueued for the binary log via the
+            // logger.enqueueFrame above; downstream consumers (BLE telemetry,
+            // EKF) get wired in Stage 2/3.
         }
     }
     else if (type == GNSS_MSG)

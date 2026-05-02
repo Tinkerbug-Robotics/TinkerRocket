@@ -79,6 +79,8 @@ static BMP585Data bmp585_data;
 static uint8_t bmp585_data_buffer[SIZE_OF_BMP585_DATA];
 static MMC5983MAData mmc5983ma_data;
 static uint8_t mmc5983ma_data_buffer[SIZE_OF_MMC5983MA_DATA];
+static IIS2MDCData iis2mdc_data;
+static uint8_t iis2mdc_data_buffer[SIZE_OF_IIS2MDC_DATA];
 static GNSSData gnss_data;
 static uint8_t gnss_data_buffer[SIZE_OF_GNSS_DATA];
 static NonSensorData non_sensor_data;
@@ -119,6 +121,8 @@ uint32_t i2s_tx_bmp_ok = 0;
 uint32_t i2s_tx_bmp_fail = 0;
 uint32_t i2s_tx_mmc_ok = 0;
 uint32_t i2s_tx_mmc_fail = 0;
+uint32_t i2s_tx_iis2mdc_ok = 0;
+uint32_t i2s_tx_iis2mdc_fail = 0;
 uint32_t i2s_tx_gnss_ok = 0;
 uint32_t i2s_tx_gnss_fail = 0;
 uint32_t i2s_tx_ns_ok = 0;
@@ -729,6 +733,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
             case ISM6HG256_MSG: i2s_tx_ism6_ok++; break;
             case BMP585_MSG: i2s_tx_bmp_ok++; break;
             case MMC5983MA_MSG: i2s_tx_mmc_ok++; break;
+            case IIS2MDC_MSG: i2s_tx_iis2mdc_ok++; break;
             case GNSS_MSG: i2s_tx_gnss_ok++; break;
             case NON_SENSOR_MSG: i2s_tx_ns_ok++; break;
             default: break;
@@ -743,6 +748,7 @@ static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t
             case ISM6HG256_MSG: i2s_tx_ism6_fail++; break;
             case BMP585_MSG: i2s_tx_bmp_fail++; break;
             case MMC5983MA_MSG: i2s_tx_mmc_fail++; break;
+            case IIS2MDC_MSG: i2s_tx_iis2mdc_fail++; break;
             case GNSS_MSG: i2s_tx_gnss_fail++; break;
             case NON_SENSOR_MSG: i2s_tx_ns_fail++; break;
             default: break;
@@ -1647,6 +1653,19 @@ static void loop_fc()
         (void)enqueueI2STx(MMC5983MA_MSG,
                            mmc5983ma_data_buffer,
                            SIZE_OF_MMC5983MA_DATA);
+    }
+
+    if (sensor_collector.getIIS2MDCData(iis2mdc_data))
+    {
+        // Stage 1: raw frames flow through I2S/log only.
+        // Converter + EKF integration arrive in Stages 2 and 3.
+        memcpy(iis2mdc_data_buffer,
+               &iis2mdc_data,
+               SIZE_OF_IIS2MDC_DATA);
+
+        (void)enqueueI2STx(IIS2MDC_MSG,
+                           iis2mdc_data_buffer,
+                           SIZE_OF_IIS2MDC_DATA);
     }
 
     if (sensor_collector.getGNSSData(gnss_data))

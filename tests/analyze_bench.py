@@ -37,6 +37,7 @@ TARGET_RATES = {
     "ISM6":       960,   # ISM6HG256_UPDATE_RATE
     "BMP":        500,   # BMP585_UPDATE_RATE (OSR x1/x1 ≈ 460 Hz actual)
     "MMC":        200,   # MMC5983MA_UPDATE_RATE (hw step: 200 Hz)
+    "IIS2MDC":    100,   # IIS2MDC default ODR (new PCB mag)
     "GNSS":        10,   # Realistic ceiling with 4 constellations (config asks 18)
     "NonSensor":  500,   # NON_SENSOR_UPDATE_RATE
     "Power":       -1,   # No fixed rate target
@@ -56,6 +57,7 @@ MSG_INFO = {
     0xA6: ("Power",        10),
     0xA7: ("StartLog",      0),
     0xA8: ("EndFlight",     0),
+    0xD1: ("IIS2MDC",      10),
     0xF1: ("LoRa",         57),
 }
 
@@ -100,6 +102,9 @@ class BinaryStats:
     counts: dict = field(default_factory=dict)          # name -> count
     timestamps: dict = field(default_factory=dict)       # name -> [uint32 us, ...]
     parsed_frames: list = field(default_factory=list)    # [(name, parsed_dict), ...]
+    # Board variant ("old" = MMC5983MA SPI mag, "new" = IIS2MDC I2C mag).
+    # Sourced from <binfile>.meta.json sidecar; defaults to "old".
+    board_variant: str = "old"
 
 
 @dataclass
@@ -166,10 +171,33 @@ class SerialStats:
 # Binary log parser
 # ============================================================================
 
+def _load_board_variant(binfile: Path) -> str:
+    """Read the <binfile>.meta.json sidecar and return its declared board.
+
+    Schema: {"board": "old" | "new"}. Missing/invalid → "old" (legacy).
+    """
+    sidecar = binfile.with_suffix(".meta.json")
+    if not sidecar.exists():
+        return "old"
+    try:
+        import json
+        meta = json.loads(sidecar.read_text())
+        declared = meta.get("board")
+        if declared in ("old", "new"):
+            return declared
+    except (json.JSONDecodeError, OSError):
+        pass
+    return "old"
+
+
 def parse_binary(path: str) -> BinaryStats:
     """Parse a TinkerRocket binary flight log file."""
     data = Path(path).read_bytes()
-    stats = BinaryStats(file_path=path, file_size=len(data))
+    stats = BinaryStats(
+        file_path=path,
+        file_size=len(data),
+        board_variant=_load_board_variant(Path(path)),
+    )
 
     counts = defaultdict(int)
     timestamps = defaultdict(list)
@@ -553,6 +581,11 @@ def report_binary(bs: BinaryStats):
     print(f"  File size:    {bs.file_size:,} bytes")
     print(f"  Valid frames: {bs.valid_frames:,}")
     print(f"  CRC errors:   {bs.crc_errors:,}")
+    variant_note = {
+        "old": "MMC5983MA SPI mag",
+        "new": "IIS2MDC I2C mag (MMC poll-gate active)",
+    }.get(bs.board_variant, bs.board_variant)
+    print(f"  Board variant: {bs.board_variant}  ({variant_note})")
 
     # ── Message counts ──
     print_header("MESSAGE COUNTS")
@@ -569,7 +602,7 @@ def report_binary(bs: BinaryStats):
     print(f"  {'-'*14} {'-'*8} {'-'*8} {'-'*6}  {'-'*8} {'-'*8} {'-'*8} {'-'*6}")
 
     any_non_monotonic = False
-    for name in ["ISM6", "BMP", "MMC", "GNSS", "NonSensor", "Power"]:
+    for name in ["ISM6", "BMP", "MMC", "IIS2MDC", "GNSS", "NonSensor", "Power"]:
         ts = bs.timestamps.get(name, [])
         target = TARGET_RATES.get(name, -1)
         rs = compute_rate_stats(ts)
@@ -597,7 +630,7 @@ def report_binary(bs: BinaryStats):
         print("    individual gap stats reflect forward intervals only.")
 
     # ── Gap analysis for key sensors ──
-    for sensor_name in ["ISM6", "BMP", "MMC", "NonSensor"]:
+    for sensor_name in ["ISM6", "BMP", "MMC", "IIS2MDC", "NonSensor"]:
         ts = bs.timestamps.get(sensor_name, [])
         rs = compute_rate_stats(ts)
         if rs.get('valid_intervals', 0) < 10:
@@ -676,10 +709,16 @@ def report_binary(bs: BinaryStats):
         if 3 in states_seen:
             anomalies.append("Rocket entered INFLIGHT on bench!")
 
-    # Sensor rate anomalies + non-chronological log detection
+    # Sensor rate anomalies + non-chronological log detection.
+    # Mag stream depends on board variant: old uses MMC, new uses IIS2MDC.
+    # Skip the low-rate anomaly for the inactive stream on each variant.
     log_non_chrono = False
     for name, target in TARGET_RATES.items():
         if target <= 0:
+            continue
+        if bs.board_variant == "new" and name == "MMC":
+            continue
+        if bs.board_variant == "old" and name == "IIS2MDC":
             continue
         ts = bs.timestamps.get(name, [])
         rs = compute_rate_stats(ts)
@@ -687,6 +726,29 @@ def report_binary(bs: BinaryStats):
             log_non_chrono = True
         if rs['rate_hz'] > 0 and rs['rate_hz'] < target * 0.5:
             anomalies.append(f"{name} rate {rs['rate_hz']:.0f} Hz is <50% of target {target} Hz")
+
+    # Board-variant invariants.
+    mmc_count = bs.counts.get("MMC", 0)
+    iis2mdc_count = bs.counts.get("IIS2MDC", 0)
+    if bs.board_variant == "new":
+        if mmc_count > 0:
+            anomalies.append(
+                f"new-board log contains {mmc_count} MMC5983MA frames — MMC "
+                f"poll gate broken (regression of #98)"
+            )
+        if iis2mdc_count == 0 and bs.valid_frames > 1000:
+            anomalies.append(
+                "new-board log has zero IIS2MDC frames — I2C mag stream dead "
+                "(check SensorCollector::pollIMUdata IIS2MDC branch)"
+            )
+    elif bs.board_variant == "old":
+        if iis2mdc_count > 0:
+            anomalies.append(
+                f"old-board log contains {iis2mdc_count} IIS2MDC frames — "
+                f"shouldn't happen, the chip isn't populated on this rev"
+            )
+        if mmc_count == 0 and bs.valid_frames > 1000:
+            anomalies.append("old-board log has zero MMC5983MA frames — SPI mag dead?")
     if log_non_chrono:
         anomalies.append("Log contains non-monotonic timestamps — "
                          "likely a ring-buffer / recovery dump, not a live flight log")
