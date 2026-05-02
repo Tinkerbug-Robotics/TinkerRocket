@@ -9,6 +9,7 @@ SensorConverter::SensorConverter()
                                 ISM6GyroFullScale::DPS_4000);
     configureISM6HG256RotationZ(0.0f);
     configureMMC5983MARotationZ(0.0f);
+    configureIIS2MDCRotationZ(0.0f);
 }
 
 void SensorConverter::configureISM6HG256FullScale(
@@ -51,6 +52,11 @@ void SensorConverter::configureISM6HG256RotationZ(float rotation_z_deg)
 void SensorConverter::configureMMC5983MARotationZ(float rotation_z_deg)
 {
     mmc_rot_z_rad = rotation_z_deg * (PI / 180.0f);
+}
+
+void SensorConverter::configureIIS2MDCRotationZ(float rotation_z_deg)
+{
+    iis2mdc_rot_z_rad = rotation_z_deg * (PI / 180.0f);
 }
 
 void SensorConverter::setHighGBias(float bx, float by, float bz)
@@ -218,6 +224,29 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
   out.mag_x_uT = (mx * c) - (my * s);
   out.mag_y_uT = (mx * s) + (my * c);
   out.mag_z_uT = mz;
+}
+
+// --- IIS2MDC (new-PCB magnetometer) ---
+// Sensitivity per datasheet 9.13: 1.5 mgauss/LSB = 0.15 uT/LSB. Raw is
+// already signed int16 centered at 0 (no offset register subtract here —
+// see TR_IIS2MDC's softReset path which zeroes OFFSET_X/Y/Z).
+void SensorConverter::convertIIS2MDCData(const IIS2MDCData& in, IIS2MDCDataSI& out)
+{
+    out.time_us = in.time_us;
+
+    static constexpr double UT_PER_LSB = 0.15;
+
+    const double mx = (double)in.mag_x * UT_PER_LSB;
+    const double my = (double)in.mag_y * UT_PER_LSB;
+    const double mz = (double)in.mag_z * UT_PER_LSB;
+
+    const double c = (double)cosf(iis2mdc_rot_z_rad);
+    const double s = (double)sinf(iis2mdc_rot_z_rad);
+
+    // Sensor frame -> board frame, rotation about +Z.
+    out.mag_x_uT = (mx * c) - (my * s);
+    out.mag_y_uT = (mx * s) + (my * c);
+    out.mag_z_uT = mz;
 }
 
 // --- NonSensor ---

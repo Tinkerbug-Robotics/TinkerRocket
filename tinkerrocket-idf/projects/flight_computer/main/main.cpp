@@ -81,6 +81,8 @@ static MMC5983MAData mmc5983ma_data;
 static uint8_t mmc5983ma_data_buffer[SIZE_OF_MMC5983MA_DATA];
 static IIS2MDCData iis2mdc_data;
 static uint8_t iis2mdc_data_buffer[SIZE_OF_IIS2MDC_DATA];
+static IIS2MDCDataSI iis2mdc_latest_si = {};
+static bool have_iis2mdc_si = false;
 static GNSSData gnss_data;
 static uint8_t gnss_data_buffer[SIZE_OF_GNSS_DATA];
 static NonSensorData non_sensor_data;
@@ -1345,6 +1347,7 @@ static void setup_fc()
         static_cast<ISM6GyroFullScale>(config::ISM6_GYRO_FS_DPS));
     sensor_converter.configureISM6HG256RotationZ(config::ISM6HG256_ROT_Z_DEG);
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
+    sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
 
     out_status_query_data.ism6_low_g_fs_g = config::ISM6_LOW_G_FS_G;
@@ -1657,8 +1660,9 @@ static void loop_fc()
 
     if (sensor_collector.getIIS2MDCData(iis2mdc_data))
     {
-        // Stage 1: raw frames flow through I2S/log only.
-        // Converter + EKF integration arrive in Stages 2 and 3.
+        sensor_converter.convertIIS2MDCData(iis2mdc_data, iis2mdc_latest_si);
+        have_iis2mdc_si = true;
+
         memcpy(iis2mdc_data_buffer,
                &iis2mdc_data,
                SIZE_OF_IIS2MDC_DATA);
@@ -1763,12 +1767,20 @@ static void loop_fc()
             ekf_imu.gyro_z = -(double)ism6_latest_si.gyro_z;
 
             // ── Build EKF input: Magnetometer in FRD body frame ──
+            // Prefer IIS2MDC (new PCB) when its samples are flowing, fall
+            // back to MMC5983MA on legacy boards. Only one is populated on
+            // any given board, so this picks "whichever mag is alive".
             EkfMagData ekf_mag = {};
-            ekf_mag.time_us = have_mmc_si ? mmc_latest_si.time_us : 0;
-            if (have_mmc_si) {
+            if (have_iis2mdc_si) {
+                ekf_mag.time_us = iis2mdc_latest_si.time_us;
+                ekf_mag.mag_x =  iis2mdc_latest_si.mag_x_uT;
+                ekf_mag.mag_y = -iis2mdc_latest_si.mag_y_uT;   // FLU→FRD
+                ekf_mag.mag_z = -iis2mdc_latest_si.mag_z_uT;   // FLU→FRD
+            } else if (have_mmc_si) {
+                ekf_mag.time_us = mmc_latest_si.time_us;
                 ekf_mag.mag_x =  mmc_latest_si.mag_x_uT;
-                ekf_mag.mag_y = -mmc_latest_si.mag_y_uT;   // FLU→FRD
-                ekf_mag.mag_z = -mmc_latest_si.mag_z_uT;   // FLU→FRD
+                ekf_mag.mag_y = -mmc_latest_si.mag_y_uT;       // FLU→FRD
+                ekf_mag.mag_z = -mmc_latest_si.mag_z_uT;       // FLU→FRD
             }
 
             // ── Build EKF input: GNSS in LLA + NED ──

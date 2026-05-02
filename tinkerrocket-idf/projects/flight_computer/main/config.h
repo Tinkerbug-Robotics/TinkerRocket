@@ -76,6 +76,11 @@ struct config
     // MMC5983MA -> board frame (deg), CCW positive about +Z.
     // Note: board frame: +X forward, +Y left, +Z up.
     static constexpr float MMC5983MA_ROT_Z_DEG = 180.0f;
+    // IIS2MDC -> board frame (deg). Default 0 deg (no rotation) until
+    // bench characterization confirms the chip's mounting on the new PCB
+    // rev. Adjust here when the EKF heading shows a fixed offset relative
+    // to the IMU's Z axis.
+    static constexpr float IIS2MDC_ROT_Z_DEG = 0.0f;
 
     // TODO Auto dection of orientation and rotation of aribtrary board position
     // to body frame
