@@ -97,11 +97,13 @@ public:
     volatile bool ism6hg256_data_ready;
     volatile bool bmp585_data_ready;
     volatile bool mmc5983ma_data_ready;
+    volatile bool iis2mdc_data_ready;
     volatile bool gnss_data_ready;
 
     bool getISM6HG256Data(ISM6HG256Data &data_out);
     bool getBMP585Data(BMP585Data &data_out);
     bool getMMC5983MAData(MMC5983MAData &data_out);
+    bool getIIS2MDCData(IIS2MDCData &data_out);
     bool getGNSSData(GNSSData &data_out);
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
@@ -166,12 +168,18 @@ private:
     ISM6HG256Data ism6hg256_data;
     BMP585Data bmp585_data;
     MMC5983MAData mmc5983ma_data;
+    IIS2MDCData iis2mdc_data;
     GNSSData gnss_data;
 
     SemaphoreHandle_t ism6hg256DataSemaphore;
     SemaphoreHandle_t bmp585DataSemaphore;
     SemaphoreHandle_t mmc5983maDataSemaphore;
+    SemaphoreHandle_t iis2mdcDataSemaphore;
     SemaphoreHandle_t gnssDataSemaphore;
+
+    // Time-gated polling state for IIS2MDC (no DRDY pin yet).
+    uint32_t iis2mdc_last_sample_us = 0;
+    static constexpr uint32_t IIS2MDC_PERIOD_US = 10000;  // 100 Hz, matches default ODR
     TaskHandle_t pollIMUTaskHandle;
     TaskHandle_t pollGNSSTaskHandle = nullptr;
 

@@ -9,7 +9,14 @@ To add test data:
 """
 import pytest
 from collections import defaultdict
-from conftest import parse_bin_file, get_bin_files, MSG_TYPES
+from conftest import (
+    parse_bin_file,
+    get_bin_files,
+    MSG_TYPES,
+    board_variant,
+    BOARD_OLD,
+    BOARD_NEW,
+)
 
 
 bin_files = get_bin_files()
@@ -143,3 +150,48 @@ class TestBinReplay:
             f"{len(large_gaps)} IMU gaps > 10ms (max 2 allowed): "
             f"{[f'{g:.1f}ms' for g in large_gaps]}"
         )
+
+    def test_mag_frames_match_board_variant(self, binfile):
+        """Magnetometer frame counts must match the declared board variant.
+
+        Old board: MMC5983MA over SPI at 200 Hz. Expect MMC frames present,
+        zero IIS2MDC frames (the IIS2MDC chip isn't populated).
+
+        New board: IIS2MDC over I2C at 100 Hz. Expect IIS2MDC frames present,
+        zero MMC frames (poll path gated on !iis2mdc_active).
+
+        Either-direction non-zero count on the wrong stream is a regression
+        of #98's auto-detect / poll-gate.
+        """
+        frames = sensor_frames(parse_bin_file(binfile))
+        mmc_count = sum(1 for f in frames if f.msg_type == 0xA4)
+        iis2mdc_count = sum(1 for f in frames if f.msg_type == 0xD1)
+        variant = board_variant(binfile)
+
+        if variant == BOARD_NEW:
+            assert mmc_count == 0, (
+                f"new-board log contains {mmc_count} MMC5983MA frames "
+                f"(0xA4); MMC poll path should be gated off when "
+                f"iis2mdc_active is true. Likely regression of #98."
+            )
+            if len(frames) < 1000:
+                pytest.skip("Capture too short to assert IIS2MDC presence")
+            assert iis2mdc_count > 100, (
+                f"new-board log has only {iis2mdc_count} IIS2MDC frames "
+                f"(0xD1); the I2C mag stream looks dead. Check that "
+                f"SensorCollector::pollIMUdata is firing iis2mdc.readRawXYZ."
+            )
+        elif variant == BOARD_OLD:
+            assert iis2mdc_count == 0, (
+                f"old-board log contains {iis2mdc_count} IIS2MDC frames "
+                f"(0xD1); the IIS2MDC chip isn't populated on this PCB rev."
+            )
+            # Sanity gate: a stationary 20+ s capture at 200 Hz target
+            # should yield thousands of MMC frames. Use a low floor
+            # (100) so a brief stall-truncated capture still passes.
+            if len(frames) < 1000:
+                pytest.skip("Capture too short to assert MMC presence")
+            assert mmc_count > 100, (
+                f"old-board log has only {mmc_count} MMC5983MA frames "
+                f"(0xA4); the SPI mag stream looks dead."
+            )

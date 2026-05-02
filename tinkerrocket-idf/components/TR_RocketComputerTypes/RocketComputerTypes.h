@@ -562,13 +562,35 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(MMC5983MAData) == 16, 
               "MMC5983MAData must be 16 bytes");
 
-typedef struct 
+typedef struct
 {
     uint32_t time_us;
     double mag_x_uT; // Micro Tesla
     double mag_y_uT;
     double mag_z_uT;
 } MMC5983MADataSI;
+
+// --- IIS2MDC Magnetometer Data (new PCB rev) ---
+// Raw int16 per axis at 0.15 µT/LSB (datasheet 9.13). Scaling and frame
+// rotation handled by TR_Sensor_Data_Converter (Stage 2 follow-up).
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;   // micros()
+    int16_t  mag_x;     // Raw counts (signed 16-bit)
+    int16_t  mag_y;
+    int16_t  mag_z;
+} IIS2MDCData;
+
+static_assert(sizeof(IIS2MDCData) == 10,
+              "IIS2MDCData must be 10 bytes");
+
+typedef struct
+{
+    uint32_t time_us;
+    double mag_x_uT;
+    double mag_y_uT;
+    double mag_z_uT;
+} IIS2MDCDataSI;
 
 // --- Non sensor data ---
 typedef struct __attribute__((packed))
@@ -884,6 +906,7 @@ static constexpr uint8_t PYRO_CONFIG_PENDING      = 0xCD;
 static constexpr uint8_t PYRO_CONFIG_MSG          = 0xCE;
 static constexpr uint8_t PYRO_CONT_TEST           = 0xCF;  // momentary arm → read continuity → disarm
 static constexpr uint8_t PYRO_FIRE_TEST            = 0xD0;  // test-fire a pyro channel from app
+static constexpr uint8_t IIS2MDC_MSG          = 0xD1;  // new-PCB IIS2MDC magnetometer raw frame
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types
@@ -1005,6 +1028,7 @@ static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);
 static constexpr size_t SIZE_OF_ISM6HG256_DATA  = sizeof(ISM6HG256Data);
 static constexpr size_t SIZE_OF_MMC5983MA_DATA  = sizeof(MMC5983MAData);
+static constexpr size_t SIZE_OF_IIS2MDC_DATA    = sizeof(IIS2MDCData);
 static constexpr size_t SIZE_OF_POWER_DATA      = sizeof(POWERData);
 static constexpr size_t SIZE_OF_NON_SENSOR_DATA = sizeof(NonSensorData);
 static constexpr size_t SIZE_OF_LORA_DATA       = sizeof(LoRaData);

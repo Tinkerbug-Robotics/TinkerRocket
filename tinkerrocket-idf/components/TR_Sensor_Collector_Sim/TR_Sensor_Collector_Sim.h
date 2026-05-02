@@ -33,6 +33,7 @@ public:
     bool getISM6HG256Data(ISM6HG256Data& data_out);
     bool getBMP585Data(BMP585Data& data_out);
     bool getMMC5983MAData(MMC5983MAData& data_out);
+    bool getIIS2MDCData(IIS2MDCData& data_out);
     bool getGNSSData(GNSSData& data_out);
 
     // Debug passthrough
