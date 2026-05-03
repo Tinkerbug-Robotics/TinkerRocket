@@ -1610,7 +1610,7 @@ static void loop_fc()
     // ### Read and Send Sensor Data ###
     // Poll as fast as possible so high-rate sensor frames are not dropped by
     // loop-period gating.
-    static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_mmc_reads = 0, dbg_gnss_reads = 0;
+    static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_mmc_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
 
     if (sensor_collector.getISM6HG256Data(ism6hg256_data))
     {
@@ -1660,6 +1660,7 @@ static void loop_fc()
 
     if (sensor_collector.getIIS2MDCData(iis2mdc_data))
     {
+        dbg_iis2mdc_reads++;
         sensor_converter.convertIIS2MDCData(iis2mdc_data, iis2mdc_latest_si);
         have_iis2mdc_si = true;
 
@@ -1770,17 +1771,40 @@ static void loop_fc()
             // Prefer IIS2MDC (new PCB) when its samples are flowing, fall
             // back to MMC5983MA on legacy boards. Only one is populated on
             // any given board, so this picks "whichever mag is alive".
+            //
+            // Magnitude gate: the Mahony AHRS only checks (0,0,0) and then
+            // normalises, so an uncalibrated hard-iron offset (e.g. the new
+            // PCB shows ~1700 µT) would dominate the heading reference. Skip
+            // the sample unless |m| sits in a sensible Earth-field band; the
+            // AHRS treats a zeroed input as "no mag, use gyro+accel only".
             EkfMagData ekf_mag = {};
+            double mag_x_frd = 0.0, mag_y_frd = 0.0, mag_z_frd = 0.0;
+            uint32_t mag_time_us = 0;
+            bool have_mag_si = false;
             if (have_iis2mdc_si) {
-                ekf_mag.time_us = iis2mdc_latest_si.time_us;
-                ekf_mag.mag_x =  iis2mdc_latest_si.mag_x_uT;
-                ekf_mag.mag_y = -iis2mdc_latest_si.mag_y_uT;   // FLU→FRD
-                ekf_mag.mag_z = -iis2mdc_latest_si.mag_z_uT;   // FLU→FRD
+                mag_time_us = iis2mdc_latest_si.time_us;
+                mag_x_frd =  iis2mdc_latest_si.mag_x_uT;
+                mag_y_frd = -iis2mdc_latest_si.mag_y_uT;       // FLU→FRD
+                mag_z_frd = -iis2mdc_latest_si.mag_z_uT;       // FLU→FRD
+                have_mag_si = true;
             } else if (have_mmc_si) {
-                ekf_mag.time_us = mmc_latest_si.time_us;
-                ekf_mag.mag_x =  mmc_latest_si.mag_x_uT;
-                ekf_mag.mag_y = -mmc_latest_si.mag_y_uT;       // FLU→FRD
-                ekf_mag.mag_z = -mmc_latest_si.mag_z_uT;       // FLU→FRD
+                mag_time_us = mmc_latest_si.time_us;
+                mag_x_frd =  mmc_latest_si.mag_x_uT;
+                mag_y_frd = -mmc_latest_si.mag_y_uT;           // FLU→FRD
+                mag_z_frd = -mmc_latest_si.mag_z_uT;           // FLU→FRD
+                have_mag_si = true;
+            }
+            if (have_mag_si) {
+                const double m2 = mag_x_frd * mag_x_frd
+                                + mag_y_frd * mag_y_frd
+                                + mag_z_frd * mag_z_frd;
+                // Earth field at surface is ~25–65 µT; widen to 15–80 µT.
+                if (m2 >= (15.0 * 15.0) && m2 <= (80.0 * 80.0)) {
+                    ekf_mag.time_us = mag_time_us;
+                    ekf_mag.mag_x = mag_x_frd;
+                    ekf_mag.mag_y = mag_y_frd;
+                    ekf_mag.mag_z = mag_z_frd;
+                }
             }
 
             // ── Build EKF input: GNSS in LLA + NED ──
@@ -3381,10 +3405,11 @@ static void loop_fc()
             lt_loop_count = 0;
 
             // Sensor data flow diagnostic
-            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu mmc=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
+            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu mmc=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
                           (unsigned long)dbg_ism6_reads,
                           (unsigned long)dbg_bmp_reads,
                           (unsigned long)dbg_mmc_reads,
+                          (unsigned long)dbg_iis2mdc_reads,
                           (unsigned long)dbg_gnss_reads,
                           have_bmp_si ? (double)bmp_latest_si.pressure : 0.0,
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
@@ -3392,6 +3417,7 @@ static void loop_fc()
             dbg_ism6_reads = 0;
             dbg_bmp_reads = 0;
             dbg_mmc_reads = 0;
+            dbg_iis2mdc_reads = 0;
             dbg_gnss_reads = 0;
 
             // MMC5983MA-specific diagnostic — we've been seeing mmc=0 reads/s
@@ -3459,15 +3485,25 @@ static void loop_fc()
             float sp = sinf(rpy[1]);
             float cos2p = 1.0f - sp * sp;
 
-            // Magnetometer field strength and validity (EKF rejects <15 or >80 µT)
+            // Magnetometer field strength and validity (EKF gate: 15–80 µT)
+            // Prefer IIS2MDC (new PCB), fall back to MMC5983MA (legacy).
             float mag_uT = 0.0f;
             const char* mag_status = "NONE";
-            if (have_mmc_si) {
+            const char* mag_src = "-";
+            if (have_iis2mdc_si) {
+                float mx = (float)iis2mdc_latest_si.mag_x_uT;
+                float my = (float)iis2mdc_latest_si.mag_y_uT;
+                float mz = (float)iis2mdc_latest_si.mag_z_uT;
+                mag_uT = sqrtf(mx * mx + my * my + mz * mz);
+                mag_status = (mag_uT >= 15.0f && mag_uT <= 80.0f) ? "OK" : "REJ";
+                mag_src = "IIS";
+            } else if (have_mmc_si) {
                 float mx = (float)mmc_latest_si.mag_x_uT;
                 float my = (float)mmc_latest_si.mag_y_uT;
                 float mz = (float)mmc_latest_si.mag_z_uT;
                 mag_uT = sqrtf(mx * mx + my * my + mz * mz);
                 mag_status = (mag_uT >= 15.0f && mag_uT <= 80.0f) ? "OK" : "REJ";
+                mag_src = "MMC";
             }
 
             // Gyro bias estimate (rad/s → deg/s for readability)
@@ -3480,7 +3516,8 @@ static void loop_fc()
                           (double)pitch_deg,
                           (double)yaw_deg,
                           (double)cos2p);
-            ESP_LOGI(TAG, "[EKF DIAG] mag=%.1fuT(%s) gyro_bias=[%.3f,%.3f,%.3f]dps",
+            ESP_LOGI(TAG, "[EKF DIAG] mag[%s]=%.1fuT(%s) gyro_bias=[%.3f,%.3f,%.3f]dps",
+                          mag_src,
                           (double)mag_uT,
                           mag_status,
                           (double)(gb[0] * 180.0f / (float)M_PI),
