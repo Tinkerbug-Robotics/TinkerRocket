@@ -1610,7 +1610,7 @@ static void loop_fc()
     // ### Read and Send Sensor Data ###
     // Poll as fast as possible so high-rate sensor frames are not dropped by
     // loop-period gating.
-    static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_mmc_reads = 0, dbg_gnss_reads = 0;
+    static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_mmc_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
 
     if (sensor_collector.getISM6HG256Data(ism6hg256_data))
     {
@@ -1660,6 +1660,7 @@ static void loop_fc()
 
     if (sensor_collector.getIIS2MDCData(iis2mdc_data))
     {
+        dbg_iis2mdc_reads++;
         sensor_converter.convertIIS2MDCData(iis2mdc_data, iis2mdc_latest_si);
         have_iis2mdc_si = true;
 
@@ -3404,10 +3405,11 @@ static void loop_fc()
             lt_loop_count = 0;
 
             // Sensor data flow diagnostic
-            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu mmc=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
+            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu mmc=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
                           (unsigned long)dbg_ism6_reads,
                           (unsigned long)dbg_bmp_reads,
                           (unsigned long)dbg_mmc_reads,
+                          (unsigned long)dbg_iis2mdc_reads,
                           (unsigned long)dbg_gnss_reads,
                           have_bmp_si ? (double)bmp_latest_si.pressure : 0.0,
                           have_ism6_si ? (double)ism6_latest_si.gyro_z : 0.0,
@@ -3415,6 +3417,7 @@ static void loop_fc()
             dbg_ism6_reads = 0;
             dbg_bmp_reads = 0;
             dbg_mmc_reads = 0;
+            dbg_iis2mdc_reads = 0;
             dbg_gnss_reads = 0;
 
             // MMC5983MA-specific diagnostic — we've been seeing mmc=0 reads/s
