@@ -291,6 +291,14 @@ void TR_LogToFlash::prepareLogFile()
 
 void TR_LogToFlash::endLogging()
 {
+    // Idempotent when nothing is logging. The flush-task drain block clears
+    // end_flight_requested only when (end_flight_requested && logging_active
+    // && file_open) all hold, so latching it here while logging_active is
+    // already false leaves it stuck true forever — and isLoggingActive()
+    // (returns logging_active || end_flight_requested) then never goes
+    // false. That made the BLE cmd=23 toggle handler stuck on "stop" after
+    // a normal LANDED-triggered drain.
+    if (!logging_active && !file_open) return;
     end_flight_requested = true;
 }
 
