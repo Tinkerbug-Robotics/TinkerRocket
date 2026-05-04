@@ -45,6 +45,7 @@ private:
     uint32_t landing_check_dt;
     uint8_t apogee_count;
     uint16_t landing_checks;
+    uint16_t impact_seen_count;
 
     // GPS apogee test state
     float max_gps_altitude_;

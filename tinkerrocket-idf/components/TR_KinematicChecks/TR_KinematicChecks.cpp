@@ -1,6 +1,18 @@
 #include <TR_KinematicChecks.h>
 #include <algorithm>
 
+namespace {
+// Impact-detected landing fast path (see issue #113).
+// Descent tumbling never exceeds ~12 g; impact on RolyPoly 5/3/26 peaked at
+// 218 g. 15 g cleanly separates them with no false positives in descent.
+// Gated on apogee + low altitude so launch (~7 g) and ejection (~22 g at
+// apogee) cannot trigger.
+constexpr float    LANDING_IMPACT_G       = 15.0f;
+constexpr float    LANDING_IMPACT_ALT_M   = 20.0f;
+constexpr uint16_t LANDING_IMPACT_COUNT   = 5;       // ~5 ms at 1 kHz
+constexpr float    G_MS2                  = 9.80665f;
+}
+
 TR_KinematicChecks::TR_KinematicChecks()
 {
     launch_flag = false;
@@ -18,6 +30,7 @@ TR_KinematicChecks::TR_KinematicChecks()
     landing_check_dt = 1000;
     apogee_count = 0;
     landing_checks = 0;
+    impact_seen_count = 0;
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
@@ -58,6 +71,7 @@ void TR_KinematicChecks::reset()
     landing_look_back_alt = 0.0;
     apogee_count = 0;
     landing_checks = 0;
+    impact_seen_count = 0;
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
@@ -126,11 +140,14 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         landing_look_back_alt = pressure_altitude;
         landing_check_time = millis();
 
-        // Checking landing declaration criteria
+        // Checking landing declaration criteria.
+        // roll_rate threshold: 20 dps tolerates wind-induced body roll on a
+        // landed rocket (RolyPoly 5/3/26 saw 5-22 dps wobbles post-touchdown);
+        // anything below 50 dps is clearly not in flight.
         if (pressure_altitude < 50.0      // Low current altitude
          && landing_altitude_change < 2.0 // Less than 2 m change
          && max_altitude > 15.0           // Max altitude was more than 15 m
-         && fabs(roll_rate) < 2.0)        // Gyro is stable
+         && fabs(roll_rate) < 20.0)       // Gyro is stable (no longer in flight)
         {
             landing_checks++;
         }
@@ -144,6 +161,27 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         {
             alt_landed_flag = true;
         }
+    }
+
+    // ### Impact-detected fast path ###
+    // High-energy ground impact is unambiguous: descent tumbling tops out
+    // around 12 g, and a hard landing is several hundred g for ~100 ms.
+    // This runs every call (gyro rate, ~1 kHz) so we don't have to wait
+    // 5 s for the slow path to accumulate when impact already gave us a
+    // definitive ground signal. See issue #113.
+    if (apogee_flag
+     && pressure_altitude < LANDING_IMPACT_ALT_M
+     && acc_mag > LANDING_IMPACT_G * G_MS2)
+    {
+        impact_seen_count++;
+        if (impact_seen_count >= LANDING_IMPACT_COUNT)
+        {
+            alt_landed_flag = true;
+        }
+    }
+    else
+    {
+        impact_seen_count = 0;
     }
 
     // ### GPS altitude tracking ###
