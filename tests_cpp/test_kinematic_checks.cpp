@@ -195,3 +195,96 @@ TEST_F(KinematicChecksTest, Reset_ClearsAll) {
     EXPECT_FLOAT_EQ(kc.max_altitude, 0.0f);
     EXPECT_FLOAT_EQ(kc.max_speed, 0.0f);
 }
+
+// ── Tests for issue #113: relaxed gyro threshold + impact fast path ──
+
+TEST_F(KinematicChecksTest, Landing_RollRate15dps_StillPasses) {
+    // The relaxed 20 dps threshold accepts steady 15 dps wobble (e.g. wind
+    // on a landed rocket). Old 2 dps threshold would fail this case.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    ASSERT_GT(kc.max_altitude, 15.0f);
+
+    for (int second = 0; second < 7; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 15.0f);
+        }
+    }
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_RollRate25dps_DoesNotTrigger) {
+    // 25 dps exceeds the 20 dps threshold -- still rejected by slow path.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+
+    for (int second = 0; second < 7; second++) {
+        uint32_t base = 1000 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(5.0f, 9.81f, 0.0f, 25.0f);
+        }
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_FastPath_ImpactTriggers) {
+    // apogee + low altitude + >15g for 5 consecutive samples -> landed
+    kc.apogee_flag = true;
+    for (int i = 0; i < 10; i++) {
+        setMockMillis(1000 + i);
+        callFlight(5.0f, 200.0f, -10.0f, 0.0f);  // ~20g, 5m alt
+    }
+    EXPECT_TRUE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_FastPath_GatedOnApogee) {
+    // Same impact-magnitude accel pre-apogee -> NO trigger (e.g. boost spike)
+    for (int i = 0; i < 50; i++) {
+        setMockMillis(1000 + i);
+        callFlight(5.0f, 200.0f, 10.0f, 0.0f);
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_FastPath_GatedOnAltitude) {
+    // Apogee + impact-magnitude accel at altitude (e.g. ejection at apogee)
+    // -> NO trigger because pressure_altitude > 20m
+    kc.apogee_flag = true;
+    for (int i = 0; i < 50; i++) {
+        setMockMillis(1000 + i);
+        callFlight(100.0f, 200.0f, -10.0f, 0.0f);
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_FastPath_BelowG_NoTrigger) {
+    // Apogee + low altitude but accel below 15 g threshold -> NO trigger
+    kc.apogee_flag = true;
+    for (int i = 0; i < 50; i++) {
+        setMockMillis(1000 + i);
+        callFlight(5.0f, 100.0f, -10.0f, 0.0f);  // ~10g, below threshold
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Landing_FastPath_BriefSpike_CounterResets) {
+    // Single high-g sample then back to quiet -> count resets, no trigger.
+    // Verifies the noise-rejection behavior of the consecutive-sample gate.
+    kc.apogee_flag = true;
+    setMockMillis(1000);
+    callFlight(5.0f, 200.0f, -10.0f, 0.0f);  // 1 sample at impact magnitude
+    for (int i = 0; i < 100; i++) {
+        setMockMillis(1001 + i);
+        callFlight(5.0f, 9.81f, 0.0f, 0.0f);  // back to gravity floor
+    }
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
