@@ -173,6 +173,62 @@ static void flightlogBeginFlight()
     flightlog.requestPrepareFlight();
 }
 
+// Pending-finalize state. Set by flightlogEndFlight (which runs in the
+// I2S Parse task at END_FLIGHT message receipt) and serviced by
+// flightlogFlushTaskHook on the flush task (Core 0). Deferral matches the
+// pattern used for prepareFlight — keeps NAND-heavy work (FlightIndex::save
+// allocates a 2 KB page buffer on the stack via readPage) off the I2S Parse
+// task's 4 KB stack. final_bytes is read at service time (not request time)
+// because the flush task may still be draining the ring when the request
+// fires; reading it then would undercount by the still-buffered bytes.
+static portMUX_TYPE g_finalize_mux        = portMUX_INITIALIZER_UNLOCKED;
+static bool         g_finalize_pending    = false;
+static char         g_finalize_name[28]   = {};
+
+static void flightlogServicePendingFinalize()
+{
+    char name_local[sizeof(g_finalize_name)];
+    bool do_it = false;
+    portENTER_CRITICAL(&g_finalize_mux);
+    // Only act once the drain is fully complete — logger.isLoggingActive()
+    // covers both logging_active and the not-yet-cleared end_flight_requested.
+    // While either is true the flush task hasn't yet popped the last byte to
+    // the sink, so currentFileBytes() would undercount.
+    if (g_finalize_pending && !logger.isLoggingActive())
+    {
+        std::memcpy(name_local, g_finalize_name, sizeof(name_local));
+        g_finalize_pending = false;
+        do_it = true;
+    }
+    portEXIT_CRITICAL(&g_finalize_mux);
+    if (!do_it) return;
+
+    if (!flightlog.isFlightActive())
+    {
+        ESP_LOGW("FLIGHTLOG", "finalizeFlight (deferred): no active flight, skipped");
+        return;
+    }
+
+    // closeLogSession (which ran in the same flush-task iteration that drained
+    // the ring) has already zeroed current_file_bytes by the time we get here.
+    // lastClosedSessionBytes() is a sticky snapshot it took just before the
+    // reset, so this is the exact byte count the sink received.
+    const uint32_t bytes = logger.lastClosedSessionBytes();
+    auto st = flightlog.finalizeFlight(name_local, bytes);
+    if (st == tr_flightlog::Status::Ok)
+    {
+        ESP_LOGI("FLIGHTLOG",
+                 "finalizeFlight OK (deferred): %s (%u bytes, %u extensions)",
+                 name_local, (unsigned)bytes,
+                 (unsigned)flightlog.overflowExtensionCount());
+    }
+    else
+    {
+        ESP_LOGW("FLIGHTLOG", "finalizeFlight (deferred): %s",
+                 tr_flightlog::to_string(st));
+    }
+}
+
 // Drives the deferred Core-0 work for TR_FlightLog. Wired into
 // TR_LogToFlash::flushTaskLoop via cfg.flush_task_hook so it executes on the
 // flush task's core (Core 0). Logs the prepareFlight outcome here because
@@ -181,22 +237,25 @@ static void flightlogFlushTaskHook(void* /*ctx*/)
 {
     uint32_t id = 0;
     tr_flightlog::Status st = tr_flightlog::Status::Ok;
-    if (!flightlog.servicePendingPrepareFlight(id, st)) return;
+    if (flightlog.servicePendingPrepareFlight(id, st))
+    {
+        if (st == tr_flightlog::Status::Ok)
+        {
+            ESP_LOGI("FLIGHTLOG",
+                     "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
+                     (unsigned)id,
+                     (unsigned)flightlog.activeStartBlock(),
+                     (unsigned)(flightlog.activeStartBlock() + flightlog.activeBlockCount()),
+                     (unsigned)flightlog.activeBlockCount());
+        }
+        else
+        {
+            ESP_LOGW("FLIGHTLOG", "prepareFlight (deferred): %s",
+                     tr_flightlog::to_string(st));
+        }
+    }
 
-    if (st == tr_flightlog::Status::Ok)
-    {
-        ESP_LOGI("FLIGHTLOG",
-                 "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
-                 (unsigned)id,
-                 (unsigned)flightlog.activeStartBlock(),
-                 (unsigned)(flightlog.activeStartBlock() + flightlog.activeBlockCount()),
-                 (unsigned)flightlog.activeBlockCount());
-    }
-    else
-    {
-        ESP_LOGW("FLIGHTLOG", "prepareFlight (deferred): %s",
-                 tr_flightlog::to_string(st));
-    }
+    flightlogServicePendingFinalize();
 }
 
 static void flightlogEndFlight()
@@ -240,21 +299,17 @@ static void flightlogEndFlight()
         std::snprintf(name, sizeof(name), "flight_%lu.bin",
                       (unsigned long)flightlog.activeFlightId());
     }
-    // Real byte count now that writeFrame is the hot path — logger.currentFileBytes()
-    // tracks bytes popped from the ring, which equals bytes handed to the sink.
-    const uint32_t bytes = logger.currentFileBytes();
-    auto st = flightlog.finalizeFlight(name, bytes);
-    if (st == tr_flightlog::Status::Ok)
-    {
-        ESP_LOGI("FLIGHTLOG", "finalizeFlight OK: %s (%u bytes, %u extensions)",
-                 name, (unsigned)bytes,
-                 (unsigned)flightlog.overflowExtensionCount());
-    }
-    else
-    {
-        ESP_LOGW("FLIGHTLOG", "finalizeFlight: %s",
-                 tr_flightlog::to_string(st));
-    }
+    // Defer the actual finalize to the flush task. flightlog.finalizeFlight
+    // calls FlightIndex::save which reads NAND with a ~2 KB on-stack page
+    // buffer (FlightIndex.cpp:120). The I2S Parse task (where this runs)
+    // only has a 4 KB stack — enough for nominal frame parsing but not for
+    // any path that pulls in NAND I/O. flightlogServicePendingFinalize on
+    // the flush task does the actual work; final_bytes is read there too,
+    // since the flush task may still be draining the ring when this runs.
+    portENTER_CRITICAL(&g_finalize_mux);
+    std::memcpy(g_finalize_name, name, sizeof(g_finalize_name));
+    g_finalize_pending = true;
+    portEXIT_CRITICAL(&g_finalize_mux);
     // 2c-3c: do NOT delete — the flight has real data now. Index entries
     // accumulate across reboots; deletion becomes an explicit BLE cmd 3
     // operation (re-backed on TR_FlightLog in Stage 3).

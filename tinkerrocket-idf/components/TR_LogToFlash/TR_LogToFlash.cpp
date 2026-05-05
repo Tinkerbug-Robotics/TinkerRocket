@@ -1480,6 +1480,7 @@ void TR_LogToFlash::closeLogSession()
             ESP_LOGI(TAG, "closeLogSession (sink mode): %lu bytes handed off",
                      (unsigned long)current_file_bytes);
         }
+        last_closed_session_bytes_ = current_file_bytes;
         current_file_bytes = 0;
         return;
     }
@@ -1525,6 +1526,7 @@ void TR_LogToFlash::closeLogSession()
                       current_filename, current_file_bytes);
     }
 
+    last_closed_session_bytes_ = current_file_bytes;
     current_file_bytes = 0;
 }
 
