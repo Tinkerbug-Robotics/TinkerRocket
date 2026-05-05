@@ -209,7 +209,11 @@ static void flightlogServicePendingFinalize()
         return;
     }
 
-    const uint32_t bytes = logger.currentFileBytes();
+    // closeLogSession (which ran in the same flush-task iteration that drained
+    // the ring) has already zeroed current_file_bytes by the time we get here.
+    // lastClosedSessionBytes() is a sticky snapshot it took just before the
+    // reset, so this is the exact byte count the sink received.
+    const uint32_t bytes = logger.lastClosedSessionBytes();
     auto st = flightlog.finalizeFlight(name_local, bytes);
     if (st == tr_flightlog::Status::Ok)
     {
