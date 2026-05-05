@@ -59,12 +59,13 @@ namespace config
     static constexpr int SD_D3   = 8;
 
     // --- LoRa CSV Logging ---
-    static constexpr uint32_t LOG_SILENCE_TIMEOUT_MS = 30000;   // Close file after 30s of no packets
-    static constexpr uint32_t LOG_LANDED_TIMEOUT_MS  = 30000;   // Close file 30s after LANDED
+    static constexpr uint32_t LOG_SILENCE_TIMEOUT_MS  = 30000;          // Close file after 30s of no packets
+    static constexpr uint32_t LOG_INFLIGHT_SAFETY_MS  = 20 * 60 * 1000; // Safety: close log 20 min after INFLIGHT entry if LANDED never seen (#107)
     static constexpr size_t   BLE_FILE_CHUNK_SIZE    = 170;     // Bytes per BLE download chunk
     static constexpr uint32_t BLE_CHUNK_DELAY_MS     = 15;      // Delay between BLE chunks (ms)
     static constexpr size_t   FILES_PER_PAGE         = 5;       // BLE file list pagination
     static constexpr uint32_t LOG_FLUSH_INTERVAL_MS  = 10000;   // Periodic flush to flash (10s)
+    static constexpr uint32_t LOG_OPEN_RETRY_MS      = 5000;    // Retry fopen() at most this often when a start attempt fails (#107)
 
     // --- I2C Bus (MAX17205G fuel gauge) ---
     static constexpr int      I2C_SCL_PIN       = 37;
