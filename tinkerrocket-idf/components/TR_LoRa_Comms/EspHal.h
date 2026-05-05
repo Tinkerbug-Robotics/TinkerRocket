@@ -192,7 +192,13 @@ public:
         t.tx_buffer = out;
         t.rx_buffer = in;
 
-        spi_device_transmit(spiDevice, &t);
+        // Polling-mode (busy-wait, no internal ret_queue) avoids the
+        // `assert(ret_trans == trans_desc)` panic in spi_device_transmit
+        // that fires when the IDF v5.3.2 SPI master driver's per-device
+        // ret_queue gets corrupted by cross-task internal state. SX1262
+        // transfers are small (max 256 B per max_transfer_sz at 2 MHz)
+        // so the CPU spin is negligible. See issue #115.
+        spi_device_polling_transmit(spiDevice, &t);
     }
 
     void spiEndTransaction() {
