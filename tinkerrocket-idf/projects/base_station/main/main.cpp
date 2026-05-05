@@ -16,6 +16,7 @@
 #include <string>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>               // fsync() — periodic-flush SD commit (#107)
 
 #include "config.h"
 
@@ -104,8 +105,24 @@ static bool logging_active = false;
 static uint32_t log_start_ms = 0;
 static uint32_t log_last_write_ms = 0;
 static uint32_t log_last_flush_ms = 0;
-static uint32_t landed_time_ms = 0;     // When LANDED state first seen (0 = not landed)
+// Throttle for repeated fopen() attempts when startLogging() fails (#107).
+// Auto-start fires on every packet until logging_active is true; without
+// a throttle a stuck SD card would spam ESP_LOGE on every downlink.
+// Reset to 0 by stopLogging() so the next flight can retry immediately
+// rather than waiting out the residual window.
+static uint32_t log_last_open_attempt_ms = 0;
+// INFLIGHT safety net (#107): tracks the moment the rocket first enters
+// INFLIGHT.  If we never see a LANDED transition (lost LoRa during descent,
+// rocket-side IMU stuck mid-flight, etc.) we close the log
+// LOG_INFLIGHT_SAFETY_MS after the entry so the file isn't unbounded.
+// Reset on any state change away from INFLIGHT and on safety fire.
+static uint32_t inflight_entry_ms = 0;
 static uint8_t  last_rocket_state = 0;  // Track state transitions
+static bool     have_seen_first_state = false;  // Detect very first packet so we don't false-trigger LANDED-close on boot
+// Sticky inhibit set by a manual cmd 23 stop so auto-start doesn't immediately
+// re-open on the next packet (#107).  Cleared on any rocket state change or
+// by a manual cmd 23 start, so a real next flight is still captured.
+static bool     log_manual_inhibit = false;
 static bool     last_known_camera_recording = false;  // Track rocket camera state for idempotent uplink
 static bool     last_known_rocket_logging = false;    // Actual rocket logging state from LoRa downlink
 
@@ -335,7 +352,7 @@ static void startLogging()
     }
 
     // Build a filename relative to the mount point (log_filename stores VFS path)
-    char basename[32];
+    char basename[40];
     if (time_synced)
     {
         // Use timestamped filename (matches rocket's flight_YYYYMMDD_HHMMSS naming)
@@ -352,6 +369,31 @@ static void startLogging()
         snprintf(basename, sizeof(basename), "lora_%03u.csv", num);
     }
     snprintf(log_filename, sizeof(log_filename), "%s/%s", SD_MOUNT_POINT, basename);
+
+    // The LANDED-transition close (#107) closes and lets the next packet
+    // auto-restart, which can land within the same wall-clock second as
+    // the previous open — `fopen("w")` on the same path would truncate
+    // the just-finished flight.  If the timestamped name already exists,
+    // append _2/_3/.. so each flight stays on its own file.  Sequential
+    // names are already unique because findNextFileNumber returns max+1.
+    if (time_synced)
+    {
+        struct stat st;
+        if (stat(log_filename, &st) == 0)
+        {
+            char base_no_ext[40];
+            const size_t blen = strlen(basename);
+            const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".csv"
+            memcpy(base_no_ext, basename, copy);
+            base_no_ext[copy] = '\0';
+            for (int suffix = 2; suffix < 100; suffix++)
+            {
+                snprintf(log_filename, sizeof(log_filename), "%s/%s_%d.csv",
+                         SD_MOUNT_POINT, base_no_ext, suffix);
+                if (stat(log_filename, &st) != 0) break;
+            }
+        }
+    }
 
     log_file = fopen(log_filename, "w");
     if (!log_file)
@@ -373,7 +415,6 @@ static void startLogging()
     log_start_ms = millis();
     log_last_write_ms = millis();
     log_last_flush_ms = millis();
-    landed_time_ms = 0;
 
     ESP_LOGI(TAG, "[LOG] Started logging: %s", log_filename);
 }
@@ -384,7 +425,7 @@ static void stopLogging()
 
     if (log_file) { fclose(log_file); log_file = nullptr; }
     logging_active = false;
-    landed_time_ms = 0;
+    log_last_open_attempt_ms = 0;  // allow the next packet to retry immediately (#107)
 
     ESP_LOGI(TAG, "[LOG] Closed log: %s", log_filename);
 }
@@ -669,7 +710,19 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.camera_recording = lora.camera_recording;
     // Rocket logging state (actual, from LoRa downlink)
     out.logging_active = last_known_rocket_logging;
-    out.active_file = "";
+    // Surface the BS log basename as a heartbeat so the operator can
+    // confirm logging is live before each flight (#107).  The rocket-side
+    // filename isn't shipped over LoRa, so this slot is otherwise unused
+    // when the iOS app is connected via the base station.
+    if (logging_active)
+    {
+        const char* slash = strrchr(log_filename, '/');
+        out.active_file = slash ? slash + 1 : log_filename;
+    }
+    else
+    {
+        out.active_file = "";
+    }
 
     // Base station's own CSV logging state (shown as separate indicator)
     out.bs_logging_active = logging_active;
@@ -2331,9 +2384,21 @@ static void loop_bs()
 
                 printTelemetry(decoded, ls.last_rssi, ls.last_snr, lat_deg, lon_deg, alt_m);
 
-                // Base station CSV logging: auto-start on PRELAUNCH transition
-                if (decoded.rocket_state == 2 && last_rocket_state != 2)
+                // Base station CSV logging policy (#107):
+                //   • Start a log whenever a rocket packet arrives and we
+                //     aren't already logging.  Every state counts — even
+                //     READY pre-flight setup is worth keeping.
+                //   • Close on LANDED transition so the flight's data is
+                //     committed to disk immediately; the next packet will
+                //     auto-open a fresh file for any post-landing telemetry
+                //     (or the next flight, if the rocket is reused).
+                //   • Throttled by LOG_OPEN_RETRY_MS so a persistent
+                //     fopen() failure (wedged SD) doesn't log-spam.
+                if (!logging_active && !log_manual_inhibit &&
+                    (log_last_open_attempt_ms == 0 ||
+                     (millis() - log_last_open_attempt_ms) >= config::LOG_OPEN_RETRY_MS))
                 {
+                    log_last_open_attempt_ms = millis();
                     startLogging();
                 }
 
@@ -2345,24 +2410,52 @@ static void loop_bs()
                                   lat_deg, lon_deg, alt_m);
                 }
 
-                // Track LANDED timing
-                if (decoded.rocket_state == 4 && landed_time_ms == 0)
+                // Arm / disarm the INFLIGHT safety timer on state edges.
+                // Skip the very first packet so a BS that boots while the
+                // rocket is already INFLIGHT doesn't immediately disarm
+                // (last_rocket_state defaults to 0 = INITIALIZATION).
+                if (have_seen_first_state)
                 {
-                    landed_time_ms = millis();
-                    ESP_LOGI(TAG, "[LOG] LANDED state detected, starting post-landing timer");
+                    if (decoded.rocket_state == INFLIGHT && last_rocket_state != INFLIGHT)
+                    {
+                        inflight_entry_ms = millis();
+                        ESP_LOGI(TAG, "[LOG] INFLIGHT entry — safety timer armed (%u min)",
+                                 (unsigned)(config::LOG_INFLIGHT_SAFETY_MS / 60000));
+                    }
+                    else if (last_rocket_state == INFLIGHT && decoded.rocket_state != INFLIGHT)
+                    {
+                        inflight_entry_ms = 0;
+                    }
                 }
-                else if (decoded.rocket_state != 4)
+                else if (decoded.rocket_state == INFLIGHT)
                 {
-                    landed_time_ms = 0;
+                    // First packet ever, and the rocket is already in flight.
+                    // Arm the safety timer so a stuck-INFLIGHT scenario still
+                    // bounds the log size, even though we missed the entry edge.
+                    inflight_entry_ms = millis();
                 }
 
-                if (logging_active &&
-                    decoded.rocket_state == 1 && last_rocket_state >= 2)
+                // Close on LANDED transition so each flight is its own file
+                // and the data is on disk immediately.  Skip the boot edge
+                // so seeing LANDED as the first packet (post-flight reboot)
+                // doesn't generate a zero-byte file.
+                if (logging_active && have_seen_first_state &&
+                    decoded.rocket_state == LANDED && last_rocket_state != LANDED)
                 {
-                    ESP_LOGI(TAG, "[LOG] Rocket returned to READY, closing base station log");
+                    ESP_LOGI(TAG, "[LOG] LANDED transition — closing flight log");
                     stopLogging();
                 }
 
+                // Any rocket-state change clears the manual stop inhibit so
+                // the next flight gets logged automatically (#107).
+                if (have_seen_first_state && decoded.rocket_state != last_rocket_state &&
+                    log_manual_inhibit)
+                {
+                    log_manual_inhibit = false;
+                    ESP_LOGI(TAG, "[LOG] State change cleared manual stop inhibit");
+                }
+
+                have_seen_first_state = true;
                 last_rocket_state = decoded.rocket_state;
                 updateFreqLockFromRocketState(decoded.rocket_state);
 
@@ -2437,11 +2530,20 @@ static void loop_bs()
         }
     }
 
-    // Post-landing timeout: close log 30s after LANDED
-    if (logging_active && landed_time_ms > 0 &&
-        (millis() - landed_time_ms) >= config::LOG_LANDED_TIMEOUT_MS)
+    // INFLIGHT safety timeout (#107): close the log if we've been in
+    // INFLIGHT for too long without seeing LANDED.  Catches lost-LoRa-
+    // during-descent and stuck-rocket-state-machine scenarios so the
+    // file isn't unbounded.  Disarmed (= 0) after firing; the next
+    // INFLIGHT entry re-arms.  Does NOT inhibit the auto-restart that
+    // fires on the next packet — if the rocket is genuinely stuck in
+    // INFLIGHT past the cap, we'll start a fresh file uncapped, and
+    // the operator will see two files instead of one.
+    if (logging_active && inflight_entry_ms > 0 &&
+        (millis() - inflight_entry_ms) >= config::LOG_INFLIGHT_SAFETY_MS)
     {
-        ESP_LOGI(TAG, "[LOG] Post-landing timeout, closing log file");
+        ESP_LOGW(TAG, "[LOG] INFLIGHT safety timeout (%u min), closing log",
+                 (unsigned)(config::LOG_INFLIGHT_SAFETY_MS / 60000));
+        inflight_entry_ms = 0;
         stopLogging();
     }
 
@@ -2452,10 +2554,18 @@ static void loop_bs()
         stopLogging();
     }
 
-    // Periodic flush to flash
+    // Periodic flush to flash.  fflush() only pushes stdio buffers down to
+    // the OS — fsync() forces FATFS to commit dirty sectors to the SD card,
+    // so a power loss within the flush window doesn't lose buffered
+    // telemetry.  Skip fsync on SPIFFS fallback: SPIFFS persists writes
+    // synchronously and fsync is a no-op there.  (#107)
     if (logging_active && (millis() - log_last_flush_ms) >= config::LOG_FLUSH_INTERVAL_MS)
     {
-        if (log_file) fflush(log_file);
+        if (log_file)
+        {
+            fflush(log_file);
+            if (!using_internal_flash) fsync(fileno(log_file));
+        }
         log_last_flush_ms = millis();
     }
 
@@ -2530,6 +2640,7 @@ static void loop_bs()
         // Base station logging state is the toggle authority — rocket follows.
         if (!logging_active)
         {
+            log_manual_inhibit = false;  // explicit start clears any prior inhibit (#107)
             startLogging();
             ESP_LOGI(TAG, "[LOG] Base station logging started (manual)");
 
@@ -2543,7 +2654,11 @@ static void loop_bs()
         else
         {
             stopLogging();
-            ESP_LOGI(TAG, "[LOG] Base station logging stopped (manual)");
+            // Sticky inhibit: don't auto-restart on the next packet.  Cleared
+            // on the next rocket state change so a real next flight is still
+            // captured automatically.  (#107)
+            log_manual_inhibit = true;
+            ESP_LOGI(TAG, "[LOG] Base station logging stopped (manual; auto-restart inhibited until state change)");
 
             if (last_known_rocket_logging)
             {
