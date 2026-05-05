@@ -139,6 +139,12 @@ public:
     // Bytes drained from the ring into the current flight so far (reset at
     // openLogSession, incremented as pages are pushed to the sink/LFS).
     uint32_t currentFileBytes() const { return current_file_bytes; }
+
+    // Bytes drained during the most recently closed session. Captured by
+    // closeLogSession just before current_file_bytes is reset, so callers
+    // that finalize the flight on a later flush-task iteration (after the
+    // close runs) can still recover the final byte count.
+    uint32_t lastClosedSessionBytes() const { return last_closed_session_bytes_; }
     void startLogging();
     void endLogging(); // request close after buffered data is flushed
     void prepareLogFile();  // Pre-create log file (call during PRELAUNCH to avoid NAND stall at launch)
@@ -354,6 +360,10 @@ private:
     // Current file tracking
     char current_filename[64] = {};
     uint32_t current_file_bytes = 0;
+    // Sticky byte count from the most recently closed session (see
+    // lastClosedSessionBytes()). Updated by closeLogSession before
+    // current_file_bytes is reset.
+    uint32_t last_closed_session_bytes_ = 0;
     bool current_file_has_timestamp = false;
 
     // Deferred timestamp (set from Core 1, applied by flush task on Core 0)
