@@ -33,6 +33,21 @@ struct DashboardView: View {
     @State private var activeSheet: DashboardSheet?
     @State private var showProvisioning = false
 
+    /// Toolbar speaker icon — color reflects audio session readiness so the
+    /// operator can verify voice is alive at a glance before launch:
+    ///   gray   = voice off
+    ///   green  = voice on, audio session active (READY)
+    ///   orange = voice on, session not active (probably interrupted)
+    ///   red    = last session call returned an error
+    private var voiceIconName: String {
+        flightAnnouncer.isEnabled ? "speaker.wave.2.fill" : "speaker.slash"
+    }
+    private var voiceIconColor: Color {
+        guard flightAnnouncer.isEnabled else { return .gray }
+        if flightAnnouncer.lastSessionError != nil { return .red }
+        return flightAnnouncer.audioSessionActive ? .green : .orange
+    }
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -133,9 +148,8 @@ struct DashboardView: View {
                             Button {
                                 flightAnnouncer.isEnabled.toggle()
                             } label: {
-                                Image(systemName: flightAnnouncer.isEnabled
-                                      ? "speaker.wave.2.fill" : "speaker.slash")
-                                    .foregroundColor(flightAnnouncer.isEnabled ? .blue : .gray)
+                                Image(systemName: voiceIconName)
+                                    .foregroundColor(voiceIconColor)
                             }
                             .simultaneousGesture(
                                 LongPressGesture().onEnded { _ in

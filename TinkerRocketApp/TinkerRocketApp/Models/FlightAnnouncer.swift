@@ -14,10 +14,15 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
 
     @Published var isEnabled: Bool = false
 
+    // Status surface for the dashboard "voice ready" indicator
+    // (the toolbar speaker icon colour reads from these).
+    @Published private(set) var audioSessionActive: Bool = false
+    @Published private(set) var lastSessionError: String?
+
     // MARK: - Private State
 
     private let synthesizer = AVSpeechSynthesizer()
-    private var enabledCancellable: AnyCancellable?
+    private var cancellables = Set<AnyCancellable>()
 
     // Previous telemetry for edge detection
     private var previousTelemetry: TelemetryData?
@@ -46,22 +51,65 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     private static let altitudeInterval: TimeInterval = 5.0       // seconds between altitude callouts
     private static let descentInterval: TimeInterval = 10.0       // seconds between descent callouts
     private static let burnoutMinSpeed: Float = 10.0              // ignore burnout below this speed (m/s)
+    private static let speechRate: Float = 0.52                   // AVSpeechUtterance default is 0.5
+
+    private static let enabledKey = "voiceAnnouncementsEnabled"
 
     // MARK: - Init
 
     override init() {
         super.init()
-        isEnabled = UserDefaults.standard.bool(forKey: "voiceAnnouncementsEnabled")
         synthesizer.delegate = self
 
-        // Persist toggle (audio session is configured lazily in speakNow(),
-        // NOT here — configuring on toggle was taking over the audio routing
-        // immediately, which the user perceived as "turning up the volume").
-        enabledCancellable = $isEnabled
-            .dropFirst() // skip initial value
-            .sink { enabled in
-                UserDefaults.standard.set(enabled, forKey: "voiceAnnouncementsEnabled")
+        isEnabled = UserDefaults.standard.bool(forKey: Self.enabledKey)
+
+        // Configure (and activate, if enabled) the audio session up-front.
+        // Activating is what makes the iPhone hardware volume buttons
+        // control *media* volume instead of ringer volume — that's how the
+        // operator dials in callout loudness, no in-app slider needed.
+        configureAudioSession()
+        if isEnabled {
+            activateSession()
+        }
+
+        $isEnabled
+            .dropFirst()
+            .sink { [weak self] enabled in
+                UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
+                guard let self = self else { return }
+                if enabled {
+                    self.activateSession()
+                    // Audible confirmation that voice is alive and at the
+                    // current phone volume. Without this the toggle is
+                    // silent and the operator can't tell if it's working
+                    // until the first in-flight callout fires.
+                    self.announceImmediate("Voice ready")
+                } else {
+                    self.deactivateSession()
+                }
             }
+            .store(in: &cancellables)
+
+        // Recover from interruptions (phone call, Siri) and route changes
+        // (BT pair/unpair, headphone unplug). Without these, the session can
+        // silently end and the next utterance never reaches the speaker.
+        let nc = NotificationCenter.default
+        nc.addObserver(self,
+                       selector: #selector(handleInterruption(_:)),
+                       name: AVAudioSession.interruptionNotification,
+                       object: nil)
+        nc.addObserver(self,
+                       selector: #selector(handleRouteChange(_:)),
+                       name: AVAudioSession.routeChangeNotification,
+                       object: nil)
+        nc.addObserver(self,
+                       selector: #selector(handleMediaServicesReset(_:)),
+                       name: AVAudioSession.mediaServicesWereResetNotification,
+                       object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - Audio Session
@@ -71,10 +119,83 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
             try AVAudioSession.sharedInstance().setCategory(
                 .playback,
                 mode: .voicePrompt,
-                options: [.mixWithOthers]
+                options: [.mixWithOthers, .duckOthers]
             )
+            lastSessionError = nil
         } catch {
-            print("[Announcer] Audio session config failed: \(error)")
+            lastSessionError = "config: \(error.localizedDescription)"
+            announcerLog("Audio session config failed: \(error)")
+        }
+    }
+
+    private func activateSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            audioSessionActive = true
+            lastSessionError = nil
+        } catch {
+            audioSessionActive = false
+            lastSessionError = "activate: \(error.localizedDescription)"
+            announcerLog("Audio session activate failed: \(error)")
+        }
+    }
+
+    private func deactivateSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                false, options: [.notifyOthersOnDeactivation])
+            audioSessionActive = false
+        } catch {
+            // Deactivation can fail if speech is mid-utterance — that's fine.
+            announcerLog("Audio session deactivate failed: \(error)")
+        }
+    }
+
+    @objc private func handleInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            switch type {
+            case .began:
+                self.audioSessionActive = false
+                announcerLog("Audio interrupted")
+            case .ended:
+                announcerLog("Audio interruption ended — reactivating")
+                self.configureAudioSession()
+                if self.isEnabled { self.activateSession() }
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    @objc private func handleRouteChange(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            announcerLog("Route change reason=\(reason.rawValue)")
+            // Re-assert the category. Some route changes (BT disconnect,
+            // headphone unplug) can implicitly downgrade the session back to
+            // ambient, which respects the silent switch and would mute us.
+            if self.isEnabled {
+                self.configureAudioSession()
+                self.activateSession()
+            }
+        }
+    }
+
+    @objc private func handleMediaServicesReset(_ note: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            announcerLog("Media services reset — reconfiguring")
+            self.configureAudioSession()
+            if self.isEnabled { self.activateSession() }
         }
     }
 
@@ -150,6 +271,7 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     /// Speak a test phrase so the user can verify volume and voice before flight
     func testVoice() {
         configureAudioSession()
+        activateSession()
         announceImmediate("Voice check. Announcements are enabled.")
     }
 
@@ -246,7 +368,10 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     /// Speak a periodic announcement. Skips if already speaking — the next
     /// scheduled callout will have fresher data instead of queuing stale info.
     private func announce(_ message: String) {
-        guard !isSpeaking else { return }
+        guard !isSpeaking else {
+            recordSkip(reason: "isSpeaking", text: message)
+            return
+        }
         speakNow(message)
     }
 
@@ -257,26 +382,29 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     }
 
     private func speakNow(_ text: String) {
-        // Ensure correct audio category before every speech attempt.
-        // Other views (e.g. keyboard in SimulationView) may have changed
-        // the session category, so we always reconfigure before speaking.
+        // Defensive: re-assert category and activate before every speech.
+        // Other views (e.g. the keyboard in SimulationView) may have changed
+        // the category, and silent route changes can downgrade the session.
         configureAudioSession()
-
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("[Announcer] Audio activation error: \(error)")
-        }
+        activateSession()
 
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = 0.52
+        utterance.rate = Self.speechRate
         utterance.pitchMultiplier = 1.0
-        utterance.volume = 0.9
+        // volume = 1.0 means "play at full per-utterance gain"; final loudness
+        // is then scaled by the iPhone hardware volume buttons. No in-app
+        // slider needed — phone volume is the volume.
+        utterance.volume = 1.0
         utterance.postUtteranceDelay = 0.1
 
         isSpeaking = true
+        announcerLog("Speak: \(text)")
         synthesizer.speak(utterance)
+    }
+
+    private func recordSkip(reason: String, text: String) {
+        announcerLog("Skip [\(reason)]: \(text)")
     }
 
     // MARK: - AVSpeechSynthesizerDelegate
@@ -303,4 +431,8 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         lastDescentAnnounceTime = .distantPast
         launchLocation = nil
     }
+}
+
+private func announcerLog(_ message: String) {
+    print("[Announcer] \(message)")
 }
