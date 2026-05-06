@@ -191,6 +191,7 @@ static constexpr uint8_t LORA_NOISE_THRESHOLD_DB  = 15;   // skip if peak > medi
 static constexpr uint8_t LORA_CMD_CHANNEL_SET     = 15;   // uplink cmd: rendezvous + mask
 static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on lora_freq_mhz for N ms (#90)
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
+static constexpr uint8_t LORA_CMD_SET_HOP_DISABLED = 17;  // uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics, #106)
 
 // Minimum SNR (dB) for an RX packet to be considered trustworthy at the
 // given spreading factor.  Bench-confirmed in #90 follow-up: a CRC-

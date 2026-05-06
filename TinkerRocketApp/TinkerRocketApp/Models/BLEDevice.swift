@@ -373,6 +373,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(11, payload: Data([enabled ? 0x01 : 0x00]))
     }
 
+    /// Disable / re-enable LoRa frequency hopping (#106).  Only meaningful
+    /// when sent to the base station — the BS persists the new value, hands
+    /// off to the rocket via the corresponding uplink cmd, and restores
+    /// fixed-frequency operation on lora_freq_mhz.  Sending this directly
+    /// to a rocket is rejected by the rocket-side firmware.
+    func sendLoRaHopDisabled(_ disabled: Bool) {
+        sendRawCommand(17, payload: Data([disabled ? 0x01 : 0x00]))
+        if var cfg = rocketConfig {
+            cfg.loraHopDisabled = disabled
+            rocketConfig = cfg
+        }
+    }
+
     func sendServoConfig(biases: [Int16], hz: Int16, minUs: Int16, maxUs: Int16) {
         var payload = Data()
         for i in 0..<4 {
@@ -938,6 +951,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraBwKHz = parseFloat(dict["lbw"])
             cfg.loraCR = (dict["lcr"] as? Int).map { UInt8($0) }
             cfg.loraTxPower = (dict["lpw"] as? Int).map { Int8($0) }
+            cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode

@@ -162,6 +162,14 @@ static uint8_t  hop_idx_          = 0;
 static bool     hop_needs_retune_ = false;
 static uint32_t hop_last_rx_ms_   = 0;
 
+// Operator override (#106): suppress hopping in PRELAUNCH/INFLIGHT and stay
+// on lora_freq_mhz instead.  BS is the authority; the BLE handler for
+// cmd 17 updates this flag, persists to NVS, and uplinks the same byte to
+// the rocket via LORA_CMD_SET_HOP_DISABLED so both sides stay aligned.
+// Diagnostic / link-debugging mode only — fixed-frequency in flight is
+// not FHSS-compliant.
+static bool     lora_hop_disabled = false;
+
 // ----------------------------------------------------------------------------
 // Channel-set state (#40 / #41 phase 3)
 // ----------------------------------------------------------------------------
@@ -880,14 +888,16 @@ static void sendCurrentConfig()
              ",\"kp\":%.4f,\"ki\":%.4f,\"kd\":%.4f"
              ",\"pmn\":%.1f,\"pmx\":%.1f"
              ",\"sen\":%s"
-             ",\"lf\":%.1f,\"lsf\":%u,\"lbw\":%.0f,\"lcr\":%u,\"lpw\":%d}",
+             ",\"lf\":%.1f,\"lsf\":%u,\"lbw\":%.0f,\"lcr\":%u,\"lpw\":%d"
+             ",\"lhd\":%s}",
              (int)cfg_servo_bias1, (int)cfg_servo_hz,
              (int)cfg_servo_min, (int)cfg_servo_max,
              (double)cfg_pid_kp, (double)cfg_pid_ki, (double)cfg_pid_kd,
              (double)cfg_pid_min, (double)cfg_pid_max,
              cfg_servo_enabled ? "true" : "false",
              (double)lora_freq_mhz, (unsigned)lora_sf,
-             (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+             (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
+             lora_hop_disabled ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(buf)) {
         ESP_LOGW(TAG, "[CFG] Config JSON truncated! (%d bytes, buf=%u)", n, (unsigned)sizeof(buf));
     }
@@ -2122,10 +2132,12 @@ static void setup_bs()
     lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
     lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
     lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
+    lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
     prefs.end();
-    ESP_LOGI(TAG, "[CFG] LoRa NVS: %.1f MHz SF%u BW%.0f CR%u %d dBm",
+    ESP_LOGI(TAG, "[CFG] LoRa NVS: %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
              (double)lora_freq_mhz, (unsigned)lora_sf,
-             (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+             (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
+             (int)lora_hop_disabled);
 
     // Channel-set: rendezvous freq + skip-mask from the most recent
     // pre-launch scan (#40 / #41 phase 3).  Falls back to defaults if
@@ -2464,7 +2476,13 @@ static void loop_bs()
                 // we should be next.  Honoured as soon as the radio is
                 // idle (top of serviceLoRa) — we don't retune in the RX
                 // callback path because the radio still has work to do.
-                if (shouldHopInState(decoded.rocket_state))
+                // #106: when the operator has disabled hopping, ignore the
+                // rocket's next_channel_idx and stay on lora_freq_mhz.  The
+                // rocket-side LORA_CMD_SET_HOP_DISABLED handler also clears
+                // its own hop_active_ so it stops emitting non-NO_HOP indices,
+                // but we belt-and-brace here in case the rocket missed the
+                // uplink and is still hopping.
+                if (!lora_hop_disabled && shouldHopInState(decoded.rocket_state))
                 {
                     if (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP)
                     {
@@ -2795,6 +2813,36 @@ static void loop_bs()
             buildUplinkPacket(14, payload, 1);
             ESP_LOGI(TAG, "[BLE->UPLINK] Servo control: %s",
                      cfg_servo_enabled ? "ENABLE" : "DISABLE");
+        }
+    }
+    else if (ble_cmd == LORA_CMD_SET_HOP_DISABLED)
+    {
+        // BS-controlled hop enable/disable (#106).  Persist locally,
+        // re-tune to lora_freq_mhz immediately if we were tracking a hop,
+        // and uplink the same byte to the rocket so both sides agree.
+        const uint8_t* payload = ble_app.getCommandPayload();
+        size_t payload_len = ble_app.getCommandPayloadLength();
+        if (payload_len >= 1)
+        {
+            const bool new_disabled = (payload[0] != 0);
+            if (new_disabled != lora_hop_disabled)
+            {
+                lora_hop_disabled = new_disabled;
+                prefs.begin("lora", false);
+                prefs.putUChar("hopdis", lora_hop_disabled ? 1 : 0);
+                prefs.end();
+                if (lora_hop_disabled && hop_active_)
+                {
+                    // Drop hop tracking so the next radio service tick
+                    // returns us to lora_freq_mhz.
+                    hop_active_       = false;
+                    hop_needs_retune_ = true;
+                }
+            }
+            buildUplinkPacket(LORA_CMD_SET_HOP_DISABLED, payload, 1);
+            ESP_LOGI(TAG, "[BLE->UPLINK] Hop disable: %s",
+                     lora_hop_disabled ? "DISABLED (fixed freq)" : "ENABLED");
+            sendCurrentConfig();
         }
     }
     else if (ble_cmd == 20)
