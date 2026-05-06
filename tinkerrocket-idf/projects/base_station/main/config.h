@@ -67,6 +67,16 @@ namespace config
     static constexpr uint32_t LOG_FLUSH_INTERVAL_MS  = 10000;   // Periodic flush to flash (10s)
     static constexpr uint32_t LOG_OPEN_RETRY_MS      = 5000;    // Retry fopen() at most this often when a start attempt fails (#107)
 
+    // --- BLE telemetry staleness (#95) ---
+    // The BS periodic push re-sends the most recent rocket telemetry every
+    // PWR_UPDATE_PERIOD_MS so battery / RSSI stay live even between LoRa
+    // packets.  Once the underlying packet is older than BLE_TELEMETRY_STALE_MS
+    // we mark the BLE payload as stale (with age) so the iOS app can dim
+    // the values + show a "stale (Ns ago)" badge instead of pretending the
+    // numbers are fresh.  Sized just above the slowest steady-state packet
+    // cadence (Long Range preset ≈ 2 Hz) plus a couple of misses.
+    static constexpr uint32_t BLE_TELEMETRY_STALE_MS = 3000;
+
     // --- I2C Bus (MAX17205G fuel gauge) ---
     static constexpr int      I2C_SCL_PIN       = 37;
     static constexpr int      I2C_SDA_PIN       = 38;

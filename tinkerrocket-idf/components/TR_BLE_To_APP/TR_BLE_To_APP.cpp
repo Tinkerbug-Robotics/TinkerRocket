@@ -1079,6 +1079,15 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
         }
     }
 
+    // #95: data freshness status.  LIVE is the default and is omitted
+    // entirely to save bytes — the iOS app treats "ds" absent as LIVE.
+    if (data.data_status != TelemetryData::DataStatus::LIVE) {
+        addInt("ds", (int)data.data_status);
+        if (data.data_status == TelemetryData::DataStatus::STALE) {
+            addUint("age", data.data_age_ms);
+        }
+    }
+
     buf[pos++] = '}';
     buf[pos] = '\0';
 

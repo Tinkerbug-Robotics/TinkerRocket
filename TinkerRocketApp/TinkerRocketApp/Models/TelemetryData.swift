@@ -97,6 +97,13 @@ struct TelemetryData: Codable {
     var source_rocket_id: Int?        // rocket_id from LoRa header
     var source_unit_name: String?     // rocket unit name from LoRa beacon
 
+    // Telemetry freshness status (#95).  Sent by the BS in periodic-push
+    // payloads; absent from RX-path payloads (which are always live) and
+    // from direct rocket connections.  iOS treats a missing "ds" as live.
+    enum DataStatus: Int, Codable { case live = 0, stale = 1, syncing = 2 }
+    var data_status: DataStatus = .live
+    var data_age_ms: UInt32 = 0      // only meaningful when .stale
+
     // Pyro channel status (packed bitfield from "ps" JSON key, decoded in init)
     var pyro_status_bits: Int = 0
     var pyro1_armed: Bool { (pyro_status_bits & 0x01) != 0 }
@@ -151,6 +158,8 @@ struct TelemetryData: Codable {
         case pyro_status_bits = "ps"  // packed bitfield: b0=ch1_armed, b1=ch1_cont, b2=ch1_fired, b3=ch2_armed, b4=ch2_cont, b5=ch2_fired
         case source_rocket_id = "rid"
         case source_unit_name = "run"
+        case data_status = "ds"        // #95
+        case data_age_ms = "age"       // #95
     }
 
     // Custom decoder: non-optional fields with defaults need decodeIfPresent
@@ -203,6 +212,10 @@ struct TelemetryData: Codable {
         pyro_status_bits = try c.decodeIfPresent(Int.self, forKey: .pyro_status_bits) ?? 0
         source_rocket_id = try c.decodeIfPresent(Int.self, forKey: .source_rocket_id)
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
+        // #95: missing "ds" → .live (older firmware doesn't emit it)
+        let dsRaw = try c.decodeIfPresent(Int.self, forKey: .data_status) ?? 0
+        data_status = DataStatus(rawValue: dsRaw) ?? .live
+        data_age_ms = try c.decodeIfPresent(UInt32.self, forKey: .data_age_ms) ?? 0
     }
 
     // Default memberwise init (for creating empty telemetry)
