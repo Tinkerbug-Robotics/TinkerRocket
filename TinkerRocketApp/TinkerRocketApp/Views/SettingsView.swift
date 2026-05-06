@@ -172,31 +172,28 @@ struct SettingsView: View {
                 }
 
                 // --- LoRa Settings ---
-
-                // Frequency is read-only here — it changes only via the
-                // Frequency Scan view (issue #71).  Show the currently active
-                // value so the user can confirm both devices match.
-                Section(header: Text("LoRa Frequency"),
-                        footer: Text(device.isBaseStation
-                            ? "To change frequency, run a Frequency Scan on the base station. The scan picks the quietest channel and applies it transactionally to both devices."
-                            : "Frequency is managed from the base station. Connect to the base station to change it.")) {
-                    HStack {
-                        Text("Current")
-                        Spacer()
-                        Text(String(format: "%.2f MHz", currentFreqMHz))
-                            .foregroundColor(.secondary)
-                            .font(.system(.body, design: .monospaced))
-                    }
-                }
-
-                // LoRa modulation (preset + TX power) is editable ONLY on the
-                // base station.  The base station relays its config to every
-                // tracked rocket via the transactional Cmd 10 path, keeping
-                // both ends in lockstep.  On a direct rocket connection we
-                // show the loaded values read-only so the user can verify
-                // they match — but never edit, eliminating the "I changed
-                // it on the rocket but not the BS" footgun.
+                //
+                // The entire LoRa region is base-station-only (#106).  When
+                // connected directly to a rocket we hide every LoRa control
+                // and the read-only summary too, so the page can't even
+                // suggest the rocket's link parameters are user-editable
+                // here.  The rocket follows whatever the BS dictates — the
+                // user must connect to the BS to inspect or change them.
                 if device.isBaseStation {
+                    // Frequency is read-only here — it changes only via the
+                    // Frequency Scan view (issue #71).  Show the currently
+                    // active value so the user can confirm both devices match.
+                    Section(header: Text("LoRa Frequency"),
+                            footer: Text("To change frequency, run a Frequency Scan on the base station. The scan picks the quietest channel and applies it transactionally to both devices.")) {
+                        HStack {
+                            Text("Current")
+                            Spacer()
+                            Text(String(format: "%.2f MHz", currentFreqMHz))
+                                .foregroundColor(.secondary)
+                                .font(.system(.body, design: .monospaced))
+                        }
+                    }
+
                     // Preset picker
                     Section("LoRa Range / Rate Preset") {
                         Picker("Preset", selection: $presetId) {
@@ -228,12 +225,13 @@ struct SettingsView: View {
                         }
                     }
 
-                    // Frequency-hopping override (#106).  Diagnostic / link-debug
-                    // mode — disables the per-packet channel hopping that runs in
-                    // PRELAUNCH/INFLIGHT and pins both BS and rocket to a fixed
-                    // frequency.  Useful for isolating link issues from hop
-                    // coordination bugs.  Sends cmd 17 to the BS, which persists
-                    // and uplinks the same byte to every tracked rocket.
+                    // Frequency-hopping override (#106).  Diagnostic /
+                    // link-debug mode — disables the per-packet channel
+                    // hopping that runs in PRELAUNCH/INFLIGHT and pins both
+                    // BS and rocket to a fixed frequency.  Useful for
+                    // isolating link issues from hop coordination bugs.
+                    // Sends cmd 17 to the BS, which persists and uplinks
+                    // the same byte to every tracked rocket.
                     Section(header: Text("LoRa Frequency Hopping"),
                             footer: Text(loraHopDisabled
                                 ? "DISABLED — both ends stay on the configured frequency. Not FHSS-compliant; use for diagnostics only."
@@ -246,36 +244,16 @@ struct SettingsView: View {
                             }
                         ))
                     }
-                }
 
-                // Summary — what the user is about to apply (BS) vs. what
-                // the rocket has loaded right now (rocket-direct).
-                Section("LoRa Summary") {
-                    infoRow(label: "Frequency", value: String(format: "%.2f MHz", currentFreqMHz))
-                    if device.isBaseStation {
+                    // Summary — what the user is about to apply.
+                    Section("LoRa Summary") {
+                        infoRow(label: "Frequency", value: String(format: "%.2f MHz", currentFreqMHz))
                         infoRow(label: "Spreading Factor", value: "SF\(selectedPreset.sf)")
                         infoRow(label: "Bandwidth", value: String(format: "%.0f kHz", selectedPreset.bwKHz))
                         infoRow(label: "Coding Rate", value: "4/5")
                         infoRow(label: "TX Power", value: "\(Int(txPower)) dBm")
                         infoRow(label: "Time on Air", value: selectedPreset.approxToA)
                         infoRow(label: "Est. Range (LOS)", value: selectedPreset.approxRange)
-                    } else if let cfg = device.rocketConfig {
-                        // Read-only view of whatever the rocket actually has.
-                        if let sf = cfg.loraSF {
-                            infoRow(label: "Spreading Factor", value: "SF\(sf)")
-                        }
-                        if let bw = cfg.loraBwKHz {
-                            infoRow(label: "Bandwidth", value: String(format: "%.0f kHz", bw))
-                        }
-                        if let cr = cfg.loraCR {
-                            infoRow(label: "Coding Rate", value: "4/\(cr)")
-                        }
-                        if let pwr = cfg.loraTxPower {
-                            infoRow(label: "TX Power", value: "\(pwr) dBm")
-                        }
-                    } else {
-                        Text("Waiting for rocket config readback…")
-                            .font(.caption).foregroundColor(.secondary)
                     }
                 }
 
