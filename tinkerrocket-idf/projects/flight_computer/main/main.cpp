@@ -25,6 +25,8 @@
 #include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <esp_task_wdt.h>
@@ -301,6 +303,94 @@ static uint32_t computeSnapshotCRC(const FlightSnapshot& snap)
     return crc.calc();
 }
 
+// --- Snapshot deferral (issue #104 follow-up) ---
+// Producer: loop_fc on Core 1 builds the snapshot at 10 Hz and drops it
+// into snap_pending_slot under a mutex.  Consumer: snap_worker_task on
+// Core 0 wakes on snap_signal, copies the slot out, and writes to NVS.
+// The Preferences.putBytes call blocks for 5-80 ms (NVS GC every 3-4
+// writes hits page erase) — keeping it on Core 0 keeps loop_fc rate at
+// 1 kHz.  Drop-old semantics: producer uses a 0-timeout mutex try-take,
+// so if the worker is mid-copy the producer just drops this tick.  The
+// next 100 ms tick will retry with newer data — only the latest
+// snapshot needs to survive a crash for recovery.
+//
+// clearFlightSnapshot also routes through the worker (CLEAR command)
+// to avoid the race where loop_fc clears NVS while the worker is
+// mid-write of an INFLIGHT snapshot — that race could resurrect the
+// just-cleared snapshot and trigger spurious recovery on next boot.
+enum class SnapCmd : uint8_t { NONE = 0, SAVE, CLEAR };
+static SemaphoreHandle_t snap_mutex = nullptr;
+static SemaphoreHandle_t snap_signal = nullptr;
+static FlightSnapshot    snap_pending_slot = {};
+static SnapCmd           snap_pending_cmd = SnapCmd::NONE;
+static TaskHandle_t      snap_worker_task_handle = nullptr;
+static uint32_t          snap_drops_mutex = 0;   // producer dropped: mutex contended
+static uint32_t          snap_writes_ok  = 0;
+static uint32_t          snap_clears_ok  = 0;
+static uint32_t          snap_max_write_us = 0;
+
+static void snapshotWorkerTask(void*)
+{
+    for (;;) {
+        // Wait until producer signals fresh work.
+        xSemaphoreTake(snap_signal, portMAX_DELAY);
+
+        // Copy slot to local under mutex.  NVS work happens OUTSIDE
+        // the mutex so the producer is never blocked by flash.
+        SnapCmd cmd = SnapCmd::NONE;
+        FlightSnapshot local;
+        if (xSemaphoreTake(snap_mutex, portMAX_DELAY) == pdTRUE) {
+            cmd = snap_pending_cmd;
+            if (cmd == SnapCmd::SAVE) {
+                local = snap_pending_slot;
+            }
+            snap_pending_cmd = SnapCmd::NONE;
+            xSemaphoreGive(snap_mutex);
+        }
+
+        const int64_t t0 = esp_timer_get_time();
+        if (cmd == SnapCmd::SAVE) {
+            Preferences snap_prefs;
+            if (snap_prefs.begin("fsnap", false)) {
+                snap_prefs.putBytes("s", &local, sizeof(local));
+                snap_prefs.end();
+                snap_writes_ok++;
+            }
+        } else if (cmd == SnapCmd::CLEAR) {
+            Preferences snap_prefs;
+            if (snap_prefs.begin("fsnap", false)) {
+                snap_prefs.remove("s");
+                snap_prefs.end();
+                snap_clears_ok++;
+            }
+        }
+        const uint32_t dt = (uint32_t)(esp_timer_get_time() - t0);
+        if (dt > snap_max_write_us) snap_max_write_us = dt;
+    }
+}
+
+static void initSnapshotWorker()
+{
+    snap_mutex = xSemaphoreCreateMutex();
+    snap_signal = xSemaphoreCreateBinary();
+    if (snap_mutex == nullptr || snap_signal == nullptr) {
+        ESP_LOGE(TAG, "[SNAP] failed to create deferral primitives — snapshots disabled");
+        return;
+    }
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        snapshotWorkerTask,
+        "snap_worker",
+        4096,
+        nullptr,
+        1,                         // below I2S Sender (prio 2) and sensor tasks
+        &snap_worker_task_handle,
+        config::SENSOR_CORE);      // Core 0 — keep flight task (Core 1) clean
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "[SNAP] failed to create worker task — snapshots disabled");
+        snap_worker_task_handle = nullptr;
+    }
+}
+
 static void saveFlightSnapshot(uint32_t now_ms)
 {
     FlightSnapshot snap = {};
@@ -338,19 +428,44 @@ static void saveFlightSnapshot(uint32_t now_ms)
 
     snap.crc32 = computeSnapshotCRC(snap);
 
-    Preferences snap_prefs;
-    if (snap_prefs.begin("fsnap", false)) {
-        snap_prefs.putBytes("s", &snap, sizeof(snap));
-        snap_prefs.end();
+    // Hand off to the Core-0 worker.  Non-blocking try-take: if the
+    // worker is mid-copy, drop this tick — the next 100 ms tick will
+    // retry with newer state (only the latest snapshot matters for
+    // crash recovery, and Preferences.putBytes can block 5-80 ms).
+    if (snap_mutex == nullptr || snap_signal == nullptr) {
+        return;  // worker init failed — snapshots disabled
+    }
+    if (xSemaphoreTake(snap_mutex, 0) == pdTRUE) {
+        snap_pending_slot = snap;
+        snap_pending_cmd  = SnapCmd::SAVE;
+        xSemaphoreGive(snap_mutex);
+        xSemaphoreGive(snap_signal);
+    } else {
+        snap_drops_mutex++;
     }
 }
 
 static void clearFlightSnapshot()
 {
-    Preferences snap_prefs;
-    if (snap_prefs.begin("fsnap", false)) {
-        snap_prefs.remove("s");
-        snap_prefs.end();
+    // Sync fallback when the worker isn't up yet (boot-time call before
+    // initSnapshotWorker()).  Safe — runs once before loop_fc starts.
+    if (snap_mutex == nullptr || snap_signal == nullptr) {
+        Preferences snap_prefs;
+        if (snap_prefs.begin("fsnap", false)) {
+            snap_prefs.remove("s");
+            snap_prefs.end();
+        }
+        return;
+    }
+    // Worker is up — defer the clear so it serializes with any pending
+    // SAVE.  Without this, loop_fc could clear NVS while the worker is
+    // mid-write of an INFLIGHT snapshot, resurrecting it after the clear
+    // and triggering spurious recovery on next boot.  Block on the mutex
+    // (rather than try-take) since clear is rare (boot, LANDED, sim end).
+    if (xSemaphoreTake(snap_mutex, portMAX_DELAY) == pdTRUE) {
+        snap_pending_cmd = SnapCmd::CLEAR;  // overrides any pending SAVE
+        xSemaphoreGive(snap_mutex);
+        xSemaphoreGive(snap_signal);
     }
 }
 
@@ -1592,11 +1707,17 @@ static void setup_fc()
             }
         }
 
-        // Clear stale snapshot on normal boot (prevents recovery on next power cycle)
+        // Clear stale snapshot on normal boot (prevents recovery on next power cycle).
+        // Sync NVS call here is fine — runs once at boot before loop_fc starts.
         if (!reboot_recovery) {
             clearFlightSnapshot();
         }
     }
+
+    // Spin up the snapshot worker AFTER any boot-time NVS work so the boot
+    // sync writes don't race the worker init.  From here on, every
+    // saveFlightSnapshot() call (10 Hz in INFLIGHT) is handed off to Core 0.
+    initSnapshotWorker();
 
     ESP_LOGI(TAG, "Setup complete");
     ESP_LOGI(TAG, "Setup complete…");
