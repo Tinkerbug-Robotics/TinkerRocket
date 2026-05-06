@@ -163,6 +163,25 @@ public:
         if (idx >= 0 && idx < 15) P_[idx][idx] += delta;
     }
 
+    /// Extract the 15 diagonal elements of P into a flat array.
+    /// Used to fit the EKF covariance into a wire-format snapshot
+    /// (see FlightSnapshotData) without serializing the full 225-element matrix.
+    void getCovDiag(float (&out)[15]) const {
+        for (int i = 0; i < 15; i++) out[i] = P_[i][i];
+    }
+
+    /// Set the diagonal of P from a flat array; zero all off-diagonal terms.
+    /// Recovery path: cross-correlations are lost but the per-state
+    /// uncertainty is preserved exactly; the filter rebuilds off-diagonals
+    /// over the next ~0.5-1 s of measurement updates.
+    void setCovFromDiag(const float (&in)[15]) {
+        for (int i = 0; i < 15; i++) {
+            for (int j = 0; j < 15; j++) {
+                P_[i][j] = (i == j) ? in[i] : 0.0f;
+            }
+        }
+    }
+
 private:
     void timeUpdate();
     void measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]);

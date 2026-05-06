@@ -1207,6 +1207,8 @@ static bool isKnownMessageType(uint8_t type)
         case CAMERA_CONFIG_PENDING:
         case CAMERA_CONFIG_MSG:
         case LORA_MSG:
+        case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
+        case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
             return true;
         default:
             return false;
@@ -1459,6 +1461,38 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         msg_count_end_flight++;
         logger.endLogging();
         flightlogEndFlight();
+    }
+    else if (type == SNAPSHOT_MSG)
+    {
+        // FC sent a flight snapshot (10 Hz during INFLIGHT).  Validate
+        // and stash the latest in the reserved MRAM region.  Single slot,
+        // serialized on the SPI bus mutex — readers (GET_FLIGHT_SNAPSHOT
+        // handler below) acquire the same mutex so they never see a
+        // partial write.  ~700 us per write on the SPI bus.
+        if (payload_len == sizeof(FlightSnapshotData))
+        {
+            // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
+            // so the recovery path can hand the bytes straight back to FC.
+            (void)logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
+                                      frame, frame_len);
+        }
+    }
+    else if (type == GET_FLIGHT_SNAPSHOT)
+    {
+        // FC is asking for the latest snapshot at boot recovery.  Read
+        // the cached wire frame from MRAM and queue it as the I2C TX
+        // response.  If MRAM holds garbage / no valid snapshot, the FC's
+        // CRC + magic check will reject it and skip recovery — no need
+        // for an explicit "no data" indicator here.
+        constexpr size_t kFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+        uint8_t snap_frame[kFrameLen] = {};
+        if (logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
+                               snap_frame, sizeof(snap_frame)))
+        {
+            // Non-blocking write — if the TX ringbuffer is full, drop;
+            // FC's masterRead retry path will handle it.
+            i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
+        }
     }
     else
     {
@@ -3277,7 +3311,10 @@ void initPeripherals()
     log_cfg.mram_cs = config::MRAM_CS;
     log_cfg.spi_hz_mram = config::SPI_HZ_MRAM;
     log_cfg.spi_mode_mram = config::SPI_MODE_MRAM;
-    log_cfg.mram_size = config::MRAM_SIZE;
+    // Shrink the ring so the top SNAPSHOT_REGION_SIZE bytes are reserved
+    // for the FlightSnapshot store (#104 follow-up).  Ring uses [0, ring_size_),
+    // snapshot region uses [SNAPSHOT_REGION_BASE, MRAM_SIZE).
+    log_cfg.mram_size = config::MRAM_SIZE - config::SNAPSHOT_REGION_SIZE;
 
     // --- LFS shrunk to 4 MB + hot-path write sink (issue #50) ---------------
     // LFS holds 32 blocks for config/placeholder use; TR_FlightLog owns the

@@ -674,6 +674,70 @@ void TR_LogToFlash::mramReadBytes(uint32_t addr, uint8_t* out, uint32_t len)
     spiRelease();
 }
 
+// Raw MRAM access for clients (e.g. FlightSnapshot region) that have
+// reserved space above ring_size_.  Same SPI primitives as
+// mramWriteBytes/mramReadBytes but no ring modulo — caller controls the
+// absolute address.  Returns false if MRAM isn't enabled.
+bool TR_LogToFlash::mramRawWrite(uint32_t addr, const uint8_t* data, uint32_t len)
+{
+    if (!use_mram_ || data == nullptr || len == 0) return false;
+
+    spiAcquire();
+
+    // WREN
+    spi->beginTransaction(spi_mram);
+    csLow(cfg.mram_cs);
+    spi->transfer(MRAM_WREN);
+    csHigh(cfg.mram_cs);
+    spi->endTransaction();
+
+    // WRITE — absolute address, no wrap
+    spi->beginTransaction(spi_mram);
+    csLow(cfg.mram_cs);
+    spi->transfer(MRAM_WRITE);
+    spi->transfer((addr >> 16) & 0xFF);
+    spi->transfer((addr >> 8) & 0xFF);
+    spi->transfer(addr & 0xFF);
+    spi->writeBytes(data, len);
+    csHigh(cfg.mram_cs);
+    spi->endTransaction();
+
+    spiRelease();
+    return true;
+}
+
+bool TR_LogToFlash::mramRawRead(uint32_t addr, uint8_t* out, uint32_t len)
+{
+    if (!use_mram_ || out == nullptr || len == 0) return false;
+
+    spiAcquire();
+
+    spi->beginTransaction(spi_mram);
+    csLow(cfg.mram_cs);
+    spi->transfer(MRAM_READ);
+    spi->transfer((addr >> 16) & 0xFF);
+    spi->transfer((addr >> 8) & 0xFF);
+    spi->transfer(addr & 0xFF);
+
+    uint8_t dummy[64];
+    memset(dummy, 0x00, sizeof(dummy));
+    uint32_t remaining = len;
+    uint8_t* dst = out;
+    while (remaining > 0)
+    {
+        uint32_t chunk = (remaining > sizeof(dummy)) ? sizeof(dummy) : remaining;
+        spi->transferBytes(dummy, dst, chunk);
+        dst += chunk;
+        remaining -= chunk;
+    }
+
+    csHigh(cfg.mram_cs);
+    spi->endTransaction();
+
+    spiRelease();
+    return true;
+}
+
 // ============================================================================
 // Ring buffer helpers (MRAM or RAM, depending on use_mram_)
 // ============================================================================
