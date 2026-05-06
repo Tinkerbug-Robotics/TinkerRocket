@@ -3768,16 +3768,16 @@ static void setup_oc()
 }
 
 // ============================================================================
-// loop_oc stall instrumentation (#90 follow-up — periodic 745 ms Core-1 stall)
+// loop_oc stall instrumentation (#94 / #104 follow-up — periodic Core-1 stall)
 // ============================================================================
-// Bench analysis showed all six sensor streams freezing for ~745 ms every
-// ~15 s with the Core-1 sensor pipeline resuming within 5 ms across streams
-// — a single Core-1 blocker preempting the I2S parser long enough to
-// overflow the DMA ring.  These macros log any blocking call inside loop_oc
-// (or the LoRa internals) that exceeds LOOP_STALL_THRESHOLD_US so the next
-// bench run names the offending op directly.  Modeled on the existing
-// LFS_TIMING / STALL_THRESHOLD_US instrumentation in TR_LogToFlash.cpp.
-static constexpr int64_t LOOP_STALL_THRESHOLD_US = 100'000;  // 100 ms
+// The original 745 ms / 9.5 s pattern (#94) appears to be resolved.  Field
+// flights on 2026-05-03 and a fresh bench on 2026-05-06 now show a different
+// signature: ~70-90 ms gaps every 100 ms post-launch, with OC POWER (read on
+// Core 1) gapping ~2 ms BEFORE FC sensor frames stop appearing in the log
+// — i.e. the blocker is on the OC, not the FC.  Threshold lowered from
+// 100 ms to 20 ms so the next bench run names the sub-100 ms op directly.
+// Revert to 100 ms once the culprit is identified.
+static constexpr int64_t LOOP_STALL_THRESHOLD_US = 20'000;  // 20 ms (investigation)
 
 #define LOOP_STALL_INSTR(name, expr) do {                                       \
     const int64_t _stall_t0_ = esp_timer_get_time();                            \
@@ -3793,6 +3793,23 @@ static void loop_oc()
     // Serial debug console removed (was Arduino Serial.available/read).
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
+
+    // Preemption catch: time elapsed *between* iterations (after vTaskDelay).
+    // The body-only catch-all below misses cases where loop_oc yields with
+    // vTaskDelay(1) and a higher-prio task (NimBLE, hardware IRQs, etc.)
+    // holds Core 1 for tens or hundreds of ms before loop_oc resumes.  A
+    // long inter-iteration gap means the OS preempted oc_loop after it
+    // already passed the body-end timer.
+    static int64_t _loop_oc_last_entry_us = 0;
+    if (_loop_oc_last_entry_us != 0) {
+        const int64_t _inter_dt = _loop_oc_t0 - _loop_oc_last_entry_us;
+        if (_inter_dt > LOOP_STALL_THRESHOLD_US) {
+            ESP_LOGW("LOOP_STALL",
+                     "loop_oc inter-iteration gap %lld us (preempted on Core 1)",
+                     (long long)_inter_dt);
+        }
+    }
+    _loop_oc_last_entry_us = _loop_oc_t0;
 
     // --- Active mode: FlightComputer + sensors powered on ---
     if (pwr_pin_on)

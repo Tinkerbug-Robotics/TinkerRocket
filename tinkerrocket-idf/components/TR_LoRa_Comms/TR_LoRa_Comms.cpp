@@ -13,7 +13,9 @@ static const char* TAG = "LORA";
 // shared bus mutex).  Anything inside this file that takes longer than
 // LORA_STALL_THRESHOLD_US is logged with its step name so the next bench
 // run names the offending op.
-static constexpr int64_t LORA_STALL_THRESHOLD_US = 50'000;  // 50 ms
+// Lowered from 50 ms to 20 ms for #94 / #104 follow-up: chasing 70-90 ms
+// periodic OC-side stalls.  Revert to 50 ms once the culprit is identified.
+static constexpr int64_t LORA_STALL_THRESHOLD_US = 20'000;  // 20 ms (investigation)
 
 #define LORA_STALL_INSTR(name, expr) do {                                      \
     const int64_t _stall_t0_ = esp_timer_get_time();                           \
