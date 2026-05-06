@@ -3794,6 +3794,23 @@ static void loop_oc()
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
 
+    // Preemption catch: time elapsed *between* iterations (after vTaskDelay).
+    // The body-only catch-all below misses cases where loop_oc yields with
+    // vTaskDelay(1) and a higher-prio task (NimBLE, hardware IRQs, etc.)
+    // holds Core 1 for tens or hundreds of ms before loop_oc resumes.  A
+    // long inter-iteration gap means the OS preempted oc_loop after it
+    // already passed the body-end timer.
+    static int64_t _loop_oc_last_entry_us = 0;
+    if (_loop_oc_last_entry_us != 0) {
+        const int64_t _inter_dt = _loop_oc_t0 - _loop_oc_last_entry_us;
+        if (_inter_dt > LOOP_STALL_THRESHOLD_US) {
+            ESP_LOGW("LOOP_STALL",
+                     "loop_oc inter-iteration gap %lld us (preempted on Core 1)",
+                     (long long)_inter_dt);
+        }
+    }
+    _loop_oc_last_entry_us = _loop_oc_t0;
+
     // --- Active mode: FlightComputer + sensors powered on ---
     if (pwr_pin_on)
     {
