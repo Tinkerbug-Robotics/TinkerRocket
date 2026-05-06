@@ -419,6 +419,13 @@ static bool    hop_active_        = false;
 static uint8_t hop_idx_           = 0;
 static bool    hop_first_pkt_     = false;
 static bool    hop_needs_retune_  = false;
+// Operator override: when true, hopping is suppressed even in PRELAUNCH /
+// INFLIGHT and we stay on lora_freq_mhz for the whole flight (#106).  Set
+// by the BS via LORA_CMD_SET_HOP_DISABLED (cmd 17).  NVS-backed so the
+// setting survives reboot.  Both sides must agree; the BS keeps its own
+// copy and pushes changes here.  Diagnostic / link-debugging mode only —
+// using a fixed frequency in flight is not FHSS-compliant.
+static bool    lora_hop_disabled  = false;
 
 // Hop-silence rendezvous fallback state (#40 / #41 phase 2b).
 // Definitions of HOP_FALLBACK_*_MS constants and the serviceHopFallback()
@@ -453,7 +460,10 @@ static bool lora_in_rx_mode = false;
 
 static inline void updateHopFromState(RocketState s)
 {
-    const bool want_active = shouldHopInState(s);
+    // Operator override: in fixed-frequency mode (#106) we stay on
+    // lora_freq_mhz for every state.  Otherwise fall back to the
+    // shared per-state policy.
+    const bool want_active = !lora_hop_disabled && shouldHopInState(s);
     if (want_active && !hop_active_)
     {
         // OFF → ON.  Bootstrap: the next TX still goes out on
@@ -1943,6 +1953,7 @@ static void sendCurrentConfig()
     j += ",\"lbw\":"; j += fmtf(lora_bw_khz, 0);
     j += ",\"lcr\":"; j += itos(lora_cr);
     j += ",\"lpw\":"; j += itos(lora_tx_power);
+    j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
     j += "}";
     ble_app.sendConfigJSON(j);
     ESP_LOGI("CFG", "Sent config readback (%u bytes)", (unsigned)j.length());
@@ -2203,6 +2214,31 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         else
         {
             ESP_LOGE("LORA", "UPLINK LoRa reconfigure FAILED");
+        }
+    }
+    else if (cmd == LORA_CMD_SET_HOP_DISABLED && payload_len >= 1)
+    {
+        // BS-controlled hop enable/disable (#106).  Payload byte 0 = 1 to
+        // disable hopping (fixed-frequency mode), 0 to re-enable.  We
+        // honour the change immediately by re-evaluating the hop state
+        // against the rocket's last known state — this gracefully turns
+        // hopping off mid-PRELAUNCH or back on once the operator clears
+        // the override.  Persist to NVS so the setting survives reboot.
+        const bool new_disabled = (payload[0] != 0);
+        if (new_disabled != lora_hop_disabled)
+        {
+            lora_hop_disabled = new_disabled;
+            prefs.begin("lora", false);
+            prefs.putUChar("hopdis", lora_hop_disabled ? 1 : 0);
+            prefs.end();
+            ESP_LOGI("LORA", "UPLINK Hop disable: %s — re-evaluating hop state",
+                     lora_hop_disabled ? "DISABLED (fixed freq)" : "ENABLED");
+            updateHopFromState(latest_rocket_state);
+        }
+        else
+        {
+            ESP_LOGI("LORA", "UPLINK Hop disable: already %s",
+                     lora_hop_disabled ? "DISABLED" : "ENABLED");
         }
     }
     else if (cmd == 12 && payload_len >= 14)
@@ -3378,6 +3414,7 @@ void initPeripherals()
         lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
         lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
+        lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
 
         // Channel-set restore (#40 / #41 phase 3): rendezvous freq +
         // skip-mask pushed by the BS via cmd 15.  Skip-mask is keyed
@@ -3619,9 +3656,11 @@ static void setup_oc()
             lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
             lora_cr        = prefs.getUChar("cr",    config::LORA_CR);
             lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
-            ESP_LOGI("CFG", "NVS LoRa early load: %.1f MHz SF%u BW%.0f CR%u %d dBm",
+            lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106
+            ESP_LOGI("CFG", "NVS LoRa early load: %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
                           (double)lora_freq_mhz, (unsigned)lora_sf,
-                          (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+                          (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
+                          (int)lora_hop_disabled);
         }
         prefs.end();
 
@@ -4308,83 +4347,18 @@ static void loop_oc()
         }
         else if (ble_cmd == 10)
         {
-            // LoRa reconfiguration: [freq:4f][bw:4f][sf:1][cr:1][txpwr:1]
-            const uint8_t* payload = ble_app.getCommandPayload();
-            const size_t plen = ble_app.getCommandPayloadLength();
-            // Refuse direct BLE reconfig while either (a) freq-locked
-            // for flight (#71) or (b) channel hopping is active
-            // (#40 / #41).  iOS app should already hide the apply button
-            // in both cases, but we belt-and-brace for version skew.
-            // Either way we send a readback so the app's UI reverts.
-            if (plen >= 11 && (freq_locked_for_flight || hop_active_))
-            {
-                ESP_LOGW("BLE", "Cmd 10 ignored: %s",
-                         freq_locked_for_flight ? "frequency locked for flight"
-                                                : "channel hopping active");
-                sendCurrentConfig();
-            }
-            else if (plen >= 11)
-            {
-                float new_freq, new_bw;
-                memcpy(&new_freq, payload + 0, 4);
-                memcpy(&new_bw,   payload + 4, 4);
-                uint8_t new_sf   = payload[8];
-                uint8_t new_cr   = payload[9];
-                int8_t  new_pwr  = (int8_t)payload[10];
-
-                // Always update runtime vars and persist to NVS, even if the
-                // radio isn't initialized yet (e.g. config sent before power-on).
-                // The saved values will be loaded by initPeripherals() on next boot.
-                const float old_bw = lora_bw_khz;
-                lora_freq_mhz = new_freq;
-                lora_bw_khz   = new_bw;
-                lora_sf        = new_sf;
-                lora_cr        = new_cr;
-                lora_tx_power  = new_pwr;
-
-                prefs.begin("lora", false);
-                prefs.putFloat("freq",  lora_freq_mhz);
-                prefs.putFloat("bw",    lora_bw_khz);
-                prefs.putUChar("sf",    lora_sf);
-                prefs.putUChar("cr",    lora_cr);
-                prefs.putChar("txpwr",  lora_tx_power);
-                // BW change invalidates the channel-set skip-mask (#40 / #41
-                // phase 3): the mask is sized for the OLD hop table.
-                if (old_bw != lora_bw_khz)
-                {
-                    skip_mask_n_        = 0;
-                    channel_set_bw_khz_ = 0.0f;
-                    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
-                    prefs.remove("chset_n");
-                    prefs.remove("chset_bw");
-                    prefs.remove("chset_mask");
-                    ESP_LOGI("BLE", "[CHSET] BW changed — skip-mask invalidated");
-                }
-                prefs.end();
-
-                // Verify NVS write by reading back
-                prefs.begin("lora", false);
-                float verify_freq = prefs.getFloat("freq", 0.0f);
-                prefs.end();
-                ESP_LOGI("CFG", "NVS LoRa verify: wrote %.1f, read back %.1f",
-                              (double)lora_freq_mhz, (double)verify_freq);
-
-                // Try to apply to live radio (may fail if not yet initialized)
-                if (lora_comms.reconfigure(new_freq, new_sf, new_bw, new_cr, new_pwr))
-                {
-                    lora_comms.startReceive();
-                    ESP_LOGI("BLE", "LoRa reconfigured + saved: %.1f MHz SF%u BW%.0f CR%u %d dBm",
-                                  (double)lora_freq_mhz, (unsigned)lora_sf,
-                                  (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
-                }
-                else
-                {
-                    ESP_LOGI("BLE", "LoRa saved (radio not ready): %.1f MHz SF%u BW%.0f CR%u %d dBm",
-                                  (double)lora_freq_mhz, (unsigned)lora_sf,
-                                  (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
-                }
-                sendCurrentConfig();
-            }
+            // Direct LoRa reconfig over BLE is no longer accepted on the
+            // rocket side (#106).  LoRa link parameters are owned by the
+            // base station; allowing the rocket to change them out-of-band
+            // can desync the pair (the BS keeps its own copy in NVS and
+            // never learns about a rocket-only change).  The iOS Settings
+            // view should be sending cmd 10 to the BS, which then relays
+            // via uplink cmd 10 (handled separately above) and persists.
+            //
+            // We send a config readback so the app's UI snaps back to the
+            // rocket's actual LoRa values rather than appearing to apply.
+            ESP_LOGW("BLE", "Cmd 10 refused on rocket: LoRa params are BS-controlled (#106). Send to base station instead.");
+            sendCurrentConfig();
         }
         else if (ble_cmd == 11)
         {

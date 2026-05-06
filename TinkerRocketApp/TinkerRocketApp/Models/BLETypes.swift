@@ -105,6 +105,7 @@ struct RocketConfig {
     var loraBwKHz: Float? = nil
     var loraCR: UInt8? = nil
     var loraTxPower: Int8? = nil
+    var loraHopDisabled: Bool? = nil   // #106 fixed-frequency override (BS-controlled)
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0
