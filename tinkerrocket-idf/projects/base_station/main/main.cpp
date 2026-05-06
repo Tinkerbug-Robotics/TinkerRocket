@@ -2386,9 +2386,14 @@ static void loop_bs()
                 TR_LoRa_Comms::Stats ls = {};
                 lora_comms.getStats(ls);
 
-                // Convert ECEF to lat/lon
+                // Convert ECEF to lat/lon — but only when the rocket reports
+                // an actual GPS fix.  The rocket sometimes packs nonzero ECEF
+                // even with num_sats == 0 (stale GNSS register read), which
+                // would otherwise yield a "valid-looking" lat/lon while the
+                // fix is invalid (#95).
                 double lat_deg = NAN, lon_deg = NAN, alt_m = NAN;
-                if (decoded.ecef_x != 0.0 || decoded.ecef_y != 0.0 || decoded.ecef_z != 0.0)
+                if (decoded.num_sats > 0 &&
+                    (decoded.ecef_x != 0.0 || decoded.ecef_y != 0.0 || decoded.ecef_z != 0.0))
                 {
                     coord.ecefToGeodetic(decoded.ecef_x, decoded.ecef_y, decoded.ecef_z,
                                          lat_deg, lon_deg, alt_m);
@@ -2593,8 +2598,15 @@ static void loop_bs()
         last_battery_ms = millis();
         updateBattery();
 
-        // Always push base station stats to BLE, even without LoRa packets.
-        // Re-send last-known rocket telemetry so battery/RSSI stay up to date.
+        // Always push base station stats to BLE, even without LoRa packets,
+        // so BS battery / logging state / RSSI stay live.  Tag each push
+        // with a freshness status (#95) so the iOS app can distinguish:
+        //   • LIVE    — re-pushing telemetry that's still recent
+        //   • STALE   — re-pushing cached telemetry older than the threshold
+        //               (iOS dims + shows "stale (Ns ago)")
+        //   • SYNCING — no rocket has ever been caught
+        //               (iOS hides rocket fields, shows "Searching for rocket…")
+        // The RX path always sends LIVE because it fires on a fresh decode.
         if (ble_app.isConnected())
         {
             TR_BLE_To_APP::TelemetryData ble_telem = {};
@@ -2606,14 +2618,22 @@ static void loop_bs()
                 if (tr.unit_name[0]) {
                     ble_telem.source_unit_name = tr.unit_name;
                 }
+                const uint32_t age_ms = millis() - tr.last_seen_ms;
+                if (age_ms > config::BLE_TELEMETRY_STALE_MS)
+                {
+                    ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::STALE;
+                    ble_telem.data_age_ms = age_ms;
+                }
             }
             else
             {
-                // No rocket tracked — publish base-station-only fields so the
-                // app still sees BS battery/logging state. Rocket-side fields
-                // stay NaN/zero.
+                // No rocket tracked — publish base-station-only fields with
+                // a SYNCING tag so the iOS app shows "Searching for rocket…"
+                // rather than rendering the empty zero-init values as if
+                // they were a rocket sitting in INIT.
                 LoRaDataSI empty = {};
                 buildBLETelemetry(empty, NAN, NAN, NAN, NAN, NAN, ble_telem);
+                ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
             }
             ble_app.sendTelemetry(ble_telem);
         }

@@ -282,7 +282,26 @@ struct ConnectedDashboardView: View {
             }
         } else {
             // --- Powered ON (or base station): full telemetry dashboard ---
-            RocketStateView(state: device.telemetry.state)
+
+            // #95: telemetry freshness gate.  When BS is in SYNCING (no
+            // rocket caught yet) we hide the rocket-data views so the
+            // operator doesn't see the empty zero-init values rendered as
+            // a fake "INIT" rocket.  When STALE we keep the views visible
+            // but dim them and show a banner with the age.  Direct rocket
+            // connections always come through as .live (no banner, no dim).
+            let dataStatus = device.telemetry.data_status
+            let showRocketViews = dataStatus != .syncing
+            let staleOpacity: Double = dataStatus == .stale ? 0.5 : 1.0
+
+            if device.isBaseStation && dataStatus != .live {
+                TelemetryStatusBanner(status: dataStatus,
+                                      ageMs: device.telemetry.data_age_ms)
+            }
+
+            if showRocketViews {
+                RocketStateView(state: device.telemetry.state)
+                    .opacity(staleOpacity)
+            }
 
             if device.simLaunched {
                 SimModeBannerView {
@@ -298,8 +317,9 @@ struct ConnectedDashboardView: View {
                 }
             }
 
-            if device.isBaseStation {
+            if showRocketViews && device.isBaseStation {
                 FlightSummaryView(telemetry: device.telemetry)
+                    .opacity(staleOpacity)
             }
 
             SignalStrengthView(
@@ -309,20 +329,39 @@ struct ConnectedDashboardView: View {
                 locationManager: device.isBaseStation ? locationManager : nil
             )
 
-            BatteryView(telemetry: device.telemetry,
-                        isBaseStation: device.isBaseStation)
-
-            IMUView(telemetry: device.telemetry,
-                    isBaseStation: device.isBaseStation)
-
-            if !device.isBaseStation {
-                FlightSummaryView(telemetry: device.telemetry)
+            // BatteryView shows BS battery (always live) + rocket battery.
+            // When syncing/stale the rocket row is meaningless; we still
+            // render the view (BS battery row is useful) but dim it on
+            // stale to match the rest, and hide it entirely on syncing
+            // since both rows would be empty/cached.
+            if device.isBaseStation && dataStatus == .syncing {
+                // BS-only: show a stripped view with just the BS battery row
+                BSOnlyBatteryView(telemetry: device.telemetry)
+            } else {
+                BatteryView(telemetry: device.telemetry,
+                            isBaseStation: device.isBaseStation)
+                    .opacity(staleOpacity)
             }
 
-            GPSView(telemetry: device.telemetry, compact: true)
+            if showRocketViews {
+                IMUView(telemetry: device.telemetry,
+                        isBaseStation: device.isBaseStation)
+                    .opacity(staleOpacity)
+            }
+
+            if showRocketViews && !device.isBaseStation {
+                FlightSummaryView(telemetry: device.telemetry)
+                    .opacity(staleOpacity)
+            }
+
+            if showRocketViews {
+                GPSView(telemetry: device.telemetry, compact: true)
+                    .opacity(staleOpacity)
+            }
 
             StatusFlagsView(telemetry: device.telemetry,
                             isBaseStation: device.isBaseStation)
+                .opacity(showRocketViews ? staleOpacity : 1.0)
 
             if !device.isBaseStation {
                 PyroChannelsView(device: device)
@@ -513,6 +552,51 @@ struct RocketStateView: View {
     }
 }
 
+/// Banner shown when the BS is reporting non-LIVE telemetry status (#95).
+/// SYNCING: BS hasn't caught the rocket yet — operator-facing "searching"
+/// hint, paired with hiding rocket-data views in the parent.
+/// STALE: BS is still re-pushing cached values older than the staleness
+/// threshold — show how old in seconds so the operator knows it's not
+/// live; parent dims rocket-data views.
+struct TelemetryStatusBanner: View {
+    let status: TelemetryData.DataStatus
+    let ageMs: UInt32
+
+    private var icon: String {
+        status == .syncing ? "antenna.radiowaves.left.and.right.slash" : "clock.badge.exclamationmark"
+    }
+    private var title: String {
+        status == .syncing ? "Searching for rocket…" : "Telemetry stale"
+    }
+    private var subtitle: String {
+        switch status {
+        case .syncing: return "Base station hasn't received any telemetry yet. Power on the rocket and wait for the link to sync."
+        case .stale:   return String(format: "Last packet %.1f s ago. Showing cached values.", Double(ageMs) / 1000.0)
+        case .live:    return ""
+        }
+    }
+    private var tint: Color {
+        status == .syncing ? .blue : .orange
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(subtitle).font(.caption).foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.1))
+        .cornerRadius(10)
+    }
+}
+
 struct SimModeBannerView: View {
     var onStop: () -> Void
 
@@ -623,6 +707,41 @@ struct BatteryView: View {
                            voltage: telemetry.bsVoltageDisplay,
                            current: telemetry.bsCurrentDisplay)
             }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+}
+
+/// Stripped-down BatteryView used while the BS hasn't caught the rocket yet
+/// (#95).  Hides the rocket row entirely (its values would be empty/cached)
+/// and shows only the live BS battery row, so the operator still has a
+/// useful battery indicator without the misleading rocket data.
+struct BSOnlyBatteryView: View {
+    let telemetry: TelemetryData
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Battery")
+                .font(.headline)
+
+            HStack(spacing: 0) {
+                Text("")
+                    .frame(width: 70, alignment: .leading)
+                Text("Charge").font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                Text("Voltage").font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                Text("Current").font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+
+            BatteryRow(label: "Base Stn",
+                       charge: telemetry.bsSocDisplay,
+                       voltage: telemetry.bsVoltageDisplay,
+                       current: telemetry.bsCurrentDisplay)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)

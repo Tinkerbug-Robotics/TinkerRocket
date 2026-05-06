@@ -89,6 +89,16 @@ public:
         // Source rocket identity (base station only — for multi-rocket demux)
         uint8_t source_rocket_id;       // 0 = not set (direct connection)
         const char* source_unit_name;   // nullptr = not set
+
+        // Telemetry freshness status (#95).  LIVE = packet just decoded
+        // (default).  STALE = BS re-pushing cached data older than
+        // BLE_TELEMETRY_STALE_MS; iOS dims + shows "stale (Ns ago)".
+        // SYNCING = no rocket has ever been caught; iOS hides rocket
+        // fields and shows "Searching for rocket…".  Direct rocket
+        // connections always send LIVE.
+        enum class DataStatus : uint8_t { LIVE = 0, STALE = 1, SYNCING = 2 };
+        DataStatus data_status;
+        uint32_t   data_age_ms;         // only meaningful when STALE
     };
 
     // Constructor
