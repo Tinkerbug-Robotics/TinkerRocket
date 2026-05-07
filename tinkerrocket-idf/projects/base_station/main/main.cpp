@@ -1635,15 +1635,14 @@ static void serviceHeartbeat()
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (uplink_pending)                        return;  // Don't clobber a real cmd
-    // Suppress heartbeats entirely while hopping (#105 follow-up).  The
-    // BS heartbeat's 2-retry TX burst (~200 ms) racing with the rocket's
-    // 500 ms TX cycle was the proximate cause of repeated hop-session
-    // collapses: BS RX a packet, queue heartbeat, by the time TX
-    // completes the rocket has moved to the next channel.  The rocket's
-    // own hop_fallback (visit rendezvous after 30 s of in-hop silence)
-    // is the correct recovery mechanism during a hop session, so
-    // heartbeats here are both unnecessary and actively harmful.
-    if (hop_active_)                           return;
+    // While hopping, only TX in the safe window right after a fresh
+    // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  With slow-hop
+    // dwell=4 (#105 follow-up) the rocket stays on a channel for 2 s,
+    // so a 250 ms heartbeat-with-retries fits comfortably inside the
+    // dwell.  Without heartbeats during hop, the rocket's
+    // hop_session_uplink_count stays 0 and its fallback fires every 30 s
+    // (HOP_FALLBACK_TRIGGER_INITIAL_MS), tearing down the session.
+    if (!inHopSafeWindow())                    return;
 
     const uint32_t now = millis();
     // Only heartbeat when we've recently heard the rocket.  If rocket has
