@@ -908,6 +908,9 @@ static constexpr uint8_t PYRO_CONFIG_MSG          = 0xCE;
 static constexpr uint8_t PYRO_CONT_TEST           = 0xCF;  // momentary arm → read continuity → disarm
 static constexpr uint8_t PYRO_FIRE_TEST            = 0xD0;  // test-fire a pyro channel from app
 static constexpr uint8_t IIS2MDC_MSG          = 0xD1;  // new-PCB IIS2MDC magnetometer raw frame
+static constexpr uint8_t SNAPSHOT_MSG         = 0xD2;  // FlightSnapshotData — FC→OC over I2S during INFLIGHT,
+                                                       // and OC→FC over I2C as the response to GET_FLIGHT_SNAPSHOT
+static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from MRAM at boot
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types
@@ -1025,6 +1028,75 @@ typedef struct __attribute__((packed))
 } GuidanceTelemData;
 static_assert(sizeof(GuidanceTelemData) == 15, "GuidanceTelemData must be 15 bytes");
 
+// --- Flight snapshot (#104 follow-up) ---
+// Periodic snapshot of FC flight state for crash recovery.  Sent FC→OC
+// over I2S at 10 Hz during INFLIGHT; OC stores the latest in a reserved
+// MRAM region.  On reboot, FC requests the snapshot back via I2C
+// (GET_FLIGHT_SNAPSHOT) and restores state if the magic+CRC validate.
+//
+// Replaces the older NVS-based recovery — keeping NVS writes off the FC
+// kept loop_fc free of the ~70-90 ms periodic stalls (#104).
+//
+// Sized to fit one I2S frame: payload ≤ MAX_PAYLOAD, ≤ 255 byte length.
+//
+// EKF covariance is stored as the diagonal only (15 floats) instead of
+// the full 15×15 matrix (225 floats).  On recovery, the EKF rebuilds
+// off-diagonals from zero — cross-correlations are re-discovered within
+// ~0.5-1 s of running the filter, but the per-state uncertainty is
+// preserved exactly.  This is the wire-format compromise that keeps the
+// snapshot in a single I2S frame.
+struct __attribute__((packed)) FlightSnapshotData
+{
+    static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
+    static constexpr uint8_t  VERSION = 1;           // bumped from old NVS struct on format change
+
+    // --- Header ---
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  rocket_state;
+    uint8_t  pad[2];
+
+    // --- Flight timestamps (relative to launch) ---
+    uint32_t flight_elapsed_ms;
+    uint32_t apogee_elapsed_ms;
+    uint32_t burnout_elapsed_ms;
+
+    // --- Pyro state (safety-critical) ---
+    uint8_t  pyro_apogee_detected;
+    uint8_t  pyro1_armed;
+    uint8_t  pyro1_fired;
+    uint8_t  pyro2_armed;
+    uint8_t  pyro2_fired;
+    uint8_t  pad2[3];
+
+    // --- Flight references ---
+    float    ground_pressure_pa;
+    double   ref_lat_rad;
+    double   ref_lon_rad;
+    double   ref_alt_m;
+
+    // --- Control state flags ---
+    uint8_t  ekf_initialized;
+    uint8_t  guidance_enabled;
+    uint8_t  burnout_detected;
+    uint8_t  servo_enabled;
+
+    // --- EKF state (covariance reduced to diagonal) ---
+    double   ekf_pos_rrm[3];
+    float    ekf_vel_ned_mps[3];
+    float    ekf_quat[4];
+    float    ekf_accel_bias[3];
+    float    ekf_gyro_bias[3];
+    float    ekf_P_diag[15];      // diagonal of P[15][15]
+    uint32_t ekf_t_prev_us;
+    float    ekf_euler[3];
+
+    // --- Integrity (CRC32 over all preceding bytes) ---
+    uint32_t crc32;
+};
+static_assert(sizeof(FlightSnapshotData) == 216,
+              "FlightSnapshotData must be 216 bytes — fits one I2S frame and one I2C TX response");
+
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);
 static constexpr size_t SIZE_OF_ISM6HG256_DATA  = sizeof(ISM6HG256Data);
@@ -1044,6 +1116,7 @@ static constexpr size_t P5 = SIZE_OF_POWER_DATA;
 static constexpr size_t P6 = SIZE_OF_NON_SENSOR_DATA;
 static constexpr size_t P7 = SIZE_OF_LORA_DATA;
 static constexpr size_t P8 = sizeof(RollProfileData);
+static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (216 B)
 
 static constexpr size_t M12   = (P1 > P2 ? P1 : P2);
 static constexpr size_t M34   = (P3 > P4 ? P3 : P4);
@@ -1052,7 +1125,8 @@ static constexpr size_t M567  = (M56 > P7 ? M56 : P7);
 static constexpr size_t M1234 = (M12 > M34 ? M12 : M34);
 static constexpr size_t M_SENSOR = (M1234 > M567 ? M1234 : M567);
 
-static constexpr size_t MAX_PAYLOAD = (M_SENSOR > P8 ? M_SENSOR : P8);
+static constexpr size_t M_SENSOR_OR_PROFILE = (M_SENSOR > P8 ? M_SENSOR : P8);
+static constexpr size_t MAX_PAYLOAD = (M_SENSOR_OR_PROFILE > P9 ? M_SENSOR_OR_PROFILE : P9);
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;

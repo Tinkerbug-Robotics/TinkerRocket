@@ -35,6 +35,14 @@ struct config
     static constexpr uint32_t SPI_HZ_MRAM = 40'000'000;
     static constexpr uint8_t SPI_MODE_MRAM = SPI_MODE0;
 
+    // FlightSnapshot region (#104 follow-up): top 1 KB of MRAM is reserved
+    // for the latest FC FlightSnapshotData (~224 B wire frame).  The log
+    // ring uses the remaining MRAM_SIZE - SNAPSHOT_REGION_SIZE bytes.
+    // Single-slot writes serialized on the SPI bus mutex (write ~700 us;
+    // reads on the same mutex never observe a partial write).
+    static constexpr uint32_t SNAPSHOT_REGION_SIZE = 1024;
+    static constexpr uint32_t SNAPSHOT_REGION_BASE = MRAM_SIZE - SNAPSHOT_REGION_SIZE;
+
     // --- SPI speeds/modes ---
     static constexpr uint32_t SPI_HZ_NAND = 40'000'000;
     static constexpr uint8_t SPI_MODE_NAND = SPI_MODE0;

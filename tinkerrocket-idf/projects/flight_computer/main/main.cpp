@@ -247,66 +247,38 @@ static uint32_t pyro2_fire_start_ms = 0;
 static bool pyro_apogee_detected = false;
 static uint32_t pyro_apogee_time_ms = 0;
 // --- Inflight reboot recovery ---
-// Snapshot of critical flight state, persisted to NVS at 10 Hz during INFLIGHT.
-// On unexpected reboot (brownout, watchdog), this allows resuming flight ops
+// Snapshot of critical flight state, sent to OC over I2S at 10 Hz during
+// INFLIGHT and stored in OC's MRAM.  On unexpected reboot (brownout,
+// watchdog), FC queries OC over I2C and restores state to resume flight ops
 // with correct pyro state, EKF navigation, and flight phase.
-struct FlightSnapshot {
-    static constexpr uint32_t MAGIC   = 0xF1A7C0DE;
-    static constexpr uint8_t  VERSION = 1;
+//
+// Wire format is FlightSnapshotData in RocketComputerTypes.h — keeps the
+// FC's flash and NVS off the hot path (#104).
 
-    uint32_t magic;
-    uint8_t  version;
-    uint8_t  rocket_state;
-    uint8_t  pad[2];
-
-    // Timestamps stored as durations relative to launch (millis epoch changes on reboot)
-    uint32_t flight_elapsed_ms;   // now_ms - launch_time_millis
-    uint32_t apogee_elapsed_ms;   // pyro_apogee_time_ms - launch_time_millis (0 if no apogee)
-    uint32_t burnout_elapsed_ms;  // burnout_time_ms - launch_time_millis (0 if no burnout)
-
-    // Pyro state (safety-critical)
-    bool     pyro_apogee_detected;
-    bool     pyro1_armed;
-    bool     pyro1_fired;
-    bool     pyro2_armed;
-    bool     pyro2_fired;
-
-    // Flight references
-    float    ground_pressure_pa;
-    double   ref_lat_rad, ref_lon_rad, ref_alt_m;
-
-    // Control state
-    bool     ekf_initialized;
-    bool     guidance_enabled;
-    bool     burnout_detected;
-    bool     servo_enabled;
-
-    // EKF full state
-    EkfStateSnapshot ekf_state;
-
-    // Integrity check (CRC32 over all preceding bytes)
-    uint32_t crc32;
-};
+// Forward decl — full definition is below the I2S sender setup.
+static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len);
 
 static bool     reboot_recovery = false;      // true during servo settle period after recovery
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
 static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
 
-static uint32_t computeSnapshotCRC(const FlightSnapshot& snap)
+static uint32_t computeSnapshotCRC(const FlightSnapshotData& snap)
 {
     CRC32 crc;
     crc.add(reinterpret_cast<const uint8_t*>(&snap),
-            offsetof(FlightSnapshot, crc32));
+            offsetof(FlightSnapshotData, crc32));
     return crc.calc();
 }
 
-static void saveFlightSnapshot(uint32_t now_ms)
+// Build a FlightSnapshotData from current FC state.  Used by both the
+// periodic save (sends to OC over I2S) and clearFlightSnapshot (sends a
+// state=LANDED snapshot to invalidate recovery on next boot).
+static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8_t override_state = 0xFF)
 {
-    FlightSnapshot snap = {};
-    snap.magic   = FlightSnapshot::MAGIC;
-    snap.version = FlightSnapshot::VERSION;
-    snap.rocket_state = (uint8_t)rocket_state;
+    snap.magic        = FlightSnapshotData::MAGIC;
+    snap.version      = FlightSnapshotData::VERSION;
+    snap.rocket_state = (override_state != 0xFF) ? override_state : (uint8_t)rocket_state;
 
     snap.flight_elapsed_ms  = now_ms - launch_time_millis;
     snap.apogee_elapsed_ms  = pyro_apogee_detected
@@ -315,43 +287,67 @@ static void saveFlightSnapshot(uint32_t now_ms)
                             ? (burnout_time_ms - launch_time_millis) : 0;
 
     portENTER_CRITICAL(&pyro_spinlock);
-    snap.pyro_apogee_detected = pyro_apogee_detected;
-    snap.pyro1_armed = pyro1_armed;
-    snap.pyro1_fired = pyro1_fired;
-    snap.pyro2_armed = pyro2_armed;
-    snap.pyro2_fired = pyro2_fired;
+    snap.pyro_apogee_detected = pyro_apogee_detected ? 1 : 0;
+    snap.pyro1_armed          = pyro1_armed          ? 1 : 0;
+    snap.pyro1_fired          = pyro1_fired          ? 1 : 0;
+    snap.pyro2_armed          = pyro2_armed          ? 1 : 0;
+    snap.pyro2_fired          = pyro2_fired          ? 1 : 0;
     portEXIT_CRITICAL(&pyro_spinlock);
 
     snap.ground_pressure_pa = ground_pressure_pa;
-    snap.ref_lat_rad = ref_lat_rad;
-    snap.ref_lon_rad = ref_lon_rad;
-    snap.ref_alt_m   = ref_alt_m;
+    snap.ref_lat_rad        = ref_lat_rad;
+    snap.ref_lon_rad        = ref_lon_rad;
+    snap.ref_alt_m          = ref_alt_m;
 
-    snap.ekf_initialized  = ekf_initialized;
-    snap.guidance_enabled  = guidance_enabled;
-    snap.burnout_detected  = burnout_detected;
-    snap.servo_enabled     = servo_enabled;
+    snap.ekf_initialized = ekf_initialized  ? 1 : 0;
+    snap.guidance_enabled = guidance_enabled ? 1 : 0;
+    snap.burnout_detected = burnout_detected ? 1 : 0;
+    snap.servo_enabled    = servo_enabled    ? 1 : 0;
 
     if (ekf_initialized) {
-        ekf.getState(snap.ekf_state);
+        EkfStateSnapshot s;
+        ekf.getState(s);
+        memcpy(snap.ekf_pos_rrm,     s.pos_rrm,     sizeof(snap.ekf_pos_rrm));
+        memcpy(snap.ekf_vel_ned_mps, s.vel_ned_mps, sizeof(snap.ekf_vel_ned_mps));
+        memcpy(snap.ekf_quat,        s.quat,        sizeof(snap.ekf_quat));
+        memcpy(snap.ekf_accel_bias,  s.accel_bias,  sizeof(snap.ekf_accel_bias));
+        memcpy(snap.ekf_gyro_bias,   s.gyro_bias,   sizeof(snap.ekf_gyro_bias));
+        // getCovDiag wants a 'float (&)[15]' reference; packed-struct
+        // fields can't bind to it.  Stage through a local first.
+        float diag_tmp[15];
+        ekf.getCovDiag(diag_tmp);
+        memcpy(snap.ekf_P_diag, diag_tmp, sizeof(diag_tmp));
+        snap.ekf_t_prev_us = s.t_prev_us;
+        memcpy(snap.ekf_euler,       s.euler,       sizeof(snap.ekf_euler));
     }
 
     snap.crc32 = computeSnapshotCRC(snap);
+}
 
-    Preferences snap_prefs;
-    if (snap_prefs.begin("fsnap", false)) {
-        snap_prefs.putBytes("s", &snap, sizeof(snap));
-        snap_prefs.end();
-    }
+static void saveFlightSnapshot(uint32_t now_ms)
+{
+    FlightSnapshotData snap = {};
+    buildFlightSnapshot(snap, now_ms);
+
+    // Hand off to the I2S sender — non-blocking, runs entirely from Core 1
+    // RAM.  ~13 KB/s additional bandwidth on top of the existing ~78 KB/s
+    // sensor stream.  No flash, no NVS, no cache disable.
+    (void)enqueueI2STx(SNAPSHOT_MSG,
+                       reinterpret_cast<const uint8_t*>(&snap),
+                       sizeof(snap));
 }
 
 static void clearFlightSnapshot()
 {
-    Preferences snap_prefs;
-    if (snap_prefs.begin("fsnap", false)) {
-        snap_prefs.remove("s");
-        snap_prefs.end();
-    }
+    // Send a snapshot with rocket_state=LANDED so the OC's MRAM holds an
+    // "invalid for recovery" state.  The recovery path on next boot only
+    // restores when state==INFLIGHT, so a LANDED snapshot effectively
+    // clears the recovery slot via the same I2S path as normal saves.
+    FlightSnapshotData snap = {};
+    buildFlightSnapshot(snap, millis(), /* override_state = */ (uint8_t)LANDED);
+    (void)enqueueI2STx(SNAPSHOT_MSG,
+                       reinterpret_cast<const uint8_t*>(&snap),
+                       sizeof(snap));
 }
 
 static const char* resetReasonStr(esp_reset_reason_t r)
@@ -1470,8 +1466,10 @@ static void setup_fc()
     }
 
     // ── Inflight reboot recovery ────────────────────────────────────────────
-    // If the reset was unexpected (brownout, watchdog, panic), check for a
-    // valid flight snapshot in NVS and restore state to resume INFLIGHT ops.
+    // If the reset was unexpected (brownout, watchdog, panic), query the OC
+    // for the latest snapshot it received over I2S and restore state to
+    // resume INFLIGHT ops.  Snapshot lives in OC's MRAM (non-volatile, no
+    // FC flash writes — see #104).
     {
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
@@ -1482,114 +1480,161 @@ static void setup_fc()
                                  rst == ESP_RST_TASK_WDT ||
                                  rst == ESP_RST_WDT);
 
-        if (unexpected_reset) {
-            Preferences snap_prefs;
-            FlightSnapshot snap = {};
-            bool valid = false;
+        FlightSnapshotData snap = {};
+        bool valid = false;
 
-            if (snap_prefs.begin("fsnap", true)) {
-                size_t len = snap_prefs.getBytesLength("s");
-                if (len == sizeof(FlightSnapshot)) {
-                    snap_prefs.getBytes("s", &snap, sizeof(snap));
-                    if (snap.magic == FlightSnapshot::MAGIC &&
-                        snap.version == FlightSnapshot::VERSION &&
-                        snap.rocket_state == (uint8_t)INFLIGHT &&
-                        snap.crc32 == computeSnapshotCRC(snap)) {
-                        valid = true;
-                    } else {
-                        ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
-                                 (unsigned long)snap.magic, snap.rocket_state,
-                                 (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+        if (unexpected_reset && !out_ready) {
+            ESP_LOGW(TAG, "[RECOVERY] OC not ready — skipping snapshot recovery");
+        }
+        else if (unexpected_reset) {
+            // Send GET_FLIGHT_SNAPSHOT request, then read the SNAPSHOT_MSG
+            // response.  OC reads from MRAM (~150 us) and queues the
+            // ~224-byte response into its I2C TX ringbuffer (256 B).
+            if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) == ESP_OK) {
+                delay(20);  // let OC service the request and queue the response
+
+                constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+                uint8_t buf[kRespFrameLen + 16] = {};  // + slack for SOF byte loss
+                esp_err_t rerr = i2c_interface.masterRead(buf, sizeof(buf), 100);
+                if (rerr == ESP_OK) {
+                    // SOF scan — same defensive pattern as the [CFG READ] path.
+                    for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
+                        if (buf[off] == 0xAA && buf[off+1] == 0x55 &&
+                            buf[off+2] == 0xAA && buf[off+3] == 0x55 &&
+                            buf[off+4] == SNAPSHOT_MSG) {
+                            uint8_t type = 0;
+                            uint8_t payload[sizeof(FlightSnapshotData)] = {};
+                            size_t  payload_len = 0;
+                            if (TR_I2C_Interface::unpackMessage(
+                                    buf + off, kRespFrameLen,
+                                    type, payload, sizeof(payload),
+                                    payload_len, true) &&
+                                type == SNAPSHOT_MSG &&
+                                payload_len == sizeof(FlightSnapshotData)) {
+                                memcpy(&snap, payload, sizeof(FlightSnapshotData));
+                                if (snap.magic   == FlightSnapshotData::MAGIC &&
+                                    snap.version == FlightSnapshotData::VERSION &&
+                                    snap.rocket_state == (uint8_t)INFLIGHT &&
+                                    snap.crc32 == computeSnapshotCRC(snap)) {
+                                    valid = true;
+                                } else {
+                                    ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
+                                             (unsigned long)snap.magic, snap.rocket_state,
+                                             (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+                                }
+                                break;
+                            }
+                        }
                     }
+                } else {
+                    ESP_LOGW(TAG, "[RECOVERY] I2C read for snapshot failed: %s", esp_err_to_name(rerr));
                 }
-                snap_prefs.end();
+            } else {
+                ESP_LOGW(TAG, "[RECOVERY] Failed to send GET_FLIGHT_SNAPSHOT");
+            }
+        }
+
+        if (valid) {
+            ESP_LOGW(TAG, "========================================");
+            ESP_LOGW(TAG, "[RECOVERY] INFLIGHT REBOOT RECOVERY from %s", resetReasonStr(rst));
+            ESP_LOGW(TAG, "[RECOVERY] Flight elapsed: %lu ms", (unsigned long)snap.flight_elapsed_ms);
+            ESP_LOGW(TAG, "========================================");
+
+            const uint32_t now_ms = millis();
+
+            // Restore flight state
+            rocket_state = INFLIGHT;
+
+            // Rebase timestamps to new millis() epoch
+            launch_time_millis = now_ms - snap.flight_elapsed_ms;
+            if (snap.pyro_apogee_detected) {
+                pyro_apogee_detected = true;
+                pyro_apogee_time_ms = launch_time_millis + snap.apogee_elapsed_ms;
+            }
+            if (snap.burnout_detected) {
+                burnout_detected = true;
+                burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
             }
 
-            if (valid) {
-                ESP_LOGW(TAG, "========================================");
-                ESP_LOGW(TAG, "[RECOVERY] INFLIGHT REBOOT RECOVERY from %s", resetReasonStr(rst));
-                ESP_LOGW(TAG, "[RECOVERY] Flight elapsed: %lu ms", (unsigned long)snap.flight_elapsed_ms);
-                ESP_LOGW(TAG, "========================================");
+            // Restore pyro state (safety-critical: no double-fire, no missed fire)
+            portENTER_CRITICAL(&pyro_spinlock);
+            pyro1_fired = snap.pyro1_fired;
+            pyro2_fired = snap.pyro2_fired;
+            pyro1_fire_start_ms = 0;
+            pyro2_fire_start_ms = 0;
+            portEXIT_CRITICAL(&pyro_spinlock);
 
-                const uint32_t now_ms = millis();
-
-                // Restore flight state
-                rocket_state = INFLIGHT;
-
-                // Rebase timestamps to new millis() epoch
-                launch_time_millis = now_ms - snap.flight_elapsed_ms;
-                if (snap.pyro_apogee_detected) {
-                    pyro_apogee_detected = true;
-                    pyro_apogee_time_ms = launch_time_millis + snap.apogee_elapsed_ms;
-                }
-                if (snap.burnout_detected) {
-                    burnout_detected = true;
-                    burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
-                }
-
-                // Restore pyro state (safety-critical: no double-fire, no missed fire)
+            // Re-arm unfired pyro channels (GPIO ARM pins reset on reboot)
+            if (snap.pyro1_armed && !snap.pyro1_fired && pyro_config.ch1_enabled) {
                 portENTER_CRITICAL(&pyro_spinlock);
-                pyro1_fired = snap.pyro1_fired;
-                pyro2_fired = snap.pyro2_fired;
-                pyro1_fire_start_ms = 0;
-                pyro2_fire_start_ms = 0;
+                gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
+                pyro1_armed = true;
                 portEXIT_CRITICAL(&pyro_spinlock);
-
-                // Re-arm unfired pyro channels (GPIO ARM pins reset on reboot)
-                if (snap.pyro1_armed && !snap.pyro1_fired && pyro_config.ch1_enabled) {
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
-                    pyro1_armed = true;
-                    portEXIT_CRITICAL(&pyro_spinlock);
-                    ESP_LOGW(TAG, "[RECOVERY] CH1 re-armed");
-                }
-                if (snap.pyro2_armed && !snap.pyro2_fired && pyro_config.ch2_enabled) {
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 1);
-                    pyro2_armed = true;
-                    portEXIT_CRITICAL(&pyro_spinlock);
-                    ESP_LOGW(TAG, "[RECOVERY] CH2 re-armed");
-                }
-
-                ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d ch1_armed=%d ch1_fired=%d ch2_armed=%d ch2_fired=%d",
-                         pyro_apogee_detected, pyro1_armed, pyro1_fired, pyro2_armed, pyro2_fired);
-
-                // Restore flight references
-                ground_pressure_pa = snap.ground_pressure_pa;
-                ref_lat_rad = snap.ref_lat_rad;
-                ref_lon_rad = snap.ref_lon_rad;
-                ref_alt_m   = snap.ref_alt_m;
-                have_ref_pos = true;
-                ref_pos_frozen = true;
-                ground_pressure_found = true;
-
-                // Restore control state
-                ekf_initialized  = snap.ekf_initialized;
-                guidance_enabled = snap.guidance_enabled;
-                servo_enabled    = snap.servo_enabled;
-                landed_actions_done = false;
-                end_flight_sent = false;
-
-                // Restore EKF state and inflate covariance for reboot uncertainty
-                if (snap.ekf_initialized) {
-                    ekf.setState(snap.ekf_state);
-                    // Inflate position covariance (5m sigma → 25 m²)
-                    for (int i = 0; i < 3; i++) ekf.inflateCovDiag(i, 25.0f);
-                    // Inflate velocity covariance (5 m/s sigma → 25 m²/s²)
-                    for (int i = 3; i < 6; i++) ekf.inflateCovDiag(i, 25.0f);
-                    // Inflate attitude covariance (~10° sigma → 0.03 rad²)
-                    for (int i = 6; i < 9; i++) ekf.inflateCovDiag(i, 0.03f);
-                    ESP_LOGW(TAG, "[RECOVERY] EKF state restored (covariance inflated)");
-                }
-
-                // Hold servos neutral for 500ms while EKF settles
-                reboot_recovery = true;
-                reboot_recovery_telem = true;
-                servo_settle_end_ms = now_ms + 500;
-
-                // Mark launch flag so kinematic checks don't re-trigger launch detection
-                kinematics.launch_flag = true;
+                ESP_LOGW(TAG, "[RECOVERY] CH1 re-armed");
             }
+            if (snap.pyro2_armed && !snap.pyro2_fired && pyro_config.ch2_enabled) {
+                portENTER_CRITICAL(&pyro_spinlock);
+                gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 1);
+                pyro2_armed = true;
+                portEXIT_CRITICAL(&pyro_spinlock);
+                ESP_LOGW(TAG, "[RECOVERY] CH2 re-armed");
+            }
+
+            ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d ch1_armed=%d ch1_fired=%d ch2_armed=%d ch2_fired=%d",
+                     pyro_apogee_detected, pyro1_armed, pyro1_fired, pyro2_armed, pyro2_fired);
+
+            // Restore flight references
+            ground_pressure_pa = snap.ground_pressure_pa;
+            ref_lat_rad = snap.ref_lat_rad;
+            ref_lon_rad = snap.ref_lon_rad;
+            ref_alt_m   = snap.ref_alt_m;
+            have_ref_pos = true;
+            ref_pos_frozen = true;
+            ground_pressure_found = true;
+
+            // Restore control state
+            ekf_initialized  = snap.ekf_initialized;
+            guidance_enabled = snap.guidance_enabled;
+            servo_enabled    = snap.servo_enabled;
+            landed_actions_done = false;
+            end_flight_sent = false;
+
+            // Restore EKF state.  The wire snapshot stores only the
+            // diagonal of P (cross-correlations get rebuilt over the
+            // next ~0.5-1 s of measurement updates) — see
+            // FlightSnapshotData comment in RocketComputerTypes.h.
+            if (snap.ekf_initialized) {
+                EkfStateSnapshot ekf_state = {};
+                memcpy(ekf_state.pos_rrm,     snap.ekf_pos_rrm,     sizeof(ekf_state.pos_rrm));
+                memcpy(ekf_state.vel_ned_mps, snap.ekf_vel_ned_mps, sizeof(ekf_state.vel_ned_mps));
+                memcpy(ekf_state.quat,        snap.ekf_quat,        sizeof(ekf_state.quat));
+                memcpy(ekf_state.accel_bias,  snap.ekf_accel_bias,  sizeof(ekf_state.accel_bias));
+                memcpy(ekf_state.gyro_bias,   snap.ekf_gyro_bias,   sizeof(ekf_state.gyro_bias));
+                // Zero P here; setCovFromDiag fills the diagonal below.
+                memset(ekf_state.P, 0, sizeof(ekf_state.P));
+                ekf_state.t_prev_us = snap.ekf_t_prev_us;
+                memcpy(ekf_state.euler,       snap.ekf_euler,       sizeof(ekf_state.euler));
+                ekf.setState(ekf_state);
+                // Copy diag to a local before passing to the float(&)[15]
+                // reference — packed-struct fields can't bind directly.
+                float P_diag_local[15];
+                memcpy(P_diag_local, snap.ekf_P_diag, sizeof(P_diag_local));
+                ekf.setCovFromDiag(P_diag_local);
+
+                // Inflate covariance for reboot uncertainty.
+                for (int i = 0; i < 3; i++) ekf.inflateCovDiag(i, 25.0f);     // pos: 5m sigma
+                for (int i = 3; i < 6; i++) ekf.inflateCovDiag(i, 25.0f);     // vel: 5 m/s
+                for (int i = 6; i < 9; i++) ekf.inflateCovDiag(i, 0.03f);     // attitude: ~10°
+                ESP_LOGW(TAG, "[RECOVERY] EKF state restored (P diag from snap, off-diag rebuilding)");
+            }
+
+            // Hold servos neutral for 500ms while EKF settles
+            reboot_recovery = true;
+            reboot_recovery_telem = true;
+            servo_settle_end_ms = now_ms + 500;
+
+            // Mark launch flag so kinematic checks don't re-trigger launch detection
+            kinematics.launch_flag = true;
         }
 
         // Clear stale snapshot on normal boot (prevents recovery on next power cycle)

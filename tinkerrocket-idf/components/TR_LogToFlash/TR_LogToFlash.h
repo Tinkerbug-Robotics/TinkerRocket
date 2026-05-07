@@ -171,6 +171,15 @@ public:
     void setFileTimestamp(const char* filename, uint16_t year, uint8_t month, uint8_t day,
                           uint8_t hour, uint8_t minute, uint8_t second);
 
+    // ─── Raw MRAM access (for clients reserving a region outside the ring) ──
+    // Used by the FlightSnapshot store (#104 follow-up): caller carves out
+    // a region above ring_size_ and uses these to read/write directly without
+    // the ring's modulo wrapping.  Returns false if MRAM is not enabled.
+    // Acquires the SPI bus mutex internally — safe to call from any task.
+    bool mramRawWrite(uint32_t addr, const uint8_t* data, uint32_t len);
+    bool mramRawRead(uint32_t addr, uint8_t* out, uint32_t len);
+    bool isMramEnabled() const { return use_mram_; }
+
 private:
     // --- NAND ---
     static constexpr uint8_t NAND_RDID = 0x9F;
