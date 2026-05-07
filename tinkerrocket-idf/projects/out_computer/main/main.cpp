@@ -937,6 +937,13 @@ static inline void cmdConsume(size_t n)
 static size_t rx_head = 0;
 static size_t rx_tail = 0;
 static volatile uint32_t rx_ring_overflow_drops = 0; // ring full in ISR callback
+
+// High-water mark of rx_ring fill since the last LOG TIMING reset.  Updated
+// in rxPush (ISR/parser context) — cheap to track and the only way to see
+// if rx_ring filled silently without overflowing.  #104 follow-up: pairs
+// with the parser_iter_max_us measurement so we can tell whether bytes
+// were lost at the DMA→rx_ring stage or whether the parser fell behind.
+static volatile uint32_t rx_ring_peak_fill = 0;
 static uint64_t parser_resync_drops = 0;
 static uint64_t parser_len_drops = 0;
 
@@ -994,6 +1001,11 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
         rx_ring_overflow_drops++;
         rx_tail = (rx_tail + 1U) % RX_STREAM_RING; // drop oldest on overflow
     }
+    // High-water tracking — non-atomic but only one ISR context produces.
+    const uint32_t fill = (rx_head >= rx_tail)
+                            ? (rx_head - rx_tail)
+                            : (RX_STREAM_RING - (rx_tail - rx_head));
+    if (fill > rx_ring_peak_fill) rx_ring_peak_fill = fill;
 }
 
 static inline uint8_t rxPeek(size_t i)
@@ -1641,6 +1653,13 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     return wake == pdTRUE;
 }
 
+// Peak wall time of a single parseRxStream() call since the last reset
+// (#104 follow-up).  If parser falls behind the DMA producer — for example
+// because it blocks on the SPI mutex while the flush task runs a slow NAND
+// op — we expect to see this spike alongside a high rx_ring_peak_fill and
+// non-zero rx_ring_overflow_drops, all in the same window.
+static volatile uint32_t parser_iter_max_us = 0;
+
 // I2S parser task — woken by DMA callback, parses frames from rx_ring.
 // Unlike the old polling approach, this never reads stale DMA data because
 // the callback only fires when a fresh DMA buffer completes.
@@ -1652,7 +1671,10 @@ static void i2sParserTask(void *)
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         // Parse all complete frames in the ring
+        const int64_t _t0 = esp_timer_get_time();
         parseRxStream();
+        const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
+        if (_dt > parser_iter_max_us) parser_iter_max_us = _dt;
     }
 }
 
@@ -3159,6 +3181,25 @@ static void printStats()
     }
     } // End VERBOSE_DEBUG
 
+    // I2S RX-side stall instrumentation (#104 follow-up).  Snapshot the
+    // counters first, then reset them so the next window measures peaks
+    // since this print only.  Three signals together catch the
+    // FC→OC→bin loss path:
+    //   rx_ovf      - bytes silently lost at DMA→rx_ring boundary
+    //                 (the silent killer; nothing else flags this)
+    //   rx_peak     - high-water of rx_ring fill since last print
+    //                 (high but not overflowing = parser barely keeping up)
+    //   parser_max  - longest single parseRxStream() call since last print
+    //                 (catches parser stalls that the LFS/NAND timers miss)
+    static uint32_t s_prev_rx_ovf = 0;
+    const uint32_t  cur_rx_ovf  = rx_ring_overflow_drops;
+    const uint32_t  d_rx_ovf    = cur_rx_ovf - s_prev_rx_ovf;
+    s_prev_rx_ovf = cur_rx_ovf;
+    const uint32_t  cur_rx_peak = rx_ring_peak_fill;
+    rx_ring_peak_fill = 0;
+    const uint32_t  cur_parser  = parser_iter_max_us;
+    parser_iter_max_us = 0;
+
     // Always-on LFS/NAND stall instrumentation — prints the peak duration of
     // each potentially-slow LittleFS/NAND op observed since the last stats
     // window.  Complements the per-op ESP_LOGW("STALL: …") that fires live
@@ -3166,7 +3207,8 @@ static void printStats()
     ESP_LOGI("LOG TIMING",
              "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
              "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
-             "bad_blocks=%lu skips=%lu",
+             "bad_blocks=%lu skips=%lu  "
+             "rx_ovf=%lu rx_peak=%lu parser_max=%lu us",
              (unsigned long)s.write_max_us,
              (unsigned long)s.sync_max_us,
              (unsigned long)s.erase_max_us,
@@ -3179,7 +3221,10 @@ static void printStats()
              (unsigned long)s.nand_erase_ops,
              (unsigned long)interval_ring_fill_peak,
              (unsigned long)s.known_bad_blocks,
-             (unsigned long)s.bad_block_skips);
+             (unsigned long)s.bad_block_skips,
+             (unsigned long)d_rx_ovf,
+             (unsigned long)cur_rx_peak,
+             (unsigned long)cur_parser);
     logger.resetIntervalTimings();
 
     // Send telemetry to BLE app
