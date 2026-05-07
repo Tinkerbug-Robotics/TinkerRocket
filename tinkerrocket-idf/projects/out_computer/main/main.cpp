@@ -3579,9 +3579,16 @@ void initPeripherals()
             ESP_LOGE("PWR", "I2S recv callback failed: %s", esp_err_to_name(cb_err));
 
         // Parser task — woken by DMA callback, parses frames from rx_ring.
-        // Runs on Core 1 at same priority as loopTask so they round-robin.
+        // Pinned to Core 1 at priority 6 (one above loopTask at prio 5).
+        // Parser preempts loopTask whenever DMA notifies; loopTask runs
+        // in the gaps when parser blocks in ulTaskNotifyTake.  Parser is
+        // bursty by design (sleeps when rx_ring is empty) so it can't
+        // starve loopTask.  Originally created at prio 1 with a
+        // misleading "round-robin" comment — the actual scheduling left
+        // parser starved during high-throughput INFLIGHT, causing
+        // rx_ring to fill until drop_oldest evicted bytes (#104).
         xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 4096,
-                                nullptr, 1, &i2s_rx_task_handle, 1);
+                                nullptr, 6, &i2s_rx_task_handle, 1);
     }
 
     // NOTE: do NOT pre-queue a status response here.  With the new
