@@ -220,6 +220,32 @@ static inline float loraMinValidSnrDb(uint8_t sf)
     return sensitivity - 2.0f;
 }
 
+// Compute observed packet-loss between two consecutive RXes on the BS,
+// from the rocket's free-running TX sequence counter (#105).
+//
+//   prev_seq_signed  : last seq seen, or -1 if no prior packet (first contact).
+//   curr_seq         : seq from the just-received packet.
+//   plausibility_max : maximum forward delta to treat as a real run.  A
+//                      delta beyond this is almost certainly a rocket
+//                      reboot (seq reset to 0) or an extended outage we
+//                      can't attribute, so we report -1 ("unknown") rather
+//                      than a misleading "you lost 200 packets" reading.
+//
+// Returns the number of packets lost between the two RXes, or -1 when
+// not computable (first contact, duplicate seq, or implausible delta).
+// Pure / branch-only so it's safely host-testable without millis().
+static inline int16_t loraComputeObservedLoss(int16_t prev_seq_signed,
+                                                uint8_t  curr_seq,
+                                                uint16_t plausibility_max = 100)
+{
+    if (prev_seq_signed < 0)            return -1;            // first contact
+    const uint8_t prev   = (uint8_t)prev_seq_signed;
+    const uint16_t delta = (uint16_t)((curr_seq - prev) & 0xFFu);
+    if (delta == 0)                     return -1;            // duplicate / replay
+    if (delta > plausibility_max)       return -1;            // reboot or long outage
+    return (int16_t)(delta - 1);
+}
+
 // "Is the rocket presumed to be hopping right now, from the BS's
 // perspective?" — used to decide whether a BLE cmd 60 should take the
 // direct-scan or coordinated-pause path (#90).
@@ -716,8 +742,46 @@ typedef struct __attribute__((packed))
 } i24le_t;
 static_assert(sizeof(i24le_t) == 3, "i24le_t must be 3 bytes");
 
-// LoRa protocol version — bump on frame format changes
-static constexpr uint8_t LORA_PROTO_VERSION = 1;
+// ============================================================================
+// LoRa factory rendezvous (#105 follow-up): a single shared known-good config
+// ============================================================================
+// Hardcoded ONCE in this shared header so the BS and OC firmware are
+// guaranteed to compile against the same fallback.  Issue #105 hit the
+// chicken-and-egg case: both sides had matching factory defaults in their
+// per-project config.h files, but NVS-persisted operating freq drifted
+// (OC was on 926.5 MHz from a prior test, BS on 915), and neither side
+// knew where the other was so the BS uplink couldn't push corrections.
+//
+// Both projects' config.h re-export these as `LORA_RENDEZVOUS_*` so all
+// existing call sites keep working unchanged — the move just removes the
+// possibility of the two config.h files drifting apart in source.
+//
+// Frequency, BW, SF, CR, and TX power must ALL match between BS and OC for
+// the radios to decode each other (LLCC68 demodulator parameters), so the
+// rendezvous config carries the full modulation tuple, not just the freq.
+static constexpr float   LORA_FACTORY_RENDEZVOUS_MHZ    = 915.0f;
+static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_SF     = 8;
+static constexpr float   LORA_FACTORY_RENDEZVOUS_BW_KHZ = 250.0f;
+static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_CR     = 5;
+static constexpr int8_t  LORA_FACTORY_RENDEZVOUS_TX_DBM = 12;
+
+// LoRa NVS schema version (#105 follow-up).  Stored alongside the LoRa
+// settings; on boot, if the stored version doesn't match this constant,
+// the LoRa-related NVS keys are wiped so the device falls back to the
+// factory rendezvous above.  Bump whenever the NVS field set changes
+// meaningfully (new keys, repurposed keys, byte-format changes), or when
+// you ship a build that needs to force-clear stale settings.
+//   v1: original LoRa NVS layout
+//   v2: post-#105 — first version that gates on this field
+static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 2;
+
+// LoRa protocol version — bump on frame format changes.
+//   v1: original 60-byte frame with 2-byte routing header.
+//   v2: 60-byte frame with 3-byte routing header (next_channel_idx for #40/#41 hopping).
+//   v3: 61-byte frame, appends a 1-byte free-running TX sequence counter (#105
+//       lock-loss diagnostics).  BS uses the seq to compute observed loss
+//       rates and distinguish missed packets from full hop-table desync.
+static constexpr uint8_t LORA_PROTO_VERSION = 3;
 
 // LoRa name beacon sync byte (distinguishes from telemetry by size + prefix)
 static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;
@@ -739,6 +803,7 @@ typedef struct __attribute__((packed))
     uint8_t network_id;      // LoRa network namespace (0..255)
     uint8_t rocket_id;       // Source rocket ID within network (1..254, 0=unset, 255=broadcast)
     uint8_t next_channel_idx;// 0..N-1 = hop to that channel after this RX; 0xFF = stay
+    uint8_t seq;             // free-running TX sequence (proto v3, #105) — wraps mod 256
 
     // --- Telemetry payload (unchanged from proto v0) ---
     uint8_t num_sats;        // 0..255
@@ -789,8 +854,8 @@ typedef struct __attribute__((packed))
 
 } LoRaData;
 
-static_assert(sizeof(LoRaData) == 60,
-              "LoRaData must be 60 bytes (3-byte header + 57-byte payload)");
+static_assert(sizeof(LoRaData) == 61,
+              "LoRaData must be 61 bytes (4-byte routing header + 57-byte telemetry payload)");
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -808,6 +873,7 @@ typedef struct
     uint8_t network_id;             // Routing header: network namespace
     uint8_t rocket_id;              // Routing header: source rocket ID
     uint8_t next_channel_idx;       // Routing header: 0..N-1 hop target, 0xFF = stay
+    uint8_t seq;                    // Routing header: free-running TX seq (#105)
     uint8_t num_sats;               // int          : 0 to 255
     float   pdop;                   // meter        : 0 to 100
     double  ecef_x, ecef_y, ecef_z; // meter        : +/- 7,000,000

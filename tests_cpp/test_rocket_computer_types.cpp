@@ -25,7 +25,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
     EXPECT_EQ(sizeof(NonSensorData),  43u);
-    EXPECT_EQ(sizeof(LoRaData),       60u);  // 3-byte routing header + 57-byte payload
+    EXPECT_EQ(sizeof(LoRaData),       61u);  // 4-byte routing header (incl. seq) + 57-byte payload
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
 }
@@ -475,6 +475,75 @@ TEST(RocketLikelyHopping, RecentNonHopStateFalse) {
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, READY,         10000));
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, INITIALIZATION,10000));
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, LANDED,        10000));
+}
+
+// ============================================================================
+// Issue #105: observed-loss attribution from the per-TX seq counter
+// ============================================================================
+
+TEST(LoraComputeObservedLoss, FirstContactReturnsUnknown) {
+    // No prior packet → BS can't compute loss; -1 means "unknown".
+    EXPECT_EQ(loraComputeObservedLoss(/*prev_seq=*/-1, /*curr=*/0),    -1);
+    EXPECT_EQ(loraComputeObservedLoss(/*prev_seq=*/-1, /*curr=*/200),  -1);
+}
+
+TEST(LoraComputeObservedLoss, ConsecutivePacketsHaveZeroLoss) {
+    // Healthy link: every TX gets through, gap=0.
+    EXPECT_EQ(loraComputeObservedLoss(0, 1),    0);
+    EXPECT_EQ(loraComputeObservedLoss(50, 51),  0);
+    EXPECT_EQ(loraComputeObservedLoss(254, 255), 0);
+}
+
+TEST(LoraComputeObservedLoss, SmallForwardJumpsReportRealLoss) {
+    // delta=N → (N-1) packets lost between RXes.
+    EXPECT_EQ(loraComputeObservedLoss(0, 2),   1);   // missed seq 1
+    EXPECT_EQ(loraComputeObservedLoss(0, 11), 10);   // missed 1..10
+    EXPECT_EQ(loraComputeObservedLoss(95, 100), 4);  // missed 96..99
+}
+
+TEST(LoraComputeObservedLoss, WrapAroundIsSeenAsForward) {
+    // 8-bit wrap: prev=250, curr=5 → modular delta = 11, loss = 10.
+    EXPECT_EQ(loraComputeObservedLoss(250, 5), 10);
+    EXPECT_EQ(loraComputeObservedLoss(255, 0), 0);   // exact wrap, no loss
+}
+
+TEST(LoraComputeObservedLoss, ImplausibleDeltaReturnsUnknown) {
+    // Modular 8-bit math: a "backward" jump only looks implausible once
+    // the wrap-forward distance exceeds the threshold.  A reboot in which
+    // the rocket happens to land near a multiple of 256 of its previous
+    // seq looks like a small forward run — that's a known limitation we
+    // accept; cross-checking against rocket_state covers the gap when it
+    // matters.  These cases are unambiguously implausible:
+    EXPECT_EQ(loraComputeObservedLoss(/*prev=*/100, /*curr=*/99),  -1);  // delta=255
+    EXPECT_EQ(loraComputeObservedLoss(/*prev=*/10,  /*curr=*/254), -1);  // delta=244
+    // Threshold is 100 by default; delta=101 must trip it.
+    EXPECT_EQ(loraComputeObservedLoss(0, 101),                     -1);
+    // delta=100 is right at the threshold — should still report (loss=99).
+    EXPECT_EQ(loraComputeObservedLoss(0, 100),                     99);
+}
+
+TEST(LoraComputeObservedLoss, AmbiguousRebootIsCountedAsLoss) {
+    // Documents the known reboot-detection blind spot: prev=200, curr=0
+    // (rocket sent 201..255 then rebooted to 0) has modular delta=56,
+    // which the helper reports as 55 lost packets.  We accept this — the
+    // operator should disambiguate using rocket_state (a fresh boot
+    // arrives in INITIALIZATION, not the prior PRELAUNCH/INFLIGHT).
+    EXPECT_EQ(loraComputeObservedLoss(200, 0), 55);
+}
+
+TEST(LoraComputeObservedLoss, DuplicateSeqIsAnomaly) {
+    // Same seq twice in a row: protocol violation (duplicate or replay).
+    // We don't try to be clever — flag as unknown so the operator sees it.
+    EXPECT_EQ(loraComputeObservedLoss(7,   7),   -1);
+    EXPECT_EQ(loraComputeObservedLoss(255, 255), -1);
+}
+
+TEST(LoraComputeObservedLoss, CustomThresholdHonoured) {
+    // A test or operator can dial the plausibility cap.  At threshold=10
+    // a delta of 50 is rejected even though it'd be accepted at default.
+    EXPECT_EQ(loraComputeObservedLoss(0, 50, /*plausibility_max=*/10), -1);
+    EXPECT_EQ(loraComputeObservedLoss(0,  9, /*plausibility_max=*/10),  8);
+    EXPECT_EQ(loraComputeObservedLoss(0, 10, /*plausibility_max=*/10),  9);
 }
 
 TEST(RocketLikelyHopping, StaleRxFalseEvenInHopState) {

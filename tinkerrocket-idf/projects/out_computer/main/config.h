@@ -2,6 +2,7 @@
 #define OUT_COMPUTER_CONFIG_H
 
 #include <stdint.h>
+#include <RocketComputerTypes.h>  // LORA_FACTORY_RENDEZVOUS_* (#105)
 
 struct config
 {
@@ -86,22 +87,15 @@ struct config
     static constexpr bool LORA_SYNCWORD_PRIVATE = true;
     static constexpr uint16_t LORA_TX_RATE_HZ = 2;
 
-    // Known-good rendezvous mode (issue #71).  When the rocket and base
-    // station drift apart, both fall back to this complete LoRa config
-    // — frequency AND modulation parameters.  Frequency alone isn't
-    // enough: the user can configure SF/BW/CR/TX power via the iOS app
-    // ("Fast" / "Standard" / "Long Range" presets), and a divergence on
-    // those is just as fatal as a frequency mismatch.  All five values
-    // must be identical on both firmware builds; the constants below are
-    // the "Standard" preset, which is also the NVS factory default — so
-    // a fresh-NVS device is already in rendezvous mode at boot.  Never
-    // persisted to NVS; NVS holds the working config and this is always
-    // the same compile-time fallback.
-    static constexpr float   LORA_RENDEZVOUS_MHZ          = 915.0f;
-    static constexpr uint8_t LORA_RENDEZVOUS_SF           = 8;
-    static constexpr float   LORA_RENDEZVOUS_BW_KHZ       = 250.0f;
-    static constexpr uint8_t LORA_RENDEZVOUS_CR           = 5;
-    static constexpr int8_t  LORA_RENDEZVOUS_TX_POWER_DBM = 12;
+    // Known-good rendezvous mode (issue #71).  Sourced from the shared
+    // RocketComputerTypes.h header (#105) so both BS and OC firmware are
+    // guaranteed to agree at compile time — see LORA_FACTORY_RENDEZVOUS_*
+    // there for the full justification.
+    static constexpr float   LORA_RENDEZVOUS_MHZ          = LORA_FACTORY_RENDEZVOUS_MHZ;
+    static constexpr uint8_t LORA_RENDEZVOUS_SF           = LORA_FACTORY_RENDEZVOUS_SF;
+    static constexpr float   LORA_RENDEZVOUS_BW_KHZ       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
+    static constexpr uint8_t LORA_RENDEZVOUS_CR           = LORA_FACTORY_RENDEZVOUS_CR;
+    static constexpr int8_t  LORA_RENDEZVOUS_TX_POWER_DBM = LORA_FACTORY_RENDEZVOUS_TX_DBM;
 
     // --- LoRa Uplink RX (commands from BaseStation) ---
     static constexpr uint8_t UPLINK_SYNC_BYTE = 0xCA;

@@ -197,6 +197,22 @@ static void analyzeAndPushFromCachedScan();
 // without holding the radio hostage if the rocket really has vanished.
 static constexpr uint32_t HOP_SILENCE_FALLBACK_MS = 3000;
 
+// ----------------------------------------------------------------------------
+// Hop-session diagnostics (#105)
+// ----------------------------------------------------------------------------
+// A "hop session" begins when hop_active_ flips false→true (BS starts
+// following the rocket's hop schedule) and ends on either silence-fallback
+// or rocket-state-change.  The counters here let the operator see, after a
+// flight, how often lock was lost, how long sessions lasted, and how many
+// packets the BS *observed* missing during each session — together with
+// the seq-derived per-packet loss in the CSV, this is the post-flight
+// view that issue #105 was opened to enable.
+static uint32_t hop_silence_events_count   = 0;   // lifetime, since boot
+static uint32_t hop_session_started_ms     = 0;   // 0 = no active session
+static uint32_t hop_session_total_pkts     = 0;   // accepted while hop_active_
+static uint32_t hop_session_observed_loss  = 0;   // sum of observed gaps (#105)
+static uint32_t lora_total_observed_loss   = 0;   // lifetime, since boot
+
 // Per-rocket tracker (replaces single last_decoded for multi-rocket support)
 static constexpr int MAX_TRACKED_ROCKETS = 4;
 struct TrackedRocket {
@@ -210,6 +226,11 @@ struct TrackedRocket {
     double     last_lon_deg = NAN;
     double     last_alt_m = NAN;
     uint32_t   last_seen_ms = 0;
+    // Free-running TX seq from the rocket (#105).  -1 = no prior packet
+    // ("first contact"); on a backward jump or implausible forward delta,
+    // we reset back to -1 and treat the next packet as fresh contact —
+    // most likely the rocket rebooted and lora_tx_seq restarted at 0.
+    int16_t    last_seq = -1;
 };
 static TrackedRocket tracked_rockets[MAX_TRACKED_ROCKETS];
 static uint8_t active_rocket_idx = 0;  // Which rocket the BLE telemetry currently shows
@@ -412,12 +433,17 @@ static void startLogging()
         return;
     }
 
-    // Write CSV header
+    // Write CSV header.  The trailing block (next_ch..event) was added
+    // for #105 lock-loss diagnostics: per-packet hop target, the freq the
+    // BS was actually tuned to, the rocket's free-running seq and the
+    // BS-derived gap to the last RX, plus an `event` column populated
+    // for non-telemetry rows (hop_active / hop_inactive / hop_silence).
     fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
                       "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
                       "pressure_alt,alt_rate,max_alt,max_speed,"
                       "voltage,current,soc,roll,pitch,yaw,speed,"
-                      "launch,vel_apo,alt_apo,landed,rssi,snr\n");
+                      "launch,vel_apo,alt_apo,landed,rssi,snr,"
+                      "next_ch,rx_freq_mhz,seq,gap,event\n");
 
     logging_active = true;
     log_start_ms = millis();
@@ -441,7 +467,8 @@ static void stopLogging()
 static uint32_t log_write_count = 0;  // Tracks calls for periodic flash check
 
 static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
-                          double lat, double lon, double alt)
+                          double lat, double lon, double alt,
+                          float rx_freq_mhz, int16_t observed_gap)
 {
     if (!logging_active) return;
 
@@ -484,7 +511,8 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     "%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,"
                     "%.1f,%.1f,%.1f,%.1f,"
                     "%.2f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,"
-                    "%d,%d,%d,%d,%.0f,%.1f\n",
+                    "%d,%d,%d,%d,%.0f,%.1f,"
+                    "%u,%.3f,%u,%d,\n",   // trailing comma keeps `event` empty
                     (unsigned long)time_ms,
                     rocketStateToString(data.rocket_state),
                     (unsigned)data.num_sats,
@@ -502,7 +530,9 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     data.vel_u_apogee_flag ? 1 : 0,
                     data.alt_apogee_flag ? 1 : 0,
                     data.alt_landed_flag ? 1 : 0,
-                    (double)rssi, (double)snr);
+                    (double)rssi, (double)snr,
+                    (unsigned)data.next_channel_idx, (double)rx_freq_mhz,
+                    (unsigned)data.seq, (int)observed_gap);
 
     if (written <= 0)
     {
@@ -510,6 +540,56 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
     }
 
     log_last_write_ms = millis();
+}
+
+// ----------------------------------------------------------------------------
+// CSV hop-event row (#105)
+// ----------------------------------------------------------------------------
+// Mirrors the column layout of logLoRaPacket() so a single pandas read_csv()
+// pass can ingest both — telemetry rows and event rows in chronological
+// order.  All telemetry-typed fields are left empty (",,,") so the event
+// stands out and the parsers can drop it with a simple `state == "EVENT"`
+// filter.  The `event` column carries a free-text description; downstream
+// scripts grep this to plot session timelines and loss histograms.
+//
+// Skipped when logging_active=false so we don't open a file just to record
+// an event with no surrounding telemetry.  Hop transitions still go to
+// ESP_LOG via the existing logging at the call site, so nothing is lost.
+static void logHopEvent(const char* event_str, float rx_freq_mhz)
+{
+    if (!logging_active || log_file == nullptr) return;
+    uint32_t time_ms = millis() - log_start_ms;
+    int written = fprintf(log_file,
+                    // 30 telemetry-typed fields blank, then next_ch=- (255 sentinel)
+                    // and rx_freq_mhz/seq/gap minimal so the event row still
+                    // tells you which freq the BS was sitting on at the moment.
+                    "%lu,EVENT,,,,,,,,,,,,,"   // time_ms, state, num_sats..gyro_z (14 cols)
+                    ",,,,"                    // pressure_alt, alt_rate, max_alt, max_speed
+                    ",,,,,,,"                 // voltage..speed (7)
+                    ",,,,,,"                  // launch, vel_apo, alt_apo, landed, rssi, snr
+                    "%u,%.3f,,,"              // next_ch=255 sentinel, rx_freq_mhz, seq=, gap=
+                    "%s\n",
+                    (unsigned long)time_ms,
+                    (unsigned)LORA_NEXT_CH_NO_HOP,
+                    (double)rx_freq_mhz,
+                    event_str);
+    if (written <= 0) {
+        ESP_LOGW(TAG, "[LOG] fprintf(event) failed");
+    }
+    log_last_write_ms = millis();
+}
+
+// Returns the radio's currently-tuned RX frequency for the hop diagnostics
+// CSV — i.e. the channel the BS was sitting on when this packet arrived
+// (or when this hop event fired).  Single source of truth so callers don't
+// have to re-derive lora_freq_mhz vs loraChannelMHz(...) inline.
+static inline float currentRxFreqMHz()
+{
+    if (hop_active_) {
+        const float f = loraChannelMHz(lora_bw_khz, hop_idx_);
+        if (f > 0.0f) return f;
+    }
+    return lora_freq_mhz;
 }
 
 // ============================================================================
@@ -873,6 +953,19 @@ static void printStats()
              (double)ls.last_rssi,
              (double)ls.last_snr,
              last_pkt_str);
+
+    // Hop diagnostics (#105).  hop_active=Y/N is the live link state; the
+    // session counters reflect the *current* session and reset on each
+    // hop_inactive / hop_silence event, so a "0 / 0" reading mid-flight
+    // means we just lost lock.  lifetime totals let the operator spot a
+    // run with abnormally many silence events at a glance.
+    ESP_LOGI(TAG, "[STATS] HOP: active=%c idx=%u session(pkts=%lu loss=%lu) lifetime(silence=%lu loss=%lu)",
+             hop_active_ ? 'Y' : 'N',
+             (unsigned)hop_idx_,
+             (unsigned long)hop_session_total_pkts,
+             (unsigned long)hop_session_observed_loss,
+             (unsigned long)hop_silence_events_count,
+             (unsigned long)lora_total_observed_loss);
 }
 
 // ============================================================================
@@ -2117,6 +2210,27 @@ static void setup_bs()
 
     // Load saved LoRa config from NVS (write config.h defaults if empty)
     prefs.begin("lora", false);  // read-write
+
+    // NVS schema gate (#105 follow-up).  If the stored schema version
+    // doesn't match the current build, wipe the lora namespace so the
+    // device falls back to the shared factory rendezvous and re-syncs
+    // with the BS via the standard rendezvous flow.  Without this, a
+    // re-flashed device can come up on a stale operating freq the BS
+    // doesn't know about — exactly the chicken-and-egg that motivated
+    // this gate.  Single namespace clear is fine: every LoRa-related
+    // key (freq, sf, bw, cr, txpwr, hopdis, rdv_mhz, chset_*) lives
+    // under "lora", so one clear() takes them all together.
+    {
+        const uint8_t stored_v = prefs.getUChar("schemv", 0);
+        if (stored_v != LORA_NVS_SCHEMA_VERSION)
+        {
+            ESP_LOGW(TAG, "[CFG] LoRa NVS schema mismatch (stored=%u, current=%u) — clearing",
+                     (unsigned)stored_v, (unsigned)LORA_NVS_SCHEMA_VERSION);
+            prefs.clear();
+            prefs.putUChar("schemv", LORA_NVS_SCHEMA_VERSION);
+        }
+    }
+
     if (!prefs.isKey("freq"))
     {
         // First boot or NVS erased — seed with config.h factory defaults
@@ -2288,8 +2402,25 @@ static void loop_bs()
         hop_last_rx_ms_ != 0 &&
         (millis() - hop_last_rx_ms_) > HOP_SILENCE_FALLBACK_MS)
     {
+        const uint32_t silence_ms = millis() - hop_last_rx_ms_;
+        const uint32_t dur_ms     = (hop_session_started_ms != 0)
+            ? (millis() - hop_session_started_ms) : 0;
         ESP_LOGW(TAG, "[HOP] Silence > %u ms — falling back to static channel",
                  (unsigned)HOP_SILENCE_FALLBACK_MS);
+        hop_silence_events_count++;
+        char ev[96];
+        snprintf(ev, sizeof(ev),
+                 "hop_silence duration_ms=%u pkts=%u loss=%u silence_ms=%u",
+                 (unsigned)dur_ms,
+                 (unsigned)hop_session_total_pkts,
+                 (unsigned)hop_session_observed_loss,
+                 (unsigned)silence_ms);
+        // Log the event row BEFORE flipping hop_active_ off so currentRxFreqMHz()
+        // still reports the hop channel we were sitting on at the moment of loss.
+        logHopEvent(ev, currentRxFreqMHz());
+        hop_session_started_ms    = 0;
+        hop_session_total_pkts    = 0;
+        hop_session_observed_loss = 0;
         hop_active_       = false;
         hop_needs_retune_ = true;
     }
@@ -2366,7 +2497,7 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: SIZE_OF_LORA_DATA (59) bytes ---
+        // --- Telemetry packet: SIZE_OF_LORA_DATA (61) bytes ---
         else if (rx_len == SIZE_OF_LORA_DATA)
         {
             // Decode the telemetry packet
@@ -2385,6 +2516,27 @@ static void loop_bs()
 
                 TR_LoRa_Comms::Stats ls = {};
                 lora_comms.getStats(ls);
+
+                // Observed-loss attribution (#105).  Use the rocket's free-
+                // running seq to compute how many telemetry packets we missed
+                // since the last RX from this rocket.  loraComputeObservedLoss
+                // returns -1 on first contact, duplicates, or implausible
+                // forward deltas (most likely a rocket reboot — lora_tx_seq
+                // resets to 0).  We update last_seq unconditionally so the
+                // next RX gets a clean baseline either way.
+                int16_t observed_gap = -1;
+                if (slot >= 0) {
+                    observed_gap = loraComputeObservedLoss(
+                        tracked_rockets[slot].last_seq, decoded.seq);
+                    tracked_rockets[slot].last_seq = (int16_t)decoded.seq;
+                    if (observed_gap > 0) {
+                        lora_total_observed_loss += (uint32_t)observed_gap;
+                        if (hop_active_) {
+                            hop_session_observed_loss += (uint32_t)observed_gap;
+                        }
+                    }
+                    if (hop_active_) hop_session_total_pkts++;
+                }
 
                 // Convert ECEF to lat/lon — but only when the rocket reports
                 // an actual GPS fix.  The rocket sometimes packs nonzero ECEF
@@ -2424,7 +2576,8 @@ static void loop_bs()
                 if (logging_active)
                 {
                     logLoRaPacket(decoded, ls.last_rssi, ls.last_snr,
-                                  lat_deg, lon_deg, alt_m);
+                                  lat_deg, lon_deg, alt_m,
+                                  currentRxFreqMHz(), observed_gap);
                 }
 
                 // Arm / disarm the INFLIGHT safety timer on state edges.
@@ -2501,11 +2654,24 @@ static void loop_bs()
                             hop_last_rx_ms_    = millis();
                             if (!was_active)
                             {
+                                // Start a fresh hop-session counter window
+                                // so the eventual hop_inactive / hop_silence
+                                // event reports stats for *this* session
+                                // (#105 diagnostics).
+                                hop_session_started_ms    = millis();
+                                hop_session_total_pkts    = 1;  // this packet counts
+                                hop_session_observed_loss = 0;
                                 ESP_LOGI(TAG, "[HOP] Active: %u channels at BW=%.0f kHz, "
                                               "first hop -> idx=%u (%.3f MHz)",
                                          (unsigned)n, (double)lora_bw_khz,
                                          (unsigned)hop_idx_,
                                          (double)loraChannelMHz(lora_bw_khz, hop_idx_));
+                                char ev[96];
+                                snprintf(ev, sizeof(ev),
+                                         "hop_active idx=%u nch=%u",
+                                         (unsigned)hop_idx_, (unsigned)n);
+                                logHopEvent(ev,
+                                            loraChannelMHz(lora_bw_khz, hop_idx_));
                             }
                         }
                     }
@@ -2517,8 +2683,21 @@ static void loop_bs()
                     // comms resume on a known frequency.
                     hop_active_       = false;
                     hop_needs_retune_ = true;
+                    const uint32_t dur_ms = (hop_session_started_ms != 0)
+                        ? (millis() - hop_session_started_ms) : 0;
                     ESP_LOGI(TAG, "[HOP] Inactive (rocket state changed): "
                                   "returning to %.2f MHz", (double)lora_freq_mhz);
+                    char ev[96];
+                    snprintf(ev, sizeof(ev),
+                             "hop_inactive duration_ms=%u pkts=%u loss=%u "
+                             "reason=state",
+                             (unsigned)dur_ms,
+                             (unsigned)hop_session_total_pkts,
+                             (unsigned)hop_session_observed_loss);
+                    logHopEvent(ev, lora_freq_mhz);
+                    hop_session_started_ms    = 0;
+                    hop_session_total_pkts    = 0;
+                    hop_session_observed_loss = 0;
                 }
 
                 last_known_camera_recording = decoded.camera_recording;

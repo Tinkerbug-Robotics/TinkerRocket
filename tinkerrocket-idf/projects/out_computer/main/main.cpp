@@ -589,6 +589,13 @@ static float max_speed_mps = 0.0f;
 static uint32_t lora_tx_ok = 0;
 static uint32_t lora_tx_fail = 0;
 static uint32_t last_lora_tx_ms = 0;
+
+// Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
+// on every actual transmit so the BS can compute observed-loss rates and
+// distinguish dropped packets from full hop-table desync.  Wraps mod 256.
+// Resets to 0 on reboot — the BS handles the discontinuity by clearing
+// its per-rocket tracking when seq jumps backward.
+static uint8_t  lora_tx_seq = 0;
 // lora_in_rx_mode forward-declared up with the hop state.
 static uint32_t lora_uplink_rx_count = 0;
 // CRC-passing decodes whose SNR was below loraMinValidSnrDb(current_sf)
@@ -1674,7 +1681,7 @@ static void serviceI2CIngress()
 }
 
 // ============================================================================
-static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
+static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint8_t seq)
 {
     if (out_payload == nullptr)
     {
@@ -1685,6 +1692,7 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
     // Routing header
     lora.network_id = network_id;
     lora.rocket_id  = rocket_id;
+    lora.seq        = seq;
     // Hop byte (#40 / #41).  Either tell the BS where we'll be for the
     // next packet, or send the no-hop sentinel.  During a rendezvous
     // visit (phase 2b) we explicitly send the sentinel — we're parked
@@ -1837,7 +1845,7 @@ static void serviceLoRa()
     }
 
     uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload))
+    if (!buildLoRaPayload(payload, lora_tx_seq))
     {
         return;
     }
@@ -1846,6 +1854,9 @@ static void serviceLoRa()
     if (lora_comms.send(payload, sizeof(payload)))
     {
         lora_tx_ok++;
+        // Advance the seq AFTER a successful send — failed startTransmit()
+        // means nothing went over the air, so the BS shouldn't see a gap.
+        lora_tx_seq++;
 
         // Advance hop state and schedule the post-TX retune.  We can't
         // retune here directly (TX is still in progress); the top of
@@ -2524,8 +2535,13 @@ enum class RocketRendezvousState : uint8_t {
 static RocketRendezvousState rendezvous_state = RocketRendezvousState::IDLE;
 static uint32_t rendezvous_phase_start_ms = 0;
 
-static constexpr uint32_t RENDEZVOUS_TRIGGER_INITIAL_MS = 30000;  // never heard BS yet
-static constexpr uint32_t RENDEZVOUS_TRIGGER_QUIET_MS   = 120000; // BS seen, just idle
+// #105 follow-up: tightened from 30 s / 120 s to 15 s for both triggers so
+// the operator doesn't sit through a long silence after a flash with stale
+// NVS, or after any other source of channel divergence.  Cycle (window +
+// saved) still gives the BS Phase A 30 s window plenty of overlap for a
+// clean handshake.
+static constexpr uint32_t RENDEZVOUS_TRIGGER_INITIAL_MS = 15000;  // never heard BS yet
+static constexpr uint32_t RENDEZVOUS_TRIGGER_QUIET_MS   = 15000;  // BS seen, then silent
 static constexpr uint32_t RENDEZVOUS_WINDOW_MS          = 10000;  // on rendezvous freq
 static constexpr uint32_t RENDEZVOUS_SAVED_MS           = 20000;  // back on saved freq
 
@@ -2796,7 +2812,7 @@ static void printLoRaPayloadDebug()
     }
 
     uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload))
+    if (!buildLoRaPayload(payload, lora_tx_seq))
     {
         return;
     }
@@ -3649,6 +3665,23 @@ static void setup_oc()
     // --- Load NVS settings early so config readback to app is correct ---
     {
         prefs.begin("lora", false);
+
+        // NVS schema gate (#105 follow-up).  Stored != current → clear the
+        // entire lora namespace so we fall back to the shared factory
+        // rendezvous values and let the BS re-sync us via the standard
+        // rendezvous flow.  Mirrors the BS side; both must agree on
+        // LORA_NVS_SCHEMA_VERSION (defined in RocketComputerTypes.h).
+        {
+            const uint8_t stored_v = prefs.getUChar("schemv", 0);
+            if (stored_v != LORA_NVS_SCHEMA_VERSION)
+            {
+                ESP_LOGW("CFG", "LoRa NVS schema mismatch (stored=%u, current=%u) — clearing",
+                         (unsigned)stored_v, (unsigned)LORA_NVS_SCHEMA_VERSION);
+                prefs.clear();
+                prefs.putUChar("schemv", LORA_NVS_SCHEMA_VERSION);
+            }
+        }
+
         if (prefs.isKey("freq"))
         {
             lora_freq_mhz = prefs.getFloat("freq", config::LORA_FREQ_MHZ);

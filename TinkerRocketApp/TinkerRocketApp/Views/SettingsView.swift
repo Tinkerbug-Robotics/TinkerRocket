@@ -98,10 +98,13 @@ struct SettingsView: View {
     @State private var servoApplied = false
     @State private var pidApplied = false
 
-    // Hop disable (#106) — local mirror of base-station's lora_hop_disabled flag.
+    // Hop enable (#106) — local mirror of the BS's lora_hop_disabled flag,
+    // inverted to match the UI's "Enable frequency hopping" toggle phrasing.
     // We keep a State so the toggle is responsive; the truth lives on the BS
-    // and is restored whenever a config readback arrives.
-    @State private var loraHopDisabled = false
+    // and is restored whenever a config readback arrives.  Wire format is
+    // still "disabled" semantics (cmd 17 payload 1 = disabled), so any place
+    // that talks to BLE inverts at the boundary.
+    @State private var loraHopEnabled = true
 
     private var selectedPreset: LoRaPreset {
         loraPresets.first(where: { $0.id == presetId }) ?? loraPresets[1]
@@ -233,14 +236,14 @@ struct SettingsView: View {
                     // Sends cmd 17 to the BS, which persists and uplinks
                     // the same byte to every tracked rocket.
                     Section(header: Text("LoRa Frequency Hopping"),
-                            footer: Text(loraHopDisabled
-                                ? "DISABLED — both ends stay on the configured frequency. Not FHSS-compliant; use for diagnostics only."
-                                : "Enabled (default). Channels hop during PRELAUNCH and INFLIGHT.")) {
-                        Toggle("Disable hopping (fixed frequency)", isOn: Binding(
-                            get: { loraHopDisabled },
+                            footer: Text(loraHopEnabled
+                                ? "Enabled (default). Channels hop during PRELAUNCH and INFLIGHT."
+                                : "DISABLED — both ends stay on the configured frequency. Not FHSS-compliant; use for diagnostics only.")) {
+                        Toggle("Enable frequency hopping", isOn: Binding(
+                            get: { loraHopEnabled },
                             set: { newValue in
-                                loraHopDisabled = newValue
-                                device.sendLoRaHopDisabled(newValue)
+                                loraHopEnabled = newValue
+                                device.sendLoRaHopDisabled(!newValue)
                             }
                         ))
                     }
@@ -536,11 +539,13 @@ struct SettingsView: View {
                 if let pwr = cfg.loraTxPower {
                     txPower = Double(pwr)
                 }
-                // #106 — sync hop-disable from device.  Older firmware doesn't
-                // emit "lhd"; in that case we leave the toggle showing its
-                // last value (defaults to false on first load).
+                // #106 — sync hop state from device.  Wire format is the
+                // "disabled" flag (lhd: true means hopping is OFF), so we
+                // invert into our UI-side "enabled" state.  Older firmware
+                // doesn't emit "lhd"; in that case we leave the toggle
+                // showing its last value (defaults to enabled on first load).
                 if let hopDis = cfg.loraHopDisabled {
-                    loraHopDisabled = hopDis
+                    loraHopEnabled = !hopDis
                 }
                 loadStringsFromStorage()
             }
