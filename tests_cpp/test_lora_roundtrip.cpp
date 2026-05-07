@@ -252,20 +252,24 @@ TEST_F(LoRaRoundtripTest, ByteLevel_PackUnpack) {
     EXPECT_NEAR(out.acc_z, 9.8f, 0.1f);
 }
 
-TEST_F(LoRaRoundtripTest, Seq_AllByteValues) {
-    // The seq byte (#105) must roundtrip the full 0..255 range without
-    // collision with adjacent fields.  A bit-mask bug here would silently
-    // corrupt either seq or next_channel_idx and the BS-side observed-loss
-    // computation would chase ghosts.
-    for (int s = 0; s <= 255; s++) {
+TEST_F(LoRaRoundtripTest, Seq_FullU16Range) {
+    // Proto v4 widened seq to 16 bits so the slow-hop seq-anchored
+    // schedule can cover all channel counts (BW=125 → 139 channels at
+    // dwell=4 needs 556 distinct seq positions, way past u8).  Verify
+    // the round-trip works at byte boundaries, mid-range, and the wrap.
+    const uint16_t test_seqs[] = {
+        0, 1, 127, 128, 255, 256, 257,                 // u8 boundary
+        1000, 16384, 32768, 49152,                     // mid-range
+        65532, 65533, 65534, 65535                     // wrap edge
+    };
+    for (uint16_t s : test_seqs) {
         LoRaDataSI in = makeNominal();
-        in.seq = (uint8_t)s;
-        // Pin some neighbours so we'd notice if seq writes overflowed
-        // into them — these are the routing-header neighbours and a
-        // payload byte right after the appended seq slot.
+        in.seq = s;
+        // Pin neighbours so we'd notice if seq writes overflowed into them.
         in.network_id       = 42;
         in.rocket_id        = 7;
         in.next_channel_idx = 99;
+        in.num_sats         = 12;
         in.speed            = 1234.0f;
 
         LoRaData packed{};
@@ -273,10 +277,11 @@ TEST_F(LoRaRoundtripTest, Seq_AllByteValues) {
         LoRaDataSI out{};
         conv.unpackLoRa(packed, out);
 
-        EXPECT_EQ(out.seq, (uint8_t)s)         << "seq=" << s;
+        EXPECT_EQ(out.seq, s)                  << "seq=" << s;
         EXPECT_EQ(out.network_id, 42)          << "seq=" << s;
         EXPECT_EQ(out.rocket_id,   7)          << "seq=" << s;
         EXPECT_EQ(out.next_channel_idx, 99)    << "seq=" << s;
+        EXPECT_EQ(out.num_sats, 12)            << "seq=" << s;
         EXPECT_NEAR(out.speed, 1234.0f, 1.0f)  << "seq=" << s;
     }
 }

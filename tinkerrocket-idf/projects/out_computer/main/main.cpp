@@ -592,10 +592,10 @@ static uint32_t last_lora_tx_ms = 0;
 
 // Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
 // on every actual transmit so the BS can compute observed-loss rates and
-// distinguish dropped packets from full hop-table desync.  Wraps mod 256.
-// Resets to 0 on reboot — the BS handles the discontinuity by clearing
-// its per-rocket tracking when seq jumps backward.
-static uint8_t  lora_tx_seq = 0;
+// the slow-hop seq-anchored channel schedule.  Widened to 16 bits in
+// proto v4 — see LORA_HOP_DWELL_PACKETS for why u8 was insufficient.
+// Wraps mod 65536; resets to 0 on reboot.
+static uint16_t lora_tx_seq = 0;
 // lora_in_rx_mode forward-declared up with the hop state.
 static uint32_t lora_uplink_rx_count = 0;
 // CRC-passing decodes whose SNR was below loraMinValidSnrDb(current_sf)
@@ -1681,7 +1681,7 @@ static void serviceI2CIngress()
 }
 
 // ============================================================================
-static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint8_t seq)
+static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t seq)
 {
     if (out_payload == nullptr)
     {
@@ -1693,40 +1693,30 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint8_t seq
     lora.network_id = network_id;
     lora.rocket_id  = rocket_id;
     lora.seq        = seq;
-    // Hop byte (#40 / #41).  Either tell the BS where we'll be for the
-    // next packet, or send the no-hop sentinel.  During a rendezvous
-    // visit (phase 2b) we explicitly send the sentinel — we're parked
-    // on rendezvous, not following the hop schedule.
+    // Hop byte (#40 / #41).  Tells the BS where to expect packet seq+1.
+    // With seq-anchored slow-hop (#105 follow-up), this value is purely
+    // a sanity hint — the BS computes the same channel from the seq
+    // itself, which lets it self-correct after a single missed packet
+    // within the dwell window.  Sentinel 0xFF means "not hopping; stay
+    // on lora_freq_mhz".
     if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL)
     {
-        if (hop_first_pkt_)
+        const uint8_t n = loraChannelCount(lora_bw_khz);
+        if (n == 0)
         {
-            // Bootstrap: this packet still goes out on lora_freq_mhz.
-            // Tell the BS to follow us to channel 0 for the next one.
-            // (Channel 0 is intentionally always considered active even
-            // if the skip-mask covers it, since it's the bootstrap
-            // anchor — the next non-bootstrap packet will skip-advance.)
-            lora.next_channel_idx = 0;
+            lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;
         }
         else
         {
-            const uint8_t n = loraChannelCount(lora_bw_khz);
-            if (n == 0)
-            {
-                lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;
-            }
-            else
-            {
-                // Skip-mask aware advance (#40 / #41 phase 3).  When no
-                // valid mask is loaded (n_chan == 0 or BW mismatch), the
-                // skip_mask_ is all-zeros so loraNextActiveChannelIdx
-                // degenerates to (idx + 1) % n.
-                const bool mask_valid = (skip_mask_n_ == n &&
-                                          channel_set_bw_khz_ == lora_bw_khz);
-                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
-                lora.next_channel_idx = loraNextActiveChannelIdx(hop_idx_, mask, n);
-            }
+            // Skip-mask aware schedule.  When no valid mask is loaded
+            // (n_chan == 0 or BW mismatch) the empty mask makes
+            // loraHopChannelForSeq degenerate to (seq/dwell) % n.
+            const bool mask_valid = (skip_mask_n_ == n &&
+                                      channel_set_bw_khz_ == lora_bw_khz);
+            static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+            const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+            lora.next_channel_idx = loraHopChannelForSeq(
+                (uint16_t)(seq + 1), LORA_HOP_DWELL_PACKETS, mask, n);
         }
     }
     else
@@ -1867,26 +1857,24 @@ static void serviceLoRa()
         {
             if (hop_first_pkt_)
             {
-                // Bootstrap packet just went out on lora_freq_mhz.
-                // hop_idx_ is already 0; clear the first-packet flag so
-                // the upcoming retune lands us on channel 0.
+                // Bootstrap packet just went out on lora_freq_mhz.  Clear
+                // the first-packet flag; the next packet (seq just
+                // incremented) will go on its scheduled hop channel.
                 hop_first_pkt_ = false;
             }
-            else
+            // Recompute hop_idx_ from the just-incremented seq via the
+            // seq-anchored schedule.  This MUST equal the next_channel_idx
+            // we put into the packet header in buildLoRaPayload — both
+            // sides derive from the same formula so they cannot disagree.
+            const uint8_t n = loraChannelCount(lora_bw_khz);
+            if (n > 0)
             {
-                // Skip-mask aware advance — must match the value we
-                // just wrote into the packet's next_channel_idx field
-                // in buildLoRaPayload, otherwise rocket and BS land on
-                // different channels.
-                const uint8_t n = loraChannelCount(lora_bw_khz);
-                if (n > 0)
-                {
-                    const bool mask_valid = (skip_mask_n_ == n &&
-                                              channel_set_bw_khz_ == lora_bw_khz);
-                    static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                    const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
-                    hop_idx_ = loraNextActiveChannelIdx(hop_idx_, mask, n);
-                }
+                const bool mask_valid = (skip_mask_n_ == n &&
+                                          channel_set_bw_khz_ == lora_bw_khz);
+                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                hop_idx_ = loraHopChannelForSeq(
+                    lora_tx_seq, LORA_HOP_DWELL_PACKETS, mask, n);
             }
             hop_needs_retune_ = true;
         }
