@@ -1595,12 +1595,17 @@ static void serviceRecovery()
 // Only sent while we ARE hearing the rocket (last_packet_ms recent).  If
 // rocket goes silent, the recovery state machine takes over and we stop
 // heartbeating until comms are restored.  Uses 2 retries instead of 8 to
-// keep airtime negligible (<0.1%) — losing one heartbeat is fine, the
-// next one comes 30 s later, well inside the rocket's tolerance.
+// keep airtime per beat small (~100 ms total).
+//
+// Interval must be < OC RENDEZVOUS_TRIGGER_QUIET_MS (15 s in #105) with
+// margin for at least one missed beat — otherwise the rocket fires its
+// slow-rendezvous in steady state, drops to the rendezvous channel, and
+// the BS spends ~30 s syncing it back via Cmd-10 relay.  10 s gives the
+// OC two heartbeats per silence-tolerance window and keeps airtime ~1%.
 // (Defined here, after the LoRa transaction & recovery sections, so the
 // state-machine enums it depends on are in scope.)
 
-static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 30000;  // every 30 s
+static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 10000;  // every 10 s (#105)
 static constexpr uint32_t HEARTBEAT_RX_FRESH_MS = 5000;   // rocket "alive"
 static constexpr uint8_t  HEARTBEAT_RETRIES     = 2;
 static uint32_t last_heartbeat_tx_ms = 0;
