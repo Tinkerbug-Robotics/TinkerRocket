@@ -178,7 +178,11 @@ static bool     lora_hop_disabled = false;
 // `channel_set_bw_khz_` is the BW the mask was generated against — used
 // to detect when a cmd-10 BW change invalidates the mask (we revert to
 // "no skips" until the user re-runs the scan on the new BW).
-static float   rendezvous_mhz_     = config::LORA_RENDEZVOUS_MHZ;
+//
+// Rendezvous freq used to live here too (NVS-stored, scan-selected) but
+// that allowed the BS and rocket to drift apart with no recovery path —
+// see issue #105.  It's now compile-time hardcoded to the shared
+// LORA_FACTORY_RENDEZVOUS_MHZ on both sides.
 static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
 static uint8_t skip_mask_n_        = 0;        // 0 = no mask yet
 static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
@@ -1356,7 +1360,7 @@ static void serviceLoRaTransaction()
 // If the base station hears nothing from any rocket for RECOVERY_SILENCE_MS
 // while on the ground (not freq_locked_for_flight), hop through known-good
 // frequencies looking for the rocket:
-//   Phase A (rendezvous): tune to LORA_RENDEZVOUS_MHZ and listen 3 s.  If a
+//   Phase A (rendezvous): tune to LORA_FACTORY_RENDEZVOUS_MHZ and listen 3 s.  If a
 //     beacon / telem arrives, relay Cmd 10 with the saved NVS config to
 //     push the rocket back, then return to the saved NVS freq.
 //   Phase B (grid scan): if Phase A was silent, scan the saved NVS freq ±
@@ -1396,16 +1400,16 @@ static constexpr float    RECOVERY_PHASE_B_SPAN_MHZ = 2.0f;  // ±2 MHz around N
 
 // Hop to the full rendezvous mode (freq + SF/BW/CR/power).  Used for
 // Phase A — both ends agree on this exact config as a known-good
-// fallback, regardless of what the user set in NVS.
+// fallback, regardless of what the user set in NVS.  All five values
+// are compile-time constants in RocketComputerTypes.h so BS and OC
+// cannot disagree on the meeting place (#105 follow-up).
 static void recoveryHopToRendezvousMode()
 {
-    // rendezvous_mhz_ is scan-selected (#40 / #41 phase 3) and falls
-    // back to config::LORA_RENDEZVOUS_MHZ when no scan has been run.
-    if (lora_comms.reconfigure(rendezvous_mhz_,
-                                config::LORA_RENDEZVOUS_SF,
-                                config::LORA_RENDEZVOUS_BW_KHZ,
-                                config::LORA_RENDEZVOUS_CR,
-                                config::LORA_RENDEZVOUS_TX_POWER_DBM))
+    if (lora_comms.reconfigure(LORA_FACTORY_RENDEZVOUS_MHZ,
+                                LORA_FACTORY_RENDEZVOUS_SF,
+                                LORA_FACTORY_RENDEZVOUS_BW_KHZ,
+                                LORA_FACTORY_RENDEZVOUS_CR,
+                                LORA_FACTORY_RENDEZVOUS_TX_DBM))
     {
         lora_comms.startReceive();
     }
@@ -1438,9 +1442,9 @@ static void recoveryEnterPhaseA()
     recovery_phase_start_ms     = millis();
     recovery_state              = RecoveryState::PHASE_A_RENDEZVOUS;
     ESP_LOGW(TAG, "[RECOVER] Silent — Phase A rendezvous mode (%.2f MHz SF%u BW%.0f) for %u ms",
-             (double)rendezvous_mhz_,
-             (unsigned)config::LORA_RENDEZVOUS_SF,
-             (double)config::LORA_RENDEZVOUS_BW_KHZ,
+             (double)LORA_FACTORY_RENDEZVOUS_MHZ,
+             (unsigned)LORA_FACTORY_RENDEZVOUS_SF,
+             (double)LORA_FACTORY_RENDEZVOUS_BW_KHZ,
              (unsigned)RECOVERY_PHASE_A_DWELL_MS);
 }
 
@@ -1727,12 +1731,13 @@ static constexpr uint32_t COORD_HOP_RECENT_MS        = 10000;
 // Persist channel-set selection to NVS.  Skip-mask is keyed off the BW
 // it was generated for so a later cmd-10 BW change invalidates it
 // cleanly (loadChannelSetFromNvs detects mismatch and clears).
+// Rendezvous freq is no longer persisted — see #105 / LORA_NVS_SCHEMA_VERSION
+// v3 in RocketComputerTypes.h.
 static void saveChannelSetToNvs(const LoRaChannelSetSelection& sel,
                                 float bw_khz)
 {
     Preferences p;
     if (!p.begin("lora", false)) return;
-    p.putFloat("rdv_mhz", sel.rendezvous_mhz);
     p.putUChar("chset_n", sel.n_channels);
     p.putFloat("chset_bw", bw_khz);
     const size_t bytes_used = (sel.n_channels + 7) / 8;
@@ -1742,13 +1747,12 @@ static void saveChannelSetToNvs(const LoRaChannelSetSelection& sel,
 
 // Restore channel-set selection from NVS.  If the stored BW doesn't
 // match the active operating BW, the skip-mask is treated as stale and
-// the runtime state is reset to "no skips".  Rendezvous freq survives
-// a BW change (it isn't tied to the operating channel table).
+// the runtime state is reset to "no skips".  Rendezvous freq is no
+// longer NVS-stored (#105) — it's a compile-time constant.
 static void loadChannelSetFromNvs()
 {
     Preferences p;
     if (!p.begin("lora", true)) return;
-    rendezvous_mhz_ = p.getFloat("rdv_mhz", config::LORA_RENDEZVOUS_MHZ);
     const uint8_t n_stored  = p.getUChar("chset_n", 0);
     const float   bw_stored = p.getFloat("chset_bw", 0.0f);
     if (n_stored > 0 && bw_stored > 0.0f && bw_stored == lora_bw_khz)
@@ -1770,9 +1774,8 @@ static void loadChannelSetFromNvs()
     p.end();
 }
 
-// Clear stored skip-mask (rendezvous_mhz_ unchanged) — called on cmd-10
-// BW change so the rocket doesn't follow a stale skip-mask sized for
-// the previous BW.
+// Clear stored skip-mask — called on cmd-10 BW change so the rocket
+// doesn't follow a stale skip-mask sized for the previous BW.
 static void invalidateSkipMaskForBwChange()
 {
     skip_mask_n_        = 0;
@@ -1795,7 +1798,6 @@ static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
                                     float bw_khz)
 {
     // Adopt locally
-    rendezvous_mhz_     = sel.rendezvous_mhz;
     skip_mask_n_        = sel.n_channels;
     channel_set_bw_khz_ = bw_khz;
     const size_t bytes_used = (sel.n_channels + 7) / 8;
@@ -1804,10 +1806,11 @@ static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
 
     saveChannelSetToNvs(sel, bw_khz);
 
-    // Wire format: [rdv:f4][bw:f4][n:u1][mask: ceil(n/8)]
+    // Wire format: [bw:f4][n:u1][mask: ceil(n/8)]
+    // Rendezvous freq used to lead this payload but is now hardcoded on
+    // both sides (#105) — see LORA_FACTORY_RENDEZVOUS_MHZ.
     uint8_t payload[40] = {0};
     size_t  off = 0;
-    memcpy(payload + off, &sel.rendezvous_mhz, 4); off += 4;
     memcpy(payload + off, &bw_khz,             4); off += 4;
     payload[off++] = sel.n_channels;
     for (size_t i = 0; i < bytes_used; i++) payload[off++] = sel.skip_mask[i];
@@ -1816,9 +1819,9 @@ static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
     uint8_t active = 0;
     for (uint8_t i = 0; i < sel.n_channels; i++)
         if (!loraSkipMaskTest(sel.skip_mask, i)) active++;
-    ESP_LOGI(TAG, "[CHSET] rendezvous=%.2f MHz, %u/%u channels active at BW=%.0f kHz "
+    ESP_LOGI(TAG, "[CHSET] %u/%u channels active at BW=%.0f kHz "
                   "(min FCC floor %u) — pushing to rocket",
-             (double)sel.rendezvous_mhz, (unsigned)active,
+             (unsigned)active,
              (unsigned)sel.n_channels, (double)bw_khz,
              (unsigned)loraFhssMinChannels(bw_khz));
 
@@ -1897,7 +1900,7 @@ static void analyzeAndPushFromCachedScan()
     }
     LoRaChannelSetSelection sel{};
     loraSelectChannelSet(scan_freqs, scan_peak_rssi_, scan_peak_count_,
-                          lora_bw_khz, config::LORA_RENDEZVOUS_MHZ, &sel);
+                          lora_bw_khz, &sel);
     applyAndPushChannelSet(sel, lora_bw_khz);
 }
 
@@ -2218,8 +2221,9 @@ static void setup_bs()
     // re-flashed device can come up on a stale operating freq the BS
     // doesn't know about — exactly the chicken-and-egg that motivated
     // this gate.  Single namespace clear is fine: every LoRa-related
-    // key (freq, sf, bw, cr, txpwr, hopdis, rdv_mhz, chset_*) lives
-    // under "lora", so one clear() takes them all together.
+    // key (freq, sf, bw, cr, txpwr, hopdis, chset_*, plus the now-defunct
+    // rdv_mhz from v2 schema) lives under "lora", so one clear() takes
+    // them all together.
     {
         const uint8_t stored_v = prefs.getUChar("schemv", 0);
         if (stored_v != LORA_NVS_SCHEMA_VERSION)
@@ -2253,23 +2257,23 @@ static void setup_bs()
              (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
              (int)lora_hop_disabled);
 
-    // Channel-set: rendezvous freq + skip-mask from the most recent
-    // pre-launch scan (#40 / #41 phase 3).  Falls back to defaults if
-    // never scanned, or if the stored mask was generated for a
-    // different BW.
+    // Channel-set: skip-mask from the most recent pre-launch scan
+    // (#40 / #41 phase 3).  Falls back to no-skips if never scanned, or
+    // if the stored mask was generated for a different BW.  Rendezvous
+    // freq is no longer scan-selected; both sides use the shared
+    // hardcoded LORA_FACTORY_RENDEZVOUS_MHZ (#105).
     loadChannelSetFromNvs();
     if (skip_mask_n_ > 0)
     {
         uint8_t active = 0;
         for (uint8_t i = 0; i < skip_mask_n_; i++)
             if (!loraSkipMaskTest(skip_mask_, i)) active++;
-        ESP_LOGI(TAG, "[CHSET] NVS: rendezvous=%.2f MHz, %u/%u channels active",
-                 (double)rendezvous_mhz_, (unsigned)active, (unsigned)skip_mask_n_);
+        ESP_LOGI(TAG, "[CHSET] NVS: %u/%u channels active",
+                 (unsigned)active, (unsigned)skip_mask_n_);
     }
     else
     {
-        ESP_LOGI(TAG, "[CHSET] NVS: rendezvous=%.2f MHz (default), no skip-mask",
-                 (double)rendezvous_mhz_);
+        ESP_LOGI(TAG, "[CHSET] NVS: no skip-mask");
     }
 
     // Load cached servo config from NVS

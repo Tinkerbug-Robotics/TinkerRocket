@@ -123,24 +123,15 @@ TEST(LoraNextActiveChannel, AllMaskedDegenerateSafe) {
     EXPECT_LT(next, 10);  // Some valid index in range; just don't crash.
 }
 
-TEST(LoraSelectChannelSet, NoScanResultsFallbacks) {
-    // No scan input: rendezvous = fallback, mask all-zero.
+TEST(LoraSelectChannelSet, NoScanResultsLeavesEmptyMask) {
+    // No scan input: skip-mask all-zero, n_channels reflects the BW table.
+    // Rendezvous freq is no longer computed by this function (it's
+    // compile-time hardcoded — see LORA_FACTORY_RENDEZVOUS_MHZ).
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(nullptr, nullptr, 0, /*bw_khz=*/250.0f,
-                          /*fallback=*/915.0f, &out);
-    EXPECT_FLOAT_EQ(out.rendezvous_mhz, 915.0f);
+    loraSelectChannelSet(nullptr, nullptr, 0, /*bw_khz=*/250.0f, &out);
     EXPECT_EQ(out.n_channels, loraChannelCount(250.0f));
     for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++)
         EXPECT_EQ(out.skip_mask[i], 0u) << "byte " << i;
-}
-
-TEST(LoraSelectChannelSet, RendezvousIsScanMinimum) {
-    // Three scan points; pick the lowest-RSSI one as rendezvous.
-    const float   freqs[] = { 910.0f, 915.0f, 920.0f };
-    const int8_t  rssi[]  = {  -75,    -95,    -80 };  // 915 quietest
-    LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, 3, 250.0f, 915.0f, &out);
-    EXPECT_FLOAT_EQ(out.rendezvous_mhz, 915.0f);
 }
 
 TEST(LoraSelectChannelSet, NoiseAboveThresholdGetsSkipped) {
@@ -159,17 +150,13 @@ TEST(LoraSelectChannelSet, NoiseAboveThresholdGetsSkipped) {
     rssi[10] = -60;   // very loud
     rssi[55] = -50;   // very loud
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, N, 125.0f, 915.0f, &out);
+    loraSelectChannelSet(freqs, rssi, N, 125.0f, &out);
 
     EXPECT_EQ(out.n_channels, n_chan);
     EXPECT_TRUE (loraSkipMaskTest(out.skip_mask, 10));
     EXPECT_TRUE (loraSkipMaskTest(out.skip_mask, 55));
     EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, 11));
     EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, 0));
-
-    // Rendezvous picks one of the quiet -110 channels (any is fine).
-    EXPECT_NE(out.rendezvous_mhz, freqs[10]);
-    EXPECT_NE(out.rendezvous_mhz, freqs[55]);
 }
 
 TEST(LoraSelectChannelSet, FccFloorEnforced_BW250) {
@@ -189,7 +176,7 @@ TEST(LoraSelectChannelSet, FccFloorEnforced_BW250) {
         rssi[i] = (i % 5 == 0) ? -100 : -50;
     }
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, M, 250.0f, 915.0f, &out);
+    loraSelectChannelSet(freqs, rssi, M, 250.0f, &out);
 
     // Count active (non-skipped).  Must be ≥ fhss_min = 50.
     uint8_t active = 0;
@@ -209,7 +196,7 @@ TEST(LoraSelectChannelSet, AllQuietSkipsNothing) {
         rssi[i]  = -105 + (int8_t)(i % 3);  // tiny variation
     }
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, N, 250.0f, 915.0f, &out);
+    loraSelectChannelSet(freqs, rssi, N, 250.0f, &out);
 
     for (uint8_t i = 0; i < out.n_channels; i++)
         EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, i)) << "channel " << (int)i;

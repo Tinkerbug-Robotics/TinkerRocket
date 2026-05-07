@@ -312,9 +312,16 @@ static inline uint8_t loraNextActiveChannelIdx(
     return (uint8_t)((current_idx + 1) % n_channels);
 }
 
+// Skip-mask + channel count produced by the pre-launch noise scan.  The
+// rendezvous frequency was previously part of this struct (and thus part
+// of the cmd 15 payload) so the scan could pick the quietest channel as
+// the rendezvous, but that introduced a divergence path: BS and OC could
+// end up with different stored rdv_mhz values and never meet again.
+// Issue #105 follow-up: rendezvous is now hardcoded at compile time
+// (LORA_FACTORY_RENDEZVOUS_MHZ above) so both sides cannot disagree.
+// The skip-mask still drives hop-channel selection.
 typedef struct
 {
-    float   rendezvous_mhz;                     // best-quietest scan freq, or fallback
     uint8_t n_channels;                         // hop table size for the given BW
     uint8_t skip_mask[LORA_SKIP_MASK_MAX_BYTES]; // 1 = skip, LSB-first
 } LoRaChannelSetSelection;
@@ -353,16 +360,17 @@ static inline int8_t loraI8MedianInPlace(int8_t* arr, size_t n)
     return arr[n / 2];
 }
 
-// Pure orchestrator.  Computes rendezvous freq + skip-mask for the
-// current operating BW from a (freq, rssi) scan grid.  See the comment
-// block above for the threshold rule and FCC-floor handling.
+// Pure orchestrator.  Computes the skip-mask for the current operating
+// BW from a (freq, rssi) scan grid.  See the comment block above for the
+// threshold rule and FCC-floor handling.  Rendezvous freq is no longer
+// computed here — it is hardcoded to LORA_FACTORY_RENDEZVOUS_MHZ on both
+// sides of the link so they always agree on a meeting place (#105).
 //
-// fallback_rendezvous_mhz is used when scan_count == 0 (e.g., scan
-// never run yet, or skipped).  In that case skip_mask is left all-zero
-// (no skips) and n_channels reflects the BW table.
+// scan_count == 0 (e.g., scan never run yet) leaves skip_mask all-zero
+// (no skips) and n_channels reflecting the BW table.
 static inline void loraSelectChannelSet(
     const float* scan_freqs, const int8_t* scan_rssi, size_t scan_count,
-    float bw_khz, float fallback_rendezvous_mhz,
+    float bw_khz,
     LoRaChannelSetSelection* out)
 {
     out->n_channels = loraChannelCount(bw_khz);
@@ -370,18 +378,7 @@ static inline void loraSelectChannelSet(
 
     if (scan_count == 0 || out->n_channels == 0)
     {
-        out->rendezvous_mhz = fallback_rendezvous_mhz;
         return;
-    }
-
-    // (1) Rendezvous = lowest-RSSI scan point.
-    {
-        size_t best = 0;
-        for (size_t i = 1; i < scan_count; i++)
-        {
-            if (scan_rssi[i] < scan_rssi[best]) best = i;
-        }
-        out->rendezvous_mhz = scan_freqs[best];
     }
 
     // (2) Per-channel peak RSSI from the nearest scan grid point.
@@ -773,7 +770,10 @@ static constexpr int8_t  LORA_FACTORY_RENDEZVOUS_TX_DBM = 12;
 // you ship a build that needs to force-clear stale settings.
 //   v1: original LoRa NVS layout
 //   v2: post-#105 — first version that gates on this field
-static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 2;
+//   v3: dropped rdv_mhz NVS key (rendezvous freq is now compile-time
+//       hardcoded to LORA_FACTORY_RENDEZVOUS_MHZ; cmd 15 no longer
+//       carries a rendezvous freq either).
+static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 3;
 
 // LoRa protocol version — bump on frame format changes.
 //   v1: original 60-byte frame with 2-byte routing header.
