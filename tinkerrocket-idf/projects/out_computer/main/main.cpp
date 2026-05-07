@@ -2435,6 +2435,7 @@ static void serviceLoRaUplink()
     // boards the interrupt may not trigger for RX-done.  pollDio1()
     // checks the pin level and sets rx_done_ if DIO1 is asserted.
     lora_comms.pollDio1();
+    lora_comms.serviceTxWatchdog();  // Force-clear stuck tx_ongoing_ (#105)
 
     // Non-blocking poll for uplink packet
     uint8_t rx_buf[32];

@@ -949,13 +949,14 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
              (unsigned long)lora_low_snr_drops,
              (unsigned long)ls.isr_count,
              (int)ls.rx_mode,
+             (unsigned long)ls.tx_watchdog_fires,
              (double)ls.last_rssi,
              (double)ls.last_snr,
              last_pkt_str);
@@ -2396,7 +2397,8 @@ static void loop_bs()
 {
     // Service LoRa (complete any pending TX before checking for RX)
     lora_comms.service();
-    lora_comms.pollDio1();  // Fallback if DIO1 interrupt doesn't fire
+    lora_comms.pollDio1();          // Fallback if DIO1 interrupt doesn't fire
+    lora_comms.serviceTxWatchdog(); // Force-clear stuck tx_ongoing_ (#105)
 
     // Drive the coordinated-scan state machine first so AWAITING_PAUSE
     // → SCANNING transitions can kick off a scan in the same iteration
@@ -2669,22 +2671,31 @@ static void loop_bs()
                             const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
                             // Compute next channel from seq+1 — what the
                             // rocket will be on for the *next* packet.
-                            const uint8_t next_ch = loraHopChannelForSeq(
+                            // Trust the rocket's announced next_channel_idx
+                            // as the retune target — that's where the rocket
+                            // will actually transmit, regardless of whether
+                            // our local skip-mask agrees with theirs.  The
+                            // seq-derived computation below is a sanity
+                            // CHECK, not the source of truth: if it disagrees
+                            // with what the rocket announced, the masks have
+                            // drifted (cmd-15 push didn't reach this side, or
+                            // the BS just ran a fresh scan and the rocket
+                            // hasn't received the new mask yet).  In that
+                            // case the mask-warning fires but we still follow
+                            // the rocket so the link stays up.
+                            const uint8_t expected_next = loraHopChannelForSeq(
                                 (uint16_t)(decoded.seq + 1),
                                 LORA_HOP_DWELL_PACKETS, mask, n);
-                            // Sanity: rocket's announced next_channel_idx
-                            // should agree with our computation.  Log
-                            // (don't reject) on mismatch — usually means
-                            // the skip-mask is out of sync.
-                            if (decoded.next_channel_idx != next_ch) {
+                            if (decoded.next_channel_idx != expected_next) {
                                 ESP_LOGW(TAG, "[HOP] seq=%u: rocket says next=%u, "
-                                              "we compute next=%u (mask drift?)",
+                                              "we'd compute next=%u (mask drift "
+                                              "— following rocket)",
                                          (unsigned)decoded.seq,
                                          (unsigned)decoded.next_channel_idx,
-                                         (unsigned)next_ch);
+                                         (unsigned)expected_next);
                             }
                             const bool was_active = hop_active_;
-                            hop_idx_           = next_ch;
+                            hop_idx_           = decoded.next_channel_idx;
                             hop_active_        = true;
                             hop_needs_retune_  = true;
                             hop_last_rx_ms_    = millis();
