@@ -314,6 +314,7 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.network_id       = in.network_id;
     out.rocket_id        = in.rocket_id;
     out.next_channel_idx = in.next_channel_idx;
+    out.seq              = in.seq;
 
     // num_sats (bits 0-6) + logging_active (bit 7)
     out.num_sats = (uint8_t)lroundi32(clampf((float)in.num_sats, 0.f, 127.f));
@@ -443,6 +444,7 @@ void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
     out.network_id       = in.network_id;
     out.rocket_id        = in.rocket_id;
     out.next_channel_idx = in.next_channel_idx;
+    out.seq              = in.seq;
 
     out.num_sats = in.num_sats & 0x7F;  // bits 0-6
     out.logging_active = (in.num_sats & LORA_LOGGING_BIT) != 0;

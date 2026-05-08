@@ -147,6 +147,7 @@ void TR_LoRa_Comms::service()
         }
     }
     tx_ongoing_ = false;
+    tx_started_ms_ = 0;  // watchdog clear (#105)
     stats_.transmitting = false;
 
     // Return to RX mode so uplink commands can be received between sends
@@ -182,6 +183,7 @@ bool TR_LoRa_Comms::send(const uint8_t* payload, size_t len)
     }
 
     tx_ongoing_ = true;
+    tx_started_ms_ = millis();  // watchdog stamp (#105)
     stats_.transmitting = true;
     stats_.tx_started++;
     return true;
@@ -213,6 +215,7 @@ bool TR_LoRa_Comms::startReceive()
     rx_mode_ = true;
     rx_done_ = false;
     tx_ongoing_ = false;
+    tx_started_ms_ = 0;  // watchdog clear (#105)
 
     int16_t st;
     LORA_STALL_INSTR("startReceive radio_->startReceive", st = radio_->startReceive());
@@ -320,6 +323,62 @@ void TR_LoRa_Comms::pollDio1()
         }
     }
     portENABLE_INTERRUPTS();
+}
+
+// ============================================================================
+// TX watchdog (#105 follow-up)
+// ============================================================================
+// Force-clears tx_ongoing_ when it has been stuck for longer than any
+// plausible TX could take.  Without this, a missed DIO1 IRQ + a
+// misclassified pollDio1 (rx_mode_ momentarily true at the polling
+// instant during a hopToFrequencyMHz retune) leaves tx_ongoing_=true
+// forever — wedging hopToFrequencyMHz, reconfigure, send, and ultimately
+// the entire LoRa link until reboot.  Field-confirmed failure mode in
+// the #105 hop testing.
+//
+// The watchdog is deliberately generous (TX_WATCHDOG_MS = 3 s) to
+// accommodate worst-case ToA at SF12 BW125 (~2.5 s for a 60-byte frame).
+// A real TX always completes well inside this window; if we hit it,
+// something is genuinely wrong and the recovery is to put the radio
+// back into a known RX state.
+void TR_LoRa_Comms::serviceTxWatchdog()
+{
+    if (!enabled_ || radio_ == nullptr) return;
+    if (!tx_ongoing_)                   return;
+    if (tx_started_ms_ == 0)            return;  // not yet stamped
+    const uint32_t elapsed = millis() - tx_started_ms_;
+    if (elapsed < TX_WATCHDOG_MS)       return;
+
+    ESP_LOGW(TAG, "TX watchdog: tx_ongoing_ stuck %u ms — force-clearing "
+                  "(tx_done=%d rx_mode=%d isr_count=%lu last_err=%d)",
+             (unsigned)elapsed,
+             (int)tx_done_, (int)rx_mode_,
+             (unsigned long)isr_count_,
+             (int)stats_.last_error);
+    stats_.tx_watchdog_fires++;
+
+    // Clear the stuck flags so the rest of the system unwedges.
+    portDISABLE_INTERRUPTS();
+    tx_ongoing_   = false;
+    tx_done_      = false;
+    tx_started_ms_ = 0;
+    portENABLE_INTERRUPTS();
+    stats_.transmitting = false;
+
+    // Best-effort radio recovery: standby, then re-enter RX so the radio
+    // and the driver agree on state.  We don't propagate errors — if
+    // these calls fail, the radio is even more wedged and the next
+    // bigger hammer (reconfigure on a recovery cycle) will handle it.
+    (void)radio_->standby();
+    if (radio_->startReceive() == RADIOLIB_ERR_NONE)
+    {
+        rx_mode_ = true;
+        rx_done_ = false;
+    }
+    else
+    {
+        rx_mode_ = false;
+    }
 }
 
 // ============================================================================

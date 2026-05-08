@@ -40,6 +40,7 @@ public:
         uint32_t rx_count = 0;
         uint32_t rx_crc_fail = 0;
         uint32_t isr_count = 0;
+        uint32_t tx_watchdog_fires = 0;  // tx_ongoing_ force-cleared by watchdog (#105)
         float last_rssi = 0.0f;
         float last_snr = 0.0f;
         int16_t last_error = RADIOLIB_ERR_NONE;
@@ -62,6 +63,18 @@ public:
 
     // Poll DIO1 pin directly (fallback if hardware interrupt doesn't fire)
     void pollDio1();
+
+    // TX watchdog (#105 follow-up).  Force-clears tx_ongoing_ if it has
+    // been stuck for longer than any plausible TX could take.  Without
+    // this, a missed DIO1 IRQ + a misclassified pollDio1 (rx_mode_ true
+    // at the moment of polling) wedges the radio: hopToFrequencyMHz and
+    // reconfigure both refuse to run while tx_ongoing_=true, so the
+    // entire link locks up until the device reboots.  Field-confirmed
+    // failure mode where reconfigure hits its 2 s wait deadline.
+    //
+    // Designed to be called every main-loop iteration (alongside
+    // pollDio1).  Cheap when not stuck (one millis() compare).
+    void serviceTxWatchdog();
 
     // Runtime reconfiguration (LLCC68: must set BW before SF)
     bool reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power);
@@ -124,6 +137,13 @@ private:
     bool rx_mode_ = false;
     volatile uint32_t isr_count_ = 0;
     int dio1_pin_ = -1;
+
+    // TX watchdog state (#105 follow-up).  tx_started_ms_ is set in
+    // send() and cleared whenever tx_ongoing_ becomes false.  The
+    // watchdog (serviceTxWatchdog) compares (now - tx_started_ms_)
+    // against TX_WATCHDOG_MS to detect a stuck flag.
+    uint32_t tx_started_ms_ = 0;
+    static constexpr uint32_t TX_WATCHDOG_MS = 3000;  // generous: SF12 BW125 ToA ~2.5s
 
     // Last-known-good radio config (for rollback on reconfigure failure)
     float   cfg_freq_mhz_ = 915.0f;

@@ -220,6 +220,40 @@ static inline float loraMinValidSnrDb(uint8_t sf)
     return sensitivity - 2.0f;
 }
 
+// Compute observed packet-loss between two consecutive RXes on the BS,
+// from the rocket's free-running TX sequence counter (#105).  Widened to
+// 16-bit seq in proto v4 (slow-hop seq-anchored hop schedule needs the
+// extra range — see LORA_HOP_DWELL_PACKETS).
+//
+//   prev_seq_signed  : last seq seen (cast from uint16_t), or -1 if no
+//                      prior packet (first contact).  Caller stores as
+//                      int32_t to hold the full uint16 range plus the -1
+//                      sentinel.
+//   curr_seq         : seq from the just-received packet.
+//   plausibility_max : maximum forward delta to treat as a real run.  A
+//                      delta beyond this is almost certainly a rocket
+//                      reboot (seq reset to 0) or an extended outage we
+//                      can't attribute, so we report -1 ("unknown") rather
+//                      than a misleading "you lost N packets" reading.
+//                      Default raised to 1000 to track the wider seq
+//                      range; a 1000-packet outage at 2 Hz is 8 minutes,
+//                      well past the rocket's slow-rendezvous timer.
+//
+// Returns the number of packets lost between the two RXes, or -1 when
+// not computable (first contact, duplicate seq, or implausible delta).
+// Pure / branch-only so it's safely host-testable without millis().
+static inline int32_t loraComputeObservedLoss(int32_t  prev_seq_signed,
+                                                uint16_t curr_seq,
+                                                uint32_t plausibility_max = 1000)
+{
+    if (prev_seq_signed < 0)            return -1;            // first contact
+    const uint16_t prev  = (uint16_t)prev_seq_signed;
+    const uint32_t delta = (uint32_t)((uint16_t)(curr_seq - prev));
+    if (delta == 0)                     return -1;            // duplicate / replay
+    if (delta > plausibility_max)       return -1;            // reboot or long outage
+    return (int32_t)(delta - 1);
+}
+
 // "Is the rocket presumed to be hopping right now, from the BS's
 // perspective?" — used to decide whether a BLE cmd 60 should take the
 // direct-scan or coordinated-pause path (#90).
@@ -286,9 +320,67 @@ static inline uint8_t loraNextActiveChannelIdx(
     return (uint8_t)((current_idx + 1) % n_channels);
 }
 
+// Seq-anchored hop schedule (#105 follow-up).  Both sides compute the
+// physical channel for a given TX seq deterministically from this
+// function — no chained handoff via next_channel_idx.  If the BS misses
+// a packet within a dwell window, the *next* received packet's seq tells
+// it exactly where the rocket is, allowing single-packet self-correction.
+//
+// Schedule:
+//   active_idx = (seq / dwell) % n_active   -- which active-channel slot
+//   physical_idx = the active_idx-th non-skipped channel in mask
+//
+// dwell == 1 reduces to the original "advance every TX" behaviour;
+// dwell >= 2 keeps the rocket on a channel for `dwell` consecutive
+// packets before advancing.  See LORA_HOP_DWELL_PACKETS for the
+// production value.
+//
+// Pure helper, host-testable.  O(n_channels) lookup — fine for n ≤ 144.
+static inline uint8_t loraHopChannelForSeq(
+    uint16_t seq, uint8_t dwell,
+    const uint8_t* mask, uint8_t n_channels)
+{
+    if (n_channels == 0 || dwell == 0) return 0;
+
+    // Count active (non-skipped) channels.  Empty mask → n_active == n_channels.
+    uint8_t n_active = 0;
+    for (uint8_t i = 0; i < n_channels; i++)
+    {
+        if (!loraSkipMaskTest(mask, i)) n_active++;
+    }
+    // Defensive: every channel masked (FCC floor prevents this).  Fall
+    // back to raw mod-n_channels so we still make forward progress.
+    if (n_active == 0)
+    {
+        return (uint8_t)((seq / dwell) % n_channels);
+    }
+
+    const uint16_t active_idx = (uint16_t)((seq / dwell) % n_active);
+
+    // Walk the channel space, counting non-skipped channels until we
+    // hit the active_idx-th one.
+    uint16_t found = 0;
+    for (uint8_t i = 0; i < n_channels; i++)
+    {
+        if (!loraSkipMaskTest(mask, i))
+        {
+            if (found == active_idx) return i;
+            found++;
+        }
+    }
+    return 0;  // unreachable given the n_active check above
+}
+
+// Skip-mask + channel count produced by the pre-launch noise scan.  The
+// rendezvous frequency was previously part of this struct (and thus part
+// of the cmd 15 payload) so the scan could pick the quietest channel as
+// the rendezvous, but that introduced a divergence path: BS and OC could
+// end up with different stored rdv_mhz values and never meet again.
+// Issue #105 follow-up: rendezvous is now hardcoded at compile time
+// (LORA_FACTORY_RENDEZVOUS_MHZ above) so both sides cannot disagree.
+// The skip-mask still drives hop-channel selection.
 typedef struct
 {
-    float   rendezvous_mhz;                     // best-quietest scan freq, or fallback
     uint8_t n_channels;                         // hop table size for the given BW
     uint8_t skip_mask[LORA_SKIP_MASK_MAX_BYTES]; // 1 = skip, LSB-first
 } LoRaChannelSetSelection;
@@ -327,16 +419,17 @@ static inline int8_t loraI8MedianInPlace(int8_t* arr, size_t n)
     return arr[n / 2];
 }
 
-// Pure orchestrator.  Computes rendezvous freq + skip-mask for the
-// current operating BW from a (freq, rssi) scan grid.  See the comment
-// block above for the threshold rule and FCC-floor handling.
+// Pure orchestrator.  Computes the skip-mask for the current operating
+// BW from a (freq, rssi) scan grid.  See the comment block above for the
+// threshold rule and FCC-floor handling.  Rendezvous freq is no longer
+// computed here — it is hardcoded to LORA_FACTORY_RENDEZVOUS_MHZ on both
+// sides of the link so they always agree on a meeting place (#105).
 //
-// fallback_rendezvous_mhz is used when scan_count == 0 (e.g., scan
-// never run yet, or skipped).  In that case skip_mask is left all-zero
-// (no skips) and n_channels reflects the BW table.
+// scan_count == 0 (e.g., scan never run yet) leaves skip_mask all-zero
+// (no skips) and n_channels reflecting the BW table.
 static inline void loraSelectChannelSet(
     const float* scan_freqs, const int8_t* scan_rssi, size_t scan_count,
-    float bw_khz, float fallback_rendezvous_mhz,
+    float bw_khz,
     LoRaChannelSetSelection* out)
 {
     out->n_channels = loraChannelCount(bw_khz);
@@ -344,18 +437,7 @@ static inline void loraSelectChannelSet(
 
     if (scan_count == 0 || out->n_channels == 0)
     {
-        out->rendezvous_mhz = fallback_rendezvous_mhz;
         return;
-    }
-
-    // (1) Rendezvous = lowest-RSSI scan point.
-    {
-        size_t best = 0;
-        for (size_t i = 1; i < scan_count; i++)
-        {
-            if (scan_rssi[i] < scan_rssi[best]) best = i;
-        }
-        out->rendezvous_mhz = scan_freqs[best];
     }
 
     // (2) Per-channel peak RSSI from the nearest scan grid point.
@@ -716,8 +798,68 @@ typedef struct __attribute__((packed))
 } i24le_t;
 static_assert(sizeof(i24le_t) == 3, "i24le_t must be 3 bytes");
 
-// LoRa protocol version — bump on frame format changes
-static constexpr uint8_t LORA_PROTO_VERSION = 1;
+// ============================================================================
+// LoRa factory rendezvous (#105 follow-up): a single shared known-good config
+// ============================================================================
+// Hardcoded ONCE in this shared header so the BS and OC firmware are
+// guaranteed to compile against the same fallback.  Issue #105 hit the
+// chicken-and-egg case: both sides had matching factory defaults in their
+// per-project config.h files, but NVS-persisted operating freq drifted
+// (OC was on 926.5 MHz from a prior test, BS on 915), and neither side
+// knew where the other was so the BS uplink couldn't push corrections.
+//
+// Both projects' config.h re-export these as `LORA_RENDEZVOUS_*` so all
+// existing call sites keep working unchanged — the move just removes the
+// possibility of the two config.h files drifting apart in source.
+//
+// Frequency, BW, SF, CR, and TX power must ALL match between BS and OC for
+// the radios to decode each other (LLCC68 demodulator parameters), so the
+// rendezvous config carries the full modulation tuple, not just the freq.
+static constexpr float   LORA_FACTORY_RENDEZVOUS_MHZ    = 915.0f;
+static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_SF     = 8;
+static constexpr float   LORA_FACTORY_RENDEZVOUS_BW_KHZ = 250.0f;
+static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_CR     = 5;
+static constexpr int8_t  LORA_FACTORY_RENDEZVOUS_TX_DBM = 12;
+
+// LoRa NVS schema version (#105 follow-up).  Stored alongside the LoRa
+// settings; on boot, if the stored version doesn't match this constant,
+// the LoRa-related NVS keys are wiped so the device falls back to the
+// factory rendezvous above.  Bump whenever the NVS field set changes
+// meaningfully (new keys, repurposed keys, byte-format changes), or when
+// you ship a build that needs to force-clear stale settings.
+//   v1: original LoRa NVS layout
+//   v2: post-#105 — first version that gates on this field
+//   v3: dropped rdv_mhz NVS key (rendezvous freq is now compile-time
+//       hardcoded to LORA_FACTORY_RENDEZVOUS_MHZ; cmd 15 no longer
+//       carries a rendezvous freq either).
+static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 3;
+
+// LoRa protocol version — bump on frame format changes.
+//   v1: original 60-byte frame with 2-byte routing header.
+//   v2: 60-byte frame with 3-byte routing header (next_channel_idx for #40/#41 hopping).
+//   v3: 61-byte frame, appends a 1-byte free-running TX sequence counter (#105
+//       lock-loss diagnostics).  BS uses the seq to compute observed loss
+//       rates and distinguish missed packets from full hop-table desync.
+//   v4: 62-byte frame, seq widened to 16 bits for slow-hop seq-anchored
+//       hop schedule.  With dwell=4 and BW=250 (69 channels) an 8-bit seq
+//       only spans 64 active positions, leaving 5 channels unreachable —
+//       16 bits covers any (BW, dwell) combination we'd reasonably pick.
+static constexpr uint8_t LORA_PROTO_VERSION = 4;
+
+// Slow-hop dwell — how many consecutive packets the rocket transmits on a
+// single channel before advancing.  At 2 Hz TX with dwell=4, channel
+// changes every 2 s instead of every 500 ms.  This gives the BS up to
+// (dwell-1) consecutive missed packets per channel before it falls out of
+// sync, eliminates BS-side TX-vs-retune races (heartbeat retries no
+// longer collide with hop boundaries), and reduces per-cycle radio churn
+// 4x.  Both rocket and BS compile against the same value; bumping it
+// requires a coordinated re-flash.
+//
+// FCC compliance: we operate as DTS, not FHSS, so there is no specific
+// per-channel dwell-time limit.  At dwell=4 + 2 Hz we still hit every
+// channel inside 140 s (BW=250, 69 channels), enough interference
+// diversity for our use case.
+static constexpr uint8_t LORA_HOP_DWELL_PACKETS = 4;
 
 // LoRa name beacon sync byte (distinguishes from telemetry by size + prefix)
 static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;
@@ -736,9 +878,10 @@ static constexpr uint8_t LORA_CMD_HEARTBEAT = 0xFE;
 typedef struct __attribute__((packed))
 {
     // --- Routing header (proto v2: hop byte added for #40/#41) ---
-    uint8_t network_id;      // LoRa network namespace (0..255)
-    uint8_t rocket_id;       // Source rocket ID within network (1..254, 0=unset, 255=broadcast)
-    uint8_t next_channel_idx;// 0..N-1 = hop to that channel after this RX; 0xFF = stay
+    uint8_t  network_id;      // LoRa network namespace (0..255)
+    uint8_t  rocket_id;       // Source rocket ID within network (1..254, 0=unset, 255=broadcast)
+    uint8_t  next_channel_idx;// 0..N-1 = hop to that channel after this RX; 0xFF = stay
+    uint16_t seq;             // free-running TX sequence (proto v4, #105) — wraps mod 65536
 
     // --- Telemetry payload (unchanged from proto v0) ---
     uint8_t num_sats;        // 0..255
@@ -789,8 +932,8 @@ typedef struct __attribute__((packed))
 
 } LoRaData;
 
-static_assert(sizeof(LoRaData) == 60,
-              "LoRaData must be 60 bytes (3-byte header + 57-byte payload)");
+static_assert(sizeof(LoRaData) == 62,
+              "LoRaData must be 62 bytes (5-byte routing header incl. 16-bit seq + 57-byte telemetry payload)");
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -805,9 +948,10 @@ static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
 // Readable LoRa data structure
 typedef struct
 {                                   // Precision    : Range
-    uint8_t network_id;             // Routing header: network namespace
-    uint8_t rocket_id;              // Routing header: source rocket ID
-    uint8_t next_channel_idx;       // Routing header: 0..N-1 hop target, 0xFF = stay
+    uint8_t  network_id;             // Routing header: network namespace
+    uint8_t  rocket_id;              // Routing header: source rocket ID
+    uint8_t  next_channel_idx;       // Routing header: 0..N-1 hop target, 0xFF = stay
+    uint16_t seq;                    // Routing header: free-running TX seq (#105, proto v4)
     uint8_t num_sats;               // int          : 0 to 255
     float   pdop;                   // meter        : 0 to 100
     double  ecef_x, ecef_y, ecef_z; // meter        : +/- 7,000,000

@@ -178,10 +178,25 @@ static bool     lora_hop_disabled = false;
 // `channel_set_bw_khz_` is the BW the mask was generated against — used
 // to detect when a cmd-10 BW change invalidates the mask (we revert to
 // "no skips" until the user re-runs the scan on the new BW).
-static float   rendezvous_mhz_     = config::LORA_RENDEZVOUS_MHZ;
+//
+// Rendezvous freq used to live here too (NVS-stored, scan-selected) but
+// that allowed the BS and rocket to drift apart with no recovery path —
+// see issue #105.  It's now compile-time hardcoded to the shared
+// LORA_FACTORY_RENDEZVOUS_MHZ on both sides.
 static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
 static uint8_t skip_mask_n_        = 0;        // 0 = no mask yet
 static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
+
+// Mask-drift auto-recovery (#105 follow-up).  Set in the hop RX path
+// when the rocket's announced next_channel_idx disagrees with the
+// BS-side seq-derived channel — that means BS and OC have diverged
+// skip-masks (typically: scan ran, cmd-15 push got displaced by a
+// follow-on cmd-10, OC never received the new mask).  serviceMaskDriftRepush
+// re-queues cmd 15 with a cooldown so it can't spam.
+static bool     chset_drift_repush_pending = false;
+static uint32_t chset_drift_repush_last_ms_ = 0;
+static constexpr uint32_t CHSET_DRIFT_REPUSH_COOLDOWN_MS = 30000;
+static uint32_t chset_drift_repush_count   = 0;  // for [STATS]
 
 // Forward declarations — definitions live further down with the other
 // channel-set machinery, but a couple of call sites (cmd-10 commit,
@@ -189,6 +204,8 @@ static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
 static void loadChannelSetFromNvs();
 static void invalidateSkipMaskForBwChange();
 static void analyzeAndPushFromCachedScan();
+static void pushCurrentChannelSet();
+static void serviceMaskDriftRepush();
 
 // If we're following a hopping rocket and packets dry up for this long,
 // give up and fall back to lora_freq_mhz so the existing silence /
@@ -196,6 +213,22 @@ static void analyzeAndPushFromCachedScan();
 // missed hop windows even at the slowest preset (Long Range = ~2 Hz),
 // without holding the radio hostage if the rocket really has vanished.
 static constexpr uint32_t HOP_SILENCE_FALLBACK_MS = 3000;
+
+// ----------------------------------------------------------------------------
+// Hop-session diagnostics (#105)
+// ----------------------------------------------------------------------------
+// A "hop session" begins when hop_active_ flips false→true (BS starts
+// following the rocket's hop schedule) and ends on either silence-fallback
+// or rocket-state-change.  The counters here let the operator see, after a
+// flight, how often lock was lost, how long sessions lasted, and how many
+// packets the BS *observed* missing during each session — together with
+// the seq-derived per-packet loss in the CSV, this is the post-flight
+// view that issue #105 was opened to enable.
+static uint32_t hop_silence_events_count   = 0;   // lifetime, since boot
+static uint32_t hop_session_started_ms     = 0;   // 0 = no active session
+static uint32_t hop_session_total_pkts     = 0;   // accepted while hop_active_
+static uint32_t hop_session_observed_loss  = 0;   // sum of observed gaps (#105)
+static uint32_t lora_total_observed_loss   = 0;   // lifetime, since boot
 
 // Per-rocket tracker (replaces single last_decoded for multi-rocket support)
 static constexpr int MAX_TRACKED_ROCKETS = 4;
@@ -210,6 +243,13 @@ struct TrackedRocket {
     double     last_lon_deg = NAN;
     double     last_alt_m = NAN;
     uint32_t   last_seen_ms = 0;
+    // Free-running TX seq from the rocket (#105, widened to 16 bits in
+    // proto v4).  -1 = no prior packet ("first contact"); on an
+    // implausible forward delta we reset to -1 and treat the next
+    // packet as fresh contact — most likely the rocket rebooted and
+    // lora_tx_seq restarted at 0.  int32_t to hold the full uint16
+    // range plus the -1 sentinel.
+    int32_t    last_seq = -1;
 };
 static TrackedRocket tracked_rockets[MAX_TRACKED_ROCKETS];
 static uint8_t active_rocket_idx = 0;  // Which rocket the BLE telemetry currently shows
@@ -412,12 +452,17 @@ static void startLogging()
         return;
     }
 
-    // Write CSV header
+    // Write CSV header.  The trailing block (next_ch..event) was added
+    // for #105 lock-loss diagnostics: per-packet hop target, the freq the
+    // BS was actually tuned to, the rocket's free-running seq and the
+    // BS-derived gap to the last RX, plus an `event` column populated
+    // for non-telemetry rows (hop_active / hop_inactive / hop_silence).
     fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
                       "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
                       "pressure_alt,alt_rate,max_alt,max_speed,"
                       "voltage,current,soc,roll,pitch,yaw,speed,"
-                      "launch,vel_apo,alt_apo,landed,rssi,snr\n");
+                      "launch,vel_apo,alt_apo,landed,rssi,snr,"
+                      "next_ch,rx_freq_mhz,seq,gap,event\n");
 
     logging_active = true;
     log_start_ms = millis();
@@ -441,7 +486,8 @@ static void stopLogging()
 static uint32_t log_write_count = 0;  // Tracks calls for periodic flash check
 
 static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
-                          double lat, double lon, double alt)
+                          double lat, double lon, double alt,
+                          float rx_freq_mhz, int32_t observed_gap)
 {
     if (!logging_active) return;
 
@@ -484,7 +530,8 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     "%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,"
                     "%.1f,%.1f,%.1f,%.1f,"
                     "%.2f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,"
-                    "%d,%d,%d,%d,%.0f,%.1f\n",
+                    "%d,%d,%d,%d,%.0f,%.1f,"
+                    "%u,%.3f,%u,%d,\n",   // trailing comma keeps `event` empty
                     (unsigned long)time_ms,
                     rocketStateToString(data.rocket_state),
                     (unsigned)data.num_sats,
@@ -502,7 +549,9 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     data.vel_u_apogee_flag ? 1 : 0,
                     data.alt_apogee_flag ? 1 : 0,
                     data.alt_landed_flag ? 1 : 0,
-                    (double)rssi, (double)snr);
+                    (double)rssi, (double)snr,
+                    (unsigned)data.next_channel_idx, (double)rx_freq_mhz,
+                    (unsigned)data.seq, (int)observed_gap);
 
     if (written <= 0)
     {
@@ -510,6 +559,56 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
     }
 
     log_last_write_ms = millis();
+}
+
+// ----------------------------------------------------------------------------
+// CSV hop-event row (#105)
+// ----------------------------------------------------------------------------
+// Mirrors the column layout of logLoRaPacket() so a single pandas read_csv()
+// pass can ingest both — telemetry rows and event rows in chronological
+// order.  All telemetry-typed fields are left empty (",,,") so the event
+// stands out and the parsers can drop it with a simple `state == "EVENT"`
+// filter.  The `event` column carries a free-text description; downstream
+// scripts grep this to plot session timelines and loss histograms.
+//
+// Skipped when logging_active=false so we don't open a file just to record
+// an event with no surrounding telemetry.  Hop transitions still go to
+// ESP_LOG via the existing logging at the call site, so nothing is lost.
+static void logHopEvent(const char* event_str, float rx_freq_mhz)
+{
+    if (!logging_active || log_file == nullptr) return;
+    uint32_t time_ms = millis() - log_start_ms;
+    int written = fprintf(log_file,
+                    // 30 telemetry-typed fields blank, then next_ch=- (255 sentinel)
+                    // and rx_freq_mhz/seq/gap minimal so the event row still
+                    // tells you which freq the BS was sitting on at the moment.
+                    "%lu,EVENT,,,,,,,,,,,,,"   // time_ms, state, num_sats..gyro_z (14 cols)
+                    ",,,,"                    // pressure_alt, alt_rate, max_alt, max_speed
+                    ",,,,,,,"                 // voltage..speed (7)
+                    ",,,,,,"                  // launch, vel_apo, alt_apo, landed, rssi, snr
+                    "%u,%.3f,,,"              // next_ch=255 sentinel, rx_freq_mhz, seq=, gap=
+                    "%s\n",
+                    (unsigned long)time_ms,
+                    (unsigned)LORA_NEXT_CH_NO_HOP,
+                    (double)rx_freq_mhz,
+                    event_str);
+    if (written <= 0) {
+        ESP_LOGW(TAG, "[LOG] fprintf(event) failed");
+    }
+    log_last_write_ms = millis();
+}
+
+// Returns the radio's currently-tuned RX frequency for the hop diagnostics
+// CSV — i.e. the channel the BS was sitting on when this packet arrived
+// (or when this hop event fired).  Single source of truth so callers don't
+// have to re-derive lora_freq_mhz vs loraChannelMHz(...) inline.
+static inline float currentRxFreqMHz()
+{
+    if (hop_active_) {
+        const float f = loraChannelMHz(lora_bw_khz, hop_idx_);
+        if (f > 0.0f) return f;
+    }
+    return lora_freq_mhz;
 }
 
 // ============================================================================
@@ -863,16 +962,32 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
              (unsigned long)lora_low_snr_drops,
              (unsigned long)ls.isr_count,
              (int)ls.rx_mode,
+             (unsigned long)ls.tx_watchdog_fires,
              (double)ls.last_rssi,
              (double)ls.last_snr,
              last_pkt_str);
+
+    // Hop diagnostics (#105).  hop_active=Y/N is the live link state; the
+    // session counters reflect the *current* session and reset on each
+    // hop_inactive / hop_silence event, so a "0 / 0" reading mid-flight
+    // means we just lost lock.  lifetime totals let the operator spot a
+    // run with abnormally many silence events at a glance.  drift_repush
+    // counts auto re-pushes of cmd 15 in response to BS/OC mask divergence.
+    ESP_LOGI(TAG, "[STATS] HOP: active=%c idx=%u session(pkts=%lu loss=%lu) lifetime(silence=%lu loss=%lu drift_repush=%lu)",
+             hop_active_ ? 'Y' : 'N',
+             (unsigned)hop_idx_,
+             (unsigned long)hop_session_total_pkts,
+             (unsigned long)hop_session_observed_loss,
+             (unsigned long)hop_silence_events_count,
+             (unsigned long)lora_total_observed_loss,
+             (unsigned long)chset_drift_repush_count);
 }
 
 // ============================================================================
@@ -1263,7 +1378,7 @@ static void serviceLoRaTransaction()
 // If the base station hears nothing from any rocket for RECOVERY_SILENCE_MS
 // while on the ground (not freq_locked_for_flight), hop through known-good
 // frequencies looking for the rocket:
-//   Phase A (rendezvous): tune to LORA_RENDEZVOUS_MHZ and listen 3 s.  If a
+//   Phase A (rendezvous): tune to LORA_FACTORY_RENDEZVOUS_MHZ and listen 3 s.  If a
 //     beacon / telem arrives, relay Cmd 10 with the saved NVS config to
 //     push the rocket back, then return to the saved NVS freq.
 //   Phase B (grid scan): if Phase A was silent, scan the saved NVS freq ±
@@ -1303,16 +1418,16 @@ static constexpr float    RECOVERY_PHASE_B_SPAN_MHZ = 2.0f;  // ±2 MHz around N
 
 // Hop to the full rendezvous mode (freq + SF/BW/CR/power).  Used for
 // Phase A — both ends agree on this exact config as a known-good
-// fallback, regardless of what the user set in NVS.
+// fallback, regardless of what the user set in NVS.  All five values
+// are compile-time constants in RocketComputerTypes.h so BS and OC
+// cannot disagree on the meeting place (#105 follow-up).
 static void recoveryHopToRendezvousMode()
 {
-    // rendezvous_mhz_ is scan-selected (#40 / #41 phase 3) and falls
-    // back to config::LORA_RENDEZVOUS_MHZ when no scan has been run.
-    if (lora_comms.reconfigure(rendezvous_mhz_,
-                                config::LORA_RENDEZVOUS_SF,
-                                config::LORA_RENDEZVOUS_BW_KHZ,
-                                config::LORA_RENDEZVOUS_CR,
-                                config::LORA_RENDEZVOUS_TX_POWER_DBM))
+    if (lora_comms.reconfigure(LORA_FACTORY_RENDEZVOUS_MHZ,
+                                LORA_FACTORY_RENDEZVOUS_SF,
+                                LORA_FACTORY_RENDEZVOUS_BW_KHZ,
+                                LORA_FACTORY_RENDEZVOUS_CR,
+                                LORA_FACTORY_RENDEZVOUS_TX_DBM))
     {
         lora_comms.startReceive();
     }
@@ -1345,9 +1460,9 @@ static void recoveryEnterPhaseA()
     recovery_phase_start_ms     = millis();
     recovery_state              = RecoveryState::PHASE_A_RENDEZVOUS;
     ESP_LOGW(TAG, "[RECOVER] Silent — Phase A rendezvous mode (%.2f MHz SF%u BW%.0f) for %u ms",
-             (double)rendezvous_mhz_,
-             (unsigned)config::LORA_RENDEZVOUS_SF,
-             (double)config::LORA_RENDEZVOUS_BW_KHZ,
+             (double)LORA_FACTORY_RENDEZVOUS_MHZ,
+             (unsigned)LORA_FACTORY_RENDEZVOUS_SF,
+             (double)LORA_FACTORY_RENDEZVOUS_BW_KHZ,
              (unsigned)RECOVERY_PHASE_A_DWELL_MS);
 }
 
@@ -1498,12 +1613,17 @@ static void serviceRecovery()
 // Only sent while we ARE hearing the rocket (last_packet_ms recent).  If
 // rocket goes silent, the recovery state machine takes over and we stop
 // heartbeating until comms are restored.  Uses 2 retries instead of 8 to
-// keep airtime negligible (<0.1%) — losing one heartbeat is fine, the
-// next one comes 30 s later, well inside the rocket's tolerance.
+// keep airtime per beat small (~100 ms total).
+//
+// Interval must be < OC RENDEZVOUS_TRIGGER_QUIET_MS (15 s in #105) with
+// margin for at least one missed beat — otherwise the rocket fires its
+// slow-rendezvous in steady state, drops to the rendezvous channel, and
+// the BS spends ~30 s syncing it back via Cmd-10 relay.  10 s gives the
+// OC two heartbeats per silence-tolerance window and keeps airtime ~1%.
 // (Defined here, after the LoRa transaction & recovery sections, so the
 // state-machine enums it depends on are in scope.)
 
-static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 30000;  // every 30 s
+static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 10000;  // every 10 s (#105)
 static constexpr uint32_t HEARTBEAT_RX_FRESH_MS = 5000;   // rocket "alive"
 static constexpr uint8_t  HEARTBEAT_RETRIES     = 2;
 static uint32_t last_heartbeat_tx_ms = 0;
@@ -1531,10 +1651,12 @@ static void serviceHeartbeat()
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (uplink_pending)                        return;  // Don't clobber a real cmd
     // While hopping, only TX in the safe window right after a fresh
-    // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  Without this,
-    // the heartbeat's 2-retry burst (~200 ms) collides with the
-    // rocket's ~500 ms-spaced TX, desyncs the hop sequence, and the
-    // link drops until the 3 s hop-silence fallback fires.
+    // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  With slow-hop
+    // dwell=4 (#105 follow-up) the rocket stays on a channel for 2 s,
+    // so a 250 ms heartbeat-with-retries fits comfortably inside the
+    // dwell.  Without heartbeats during hop, the rocket's
+    // hop_session_uplink_count stays 0 and its fallback fires every 30 s
+    // (HOP_FALLBACK_TRIGGER_INITIAL_MS), tearing down the session.
     if (!inHopSafeWindow())                    return;
 
     const uint32_t now = millis();
@@ -1634,12 +1756,13 @@ static constexpr uint32_t COORD_HOP_RECENT_MS        = 10000;
 // Persist channel-set selection to NVS.  Skip-mask is keyed off the BW
 // it was generated for so a later cmd-10 BW change invalidates it
 // cleanly (loadChannelSetFromNvs detects mismatch and clears).
+// Rendezvous freq is no longer persisted — see #105 / LORA_NVS_SCHEMA_VERSION
+// v3 in RocketComputerTypes.h.
 static void saveChannelSetToNvs(const LoRaChannelSetSelection& sel,
                                 float bw_khz)
 {
     Preferences p;
     if (!p.begin("lora", false)) return;
-    p.putFloat("rdv_mhz", sel.rendezvous_mhz);
     p.putUChar("chset_n", sel.n_channels);
     p.putFloat("chset_bw", bw_khz);
     const size_t bytes_used = (sel.n_channels + 7) / 8;
@@ -1649,13 +1772,12 @@ static void saveChannelSetToNvs(const LoRaChannelSetSelection& sel,
 
 // Restore channel-set selection from NVS.  If the stored BW doesn't
 // match the active operating BW, the skip-mask is treated as stale and
-// the runtime state is reset to "no skips".  Rendezvous freq survives
-// a BW change (it isn't tied to the operating channel table).
+// the runtime state is reset to "no skips".  Rendezvous freq is no
+// longer NVS-stored (#105) — it's a compile-time constant.
 static void loadChannelSetFromNvs()
 {
     Preferences p;
     if (!p.begin("lora", true)) return;
-    rendezvous_mhz_ = p.getFloat("rdv_mhz", config::LORA_RENDEZVOUS_MHZ);
     const uint8_t n_stored  = p.getUChar("chset_n", 0);
     const float   bw_stored = p.getFloat("chset_bw", 0.0f);
     if (n_stored > 0 && bw_stored > 0.0f && bw_stored == lora_bw_khz)
@@ -1677,9 +1799,8 @@ static void loadChannelSetFromNvs()
     p.end();
 }
 
-// Clear stored skip-mask (rendezvous_mhz_ unchanged) — called on cmd-10
-// BW change so the rocket doesn't follow a stale skip-mask sized for
-// the previous BW.
+// Clear stored skip-mask — called on cmd-10 BW change so the rocket
+// doesn't follow a stale skip-mask sized for the previous BW.
 static void invalidateSkipMaskForBwChange()
 {
     skip_mask_n_        = 0;
@@ -1702,7 +1823,6 @@ static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
                                     float bw_khz)
 {
     // Adopt locally
-    rendezvous_mhz_     = sel.rendezvous_mhz;
     skip_mask_n_        = sel.n_channels;
     channel_set_bw_khz_ = bw_khz;
     const size_t bytes_used = (sel.n_channels + 7) / 8;
@@ -1711,10 +1831,11 @@ static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
 
     saveChannelSetToNvs(sel, bw_khz);
 
-    // Wire format: [rdv:f4][bw:f4][n:u1][mask: ceil(n/8)]
+    // Wire format: [bw:f4][n:u1][mask: ceil(n/8)]
+    // Rendezvous freq used to lead this payload but is now hardcoded on
+    // both sides (#105) — see LORA_FACTORY_RENDEZVOUS_MHZ.
     uint8_t payload[40] = {0};
     size_t  off = 0;
-    memcpy(payload + off, &sel.rendezvous_mhz, 4); off += 4;
     memcpy(payload + off, &bw_khz,             4); off += 4;
     payload[off++] = sel.n_channels;
     for (size_t i = 0; i < bytes_used; i++) payload[off++] = sel.skip_mask[i];
@@ -1723,9 +1844,9 @@ static void applyAndPushChannelSet(const LoRaChannelSetSelection& sel,
     uint8_t active = 0;
     for (uint8_t i = 0; i < sel.n_channels; i++)
         if (!loraSkipMaskTest(sel.skip_mask, i)) active++;
-    ESP_LOGI(TAG, "[CHSET] rendezvous=%.2f MHz, %u/%u channels active at BW=%.0f kHz "
+    ESP_LOGI(TAG, "[CHSET] %u/%u channels active at BW=%.0f kHz "
                   "(min FCC floor %u) — pushing to rocket",
-             (double)sel.rendezvous_mhz, (unsigned)active,
+             (unsigned)active,
              (unsigned)sel.n_channels, (double)bw_khz,
              (unsigned)loraFhssMinChannels(bw_khz));
 
@@ -1804,8 +1925,60 @@ static void analyzeAndPushFromCachedScan()
     }
     LoRaChannelSetSelection sel{};
     loraSelectChannelSet(scan_freqs, scan_peak_rssi_, scan_peak_count_,
-                          lora_bw_khz, config::LORA_RENDEZVOUS_MHZ, &sel);
+                          lora_bw_khz, &sel);
     applyAndPushChannelSet(sel, lora_bw_khz);
+}
+
+// Re-push the BS's current skip-mask state to the rocket — used by the
+// mask-drift auto-recovery (#105 follow-up) when the rocket's announced
+// next_channel_idx doesn't match the BS's seq-derived expectation.  No
+// re-analysis (no scan needed); just (re-)delivers what we already have.
+// Inert if we have no mask to push.
+static void pushCurrentChannelSet()
+{
+    if (skip_mask_n_ == 0) return;  // nothing to push
+    LoRaChannelSetSelection sel = {};
+    sel.n_channels = skip_mask_n_;
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) {
+        sel.skip_mask[i] = skip_mask_[i];
+    }
+    applyAndPushChannelSet(sel, channel_set_bw_khz_);
+}
+
+// Mask-drift auto-recovery service (#105 follow-up).  Watches the flag
+// set by the hop RX path and re-pushes cmd 15 when the radio state is
+// quiet enough to do so safely.  Cooldown prevents spam if drift
+// persists across multiple packets.
+static void serviceMaskDriftRepush()
+{
+    if (!chset_drift_repush_pending) return;
+    // Only push when nothing else is using the radio for TX.
+    if (uplink_pending)                        return;
+    if (lora_txn_state != LoRaTxnState::IDLE)  return;
+    if (recovery_state != RecoveryState::IDLE) return;
+    // Cooldown: don't re-push more than once every CHSET_DRIFT_REPUSH_COOLDOWN_MS.
+    // First-ever push (last_ms_=0) bypasses the cooldown.
+    const uint32_t now = millis();
+    if (chset_drift_repush_last_ms_ != 0 &&
+        (now - chset_drift_repush_last_ms_) < CHSET_DRIFT_REPUSH_COOLDOWN_MS)
+    {
+        // Cooldown active; clear the flag so we don't spin checking.
+        // Next drift event after the cooldown will set it again.
+        chset_drift_repush_pending = false;
+        return;
+    }
+    if (skip_mask_n_ == 0) {
+        // No mask to push — likely a brand-new BS without scan results.
+        // The drift warning is informational only in this case.
+        chset_drift_repush_pending = false;
+        return;
+    }
+    chset_drift_repush_pending = false;
+    chset_drift_repush_last_ms_ = now;
+    chset_drift_repush_count++;
+    ESP_LOGI(TAG, "[CHSET] Mask drift detected — re-pushing cmd 15 (count=%lu)",
+             (unsigned long)chset_drift_repush_count);
+    pushCurrentChannelSet();
 }
 
 // All passes done.  Ship results to BLE (preserving the existing
@@ -2117,6 +2290,28 @@ static void setup_bs()
 
     // Load saved LoRa config from NVS (write config.h defaults if empty)
     prefs.begin("lora", false);  // read-write
+
+    // NVS schema gate (#105 follow-up).  If the stored schema version
+    // doesn't match the current build, wipe the lora namespace so the
+    // device falls back to the shared factory rendezvous and re-syncs
+    // with the BS via the standard rendezvous flow.  Without this, a
+    // re-flashed device can come up on a stale operating freq the BS
+    // doesn't know about — exactly the chicken-and-egg that motivated
+    // this gate.  Single namespace clear is fine: every LoRa-related
+    // key (freq, sf, bw, cr, txpwr, hopdis, chset_*, plus the now-defunct
+    // rdv_mhz from v2 schema) lives under "lora", so one clear() takes
+    // them all together.
+    {
+        const uint8_t stored_v = prefs.getUChar("schemv", 0);
+        if (stored_v != LORA_NVS_SCHEMA_VERSION)
+        {
+            ESP_LOGW(TAG, "[CFG] LoRa NVS schema mismatch (stored=%u, current=%u) — clearing",
+                     (unsigned)stored_v, (unsigned)LORA_NVS_SCHEMA_VERSION);
+            prefs.clear();
+            prefs.putUChar("schemv", LORA_NVS_SCHEMA_VERSION);
+        }
+    }
+
     if (!prefs.isKey("freq"))
     {
         // First boot or NVS erased — seed with config.h factory defaults
@@ -2139,23 +2334,23 @@ static void setup_bs()
              (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
              (int)lora_hop_disabled);
 
-    // Channel-set: rendezvous freq + skip-mask from the most recent
-    // pre-launch scan (#40 / #41 phase 3).  Falls back to defaults if
-    // never scanned, or if the stored mask was generated for a
-    // different BW.
+    // Channel-set: skip-mask from the most recent pre-launch scan
+    // (#40 / #41 phase 3).  Falls back to no-skips if never scanned, or
+    // if the stored mask was generated for a different BW.  Rendezvous
+    // freq is no longer scan-selected; both sides use the shared
+    // hardcoded LORA_FACTORY_RENDEZVOUS_MHZ (#105).
     loadChannelSetFromNvs();
     if (skip_mask_n_ > 0)
     {
         uint8_t active = 0;
         for (uint8_t i = 0; i < skip_mask_n_; i++)
             if (!loraSkipMaskTest(skip_mask_, i)) active++;
-        ESP_LOGI(TAG, "[CHSET] NVS: rendezvous=%.2f MHz, %u/%u channels active",
-                 (double)rendezvous_mhz_, (unsigned)active, (unsigned)skip_mask_n_);
+        ESP_LOGI(TAG, "[CHSET] NVS: %u/%u channels active",
+                 (unsigned)active, (unsigned)skip_mask_n_);
     }
     else
     {
-        ESP_LOGI(TAG, "[CHSET] NVS: rendezvous=%.2f MHz (default), no skip-mask",
-                 (double)rendezvous_mhz_);
+        ESP_LOGI(TAG, "[CHSET] NVS: no skip-mask");
     }
 
     // Load cached servo config from NVS
@@ -2268,7 +2463,8 @@ static void loop_bs()
 {
     // Service LoRa (complete any pending TX before checking for RX)
     lora_comms.service();
-    lora_comms.pollDio1();  // Fallback if DIO1 interrupt doesn't fire
+    lora_comms.pollDio1();          // Fallback if DIO1 interrupt doesn't fire
+    lora_comms.serviceTxWatchdog(); // Force-clear stuck tx_ongoing_ (#105)
 
     // Drive the coordinated-scan state machine first so AWAITING_PAUSE
     // → SCANNING transitions can kick off a scan in the same iteration
@@ -2288,8 +2484,25 @@ static void loop_bs()
         hop_last_rx_ms_ != 0 &&
         (millis() - hop_last_rx_ms_) > HOP_SILENCE_FALLBACK_MS)
     {
+        const uint32_t silence_ms = millis() - hop_last_rx_ms_;
+        const uint32_t dur_ms     = (hop_session_started_ms != 0)
+            ? (millis() - hop_session_started_ms) : 0;
         ESP_LOGW(TAG, "[HOP] Silence > %u ms — falling back to static channel",
                  (unsigned)HOP_SILENCE_FALLBACK_MS);
+        hop_silence_events_count++;
+        char ev[96];
+        snprintf(ev, sizeof(ev),
+                 "hop_silence duration_ms=%u pkts=%u loss=%u silence_ms=%u",
+                 (unsigned)dur_ms,
+                 (unsigned)hop_session_total_pkts,
+                 (unsigned)hop_session_observed_loss,
+                 (unsigned)silence_ms);
+        // Log the event row BEFORE flipping hop_active_ off so currentRxFreqMHz()
+        // still reports the hop channel we were sitting on at the moment of loss.
+        logHopEvent(ev, currentRxFreqMHz());
+        hop_session_started_ms    = 0;
+        hop_session_total_pkts    = 0;
+        hop_session_observed_loss = 0;
         hop_active_       = false;
         hop_needs_retune_ = true;
     }
@@ -2366,7 +2579,7 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: SIZE_OF_LORA_DATA (59) bytes ---
+        // --- Telemetry packet: SIZE_OF_LORA_DATA (61) bytes ---
         else if (rx_len == SIZE_OF_LORA_DATA)
         {
             // Decode the telemetry packet
@@ -2385,6 +2598,27 @@ static void loop_bs()
 
                 TR_LoRa_Comms::Stats ls = {};
                 lora_comms.getStats(ls);
+
+                // Observed-loss attribution (#105).  Use the rocket's free-
+                // running seq to compute how many telemetry packets we missed
+                // since the last RX from this rocket.  loraComputeObservedLoss
+                // returns -1 on first contact, duplicates, or implausible
+                // forward deltas (most likely a rocket reboot — lora_tx_seq
+                // resets to 0).  We update last_seq unconditionally so the
+                // next RX gets a clean baseline either way.
+                int32_t observed_gap = -1;
+                if (slot >= 0) {
+                    observed_gap = loraComputeObservedLoss(
+                        tracked_rockets[slot].last_seq, decoded.seq);
+                    tracked_rockets[slot].last_seq = (int32_t)decoded.seq;
+                    if (observed_gap > 0) {
+                        lora_total_observed_loss += (uint32_t)observed_gap;
+                        if (hop_active_) {
+                            hop_session_observed_loss += (uint32_t)observed_gap;
+                        }
+                    }
+                    if (hop_active_) hop_session_total_pkts++;
+                }
 
                 // Convert ECEF to lat/lon — but only when the rocket reports
                 // an actual GPS fix.  The rocket sometimes packs nonzero ECEF
@@ -2424,7 +2658,8 @@ static void loop_bs()
                 if (logging_active)
                 {
                     logLoRaPacket(decoded, ls.last_rssi, ls.last_snr,
-                                  lat_deg, lon_deg, alt_m);
+                                  lat_deg, lon_deg, alt_m,
+                                  currentRxFreqMHz(), observed_gap);
                 }
 
                 // Arm / disarm the INFLIGHT safety timer on state edges.
@@ -2476,24 +2711,61 @@ static void loop_bs()
                 last_rocket_state = decoded.rocket_state;
                 updateFreqLockFromRocketState(decoded.rocket_state);
 
-                // Hop state follow (#40 / #41 phase 2a).  The rocket owns
-                // the schedule; we just retune to wherever its packet says
-                // we should be next.  Honoured as soon as the radio is
-                // idle (top of serviceLoRa) — we don't retune in the RX
-                // callback path because the radio still has work to do.
-                // #106: when the operator has disabled hopping, ignore the
-                // rocket's next_channel_idx and stay on lora_freq_mhz.  The
-                // rocket-side LORA_CMD_SET_HOP_DISABLED handler also clears
-                // its own hop_active_ so it stops emitting non-NO_HOP indices,
-                // but we belt-and-brace here in case the rocket missed the
-                // uplink and is still hopping.
+                // Hop state follow (#40 / #41 phase 2a, seq-anchored in
+                // #105 follow-up).  The rocket and the BS both compute
+                // the channel for any seq from loraHopChannelForSeq() —
+                // identical formula, no chained handoff.  This means a
+                // single missed packet within a dwell window doesn't
+                // desync us: the next received packet's seq tells us
+                // exactly where the rocket is.  next_channel_idx in the
+                // packet header is now a sanity hint; we still honour
+                // the NO_HOP sentinel as the "not currently hopping"
+                // signal, but for the actual channel we consult seq.
+                //
+                // #106: when the operator has disabled hopping, ignore
+                // the rocket's hop entirely and stay on lora_freq_mhz.
                 if (!lora_hop_disabled && shouldHopInState(decoded.rocket_state))
                 {
                     if (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP)
                     {
                         const uint8_t n = loraChannelCount(lora_bw_khz);
-                        if (n > 0 && decoded.next_channel_idx < n)
+                        if (n > 0)
                         {
+                            const bool mask_valid = (skip_mask_n_ == n &&
+                                                      channel_set_bw_khz_ == lora_bw_khz);
+                            static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+                            const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                            // Compute next channel from seq+1 — what the
+                            // rocket will be on for the *next* packet.
+                            // Trust the rocket's announced next_channel_idx
+                            // as the retune target — that's where the rocket
+                            // will actually transmit, regardless of whether
+                            // our local skip-mask agrees with theirs.  The
+                            // seq-derived computation below is a sanity
+                            // CHECK, not the source of truth: if it disagrees
+                            // with what the rocket announced, the masks have
+                            // drifted (cmd-15 push didn't reach this side, or
+                            // the BS just ran a fresh scan and the rocket
+                            // hasn't received the new mask yet).  In that
+                            // case the mask-warning fires but we still follow
+                            // the rocket so the link stays up.
+                            const uint8_t expected_next = loraHopChannelForSeq(
+                                (uint16_t)(decoded.seq + 1),
+                                LORA_HOP_DWELL_PACKETS, mask, n);
+                            if (decoded.next_channel_idx != expected_next) {
+                                ESP_LOGW(TAG, "[HOP] seq=%u: rocket says next=%u, "
+                                              "we'd compute next=%u (mask drift "
+                                              "— following rocket)",
+                                         (unsigned)decoded.seq,
+                                         (unsigned)decoded.next_channel_idx,
+                                         (unsigned)expected_next);
+                                // Schedule auto re-push of the mask via
+                                // cmd 15 — the rocket's mask is out of
+                                // sync with ours, fixed by re-sending
+                                // ours.  Cooldown enforced in
+                                // serviceMaskDriftRepush.
+                                chset_drift_repush_pending = true;
+                            }
                             const bool was_active = hop_active_;
                             hop_idx_           = decoded.next_channel_idx;
                             hop_active_        = true;
@@ -2501,11 +2773,26 @@ static void loop_bs()
                             hop_last_rx_ms_    = millis();
                             if (!was_active)
                             {
-                                ESP_LOGI(TAG, "[HOP] Active: %u channels at BW=%.0f kHz, "
-                                              "first hop -> idx=%u (%.3f MHz)",
+                                // Start a fresh hop-session counter window
+                                // so the eventual hop_inactive / hop_silence
+                                // event reports stats for *this* session
+                                // (#105 diagnostics).
+                                hop_session_started_ms    = millis();
+                                hop_session_total_pkts    = 1;  // this packet counts
+                                hop_session_observed_loss = 0;
+                                ESP_LOGI(TAG, "[HOP] Active: %u channels at BW=%.0f kHz "
+                                              "dwell=%u, first hop -> idx=%u (%.3f MHz)",
                                          (unsigned)n, (double)lora_bw_khz,
+                                         (unsigned)LORA_HOP_DWELL_PACKETS,
                                          (unsigned)hop_idx_,
                                          (double)loraChannelMHz(lora_bw_khz, hop_idx_));
+                                char ev[96];
+                                snprintf(ev, sizeof(ev),
+                                         "hop_active idx=%u nch=%u dwell=%u",
+                                         (unsigned)hop_idx_, (unsigned)n,
+                                         (unsigned)LORA_HOP_DWELL_PACKETS);
+                                logHopEvent(ev,
+                                            loraChannelMHz(lora_bw_khz, hop_idx_));
                             }
                         }
                     }
@@ -2517,8 +2804,21 @@ static void loop_bs()
                     // comms resume on a known frequency.
                     hop_active_       = false;
                     hop_needs_retune_ = true;
+                    const uint32_t dur_ms = (hop_session_started_ms != 0)
+                        ? (millis() - hop_session_started_ms) : 0;
                     ESP_LOGI(TAG, "[HOP] Inactive (rocket state changed): "
                                   "returning to %.2f MHz", (double)lora_freq_mhz);
+                    char ev[96];
+                    snprintf(ev, sizeof(ev),
+                             "hop_inactive duration_ms=%u pkts=%u loss=%u "
+                             "reason=state",
+                             (unsigned)dur_ms,
+                             (unsigned)hop_session_total_pkts,
+                             (unsigned)hop_session_observed_loss);
+                    logHopEvent(ev, lora_freq_mhz);
+                    hop_session_started_ms    = 0;
+                    hop_session_total_pkts    = 0;
+                    hop_session_observed_loss = 0;
                 }
 
                 last_known_camera_recording = decoded.camera_recording;
@@ -3031,6 +3331,12 @@ static void loop_bs()
     // Silence recovery runs after the transaction service so a freshly
     // started transaction always wins over any pending recovery cycle.
     serviceRecovery();
+
+    // Mask-drift auto-recovery (#105 follow-up).  Re-pushes cmd 15 if
+    // the hop RX path detected a divergence between our skip-mask and
+    // the rocket's.  Cheap when no drift is pending; only acts when
+    // the radio is otherwise idle.
+    serviceMaskDriftRepush();
 
     // Heartbeat — quietly tells the rocket "we're hearing you" so its
     // slow-rendezvous timer doesn't expire during normal idle operation.

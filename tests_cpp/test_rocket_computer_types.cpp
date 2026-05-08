@@ -25,7 +25,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
     EXPECT_EQ(sizeof(NonSensorData),  43u);
-    EXPECT_EQ(sizeof(LoRaData),       60u);  // 3-byte routing header + 57-byte payload
+    EXPECT_EQ(sizeof(LoRaData),       62u);  // 5-byte routing header (incl. 16-bit seq) + 57-byte payload
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
 }
@@ -123,24 +123,15 @@ TEST(LoraNextActiveChannel, AllMaskedDegenerateSafe) {
     EXPECT_LT(next, 10);  // Some valid index in range; just don't crash.
 }
 
-TEST(LoraSelectChannelSet, NoScanResultsFallbacks) {
-    // No scan input: rendezvous = fallback, mask all-zero.
+TEST(LoraSelectChannelSet, NoScanResultsLeavesEmptyMask) {
+    // No scan input: skip-mask all-zero, n_channels reflects the BW table.
+    // Rendezvous freq is no longer computed by this function (it's
+    // compile-time hardcoded — see LORA_FACTORY_RENDEZVOUS_MHZ).
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(nullptr, nullptr, 0, /*bw_khz=*/250.0f,
-                          /*fallback=*/915.0f, &out);
-    EXPECT_FLOAT_EQ(out.rendezvous_mhz, 915.0f);
+    loraSelectChannelSet(nullptr, nullptr, 0, /*bw_khz=*/250.0f, &out);
     EXPECT_EQ(out.n_channels, loraChannelCount(250.0f));
     for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++)
         EXPECT_EQ(out.skip_mask[i], 0u) << "byte " << i;
-}
-
-TEST(LoraSelectChannelSet, RendezvousIsScanMinimum) {
-    // Three scan points; pick the lowest-RSSI one as rendezvous.
-    const float   freqs[] = { 910.0f, 915.0f, 920.0f };
-    const int8_t  rssi[]  = {  -75,    -95,    -80 };  // 915 quietest
-    LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, 3, 250.0f, 915.0f, &out);
-    EXPECT_FLOAT_EQ(out.rendezvous_mhz, 915.0f);
 }
 
 TEST(LoraSelectChannelSet, NoiseAboveThresholdGetsSkipped) {
@@ -159,17 +150,13 @@ TEST(LoraSelectChannelSet, NoiseAboveThresholdGetsSkipped) {
     rssi[10] = -60;   // very loud
     rssi[55] = -50;   // very loud
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, N, 125.0f, 915.0f, &out);
+    loraSelectChannelSet(freqs, rssi, N, 125.0f, &out);
 
     EXPECT_EQ(out.n_channels, n_chan);
     EXPECT_TRUE (loraSkipMaskTest(out.skip_mask, 10));
     EXPECT_TRUE (loraSkipMaskTest(out.skip_mask, 55));
     EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, 11));
     EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, 0));
-
-    // Rendezvous picks one of the quiet -110 channels (any is fine).
-    EXPECT_NE(out.rendezvous_mhz, freqs[10]);
-    EXPECT_NE(out.rendezvous_mhz, freqs[55]);
 }
 
 TEST(LoraSelectChannelSet, FccFloorEnforced_BW250) {
@@ -189,7 +176,7 @@ TEST(LoraSelectChannelSet, FccFloorEnforced_BW250) {
         rssi[i] = (i % 5 == 0) ? -100 : -50;
     }
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, M, 250.0f, 915.0f, &out);
+    loraSelectChannelSet(freqs, rssi, M, 250.0f, &out);
 
     // Count active (non-skipped).  Must be ≥ fhss_min = 50.
     uint8_t active = 0;
@@ -209,7 +196,7 @@ TEST(LoraSelectChannelSet, AllQuietSkipsNothing) {
         rssi[i]  = -105 + (int8_t)(i % 3);  // tiny variation
     }
     LoRaChannelSetSelection out{};
-    loraSelectChannelSet(freqs, rssi, N, 250.0f, 915.0f, &out);
+    loraSelectChannelSet(freqs, rssi, N, 250.0f, &out);
 
     for (uint8_t i = 0; i < out.n_channels; i++)
         EXPECT_FALSE(loraSkipMaskTest(out.skip_mask, i)) << "channel " << (int)i;
@@ -475,6 +462,197 @@ TEST(RocketLikelyHopping, RecentNonHopStateFalse) {
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, READY,         10000));
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, INITIALIZATION,10000));
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, LANDED,        10000));
+}
+
+// ============================================================================
+// Issue #105: observed-loss attribution from the per-TX seq counter
+// ============================================================================
+
+TEST(LoraComputeObservedLoss, FirstContactReturnsUnknown) {
+    // No prior packet → BS can't compute loss; -1 means "unknown".
+    EXPECT_EQ(loraComputeObservedLoss(/*prev_seq=*/-1, /*curr=*/0),    -1);
+    EXPECT_EQ(loraComputeObservedLoss(/*prev_seq=*/-1, /*curr=*/200),  -1);
+}
+
+TEST(LoraComputeObservedLoss, ConsecutivePacketsHaveZeroLoss) {
+    // Healthy link: every TX gets through, gap=0.
+    EXPECT_EQ(loraComputeObservedLoss(0, 1),         0);
+    EXPECT_EQ(loraComputeObservedLoss(50, 51),       0);
+    EXPECT_EQ(loraComputeObservedLoss(65534, 65535), 0);
+}
+
+TEST(LoraComputeObservedLoss, SmallForwardJumpsReportRealLoss) {
+    // delta=N → (N-1) packets lost between RXes.
+    EXPECT_EQ(loraComputeObservedLoss(0, 2),     1);   // missed seq 1
+    EXPECT_EQ(loraComputeObservedLoss(0, 11),   10);   // missed 1..10
+    EXPECT_EQ(loraComputeObservedLoss(95, 100),  4);   // missed 96..99
+    EXPECT_EQ(loraComputeObservedLoss(0, 500), 499);   // far inside default 1000 cap
+}
+
+TEST(LoraComputeObservedLoss, WrapAroundIsSeenAsForward) {
+    // 16-bit wrap (proto v4): prev near top of u16, curr just past wrap.
+    EXPECT_EQ(loraComputeObservedLoss(65530, 5),  10);  // delta=11, loss=10
+    EXPECT_EQ(loraComputeObservedLoss(65535, 0),   0);  // exact wrap, no loss
+    EXPECT_EQ(loraComputeObservedLoss(65000, 99), 634); // delta=635, loss=634 (still inside cap)
+}
+
+TEST(LoraComputeObservedLoss, ImplausibleDeltaReturnsUnknown) {
+    // 16-bit math: a "backward" jump only looks implausible once the
+    // wrap-forward distance exceeds the threshold.  A reboot near a
+    // multiple of 65536 of the prior seq looks like a small forward run
+    // — known limitation; cross-check rocket_state to disambiguate.
+    EXPECT_EQ(loraComputeObservedLoss(/*prev=*/100, /*curr=*/99),  -1);  // delta=65535
+    EXPECT_EQ(loraComputeObservedLoss(/*prev=*/500, /*curr=*/0),   -1);  // delta=65036
+    // Threshold is 1000 by default; delta=1001 must trip it.
+    EXPECT_EQ(loraComputeObservedLoss(0, 1001),                    -1);
+    // delta=1000 is right at the threshold — should still report.
+    EXPECT_EQ(loraComputeObservedLoss(0, 1000),                   999);
+}
+
+TEST(LoraComputeObservedLoss, AmbiguousRebootIsCountedAsLoss) {
+    // Reboot blind spot from proto v3 is GONE for the common case: with
+    // 16-bit seq, a rocket that rebooted from seq=200 to seq=0 now has
+    // modular delta=65336 (way past the 1000 threshold) and is correctly
+    // flagged unknown.  Documenting here so the regression doesn't
+    // sneak back in if someone narrows seq again.
+    EXPECT_EQ(loraComputeObservedLoss(200, 0),    -1);
+    EXPECT_EQ(loraComputeObservedLoss(50000, 0),  -1);
+    // The remaining blind spot: a reboot that lands within the
+    // plausibility window still looks like real loss.  Operator should
+    // disambiguate via rocket_state (INITIALIZATION on fresh boot).
+    EXPECT_EQ(loraComputeObservedLoss(/*prev=*/0, /*curr=*/100), 99);
+}
+
+TEST(LoraComputeObservedLoss, DuplicateSeqIsAnomaly) {
+    // Same seq twice in a row: protocol violation (duplicate or replay).
+    // We don't try to be clever — flag as unknown so the operator sees it.
+    EXPECT_EQ(loraComputeObservedLoss(7,   7),     -1);
+    EXPECT_EQ(loraComputeObservedLoss(65535, 65535), -1);
+}
+
+TEST(LoraComputeObservedLoss, CustomThresholdHonoured) {
+    // A test or operator can dial the plausibility cap.  At threshold=10
+    // a delta of 50 is rejected even though it'd be accepted at default.
+    EXPECT_EQ(loraComputeObservedLoss(0, 50, /*plausibility_max=*/10), -1);
+    EXPECT_EQ(loraComputeObservedLoss(0,  9, /*plausibility_max=*/10),  8);
+    EXPECT_EQ(loraComputeObservedLoss(0, 10, /*plausibility_max=*/10),  9);
+}
+
+// ============================================================================
+// Issue #105 follow-up: seq-anchored slow-hop channel schedule
+// ============================================================================
+
+TEST(LoraHopChannelForSeq, DwellOneMatchesNaiveModulo) {
+    // dwell=1 is the "advance every TX" baseline.  With an empty mask,
+    // channel = seq % n_channels.  Both rocket and BS compute identically.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    for (uint16_t s = 0; s < 200; s++) {
+        EXPECT_EQ(loraHopChannelForSeq(s, /*dwell=*/1, mask, /*n=*/35),
+                  (uint8_t)(s % 35)) << "seq=" << s;
+    }
+}
+
+TEST(LoraHopChannelForSeq, DwellHoldsForNPackets) {
+    // dwell=4 holds the same channel for 4 consecutive seq values then
+    // advances exactly once.  This is the slow-hop property the BS
+    // depends on for tolerating single missed packets.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    constexpr uint8_t n     = 35;
+    constexpr uint8_t dwell = 4;
+    for (uint16_t s = 0; s < 4 * n; s++) {
+        EXPECT_EQ(loraHopChannelForSeq(s, dwell, mask, n),
+                  (uint8_t)((s / dwell) % n)) << "seq=" << s;
+    }
+}
+
+TEST(LoraHopChannelForSeq, U8WouldStarveChannels_U16CoversAll) {
+    // The motivation for proto v4 widening seq to 16 bits: with 8-bit
+    // seq + dwell=4, only 256/4 = 64 distinct positions exist, so any
+    // channel count > 64 starves the high-numbered channels.  Verify
+    // that with u16 we actually cover all 69 channels at BW=250.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    constexpr uint8_t n     = 69;
+    constexpr uint8_t dwell = 4;
+    bool seen[256] = {false};
+    // (seq / dwell) needs to reach n-1 for full coverage; with dwell=4
+    // and n=69 that requires seq >= 4*68 = 272 — well past u8 wrap.
+    for (uint16_t s = 0; s < dwell * n; s++) {
+        seen[loraHopChannelForSeq(s, dwell, mask, n)] = true;
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        EXPECT_TRUE(seen[i]) << "channel " << (int)i << " never visited";
+    }
+}
+
+TEST(LoraHopChannelForSeq, SkipMaskExcludesMaskedChannels) {
+    // Channels marked in the skip mask are never returned.  Active
+    // channels are visited in their natural order.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    loraSkipMaskSet(mask, 3);
+    loraSkipMaskSet(mask, 7);
+    loraSkipMaskSet(mask, 8);
+    constexpr uint8_t n     = 10;
+    constexpr uint8_t dwell = 1;
+    for (uint16_t s = 0; s < 50; s++) {
+        const uint8_t ch = loraHopChannelForSeq(s, dwell, mask, n);
+        EXPECT_FALSE(loraSkipMaskTest(mask, ch))
+            << "seq=" << s << " landed on masked channel " << (int)ch;
+    }
+}
+
+TEST(LoraHopChannelForSeq, SkipMaskWalksActiveChannelsInOrder) {
+    // Active channels: 0, 1, 2, 4, 5, 6, 9 (mask 3,7,8 + 7 active).
+    // dwell=1: schedule cycles 0→1→2→4→5→6→9→0→...
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    loraSkipMaskSet(mask, 3);
+    loraSkipMaskSet(mask, 7);
+    loraSkipMaskSet(mask, 8);
+    const uint8_t expected[] = { 0, 1, 2, 4, 5, 6, 9, 0, 1, 2, 4, 5, 6, 9 };
+    for (size_t i = 0; i < sizeof(expected); i++) {
+        EXPECT_EQ(loraHopChannelForSeq((uint16_t)i, 1, mask, 10), expected[i])
+            << "seq=" << i;
+    }
+}
+
+TEST(LoraHopChannelForSeq, BothSidesAgreeAcrossWrapBoundary) {
+    // The seq-anchored property means BS and rocket compute identically
+    // from the same seq.  Hammer the wrap point to verify behaviour is
+    // continuous across u16 rollover.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    constexpr uint8_t n     = 69;
+    constexpr uint8_t dwell = 4;
+    // Both sides (rocket-perspective vs BS-perspective) compute the
+    // same value for any seq — just confirm the call is pure and
+    // deterministic at the wrap.
+    for (uint32_t s = 65530; s < 65540; s++) {
+        const uint16_t s16 = (uint16_t)s;
+        const uint8_t ch_a = loraHopChannelForSeq(s16, dwell, mask, n);
+        const uint8_t ch_b = loraHopChannelForSeq(s16, dwell, mask, n);
+        EXPECT_EQ(ch_a, ch_b);
+    }
+    // After u16 wrap, schedule continues from seq=0,1,2,3 → channel 0.
+    EXPECT_EQ(loraHopChannelForSeq(0, dwell, mask, n), 0);
+    EXPECT_EQ(loraHopChannelForSeq(3, dwell, mask, n), 0);
+    EXPECT_EQ(loraHopChannelForSeq(4, dwell, mask, n), 1);
+}
+
+TEST(LoraHopChannelForSeq, ZeroOrInvalidArgsAreSafe) {
+    // Defensive: callers shouldn't hit these but we don't want UB.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    EXPECT_EQ(loraHopChannelForSeq(0, 4, mask, 0),  0);  // n_channels=0
+    EXPECT_EQ(loraHopChannelForSeq(7, 0, mask, 35), 0);  // dwell=0
+}
+
+TEST(LoraHopChannelForSeq, AllMaskedFallsBackToRawMod) {
+    // FCC floor prevents this in production, but the helper must not
+    // crash.  Falls back to raw modulo so it still makes progress.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES];
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) mask[i] = 0xFF;
+    constexpr uint8_t n     = 16;
+    constexpr uint8_t dwell = 4;
+    EXPECT_EQ(loraHopChannelForSeq(0,  dwell, mask, n), 0);
+    EXPECT_EQ(loraHopChannelForSeq(4,  dwell, mask, n), 1);
+    EXPECT_EQ(loraHopChannelForSeq(60, dwell, mask, n), 15);
 }
 
 TEST(RocketLikelyHopping, StaleRxFalseEvenInHopState) {

@@ -443,11 +443,11 @@ static uint32_t         hop_session_uplink_count    = 0;  // resets each hop ses
 static uint32_t         hop_pause_until_ms          = 0;  // wall-clock deadline for PAUSED_FOR_SCAN
 
 // Channel-set state pushed by the BS via LORA_CMD_CHANNEL_SET (#40 / #41
-// phase 3).  rendezvous_mhz_ replaces the hardcoded LORA_RENDEZVOUS_MHZ
-// constant for both slow_rendezvous and hop-silence visits.  skip_mask_
+// phase 3).  Rendezvous freq is no longer scan-selected (it's compile-
+// time hardcoded to LORA_FACTORY_RENDEZVOUS_MHZ on both sides — see
+// #105 for why); only the skip-mask is pushed via cmd 15 now.  skip_mask_
 // is consulted in the per-packet next_channel_idx advance so the hop
 // sequence skips noisy channels.
-static float   rendezvous_mhz_     = config::LORA_RENDEZVOUS_MHZ;
 static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
 static uint8_t skip_mask_n_        = 0;        // 0 = no mask (all active)
 static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
@@ -589,6 +589,13 @@ static float max_speed_mps = 0.0f;
 static uint32_t lora_tx_ok = 0;
 static uint32_t lora_tx_fail = 0;
 static uint32_t last_lora_tx_ms = 0;
+
+// Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
+// on every actual transmit so the BS can compute observed-loss rates and
+// the slow-hop seq-anchored channel schedule.  Widened to 16 bits in
+// proto v4 — see LORA_HOP_DWELL_PACKETS for why u8 was insufficient.
+// Wraps mod 65536; resets to 0 on reboot.
+static uint16_t lora_tx_seq = 0;
 // lora_in_rx_mode forward-declared up with the hop state.
 static uint32_t lora_uplink_rx_count = 0;
 // CRC-passing decodes whose SNR was below loraMinValidSnrDb(current_sf)
@@ -1730,7 +1737,7 @@ static void serviceI2CIngress()
 }
 
 // ============================================================================
-static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
+static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t seq)
 {
     if (out_payload == nullptr)
     {
@@ -1741,40 +1748,31 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA])
     // Routing header
     lora.network_id = network_id;
     lora.rocket_id  = rocket_id;
-    // Hop byte (#40 / #41).  Either tell the BS where we'll be for the
-    // next packet, or send the no-hop sentinel.  During a rendezvous
-    // visit (phase 2b) we explicitly send the sentinel — we're parked
-    // on rendezvous, not following the hop schedule.
+    lora.seq        = seq;
+    // Hop byte (#40 / #41).  Tells the BS where to expect packet seq+1.
+    // With seq-anchored slow-hop (#105 follow-up), this value is purely
+    // a sanity hint — the BS computes the same channel from the seq
+    // itself, which lets it self-correct after a single missed packet
+    // within the dwell window.  Sentinel 0xFF means "not hopping; stay
+    // on lora_freq_mhz".
     if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL)
     {
-        if (hop_first_pkt_)
+        const uint8_t n = loraChannelCount(lora_bw_khz);
+        if (n == 0)
         {
-            // Bootstrap: this packet still goes out on lora_freq_mhz.
-            // Tell the BS to follow us to channel 0 for the next one.
-            // (Channel 0 is intentionally always considered active even
-            // if the skip-mask covers it, since it's the bootstrap
-            // anchor — the next non-bootstrap packet will skip-advance.)
-            lora.next_channel_idx = 0;
+            lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;
         }
         else
         {
-            const uint8_t n = loraChannelCount(lora_bw_khz);
-            if (n == 0)
-            {
-                lora.next_channel_idx = LORA_NEXT_CH_NO_HOP;
-            }
-            else
-            {
-                // Skip-mask aware advance (#40 / #41 phase 3).  When no
-                // valid mask is loaded (n_chan == 0 or BW mismatch), the
-                // skip_mask_ is all-zeros so loraNextActiveChannelIdx
-                // degenerates to (idx + 1) % n.
-                const bool mask_valid = (skip_mask_n_ == n &&
-                                          channel_set_bw_khz_ == lora_bw_khz);
-                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
-                lora.next_channel_idx = loraNextActiveChannelIdx(hop_idx_, mask, n);
-            }
+            // Skip-mask aware schedule.  When no valid mask is loaded
+            // (n_chan == 0 or BW mismatch) the empty mask makes
+            // loraHopChannelForSeq degenerate to (seq/dwell) % n.
+            const bool mask_valid = (skip_mask_n_ == n &&
+                                      channel_set_bw_khz_ == lora_bw_khz);
+            static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+            const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+            lora.next_channel_idx = loraHopChannelForSeq(
+                (uint16_t)(seq + 1), LORA_HOP_DWELL_PACKETS, mask, n);
         }
     }
     else
@@ -1893,7 +1891,7 @@ static void serviceLoRa()
     }
 
     uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload))
+    if (!buildLoRaPayload(payload, lora_tx_seq))
     {
         return;
     }
@@ -1902,6 +1900,9 @@ static void serviceLoRa()
     if (lora_comms.send(payload, sizeof(payload)))
     {
         lora_tx_ok++;
+        // Advance the seq AFTER a successful send — failed startTransmit()
+        // means nothing went over the air, so the BS shouldn't see a gap.
+        lora_tx_seq++;
 
         // Advance hop state and schedule the post-TX retune.  We can't
         // retune here directly (TX is still in progress); the top of
@@ -1912,26 +1913,24 @@ static void serviceLoRa()
         {
             if (hop_first_pkt_)
             {
-                // Bootstrap packet just went out on lora_freq_mhz.
-                // hop_idx_ is already 0; clear the first-packet flag so
-                // the upcoming retune lands us on channel 0.
+                // Bootstrap packet just went out on lora_freq_mhz.  Clear
+                // the first-packet flag; the next packet (seq just
+                // incremented) will go on its scheduled hop channel.
                 hop_first_pkt_ = false;
             }
-            else
+            // Recompute hop_idx_ from the just-incremented seq via the
+            // seq-anchored schedule.  This MUST equal the next_channel_idx
+            // we put into the packet header in buildLoRaPayload — both
+            // sides derive from the same formula so they cannot disagree.
+            const uint8_t n = loraChannelCount(lora_bw_khz);
+            if (n > 0)
             {
-                // Skip-mask aware advance — must match the value we
-                // just wrote into the packet's next_channel_idx field
-                // in buildLoRaPayload, otherwise rocket and BS land on
-                // different channels.
-                const uint8_t n = loraChannelCount(lora_bw_khz);
-                if (n > 0)
-                {
-                    const bool mask_valid = (skip_mask_n_ == n &&
-                                              channel_set_bw_khz_ == lora_bw_khz);
-                    static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                    const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
-                    hop_idx_ = loraNextActiveChannelIdx(hop_idx_, mask, n);
-                }
+                const bool mask_valid = (skip_mask_n_ == n &&
+                                          channel_set_bw_khz_ == lora_bw_khz);
+                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                hop_idx_ = loraHopChannelForSeq(
+                    lora_tx_seq, LORA_HOP_DWELL_PACKETS, mask, n);
             }
             hop_needs_retune_ = true;
         }
@@ -2351,19 +2350,20 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         setPendingCommand(enabled ? GUIDANCE_ENABLE : GUIDANCE_DISABLE);
         ESP_LOGI("LORA", "UPLINK Guidance: %s", enabled ? "ENABLE" : "DISABLE");
     }
-    else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 9)
+    else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 5)
     {
         // Channel-set push from BS (#40 / #41 phase 3).  Wire format:
-        //   [rdv:f4][bw:f4][n_channels:u1][skip_mask: ceil(n/8) bytes]
-        float new_rdv, new_bw;
-        memcpy(&new_rdv, payload + 0, 4);
-        memcpy(&new_bw,  payload + 4, 4);
-        const uint8_t new_n = payload[8];
+        //   [bw:f4][n_channels:u1][skip_mask: ceil(n/8) bytes]
+        // Rendezvous freq used to lead this payload but is now hardcoded
+        // on both sides (#105) — see LORA_FACTORY_RENDEZVOUS_MHZ.
+        float new_bw;
+        memcpy(&new_bw,  payload + 0, 4);
+        const uint8_t new_n = payload[4];
         const size_t  mask_bytes = (size_t)(new_n + 7) / 8;
-        if (payload_len < 9 + mask_bytes || mask_bytes > LORA_SKIP_MASK_MAX_BYTES)
+        if (payload_len < 5 + mask_bytes || mask_bytes > LORA_SKIP_MASK_MAX_BYTES)
         {
             ESP_LOGW("LORA", "UPLINK Cmd 15 ignored: payload truncated (len=%u, need %u)",
-                     (unsigned)payload_len, (unsigned)(9 + mask_bytes));
+                     (unsigned)payload_len, (unsigned)(5 + mask_bytes));
             return;
         }
         // Reject if BW doesn't match — the BS sent a mask sized for a
@@ -2378,17 +2378,15 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                      (double)new_bw, (double)lora_bw_khz);
             return;
         }
-        rendezvous_mhz_     = new_rdv;
         skip_mask_n_        = new_n;
         channel_set_bw_khz_ = new_bw;
         for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) skip_mask_[i] = 0;
-        for (size_t i = 0; i < mask_bytes;          i++) skip_mask_[i] = payload[9 + i];
+        for (size_t i = 0; i < mask_bytes;          i++) skip_mask_[i] = payload[5 + i];
 
-        // Persist
+        // Persist (rdv_mhz no longer stored — see #105 / NVS schema v3)
         Preferences p;
         if (p.begin("lora", false))
         {
-            p.putFloat("rdv_mhz", rendezvous_mhz_);
             p.putUChar("chset_n", skip_mask_n_);
             p.putFloat("chset_bw", channel_set_bw_khz_);
             p.putBytes("chset_mask", skip_mask_, mask_bytes);
@@ -2398,8 +2396,8 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         uint8_t active = 0;
         for (uint8_t i = 0; i < skip_mask_n_; i++)
             if (!loraSkipMaskTest(skip_mask_, i)) active++;
-        ESP_LOGI("LORA", "UPLINK Cmd 15: rendezvous=%.2f MHz, %u/%u active at BW=%.0f kHz",
-                 (double)rendezvous_mhz_, (unsigned)active,
+        ESP_LOGI("LORA", "UPLINK Cmd 15: %u/%u active at BW=%.0f kHz",
+                 (unsigned)active,
                  (unsigned)skip_mask_n_, (double)channel_set_bw_khz_);
     }
     else if (cmd == LORA_CMD_HOP_PAUSE && payload_len >= 2)
@@ -2419,7 +2417,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Only meaningful while we're hopping.  In non-hop states the
         // BS uses the existing direct-scan path and never sends cmd 16.
         // Slow-rendezvous (#71) doesn't need to be checked here: while
-        // it's parking the radio on rendezvous_mhz_, the BS is on a
+        // it's parking the radio on the rendezvous channel, the BS is on a
         // hop channel and physically can't deliver cmd 16 to us.
         if (!hop_active_)
         {
@@ -2493,6 +2491,7 @@ static void serviceLoRaUplink()
     // boards the interrupt may not trigger for RX-done.  pollDio1()
     // checks the pin level and sets rx_done_ if DIO1 is asserted.
     lora_comms.pollDio1();
+    lora_comms.serviceTxWatchdog();  // Force-clear stuck tx_ongoing_ (#105)
 
     // Non-blocking poll for uplink packet
     uint8_t rx_buf[32];
@@ -2548,7 +2547,7 @@ static void serviceLoRaUplink()
 // Slow Rendezvous Cycle (issue #71)
 // ============================================================================
 // If the rocket has been silent (no uplink received) for long enough, hop
-// briefly to LORA_RENDEZVOUS_MHZ on a duty cycle so the base station's
+// briefly to LORA_FACTORY_RENDEZVOUS_MHZ on a duty cycle so the base station's
 // Phase-A recovery has a guaranteed meeting point even when the two NVS
 // freqs disagree by more than the BS's ±2 MHz scan range (e.g. the rocket
 // kept a previously-scanned channel like 921.5 MHz while the BS rebooted
@@ -2573,15 +2572,20 @@ static void serviceLoRaUplink()
 
 enum class RocketRendezvousState : uint8_t {
     IDLE,
-    ON_RENDEZVOUS,    // RENDEZVOUS_WINDOW_MS on LORA_RENDEZVOUS_MHZ
+    ON_RENDEZVOUS,    // RENDEZVOUS_WINDOW_MS on LORA_FACTORY_RENDEZVOUS_MHZ
     ON_SAVED,         // RENDEZVOUS_SAVED_MS back on lora_freq_mhz (NVS)
 };
 
 static RocketRendezvousState rendezvous_state = RocketRendezvousState::IDLE;
 static uint32_t rendezvous_phase_start_ms = 0;
 
-static constexpr uint32_t RENDEZVOUS_TRIGGER_INITIAL_MS = 30000;  // never heard BS yet
-static constexpr uint32_t RENDEZVOUS_TRIGGER_QUIET_MS   = 120000; // BS seen, just idle
+// #105 follow-up: tightened from 30 s / 120 s to 15 s for both triggers so
+// the operator doesn't sit through a long silence after a flash with stale
+// NVS, or after any other source of channel divergence.  Cycle (window +
+// saved) still gives the BS Phase A 30 s window plenty of overlap for a
+// clean handshake.
+static constexpr uint32_t RENDEZVOUS_TRIGGER_INITIAL_MS = 15000;  // never heard BS yet
+static constexpr uint32_t RENDEZVOUS_TRIGGER_QUIET_MS   = 15000;  // BS seen, then silent
 static constexpr uint32_t RENDEZVOUS_WINDOW_MS          = 10000;  // on rendezvous freq
 static constexpr uint32_t RENDEZVOUS_SAVED_MS           = 20000;  // back on saved freq
 
@@ -2593,14 +2597,14 @@ static constexpr uint32_t RENDEZVOUS_SAVED_MS           = 20000;  // back on sav
 // fallback.
 static void rendezvousHopToRendezvousMode()
 {
-    // rendezvous_mhz_ is scan-selected (#40 / #41 phase 3) and falls
-    // back to config::LORA_RENDEZVOUS_MHZ when no scan-pushed value is
-    // in NVS.
-    if (lora_comms.reconfigure(rendezvous_mhz_,
-                                config::LORA_RENDEZVOUS_SF,
-                                config::LORA_RENDEZVOUS_BW_KHZ,
-                                config::LORA_RENDEZVOUS_CR,
-                                config::LORA_RENDEZVOUS_TX_POWER_DBM))
+    // All five values are compile-time constants in RocketComputerTypes.h
+    // so the BS and OC are guaranteed to agree on the meeting place even
+    // when each side's NVS has drifted (#105).
+    if (lora_comms.reconfigure(LORA_FACTORY_RENDEZVOUS_MHZ,
+                                LORA_FACTORY_RENDEZVOUS_SF,
+                                LORA_FACTORY_RENDEZVOUS_BW_KHZ,
+                                LORA_FACTORY_RENDEZVOUS_CR,
+                                LORA_FACTORY_RENDEZVOUS_TX_DBM))
     {
         lora_comms.startReceive();
         lora_in_rx_mode = true;
@@ -2688,9 +2692,9 @@ static void serviceRocketRendezvous()
                 rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
                 ESP_LOGW("OC", "[RENDEZVOUS] Silent %u s; hop to rendezvous mode %.2f MHz SF%u BW%.0f",
                          (unsigned)(silent_for / 1000),
-                         (double)rendezvous_mhz_,
-                         (unsigned)config::LORA_RENDEZVOUS_SF,
-                         (double)config::LORA_RENDEZVOUS_BW_KHZ);
+                         (double)LORA_FACTORY_RENDEZVOUS_MHZ,
+                         (unsigned)LORA_FACTORY_RENDEZVOUS_SF,
+                         (double)LORA_FACTORY_RENDEZVOUS_BW_KHZ);
             }
             break;
 
@@ -2768,15 +2772,15 @@ static void serviceHopFallback()
             }
             if ((now - ref) < trigger) return;
 
-            // Trigger: visit rendezvous.  reconfigure() switches
-            // BW/SF/CR/freq atomically (with rollback on failure) —
-            // same machinery as slow_rendezvous so the radio handling
-            // is identical and well-tested.
-            if (!lora_comms.reconfigure(rendezvous_mhz_,
-                                         config::LORA_RENDEZVOUS_SF,
-                                         config::LORA_RENDEZVOUS_BW_KHZ,
-                                         config::LORA_RENDEZVOUS_CR,
-                                         config::LORA_RENDEZVOUS_TX_POWER_DBM))
+            // Trigger: visit the shared hardcoded rendezvous (#105).
+            // reconfigure() switches BW/SF/CR/freq atomically (with
+            // rollback on failure) — same machinery as slow_rendezvous
+            // so the radio handling is identical and well-tested.
+            if (!lora_comms.reconfigure(LORA_FACTORY_RENDEZVOUS_MHZ,
+                                         LORA_FACTORY_RENDEZVOUS_SF,
+                                         LORA_FACTORY_RENDEZVOUS_BW_KHZ,
+                                         LORA_FACTORY_RENDEZVOUS_CR,
+                                         LORA_FACTORY_RENDEZVOUS_TX_DBM))
             {
                 ESP_LOGE("OC", "[HOP] Visit failed: reconfigure to rendezvous mode");
                 return;
@@ -2787,7 +2791,7 @@ static void serviceHopFallback()
             hop_fallback_state = HopFallbackState::VISITING_RENDEZVOUS;
             ESP_LOGW("OC", "[HOP] Silence %u s — visiting rendezvous %.2f MHz for %u s",
                      (unsigned)((now - ref) / 1000),
-                     (double)rendezvous_mhz_,
+                     (double)LORA_FACTORY_RENDEZVOUS_MHZ,
                      (unsigned)(HOP_FALLBACK_VISIT_MS / 1000));
             break;
         }
@@ -2852,7 +2856,7 @@ static void printLoRaPayloadDebug()
     }
 
     uint8_t payload[SIZE_OF_LORA_DATA] = {0};
-    if (!buildLoRaPayload(payload))
+    if (!buildLoRaPayload(payload, lora_tx_seq))
     {
         return;
     }
@@ -3498,12 +3502,11 @@ void initPeripherals()
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
         lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
 
-        // Channel-set restore (#40 / #41 phase 3): rendezvous freq +
-        // skip-mask pushed by the BS via cmd 15.  Skip-mask is keyed
-        // off the BW it was generated for; if NVS BW != active BW,
-        // discard the mask (the BS will re-push after the user re-runs
-        // the scan).
-        rendezvous_mhz_ = prefs.getFloat("rdv_mhz", config::LORA_RENDEZVOUS_MHZ);
+        // Channel-set restore (#40 / #41 phase 3): skip-mask pushed by
+        // the BS via cmd 15.  Skip-mask is keyed off the BW it was
+        // generated for; if NVS BW != active BW, discard the mask (the
+        // BS will re-push after the user re-runs the scan).  Rendezvous
+        // freq is no longer NVS-stored — see #105.
         const uint8_t chset_n  = prefs.getUChar("chset_n", 0);
         const float   chset_bw = prefs.getFloat("chset_bw", 0.0f);
         if (chset_n > 0 && chset_bw == lora_bw_khz)
@@ -3525,14 +3528,12 @@ void initPeripherals()
             uint8_t active = 0;
             for (uint8_t i = 0; i < skip_mask_n_; i++)
                 if (!loraSkipMaskTest(skip_mask_, i)) active++;
-            ESP_LOGI("CFG", "[CHSET] NVS: rendezvous=%.2f MHz, %u/%u channels active",
-                     (double)rendezvous_mhz_, (unsigned)active,
-                     (unsigned)skip_mask_n_);
+            ESP_LOGI("CFG", "[CHSET] NVS: %u/%u channels active",
+                     (unsigned)active, (unsigned)skip_mask_n_);
         }
         else
         {
-            ESP_LOGI("CFG", "[CHSET] NVS: rendezvous=%.2f MHz (default), no skip-mask",
-                     (double)rendezvous_mhz_);
+            ESP_LOGI("CFG", "[CHSET] NVS: no skip-mask");
         }
 
         // Load cached servo config from NVS
@@ -3738,6 +3739,23 @@ static void setup_oc()
     // --- Load NVS settings early so config readback to app is correct ---
     {
         prefs.begin("lora", false);
+
+        // NVS schema gate (#105 follow-up).  Stored != current → clear the
+        // entire lora namespace so we fall back to the shared factory
+        // rendezvous values and let the BS re-sync us via the standard
+        // rendezvous flow.  Mirrors the BS side; both must agree on
+        // LORA_NVS_SCHEMA_VERSION (defined in RocketComputerTypes.h).
+        {
+            const uint8_t stored_v = prefs.getUChar("schemv", 0);
+            if (stored_v != LORA_NVS_SCHEMA_VERSION)
+            {
+                ESP_LOGW("CFG", "LoRa NVS schema mismatch (stored=%u, current=%u) — clearing",
+                         (unsigned)stored_v, (unsigned)LORA_NVS_SCHEMA_VERSION);
+                prefs.clear();
+                prefs.putUChar("schemv", LORA_NVS_SCHEMA_VERSION);
+            }
+        }
+
         if (prefs.isKey("freq"))
         {
             lora_freq_mhz = prefs.getFloat("freq", config::LORA_FREQ_MHZ);
@@ -3948,7 +3966,7 @@ static void loop_oc()
         // Check for LoRa uplink commands between TX cycles
         LOOP_STALL_INSTR("serviceLoRaUplink", serviceLoRaUplink());
 
-        // Slow-rendezvous cycle: brief visits to LORA_RENDEZVOUS_MHZ when
+        // Slow-rendezvous cycle: brief visits to LORA_FACTORY_RENDEZVOUS_MHZ when
         // the rocket has been silent in READY for a long time, so the base
         // station's Phase-A recovery has a meeting point (issue #71).
         LOOP_STALL_INSTR("serviceRocketRendezvous", serviceRocketRendezvous());
