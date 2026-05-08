@@ -187,12 +187,25 @@ static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
 static uint8_t skip_mask_n_        = 0;        // 0 = no mask yet
 static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
 
+// Mask-drift auto-recovery (#105 follow-up).  Set in the hop RX path
+// when the rocket's announced next_channel_idx disagrees with the
+// BS-side seq-derived channel — that means BS and OC have diverged
+// skip-masks (typically: scan ran, cmd-15 push got displaced by a
+// follow-on cmd-10, OC never received the new mask).  serviceMaskDriftRepush
+// re-queues cmd 15 with a cooldown so it can't spam.
+static bool     chset_drift_repush_pending = false;
+static uint32_t chset_drift_repush_last_ms_ = 0;
+static constexpr uint32_t CHSET_DRIFT_REPUSH_COOLDOWN_MS = 30000;
+static uint32_t chset_drift_repush_count   = 0;  // for [STATS]
+
 // Forward declarations — definitions live further down with the other
 // channel-set machinery, but a couple of call sites (cmd-10 commit,
 // boot-time NVS load) need them earlier in the file.
 static void loadChannelSetFromNvs();
 static void invalidateSkipMaskForBwChange();
 static void analyzeAndPushFromCachedScan();
+static void pushCurrentChannelSet();
+static void serviceMaskDriftRepush();
 
 // If we're following a hopping rocket and packets dry up for this long,
 // give up and fall back to lora_freq_mhz so the existing silence /
@@ -965,14 +978,16 @@ static void printStats()
     // session counters reflect the *current* session and reset on each
     // hop_inactive / hop_silence event, so a "0 / 0" reading mid-flight
     // means we just lost lock.  lifetime totals let the operator spot a
-    // run with abnormally many silence events at a glance.
-    ESP_LOGI(TAG, "[STATS] HOP: active=%c idx=%u session(pkts=%lu loss=%lu) lifetime(silence=%lu loss=%lu)",
+    // run with abnormally many silence events at a glance.  drift_repush
+    // counts auto re-pushes of cmd 15 in response to BS/OC mask divergence.
+    ESP_LOGI(TAG, "[STATS] HOP: active=%c idx=%u session(pkts=%lu loss=%lu) lifetime(silence=%lu loss=%lu drift_repush=%lu)",
              hop_active_ ? 'Y' : 'N',
              (unsigned)hop_idx_,
              (unsigned long)hop_session_total_pkts,
              (unsigned long)hop_session_observed_loss,
              (unsigned long)hop_silence_events_count,
-             (unsigned long)lora_total_observed_loss);
+             (unsigned long)lora_total_observed_loss,
+             (unsigned long)chset_drift_repush_count);
 }
 
 // ============================================================================
@@ -1914,6 +1929,58 @@ static void analyzeAndPushFromCachedScan()
     applyAndPushChannelSet(sel, lora_bw_khz);
 }
 
+// Re-push the BS's current skip-mask state to the rocket — used by the
+// mask-drift auto-recovery (#105 follow-up) when the rocket's announced
+// next_channel_idx doesn't match the BS's seq-derived expectation.  No
+// re-analysis (no scan needed); just (re-)delivers what we already have.
+// Inert if we have no mask to push.
+static void pushCurrentChannelSet()
+{
+    if (skip_mask_n_ == 0) return;  // nothing to push
+    LoRaChannelSetSelection sel = {};
+    sel.n_channels = skip_mask_n_;
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) {
+        sel.skip_mask[i] = skip_mask_[i];
+    }
+    applyAndPushChannelSet(sel, channel_set_bw_khz_);
+}
+
+// Mask-drift auto-recovery service (#105 follow-up).  Watches the flag
+// set by the hop RX path and re-pushes cmd 15 when the radio state is
+// quiet enough to do so safely.  Cooldown prevents spam if drift
+// persists across multiple packets.
+static void serviceMaskDriftRepush()
+{
+    if (!chset_drift_repush_pending) return;
+    // Only push when nothing else is using the radio for TX.
+    if (uplink_pending)                        return;
+    if (lora_txn_state != LoRaTxnState::IDLE)  return;
+    if (recovery_state != RecoveryState::IDLE) return;
+    // Cooldown: don't re-push more than once every CHSET_DRIFT_REPUSH_COOLDOWN_MS.
+    // First-ever push (last_ms_=0) bypasses the cooldown.
+    const uint32_t now = millis();
+    if (chset_drift_repush_last_ms_ != 0 &&
+        (now - chset_drift_repush_last_ms_) < CHSET_DRIFT_REPUSH_COOLDOWN_MS)
+    {
+        // Cooldown active; clear the flag so we don't spin checking.
+        // Next drift event after the cooldown will set it again.
+        chset_drift_repush_pending = false;
+        return;
+    }
+    if (skip_mask_n_ == 0) {
+        // No mask to push — likely a brand-new BS without scan results.
+        // The drift warning is informational only in this case.
+        chset_drift_repush_pending = false;
+        return;
+    }
+    chset_drift_repush_pending = false;
+    chset_drift_repush_last_ms_ = now;
+    chset_drift_repush_count++;
+    ESP_LOGI(TAG, "[CHSET] Mask drift detected — re-pushing cmd 15 (count=%lu)",
+             (unsigned long)chset_drift_repush_count);
+    pushCurrentChannelSet();
+}
+
 // All passes done.  Ship results to BLE (preserving the existing
 // single-result protocol so the iOS app doesn't need to change), then
 // run the analyzer + push to the rocket.
@@ -2692,6 +2759,12 @@ static void loop_bs()
                                          (unsigned)decoded.seq,
                                          (unsigned)decoded.next_channel_idx,
                                          (unsigned)expected_next);
+                                // Schedule auto re-push of the mask via
+                                // cmd 15 — the rocket's mask is out of
+                                // sync with ours, fixed by re-sending
+                                // ours.  Cooldown enforced in
+                                // serviceMaskDriftRepush.
+                                chset_drift_repush_pending = true;
                             }
                             const bool was_active = hop_active_;
                             hop_idx_           = decoded.next_channel_idx;
@@ -3258,6 +3331,12 @@ static void loop_bs()
     // Silence recovery runs after the transaction service so a freshly
     // started transaction always wins over any pending recovery cycle.
     serviceRecovery();
+
+    // Mask-drift auto-recovery (#105 follow-up).  Re-pushes cmd 15 if
+    // the hop RX path detected a divergence between our skip-mask and
+    // the rocket's.  Cheap when no drift is pending; only acts when
+    // the radio is otherwise idle.
+    serviceMaskDriftRepush();
 
     // Heartbeat — quietly tells the rocket "we're hearing you" so its
     // slow-rendezvous timer doesn't expire during normal idle operation.
