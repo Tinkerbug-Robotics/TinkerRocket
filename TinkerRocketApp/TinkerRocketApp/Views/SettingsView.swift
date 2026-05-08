@@ -167,6 +167,15 @@ struct SettingsView: View {
                             .onChange(of: servoControlEnabled) { newValue in
                                 device.sendServoControlConfig(enabled: newValue)
                             }
+                        // Hard-iron magnetometer cal entry (issue #96).  Only
+                        // shown for direct rocket connections — the cal flow
+                        // runs on the FC itself and the OC publishes status
+                        // back over the same BLE link.
+                        NavigationLink {
+                            MagCalView(device: device)
+                        } label: {
+                            Label("Magnetometer Calibration", systemImage: "location.north.line")
+                        }
                         Text("Persists across reboots.")
                             .font(.caption)
                             .foregroundColor(.secondary)

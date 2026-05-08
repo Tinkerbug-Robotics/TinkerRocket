@@ -532,6 +532,7 @@ struct RocketStateView: View {
         case "PRELAUNCH": return .orange
         case "INFLIGHT": return .red
         case "COMPLETE": return .blue
+        case "MAG_CAL": return .blue   // ground-only excursion (issue #96)
         default: return .gray
         }
     }
