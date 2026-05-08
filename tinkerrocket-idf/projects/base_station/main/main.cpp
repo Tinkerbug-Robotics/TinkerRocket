@@ -789,6 +789,7 @@ static const char* rocketStateToString(uint8_t state)
         case 2:  return "PRELAUNCH";
         case 3:  return "INFLIGHT";
         case 4:  return "LANDED";
+        case 5:  return "MAG_CAL";
         default: return "UNKNOWN";
     }
 }

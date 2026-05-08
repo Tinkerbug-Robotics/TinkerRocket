@@ -116,6 +116,15 @@ public:
     int16_t gyro_cal_y;
     int16_t gyro_cal_z;
 
+    // True iff IIS2MDC was detected at boot and is the active mag path.
+    // (Issue #96 — needed by the cal flow to choose IIS2MDC OFFSET regs
+    // vs. MMC software offset.)
+    bool isIIS2MDCActive() const { return iis2mdc_active; }
+
+    // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers.  Returns false if
+    // the IIS2MDC isn't active or the I2C write failed.  Issue #96.
+    bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+
     // Calibration results (populated by calibrateGyro)
     float hg_bias_x = 0.0f, hg_bias_y = 0.0f, hg_bias_z = 0.0f;  // m/s², body frame
     float cal_gravity_mag = 0.0f;  // measured gravity magnitude from low-g (m/s²)

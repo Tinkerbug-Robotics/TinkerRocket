@@ -68,6 +68,18 @@ void SensorCollectorSim::calibrateGyro(float rotation_z_deg)
     cal_gravity_mag  = real_.cal_gravity_mag;
 }
 
+bool SensorCollectorSim::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
+{
+    if (isSimActive())
+    {
+        // No physical IIS2MDC interaction in sim mode; cal flow is gated on
+        // READY and we don't enter sim from there, so this branch is mostly
+        // defensive.
+        return false;
+    }
+    return real_.setIIS2MDCHardIronOffset(cx, cy, cz);
+}
+
 // ============================================================================
 // Sim Control
 // ============================================================================

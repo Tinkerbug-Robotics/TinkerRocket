@@ -838,6 +838,12 @@ bool SensorCollector::getIIS2MDCData(IIS2MDCData& iis2mdc_out)
     return false;
 }
 
+bool SensorCollector::setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
+{
+    if (!iis2mdc_active) return false;
+    return iis2mdc.setHardIronOffset(cx, cy, cz) == TR_IIS2MDC_OK;
+}
+
 bool SensorCollector::getGNSSData(GNSSData& gnss_out)
 {
     if (gnss_data_ready && xSemaphoreTake(gnssDataSemaphore, 0) == pdTRUE)

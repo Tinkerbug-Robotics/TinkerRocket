@@ -1176,6 +1176,7 @@ static const char* rocketStateToString(RocketState s)
         case PRELAUNCH:      return "PRELAUNCH";
         case INFLIGHT:       return "INFLIGHT";
         case LANDED:         return "LANDED";
+        case MAG_CALIBRATION: return "MAG_CAL";
         default:             return "UNKNOWN";
     }
 }
@@ -1228,6 +1229,7 @@ static bool isKnownMessageType(uint8_t type)
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
+        case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
             return true;
         default:
             return false;
@@ -1397,6 +1399,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             memcpy(&latest_iis2mdc_raw, payload, sizeof(IIS2MDCData));
             sensor_converter.convertIIS2MDCData(latest_iis2mdc_raw, latest_iis2mdc_si);
             latest_iis2mdc_valid = true;
+        }
+    }
+    else if (type == MAG_CAL_STATUS_MSG)
+    {
+        // Issue #96: FC→OC mag cal status frame.  Forward verbatim to BLE
+        // on the file-ops characteristic with a 0xCA discriminator added
+        // by sendMagCalStatus().  Only meaningful on a direct rocket BLE
+        // connection — base-station relay drops these (the BS doesn't
+        // process I2S frames from a remote rocket) and the cal flow runs
+        // only on the connected rocket anyway.
+        if (payload_len >= sizeof(MagCalStatusData))
+        {
+            ble_app.sendMagCalStatus(payload, sizeof(MagCalStatusData));
         }
     }
     else if (type == GNSS_MSG)
@@ -4768,6 +4783,30 @@ static void loop_oc()
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Rocket ID set: %u", (unsigned)rocket_id);
             }
+        }
+        // ---- Magnetometer hard-iron calibration (issue #96) ----
+        // Four single-byte commands grouped at 50–53.  Each is a thin
+        // pass-through: setPendingCommand routes to the FC over I2C, FC
+        // owns all the state-machine + sphere-fit logic.
+        else if (ble_cmd == 50)
+        {
+            setPendingCommand(MAG_CAL_START);
+            ESP_LOGI("BLE", "Mag cal START -> FlightComputer");
+        }
+        else if (ble_cmd == 51)
+        {
+            setPendingCommand(MAG_CAL_ABORT);
+            ESP_LOGI("BLE", "Mag cal ABORT -> FlightComputer");
+        }
+        else if (ble_cmd == 52)
+        {
+            setPendingCommand(MAG_CAL_ACCEPT);
+            ESP_LOGI("BLE", "Mag cal ACCEPT -> FlightComputer");
+        }
+        else if (ble_cmd == 53)
+        {
+            setPendingCommand(MAG_CAL_RETRY);
+            ESP_LOGI("BLE", "Mag cal RETRY -> FlightComputer");
         }
     }
 

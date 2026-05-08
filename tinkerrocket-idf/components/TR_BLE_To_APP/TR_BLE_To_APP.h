@@ -154,6 +154,15 @@ public:
     void sendScanResults(float start_mhz, float step_khz,
                          const int8_t* rssi, uint8_t n);
 
+    // Send a magnetometer calibration status frame as a compact binary
+    // blob on the file-ops characteristic (issue #96).  Format:
+    //   [0][0xCA marker] [1..22][MagCalStatusData LE bytes]
+    // Distinct discriminator from sendScanResults' 0xAA so the iOS app
+    // can route both off the same subscription.  The JSON responses (file
+    // list, config) start with '[' or '{' which can never collide with
+    // 0xAA / 0xCA, so all four payload kinds coexist on this channel.
+    void sendMagCalStatus(const uint8_t* status_bytes, size_t len);
+
     // Get pending download filename (empty if none)
     // Clears the filename after reading
     String getDownloadFilename();

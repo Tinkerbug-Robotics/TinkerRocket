@@ -38,13 +38,22 @@ static_assert(sizeof(DataReadyFlags) == 1,
               "DataReadyFlags must be 1 byte");
 
 // Rocket‐state enum
+//
+// MAG_CALIBRATION is an optional ground-only excursion from READY for the
+// hard-iron magnetometer cal flow (issue #96).  Entered by user request via
+// BLE cmd MAG_CAL_START, exits back to READY on accept/abort/retry.
+// Refused if the rocket is in PRELAUNCH/INFLIGHT/LANDED — only safe on the
+// pad / bench.  Sticky-flight, beacon, and hop predicates above all leave
+// MAG_CALIBRATION at their ground-state defaults (no lock, beacons on, no
+// hopping).
 enum RocketState : uint8_t
 {
     INITIALIZATION,
     READY,
     PRELAUNCH,
     INFLIGHT,
-    LANDED
+    LANDED,
+    MAG_CALIBRATION
 };
 
 // ============================================================================
@@ -675,6 +684,98 @@ typedef struct
     double mag_z_uT;
 } IIS2MDCDataSI;
 
+// --- Magnetometer hard-iron calibration status (#96) ---
+// Single fixed-size frame carrying either live progress, final fit (review),
+// applied (post-NVS-save), aborted, or idle.  FC→OC over I2S, and OC
+// forwards verbatim to the iOS app over BLE on the file_ops characteristic
+// with a 0xCA discriminator byte prepended.  Sized small so the OC→BLE
+// notification stays well under MTU regardless of negotiated value.
+//
+// Field encoding:
+//   offset_*       — raw IIS2MDC LSB units, signed 16-bit, 0.15 µT/LSB.
+//                    On the MMC5983MA path these are the centered-counts
+//                    offset (caller multiplies by UT_PER_COUNT for µT).
+//   *_uT_x10       — magnitude in tenths of µT (range 0..6553.5 µT, ~130×
+//                    Earth's field — plenty of headroom over the 50 µT
+//                    nominal and the 1640 µT residual seen on the new PCB).
+//   reject_code    — only meaningful when sub_type == REVIEW. 0 = fit
+//                    passes the R-band gate AND has sufficient coverage —
+//                    iOS shows "Accept".  Non-zero codes describe why iOS
+//                    should show "Retry".
+enum MagCalSubType : uint8_t {
+    MAG_CAL_SUB_IDLE     = 0,
+    MAG_CAL_SUB_SAMPLING = 1,
+    MAG_CAL_SUB_REVIEW   = 2,
+    MAG_CAL_SUB_APPLIED  = 3,
+    MAG_CAL_SUB_ABORTED  = 4
+};
+
+enum MagCalRejectCode : uint8_t {
+    MAG_CAL_OK                    = 0,
+    MAG_CAL_REJECT_R_TOO_LOW      = 1,  // fitted R < 20 µT
+    MAG_CAL_REJECT_R_TOO_HIGH     = 2,  // fitted R > 80 µT
+    MAG_CAL_REJECT_HIGH_RESIDUAL  = 3,  // RMS residual > threshold (poor sphere fit)
+    MAG_CAL_REJECT_LOW_COVERAGE   = 4   // < min populated wedges
+};
+
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;
+    uint8_t  sub_type;            // MagCalSubType
+    uint8_t  coverage_bins;       // 0..26 (3³ - 1 = 26 directional wedges populated)
+    uint16_t sample_count;        // total samples accumulated this run
+    uint16_t inst_field_uT_x10;   // |B| of the most recent sample × 10
+    int16_t  offset_x;            // fitted hard-iron offset (raw LSB units), or 0 if no fit
+    int16_t  offset_y;
+    int16_t  offset_z;
+    uint16_t field_R_uT_x10;      // fitted Earth-field magnitude × 10, or 0 if no fit
+    uint16_t residual_uT_x10;     // fit RMS residual × 10
+    uint8_t  reject_code;         // MagCalRejectCode (only valid in REVIEW)
+    uint8_t  _pad;
+} MagCalStatusData;
+static_assert(sizeof(MagCalStatusData) == 22,
+              "MagCalStatusData must be 22 bytes");
+
+// MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
+// int32_t in the same 18-bit signed centered-counts space as
+// mmc5983ma_centered_counts() returns.  Subtracted before scaling to µT.
+typedef struct __attribute__((packed))
+{
+    int32_t cx_counts;
+    int32_t cy_counts;
+    int32_t cz_counts;
+} MagCalMMCOffset;
+static_assert(sizeof(MagCalMMCOffset) == 12,
+              "MagCalMMCOffset must be 12 bytes");
+
+// Sphere-fit R sanity gate (issue #96).  WMM total field at Earth's
+// surface ranges ~22-67 µT.  20-80 µT covers everywhere with margin and
+// rejects fits dominated by a moving magnet during tumble.
+static constexpr float MAG_CAL_R_MIN_UT = 20.0f;
+static constexpr float MAG_CAL_R_MAX_UT = 80.0f;
+
+// Coverage gate — minimum populated wedges (out of 26) for the fit to be
+// considered well-conditioned.  A perfect tumble hits all 26; insisting on
+// 26 is fragile, so we accept ≥ 18 (8 octants + ~10 of the edges/faces).
+static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 18;
+
+// Residual gate — RMS deviation from the fitted sphere, in µT.  A clean
+// sphere on the bench should sit well under 5 µT; bigger means soft-iron
+// or moving interferer dominated the capture.
+static constexpr float MAG_CAL_MAX_RESIDUAL_UT = 8.0f;
+
+// Sample-buffer cap.  At 100 Hz IIS2MDC ODR, 1024 samples = ~10 s of
+// tumble — long enough to cover all wedges with normal hand-tumble pace.
+static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 1024;
+
+// Minimum samples before we'll attempt a fit.  Matches the issue's "≥500
+// samples (~5 s at 100 Hz)" guidance.
+static constexpr uint16_t MAG_CAL_MIN_SAMPLES = 500;
+
+// NVS schema version for the mag_cal namespace.  Bump if the persisted
+// field set changes meaningfully so old persisted state is ignored.
+static constexpr uint8_t MAG_CAL_NVS_SCHEMA_VERSION = 1;
+
 // --- Non sensor data ---
 typedef struct __attribute__((packed))
 {
@@ -1055,6 +1156,16 @@ static constexpr uint8_t IIS2MDC_MSG          = 0xD1;  // new-PCB IIS2MDC magnet
 static constexpr uint8_t SNAPSHOT_MSG         = 0xD2;  // FlightSnapshotData — FC→OC over I2S during INFLIGHT,
                                                        // and OC→FC over I2C as the response to GET_FLIGHT_SNAPSHOT
 static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the latest snapshot from MRAM at boot
+
+// --- Magnetometer hard-iron cal (issue #96) ---
+// OC→FC commands (passed via I2C as setPendingCommand byte) and a single
+// FC→OC status message that carries either live progress or the final fit.
+static constexpr uint8_t MAG_CAL_START        = 0xD4;  // OC→FC: enter MAG_CALIBRATION + begin sampling
+static constexpr uint8_t MAG_CAL_ABORT        = 0xD5;  // OC→FC: drop sampling, return to READY
+static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: persist current fit, apply offsets, return to READY
+static constexpr uint8_t MAG_CAL_RETRY        = 0xD7;  // OC→FC: discard fit, restart sampling
+static constexpr uint8_t MAG_CAL_STATUS_MSG   = 0xD8;  // FC→OC: live progress / final result (MagCalStatusData)
+
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types
