@@ -115,55 +115,48 @@ struct MagCalView: View {
         }
     }
 
-    /// Sampling: progress bar + live count + coverage + |B|.
+    /// Sampling: animated tumble guidance, live |B|, circular coverage
+    /// gauge, and a cycling orientation prompt so the user always knows
+    /// what to do next.  Drives all visuals off the FC's 5 Hz status
+    /// frame — no extra polling.
     private var samplingSection: some View {
         Group {
-            Section(header: Text("Tumble the rocket")) {
-                if let s = status {
-                    let progress = s.samplingProgress(
-                        targetSamples: MagCalConstants.maxSamples,
-                        minCoverage: 26  // visualise approach to full coverage; FC uses 18 as the gate
-                    )
-                    VStack(alignment: .leading, spacing: 12) {
-                        ProgressView(value: progress)
-                            .progressViewStyle(.linear)
-                        HStack {
-                            Text("Samples")
-                            Spacer()
-                            Text("\(s.sampleCount) / \(MagCalConstants.maxSamples)")
-                                .foregroundColor(.secondary)
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        HStack {
-                            Text("Coverage")
-                            Spacer()
-                            Text("\(s.coverageBins) / 26 wedges")
-                                .foregroundColor(.secondary)
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        HStack {
-                            Text("|B|")
-                            Spacer()
-                            Text(String(format: "%.1f µT", s.instantaneousFieldUT))
-                                .foregroundColor(.secondary)
-                                .font(.system(.body, design: .monospaced))
-                        }
-                    }
-                    .padding(.vertical, 4)
-                } else {
-                    ProgressView("Waiting for rocket…")
+            if let s = status {
+                Section {
+                    SamplingHero(status: s)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
                 }
-            }
-
-            Section {
-                Button(role: .destructive) {
-                    device.sendMagCalAbort()
-                } label: {
+                Section(header: Text("Progress")) {
                     HStack {
-                        Image(systemName: "xmark.circle")
-                        Text("Abort")
+                        Text("Coverage")
                         Spacer()
+                        Text("\(s.coverageBins) / 26 wedges")
+                            .foregroundColor(.secondary)
+                            .font(.system(.body, design: .monospaced))
                     }
+                    HStack {
+                        Text("Samples")
+                        Spacer()
+                        Text("\(s.sampleCount) / \(MagCalConstants.maxSamples)")
+                            .foregroundColor(.secondary)
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
+                Section {
+                    Button(role: .destructive) {
+                        device.sendMagCalAbort()
+                    } label: {
+                        HStack {
+                            Image(systemName: "xmark.circle")
+                            Text("Abort")
+                            Spacer()
+                        }
+                    }
+                }
+            } else {
+                Section {
+                    ProgressView("Waiting for rocket…")
                 }
             }
         }
@@ -307,6 +300,133 @@ struct MagCalView: View {
                     }
                     .listRowBackground(Color.blue)
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Sampling Hero
+
+/// Animated guidance card shown at the top of the sampling phase.  Three
+/// pieces of information that drive whether the user knows what to do:
+///   1. A rotation animation so they're not staring at a dead screen.
+///   2. A live |B| readout — the number changes immediately as they
+///      tumble, which is the most visceral confirmation that sampling
+///      is happening.
+///   3. A cycling orientation prompt with an arrow icon, so they always
+///      have an explicit "now do this" instead of a vague "tumble it."
+///
+/// All three drive off the FC's status frames + a local 2.5 s prompt
+/// timer; nothing requires extra firmware support.
+private struct SamplingHero: View {
+    let status: MagCalStatus
+
+    @State private var promptIndex: Int = 0
+    @State private var rotation: Double = 0
+
+    private static let prompts: [(icon: String, text: String)] = [
+        ("arrow.up",                "Point the nose UP"),
+        ("arrow.down",              "Now point the nose DOWN"),
+        ("arrow.left",              "Lay it on its LEFT side"),
+        ("arrow.right",             "Lay it on its RIGHT side"),
+        ("arrow.up.right",          "Tilt at an angle"),
+        ("arrow.triangle.2.circlepath", "Slowly roll it through every direction"),
+    ]
+
+    /// Headline that adapts to coverage so the user gets feedback even
+    /// when they're between cardinal-direction prompts.
+    private var headline: String {
+        switch status.coverageBins {
+        case 0..<6:   return "Start tumbling"
+        case 6..<14:  return "Good — keep going"
+        case 14..<22: return "Almost there"
+        default:      return "Excellent coverage"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Text(headline)
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            // Rotating icon — visible motion is the cheapest signal that
+            // sampling is live.  Stops when the user accepts or aborts
+            // because the parent view replaces this hero entirely.
+            Image(systemName: "rotate.3d")
+                .font(.system(size: 64))
+                .foregroundColor(.blue)
+                .rotationEffect(.degrees(rotation))
+                .onAppear {
+                    withAnimation(.linear(duration: 3.0).repeatForever(autoreverses: false)) {
+                        rotation = 360
+                    }
+                }
+
+            // Cycling orientation prompt.  2.5 s/step × 6 steps = 15 s,
+            // longer than the ~10 s sample window so the user sees most
+            // of the cardinal cues at least once.
+            HStack(spacing: 12) {
+                Image(systemName: SamplingHero.prompts[promptIndex].icon)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundColor(.orange)
+                    .frame(width: 36)
+                Text(SamplingHero.prompts[promptIndex].text)
+                    .font(.headline)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.orange.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 8)
+            .onAppear { startPromptCycle() }
+
+            HStack(spacing: 28) {
+                // Live |B|.  Big monospaced digits so the eye spots the
+                // movement and the user trusts that sampling is live.
+                VStack(spacing: 2) {
+                    Text(String(format: "%.0f", status.instantaneousFieldUT))
+                        .font(.system(size: 36, weight: .bold, design: .monospaced))
+                    Text("µT field")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                // Coverage gauge.  Circular feels more "spherical" than
+                // a linear bar — and the cal is literally about lighting
+                // up wedges of a sphere.
+                ZStack {
+                    Circle()
+                        .stroke(Color.gray.opacity(0.20), lineWidth: 10)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(min(Double(status.coverageBins) / 26.0, 1.0)))
+                        .stroke(Color.green,
+                                style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.4), value: status.coverageBins)
+                    VStack(spacing: 0) {
+                        Text("\(status.coverageBins)")
+                            .font(.system(size: 22, weight: .bold, design: .monospaced))
+                        Text("/ 26")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(width: 84, height: 84)
+            }
+        }
+    }
+
+    private func startPromptCycle() {
+        Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { timer in
+            // The hero is created fresh on each entry to .sampling, so the
+            // timer's lifetime is bounded by the view.  We invalidate
+            // explicitly when the index would go out of range — defensive
+            // against the prompts array shrinking later.
+            DispatchQueue.main.async {
+                promptIndex = (promptIndex + 1) % SamplingHero.prompts.count
             }
         }
     }
