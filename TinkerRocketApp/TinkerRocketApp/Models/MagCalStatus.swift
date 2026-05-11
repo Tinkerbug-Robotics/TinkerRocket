@@ -3,11 +3,15 @@
 //  TinkerRocketApp
 //
 //  Decoded form of the FC's MagCalStatusData binary frame (issue #96).
-//  The wire frame is 22 bytes, little-endian, prefixed with a 0xCA byte
+//  The wire frame is 26 bytes, little-endian, prefixed with a 0xCA byte
 //  on the BLE file_ops characteristic (sibling of the 0xAA scan-results
 //  prefix).  Field layout is mirrored from
 //  tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h
 //  — keep both in sync if the wire format ever changes.
+//
+//  Older firmware ships a 22-byte payload (no coverage_mask trailer);
+//  the decoder accepts both and defaults coverageMask to 0 on old FC
+//  builds so the UI degrades to timer-based prompts.
 //
 
 import Foundation
@@ -66,6 +70,14 @@ struct MagCalStatus: Equatable {
     /// the right error and offers Retry instead of Accept.
     let rejectCode: MagCalRejectCode
 
+    /// Bitmap of populated 3³ wedges; bit i corresponds to wedge i in
+    /// directionWedge() (firmware-side TR_MagCalibrator).  Drives the
+    /// per-direction progress grid and the gated orientation-prompt
+    /// cycle.  Bit 13 is the unreachable centre cell and is always 0.
+    /// 0 on old firmware builds that ship the 22-byte payload — UI
+    /// then falls back to a simple timer cycle.
+    let coverageMask: UInt32
+
     /// Convenience: human-readable explanation for a non-zero rejectCode.
     var rejectMessage: String {
         switch rejectCode {
@@ -86,8 +98,11 @@ struct MagCalStatus: Equatable {
         return min(s, c)
     }
 
-    /// Decode a 22-byte little-endian payload (the bytes *after* the 0xCA
-    /// discriminator).  Returns nil if the buffer is too short.
+    /// Decode the wire payload (bytes *after* the 0xCA discriminator).
+    /// Accepts both the original 22-byte layout and the 26-byte layout
+    /// that trails a uint32 coverage_mask — old firmware → coverageMask=0
+    /// and UI falls back to a timer-only prompt cycle.  Returns nil if
+    /// the buffer is too short to be the original payload.
     static func decode(_ bytes: [UInt8]) -> MagCalStatus? {
         guard bytes.count >= 22 else { return nil }
 
@@ -95,6 +110,11 @@ struct MagCalStatus: Equatable {
         func u16(_ offset: Int) -> UInt16 {
             return bytes.withUnsafeBufferPointer {
                 UnsafeRawBufferPointer($0).loadUnaligned(fromByteOffset: offset, as: UInt16.self)
+            }
+        }
+        func u32(_ offset: Int) -> UInt32 {
+            return bytes.withUnsafeBufferPointer {
+                UnsafeRawBufferPointer($0).loadUnaligned(fromByteOffset: offset, as: UInt32.self)
             }
         }
         func i16(_ offset: Int) -> Int16 {
@@ -114,7 +134,9 @@ struct MagCalStatus: Equatable {
         let RUTx10        = u16(16)
         let resUTx10      = u16(18)
         let rejectRaw     = bytes[20]
-        // bytes[21] is _pad
+        // bytes[21]      = _pad
+        // bytes[22..25]  = uint32 coverage_mask  (new in 26-byte payload)
+        let coverageMask: UInt32 = (bytes.count >= 26) ? u32(22) : 0
 
         let sub    = MagCalSubType(rawValue: subTypeRaw) ?? .idle
         let reject = MagCalRejectCode(rawValue: rejectRaw) ?? .ok
@@ -129,8 +151,81 @@ struct MagCalStatus: Equatable {
             offsetZ: offZ,
             fieldR_uT: Float(RUTx10) / 10.0,
             residualUT: Float(resUTx10) / 10.0,
-            rejectCode: reject
+            rejectCode: reject,
+            coverageMask: coverageMask
         )
+    }
+}
+
+// Six cardinal-axis "wedge caps" that the UI uses to drive the gated
+// prompt cycle (issue #96 follow-up).  These are the firmware
+// directionWedge() indices for unit vectors near ±X / ±Y / ±Z — see the
+// 3×3×3 encoding in TR_MagCalibrator.cpp (bx*9 + by*3 + bz with each
+// component in {0,1,2} for {<-T, [-T,T], >T}).
+//
+// The mapping below assumes the IIS2MDC body frame after the configured
+// rotation, with +Z = nose tip, +X = "right" side, +Y = "front" face.
+// If the user reports the prompts feel mirrored, swap the matching
+// constants here — none of the firmware needs to change.
+enum MagCalAxis: CaseIterable {
+    case noseUp, noseDown
+    case rightSide, leftSide
+    case frontFace, backFace
+
+    /// Bit index inside MagCalStatus.coverageMask.
+    var wedgeBit: UInt32 {
+        switch self {
+        // bx, by, bz ∈ {0,1,2} → index = bx*9 + by*3 + bz
+        case .noseUp:    return 1 * 9 + 1 * 3 + 2  // (0,0,+) = 14
+        case .noseDown:  return 1 * 9 + 1 * 3 + 0  // (0,0,-) = 12
+        case .rightSide: return 2 * 9 + 1 * 3 + 1  // (+,0,0) = 22
+        case .leftSide:  return 0 * 9 + 1 * 3 + 1  // (-,0,0) = 4
+        case .frontFace: return 1 * 9 + 2 * 3 + 1  // (0,+,0) = 16
+        case .backFace:  return 1 * 9 + 0 * 3 + 1  // (0,-,0) = 10
+        }
+    }
+
+    /// Big arrow glyph for the prompt card.
+    var icon: String {
+        switch self {
+        case .noseUp:    return "arrow.up"
+        case .noseDown:  return "arrow.down"
+        case .rightSide: return "arrow.right"
+        case .leftSide:  return "arrow.left"
+        case .frontFace: return "arrow.up.right"
+        case .backFace:  return "arrow.down.left"
+        }
+    }
+
+    /// Imperative direction for the prompt card.
+    var prompt: String {
+        switch self {
+        case .noseUp:    return "Point the nose UP"
+        case .noseDown:  return "Point the nose DOWN"
+        case .rightSide: return "Lay it on its RIGHT side"
+        case .leftSide:  return "Lay it on its LEFT side"
+        case .frontFace: return "Tilt the FRONT face up"
+        case .backFace:  return "Tilt the BACK face up"
+        }
+    }
+
+    /// Short label for the per-direction status grid.
+    var shortLabel: String {
+        switch self {
+        case .noseUp:    return "Up"
+        case .noseDown:  return "Down"
+        case .rightSide: return "Right"
+        case .leftSide:  return "Left"
+        case .frontFace: return "Front"
+        case .backFace:  return "Back"
+        }
+    }
+}
+
+extension MagCalStatus {
+    /// True iff the wedge for `axis` has been populated in this run.
+    func isAxisCovered(_ axis: MagCalAxis) -> Bool {
+        return (coverageMask & (UInt32(1) << axis.wedgeBit)) != 0
     }
 }
 
@@ -138,7 +233,7 @@ struct MagCalStatus: Equatable {
 // drift from the FC's accept/reject decision.  The FC is the source of
 // truth via rejectCode — these constants are just for the progress UI.
 enum MagCalConstants {
-    static let maxSamples: UInt16 = 1024
+    static let maxSamples: UInt16 = 2048
     static let minSamples: UInt16 = 500
     static let minCoverageBins: UInt8 = 18
 }
