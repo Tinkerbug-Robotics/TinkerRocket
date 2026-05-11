@@ -391,9 +391,43 @@ void MagCalibrator::runFit()
     fit_residual_uT_ = res_uT;
     fit_valid_ = true;
 
+    // Recompute coverage_mask_ using samples *relative to the fit
+    // centre* (issue #96 follow-up).  The original mask binned raw
+    // samples by direction in mag space, which is misleading when the
+    // hard-iron bias dominates: with a ~1640 µT bias every sample
+    // lands in the same +X wedge even though the samples actually
+    // span the offset sphere correctly.  After centring on (cx, cy, cz)
+    // the samples should sit on a unit-radius shell around the origin,
+    // and the wedge mask becomes a meaningful "did the user rotate
+    // through the field?" indicator that drives the coverage gate
+    // below and the iOS REVIEW screen's coverage row.
+    {
+        uint32_t post_fit_mask = 0;
+        for (uint16_t i = 0; i < n_samples_; i++)
+        {
+            const double dx = (double)samples_x_[i] - cx;
+            const double dy = (double)samples_y_[i] - cy;
+            const double dz = (double)samples_z_[i] - cz;
+            const double r2 = dx*dx + dy*dy + dz*dz;
+            if (!(r2 > 0.0)) continue;
+            const double r = sqrt(r2);
+            const double ux = dx / r;
+            const double uy = dy / r;
+            const double uz = dz / r;
+            constexpr double T = 0.4;
+            auto bin = [](double v) -> int {
+                return (v < -T) ? 0 : (v > T) ? 2 : 1;
+            };
+            const uint8_t wedge = (uint8_t)(bin(ux) * 9 + bin(uy) * 3 + bin(uz));
+            if (wedge < 27) post_fit_mask |= (1u << wedge);
+        }
+        coverage_mask_ = post_fit_mask;
+    }
+
     // Gate the fit.  Order: coverage first (fastest reason to retry),
     // then R band, then residual.  These are advisory codes — caller
-    // shows the right error in the iOS UI.
+    // shows the right error in the iOS UI.  Coverage check uses the
+    // post-fit-recomputed mask from the block above.
     const uint8_t cov = (uint8_t)__builtin_popcount(coverage_mask_);
     if (cov < MAG_CAL_MIN_COVERAGE_BINS)        fit_reject_code_ = MAG_CAL_REJECT_LOW_COVERAGE;
     else if (R_uT < MAG_CAL_R_MIN_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_LOW;
