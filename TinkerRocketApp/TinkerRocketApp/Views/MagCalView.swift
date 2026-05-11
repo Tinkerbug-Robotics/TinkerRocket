@@ -18,6 +18,7 @@
 //
 
 import SwiftUI
+import Combine
 
 struct MagCalView: View {
     @ObservedObject var device: BLEDevice
@@ -27,6 +28,12 @@ struct MagCalView: View {
     /// (e.g. just navigated in, before tapping Start).  In that case the
     /// view shows the intro/Start state.
     private var status: MagCalStatus? { device.magCalStatus }
+
+    /// Accel-driven orientation coverage tracker.  Owned at the view
+    /// level so both the SamplingHero gauge and the Progress section
+    /// read the same value.  Reset whenever a fresh sampling run
+    /// starts (sample_count transitions to 0).
+    @StateObject private var accelCoverage = AccelCoverageTracker()
 
     var body: some View {
         Form {
@@ -129,7 +136,8 @@ struct MagCalView: View {
                 let ay = device.telemetry.low_g_y
                 let az = device.telemetry.low_g_z
                 Section {
-                    SamplingHero(status: s, ax: ax, ay: ay, az: az)
+                    SamplingHero(status: s, ax: ax, ay: ay, az: az,
+                                 accelCoverage: accelCoverage)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                 }
@@ -138,18 +146,19 @@ struct MagCalView: View {
                     DirectionBars(ax: ax, ay: ay, az: az)
                         .padding(.vertical, 4)
                 }
-                Section(header: Text("Progress")) {
+                Section(header: Text("Progress"),
+                        footer: Text("Coverage counts gravity-direction wedges visited during this run — independent of the mag samples. The fit-quality coverage (mag wedges, post-centring) is shown on the Review screen.")) {
                     HStack {
-                        Text("Coverage")
+                        Text("Orientation coverage")
                         Spacer()
-                        Text("\(s.coverageBins) / 26 wedges")
+                        Text("\(accelCoverage.coverageCount) / 26 wedges")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
                     HStack {
                         Text("Samples")
                         Spacer()
-                        Text("\(s.sampleCount) / \(MagCalConstants.maxSamples)")
+                        Text("\(s.sampleCount) / \(MagCalConstants.maxSamples) (rolling)")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
@@ -375,6 +384,11 @@ private struct SamplingHero: View {
     /// is sampling mag continuously regardless of what's in here.
     @State private var capturedAxes: Set<SignedAxis> = []
 
+    /// Accel-driven orientation coverage tracker, supplied by the parent
+    /// view so the gauge here and the row in the Progress section read
+    /// the same value.
+    @ObservedObject var accelCoverage: AccelCoverageTracker
+
     /// Whichever signed axis is currently dominant in the accel reading.
     /// Pure-derived; no state.  Returns nil when no axis is above the
     /// dominance threshold (free-fall, rapid tumble, near-zero gravity).
@@ -422,24 +436,25 @@ private struct SamplingHero: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                // FC-side sphere-fit diversity gauge.  Tracks how many
-                // of the 26 mag-space wedges have been visited; with a
-                // large hard-iron bias this can stay near zero even as
-                // sample_count grows — that's expected and the fit will
-                // still recover the bias.
+                // Accel-based orientation coverage gauge.  Counts how
+                // many of 26 wedges of the gravity-direction sphere the
+                // user has rotated through.  Drives the meaningful
+                // "have I rotated through enough orientations?" signal
+                // during sampling, in place of the mag-side coverage
+                // that's biased and useless until the fit runs.
                 ZStack {
                     Circle()
                         .stroke(Color.gray.opacity(0.20), lineWidth: 10)
                     Circle()
-                        .trim(from: 0, to: CGFloat(min(Double(status.coverageBins) / 26.0, 1.0)))
+                        .trim(from: 0, to: CGFloat(min(Double(accelCoverage.coverageCount) / 26.0, 1.0)))
                         .stroke(Color.green,
                                 style: StrokeStyle(lineWidth: 10, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.4), value: status.coverageBins)
+                        .animation(.easeInOut(duration: 0.4), value: accelCoverage.coverageCount)
                     VStack(spacing: 0) {
-                        Text("\(status.coverageBins)")
+                        Text("\(accelCoverage.coverageCount)")
                             .font(.system(size: 20, weight: .bold, design: .monospaced))
-                        Text("fit dvs")
+                        Text("/ 26")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -447,6 +462,22 @@ private struct SamplingHero: View {
                 .frame(width: 76, height: 76)
             }
         }
+        // Reset accel coverage whenever the user starts a fresh
+        // sampling run (Start / Retry both increment sample_count from
+        // 0, so a drop to zero is the signal).
+        .onChange(of: status.sampleCount) { newValue in
+            if newValue == 0 {
+                accelCoverage.reset()
+                capturedAxes.removeAll()
+            }
+        }
+        // Feed live accel to the tracker on each new reading.  Watching
+        // all three components catches every refresh — the regular
+        // telemetry stream delivers low_g_x/y/z together, so this fires
+        // at the telemetry rate (~10 Hz).
+        .onChange(of: ax) { _ in accelCoverage.update(ax: ax, ay: ay, az: az) }
+        .onChange(of: ay) { _ in accelCoverage.update(ax: ax, ay: ay, az: az) }
+        .onChange(of: az) { _ in accelCoverage.update(ax: ax, ay: ay, az: az) }
     }
 
     // MARK: - Pieces
@@ -706,5 +737,61 @@ private struct ComponentBar: View {
                 .frame(width: 56, alignment: .trailing)
                 .foregroundColor(isDominant ? .blue : .secondary)
         }
+    }
+}
+
+// MARK: - Accel coverage tracker
+
+/// Live orientation-coverage counter for the mag-cal sampling phase.
+/// Bins the gravity-direction unit vector into the same 3³ = 27-cell
+/// grid the firmware uses for its post-fit mag coverage (the (0,0,0)
+/// centre cell is unreachable for a unit vector → 26 reachable wedges).
+/// Each .update call OR's the current wedge bit into the mask; popcount
+/// is the count displayed in the UI.
+///
+/// Kept as an ObservableObject because @State + struct-view + Timer
+/// combinations have repeatedly bitten us on this screen (stale-self
+/// captures, missed updates).  Reference-type state behaves predictably
+/// across SwiftUI re-renders.
+@MainActor
+final class AccelCoverageTracker: ObservableObject {
+    @Published private(set) var coverageMask: UInt32 = 0
+
+    /// How many wedges have been visited (0..26).
+    var coverageCount: Int { coverageMask.nonzeroBitCount }
+
+    /// Components below this magnitude (m/s²) don't bin — avoids
+    /// counting a free-fall blip as a unique orientation.
+    private static let MIN_MAGNITUDE_MS2: Float = 5.0
+
+    /// Same threshold the firmware's directionWedge uses (0.4 of the
+    /// unit vector).  Keeps the wedge encoding bit-identical so the
+    /// post-fit FC coverage and this live counter use the same scheme.
+    private static let T: Float = 0.4
+
+    func update(ax: Float?, ay: Float?, az: Float?) {
+        guard let x = ax, let y = ay, let z = az else { return }
+        let mag = sqrtf(x * x + y * y + z * z)
+        guard mag >= AccelCoverageTracker.MIN_MAGNITUDE_MS2 else { return }
+        let ux = x / mag
+        let uy = y / mag
+        let uz = z / mag
+
+        func bin(_ v: Float) -> Int {
+            return v < -AccelCoverageTracker.T ? 0
+                 : v >  AccelCoverageTracker.T ? 2
+                 : 1
+        }
+        let wedge = bin(ux) * 9 + bin(uy) * 3 + bin(uz)
+        // wedge ∈ [0, 26]; 13 = (1,1,1) is the centre cell and never
+        // sets for a unit vector, but we don't special-case it here —
+        // it just stays at 0 in the mask.
+        if wedge >= 0 && wedge < 27 {
+            coverageMask |= (UInt32(1) << wedge)
+        }
+    }
+
+    func reset() {
+        coverageMask = 0
     }
 }
