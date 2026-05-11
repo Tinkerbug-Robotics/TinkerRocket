@@ -220,6 +220,14 @@ enum class AutoAcquireState : uint8_t {
 static AutoAcquireState auto_acquire_state = AutoAcquireState::AWAITING_ROCKET;
 static void autoAcquireOnScanFinalize();
 
+// Noise-scan pass counter — actual scan machinery lives further down,
+// but serviceHeartbeat() needs to see this to skip beats mid-scan.
+// Moved up from its original spot near the scan code (#136 follow-up: a
+// heartbeat TX during the auto-acquire scan caused subsequent passes
+// of the multi-pass scan to refuse to start because tx_ongoing_ was
+// still set when startScan() was retried).
+static uint8_t scan_passes_remaining_ = 0;
+
 // If we're following a hopping rocket and packets dry up for this long,
 // give up and fall back to lora_freq_mhz so the existing silence /
 // recovery machinery can take over.  Sized to swallow a handful of
@@ -1567,7 +1575,22 @@ static void serviceRecovery()
             }
             if ((now - recovery_phase_start_ms) >= RECOVERY_PHASE_A_DWELL_MS)
             {
-                recoveryEnterPhaseB();
+                // #136: Phase B scans ±2 MHz around lora_freq_mhz to catch
+                // a hopping rocket that drifted to an unknown channel.
+                // With hopping disabled, the rocket is fixed on its
+                // configured channel — walking the BS off-frequency only
+                // hides the rocket from us during the very window it's
+                // beaconing.  Just end the recovery cycle; next silence
+                // tick will start another Phase A dwell on rendezvous,
+                // which is the only place a fixed-channel rocket can be.
+                if (lora_hop_disabled)
+                {
+                    recoveryEnd("hop disabled — skipping Phase B scan");
+                }
+                else
+                {
+                    recoveryEnterPhaseB();
+                }
             }
             break;
         }
@@ -1663,6 +1686,7 @@ static void serviceHeartbeat()
     if (freq_locked_for_flight)                return;  // No heartbeats in flight
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
+    if (scan_passes_remaining_ != 0)           return;  // #136: don't TX mid-scan
     if (uplink_pending)                        return;  // Don't clobber a real cmd
     // While hopping, only TX in the safe window right after a fresh
     // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  With slow-hop
@@ -1704,7 +1728,8 @@ static int8_t   scan_peak_rssi_[TR_LoRa_Comms::SCAN_MAX_SAMPLES] = {0};
 static size_t   scan_peak_count_ = 0;
 static float    scan_peak_start_mhz_ = 0.0f;
 static float    scan_peak_step_khz_  = 0.0f;
-static uint8_t  scan_passes_remaining_ = 0;
+// scan_passes_remaining_ is declared near the top of the file so
+// serviceHeartbeat() can read it.
 // Set true after a multi-pass scan completes; used by the cmd-10
 // commit path to re-push the channel-set selection (the original
 // post-scan push gets clobbered when the iOS app's auto-channel-select
