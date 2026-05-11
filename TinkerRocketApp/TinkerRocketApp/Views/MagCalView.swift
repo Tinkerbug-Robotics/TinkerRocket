@@ -339,26 +339,27 @@ struct MagCalView: View {
 
 // MARK: - Sampling Hero
 
-/// Guidance card for the sampling phase.  Walks the user through each
-/// cardinal orientation using the LOW-G ACCELEROMETER (gravity vector)
-/// as the orientation reference — never the magnetometer, which is
-/// exactly what we're trying to calibrate and may report wildly biased
-/// values until the fit is applied.
+/// Guidance card for the sampling phase.  Free-form orientation capture
+/// driven by the LOW-G ACCELEROMETER (gravity vector) — the user
+/// rotates the rocket through 6 unique orientations in whatever order
+/// is physically convenient, and each signed-axis (+X / -X / +Y / -Y /
+/// +Z / -Z) gets captured independently when the user holds that axis
+/// dominant for 1.5 s.  Earlier versions tried a fixed body-frame
+/// mapping (nose UP = +X, etc.); on the current rocket that mapping
+/// proved fragile (Down never triggered) so we drop the mapping
+/// entirely and let the bars + grid teach the user which physical
+/// rotation produces which signed axis.
 ///
-/// State machine:
-///   prompting(axis)  → user rotates the rocket; accel-dominant axis
-///                       compared with the target.
-///   filling(axis, p) → orientation matched; a progress bar fills from
-///                       0 → 1.  Gentle decay if alignment briefly
-///                       wobbles, so small movements don't reset.
-///   captured(axis)   → bar full; axis goes into capturedAxes; advance.
-///   allDone          → all 6 cardinals captured; FC keeps sampling
-///                       in the background until the user taps Compute Fit.
+/// Per-axis state machine:
+///   pending   → no progress yet
+///   capturing → axis is currently the dominant one; progress fills
+///               toward HOLD_SECONDS, gentle half-rate decay if the
+///               user wobbles out of alignment briefly
+///   captured  → progress hit HOLD_SECONDS; cell turns green and stays
 ///
-/// All orientation state is local to the view.  The FC's mag coverage
-/// is shown separately as a fit-quality indicator (it's the diversity
-/// of the sphere fit's input data, not whether the user reached the
-/// target physical orientations).
+/// Mag-side coverage from the FC is still shown (as the "fit dvs"
+/// gauge) — that's the diversity of the sphere fit's input data, and
+/// it grows in parallel with the accel-driven capture loop.
 private struct SamplingHero: View {
     let status: MagCalStatus
     /// Live low-g accelerometer in body frame, m/s².  Pulled from the
@@ -368,15 +369,7 @@ private struct SamplingHero: View {
     let ay: Float?
     let az: Float?
 
-    /// All six cardinal axes in the order the user walks through them.
-    /// Fixed across runs so users build muscle memory.
-    private static let axisOrder: [MagCalAxis] = [
-        .noseUp, .noseDown, .rightSide, .leftSide, .frontFace, .backFace
-    ]
-
-    /// Time the user must hold the alignment before the axis captures.
-    /// Long enough to feel deliberate; short enough that 6 axes plus
-    /// re-orientation time fits in a reasonable session.
+    /// Time the user must hold an axis aligned before it captures.
     private static let HOLD_SECONDS: Double = 1.5
     private static let TICK_SECONDS: Double = 0.05
 
@@ -385,64 +378,40 @@ private struct SamplingHero: View {
     /// orientations.  Gravity is ~9.81; 4 m/s² ≈ 24° off pure axis.
     private static let DOMINANT_THRESHOLD_MS2: Float = 4.0
 
-    /// Index into axisOrder of the orientation we're currently prompting
-    /// for.  Moves forward only.
-    @State private var currentAxisIndex: Int = 0
-
-    /// Hold progress for the current axis, 0..HOLD_SECONDS.  When this
-    /// reaches HOLD_SECONDS we capture and advance.
-    @State private var holdAccumulated: Double = 0
+    /// Per-signed-axis hold progress, 0..HOLD_SECONDS.  Captured when ≥
+    /// HOLD_SECONDS.  Kept as a dict keyed by SignedAxis so we can
+    /// progress multiple axes across the run (each rotation captures
+    /// the one currently dominant).
+    @State private var captureProgress: [SignedAxis: Double] = [:]
 
     /// State-machine tick.  Started in onAppear, torn down on disappear.
     @State private var tickTimer: Timer?
 
-    /// The axis the user should be aiming for right now (nil = all 6 done).
-    private var currentAxis: MagCalAxis? {
-        currentAxisIndex < SamplingHero.axisOrder.count
-            ? SamplingHero.axisOrder[currentAxisIndex]
-            : nil
-    }
-
-    /// True if the live accel vector indicates the rocket is in the
-    /// orientation the current target axis prompts for.
-    private var isAlignedWithTarget: Bool {
-        guard let target = currentAxis,
-              let x = ax, let y = ay, let z = az else { return false }
-        return SamplingHero.isAligned(target: target, ax: x, ay: y, az: z)
-    }
-
-    /// Per-axis alignment check.  An axis "matches" the accel vector
-    /// when (a) the target's component (X/Y/Z) is the dominant one, and
-    /// (b) that component's sign matches the target.  Threshold filters
-    /// out near-zero components so wobble doesn't accidentally count.
-    static func isAligned(target: MagCalAxis, ax: Float, ay: Float, az: Float) -> Bool {
-        let xa = abs(ax), ya = abs(ay), za = abs(az)
+    /// Whichever signed axis is currently dominant in the accel reading,
+    /// or nil if no axis is above the dominance threshold (free-fall,
+    /// rapid tumble, near-zero gravity component).
+    private var currentlyAligned: SignedAxis? {
+        guard let x = ax, let y = ay, let z = az else { return nil }
+        let xa = abs(x), ya = abs(y), za = abs(z)
         let peak = max(xa, max(ya, za))
-        guard peak >= SamplingHero.DOMINANT_THRESHOLD_MS2 else { return false }
+        guard peak >= SamplingHero.DOMINANT_THRESHOLD_MS2 else { return nil }
 
-        let dominant: MagCalComponent
-        if peak == xa { dominant = .x }
-        else if peak == ya { dominant = .y }
-        else { dominant = .z }
-        guard dominant == target.component else { return false }
-
-        let signed: Float
-        switch dominant {
-        case .x: signed = ax
-        case .y: signed = ay
-        case .z: signed = az
-        }
-        return (signed > 0) == (target.sign > 0)
+        if peak == xa { return SignedAxis(component: .x, positive: x > 0) }
+        if peak == ya { return SignedAxis(component: .y, positive: y > 0) }
+        return SignedAxis(component: .z, positive: z > 0)
     }
 
-    /// Adaptive headline.  Drives off the local prompt index.
+    private var capturedCount: Int {
+        SignedAxis.allCases.filter { (captureProgress[$0] ?? 0) >= SamplingHero.HOLD_SECONDS }.count
+    }
+
+    /// Adaptive headline based on capture progress.
     private var headline: String {
-        if currentAxis == nil { return "All orientations captured" }
-        switch currentAxisIndex {
-        case 0:     return "Let's start"
-        case 1, 2:  return "Nice — keep going"
-        case 3, 4:  return "Almost there"
-        default:    return "Last one"
+        switch capturedCount {
+        case 6:     return "All six orientations captured"
+        case 4...5: return "Almost there"
+        case 1...3: return "Keep rotating"
+        default:    return "Rotate to any orientation"
         }
     }
 
@@ -451,6 +420,9 @@ private struct SamplingHero: View {
             Text(headline)
                 .font(.title3)
                 .fontWeight(.semibold)
+            Text("\(capturedCount) of 6 directions captured")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
 
             currentTargetCard
             orientationGrid
@@ -468,7 +440,7 @@ private struct SamplingHero: View {
 
                 // Sphere-fit diversity gauge — how many of the 26 wedges
                 // of MAGNETIC-space have been sampled.  Independent of
-                // the cardinal-orientation walk above.  More wedges →
+                // the accel-driven capture grid above.  More wedges →
                 // better-conditioned sphere fit.
                 ZStack {
                     Circle()
@@ -496,54 +468,26 @@ private struct SamplingHero: View {
 
     // MARK: - Pieces
 
-    /// The big "do this now" prompt card.  Three visual states:
-    ///   - Prompting:  orange arrow icon + "Point the nose UP" + caption
-    ///   - Filling:    green check + progress bar growing toward capture
-    ///   - All done:   seal + "All orientations captured"
-    /// The fill bar uses accel-driven `holdAccumulated` rather than a
-    /// blind timer — if the user wobbles out of alignment, fill stops
-    /// (and gently decays); if they hold, it advances.
+    /// Status card above the grid.  Three visual states:
+    ///   - Aligned (not yet captured): blue, progress bar fills toward
+    ///     capture; tells the user "you're doing it, keep holding."
+    ///   - Aligned (already captured): green check; "Try a different
+    ///     orientation."
+    ///   - Not aligned: orange; "Rotate the rocket — watch the bars."
+    /// All three states use the live accel reading; no fixed body-frame
+    /// assumption.
     @ViewBuilder
     private var currentTargetCard: some View {
-        if let axis = currentAxis {
-            let aligned = isAlignedWithTarget
-            HStack(spacing: 12) {
-                Image(systemName: aligned ? "checkmark.circle.fill" : axis.icon)
-                    .font(.system(size: 36, weight: .semibold))
-                    .foregroundColor(aligned ? .green : .orange)
-                    .frame(width: 44)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(aligned ? "Aligned — hold steady" : axis.prompt)
-                        .font(.headline)
-                    ProgressView(value: holdAccumulated,
-                                 total: SamplingHero.HOLD_SECONDS)
-                        .progressViewStyle(.linear)
-                        .tint(aligned ? .green : .orange)
-                    Text(aligned
-                        ? String(format: "Capturing… %.0f%%",
-                                 100 * holdAccumulated / SamplingHero.HOLD_SECONDS)
-                        : "Use the bars below to see which axis is dominant")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background((aligned ? Color.green : Color.orange).opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 8)
-            .animation(.easeInOut(duration: 0.20), value: aligned)
-        } else {
+        if capturedCount == 6 {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 36, weight: .semibold))
                     .foregroundColor(.green)
                     .frame(width: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("All orientations captured")
+                    Text("All six orientations captured")
                         .font(.headline)
-                    Text("Tap Compute Fit when ready, or keep rolling for better diversity.")
+                    Text("Tap Compute Fit when ready.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -554,34 +498,103 @@ private struct SamplingHero: View {
             .background(Color.green.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal, 8)
+        } else if let active = currentlyAligned {
+            let progress = captureProgress[active] ?? 0
+            let alreadyCaptured = progress >= SamplingHero.HOLD_SECONDS
+            HStack(spacing: 12) {
+                Image(systemName: alreadyCaptured ? "checkmark.circle.fill" : "scope")
+                    .font(.system(size: 36, weight: .semibold))
+                    .foregroundColor(alreadyCaptured ? .green : .blue)
+                    .frame(width: 44)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(alreadyCaptured
+                        ? "\(active.label) already captured"
+                        : "Capturing \(active.label) — hold steady")
+                        .font(.headline)
+                    if !alreadyCaptured {
+                        ProgressView(value: progress,
+                                     total: SamplingHero.HOLD_SECONDS)
+                            .progressViewStyle(.linear)
+                            .tint(.blue)
+                        Text(String(format: "%.0f%%",
+                                    100 * progress / SamplingHero.HOLD_SECONDS))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("Rotate to a different orientation")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background((alreadyCaptured ? Color.green : Color.blue).opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 8)
+            .animation(.easeInOut(duration: 0.20), value: alreadyCaptured)
+        } else {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 36, weight: .semibold))
+                    .foregroundColor(.orange)
+                    .frame(width: 44)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Rotate the rocket")
+                        .font(.headline)
+                    Text("Watch the bars below — when one axis reaches ≈ ±9.8 m/s², hold steady.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color.orange.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 8)
         }
     }
 
-    /// 6-cell grid showing per-axis capture state.  Captured = green,
-    /// current target = blue ring, future = grey.
+    /// 6-cell grid showing per-signed-axis capture state.  Labels are
+    /// the raw ±X / ±Y / ±Z signed axis (no body-frame guessing) so the
+    /// user can match directly against the accel bars.
     private var orientationGrid: some View {
         let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
         return LazyVGrid(columns: cols, spacing: 8) {
-            ForEach(Array(SamplingHero.axisOrder.enumerated()), id: \.offset) { (idx, axis) in
-                let done = idx < currentAxisIndex
-                let isCurrent = idx == currentAxisIndex
+            ForEach(SignedAxis.allCases, id: \.self) { axis in
+                let progress = captureProgress[axis] ?? 0
+                let captured = progress >= SamplingHero.HOLD_SECONDS
+                let isActive = currentlyAligned == axis && !captured
+                let capturing = progress > 0 && !captured
                 VStack(spacing: 4) {
-                    Image(systemName: done ? "checkmark.circle.fill" : axis.icon)
+                    Image(systemName: captured ? "checkmark.circle.fill"
+                                  : isActive ? "scope"
+                                  : "circle")
                         .font(.system(size: 22, weight: .semibold))
-                        .foregroundColor(done ? .green : (isCurrent ? .blue : .gray))
-                    Text(axis.shortLabel)
-                        .font(.caption2)
-                        .foregroundColor(done || isCurrent ? .primary : .secondary)
+                        .foregroundColor(captured ? .green
+                                       : isActive ? .blue
+                                       : (capturing ? .blue.opacity(0.5) : .gray))
+                    Text(axis.label)
+                        .font(.system(.headline, design: .monospaced))
+                        .foregroundColor(captured ? .primary : .secondary)
+                    if capturing {
+                        ProgressView(value: progress, total: SamplingHero.HOLD_SECONDS)
+                            .progressViewStyle(.linear)
+                            .tint(.blue)
+                            .frame(height: 3)
+                    }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: 64)
                 .padding(.vertical, 8)
-                .background(done
-                    ? Color.green.opacity(0.12)
-                    : (isCurrent ? Color.blue.opacity(0.12) : Color.gray.opacity(0.08)))
+                .background(captured ? Color.green.opacity(0.12)
+                          : isActive ? Color.blue.opacity(0.12)
+                          : Color.gray.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(isCurrent ? Color.blue : Color.clear, lineWidth: 2)
+                        .stroke(isActive ? Color.blue : Color.clear, lineWidth: 2)
                 )
             }
         }
@@ -602,25 +615,46 @@ private struct SamplingHero: View {
         tickTimer?.invalidate(); tickTimer = nil
     }
 
-    /// One tick of the state machine.  Fills holdAccumulated when the
-    /// rocket is aligned with the current target; gently decays it when
-    /// it isn't (so brief wobble doesn't reset everything).  When the
-    /// bar fills, capture the axis and move to the next.
+    /// One tick of the state machine.  If an axis is currently dominant
+    /// in the accel reading, fill its progress.  Otherwise, gently
+    /// decay any in-progress (non-captured) axes so brief wobble
+    /// doesn't reset progress on whichever axis the user is working on.
     private func advance() {
-        guard currentAxis != nil else { return }
         let step = SamplingHero.TICK_SECONDS
-        if isAlignedWithTarget {
-            holdAccumulated = min(SamplingHero.HOLD_SECONDS,
-                                  holdAccumulated + step)
-            if holdAccumulated >= SamplingHero.HOLD_SECONDS {
-                currentAxisIndex += 1
-                holdAccumulated = 0
+        if let active = currentlyAligned {
+            let p = captureProgress[active] ?? 0
+            if p < SamplingHero.HOLD_SECONDS {
+                captureProgress[active] = min(SamplingHero.HOLD_SECONDS, p + step)
             }
         } else {
-            // Gentle decay — half the fill rate so a brief wobble
-            // doesn't wipe several seconds of work.
-            holdAccumulated = max(0, holdAccumulated - step * 0.5)
+            for axis in SignedAxis.allCases {
+                let p = captureProgress[axis] ?? 0
+                if p > 0 && p < SamplingHero.HOLD_SECONDS {
+                    captureProgress[axis] = max(0, p - step * 0.5)
+                }
+            }
         }
+    }
+}
+
+/// A signed body-frame axis — the six unique directions a rocket's
+/// gravity vector can point.  Used as the unit of "captured
+/// orientation" in the cal hero.
+private struct SignedAxis: Hashable {
+    let component: MagCalComponent
+    let positive: Bool
+
+    static let allCases: [SignedAxis] = [
+        SignedAxis(component: .x, positive: true),
+        SignedAxis(component: .x, positive: false),
+        SignedAxis(component: .y, positive: true),
+        SignedAxis(component: .y, positive: false),
+        SignedAxis(component: .z, positive: true),
+        SignedAxis(component: .z, positive: false),
+    ]
+
+    var label: String {
+        "\(positive ? "+" : "-")\(component.rawValue)"
     }
 }
 
