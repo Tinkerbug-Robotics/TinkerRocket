@@ -115,10 +115,9 @@ struct MagCalView: View {
         }
     }
 
-    /// Sampling: animated tumble guidance, live |B|, circular coverage
-    /// gauge, and a cycling orientation prompt so the user always knows
-    /// what to do next.  Drives all visuals off the FC's 5 Hz status
-    /// frame — no extra polling.
+    /// Sampling: orientation-progress hero, live direction bars, Compute
+    /// Fit button (user-driven completion — no auto-timeout), and abort.
+    /// All driven off the FC's 5 Hz status frame.
     private var samplingSection: some View {
         Group {
             if let s = status {
@@ -126,6 +125,11 @@ struct MagCalView: View {
                     SamplingHero(status: s)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
+                }
+                Section(header: Text("Live mag vector"),
+                        footer: Text("Use the bars to verify which axis is dominant. The current target's bar is highlighted — adjust the rocket until its bar reaches the target marker.")) {
+                    DirectionBars(status: s)
+                        .padding(.vertical, 4)
                 }
                 Section(header: Text("Progress")) {
                     HStack {
@@ -142,6 +146,27 @@ struct MagCalView: View {
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
+                }
+                // Compute Fit replaces the old auto-completion-at-buffer-fill.
+                // Disabled until min samples reached so the user can't ship a
+                // bad fit; styled as the primary action once ready.
+                let canFit = s.sampleCount >= MagCalConstants.minSamples
+                Section(footer: Text(canFit
+                    ? "When you're happy with the coverage, tap Compute Fit to run the sphere fit and review the result."
+                    : "Need ≥ \(MagCalConstants.minSamples) samples before fitting. Keep tumbling…")) {
+                    Button {
+                        device.sendMagCalComputeFit()
+                    } label: {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Compute Fit")
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
+                        .foregroundColor(.white)
+                    }
+                    .listRowBackground(canFit ? Color.blue : Color.gray)
+                    .disabled(!canFit)
                 }
                 Section {
                     Button(role: .destructive) {
@@ -587,6 +612,118 @@ private struct SamplingHero: View {
         } else if currentAxisMatched {
             // Orientation just matched — kick off the visible hold.
             holdRemaining = SamplingHero.HOLD_SECONDS
+        }
+    }
+}
+
+// MARK: - Direction Bars
+
+/// Live mag-vector display: three signed horizontal bars for X, Y, Z
+/// (µT, post-IIS2MDC-OFFSET-subtract).  Centred at zero with a ±100 µT
+/// full-scale so an Earth field (~50 µT) reaches roughly half-bar.  The
+/// currently dominant component (largest |value|, above a small dead
+/// zone) is highlighted in blue so the user can see at a glance which
+/// axis their orientation is producing — the key feedback that was
+/// missing when the user couldn't tell whether nose-up was actually
+/// being detected.
+///
+/// Falls back to a "waiting for live data" placeholder when running
+/// against firmware older than the 32-byte payload (all three components
+/// zero).
+private struct DirectionBars: View {
+    let status: MagCalStatus
+
+    /// Bar full-scale.  Fixed (not auto-scaling) so the bars don't
+    /// jitter as the user tumbles.  Earth fields land ~50 µT; the
+    /// uncalibrated PCB residual seen on this board is ~1640 µT so we
+    /// clamp wider — values past full-scale stay pinned at the end.
+    private static let RANGE_UT: Float = 100.0
+
+    /// Components below this (in µT abs) don't count as "dominant" —
+    /// avoids flickering the highlight between near-zero axes when the
+    /// rocket is between orientations.
+    private static let DEAD_ZONE_UT: Float = 5.0
+
+    private var hasLiveVector: Bool {
+        status.liveX_uT != 0 || status.liveY_uT != 0 || status.liveZ_uT != 0
+    }
+
+    /// Which axis is currently dominant (largest absolute value), or nil
+    /// if all three are below the dead zone.
+    private var dominantAxis: MagCalComponent? {
+        let xAbs = abs(status.liveX_uT)
+        let yAbs = abs(status.liveY_uT)
+        let zAbs = abs(status.liveZ_uT)
+        let peak = max(xAbs, max(yAbs, zAbs))
+        if peak < DirectionBars.DEAD_ZONE_UT { return nil }
+        if peak == xAbs { return .x }
+        if peak == yAbs { return .y }
+        return .z
+    }
+
+    var body: some View {
+        if hasLiveVector {
+            VStack(spacing: 10) {
+                ForEach(MagCalComponent.allCases, id: \.rawValue) { comp in
+                    ComponentBar(label: comp.rawValue,
+                                 value: comp.value(in: status),
+                                 range: DirectionBars.RANGE_UT,
+                                 isDominant: comp == dominantAxis)
+                }
+            }
+        } else {
+            Text("Waiting for live mag data… (re-flash firmware if this persists)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+private struct ComponentBar: View {
+    let label: String
+    let value: Float
+    let range: Float
+    let isDominant: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(.system(.headline, design: .monospaced))
+                .frame(width: 20)
+                .foregroundColor(isDominant ? .blue : .secondary)
+
+            // Two-sided bar centered at zero.  GeometryReader lets us
+            // size the half-bar in points and place it relative to the
+            // centre tick.
+            GeometryReader { geo in
+                let half = geo.size.width / 2
+                let mag = min(abs(value), range)
+                let frac = CGFloat(mag) / CGFloat(range)
+                let barWidth = frac * half
+
+                ZStack(alignment: .leading) {
+                    // Track
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(height: 18)
+                    // Centre tick
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: 1, height: 24)
+                        .offset(x: half - 0.5)
+                    // Signed bar
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(isDominant ? Color.blue : Color.blue.opacity(0.45))
+                        .frame(width: barWidth, height: 16)
+                        .offset(x: value >= 0 ? half : (half - barWidth))
+                }
+            }
+            .frame(height: 24)
+
+            Text(String(format: "%+.0f", value))
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .frame(width: 56, alignment: .trailing)
+                .foregroundColor(isDominant ? .blue : .secondary)
         }
     }
 }

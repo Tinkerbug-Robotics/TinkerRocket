@@ -529,14 +529,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Magnetometer hard-iron calibration (issue #96)
     //
-    // Four single-byte commands.  The OC routes each to the FC over I2C,
+    // Five single-byte commands.  The OC routes each to the FC over I2C,
     // and the FC publishes back a binary status frame on the file_ops
     // characteristic (parsed into magCalStatus).  Entry guard lives on
     // the FC: START is only honoured when rocket_state == READY.
-    func sendMagCalStart()  { sendCommand(50) }
-    func sendMagCalAbort()  { sendCommand(51) }
-    func sendMagCalAccept() { sendCommand(52) }
-    func sendMagCalRetry()  { sendCommand(53) }
+    func sendMagCalStart()      { sendCommand(50) }
+    func sendMagCalAbort()      { sendCommand(51) }
+    func sendMagCalAccept()     { sendCommand(52) }
+    func sendMagCalRetry()      { sendCommand(53) }
+    /// Tell the FC: stop accumulating, run the sphere fit on what we
+    /// have, transition to REVIEW.  Replaces the old
+    /// auto-completion-at-buffer-fill so the user owns when the cal
+    /// "finishes."
+    func sendMagCalComputeFit() { sendCommand(54) }
 
     func sendToggleLogging() {
         sendCommand(23)

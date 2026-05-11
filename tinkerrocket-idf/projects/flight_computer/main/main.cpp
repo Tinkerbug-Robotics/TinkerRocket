@@ -2551,6 +2551,25 @@ static void loop_fc()
                     mag_cal_status_dirty = true;
                 }
             }
+            else if (out_pending_command == MAG_CAL_COMPUTE_FIT)
+            {
+                if (rocket_state != MAG_CALIBRATION)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] compute_fit refused: not in MAG_CALIBRATION");
+                }
+                else if (!mag_calibrator.computeFit())
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] compute_fit refused: insufficient samples");
+                    // Still publish a status frame so the iOS button
+                    // doesn't appear stuck.
+                    mag_cal_status_dirty = true;
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "[MAGCAL] user-triggered fit complete, REVIEW state");
+                    mag_cal_status_dirty = true;
+                }
+            }
             else if (out_pending_command == MAG_CAL_ACCEPT)
             {
                 if (rocket_state != MAG_CALIBRATION)
