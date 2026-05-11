@@ -739,9 +739,17 @@ typedef struct __attribute__((packed))
     // up).  Bit 13 = the (0,0,0) center cell is unreachable for a unit
     // vector so never sets; the remaining 26 bits map 1:1 to wedges.
     uint32_t coverage_mask;
+    // Live raw mag vector (last sample), in IIS2MDC LSB units
+    // (0.15 µT/LSB).  Lets iOS render real-time direction feedback so
+    // the user can see which body axis is currently dominant and
+    // adjust the orientation — without this they're guessing whether
+    // the rocket is "really" pointing up.
+    int16_t  inst_x_lsb;
+    int16_t  inst_y_lsb;
+    int16_t  inst_z_lsb;
 } MagCalStatusData;
-static_assert(sizeof(MagCalStatusData) == 26,
-              "MagCalStatusData must be 26 bytes");
+static_assert(sizeof(MagCalStatusData) == 32,
+              "MagCalStatusData must be 32 bytes");
 
 // MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
 // int32_t in the same 18-bit signed centered-counts space as
@@ -1175,6 +1183,7 @@ static constexpr uint8_t MAG_CAL_ABORT        = 0xD5;  // OC→FC: drop sampling
 static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: persist current fit, apply offsets, return to READY
 static constexpr uint8_t MAG_CAL_RETRY        = 0xD7;  // OC→FC: discard fit, restart sampling
 static constexpr uint8_t MAG_CAL_STATUS_MSG   = 0xD8;  // FC→OC: live progress / final result (MagCalStatusData)
+static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fit on current buffer, transition to REVIEW
 
 static constexpr uint8_t LORA_MSG            = 0xF1;
 

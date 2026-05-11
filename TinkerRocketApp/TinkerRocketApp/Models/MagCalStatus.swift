@@ -78,6 +78,15 @@ struct MagCalStatus: Equatable {
     /// then falls back to a simple timer cycle.
     let coverageMask: UInt32
 
+    /// Live raw mag-vector components in µT (most recent sample).
+    /// Lets the iOS UI render real-time direction feedback so the
+    /// user can verify which axis is currently dominant and adjust
+    /// the rocket to match the target orientation.  All zero on old
+    /// firmware (< 32-byte payload).
+    let liveX_uT: Float
+    let liveY_uT: Float
+    let liveZ_uT: Float
+
     /// Convenience: human-readable explanation for a non-zero rejectCode.
     var rejectMessage: String {
         switch rejectCode {
@@ -136,7 +145,15 @@ struct MagCalStatus: Equatable {
         let rejectRaw     = bytes[20]
         // bytes[21]      = _pad
         // bytes[22..25]  = uint32 coverage_mask  (new in 26-byte payload)
+        // bytes[26..31]  = int16 inst_x/y/z LSB   (new in 32-byte payload)
         let coverageMask: UInt32 = (bytes.count >= 26) ? u32(22) : 0
+        let liveX_lsb: Int16 = (bytes.count >= 32) ? i16(26) : 0
+        let liveY_lsb: Int16 = (bytes.count >= 32) ? i16(28) : 0
+        let liveZ_lsb: Int16 = (bytes.count >= 32) ? i16(30) : 0
+
+        // IIS2MDC sensitivity is 0.15 µT/LSB (datasheet 9.13).  Mirrors
+        // the firmware-side IIS2MDC_LSB_TO_uT constant.
+        let LSB_TO_uT: Float = 0.15
 
         let sub    = MagCalSubType(rawValue: subTypeRaw) ?? .idle
         let reject = MagCalRejectCode(rawValue: rejectRaw) ?? .ok
@@ -152,7 +169,10 @@ struct MagCalStatus: Equatable {
             fieldR_uT: Float(RUTx10) / 10.0,
             residualUT: Float(resUTx10) / 10.0,
             rejectCode: reject,
-            coverageMask: coverageMask
+            coverageMask: coverageMask,
+            liveX_uT: Float(liveX_lsb) * LSB_TO_uT,
+            liveY_uT: Float(liveY_lsb) * LSB_TO_uT,
+            liveZ_uT: Float(liveZ_lsb) * LSB_TO_uT
         )
     }
 }
@@ -219,6 +239,40 @@ enum MagCalAxis: CaseIterable {
         case .leftSide:  return "Left"
         case .frontFace: return "Front"
         case .backFace:  return "Back"
+        }
+    }
+
+    /// Which body-frame axis (X/Y/Z) this orientation targets.
+    var component: MagCalComponent {
+        switch self {
+        case .noseUp, .noseDown:     return .x
+        case .rightSide, .leftSide:  return .y
+        case .frontFace, .backFace:  return .z
+        }
+    }
+
+    /// Sign the target component should have when correctly oriented.
+    /// e.g. nose-up → +X (sign +1); nose-down → -X (sign -1).
+    var sign: Float {
+        switch self {
+        case .noseUp, .rightSide, .frontFace: return  1.0
+        case .noseDown, .leftSide, .backFace: return -1.0
+        }
+    }
+}
+
+/// Sensor-frame component axis labels for the direction-feedback bars.
+enum MagCalComponent: String, CaseIterable {
+    case x = "X"
+    case y = "Y"
+    case z = "Z"
+
+    /// Pull the live µT reading for this component out of a status frame.
+    func value(in status: MagCalStatus) -> Float {
+        switch self {
+        case .x: return status.liveX_uT
+        case .y: return status.liveY_uT
+        case .z: return status.liveZ_uT
         }
     }
 }

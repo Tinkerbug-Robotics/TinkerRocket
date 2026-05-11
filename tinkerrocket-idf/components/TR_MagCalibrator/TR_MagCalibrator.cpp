@@ -116,34 +116,54 @@ void MagCalibrator::clear()
 bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
 {
     if (state_ != State::SAMPLING) return false;
-    if (n_samples_ >= MAX_SAMPLES) return false;
+
+    // Keep updating the "live" vector even after the buffer fills, so
+    // the iOS direction-feedback UI keeps ticking.  Coverage mask also
+    // stays in sync — the user might tumble through new wedges after
+    // the buffer is full.
+    last_x_ = x;
+    last_y_ = y;
+    last_z_ = z;
+    const uint8_t wedge = directionWedge(x, y, z);
+    if (wedge < 27) coverage_mask_ |= (1u << wedge);
+
+    if (n_samples_ >= MAX_SAMPLES)
+    {
+        // Buffer full — stop adding to it, but DO NOT auto-fit.  The fit
+        // is user-driven via computeFit() (BLE cmd MAG_CAL_COMPUTE_FIT),
+        // so the user gets to decide when they're done tumbling.  Return
+        // false here so callers don't see a misleading "buffer just
+        // filled" pulse on every subsequent sample.
+        return false;
+    }
 
     samples_x_[n_samples_] = x;
     samples_y_[n_samples_] = y;
     samples_z_[n_samples_] = z;
     n_samples_++;
 
-    last_x_ = x;
-    last_y_ = y;
-    last_z_ = z;
+    // Caller cue: buffer just filled on this sample.  Used by main.cpp
+    // to publish an immediate status frame so the iOS UI flips its
+    // "Compute Fit" button to a primary-action style without waiting
+    // for the next 5 Hz tick.
+    return (n_samples_ == MAX_SAMPLES);
+}
 
-    const uint8_t wedge = directionWedge(x, y, z);
-    if (wedge < 27) coverage_mask_ |= (1u << wedge);
-
-    if (n_samples_ >= MAX_SAMPLES)
-    {
-        runFit();
-        state_ = State::REVIEW;
+bool MagCalibrator::computeFit()
+{
+    if (state_ != State::SAMPLING) return false;
+    if (n_samples_ < MAG_CAL_MIN_SAMPLES) return false;
+    runFit();
+    state_ = State::REVIEW;
 #ifdef ESP_PLATFORM
-        ESP_LOGI(TAG, "fit complete: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT cov=%u/26 reject=%u",
-                 (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
-                 (double)fit_R_uT_, (double)fit_residual_uT_,
-                 (unsigned)__builtin_popcount(coverage_mask_),
-                 (unsigned)fit_reject_code_);
+    ESP_LOGI(TAG, "user-triggered fit complete: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT cov=%u/26 reject=%u (n=%u)",
+             (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
+             (double)fit_R_uT_, (double)fit_residual_uT_,
+             (unsigned)__builtin_popcount(coverage_mask_),
+             (unsigned)fit_reject_code_,
+             (unsigned)n_samples_);
 #endif
-        return true;
-    }
-    return false;
+    return true;
 }
 
 void MagCalibrator::getProgress(uint16_t& sample_count,
@@ -191,6 +211,12 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
     out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
     out.coverage_mask = coverage_mask_;
     out.sample_count  = n_samples_;
+
+    // Live raw vector for the iOS direction-feedback UI.  Raw LSB
+    // matches the sphere-fit's working units so no conversion drift.
+    out.inst_x_lsb = last_x_;
+    out.inst_y_lsb = last_y_;
+    out.inst_z_lsb = last_z_;
 
     // Instantaneous field magnitude (most recent sample).
     {

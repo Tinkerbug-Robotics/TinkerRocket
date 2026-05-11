@@ -71,10 +71,18 @@ public:
 
     // Feed one raw sample (int16 LSB counts, sensor frame — same units the
     // IIS2MDC OFFSET registers consume).  No-op outside SAMPLING.  Returns
-    // true if the sample was the one that filled the buffer and triggered
-    // the fit + REVIEW transition (so the caller can publish a status
-    // frame promptly).
+    // true if the sample was the one that filled the buffer (the caller
+    // can use this as a "buffer full, stop pacing samples" hint, though
+    // additional samples silently no-op once full).  Sampling NEVER
+    // auto-transitions to REVIEW — that's user-driven via computeFit().
     bool addSample(int16_t x, int16_t y, int16_t z);
+
+    // Run the sphere fit on the current sample buffer and transition to
+    // REVIEW.  Returns false (and stays in SAMPLING) if fewer than
+    // MAG_CAL_MIN_SAMPLES have landed.  Decoupling fit from buffer-fill
+    // lets the iOS UI offer an explicit "Compute Fit" button: the user
+    // tumbles as long as they want, then decides when to commit.
+    bool computeFit();
 
     State getState() const { return state_; }
 
