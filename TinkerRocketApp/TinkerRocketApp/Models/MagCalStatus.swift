@@ -163,10 +163,11 @@ struct MagCalStatus: Equatable {
 // 3×3×3 encoding in TR_MagCalibrator.cpp (bx*9 + by*3 + bz with each
 // component in {0,1,2} for {<-T, [-T,T], >T}).
 //
-// The mapping below assumes the IIS2MDC body frame after the configured
-// rotation, with +Z = nose tip, +X = "right" side, +Y = "front" face.
-// If the user reports the prompts feel mirrored, swap the matching
-// constants here — none of the firmware needs to change.
+// Body-frame convention (empirical, verified by the user on the flight
+// computer): nose-up populates the +X wedge.  Sides and faces follow
+// from the right-hand rule around that — if any axis turns out to be
+// flipped on the rocket, swap the +Y/+Z assignments here without
+// touching the firmware.
 enum MagCalAxis: CaseIterable {
     case noseUp, noseDown
     case rightSide, leftSide
@@ -176,12 +177,12 @@ enum MagCalAxis: CaseIterable {
     var wedgeBit: UInt32 {
         switch self {
         // bx, by, bz ∈ {0,1,2} → index = bx*9 + by*3 + bz
-        case .noseUp:    return 1 * 9 + 1 * 3 + 2  // (0,0,+) = 14
-        case .noseDown:  return 1 * 9 + 1 * 3 + 0  // (0,0,-) = 12
-        case .rightSide: return 2 * 9 + 1 * 3 + 1  // (+,0,0) = 22
-        case .leftSide:  return 0 * 9 + 1 * 3 + 1  // (-,0,0) = 4
-        case .frontFace: return 1 * 9 + 2 * 3 + 1  // (0,+,0) = 16
-        case .backFace:  return 1 * 9 + 0 * 3 + 1  // (0,-,0) = 10
+        case .noseUp:    return 2 * 9 + 1 * 3 + 1  // (+,0,0) = 22  — user-confirmed: Up = +X
+        case .noseDown:  return 0 * 9 + 1 * 3 + 1  // (-,0,0) =  4
+        case .rightSide: return 1 * 9 + 2 * 3 + 1  // (0,+,0) = 16
+        case .leftSide:  return 1 * 9 + 0 * 3 + 1  // (0,-,0) = 10
+        case .frontFace: return 1 * 9 + 1 * 3 + 2  // (0,0,+) = 14
+        case .backFace:  return 1 * 9 + 1 * 3 + 0  // (0,0,-) = 12
         }
     }
 
