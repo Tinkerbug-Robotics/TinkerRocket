@@ -92,37 +92,19 @@ struct SettingsView: View {
         && device.telemetry.state == "INITIALIZATION"
     }
 
-    @AppStorage("networkName") private var networkName: String = ""
-    @AppStorage("networkID") private var networkID: Int = 0
-    @State private var editingNetworkName: String = ""
-
     var body: some View {
         NavigationView {
             Form {
-                // Network settings
-                Section(header: Text("Network"),
-                        footer: Text("Changing the network name will require re-provisioning all devices.")) {
-                    HStack {
-                        TextField("Network name", text: $editingNetworkName)
-                            .onAppear { editingNetworkName = networkName }
-                        if editingNetworkName != networkName && !editingNetworkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Button("Apply") {
-                                let trimmed = editingNetworkName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                networkName = trimmed
-                                networkID = Int(fnv1a8(trimmed))
-                                // Push to currently connected device
-                                device.sendSetNetworkID(UInt8(networkID))
-                            }
-                            .foregroundColor(.blue)
-                        }
-                    }
-                    HStack {
-                        Text("Network ID")
-                        Spacer()
-                        Text("\(networkID)")
-                            .foregroundColor(.secondary)
-                    }
-                }
+                // Network settings hidden in #136: both ends are forced to
+                // the firmware default network ID at boot so the BS and OC
+                // can't drift apart silently.  The text-field UI showed the
+                // app's @AppStorage "Network ID" — which had nothing to do
+                // with what the connected device actually used — and that
+                // confused users into thinking they were on the same
+                // network when in fact the OC's NVS still carried an old
+                // value while the BS had been reset to default.  The
+                // user-facing network-name flow returns alongside hopping
+                // in #150.
 
                 // Rocket computer settings (only when connected directly to rocket)
                 if !device.isBaseStation {

@@ -2626,6 +2626,24 @@ static void setup_bs()
         network_id = prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
         prefs.end();
 
+        // #136: every boot also forces network_id back to the hardcoded
+        // default, mirroring the LoRa rendezvous override.  Without this,
+        // a BS and OC can quietly drift apart whenever one device's NVS
+        // is wiped (e.g., the LORA_NVS_SCHEMA_VERSION bump in #105 cleared
+        // the lora namespace on this BS but left the OC's `identity` nid
+        // alone, so OC stayed on nid=180 while the BS came back on nid=0
+        // — every beacon and telemetry packet from the rocket got dropped
+        // silently by the network_id filter).  Cmd 9 still lets a
+        // developer change network_id at runtime, but boot always
+        // re-resets, so devices can't drift across power cycles.
+        // Reintroduce per-network IDs alongside hopping in #150.
+        if (network_id != config::DEFAULT_NETWORK_ID)
+        {
+            ESP_LOGW(TAG, "[CFG] NVS nid=%u differs from default %u — forcing default",
+                     (unsigned)network_id, (unsigned)config::DEFAULT_NETWORK_ID);
+            network_id = config::DEFAULT_NETWORK_ID;
+        }
+
         ESP_LOGI(TAG, "[CFG] Identity: uid=%s name=%s nid=%u",
                  unit_id_hex, unit_name, (unsigned)network_id);
 

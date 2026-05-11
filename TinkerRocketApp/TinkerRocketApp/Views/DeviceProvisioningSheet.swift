@@ -12,9 +12,6 @@ struct DeviceProvisioningSheet: View {
     @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
-    @AppStorage("networkName") private var networkName: String = ""
-    @AppStorage("networkID") private var networkID: Int = 0
-
     @State private var nameInput: String = ""
     @State private var rocketIDInput: Int = 1
     @State private var initialized = false
@@ -53,15 +50,9 @@ struct DeviceProvisioningSheet: View {
                     }
                 }
 
-                Section(header: Text("Network"),
-                        footer: Text("All your devices will be set to this network. Change in Settings.")) {
-                    HStack {
-                        Text(networkName.isEmpty ? "Not set" : networkName)
-                        Spacer()
-                        Text("ID: \(networkID)")
-                            .foregroundColor(.secondary)
-                    }
-                }
+                // Network section hidden in #136 — see SettingsView for
+                // the rationale.  Both ends now force a default network
+                // ID at boot, so there's nothing to push from here.
 
                 Section {
                     Button {
@@ -109,8 +100,10 @@ struct DeviceProvisioningSheet: View {
         // Send name to device
         device.sendSetUnitName(trimmed)
 
-        // Send network ID
-        device.sendSetNetworkID(UInt8(networkID))
+        // Network ID push removed in #136 — firmware boots to a hardcoded
+        // default and cmd 9 only takes effect for the current session, so
+        // pushing here would just lull the user into thinking they're on
+        // a custom network until the next power cycle.
 
         // Send rocket ID (rockets only)
         if !device.isBaseStation {

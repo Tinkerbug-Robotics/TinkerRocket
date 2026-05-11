@@ -26,7 +26,6 @@ struct OnboardingView: View {
     @AppStorage("hasOnboarded") private var hasOnboarded: Bool = false
 
     @State private var nameInput: String = ""
-    @State private var previewID: UInt8 = 0
 
     var body: some View {
         VStack(spacing: 32) {
@@ -54,17 +53,11 @@ struct OnboardingView: View {
                 TextField("e.g. My Backyard, Skyhawks Club", text: $nameInput)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .autocapitalization(.words)
-                    .onChange(of: nameInput) { newValue in
-                        if !newValue.isEmpty {
-                            previewID = fnv1a8(newValue)
-                        }
-                    }
 
-                if !nameInput.isEmpty {
-                    Text("Network ID: \(previewID)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                // Network ID preview hidden in #136 — both ends now force
+                // a hardcoded default network_id at boot.  Network name is
+                // kept as a friendly label for the user's setup but no
+                // longer maps to a wire ID until #150 brings hopping back.
             }
             .padding(.horizontal, 32)
 

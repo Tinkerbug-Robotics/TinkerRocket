@@ -3863,6 +3863,20 @@ static void setup_oc()
         rocket_id  = prefs.getUChar("rid", config::DEFAULT_ROCKET_ID);
         prefs.end();
 
+        // #136: force network_id back to default on every boot, matching
+        // the LoRa rendezvous override.  Stops BS and OC from drifting
+        // apart when one side's NVS gets wiped (e.g., the lora-namespace
+        // clear on a schema bump) while the other keeps an old nid.
+        // Cmd 9 still works at runtime for developers; on next boot the
+        // device returns to the hardcoded default.  Per-network IDs come
+        // back in #150 alongside hopping.
+        if (network_id != config::DEFAULT_NETWORK_ID)
+        {
+            ESP_LOGW("CFG", "NVS nid=%u differs from default %u — forcing default",
+                     (unsigned)network_id, (unsigned)config::DEFAULT_NETWORK_ID);
+            network_id = config::DEFAULT_NETWORK_ID;
+        }
+
         ESP_LOGI("CFG", "Identity early load: uid=%s name=%s nid=%u rid=%u",
                  unit_id_hex, unit_name, (unsigned)network_id, (unsigned)rocket_id);
         ble_app.setName(unit_name);
