@@ -57,6 +57,7 @@ static bool solve4x4(double A[4][4], double b[4], double x[4])
 
 MagCalibrator::MagCalibrator()
     : n_samples_(0),
+      write_idx_(0),
       coverage_mask_(0),
       last_x_(0), last_y_(0), last_z_(0),
       fit_cx_(0), fit_cy_(0), fit_cz_(0),
@@ -70,6 +71,7 @@ MagCalibrator::MagCalibrator()
 void MagCalibrator::start()
 {
     n_samples_ = 0;
+    write_idx_ = 0;
     coverage_mask_ = 0;
     last_x_ = last_y_ = last_z_ = 0;
     fit_valid_ = false;
@@ -117,36 +119,31 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
 {
     if (state_ != State::SAMPLING) return false;
 
-    // Keep updating the "live" vector even after the buffer fills, so
-    // the iOS direction-feedback UI keeps ticking.  Coverage mask also
-    // stays in sync — the user might tumble through new wedges after
-    // the buffer is full.
+    // Live vector + coverage update regardless of buffer state — the
+    // iOS direction-feedback UI keeps ticking and the coverage mask
+    // stays in sync if the user tumbles into new wedges.
     last_x_ = x;
     last_y_ = y;
     last_z_ = z;
     const uint8_t wedge = directionWedge(x, y, z);
     if (wedge < 27) coverage_mask_ |= (1u << wedge);
 
-    if (n_samples_ >= MAX_SAMPLES)
-    {
-        // Buffer full — stop adding to it, but DO NOT auto-fit.  The fit
-        // is user-driven via computeFit() (BLE cmd MAG_CAL_COMPUTE_FIT),
-        // so the user gets to decide when they're done tumbling.  Return
-        // false here so callers don't see a misleading "buffer just
-        // filled" pulse on every subsequent sample.
-        return false;
-    }
+    // Ring buffer: write at the current index, advance modulo
+    // MAX_SAMPLES, and let n_samples_ saturate at MAX_SAMPLES once we
+    // wrap.  This means the user can keep sampling indefinitely — they
+    // don't lose orientations because the buffer "ran out" 20 s in.
+    // The fit always sees the most recent MAX_SAMPLES, which captures
+    // whatever orientations the user just finished rotating through.
+    samples_x_[write_idx_] = x;
+    samples_y_[write_idx_] = y;
+    samples_z_[write_idx_] = z;
+    write_idx_ = (uint16_t)((write_idx_ + 1) % MAX_SAMPLES);
+    if (n_samples_ < MAX_SAMPLES) n_samples_++;
 
-    samples_x_[n_samples_] = x;
-    samples_y_[n_samples_] = y;
-    samples_z_[n_samples_] = z;
-    n_samples_++;
-
-    // Caller cue: buffer just filled on this sample.  Used by main.cpp
-    // to publish an immediate status frame so the iOS UI flips its
-    // "Compute Fit" button to a primary-action style without waiting
-    // for the next 5 Hz tick.
-    return (n_samples_ == MAX_SAMPLES);
+    // Ring buffer means sampling never "completes" — the 5 Hz status
+    // cadence in the FC main loop keeps the iOS UI updated.  No more
+    // one-shot "buffer just filled" pulse.
+    return false;
 }
 
 bool MagCalibrator::computeFit()

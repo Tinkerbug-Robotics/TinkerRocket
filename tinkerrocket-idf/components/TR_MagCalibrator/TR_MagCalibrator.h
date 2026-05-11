@@ -110,11 +110,17 @@ private:
     // Tunables — see MAG_CAL_* constants in RocketComputerTypes.h.
     static constexpr uint16_t MAX_SAMPLES = MAG_CAL_MAX_SAMPLES;
 
-    // Sample storage.  3 × int16 × 1024 = 6 KiB on the FC heap.
+    // Sample storage.  3 × int16 × 2048 = 12 KiB on the FC heap.  Used
+    // as a ring buffer once full so the user can keep sampling past
+    // MAX_SAMPLES — newest samples overwrite the oldest, and the fit
+    // always runs on the latest MAX_SAMPLES.  write_idx_ tracks where
+    // the next sample lands; n_samples_ saturates at MAX_SAMPLES once
+    // the buffer wraps.
     int16_t samples_x_[MAX_SAMPLES];
     int16_t samples_y_[MAX_SAMPLES];
     int16_t samples_z_[MAX_SAMPLES];
     uint16_t n_samples_;
+    uint16_t write_idx_;
 
     // 3³ - 1 = 26 wedges (the all-center cell is unreachable for unit
     // vectors).  Bit i set means wedge i has at least one sample.
