@@ -189,6 +189,7 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
     }
 
     out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
+    out.coverage_mask = coverage_mask_;
     out.sample_count  = n_samples_;
 
     // Instantaneous field magnitude (most recent sample).
