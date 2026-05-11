@@ -117,18 +117,25 @@ struct MagCalView: View {
 
     /// Sampling: orientation-progress hero, live direction bars, Compute
     /// Fit button (user-driven completion — no auto-timeout), and abort.
-    /// All driven off the FC's 5 Hz status frame.
+    /// Orientation detection runs off the low-g accelerometer (gravity
+    /// vector), not the magnetometer — the mag is precisely what we're
+    /// trying to calibrate, so it's unreliable as an orientation source.
+    /// Accel data comes from the regular telemetry stream that runs in
+    /// parallel with the cal status frames.
     private var samplingSection: some View {
         Group {
             if let s = status {
+                let ax = device.telemetry.low_g_x
+                let ay = device.telemetry.low_g_y
+                let az = device.telemetry.low_g_z
                 Section {
-                    SamplingHero(status: s)
+                    SamplingHero(status: s, ax: ax, ay: ay, az: az)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                 }
-                Section(header: Text("Live mag vector"),
-                        footer: Text("Use the bars to verify which axis is dominant. The current target's bar is highlighted — adjust the rocket until its bar reaches the target marker.")) {
-                    DirectionBars(status: s)
+                Section(header: Text("Live accel (gravity)"),
+                        footer: Text("These bars show the gravity direction in the rocket's body frame. Whichever axis reads ≈ ±9.8 m/s² is the one pointing up or down. Adjust the rocket so the target axis dominates.")) {
+                    DirectionBars(ax: ax, ay: ay, az: az)
                         .padding(.vertical, 4)
                 }
                 Section(header: Text("Progress")) {
@@ -333,65 +340,61 @@ struct MagCalView: View {
 // MARK: - Sampling Hero
 
 /// Guidance card for the sampling phase.  Walks the user through each
-/// cardinal orientation one at a time with a deterministic state
-/// machine:
-///   prompting(axis)  → user matches the axis; the live FC coverageMask
-///                       lights up the corresponding wedge bit
-///   holding(axis, t) → orientation matched; a visible countdown ticks
-///                       down while the user holds it.  Tells the user
-///                       "yes, this is working, just keep holding."
-///   prompting(next)  → after countdown elapses, advance.
-///   allDone          → all 6 cardinals walked; FC continues sampling
-///                       through diagonals for the full 2048-sample
-///                       window so coverage hits the 18-wedge gate.
+/// cardinal orientation using the LOW-G ACCELEROMETER (gravity vector)
+/// as the orientation reference — never the magnetometer, which is
+/// exactly what we're trying to calibrate and may report wildly biased
+/// values until the fit is applied.
 ///
-/// State is local to the view.  Coverage state from the FC drives the
-/// prompting→holding transition only; once we've finished a hold for
-/// an axis, we advance regardless of whether its bit clears later
-/// (which won't happen — bits are sticky on the FC side).
+/// State machine:
+///   prompting(axis)  → user rotates the rocket; accel-dominant axis
+///                       compared with the target.
+///   filling(axis, p) → orientation matched; a progress bar fills from
+///                       0 → 1.  Gentle decay if alignment briefly
+///                       wobbles, so small movements don't reset.
+///   captured(axis)   → bar full; axis goes into capturedAxes; advance.
+///   allDone          → all 6 cardinals captured; FC keeps sampling
+///                       in the background until the user taps Compute Fit.
 ///
-/// Old firmware (22-byte payload, coverageMask=0) leaves the state
-/// machine stuck in prompting forever, so we additionally drive a
-/// slow time-based cycle in that case as a degraded fallback.
+/// All orientation state is local to the view.  The FC's mag coverage
+/// is shown separately as a fit-quality indicator (it's the diversity
+/// of the sphere fit's input data, not whether the user reached the
+/// target physical orientations).
 private struct SamplingHero: View {
     let status: MagCalStatus
+    /// Live low-g accelerometer in body frame, m/s².  Pulled from the
+    /// regular telemetry stream by the parent view.  Nil = telemetry
+    /// hasn't arrived yet; the hero shows a "waiting" state.
+    let ax: Float?
+    let ay: Float?
+    let az: Float?
 
-    /// All six cardinal axes in the order the user is walked through them.
-    /// Order = nose along the body, then the four sides.  Fixed across
-    /// runs so users build muscle memory.
+    /// All six cardinal axes in the order the user walks through them.
+    /// Fixed across runs so users build muscle memory.
     private static let axisOrder: [MagCalAxis] = [
         .noseUp, .noseDown, .rightSide, .leftSide, .frontFace, .backFace
     ]
 
-    /// Hold duration before advancing — long enough to give the user
-    /// satisfying visual confirmation, short enough that 6 × HOLD plus
-    /// transition time still fits in the FC's 20 s sample window.
+    /// Time the user must hold the alignment before the axis captures.
+    /// Long enough to feel deliberate; short enough that 6 axes plus
+    /// re-orientation time fits in a reasonable session.
     private static let HOLD_SECONDS: Double = 1.5
-
-    /// State-machine tick — fast enough for a smooth countdown bar.
     private static let TICK_SECONDS: Double = 0.05
 
+    /// Minimum component magnitude (m/s²) for an axis to count as
+    /// "dominant" — filters free-fall, slow tumble, in-between
+    /// orientations.  Gravity is ~9.81; 4 m/s² ≈ 24° off pure axis.
+    private static let DOMINANT_THRESHOLD_MS2: Float = 4.0
+
     /// Index into axisOrder of the orientation we're currently prompting
-    /// for.  Moves forward only — once an axis is held to completion we
-    /// don't revisit it (even if its wedge bit somehow clears).
+    /// for.  Moves forward only.
     @State private var currentAxisIndex: Int = 0
 
-    /// Seconds remaining in the current hold.  When this reaches zero
-    /// we advance currentAxisIndex.  Zero = not currently holding.
-    @State private var holdRemaining: Double = 0
+    /// Hold progress for the current axis, 0..HOLD_SECONDS.  When this
+    /// reaches HOLD_SECONDS we capture and advance.
+    @State private var holdAccumulated: Double = 0
 
-    /// Old-firmware fallback timer — only kicks in when coverageMask is
-    /// always zero.  Cycles the prompt every 3 s as a degraded UX.
-    @State private var fallbackTimer: Timer?
-
-    /// State-machine driver — fires every TICK_SECONDS while the view
-    /// is visible.  Started in onAppear, torn down in onDisappear.
+    /// State-machine tick.  Started in onAppear, torn down on disappear.
     @State private var tickTimer: Timer?
-
-    /// True any time the FC's wire frame can carry per-wedge info.
-    /// Zero-mask + zero-bins (no samples yet) still counts as "live" so
-    /// a fresh entry isn't misread as old firmware.
-    private var hasLiveMask: Bool { status.coverageMask != 0 || status.coverageBins == 0 }
 
     /// The axis the user should be aiming for right now (nil = all 6 done).
     private var currentAxis: MagCalAxis? {
@@ -400,18 +403,39 @@ private struct SamplingHero: View {
             : nil
     }
 
-    /// True if the user is in the right orientation for the current
-    /// target — the corresponding wedge bit is set on the FC side.
-    private var currentAxisMatched: Bool {
-        guard hasLiveMask, let axis = currentAxis else { return false }
-        return status.isAxisCovered(axis)
+    /// True if the live accel vector indicates the rocket is in the
+    /// orientation the current target axis prompts for.
+    private var isAlignedWithTarget: Bool {
+        guard let target = currentAxis,
+              let x = ax, let y = ay, let z = az else { return false }
+        return SamplingHero.isAligned(target: target, ax: x, ay: y, az: z)
     }
 
-    private var isHolding: Bool { holdRemaining > 0 }
+    /// Per-axis alignment check.  An axis "matches" the accel vector
+    /// when (a) the target's component (X/Y/Z) is the dominant one, and
+    /// (b) that component's sign matches the target.  Threshold filters
+    /// out near-zero components so wobble doesn't accidentally count.
+    static func isAligned(target: MagCalAxis, ax: Float, ay: Float, az: Float) -> Bool {
+        let xa = abs(ax), ya = abs(ay), za = abs(az)
+        let peak = max(xa, max(ya, za))
+        guard peak >= SamplingHero.DOMINANT_THRESHOLD_MS2 else { return false }
 
-    /// Adaptive headline.  Drives off the local prompt index so it
-    /// updates in lock-step with what the user actually sees, rather
-    /// than off the FC's coverage count which can include diagonals.
+        let dominant: MagCalComponent
+        if peak == xa { dominant = .x }
+        else if peak == ya { dominant = .y }
+        else { dominant = .z }
+        guard dominant == target.component else { return false }
+
+        let signed: Float
+        switch dominant {
+        case .x: signed = ax
+        case .y: signed = ay
+        case .z: signed = az
+        }
+        return (signed > 0) == (target.sign > 0)
+    }
+
+    /// Adaptive headline.  Drives off the local prompt index.
     private var headline: String {
         if currentAxis == nil { return "All orientations captured" }
         switch currentAxisIndex {
@@ -432,19 +456,20 @@ private struct SamplingHero: View {
             orientationGrid
 
             HStack(spacing: 28) {
-                // Live |B|.  Big monospaced digits so the eye sees motion
-                // and trusts that sampling is live.
+                // Live |B| (raw, includes hard-iron bias).  Useful as a
+                // sanity check that mag is still sampling.
                 VStack(spacing: 2) {
                     Text(String(format: "%.0f", status.instantaneousFieldUT))
-                        .font(.system(size: 36, weight: .bold, design: .monospaced))
-                    Text("µT field")
+                        .font(.system(size: 32, weight: .bold, design: .monospaced))
+                    Text("µT raw |B|")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
 
-                // Total-coverage gauge.  Counts all 26 wedges (including
-                // diagonals); the six-axis grid above shows only the
-                // cardinals.
+                // Sphere-fit diversity gauge — how many of the 26 wedges
+                // of MAGNETIC-space have been sampled.  Independent of
+                // the cardinal-orientation walk above.  More wedges →
+                // better-conditioned sphere fit.
                 ZStack {
                     Circle()
                         .stroke(Color.gray.opacity(0.20), lineWidth: 10)
@@ -456,13 +481,13 @@ private struct SamplingHero: View {
                         .animation(.easeInOut(duration: 0.4), value: status.coverageBins)
                     VStack(spacing: 0) {
                         Text("\(status.coverageBins)")
-                            .font(.system(size: 22, weight: .bold, design: .monospaced))
-                        Text("/ 26")
+                            .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        Text("fit dvs")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
-                .frame(width: 84, height: 84)
+                .frame(width: 76, height: 76)
             }
         }
         .onAppear { startTimers() }
@@ -472,46 +497,43 @@ private struct SamplingHero: View {
     // MARK: - Pieces
 
     /// The big "do this now" prompt card.  Three visual states:
-    ///   - Prompting: orange arrow icon + "Point the nose UP" + caption
-    ///   - Holding:   green check + "Captured! Hold steady…" + countdown bar
-    ///   - All done:  seal + "All orientations captured" message
+    ///   - Prompting:  orange arrow icon + "Point the nose UP" + caption
+    ///   - Filling:    green check + progress bar growing toward capture
+    ///   - All done:   seal + "All orientations captured"
+    /// The fill bar uses accel-driven `holdAccumulated` rather than a
+    /// blind timer — if the user wobbles out of alignment, fill stops
+    /// (and gently decays); if they hold, it advances.
     @ViewBuilder
     private var currentTargetCard: some View {
         if let axis = currentAxis {
-            let holding = isHolding
+            let aligned = isAlignedWithTarget
             HStack(spacing: 12) {
-                Image(systemName: holding ? "checkmark.circle.fill" : axis.icon)
+                Image(systemName: aligned ? "checkmark.circle.fill" : axis.icon)
                     .font(.system(size: 36, weight: .semibold))
-                    .foregroundColor(holding ? .green : .orange)
+                    .foregroundColor(aligned ? .green : .orange)
                     .frame(width: 44)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(holding ? "Captured — hold steady" : axis.prompt)
+                    Text(aligned ? "Aligned — hold steady" : axis.prompt)
                         .font(.headline)
-                    if holding {
-                        // Countdown bar shrinks from full → empty over
-                        // HOLD_SECONDS.  More tangible than a "1.4 s"
-                        // number that flickers.
-                        ProgressView(value: max(0, holdRemaining),
-                                     total: SamplingHero.HOLD_SECONDS)
-                            .progressViewStyle(.linear)
-                            .tint(.green)
-                        Text(String(format: "Advancing in %.1f s", holdRemaining))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("Hold this position until it turns green")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    ProgressView(value: holdAccumulated,
+                                 total: SamplingHero.HOLD_SECONDS)
+                        .progressViewStyle(.linear)
+                        .tint(aligned ? .green : .orange)
+                    Text(aligned
+                        ? String(format: "Capturing… %.0f%%",
+                                 100 * holdAccumulated / SamplingHero.HOLD_SECONDS)
+                        : "Use the bars below to see which axis is dominant")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 Spacer()
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background((holding ? Color.green : Color.orange).opacity(0.12))
+            .background((aligned ? Color.green : Color.orange).opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal, 8)
-            .animation(.easeInOut(duration: 0.25), value: holding)
+            .animation(.easeInOut(duration: 0.20), value: aligned)
         } else {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.seal.fill")
@@ -521,7 +543,7 @@ private struct SamplingHero: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("All orientations captured")
                         .font(.headline)
-                    Text("Keep rolling slowly for a clean fit…")
+                    Text("Tap Compute Fit when ready, or keep rolling for better diversity.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -535,10 +557,8 @@ private struct SamplingHero: View {
         }
     }
 
-    /// 6-cell grid showing per-axis progress.  Each cell turns green
-    /// once we've held that axis to completion (currentAxisIndex moved
-    /// past it).  The CURRENT target also gets a blue ring + pulse so
-    /// it's obvious which one we're prompting for.
+    /// 6-cell grid showing per-axis capture state.  Captured = green,
+    /// current target = blue ring, future = grey.
     private var orientationGrid: some View {
         let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
         return LazyVGrid(columns: cols, spacing: 8) {
@@ -571,108 +591,103 @@ private struct SamplingHero: View {
     // MARK: - Timers / state-machine
 
     private func startTimers() {
-        // Main state-machine tick.
         tickTimer?.invalidate()
         tickTimer = Timer.scheduledTimer(withTimeInterval: SamplingHero.TICK_SECONDS,
                                           repeats: true) { _ in
             DispatchQueue.main.async { advance() }
         }
-        // Old-firmware fallback: if we never get a real mask, walk the
-        // axis cycle on a slow timer so the user still gets prompts.
-        // The FC fit will still run, just without per-orientation
-        // confirmation.
-        fallbackTimer?.invalidate()
-        fallbackTimer = Timer.scheduledTimer(withTimeInterval: 3.0,
-                                              repeats: true) { _ in
-            DispatchQueue.main.async {
-                if !hasLiveMask && !isHolding && currentAxisIndex < SamplingHero.axisOrder.count {
-                    // No live coverage info — simulate a hold completing.
-                    holdRemaining = 0
-                    currentAxisIndex += 1
-                }
-            }
-        }
     }
 
     private func stopTimers() {
         tickTimer?.invalidate(); tickTimer = nil
-        fallbackTimer?.invalidate(); fallbackTimer = nil
     }
 
-    /// One tick of the state machine.  Either tick down a running hold,
-    /// or start one if the current target's wedge bit is now set.
+    /// One tick of the state machine.  Fills holdAccumulated when the
+    /// rocket is aligned with the current target; gently decays it when
+    /// it isn't (so brief wobble doesn't reset everything).  When the
+    /// bar fills, capture the axis and move to the next.
     private func advance() {
         guard currentAxis != nil else { return }
-        if isHolding {
-            holdRemaining = max(0, holdRemaining - SamplingHero.TICK_SECONDS)
-            if holdRemaining == 0 {
-                // Hold done — advance past the current axis.
+        let step = SamplingHero.TICK_SECONDS
+        if isAlignedWithTarget {
+            holdAccumulated = min(SamplingHero.HOLD_SECONDS,
+                                  holdAccumulated + step)
+            if holdAccumulated >= SamplingHero.HOLD_SECONDS {
                 currentAxisIndex += 1
+                holdAccumulated = 0
             }
-        } else if currentAxisMatched {
-            // Orientation just matched — kick off the visible hold.
-            holdRemaining = SamplingHero.HOLD_SECONDS
+        } else {
+            // Gentle decay — half the fill rate so a brief wobble
+            // doesn't wipe several seconds of work.
+            holdAccumulated = max(0, holdAccumulated - step * 0.5)
         }
     }
 }
 
 // MARK: - Direction Bars
 
-/// Live mag-vector display: three signed horizontal bars for X, Y, Z
-/// (µT, post-IIS2MDC-OFFSET-subtract).  Centred at zero with a ±100 µT
-/// full-scale so an Earth field (~50 µT) reaches roughly half-bar.  The
-/// currently dominant component (largest |value|, above a small dead
-/// zone) is highlighted in blue so the user can see at a glance which
-/// axis their orientation is producing — the key feedback that was
-/// missing when the user couldn't tell whether nose-up was actually
-/// being detected.
+/// Live low-g accelerometer (gravity) display: three signed horizontal
+/// bars for X, Y, Z (m/s²).  Drives orientation feedback during the cal
+/// because the magnetometer is unreliable as an orientation reference
+/// — it's literally what we're trying to calibrate, and at the start of
+/// a cal session it can be biased by 30× Earth's field.  Gravity is a
+/// dependable ±9.81 m/s² reference vector that's always in the body
+/// frame.
 ///
-/// Falls back to a "waiting for live data" placeholder when running
-/// against firmware older than the 32-byte payload (all three components
-/// zero).
+/// The currently dominant axis (largest |value| above a small dead
+/// zone) is highlighted in blue so the user can verify at a glance
+/// which body axis is currently pointing up or down.
+///
+/// nil accel inputs render a "waiting for telemetry" placeholder.
 private struct DirectionBars: View {
-    let status: MagCalStatus
+    let ax: Float?
+    let ay: Float?
+    let az: Float?
 
-    /// Bar full-scale.  Fixed (not auto-scaling) so the bars don't
-    /// jitter as the user tumbles.  Earth fields land ~50 µT; the
-    /// uncalibrated PCB residual seen on this board is ~1640 µT so we
-    /// clamp wider — values past full-scale stay pinned at the end.
-    private static let RANGE_UT: Float = 100.0
+    /// Bar full-scale.  Set just above 1 g so a clean cardinal
+    /// orientation reads ~80% of the bar — visually saturated without
+    /// being pinned at the edge.
+    private static let RANGE_MS2: Float = 12.0
 
-    /// Components below this (in µT abs) don't count as "dominant" —
-    /// avoids flickering the highlight between near-zero axes when the
-    /// rocket is between orientations.
-    private static let DEAD_ZONE_UT: Float = 5.0
+    /// Components below this (m/s²) don't count as "dominant" — avoids
+    /// flickering the highlight between near-zero axes when the rocket
+    /// is in between orientations or tumbling.
+    private static let DEAD_ZONE_MS2: Float = 2.0
 
     private var hasLiveVector: Bool {
-        status.liveX_uT != 0 || status.liveY_uT != 0 || status.liveZ_uT != 0
+        ax != nil && ay != nil && az != nil
     }
 
-    /// Which axis is currently dominant (largest absolute value), or nil
-    /// if all three are below the dead zone.
+    /// Which axis is currently dominant, or nil if all three are below
+    /// the dead zone.
     private var dominantAxis: MagCalComponent? {
-        let xAbs = abs(status.liveX_uT)
-        let yAbs = abs(status.liveY_uT)
-        let zAbs = abs(status.liveZ_uT)
+        guard let x = ax, let y = ay, let z = az else { return nil }
+        let xAbs = abs(x), yAbs = abs(y), zAbs = abs(z)
         let peak = max(xAbs, max(yAbs, zAbs))
-        if peak < DirectionBars.DEAD_ZONE_UT { return nil }
+        if peak < DirectionBars.DEAD_ZONE_MS2 { return nil }
         if peak == xAbs { return .x }
         if peak == yAbs { return .y }
         return .z
     }
 
     var body: some View {
-        if hasLiveVector {
+        if hasLiveVector, let x = ax, let y = ay, let z = az {
             VStack(spacing: 10) {
-                ForEach(MagCalComponent.allCases, id: \.rawValue) { comp in
-                    ComponentBar(label: comp.rawValue,
-                                 value: comp.value(in: status),
-                                 range: DirectionBars.RANGE_UT,
-                                 isDominant: comp == dominantAxis)
-                }
+                ComponentBar(label: "X", value: x,
+                             range: DirectionBars.RANGE_MS2,
+                             isDominant: dominantAxis == .x,
+                             unitSuffix: " m/s²")
+                ComponentBar(label: "Y", value: y,
+                             range: DirectionBars.RANGE_MS2,
+                             isDominant: dominantAxis == .y,
+                             unitSuffix: " m/s²")
+                ComponentBar(label: "Z", value: z,
+                             range: DirectionBars.RANGE_MS2,
+                             isDominant: dominantAxis == .z,
+                             unitSuffix: " m/s²")
             }
         } else {
-            Text("Waiting for live mag data… (re-flash firmware if this persists)")
+            Text("Waiting for accelerometer telemetry…")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -684,6 +699,10 @@ private struct ComponentBar: View {
     let value: Float
     let range: Float
     let isDominant: Bool
+    /// e.g. " µT" or " m/s²".  Currently unused in the trailing readout
+    /// (we keep it compact at "+9.8") but lives here so a future Detail
+    /// row can show the full unit.
+    let unitSuffix: String
 
     var body: some View {
         HStack(spacing: 12) {
@@ -720,7 +739,7 @@ private struct ComponentBar: View {
             }
             .frame(height: 24)
 
-            Text(String(format: "%+.0f", value))
+            Text(String(format: "%+.1f", value))
                 .font(.system(size: 14, weight: .semibold, design: .monospaced))
                 .frame(width: 56, alignment: .trailing)
                 .foregroundColor(isDominant ? .blue : .secondary)
