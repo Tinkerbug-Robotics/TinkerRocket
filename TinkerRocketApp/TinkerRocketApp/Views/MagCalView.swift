@@ -510,10 +510,11 @@ private struct SamplingHero: View {
         .padding(.horizontal, 8)
     }
 
-    /// 6-cell grid.  Each cell is a tap-target: tap to mark that signed
-    /// axis captured.  Auto-detect (live accel dominance) drives a
-    /// blue ring around the matching cell as a hint, but doesn't gate
-    /// capture — the tap is what counts.
+    /// 6-cell grid.  Each cell is a tap-target — tap toggles capture
+    /// for that signed axis so an accidental tap can be undone without
+    /// restarting the whole cal.  Auto-detect (live accel dominance)
+    /// drives a blue ring around the matching cell as a hint but
+    /// doesn't gate capture — the tap is what counts.
     private var orientationGrid: some View {
         let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
         return LazyVGrid(columns: cols, spacing: 8) {
@@ -521,7 +522,13 @@ private struct SamplingHero: View {
                 let captured = capturedAxes.contains(axis)
                 let isActive = dominantAxis == axis && !captured
                 Button {
-                    capturedAxes.insert(axis)
+                    // Toggle: tap an unmarked cell to capture, tap a
+                    // captured cell to clear it (undo a misclick).
+                    if capturedAxes.contains(axis) {
+                        capturedAxes.remove(axis)
+                    } else {
+                        capturedAxes.insert(axis)
+                    }
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: captured ? "checkmark.circle.fill"
@@ -534,7 +541,9 @@ private struct SamplingHero: View {
                         Text(axis.label)
                             .font(.system(.headline, design: .monospaced))
                             .foregroundColor(captured ? .primary : .secondary)
-                        Text(captured ? "captured" : isActive ? "tap to mark" : "")
+                        Text(captured ? "tap to undo"
+                           : isActive ? "tap to mark"
+                           : "")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -550,7 +559,6 @@ private struct SamplingHero: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(captured)
             }
         }
         .padding(.horizontal, 8)
