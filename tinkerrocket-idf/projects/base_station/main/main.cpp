@@ -1528,6 +1528,19 @@ static void recoveryPushRocketHome()
 
 static void serviceRecovery()
 {
+    // #136: with hopping disabled the whole recovery state machine is
+    // redundant.  Both ends are pinned to LORA_FACTORY_RENDEZVOUS at
+    // boot (and can't drift — no auto-acquire move, no app-driven cmd
+    // 10), so Phase A's reconfigure is a no-op and the post-Phase-A
+    // "push rocket home" cmd 10 just blasts redundant TX retries at
+    // a rocket that's already on the right channel.  Leave the
+    // state machine inert until #150 re-enables hopping.
+    if (lora_hop_disabled)
+    {
+        if (recovery_state != RecoveryState::IDLE)
+            recoveryEnd("hop disabled — recovery suppressed");
+        return;
+    }
     // While locked for flight, or while actively hopping with the rocket,
     // accept silence — neither is a recovery scenario.  In flight, momentary
     // SNR dips look like silence; while hopping (#40 / #41), the recovery
@@ -2292,94 +2305,48 @@ static void autoAcquireOnScanFinalize()
 
 // Drive the auto-acquire state machine.  Called every loop iteration.
 // Cheap when in AWAITING_ROCKET / DONE — most calls are a single switch.
+//
+// #136 v2: scan-and-move was removed.  The whole point of the issue is to
+// stay on the hardcoded rendezvous (915 MHz SF8 BW250) for the duration
+// of the test so we can measure raw link performance.  Picking a
+// "quieter" channel and moving via cmd 10 adds a fragile transaction
+// where any cmd-10 loss makes the BS roll back to 915 — which is
+// exactly the no-op we'd have wanted in the first place.  Field-tested
+// on 2026-05-11: the BS picked 923.5, the OC didn't follow, BS rolled
+// back, and the user (rightly) flagged the BS as no longer "on a
+// single frequency".
+//
+// State machine now just waits for first RX and declares success.  The
+// scan helpers (autoAcquireOnScanFinalize, AUTO_ACQUIRE_SCAN_*) are kept
+// in source for when #150 re-enables the scan-and-move pathway.
 static void serviceAutoAcquire()
 {
     if (auto_acquire_state == AutoAcquireState::DONE) return;
 
-    const uint32_t now = millis();
-    switch (auto_acquire_state)
+    // Only the AWAITING_ROCKET state is reachable now; the rest of the
+    // enum is dead-code preserved for #150's follow-up.  Belt-and-braces:
+    // if anything ever leaves us in a non-AWAITING state, flush to DONE
+    // so we don't get stuck.
+    if (auto_acquire_state != AutoAcquireState::AWAITING_ROCKET)
     {
-        case AutoAcquireState::AWAITING_ROCKET:
-        {
-            // last_packet_ms is bumped on every CRC-good + SNR-validated
-            // RX, so any non-zero value means the rocket is alive on the
-            // rendezvous channel.  If freq_locked_for_flight came on
-            // before we ever heard a packet (rocket caught mid-flight on
-            // BS power-up), skip — too late to relocate it.
-            if (freq_locked_for_flight)
-            {
-                ESP_LOGW(TAG, "[AUTO] Rocket already INFLIGHT before first acquire — skipping scan");
-                auto_acquire_state = AutoAcquireState::DONE;
-                return;
-            }
-            if (last_packet_ms != 0)
-            {
-                auto_acquire_state = AutoAcquireState::GRACE_DELAY;
-                auto_acquire_grace_start_ms = now;
-                ESP_LOGI(TAG, "[AUTO] First rocket packet acquired — scan in %u ms",
-                         (unsigned)AUTO_ACQUIRE_GRACE_MS);
-            }
-            break;
-        }
+        ESP_LOGW(TAG, "[AUTO] Unexpected state %d — forcing DONE",
+                 (int)auto_acquire_state);
+        auto_acquire_state = AutoAcquireState::DONE;
+        return;
+    }
 
-        case AutoAcquireState::GRACE_DELAY:
-        {
-            if ((now - auto_acquire_grace_start_ms) < AUTO_ACQUIRE_GRACE_MS)
-                return;
-            // Refuse to start if the radio is busy with something else.
-            // We just wait — the next loop iteration will re-check.  In
-            // practice nothing else should be touching the radio this
-            // early, but the guards are cheap.
-            if (uplink_pending)                         return;
-            if (lora_txn_state != LoRaTxnState::IDLE)   return;
-            if (scan_passes_remaining_ != 0)            return;
-            if (coord_scan_state_ != CoordScanState::IDLE) return;
-
-            if (startNoiseScan(AUTO_ACQUIRE_SCAN_START_MHZ,
-                                AUTO_ACQUIRE_SCAN_STOP_MHZ,
-                                AUTO_ACQUIRE_SCAN_STEP_KHZ,
-                                AUTO_ACQUIRE_SCAN_DWELL_MS))
-            {
-                auto_acquire_state = AutoAcquireState::SCANNING;
-                ESP_LOGI(TAG, "[AUTO] Noise scan started (%.0f..%.0f MHz, %u kHz, %u ms × %u passes)",
-                         (double)AUTO_ACQUIRE_SCAN_START_MHZ,
-                         (double)AUTO_ACQUIRE_SCAN_STOP_MHZ,
-                         (unsigned)AUTO_ACQUIRE_SCAN_STEP_KHZ,
-                         (unsigned)AUTO_ACQUIRE_SCAN_DWELL_MS,
-                         (unsigned)LORA_NOISE_SCAN_PASSES);
-            }
-            else
-            {
-                ESP_LOGW(TAG, "[AUTO] startNoiseScan refused — staying on %.2f MHz",
-                         (double)lora_freq_mhz);
-                auto_acquire_state = AutoAcquireState::DONE;
-            }
-            break;
-        }
-
-        case AutoAcquireState::SCANNING:
-        {
-            // finalizeNoiseScan() dispatches to autoAcquireOnScanFinalize()
-            // on completion, which advances us to COMMITTING (or DONE on
-            // no-op / refusal).  Nothing for us to do here.
-            break;
-        }
-
-        case AutoAcquireState::COMMITTING:
-        {
-            // serviceLoRaTransaction() commits or rolls back asynchronously.
-            // We just wait for the txn machine to settle, then we're done.
-            if (lora_txn_state == LoRaTxnState::IDLE)
-            {
-                ESP_LOGI(TAG, "[AUTO] Settled — link locked on %.2f MHz for this flight",
-                         (double)lora_freq_mhz);
-                auto_acquire_state = AutoAcquireState::DONE;
-            }
-            break;
-        }
-
-        case AutoAcquireState::DONE:
-            break;
+    if (freq_locked_for_flight)
+    {
+        ESP_LOGW(TAG, "[AUTO] Rocket INFLIGHT before first acquire — done");
+        auto_acquire_state = AutoAcquireState::DONE;
+        return;
+    }
+    if (last_packet_ms != 0)
+    {
+        ESP_LOGI(TAG, "[AUTO] First rocket packet acquired — locked on %.2f MHz "
+                      "for this flight (no scan, no move)",
+                 (double)lora_freq_mhz);
+        auto_acquire_state = AutoAcquireState::DONE;
     }
 }
 
