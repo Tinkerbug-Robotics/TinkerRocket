@@ -288,7 +288,7 @@ extension MagCalStatus {
 // drift from the FC's accept/reject decision.  The FC is the source of
 // truth via rejectCode — these constants are just for the progress UI.
 enum MagCalConstants {
-    static let maxSamples: UInt16 = 2048
+    static let maxSamples: UInt16 = 2700   // 27 accel-wedges × 100 slots each
     static let minSamples: UInt16 = 500
     static let minCoverageBins: UInt8 = 18
 }

@@ -57,7 +57,6 @@ static bool solve4x4(double A[4][4], double b[4], double x[4])
 
 MagCalibrator::MagCalibrator()
     : n_samples_(0),
-      write_idx_(0),
       coverage_mask_(0),
       last_x_(0), last_y_(0), last_z_(0),
       fit_cx_(0), fit_cy_(0), fit_cz_(0),
@@ -65,15 +64,23 @@ MagCalibrator::MagCalibrator()
       fit_residual_uT_(0.0f),
       fit_reject_code_(MAG_CAL_OK),
       fit_valid_(false),
+      accel_x_(0), accel_y_(0), accel_z_(0),
+      accel_valid_(false),
       state_(State::IDLE)
-{}
+{
+    memset(wedge_count_, 0, sizeof(wedge_count_));
+    memset(wedge_write_, 0, sizeof(wedge_write_));
+}
 
 void MagCalibrator::start()
 {
     n_samples_ = 0;
-    write_idx_ = 0;
+    memset(wedge_count_, 0, sizeof(wedge_count_));
+    memset(wedge_write_, 0, sizeof(wedge_write_));
     coverage_mask_ = 0;
     last_x_ = last_y_ = last_z_ = 0;
+    // accel_valid_ stays as-is: the IMU is sampling regardless of cal
+    // state, so accel readings from before Start are still fresh.
     fit_valid_ = false;
     fit_cx_ = fit_cy_ = fit_cz_ = 0;
     fit_R_uT_ = 0.0f;
@@ -115,34 +122,57 @@ void MagCalibrator::clear()
     state_ = State::IDLE;
 }
 
+void MagCalibrator::setLiveAccel(int16_t ax, int16_t ay, int16_t az)
+{
+    accel_x_ = ax;
+    accel_y_ = ay;
+    accel_z_ = az;
+    accel_valid_ = true;
+}
+
 bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
 {
     if (state_ != State::SAMPLING) return false;
 
-    // Live vector + coverage update regardless of buffer state — the
+    // Live vector + coverage update regardless of bucket state — the
     // iOS direction-feedback UI keeps ticking and the coverage mask
-    // stays in sync if the user tumbles into new wedges.
+    // tracks which accel-direction wedges have been visited so far.
     last_x_ = x;
     last_y_ = y;
     last_z_ = z;
-    const uint8_t wedge = directionWedge(x, y, z);
-    if (wedge < 27) coverage_mask_ |= (1u << wedge);
 
-    // Ring buffer: write at the current index, advance modulo
-    // MAX_SAMPLES, and let n_samples_ saturate at MAX_SAMPLES once we
-    // wrap.  This means the user can keep sampling indefinitely — they
-    // don't lose orientations because the buffer "ran out" 20 s in.
-    // The fit always sees the most recent MAX_SAMPLES, which captures
-    // whatever orientations the user just finished rotating through.
-    samples_x_[write_idx_] = x;
-    samples_y_[write_idx_] = y;
-    samples_z_[write_idx_] = z;
-    write_idx_ = (uint16_t)((write_idx_ + 1) % MAX_SAMPLES);
-    if (n_samples_ < MAX_SAMPLES) n_samples_++;
+    // Without a recent accel reading we can't bin the sample by
+    // orientation, so drop it rather than piling everything into a
+    // single bucket.  Should only happen during the brief startup
+    // window before the first IMU sample lands.
+    if (!accel_valid_) return false;
 
-    // Ring buffer means sampling never "completes" — the 5 Hz status
-    // cadence in the FC main loop keeps the iOS UI updated.  No more
-    // one-shot "buffer just filled" pulse.
+    const uint8_t accel_wedge = directionWedge(accel_x_, accel_y_, accel_z_);
+    if (accel_wedge >= NUM_ACCEL_WEDGES) return false;
+
+    // Update the accel-driven coverage mask up-front so the iOS UI
+    // sees the new wedge as soon as it's been visited, even if its
+    // slot ring buffer is full and an oldest sample gets evicted.
+    coverage_mask_ |= (1u << accel_wedge);
+
+    // Ring buffer inside the wedge bucket.  Up to SAMPLES_PER_WEDGE
+    // samples are kept per accel-wedge; when full, newest overwrites
+    // oldest WITHIN THAT WEDGE.  Samples from other orientations are
+    // never disturbed, so a user lingering in one position can't
+    // wipe out the diversity gathered earlier.
+    const uint16_t base = (uint16_t)accel_wedge * SAMPLES_PER_WEDGE;
+    const uint16_t slot = base + wedge_write_[accel_wedge];
+    samples_x_[slot] = x;
+    samples_y_[slot] = y;
+    samples_z_[slot] = z;
+    wedge_write_[accel_wedge] = (uint8_t)((wedge_write_[accel_wedge] + 1) % SAMPLES_PER_WEDGE);
+    if (wedge_count_[accel_wedge] < SAMPLES_PER_WEDGE) {
+        wedge_count_[accel_wedge]++;
+        n_samples_++;  // saturates at NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE
+    }
+
+    // Sampling never "completes" — the 5 Hz status cadence in the FC
+    // main loop keeps the iOS UI updated.  No "buffer just filled" pulse.
     return false;
 }
 
@@ -279,17 +309,31 @@ void MagCalibrator::runFit()
 
     if (n_samples_ < MAG_CAL_MIN_SAMPLES) return;
 
+    // All sample iteration walks the per-wedge bucket arrays.  Helper
+    // lambda captures the "for each valid sample" pattern so the three
+    // passes (centroid, normal eqs, residual) share the same indexing
+    // logic and stay in sync if the storage layout changes.
+    auto forEachSample = [this](auto&& fn) {
+        for (uint8_t w = 0; w < NUM_ACCEL_WEDGES; w++) {
+            const uint16_t base = (uint16_t)w * SAMPLES_PER_WEDGE;
+            const uint8_t  count = wedge_count_[w];
+            for (uint8_t i = 0; i < count; i++) {
+                const uint16_t slot = base + i;
+                fn(samples_x_[slot], samples_y_[slot], samples_z_[slot]);
+            }
+        }
+    };
+
     // Accumulate sums in double.  Centroid-shifting before solving keeps
     // the cross-product sums small (cancel the bulk of the offset before
     // squaring), which preserves ~7+ digits of precision in the normal
     // equations even with raw counts in the ~1e4 range.
     double sx = 0.0, sy = 0.0, sz = 0.0;
-    for (uint16_t i = 0; i < n_samples_; i++)
-    {
-        sx += (double)samples_x_[i];
-        sy += (double)samples_y_[i];
-        sz += (double)samples_z_[i];
-    }
+    forEachSample([&](int16_t x, int16_t y, int16_t z) {
+        sx += (double)x;
+        sy += (double)y;
+        sz += (double)z;
+    });
     const double mx = sx / (double)n_samples_;
     const double my = sy / (double)n_samples_;
     const double mz = sz / (double)n_samples_;
@@ -302,11 +346,10 @@ void MagCalibrator::runFit()
     double sb = 0.0;
     double sxb = 0.0, syb = 0.0, szb = 0.0;
 
-    for (uint16_t i = 0; i < n_samples_; i++)
-    {
-        const double xc = (double)samples_x_[i] - mx;
-        const double yc = (double)samples_y_[i] - my;
-        const double zc = (double)samples_z_[i] - mz;
+    forEachSample([&](int16_t x, int16_t y, int16_t z) {
+        const double xc = (double)x - mx;
+        const double yc = (double)y - my;
+        const double zc = (double)z - mz;
         const double bi = xc*xc + yc*yc + zc*zc;
 
         sxx += xc*xc; syy += yc*yc; szz += zc*zc;
@@ -316,7 +359,7 @@ void MagCalibrator::runFit()
         sxb += xc * bi;
         syb += yc * bi;
         szb += zc * bi;
-    }
+    });
 
     // Build symmetric AᵀA (4×4) and Aᵀb (4×1) for the centered solve.
     double M[4][4] = {
@@ -357,15 +400,14 @@ void MagCalibrator::runFit()
 
     // RMS residual in raw counts (then scaled to µT).
     double rss = 0.0;
-    for (uint16_t i = 0; i < n_samples_; i++)
-    {
-        const double dx = (double)samples_x_[i] - cx;
-        const double dy = (double)samples_y_[i] - cy;
-        const double dz = (double)samples_z_[i] - cz;
+    forEachSample([&](int16_t x, int16_t y, int16_t z) {
+        const double dx = (double)x - cx;
+        const double dy = (double)y - cy;
+        const double dz = (double)z - cz;
         const double ri = sqrt(dx*dx + dy*dy + dz*dz);
         const double e = ri - R;
         rss += e*e;
-    }
+    });
     const double rms_counts = sqrt(rss / (double)n_samples_);
 
     // Scale to µT for gating + reporting.
@@ -400,13 +442,12 @@ void MagCalibrator::runFit()
     // below and the iOS REVIEW screen's coverage row.
     {
         uint32_t post_fit_mask = 0;
-        for (uint16_t i = 0; i < n_samples_; i++)
-        {
-            const double dx = (double)samples_x_[i] - cx;
-            const double dy = (double)samples_y_[i] - cy;
-            const double dz = (double)samples_z_[i] - cz;
+        forEachSample([&](int16_t x, int16_t y, int16_t z) {
+            const double dx = (double)x - cx;
+            const double dy = (double)y - cy;
+            const double dz = (double)z - cz;
             const double r2 = dx*dx + dy*dy + dz*dz;
-            if (!(r2 > 0.0)) continue;
+            if (!(r2 > 0.0)) return;
             const double r = sqrt(r2);
             const double ux = dx / r;
             const double uy = dy / r;
@@ -417,7 +458,7 @@ void MagCalibrator::runFit()
             };
             const uint8_t wedge = (uint8_t)(bin(ux) * 9 + bin(uy) * 3 + bin(uz));
             if (wedge < 27) post_fit_mask |= (1u << wedge);
-        }
+        });
         coverage_mask_ = post_fit_mask;
     }
 

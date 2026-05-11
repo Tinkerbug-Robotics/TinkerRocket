@@ -779,12 +779,11 @@ static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 18;
 // or moving interferer dominated the capture.
 static constexpr float MAG_CAL_MAX_RESIDUAL_UT = 8.0f;
 
-// Sample-buffer cap.  At 100 Hz IIS2MDC ODR, 2048 samples = ~20 s of
-// tumble — long enough to cover all wedges at a relaxed pace, especially
-// with the iOS UI gating each orientation prompt on the corresponding
-// wedge actually lighting up (so the user can dwell on each direction
-// until it's captured).  Heap cost: 2048 × 3 × int16 = 12 KiB.
-static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 2048;
+// Sample-buffer cap.  Bucketed per accel-wedge (27 wedges × 100 slots
+// each = 2700 total) so a user lingering in one orientation can't
+// crowd out samples from other orientations — diversity is preserved
+// even across long sessions.  Heap cost: 2700 × 3 × int16 ≈ 16 KiB.
+static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 2700;
 
 // Minimum samples before we'll attempt a fit.  Matches the issue's "≥500
 // samples (~5 s at 100 Hz)" guidance.

@@ -1730,6 +1730,14 @@ static void loop_fc()
         sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
         have_ism6_si = true;
 
+        // Feed the live low-g accel to the mag calibrator so each
+        // incoming mag sample can be bucketed by physical orientation
+        // (issue #96 follow-up).  Raw int16 LSB units share the same
+        // sign convention as the mag direction-wedge encoding.
+        mag_calibrator.setLiveAccel(ism6hg256_data.acc_low_raw.x,
+                                    ism6hg256_data.acc_low_raw.y,
+                                    ism6hg256_data.acc_low_raw.z);
+
         memcpy(ism6hg256_data_buffer,
                &ism6hg256_data,
                SIZE_OF_ISM6HG256_DATA);

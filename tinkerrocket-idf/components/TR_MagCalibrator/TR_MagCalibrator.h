@@ -69,13 +69,25 @@ public:
     // Reset to IDLE.  Call after consuming an APPLIED or ABORTED state.
     void clear();
 
-    // Feed one raw sample (int16 LSB counts, sensor frame — same units the
-    // IIS2MDC OFFSET registers consume).  No-op outside SAMPLING.  Returns
-    // true if the sample was the one that filled the buffer (the caller
-    // can use this as a "buffer full, stop pacing samples" hint, though
-    // additional samples silently no-op once full).  Sampling NEVER
-    // auto-transitions to REVIEW — that's user-driven via computeFit().
+    // Feed one raw mag sample (int16 LSB counts, sensor frame — same
+    // units the IIS2MDC OFFSET registers consume).  No-op outside
+    // SAMPLING.  Always returns false: the ring-buffer-per-wedge model
+    // never has a "buffer full" pulse — the 5 Hz status cadence handles
+    // iOS updates.  Each sample lands in the bucket for the rocket's
+    // current accel-direction wedge (set via setLiveAccel), so samples
+    // from one orientation can't crowd out samples from another.
+    // Sampling NEVER auto-transitions to REVIEW — that's user-driven
+    // via computeFit().
     bool addSample(int16_t x, int16_t y, int16_t z);
+
+    // Set the latest low-g accelerometer reading (raw int16 counts,
+    // body frame).  Used to bucket subsequent mag samples by physical
+    // orientation: each call to addSample lands its sample in the
+    // bucket for the wedge of (accel_x_, accel_y_, accel_z_).  Should
+    // be called from the FC's IMU sample path; mag samples that
+    // arrive before any accel reading are dropped (otherwise they'd
+    // all pile into wedge 0).
+    void setLiveAccel(int16_t ax, int16_t ay, int16_t az);
 
     // Run the sphere fit on the current sample buffer and transition to
     // REVIEW.  Returns false (and stays in SAMPLING) if fewer than
@@ -107,20 +119,37 @@ public:
     void buildStatusFrame(uint32_t time_us, MagCalStatusData& out) const;
 
 private:
-    // Tunables — see MAG_CAL_* constants in RocketComputerTypes.h.
-    static constexpr uint16_t MAX_SAMPLES = MAG_CAL_MAX_SAMPLES;
+    // Per-accel-wedge sample bucketing.  The flat ring buffer (older
+    // design) lost diverse samples when the user lingered in one
+    // orientation — newest samples blindly overwrote everything.  Now
+    // each of the 27 (3³) accel-direction wedges has its own
+    // SAMPLES_PER_WEDGE ring buffer, so samples from one orientation
+    // can only displace other samples from the SAME orientation.
+    // Memory: 27 × 100 × 3 × int16 ≈ 16 KiB, comfortably small on the
+    // ESP32-P4.  Wedge 13 (the all-centre cell) is unreachable for a
+    // unit accel vector so its slots stay unused — kept in the array
+    // for index arithmetic simplicity.
+    static constexpr uint8_t  NUM_ACCEL_WEDGES   = 27;
+    static constexpr uint8_t  SAMPLES_PER_WEDGE  = 100;
+    static constexpr uint16_t MAX_TOTAL_SAMPLES  =
+        (uint16_t)NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE;
+    // Exposed for callers (e.g. iOS display caps); matches the old
+    // MAG_CAL_MAX_SAMPLES contract.
+    static constexpr uint16_t MAX_SAMPLES = MAX_TOTAL_SAMPLES;
 
-    // Sample storage.  3 × int16 × 2048 = 12 KiB on the FC heap.  Used
-    // as a ring buffer once full so the user can keep sampling past
-    // MAX_SAMPLES — newest samples overwrite the oldest, and the fit
-    // always runs on the latest MAX_SAMPLES.  write_idx_ tracks where
-    // the next sample lands; n_samples_ saturates at MAX_SAMPLES once
-    // the buffer wraps.
-    int16_t samples_x_[MAX_SAMPLES];
-    int16_t samples_y_[MAX_SAMPLES];
-    int16_t samples_z_[MAX_SAMPLES];
-    uint16_t n_samples_;
-    uint16_t write_idx_;
+    int16_t samples_x_[MAX_TOTAL_SAMPLES];
+    int16_t samples_y_[MAX_TOTAL_SAMPLES];
+    int16_t samples_z_[MAX_TOTAL_SAMPLES];
+    uint8_t wedge_count_[NUM_ACCEL_WEDGES];  // 0..SAMPLES_PER_WEDGE per wedge
+    uint8_t wedge_write_[NUM_ACCEL_WEDGES];  // ring write index per wedge
+    uint16_t n_samples_;                      // sum of wedge_count_, kept in sync
+
+    // Latest accel reading, used to pick the wedge bucket for each
+    // incoming mag sample.  accel_valid_ stays false until the first
+    // setLiveAccel call so we don't pile mag samples into wedge 0
+    // before any orientation info has arrived.
+    int16_t accel_x_, accel_y_, accel_z_;
+    bool    accel_valid_;
 
     // 3³ - 1 = 26 wedges (the all-center cell is unreachable for unit
     // vectors).  Bit i set means wedge i has at least one sample.
