@@ -3517,6 +3517,22 @@ void initPeripherals()
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
         lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
 
+        // Issue #136: every rocket boot starts on the hardcoded
+        // rendezvous frequency + preset, hopping off, regardless of
+        // any NVS values left from prior sessions.  The BS reaches
+        // here on rendezvous, scans, and uses the cmd-10 transactional
+        // flow to move us to the picked channel.  cmd-10's NVS write
+        // still happens during a session for visibility, but boot
+        // always re-resets here so the rendezvous is reliable.
+        // Hopping is gated behind cmd 17 (developer flag); see the
+        // "Re-enable LoRa hopping" follow-up enhancement.
+        lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
+        lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
+        lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
+        lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
+        lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+        lora_hop_disabled = true;
+
         // Channel-set restore (#40 / #41 phase 3): skip-mask pushed by
         // the BS via cmd 15.  Skip-mask is keyed off the BW it was
         // generated for; if NVS BW != active BW, discard the mask (the
@@ -3779,12 +3795,23 @@ static void setup_oc()
             lora_cr        = prefs.getUChar("cr",    config::LORA_CR);
             lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
             lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106
-            ESP_LOGI("CFG", "NVS LoRa early load: %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
+            ESP_LOGI("CFG", "NVS LoRa early load (cached): %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
                           (int)lora_hop_disabled);
         }
         prefs.end();
+
+        // Issue #136: same boot-time override as the later peripheral
+        // init.  Done here too so any code between this early load and
+        // initPeripherals() (e.g., config-readback construction) sees
+        // the rendezvous values rather than stale NVS.
+        lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
+        lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
+        lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
+        lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
+        lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+        lora_hop_disabled = true;
 
         prefs.begin("servo", false);
         if (prefs.isKey("b1"))
@@ -3835,6 +3862,20 @@ static void setup_oc()
         network_id = prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
         rocket_id  = prefs.getUChar("rid", config::DEFAULT_ROCKET_ID);
         prefs.end();
+
+        // #136: force network_id back to default on every boot, matching
+        // the LoRa rendezvous override.  Stops BS and OC from drifting
+        // apart when one side's NVS gets wiped (e.g., the lora-namespace
+        // clear on a schema bump) while the other keeps an old nid.
+        // Cmd 9 still works at runtime for developers; on next boot the
+        // device returns to the hardcoded default.  Per-network IDs come
+        // back in #150 alongside hopping.
+        if (network_id != config::DEFAULT_NETWORK_ID)
+        {
+            ESP_LOGW("CFG", "NVS nid=%u differs from default %u — forcing default",
+                     (unsigned)network_id, (unsigned)config::DEFAULT_NETWORK_ID);
+            network_id = config::DEFAULT_NETWORK_ID;
+        }
 
         ESP_LOGI("CFG", "Identity early load: uid=%s name=%s nid=%u rid=%u",
                  unit_id_hex, unit_name, (unsigned)network_id, (unsigned)rocket_id);

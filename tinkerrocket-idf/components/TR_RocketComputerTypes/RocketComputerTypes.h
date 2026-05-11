@@ -144,6 +144,33 @@ static constexpr float   LORA_BAND_HI_MHZ        = 928.0f;  // US ISM band high 
 static constexpr float   LORA_CHANNEL_SPACING_X  = 1.5f;    // spacing as multiple of BW
 static constexpr uint8_t LORA_NEXT_CH_NO_HOP     = 0xFF;    // sentinel: don't hop
 
+// ============================================================================
+// LoRa factory rendezvous (#105 follow-up): a single shared known-good config
+// ============================================================================
+// Hardcoded ONCE in this shared header so the BS and OC firmware are
+// guaranteed to compile against the same fallback.  Issue #105 hit the
+// chicken-and-egg case: both sides had matching factory defaults in their
+// per-project config.h files, but NVS-persisted operating freq drifted
+// (OC was on 926.5 MHz from a prior test, BS on 915), and neither side
+// knew where the other was so the BS uplink couldn't push corrections.
+//
+// Both projects' config.h re-export these as `LORA_RENDEZVOUS_*` so all
+// existing call sites keep working unchanged — the move just removes the
+// possibility of the two config.h files drifting apart in source.
+//
+// Frequency, BW, SF, CR, and TX power must ALL match between BS and OC for
+// the radios to decode each other (LLCC68 demodulator parameters), so the
+// rendezvous config carries the full modulation tuple, not just the freq.
+//
+// Moved up here (was further down with the LoRa structs) so
+// loraPickQuietestChannelMHz() below can fall back to it without a
+// forward declaration.
+static constexpr float   LORA_FACTORY_RENDEZVOUS_MHZ    = 915.0f;
+static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_SF     = 8;
+static constexpr float   LORA_FACTORY_RENDEZVOUS_BW_KHZ = 250.0f;
+static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_CR     = 5;
+static constexpr int8_t  LORA_FACTORY_RENDEZVOUS_TX_DBM = 12;
+
 // Number of channels available for a given LoRa bandwidth.  Returns 0 if
 // the BW would not fit a single channel inside the band.
 static inline uint8_t loraChannelCount(float bw_khz)
@@ -426,6 +453,35 @@ static inline int8_t loraI8MedianInPlace(int8_t* arr, size_t n)
         arr[j] = key;
     }
     return arr[n / 2];
+}
+
+// Pick the single quietest channel from a (freq, rssi) scan grid, snapped
+// to the channel-table grid for the operating BW.  Used by the BS
+// auto-acquire flow (#136) when we want one fixed frequency for the whole
+// flight rather than a hop table.  Hopping logic is still present in the
+// codebase but the default user build keeps `lora_hop_disabled = true`, so
+// the BS picks one channel at boot and both ends stay on it.
+//
+// Returns the chosen frequency in MHz.  Falls back to
+// LORA_FACTORY_RENDEZVOUS_MHZ if the scan is empty or the BW yields zero
+// channels — those cases shouldn't happen in practice, but failing back
+// to the rendezvous keeps the link from disappearing if they do.
+static inline float loraPickQuietestChannelMHz(
+    const float* scan_freqs, const int8_t* scan_rssi, size_t scan_count,
+    float bw_khz)
+{
+    const uint8_t n = loraChannelCount(bw_khz);
+    if (scan_count == 0 || n == 0) return LORA_FACTORY_RENDEZVOUS_MHZ;
+    uint8_t best_idx  = 0;
+    int8_t  best_rssi = INT8_MAX;
+    for (uint8_t i = 0; i < n; i++)
+    {
+        const float c = loraChannelMHz(bw_khz, i);
+        const int8_t r = loraScanRssiAtMHz(scan_freqs, scan_rssi,
+                                            scan_count, c);
+        if (r < best_rssi) { best_rssi = r; best_idx = i; }
+    }
+    return loraChannelMHz(bw_khz, best_idx);
 }
 
 // Pure orchestrator.  Computes the skip-mask for the current operating
@@ -915,29 +971,6 @@ typedef struct __attribute__((packed))
     uint8_t b0, b1, b2; 
 } i24le_t;
 static_assert(sizeof(i24le_t) == 3, "i24le_t must be 3 bytes");
-
-// ============================================================================
-// LoRa factory rendezvous (#105 follow-up): a single shared known-good config
-// ============================================================================
-// Hardcoded ONCE in this shared header so the BS and OC firmware are
-// guaranteed to compile against the same fallback.  Issue #105 hit the
-// chicken-and-egg case: both sides had matching factory defaults in their
-// per-project config.h files, but NVS-persisted operating freq drifted
-// (OC was on 926.5 MHz from a prior test, BS on 915), and neither side
-// knew where the other was so the BS uplink couldn't push corrections.
-//
-// Both projects' config.h re-export these as `LORA_RENDEZVOUS_*` so all
-// existing call sites keep working unchanged — the move just removes the
-// possibility of the two config.h files drifting apart in source.
-//
-// Frequency, BW, SF, CR, and TX power must ALL match between BS and OC for
-// the radios to decode each other (LLCC68 demodulator parameters), so the
-// rendezvous config carries the full modulation tuple, not just the freq.
-static constexpr float   LORA_FACTORY_RENDEZVOUS_MHZ    = 915.0f;
-static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_SF     = 8;
-static constexpr float   LORA_FACTORY_RENDEZVOUS_BW_KHZ = 250.0f;
-static constexpr uint8_t LORA_FACTORY_RENDEZVOUS_CR     = 5;
-static constexpr int8_t  LORA_FACTORY_RENDEZVOUS_TX_DBM = 12;
 
 // LoRa NVS schema version (#105 follow-up).  Stored alongside the LoRa
 // settings; on boot, if the stored version doesn't match this constant,

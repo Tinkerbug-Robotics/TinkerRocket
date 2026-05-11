@@ -10,42 +10,22 @@
 import SwiftUI
 import Combine
 
-// MARK: - Preset Definitions
+// MARK: - LoRa UI policy (issue #136)
 //
-// Manual frequency selection was removed in issue #71 — letting the user
-// type any frequency is the #1 way the base station and rocket end up on
-// different channels.  The only path to change frequency now is the
-// Frequency Scan view, which picks the quietest channel and uses the
-// transactional apply flow.  SF/BW/CR/power presets remain user-editable
-// because they change rarely and are relayed atomically.
-
-struct LoRaPreset: Identifiable {
-    let id: Int
-    let name: String
-    let sf: UInt8
-    let bwKHz: Float
-    let approxToA: String      // Time on air for 49-byte payload
-    let maxTxHz: String        // Max TX rate
-    let approxRange: String    // Approximate LOS range
-}
-
-private let loraPresets: [LoRaPreset] = [
-    LoRaPreset(id: 0, name: "Fast",       sf: 7,  bwKHz: 500.0, approxToA: "25 ms",  maxTxHz: "25 Hz", approxRange: "~3 km"),
-    LoRaPreset(id: 1, name: "Standard",   sf: 8,  bwKHz: 250.0, approxToA: "91 ms",  maxTxHz: "10 Hz", approxRange: "~8 km"),
-    LoRaPreset(id: 2, name: "Balanced",   sf: 9,  bwKHz: 250.0, approxToA: "165 ms", maxTxHz: "5 Hz",  approxRange: "~12 km"),
-    LoRaPreset(id: 3, name: "Long Range", sf: 10, bwKHz: 250.0, approxToA: "330 ms", maxTxHz: "2 Hz",  approxRange: "~18 km"),
-    LoRaPreset(id: 4, name: "Max Range",  sf: 9,  bwKHz: 125.0, approxToA: "330 ms", maxTxHz: "2 Hz",  approxRange: "~25 km"),
-]
+// LoRa configuration is no longer user-editable from the app.  The base
+// station boots on the hardcoded rendezvous frequency, runs a noise scan
+// once it acquires the rocket, and uses the cmd-10 transactional flow to
+// move both ends onto the quietest channel — all without user
+// involvement.  This view shows only a read-only "Current frequency" so
+// the user can confirm both devices ended up on the same channel.
+// Hopping / preset / TX-power controls are gated behind a developer flag
+// in firmware (cmd 17 / cmd 10), not exposed here.
 
 // MARK: - SettingsView
 
 struct SettingsView: View {
     @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
-
-    // Persisted selections — LoRa (frequency no longer user-settable; see note above)
-    @AppStorage("loraPresetId")         private var presetId: Int = 1           // Default: Standard
-    @AppStorage("loraTxPower")          private var txPower: Double = 12.0      // Default: 12 dBm
 
     // Persisted selections — Rocket settings
     @AppStorage("rocketSoundsEnabled")  private var soundsEnabled: Bool = false
@@ -94,25 +74,13 @@ struct SettingsView: View {
     @State private var rollControlApplied = false
 
     // Apply button feedback
-    @State private var loraApplied = false
     @State private var servoApplied = false
     @State private var pidApplied = false
 
-    // Hop enable (#106) — local mirror of the BS's lora_hop_disabled flag,
-    // inverted to match the UI's "Enable frequency hopping" toggle phrasing.
-    // We keep a State so the toggle is responsive; the truth lives on the BS
-    // and is restored whenever a config readback arrives.  Wire format is
-    // still "disabled" semantics (cmd 17 payload 1 = disabled), so any place
-    // that talks to BLE inverts at the boundary.
-    @State private var loraHopEnabled = true
-
-    private var selectedPreset: LoRaPreset {
-        loraPresets.first(where: { $0.id == presetId }) ?? loraPresets[1]
-    }
-
     /// Current active frequency for the connected device, read from the most
     /// recent config readback.  Falls back to the factory default so the
-    /// Summary section has something to show before the first readback lands.
+    /// read-only summary has something to show before the first readback
+    /// lands (typically the rendezvous freq, since BS boots there too).
     private var currentFreqMHz: Float {
         device.rocketConfig?.loraFreqMHz ?? 915.0
     }
@@ -124,37 +92,19 @@ struct SettingsView: View {
         && device.telemetry.state == "INITIALIZATION"
     }
 
-    @AppStorage("networkName") private var networkName: String = ""
-    @AppStorage("networkID") private var networkID: Int = 0
-    @State private var editingNetworkName: String = ""
-
     var body: some View {
         NavigationView {
             Form {
-                // Network settings
-                Section(header: Text("Network"),
-                        footer: Text("Changing the network name will require re-provisioning all devices.")) {
-                    HStack {
-                        TextField("Network name", text: $editingNetworkName)
-                            .onAppear { editingNetworkName = networkName }
-                        if editingNetworkName != networkName && !editingNetworkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Button("Apply") {
-                                let trimmed = editingNetworkName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                networkName = trimmed
-                                networkID = Int(fnv1a8(trimmed))
-                                // Push to currently connected device
-                                device.sendSetNetworkID(UInt8(networkID))
-                            }
-                            .foregroundColor(.blue)
-                        }
-                    }
-                    HStack {
-                        Text("Network ID")
-                        Spacer()
-                        Text("\(networkID)")
-                            .foregroundColor(.secondary)
-                    }
-                }
+                // Network settings hidden in #136: both ends are forced to
+                // the firmware default network ID at boot so the BS and OC
+                // can't drift apart silently.  The text-field UI showed the
+                // app's @AppStorage "Network ID" — which had nothing to do
+                // with what the connected device actually used — and that
+                // confused users into thinking they were on the same
+                // network when in fact the OC's NVS still carried an old
+                // value while the BS had been reset to default.  The
+                // user-facing network-name flow returns alongside hopping
+                // in #150.
 
                 // Rocket computer settings (only when connected directly to rocket)
                 if !device.isBaseStation {
@@ -183,20 +133,19 @@ struct SettingsView: View {
 
                 }
 
-                // --- LoRa Settings ---
+                // --- LoRa Frequency (read-only) ---
                 //
-                // The entire LoRa region is base-station-only (#106).  When
-                // connected directly to a rocket we hide every LoRa control
-                // and the read-only summary too, so the page can't even
-                // suggest the rocket's link parameters are user-editable
-                // here.  The rocket follows whatever the BS dictates — the
-                // user must connect to the BS to inspect or change them.
+                // Issue #136: the BS auto-acquires the rocket on the
+                // hardcoded rendezvous frequency, runs a noise scan, and
+                // moves both ends to the quietest channel via the
+                // existing cmd-10 transactional handshake.  Nothing here
+                // is user-editable.  We show the current channel so the
+                // user can confirm both devices ended up on the same
+                // frequency — if they don't match, the BS rolled back
+                // and both should be reading the rendezvous (915 MHz).
                 if device.isBaseStation {
-                    // Frequency is read-only here — it changes only via the
-                    // Frequency Scan view (issue #71).  Show the currently
-                    // active value so the user can confirm both devices match.
                     Section(header: Text("LoRa Frequency"),
-                            footer: Text("To change frequency, run a Frequency Scan on the base station. The scan picks the quietest channel and applies it transactionally to both devices.")) {
+                            footer: Text("Base station picks the quietest channel automatically at boot. Both devices should report the same frequency.")) {
                         HStack {
                             Text("Current")
                             Spacer()
@@ -204,87 +153,6 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                                 .font(.system(.body, design: .monospaced))
                         }
-                    }
-
-                    // Preset picker
-                    Section("LoRa Range / Rate Preset") {
-                        Picker("Preset", selection: $presetId) {
-                            ForEach(loraPresets) { preset in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(preset.name)
-                                    Text("\(preset.approxRange) \u{00B7} \(preset.maxTxHz) \u{00B7} \(preset.approxToA)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .tag(preset.id)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
-                    }
-
-                    // TX Power slider
-                    Section("LoRa TX Power") {
-                        VStack {
-                            HStack {
-                                Text("Power")
-                                Spacer()
-                                Text("\(Int(txPower)) dBm")
-                                    .foregroundColor(.secondary)
-                                    .font(.system(.body, design: .monospaced))
-                            }
-                            Slider(value: $txPower, in: 2...22, step: 1)
-                        }
-                    }
-
-                    // Frequency-hopping override (#106).  Diagnostic /
-                    // link-debug mode — disables the per-packet channel
-                    // hopping that runs in PRELAUNCH/INFLIGHT and pins both
-                    // BS and rocket to a fixed frequency.  Useful for
-                    // isolating link issues from hop coordination bugs.
-                    // Sends cmd 17 to the BS, which persists and uplinks
-                    // the same byte to every tracked rocket.
-                    Section(header: Text("LoRa Frequency Hopping"),
-                            footer: Text(loraHopEnabled
-                                ? "Enabled (default). Channels hop during PRELAUNCH and INFLIGHT."
-                                : "DISABLED — both ends stay on the configured frequency. Not FHSS-compliant; use for diagnostics only.")) {
-                        Toggle("Enable frequency hopping", isOn: Binding(
-                            get: { loraHopEnabled },
-                            set: { newValue in
-                                loraHopEnabled = newValue
-                                device.sendLoRaHopDisabled(!newValue)
-                            }
-                        ))
-                    }
-
-                    // Summary — what the user is about to apply.
-                    Section("LoRa Summary") {
-                        infoRow(label: "Frequency", value: String(format: "%.2f MHz", currentFreqMHz))
-                        infoRow(label: "Spreading Factor", value: "SF\(selectedPreset.sf)")
-                        infoRow(label: "Bandwidth", value: String(format: "%.0f kHz", selectedPreset.bwKHz))
-                        infoRow(label: "Coding Rate", value: "4/5")
-                        infoRow(label: "TX Power", value: "\(Int(txPower)) dBm")
-                        infoRow(label: "Time on Air", value: selectedPreset.approxToA)
-                        infoRow(label: "Est. Range (LOS)", value: selectedPreset.approxRange)
-                    }
-                }
-
-                // Apply button — base station only.  Rocket gets its config
-                // via the BS's transactional Cmd 10 relay; there's no
-                // direct-apply path on a rocket connection.
-                if device.isBaseStation {
-                    Section {
-                        applyButton(
-                            icon: "antenna.radiowaves.left.and.right",
-                            label: "Apply LoRa Config",
-                            applied: loraApplied
-                        ) {
-                            applyLoRaConfig()
-                        }
-
-                        Text("Applies to the base station and relays to every tracked rocket. Frequency is preserved — change it via Frequency Scan.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -537,25 +405,9 @@ struct SettingsView: View {
                 rollDelayMs = Double(cfg.rollDelayMs)
                 guidanceEnabled = cfg.guidanceEnabled
                 cameraType = Int(cfg.cameraType)
-                // Sync LoRa preset + TX power from device.  Frequency is
-                // displayed read-only via `currentFreqMHz` and doesn't need
-                // reverse-mapping to any picker.
-                if let sf = cfg.loraSF, let bw = cfg.loraBwKHz {
-                    if let preset = loraPresets.first(where: { $0.sf == sf && abs($0.bwKHz - bw) < 1.0 }) {
-                        presetId = preset.id
-                    }
-                }
-                if let pwr = cfg.loraTxPower {
-                    txPower = Double(pwr)
-                }
-                // #106 — sync hop state from device.  Wire format is the
-                // "disabled" flag (lhd: true means hopping is OFF), so we
-                // invert into our UI-side "enabled" state.  Older firmware
-                // doesn't emit "lhd"; in that case we leave the toggle
-                // showing its last value (defaults to enabled on first load).
-                if let hopDis = cfg.loraHopDisabled {
-                    loraHopEnabled = !hopDis
-                }
+                // LoRa state is displayed read-only via `currentFreqMHz`;
+                // no per-field bindings to sync since the user can't edit
+                // the preset/TX-power/hop fields here anymore (#136).
                 loadStringsFromStorage()
             }
         }
@@ -600,15 +452,6 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
-    private func infoRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value)
-                .foregroundColor(.secondary)
-        }
-    }
-
     private func stringRow(_ label: String, text: Binding<String>, unit: String? = nil, decimal: Bool = false) -> some View {
         HStack {
             Text(label)
@@ -637,24 +480,6 @@ struct SettingsView: View {
     }
 
     // MARK: - Apply actions
-
-    private func applyLoRaConfig() {
-        // Keep the currently active frequency — only preset + power change
-        // here.  Frequency is managed exclusively by the Frequency Scan view
-        // so that every frequency change goes through the transactional
-        // apply path (issue #71).
-        let preset = selectedPreset
-        let cr: UInt8 = 5  // All presets use CR 4/5
-
-        device.sendLoRaConfig(
-            freqMHz: currentFreqMHz,
-            bwKHz: preset.bwKHz,
-            sf: preset.sf,
-            cr: cr,
-            txPower: Int8(txPower)
-        )
-        showApplied($loraApplied)
-    }
 
     private func applyServoConfig() {
         let b1 = parseDouble(sBias1, fallback: storedBias1)

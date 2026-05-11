@@ -209,6 +209,54 @@ TEST(LoraFhssMinChannels, BoundaryValues) {
 }
 
 // ============================================================================
+// Issue #136: BS auto-acquire single-channel picker
+// ============================================================================
+
+TEST(LoraPickQuietestChannel, EmptyScanFallsBackToRendezvous) {
+    EXPECT_FLOAT_EQ(loraPickQuietestChannelMHz(nullptr, nullptr, 0, 250.0f),
+                    LORA_FACTORY_RENDEZVOUS_MHZ);
+}
+
+TEST(LoraPickQuietestChannel, PicksLowestRssiChannel) {
+    // Use the channel table itself as the scan grid so every channel
+    // maps to exactly one scan bin (no aliasing).  Then drop one bin's
+    // RSSI far below the rest and verify the picker snaps to it.
+    constexpr float BW = 250.0f;
+    const uint8_t n = loraChannelCount(BW);
+    ASSERT_GT(n, 5u);
+
+    const uint8_t target_idx = (uint8_t)(n / 3);
+    const float target_mhz = loraChannelMHz(BW, target_idx);
+
+    float  freqs[256];
+    int8_t rssi[256];
+    for (uint8_t i = 0; i < n; i++) {
+        freqs[i] = loraChannelMHz(BW, i);
+        rssi[i]  = -80;
+    }
+    rssi[target_idx] = -120;  // clear winner
+
+    const float picked = loraPickQuietestChannelMHz(freqs, rssi, n, BW);
+    EXPECT_NEAR(picked, target_mhz, 0.01f);
+}
+
+TEST(LoraPickQuietestChannel, TiesFavorLowerIndex) {
+    // When all bins are equal, the picker walks the channel table in
+    // order and keeps the first one (lowest index = lowest freq, since
+    // loraChannelMHz is monotonic).
+    constexpr float BW = 250.0f;
+    constexpr size_t N = 53;
+    float  freqs[N];
+    int8_t rssi[N];
+    for (size_t i = 0; i < N; i++) {
+        freqs[i] = 902.0f + (float)i * 0.5f;
+        rssi[i]  = -95;
+    }
+    const float picked = loraPickQuietestChannelMHz(freqs, rssi, N, BW);
+    EXPECT_FLOAT_EQ(picked, loraChannelMHz(BW, 0));
+}
+
+// ============================================================================
 // Issues #40 / #41: per-packet channel hopping — state gate
 // ============================================================================
 

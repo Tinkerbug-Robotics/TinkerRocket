@@ -239,37 +239,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(60, payload: payload)
     }
 
-    /// If this base-station session has not auto-picked a channel yet, and
-    /// we now have both a config readback and at least one tracked rocket,
-    /// kick off a scan-and-apply cycle so the link lands on the quietest
-    /// channel automatically.  Safe to call as often as needed — it no-ops
-    /// after the first successful trigger.
+    /// Auto-channel-select was disabled in #136 — the BS now stays on the
+    /// hardcoded rendezvous (915 MHz SF8 BW250) for the duration of a test
+    /// instead of scanning and trying to move both ends.  See #150 for the
+    /// follow-up that reintroduces scan-and-move alongside FHSS hopping.
     ///
-    /// Rocket must be on-air because the config change is relayed over the
-    /// existing LoRa link; if the rocket has not yet been heard, the BS has
-    /// no way to tell it about the new channel and would strand it.
+    /// Function kept (rather than ripped out) so the call sites that ping
+    /// it on config-readback and on new-rocket-seen events stay valid; it
+    /// just no-ops.
     func triggerAutoChannelSelectIfNeeded() {
-        // Same gating as manual apply — no point scanning if we couldn't
-        // apply the result anyway.
-        guard !hasAutoSelectedChannel,
-              !isScanning,
-              !pendingAutoApply,
-              autoApplyRefusalReason() == nil else { return }
-
-        hasAutoSelectedChannel = true
-        pendingAutoApply = true
-
-        // 5 s breathing room so the user sees "Connected" before the scan
-        // interrupts telemetry for ~1.6 s.  Without this delay the dashboard
-        // flashes into view and immediately stalls, which looks broken.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            guard let self = self,
-                  self.pendingAutoApply,
-                  self.isConnected,
-                  !self.remoteRockets.isEmpty else { return }
-            print("[FREQ] Auto-selecting channel (first-time session)")
-            self.startFrequencyScan(startMHz: 902.0, stopMHz: 928.0, stepKHz: 500, dwellMs: 30)
-        }
+        // Intentionally empty — see comment above.
     }
 
     /// Reasons an auto-apply can be refused, surfaced to the UI so the user
