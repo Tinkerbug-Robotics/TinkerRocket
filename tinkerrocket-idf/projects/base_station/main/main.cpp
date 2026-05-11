@@ -207,6 +207,19 @@ static void analyzeAndPushFromCachedScan();
 static void pushCurrentChannelSet();
 static void serviceMaskDriftRepush();
 
+// Auto-acquire + auto-scan state (#136).  Full definitions live just
+// before setup_bs(); the enum + state variable are declared here so
+// finalizeNoiseScan() can branch on them without forward-decl gymnastics.
+enum class AutoAcquireState : uint8_t {
+    AWAITING_ROCKET,
+    GRACE_DELAY,
+    SCANNING,
+    COMMITTING,
+    DONE,
+};
+static AutoAcquireState auto_acquire_state = AutoAcquireState::AWAITING_ROCKET;
+static void autoAcquireOnScanFinalize();
+
 // If we're following a hopping rocket and packets dry up for this long,
 // give up and fall back to lora_freq_mhz so the existing silence /
 // recovery machinery can take over.  Sized to swallow a handful of
@@ -1984,13 +1997,27 @@ static void serviceMaskDriftRepush()
 
 // All passes done.  Ship results to BLE (preserving the existing
 // single-result protocol so the iOS app doesn't need to change), then
-// run the analyzer + push to the rocket.
+// dispatch to either the auto-acquire single-channel picker (#136) or
+// the legacy skip-mask push (kept for the hopping path, currently gated
+// off by default).
 static void finalizeNoiseScan()
 {
     ble_app.sendScanResults(scan_peak_start_mhz_, scan_peak_step_khz_,
                             scan_peak_rssi_, (uint8_t)scan_peak_count_);
     scan_results_valid_ = true;
-    analyzeAndPushFromCachedScan();
+
+    // #136: when our auto-acquire flow kicked off this scan, the
+    // post-scan action is "pick one channel + cmd-10 move", not
+    // "compute skip-mask + cmd-15 push".  Any other scan (BLE cmd 60,
+    // coordinated scan) falls through to the existing skip-mask path.
+    if (auto_acquire_state == AutoAcquireState::SCANNING)
+    {
+        autoAcquireOnScanFinalize();
+    }
+    else
+    {
+        analyzeAndPushFromCachedScan();
+    }
 }
 
 // Compute the cmd 16 pause duration (ms) for a coordinated scan.  Sized
@@ -2138,6 +2165,196 @@ static void serviceCoordinatedScan()
             }
             break;
         }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Auto-acquire + auto-scan (#136)
+// ----------------------------------------------------------------------------
+// Every BS power cycle starts on LORA_FACTORY_RENDEZVOUS_MHZ.  Once we
+// confirm the rocket is alive on that channel (one RX is enough; the
+// rocket beacons at ~2 Hz on the ground), we run a 902..928 MHz noise
+// scan, pick the single quietest channel, and drive the existing cmd-10
+// transactional reconfigure to move the rocket onto it.  The txn's
+// verify/rollback semantics naturally fall back to rendezvous if the
+// rocket doesn't follow — exactly the handshake/ack-with-fallback the
+// issue calls for.
+//
+// Why wait for an RX before scanning?  Running the scan immediately on
+// boot would race the rocket's own boot.  If the rocket isn't up yet we
+// move to a channel it can't hear cmd-10 on, the txn times out and we
+// roll back, and we've burned 14 s for no reason.  Acquiring first means
+// every scan we run results in a real move (or stays put because the
+// rendezvous is already the quietest channel).
+//
+// One-shot per power cycle.  Re-runs require a BS reboot — keeps the
+// behaviour predictable on the bench and means we never drop the link
+// mid-flight to chase a different channel.
+//
+// Enum + auto_acquire_state are forward-declared near the top so
+// finalizeNoiseScan() can branch on them; values:
+//   AWAITING_ROCKET → No packet seen yet; just listening on rendezvous
+//   GRACE_DELAY     → First packet seen; brief settle before we scan
+//   SCANNING        → startNoiseScan() running — finalize will dispatch
+//   COMMITTING      → cmd-10 transaction in flight — wait for IDLE
+//   DONE            → Settled (committed or rolled back); inert
+static uint32_t auto_acquire_grace_start_ms = 0;
+// Brief settle window after first RX so the rocket has a moment to
+// stabilize its beacon cadence and we aren't tearing down the link
+// halfway through its first packet.  Short enough to feel responsive,
+// long enough to avoid colliding with an in-flight uplink retry.
+static constexpr uint32_t AUTO_ACQUIRE_GRACE_MS = 750;
+// Scan parameters — matches what the iOS Frequency Scan view used to
+// send via BLE cmd 60.  Wide enough to cover the entire US ISM band,
+// fine enough that every BW=250 channel has a sample within ±250 kHz.
+static constexpr float    AUTO_ACQUIRE_SCAN_START_MHZ = LORA_BAND_LO_MHZ;
+static constexpr float    AUTO_ACQUIRE_SCAN_STOP_MHZ  = LORA_BAND_HI_MHZ;
+static constexpr uint16_t AUTO_ACQUIRE_SCAN_STEP_KHZ  = 500;
+static constexpr uint16_t AUTO_ACQUIRE_SCAN_DWELL_MS  = 30;
+
+// Called from finalizeNoiseScan() when the auto-acquire scan completes.
+// Walks the scan grid, picks the quietest channel snapped to the BW
+// table, and hands off to the existing cmd-10 transaction.  If the
+// quietest channel is the rendezvous we're already on, short-circuit
+// to DONE rather than burning a verify window on a no-op move.
+static void autoAcquireOnScanFinalize()
+{
+    if (scan_peak_count_ == 0)
+    {
+        ESP_LOGW(TAG, "[AUTO] Scan finalized with no samples — staying on %.2f MHz",
+                 (double)lora_freq_mhz);
+        auto_acquire_state = AutoAcquireState::DONE;
+        return;
+    }
+
+    float scan_freqs[TR_LoRa_Comms::SCAN_MAX_SAMPLES];
+    for (size_t i = 0; i < scan_peak_count_; i++)
+    {
+        scan_freqs[i] = scan_peak_start_mhz_
+                        + (scan_peak_step_khz_ * (float)i) / 1000.0f;
+    }
+    const float quietest = loraPickQuietestChannelMHz(
+        scan_freqs, scan_peak_rssi_, scan_peak_count_, lora_bw_khz);
+
+    // No-op move detection.  loraChannelMHz() returns multiples of the
+    // BW spacing offset from LORA_BAND_LO_MHZ + bw/2, so equality here
+    // is exact in principle, but compare with a tolerance well below the
+    // channel spacing just to be safe against float quirks.
+    if (fabsf(quietest - lora_freq_mhz) < 0.05f)
+    {
+        ESP_LOGI(TAG, "[AUTO] Rendezvous %.2f MHz is already the quietest — staying put",
+                 (double)lora_freq_mhz);
+        auto_acquire_state = AutoAcquireState::DONE;
+        return;
+    }
+
+    if (startLoRaTransaction(quietest, lora_bw_khz, lora_sf, lora_cr, lora_tx_power))
+    {
+        auto_acquire_state = AutoAcquireState::COMMITTING;
+        ESP_LOGI(TAG, "[AUTO] Scan done — moving rocket to %.2f MHz (was %.2f MHz)",
+                 (double)quietest, (double)lora_freq_mhz);
+    }
+    else
+    {
+        // startLoRaTransaction refuses if freq is locked for flight or a
+        // txn is already in progress.  Neither is expected this early in
+        // a power cycle, but if it happens we just stay on rendezvous.
+        ESP_LOGW(TAG, "[AUTO] startLoRaTransaction refused — staying on %.2f MHz",
+                 (double)lora_freq_mhz);
+        auto_acquire_state = AutoAcquireState::DONE;
+    }
+}
+
+// Drive the auto-acquire state machine.  Called every loop iteration.
+// Cheap when in AWAITING_ROCKET / DONE — most calls are a single switch.
+static void serviceAutoAcquire()
+{
+    if (auto_acquire_state == AutoAcquireState::DONE) return;
+
+    const uint32_t now = millis();
+    switch (auto_acquire_state)
+    {
+        case AutoAcquireState::AWAITING_ROCKET:
+        {
+            // last_packet_ms is bumped on every CRC-good + SNR-validated
+            // RX, so any non-zero value means the rocket is alive on the
+            // rendezvous channel.  If freq_locked_for_flight came on
+            // before we ever heard a packet (rocket caught mid-flight on
+            // BS power-up), skip — too late to relocate it.
+            if (freq_locked_for_flight)
+            {
+                ESP_LOGW(TAG, "[AUTO] Rocket already INFLIGHT before first acquire — skipping scan");
+                auto_acquire_state = AutoAcquireState::DONE;
+                return;
+            }
+            if (last_packet_ms != 0)
+            {
+                auto_acquire_state = AutoAcquireState::GRACE_DELAY;
+                auto_acquire_grace_start_ms = now;
+                ESP_LOGI(TAG, "[AUTO] First rocket packet acquired — scan in %u ms",
+                         (unsigned)AUTO_ACQUIRE_GRACE_MS);
+            }
+            break;
+        }
+
+        case AutoAcquireState::GRACE_DELAY:
+        {
+            if ((now - auto_acquire_grace_start_ms) < AUTO_ACQUIRE_GRACE_MS)
+                return;
+            // Refuse to start if the radio is busy with something else.
+            // We just wait — the next loop iteration will re-check.  In
+            // practice nothing else should be touching the radio this
+            // early, but the guards are cheap.
+            if (uplink_pending)                         return;
+            if (lora_txn_state != LoRaTxnState::IDLE)   return;
+            if (scan_passes_remaining_ != 0)            return;
+            if (coord_scan_state_ != CoordScanState::IDLE) return;
+
+            if (startNoiseScan(AUTO_ACQUIRE_SCAN_START_MHZ,
+                                AUTO_ACQUIRE_SCAN_STOP_MHZ,
+                                AUTO_ACQUIRE_SCAN_STEP_KHZ,
+                                AUTO_ACQUIRE_SCAN_DWELL_MS))
+            {
+                auto_acquire_state = AutoAcquireState::SCANNING;
+                ESP_LOGI(TAG, "[AUTO] Noise scan started (%.0f..%.0f MHz, %u kHz, %u ms × %u passes)",
+                         (double)AUTO_ACQUIRE_SCAN_START_MHZ,
+                         (double)AUTO_ACQUIRE_SCAN_STOP_MHZ,
+                         (unsigned)AUTO_ACQUIRE_SCAN_STEP_KHZ,
+                         (unsigned)AUTO_ACQUIRE_SCAN_DWELL_MS,
+                         (unsigned)LORA_NOISE_SCAN_PASSES);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "[AUTO] startNoiseScan refused — staying on %.2f MHz",
+                         (double)lora_freq_mhz);
+                auto_acquire_state = AutoAcquireState::DONE;
+            }
+            break;
+        }
+
+        case AutoAcquireState::SCANNING:
+        {
+            // finalizeNoiseScan() dispatches to autoAcquireOnScanFinalize()
+            // on completion, which advances us to COMMITTING (or DONE on
+            // no-op / refusal).  Nothing for us to do here.
+            break;
+        }
+
+        case AutoAcquireState::COMMITTING:
+        {
+            // serviceLoRaTransaction() commits or rolls back asynchronously.
+            // We just wait for the txn machine to settle, then we're done.
+            if (lora_txn_state == LoRaTxnState::IDLE)
+            {
+                ESP_LOGI(TAG, "[AUTO] Settled — link locked on %.2f MHz for this flight",
+                         (double)lora_freq_mhz);
+                auto_acquire_state = AutoAcquireState::DONE;
+            }
+            break;
+        }
+
+        case AutoAcquireState::DONE:
+            break;
     }
 }
 
@@ -2330,10 +2547,29 @@ static void setup_bs()
     lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
     lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
     prefs.end();
-    ESP_LOGI(TAG, "[CFG] LoRa NVS: %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
+    ESP_LOGI(TAG, "[CFG] LoRa NVS (cached): %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
              (double)lora_freq_mhz, (unsigned)lora_sf,
              (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
              (int)lora_hop_disabled);
+
+    // Issue #136: every BS power cycle starts on the hardcoded rendezvous
+    // frequency + preset, regardless of any NVS values left over from
+    // prior sessions.  This guarantees that BS and rocket meet on a known
+    // channel before the BS scans + picks a quiet one.  cmd-10 commits
+    // still write through to NVS during a session for visibility and
+    // BLE-readback, but those values no longer drive boot config.
+    // Hopping is also gated off at boot — re-enable via cmd 17 if you're
+    // testing the hop state machine.  See the "Re-enable LoRa hopping"
+    // follow-up enhancement.
+    lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
+    lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
+    lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
+    lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
+    lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
+    lora_hop_disabled = true;
+    ESP_LOGI(TAG, "[CFG] LoRa boot (forced rendezvous): %.1f MHz SF%u BW%.0f CR%u %d dBm",
+             (double)lora_freq_mhz, (unsigned)lora_sf,
+             (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
 
     // Channel-set: skip-mask from the most recent pre-launch scan
     // (#40 / #41 phase 3).  Falls back to no-skips if never scanned, or
@@ -3338,6 +3574,12 @@ static void loop_bs()
     // the rocket's.  Cheap when no drift is pending; only acts when
     // the radio is otherwise idle.
     serviceMaskDriftRepush();
+
+    // Auto-acquire (#136): one-shot per power cycle.  Waits to hear the
+    // rocket on rendezvous, runs a noise scan, picks the quietest
+    // channel, and uses the existing cmd-10 transactional flow to move
+    // both ends onto it.  Inert once DONE.
+    serviceAutoAcquire();
 
     // Heartbeat — quietly tells the rocket "we're hearing you" so its
     // slow-rendezvous timer doesn't expire during normal idle operation.
