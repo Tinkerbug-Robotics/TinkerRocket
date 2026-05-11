@@ -424,13 +424,18 @@ void MagCalibrator::runFit()
         coverage_mask_ = post_fit_mask;
     }
 
-    // Gate the fit.  Order: coverage first (fastest reason to retry),
-    // then R band, then residual.  These are advisory codes — caller
-    // shows the right error in the iOS UI.  Coverage check uses the
-    // post-fit-recomputed mask from the block above.
-    const uint8_t cov = (uint8_t)__builtin_popcount(coverage_mask_);
-    if (cov < MAG_CAL_MIN_COVERAGE_BINS)        fit_reject_code_ = MAG_CAL_REJECT_LOW_COVERAGE;
-    else if (R_uT < MAG_CAL_R_MIN_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_LOW;
+    // Gate the fit.  R and residual are the direct, quantitative
+    // measures of fit quality: a fitted R inside the WMM band that
+    // produces a sub-µT-class RMS residual is mathematically a clean
+    // sphere fit through the sample cloud.  Coverage USED to be the
+    // first check, but it's a poor proxy when the hard-iron bias is
+    // big — samples cluster in raw mag-space regardless of rotation,
+    // and even after post-fit centring the user typically only hits
+    // 6-12 wedges (one per cardinal orientation), not the 18+ the
+    // original threshold was set for.  Coverage stays in the status
+    // frame as an informational diagnostic, but it no longer rejects
+    // an otherwise-healthy fit.  Issue #96.
+    if      (R_uT < MAG_CAL_R_MIN_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_LOW;
     else if (R_uT > MAG_CAL_R_MAX_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_HIGH;
     else if (res_uT > MAG_CAL_MAX_RESIDUAL_UT)  fit_reject_code_ = MAG_CAL_REJECT_HIGH_RESIDUAL;
     else                                         fit_reject_code_ = MAG_CAL_OK;
