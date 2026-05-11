@@ -64,14 +64,23 @@ MagCalibrator::MagCalibrator()
       fit_residual_uT_(0.0f),
       fit_reject_code_(MAG_CAL_OK),
       fit_valid_(false),
+      accel_x_(0), accel_y_(0), accel_z_(0),
+      accel_valid_(false),
       state_(State::IDLE)
-{}
+{
+    memset(wedge_count_, 0, sizeof(wedge_count_));
+    memset(wedge_write_, 0, sizeof(wedge_write_));
+}
 
 void MagCalibrator::start()
 {
     n_samples_ = 0;
+    memset(wedge_count_, 0, sizeof(wedge_count_));
+    memset(wedge_write_, 0, sizeof(wedge_write_));
     coverage_mask_ = 0;
     last_x_ = last_y_ = last_z_ = 0;
+    // accel_valid_ stays as-is: the IMU is sampling regardless of cal
+    // state, so accel readings from before Start are still fresh.
     fit_valid_ = false;
     fit_cx_ = fit_cy_ = fit_cz_ = 0;
     fit_R_uT_ = 0.0f;
@@ -113,37 +122,75 @@ void MagCalibrator::clear()
     state_ = State::IDLE;
 }
 
+void MagCalibrator::setLiveAccel(int16_t ax, int16_t ay, int16_t az)
+{
+    accel_x_ = ax;
+    accel_y_ = ay;
+    accel_z_ = az;
+    accel_valid_ = true;
+}
+
 bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
 {
     if (state_ != State::SAMPLING) return false;
-    if (n_samples_ >= MAX_SAMPLES) return false;
 
-    samples_x_[n_samples_] = x;
-    samples_y_[n_samples_] = y;
-    samples_z_[n_samples_] = z;
-    n_samples_++;
-
+    // Live vector + coverage update regardless of bucket state — the
+    // iOS direction-feedback UI keeps ticking and the coverage mask
+    // tracks which accel-direction wedges have been visited so far.
     last_x_ = x;
     last_y_ = y;
     last_z_ = z;
 
-    const uint8_t wedge = directionWedge(x, y, z);
-    if (wedge < 27) coverage_mask_ |= (1u << wedge);
+    // Without a recent accel reading we can't bin the sample by
+    // orientation, so drop it rather than piling everything into a
+    // single bucket.  Should only happen during the brief startup
+    // window before the first IMU sample lands.
+    if (!accel_valid_) return false;
 
-    if (n_samples_ >= MAX_SAMPLES)
-    {
-        runFit();
-        state_ = State::REVIEW;
-#ifdef ESP_PLATFORM
-        ESP_LOGI(TAG, "fit complete: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT cov=%u/26 reject=%u",
-                 (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
-                 (double)fit_R_uT_, (double)fit_residual_uT_,
-                 (unsigned)__builtin_popcount(coverage_mask_),
-                 (unsigned)fit_reject_code_);
-#endif
-        return true;
+    const uint8_t accel_wedge = directionWedge(accel_x_, accel_y_, accel_z_);
+    if (accel_wedge >= NUM_ACCEL_WEDGES) return false;
+
+    // Update the accel-driven coverage mask up-front so the iOS UI
+    // sees the new wedge as soon as it's been visited, even if its
+    // slot ring buffer is full and an oldest sample gets evicted.
+    coverage_mask_ |= (1u << accel_wedge);
+
+    // Ring buffer inside the wedge bucket.  Up to SAMPLES_PER_WEDGE
+    // samples are kept per accel-wedge; when full, newest overwrites
+    // oldest WITHIN THAT WEDGE.  Samples from other orientations are
+    // never disturbed, so a user lingering in one position can't
+    // wipe out the diversity gathered earlier.
+    const uint16_t base = (uint16_t)accel_wedge * SAMPLES_PER_WEDGE;
+    const uint16_t slot = base + wedge_write_[accel_wedge];
+    samples_x_[slot] = x;
+    samples_y_[slot] = y;
+    samples_z_[slot] = z;
+    wedge_write_[accel_wedge] = (uint8_t)((wedge_write_[accel_wedge] + 1) % SAMPLES_PER_WEDGE);
+    if (wedge_count_[accel_wedge] < SAMPLES_PER_WEDGE) {
+        wedge_count_[accel_wedge]++;
+        n_samples_++;  // saturates at NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE
     }
+
+    // Sampling never "completes" — the 5 Hz status cadence in the FC
+    // main loop keeps the iOS UI updated.  No "buffer just filled" pulse.
     return false;
+}
+
+bool MagCalibrator::computeFit()
+{
+    if (state_ != State::SAMPLING) return false;
+    if (n_samples_ < MAG_CAL_MIN_SAMPLES) return false;
+    runFit();
+    state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "user-triggered fit complete: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT cov=%u/26 reject=%u (n=%u)",
+             (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
+             (double)fit_R_uT_, (double)fit_residual_uT_,
+             (unsigned)__builtin_popcount(coverage_mask_),
+             (unsigned)fit_reject_code_,
+             (unsigned)n_samples_);
+#endif
+    return true;
 }
 
 void MagCalibrator::getProgress(uint16_t& sample_count,
@@ -189,7 +236,14 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
     }
 
     out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
+    out.coverage_mask = coverage_mask_;
     out.sample_count  = n_samples_;
+
+    // Live raw vector for the iOS direction-feedback UI.  Raw LSB
+    // matches the sphere-fit's working units so no conversion drift.
+    out.inst_x_lsb = last_x_;
+    out.inst_y_lsb = last_y_;
+    out.inst_z_lsb = last_z_;
 
     // Instantaneous field magnitude (most recent sample).
     {
@@ -255,17 +309,31 @@ void MagCalibrator::runFit()
 
     if (n_samples_ < MAG_CAL_MIN_SAMPLES) return;
 
+    // All sample iteration walks the per-wedge bucket arrays.  Helper
+    // lambda captures the "for each valid sample" pattern so the three
+    // passes (centroid, normal eqs, residual) share the same indexing
+    // logic and stay in sync if the storage layout changes.
+    auto forEachSample = [this](auto&& fn) {
+        for (uint8_t w = 0; w < NUM_ACCEL_WEDGES; w++) {
+            const uint16_t base = (uint16_t)w * SAMPLES_PER_WEDGE;
+            const uint8_t  count = wedge_count_[w];
+            for (uint8_t i = 0; i < count; i++) {
+                const uint16_t slot = base + i;
+                fn(samples_x_[slot], samples_y_[slot], samples_z_[slot]);
+            }
+        }
+    };
+
     // Accumulate sums in double.  Centroid-shifting before solving keeps
     // the cross-product sums small (cancel the bulk of the offset before
     // squaring), which preserves ~7+ digits of precision in the normal
     // equations even with raw counts in the ~1e4 range.
     double sx = 0.0, sy = 0.0, sz = 0.0;
-    for (uint16_t i = 0; i < n_samples_; i++)
-    {
-        sx += (double)samples_x_[i];
-        sy += (double)samples_y_[i];
-        sz += (double)samples_z_[i];
-    }
+    forEachSample([&](int16_t x, int16_t y, int16_t z) {
+        sx += (double)x;
+        sy += (double)y;
+        sz += (double)z;
+    });
     const double mx = sx / (double)n_samples_;
     const double my = sy / (double)n_samples_;
     const double mz = sz / (double)n_samples_;
@@ -278,11 +346,10 @@ void MagCalibrator::runFit()
     double sb = 0.0;
     double sxb = 0.0, syb = 0.0, szb = 0.0;
 
-    for (uint16_t i = 0; i < n_samples_; i++)
-    {
-        const double xc = (double)samples_x_[i] - mx;
-        const double yc = (double)samples_y_[i] - my;
-        const double zc = (double)samples_z_[i] - mz;
+    forEachSample([&](int16_t x, int16_t y, int16_t z) {
+        const double xc = (double)x - mx;
+        const double yc = (double)y - my;
+        const double zc = (double)z - mz;
         const double bi = xc*xc + yc*yc + zc*zc;
 
         sxx += xc*xc; syy += yc*yc; szz += zc*zc;
@@ -292,7 +359,7 @@ void MagCalibrator::runFit()
         sxb += xc * bi;
         syb += yc * bi;
         szb += zc * bi;
-    }
+    });
 
     // Build symmetric AᵀA (4×4) and Aᵀb (4×1) for the centered solve.
     double M[4][4] = {
@@ -333,15 +400,14 @@ void MagCalibrator::runFit()
 
     // RMS residual in raw counts (then scaled to µT).
     double rss = 0.0;
-    for (uint16_t i = 0; i < n_samples_; i++)
-    {
-        const double dx = (double)samples_x_[i] - cx;
-        const double dy = (double)samples_y_[i] - cy;
-        const double dz = (double)samples_z_[i] - cz;
+    forEachSample([&](int16_t x, int16_t y, int16_t z) {
+        const double dx = (double)x - cx;
+        const double dy = (double)y - cy;
+        const double dz = (double)z - cz;
         const double ri = sqrt(dx*dx + dy*dy + dz*dz);
         const double e = ri - R;
         rss += e*e;
-    }
+    });
     const double rms_counts = sqrt(rss / (double)n_samples_);
 
     // Scale to µT for gating + reporting.
@@ -364,12 +430,50 @@ void MagCalibrator::runFit()
     fit_residual_uT_ = res_uT;
     fit_valid_ = true;
 
-    // Gate the fit.  Order: coverage first (fastest reason to retry),
-    // then R band, then residual.  These are advisory codes — caller
-    // shows the right error in the iOS UI.
-    const uint8_t cov = (uint8_t)__builtin_popcount(coverage_mask_);
-    if (cov < MAG_CAL_MIN_COVERAGE_BINS)        fit_reject_code_ = MAG_CAL_REJECT_LOW_COVERAGE;
-    else if (R_uT < MAG_CAL_R_MIN_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_LOW;
+    // Recompute coverage_mask_ using samples *relative to the fit
+    // centre* (issue #96 follow-up).  The original mask binned raw
+    // samples by direction in mag space, which is misleading when the
+    // hard-iron bias dominates: with a ~1640 µT bias every sample
+    // lands in the same +X wedge even though the samples actually
+    // span the offset sphere correctly.  After centring on (cx, cy, cz)
+    // the samples should sit on a unit-radius shell around the origin,
+    // and the wedge mask becomes a meaningful "did the user rotate
+    // through the field?" indicator that drives the coverage gate
+    // below and the iOS REVIEW screen's coverage row.
+    {
+        uint32_t post_fit_mask = 0;
+        forEachSample([&](int16_t x, int16_t y, int16_t z) {
+            const double dx = (double)x - cx;
+            const double dy = (double)y - cy;
+            const double dz = (double)z - cz;
+            const double r2 = dx*dx + dy*dy + dz*dz;
+            if (!(r2 > 0.0)) return;
+            const double r = sqrt(r2);
+            const double ux = dx / r;
+            const double uy = dy / r;
+            const double uz = dz / r;
+            constexpr double T = 0.4;
+            auto bin = [](double v) -> int {
+                return (v < -T) ? 0 : (v > T) ? 2 : 1;
+            };
+            const uint8_t wedge = (uint8_t)(bin(ux) * 9 + bin(uy) * 3 + bin(uz));
+            if (wedge < 27) post_fit_mask |= (1u << wedge);
+        });
+        coverage_mask_ = post_fit_mask;
+    }
+
+    // Gate the fit.  R and residual are the direct, quantitative
+    // measures of fit quality: a fitted R inside the WMM band that
+    // produces a sub-µT-class RMS residual is mathematically a clean
+    // sphere fit through the sample cloud.  Coverage USED to be the
+    // first check, but it's a poor proxy when the hard-iron bias is
+    // big — samples cluster in raw mag-space regardless of rotation,
+    // and even after post-fit centring the user typically only hits
+    // 6-12 wedges (one per cardinal orientation), not the 18+ the
+    // original threshold was set for.  Coverage stays in the status
+    // frame as an informational diagnostic, but it no longer rejects
+    // an otherwise-healthy fit.  Issue #96.
+    if      (R_uT < MAG_CAL_R_MIN_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_LOW;
     else if (R_uT > MAG_CAL_R_MAX_UT)           fit_reject_code_ = MAG_CAL_REJECT_R_TOO_HIGH;
     else if (res_uT > MAG_CAL_MAX_RESIDUAL_UT)  fit_reject_code_ = MAG_CAL_REJECT_HIGH_RESIDUAL;
     else                                         fit_reject_code_ = MAG_CAL_OK;

@@ -51,6 +51,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var scanSamples: [FrequencyScanSample] = []
     @Published var isScanning: Bool = false
 
+    // Magnetometer hard-iron calibration status (issue #96).  Latest frame
+    // received from the FC over BLE on the file_ops characteristic with a
+    // 0xCA discriminator.  nil until the first frame arrives; reset on
+    // disconnect so a stale REVIEW state doesn't bleed across sessions.
+    @Published var magCalStatus: MagCalStatus?
+
     /// Set once per connected-session after the first-time-seen base station
     /// has auto-picked and pushed a quiet channel.  Gates the auto-pick so it
     /// only runs once per session; cleared on disconnect so that a BS reboot
@@ -151,6 +157,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // finish anyway.
         hasAutoSelectedChannel = false
         pendingAutoApply = false
+        // Drop any cached mag-cal status so a stale REVIEW from a previous
+        // session doesn't show up on reconnect (issue #96).  The FC
+        // republishes IDLE on reconnect anyway.
+        magCalStatus = nil
         flightAnnouncer?.reset()
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -516,6 +526,22 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func sendPyroFire(channel: UInt8) {
         sendRawCommand(36, payload: Data([channel]))
     }
+
+    // MARK: - Magnetometer hard-iron calibration (issue #96)
+    //
+    // Five single-byte commands.  The OC routes each to the FC over I2C,
+    // and the FC publishes back a binary status frame on the file_ops
+    // characteristic (parsed into magCalStatus).  Entry guard lives on
+    // the FC: START is only honoured when rocket_state == READY.
+    func sendMagCalStart()      { sendCommand(50) }
+    func sendMagCalAbort()      { sendCommand(51) }
+    func sendMagCalAccept()     { sendCommand(52) }
+    func sendMagCalRetry()      { sendCommand(53) }
+    /// Tell the FC: stop accumulating, run the sphere fit on what we
+    /// have, transition to REVIEW.  Replaces the old
+    /// auto-completion-at-buffer-fill so the user owns when the cal
+    /// "finishes."
+    func sendMagCalComputeFit() { sendCommand(54) }
 
     func sendToggleLogging() {
         sendCommand(23)
@@ -909,12 +935,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             parseTelemetryData(characteristic.value)
         } else if characteristic.uuid == fileOpsCharUUID {
             if let data = characteristic.value {
-                // Scan results use a 0xAA binary prefix; JSON responses start
-                // with '{' or '[' so the first byte is enough to disambiguate.
-                if data.first == 0xAA {
-                    parseScanResult(data)
-                } else {
-                    parseFileList(data)
+                // Multiple binary frame kinds + JSON share this characteristic;
+                // disambiguate by the first byte.  JSON always starts with '{'
+                // or '[' so the binary discriminators (0xAA scan, 0xCA mag-cal)
+                // can never collide with it.
+                switch data.first {
+                case 0xAA: parseScanResult(data)
+                case 0xCA: parseMagCalStatus(data)   // issue #96
+                default:   parseFileList(data)
                 }
             }
         } else if characteristic.uuid == fileTransferCharUUID {
@@ -1054,6 +1082,25 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// We copy into a `[UInt8]` first so indexing is always zero-based, which
     /// avoids the `Data` slice-startIndex footgun if CoreBluetooth ever hands
     /// us a sliced buffer.
+    /// Parse a magnetometer hard-iron cal status frame (issue #96).
+    /// Format: [0xCA][22-byte MagCalStatusData LE].  The FC sends one
+    /// frame on every state transition (SAMPLING entry, REVIEW entry,
+    /// APPLIED, ABORTED) plus a 5 Hz heartbeat in SAMPLING — so the iOS
+    /// UI can update progress smoothly without polling.
+    private func parseMagCalStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 23, bytes[0] == 0xCA else {
+            print("[MAGCAL] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        let payload = Array(bytes[1..<bytes.count])
+        guard let status = MagCalStatus.decode(payload) else {
+            print("[MAGCAL] decode failed (payload=\(payload.count) bytes)")
+            return
+        }
+        magCalStatus = status
+    }
+
     private func parseScanResult(_ data: Data) {
         print("[SCAN] parseScanResult: \(data.count) bytes, first=\(data.first.map { String(format: "0x%02X", $0) } ?? "nil")")
         let bytes = [UInt8](data)

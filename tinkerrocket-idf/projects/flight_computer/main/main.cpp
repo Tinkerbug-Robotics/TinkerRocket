@@ -1730,6 +1730,14 @@ static void loop_fc()
         sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
         have_ism6_si = true;
 
+        // Feed the live low-g accel to the mag calibrator so each
+        // incoming mag sample can be bucketed by physical orientation
+        // (issue #96 follow-up).  Raw int16 LSB units share the same
+        // sign convention as the mag direction-wedge encoding.
+        mag_calibrator.setLiveAccel(ism6hg256_data.acc_low_raw.x,
+                                    ism6hg256_data.acc_low_raw.y,
+                                    ism6hg256_data.acc_low_raw.z);
+
         memcpy(ism6hg256_data_buffer,
                &ism6hg256_data,
                SIZE_OF_ISM6HG256_DATA);
@@ -2548,6 +2556,25 @@ static void loop_fc()
                 {
                     ESP_LOGI(TAG, "[MAGCAL] retry");
                     mag_calibrator.retry();
+                    mag_cal_status_dirty = true;
+                }
+            }
+            else if (out_pending_command == MAG_CAL_COMPUTE_FIT)
+            {
+                if (rocket_state != MAG_CALIBRATION)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] compute_fit refused: not in MAG_CALIBRATION");
+                }
+                else if (!mag_calibrator.computeFit())
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] compute_fit refused: insufficient samples");
+                    // Still publish a status frame so the iOS button
+                    // doesn't appear stuck.
+                    mag_cal_status_dirty = true;
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "[MAGCAL] user-triggered fit complete, REVIEW state");
                     mag_cal_status_dirty = true;
                 }
             }

@@ -4808,6 +4808,11 @@ static void loop_oc()
             setPendingCommand(MAG_CAL_RETRY);
             ESP_LOGI("BLE", "Mag cal RETRY -> FlightComputer");
         }
+        else if (ble_cmd == 54)
+        {
+            setPendingCommand(MAG_CAL_COMPUTE_FIT);
+            ESP_LOGI("BLE", "Mag cal COMPUTE_FIT -> FlightComputer");
+        }
     }
 
     LOOP_STALL_INSTR("printStats", printStats());

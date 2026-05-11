@@ -722,7 +722,7 @@ typedef struct __attribute__((packed))
 {
     uint32_t time_us;
     uint8_t  sub_type;            // MagCalSubType
-    uint8_t  coverage_bins;       // 0..26 (3³ - 1 = 26 directional wedges populated)
+    uint8_t  coverage_bins;       // 0..26 (3³ - 1 = 26 directional wedges populated; == popcount(coverage_mask))
     uint16_t sample_count;        // total samples accumulated this run
     uint16_t inst_field_uT_x10;   // |B| of the most recent sample × 10
     int16_t  offset_x;            // fitted hard-iron offset (raw LSB units), or 0 if no fit
@@ -732,9 +732,24 @@ typedef struct __attribute__((packed))
     uint16_t residual_uT_x10;     // fit RMS residual × 10
     uint8_t  reject_code;         // MagCalRejectCode (only valid in REVIEW)
     uint8_t  _pad;
+    // Bitmap of populated 3³ wedges (bit i = wedge i, see directionWedge()
+    // in TR_MagCalibrator).  Drives the iOS UI's per-direction progress
+    // grid and the gated orientation-prompt cycle (issue #96 follow-up
+    // — don't advance the prompt until the current target wedge lights
+    // up).  Bit 13 = the (0,0,0) center cell is unreachable for a unit
+    // vector so never sets; the remaining 26 bits map 1:1 to wedges.
+    uint32_t coverage_mask;
+    // Live raw mag vector (last sample), in IIS2MDC LSB units
+    // (0.15 µT/LSB).  Lets iOS render real-time direction feedback so
+    // the user can see which body axis is currently dominant and
+    // adjust the orientation — without this they're guessing whether
+    // the rocket is "really" pointing up.
+    int16_t  inst_x_lsb;
+    int16_t  inst_y_lsb;
+    int16_t  inst_z_lsb;
 } MagCalStatusData;
-static_assert(sizeof(MagCalStatusData) == 22,
-              "MagCalStatusData must be 22 bytes");
+static_assert(sizeof(MagCalStatusData) == 32,
+              "MagCalStatusData must be 32 bytes");
 
 // MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
 // int32_t in the same 18-bit signed centered-counts space as
@@ -764,9 +779,11 @@ static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 18;
 // or moving interferer dominated the capture.
 static constexpr float MAG_CAL_MAX_RESIDUAL_UT = 8.0f;
 
-// Sample-buffer cap.  At 100 Hz IIS2MDC ODR, 1024 samples = ~10 s of
-// tumble — long enough to cover all wedges with normal hand-tumble pace.
-static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 1024;
+// Sample-buffer cap.  Bucketed per accel-wedge (27 wedges × 100 slots
+// each = 2700 total) so a user lingering in one orientation can't
+// crowd out samples from other orientations — diversity is preserved
+// even across long sessions.  Heap cost: 2700 × 3 × int16 ≈ 16 KiB.
+static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 2700;
 
 // Minimum samples before we'll attempt a fit.  Matches the issue's "≥500
 // samples (~5 s at 100 Hz)" guidance.
@@ -1165,6 +1182,7 @@ static constexpr uint8_t MAG_CAL_ABORT        = 0xD5;  // OC→FC: drop sampling
 static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: persist current fit, apply offsets, return to READY
 static constexpr uint8_t MAG_CAL_RETRY        = 0xD7;  // OC→FC: discard fit, restart sampling
 static constexpr uint8_t MAG_CAL_STATUS_MSG   = 0xD8;  // FC→OC: live progress / final result (MagCalStatusData)
+static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fit on current buffer, transition to REVIEW
 
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
