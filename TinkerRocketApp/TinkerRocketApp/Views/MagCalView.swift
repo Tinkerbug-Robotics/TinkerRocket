@@ -307,68 +307,93 @@ struct MagCalView: View {
 
 // MARK: - Sampling Hero
 
-/// Guidance card shown at the top of the sampling phase.  Built around
-/// the FC's `coverageMask` — bit i is set once the user has dwelt long
-/// enough in wedge i for the calibrator to pick up that orientation.
+/// Guidance card for the sampling phase.  Walks the user through each
+/// cardinal orientation one at a time with a deterministic state
+/// machine:
+///   prompting(axis)  → user matches the axis; the live FC coverageMask
+///                       lights up the corresponding wedge bit
+///   holding(axis, t) → orientation matched; a visible countdown ticks
+///                       down while the user holds it.  Tells the user
+///                       "yes, this is working, just keep holding."
+///   prompting(next)  → after countdown elapses, advance.
+///   allDone          → all 6 cardinals walked; FC continues sampling
+///                       through diagonals for the full 2048-sample
+///                       window so coverage hits the 18-wedge gate.
 ///
-/// The hero shows three things, all driven off the live mask:
-///   1. A "current target" card — one of six cardinal axes (nose UP,
-///      DOWN, LEFT side, RIGHT side, FRONT face, BACK face).  We pick
-///      the first uncovered axis in a fixed order and stay on it until
-///      the FC reports the corresponding wedge bit is set.  The card
-///      flips to a green checkmark for ~0.5 s before advancing — that
-///      micro-pause is the user-visible confirmation that the firmware
-///      and the app agree this orientation is captured.
-///   2. A 6-cell orientation grid showing which cardinal axes are done.
-///      Replaces the spinning-globe icon: users can see at a glance
-///      exactly how many more orientations are left, and which.
-///   3. A live |B| readout in µT so the user trusts that sampling is
-///      running.  Big monospaced digits — eye spots the change.
+/// State is local to the view.  Coverage state from the FC drives the
+/// prompting→holding transition only; once we've finished a hold for
+/// an axis, we advance regardless of whether its bit clears later
+/// (which won't happen — bits are sticky on the FC side).
 ///
-/// Old firmware (22-byte payload, coverageMask=0) means no per-axis
-/// info; in that case we fall back to a slow timer cycle through all
-/// six prompts so the UX still works.
+/// Old firmware (22-byte payload, coverageMask=0) leaves the state
+/// machine stuck in prompting forever, so we additionally drive a
+/// slow time-based cycle in that case as a degraded fallback.
 private struct SamplingHero: View {
     let status: MagCalStatus
 
     /// All six cardinal axes in the order the user is walked through them.
-    /// The fixed order means muscle memory carries between runs.
+    /// Order = nose along the body, then the four sides.  Fixed across
+    /// runs so users build muscle memory.
     private static let axisOrder: [MagCalAxis] = [
         .noseUp, .noseDown, .rightSide, .leftSide, .frontFace, .backFace
     ]
 
-    /// Last target we showed — used to detect a "just covered" transition
-    /// so we can briefly hold the green-check confirmation.
-    @State private var lastSeenTarget: MagCalAxis?
+    /// Hold duration before advancing — long enough to give the user
+    /// satisfying visual confirmation, short enough that 6 × HOLD plus
+    /// transition time still fits in the FC's 20 s sample window.
+    private static let HOLD_SECONDS: Double = 1.5
 
-    /// When non-nil, the card shows this axis as just-captured (green
-    /// check) for ~0.6 s before the prompt advances.  Bridges the gap
-    /// between "wedge bit flipped" and "user has time to register it."
-    @State private var heldCoveredAxis: MagCalAxis?
+    /// State-machine tick — fast enough for a smooth countdown bar.
+    private static let TICK_SECONDS: Double = 0.05
 
-    /// Old-firmware fallback: cycle index for the timer-driven path.
-    @State private var fallbackIndex: Int = 0
+    /// Index into axisOrder of the orientation we're currently prompting
+    /// for.  Moves forward only — once an axis is held to completion we
+    /// don't revisit it (even if its wedge bit somehow clears).
+    @State private var currentAxisIndex: Int = 0
 
-    /// Are we running against firmware that ships the coverage mask?
-    /// True any time the mask carries information OR no samples have
-    /// landed yet (so coverage_bins==0 isn't mistaken for "old FC").
+    /// Seconds remaining in the current hold.  When this reaches zero
+    /// we advance currentAxisIndex.  Zero = not currently holding.
+    @State private var holdRemaining: Double = 0
+
+    /// Old-firmware fallback timer — only kicks in when coverageMask is
+    /// always zero.  Cycles the prompt every 3 s as a degraded UX.
+    @State private var fallbackTimer: Timer?
+
+    /// State-machine driver — fires every TICK_SECONDS while the view
+    /// is visible.  Started in onAppear, torn down in onDisappear.
+    @State private var tickTimer: Timer?
+
+    /// True any time the FC's wire frame can carry per-wedge info.
+    /// Zero-mask + zero-bins (no samples yet) still counts as "live" so
+    /// a fresh entry isn't misread as old firmware.
     private var hasLiveMask: Bool { status.coverageMask != 0 || status.coverageBins == 0 }
 
-    /// First uncovered axis in fixed order — the "do this now" target.
-    /// nil once all six cardinals are covered.
-    private var nextUncoveredAxis: MagCalAxis? {
-        SamplingHero.axisOrder.first { !status.isAxisCovered($0) }
+    /// The axis the user should be aiming for right now (nil = all 6 done).
+    private var currentAxis: MagCalAxis? {
+        currentAxisIndex < SamplingHero.axisOrder.count
+            ? SamplingHero.axisOrder[currentAxisIndex]
+            : nil
     }
 
-    /// Adaptive headline so the user gets feedback even between cardinal
-    /// transitions.  Computed off the coverage bin count, not the mask,
-    /// so this also works on old firmware.
+    /// True if the user is in the right orientation for the current
+    /// target — the corresponding wedge bit is set on the FC side.
+    private var currentAxisMatched: Bool {
+        guard hasLiveMask, let axis = currentAxis else { return false }
+        return status.isAxisCovered(axis)
+    }
+
+    private var isHolding: Bool { holdRemaining > 0 }
+
+    /// Adaptive headline.  Drives off the local prompt index so it
+    /// updates in lock-step with what the user actually sees, rather
+    /// than off the FC's coverage count which can include diagonals.
     private var headline: String {
-        switch status.coverageBins {
-        case 0..<6:   return "Start tumbling"
-        case 6..<14:  return "Good — keep going"
-        case 14..<22: return "Almost there"
-        default:      return "Excellent coverage"
+        if currentAxis == nil { return "All orientations captured" }
+        switch currentAxisIndex {
+        case 0:     return "Let's start"
+        case 1, 2:  return "Nice — keep going"
+        case 3, 4:  return "Almost there"
+        default:    return "Last one"
         }
     }
 
@@ -379,12 +404,11 @@ private struct SamplingHero: View {
                 .fontWeight(.semibold)
 
             currentTargetCard
-
             orientationGrid
 
             HStack(spacing: 28) {
-                // Live |B|.  Big monospaced digits so the eye spots the
-                // movement and the user trusts that sampling is live.
+                // Live |B|.  Big monospaced digits so the eye sees motion
+                // and trusts that sampling is live.
                 VStack(spacing: 2) {
                     Text(String(format: "%.0f", status.instantaneousFieldUT))
                         .font(.system(size: 36, weight: .bold, design: .monospaced))
@@ -393,10 +417,8 @@ private struct SamplingHero: View {
                         .foregroundColor(.secondary)
                 }
 
-                // Total-coverage gauge.  Circular feels more "spherical"
-                // than a linear bar — the cal is literally about lighting
-                // up wedges of a sphere.  Counts all 26 wedges, including
-                // the diagonals; the six-axis grid above shows only the
+                // Total-coverage gauge.  Counts all 26 wedges (including
+                // diagonals); the six-axis grid above shows only the
                 // cardinals.
                 ZStack {
                     Circle()
@@ -418,126 +440,153 @@ private struct SamplingHero: View {
                 .frame(width: 84, height: 84)
             }
         }
-        .onChange(of: status.coverageMask) { _ in
-            guard hasLiveMask else { return }
-            // Detect the "previous target just got captured" transition:
-            // the axis we were prompting for now has its wedge bit set.
-            // Flash it green for a beat before the prompt advances.
-            if let prev = lastSeenTarget,
-               prev != nextUncoveredAxis,
-               status.isAxisCovered(prev),
-               heldCoveredAxis == nil {
-                heldCoveredAxis = prev
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    heldCoveredAxis = nil
-                }
-            }
-            lastSeenTarget = nextUncoveredAxis
-        }
-        .onAppear {
-            lastSeenTarget = nextUncoveredAxis
-            if !hasLiveMask { startFallbackCycle() }
-        }
+        .onAppear { startTimers() }
+        .onDisappear { stopTimers() }
     }
 
     // MARK: - Pieces
 
-    /// Display priority for the prompt card: held-just-captured → next
-    /// uncovered → cycle fallback (old firmware).  `covered` is true
-    /// only when we're displaying a just-captured axis.
-    private var promptDisplay: (axis: MagCalAxis?, covered: Bool) {
-        if let held = heldCoveredAxis {
-            return (held, true)
-        }
-        if hasLiveMask {
-            return (nextUncoveredAxis, false)
-        }
-        return (SamplingHero.axisOrder[fallbackIndex % SamplingHero.axisOrder.count], false)
-    }
-
-    /// The big "do this now" prompt card.  Stays on the same axis until
-    /// the firmware reports its wedge is populated, then flashes a green
-    /// "Captured!" for ~0.6 s before moving to the next.
+    /// The big "do this now" prompt card.  Three visual states:
+    ///   - Prompting: orange arrow icon + "Point the nose UP" + caption
+    ///   - Holding:   green check + "Captured! Hold steady…" + countdown bar
+    ///   - All done:  seal + "All orientations captured" message
     @ViewBuilder
     private var currentTargetCard: some View {
-        let display = promptDisplay
-        let axisToShow = display.axis
-        let covered = display.covered
-
-        HStack(spacing: 12) {
-            if let axis = axisToShow {
-                Image(systemName: covered ? "checkmark.circle.fill" : axis.icon)
+        if let axis = currentAxis {
+            let holding = isHolding
+            HStack(spacing: 12) {
+                Image(systemName: holding ? "checkmark.circle.fill" : axis.icon)
                     .font(.system(size: 36, weight: .semibold))
-                    .foregroundColor(covered ? .green : .orange)
+                    .foregroundColor(holding ? .green : .orange)
                     .frame(width: 44)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(covered ? "Captured!" : axis.prompt)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(holding ? "Captured — hold steady" : axis.prompt)
                         .font(.headline)
-                    Text(covered ? "Moving to next orientation…" : "Hold this position")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if holding {
+                        // Countdown bar shrinks from full → empty over
+                        // HOLD_SECONDS.  More tangible than a "1.4 s"
+                        // number that flickers.
+                        ProgressView(value: max(0, holdRemaining),
+                                     total: SamplingHero.HOLD_SECONDS)
+                            .progressViewStyle(.linear)
+                            .tint(.green)
+                        Text(String(format: "Advancing in %.1f s", holdRemaining))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("Hold this position until it turns green")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 Spacer()
-            } else {
-                // All six cardinal axes done — the FC fit-gate is on 18
-                // total wedges, so coverage may still be growing through
-                // the diagonals; keep encouraging the user.
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background((holding ? Color.green : Color.orange).opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 8)
+            .animation(.easeInOut(duration: 0.25), value: holding)
+        } else {
+            HStack(spacing: 12) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 36, weight: .semibold))
                     .foregroundColor(.green)
                     .frame(width: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("All six axes captured")
+                    Text("All orientations captured")
                         .font(.headline)
-                    Text("Keep rolling for full coverage…")
+                    Text("Keep rolling slowly for a clean fit…")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
                 Spacer()
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color.green.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 8)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background((covered ? Color.green : Color.orange).opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 8)
-        .animation(.easeInOut(duration: 0.25), value: covered)
     }
 
-    /// 6-cell grid showing which cardinal axes are captured.  Replaces
-    /// the spinning globe — gives the user an at-a-glance map of what
-    /// orientations remain.
+    /// 6-cell grid showing per-axis progress.  Each cell turns green
+    /// once we've held that axis to completion (currentAxisIndex moved
+    /// past it).  The CURRENT target also gets a blue ring + pulse so
+    /// it's obvious which one we're prompting for.
     private var orientationGrid: some View {
         let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
         return LazyVGrid(columns: cols, spacing: 8) {
-            ForEach(SamplingHero.axisOrder, id: \.self) { axis in
-                let covered = hasLiveMask && status.isAxisCovered(axis)
+            ForEach(Array(SamplingHero.axisOrder.enumerated()), id: \.offset) { (idx, axis) in
+                let done = idx < currentAxisIndex
+                let isCurrent = idx == currentAxisIndex
                 VStack(spacing: 4) {
-                    Image(systemName: covered ? "checkmark.circle.fill" : axis.icon)
+                    Image(systemName: done ? "checkmark.circle.fill" : axis.icon)
                         .font(.system(size: 22, weight: .semibold))
-                        .foregroundColor(covered ? .green : .gray)
+                        .foregroundColor(done ? .green : (isCurrent ? .blue : .gray))
                     Text(axis.shortLabel)
                         .font(.caption2)
-                        .foregroundColor(covered ? .primary : .secondary)
+                        .foregroundColor(done || isCurrent ? .primary : .secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
-                .background(covered
+                .background(done
                     ? Color.green.opacity(0.12)
-                    : Color.gray.opacity(0.08))
+                    : (isCurrent ? Color.blue.opacity(0.12) : Color.gray.opacity(0.08)))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isCurrent ? Color.blue : Color.clear, lineWidth: 2)
+                )
             }
         }
         .padding(.horizontal, 8)
     }
 
-    // MARK: - Old-firmware fallback (timer cycle)
+    // MARK: - Timers / state-machine
 
-    private func startFallbackCycle() {
-        Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
+    private func startTimers() {
+        // Main state-machine tick.
+        tickTimer?.invalidate()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: SamplingHero.TICK_SECONDS,
+                                          repeats: true) { _ in
+            DispatchQueue.main.async { advance() }
+        }
+        // Old-firmware fallback: if we never get a real mask, walk the
+        // axis cycle on a slow timer so the user still gets prompts.
+        // The FC fit will still run, just without per-orientation
+        // confirmation.
+        fallbackTimer?.invalidate()
+        fallbackTimer = Timer.scheduledTimer(withTimeInterval: 3.0,
+                                              repeats: true) { _ in
             DispatchQueue.main.async {
-                fallbackIndex = (fallbackIndex + 1) % SamplingHero.axisOrder.count
+                if !hasLiveMask && !isHolding && currentAxisIndex < SamplingHero.axisOrder.count {
+                    // No live coverage info — simulate a hold completing.
+                    holdRemaining = 0
+                    currentAxisIndex += 1
+                }
             }
+        }
+    }
+
+    private func stopTimers() {
+        tickTimer?.invalidate(); tickTimer = nil
+        fallbackTimer?.invalidate(); fallbackTimer = nil
+    }
+
+    /// One tick of the state machine.  Either tick down a running hold,
+    /// or start one if the current target's wedge bit is now set.
+    private func advance() {
+        guard currentAxis != nil else { return }
+        if isHolding {
+            holdRemaining = max(0, holdRemaining - SamplingHero.TICK_SECONDS)
+            if holdRemaining == 0 {
+                // Hold done — advance past the current axis.
+                currentAxisIndex += 1
+            }
+        } else if currentAxisMatched {
+            // Orientation just matched — kick off the visible hold.
+            holdRemaining = SamplingHero.HOLD_SECONDS
         }
     }
 }
