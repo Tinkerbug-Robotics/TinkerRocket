@@ -12,6 +12,7 @@
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_GpsInsEKF.h>
 #include <TR_KinematicChecks.h>
+#include <TR_MagCalibrator.h>
 #include <TR_ServoControl_ledc_mult.h>
 #include <TR_GuidancePN.h>
 #include <TR_ControlMixer.h>
@@ -72,6 +73,18 @@ TR_I2C_Interface i2c_interface(config::ESP_I2C_ADR);
 // I2S stream for high-frequency telemetry to OutComputer
 static TR_I2S_Stream i2s_stream;
 SensorConverter sensor_converter;
+
+// Hard-iron mag calibration (issue #96).  Runs only while rocket_state ==
+// MAG_CALIBRATION; pad cal flow only, gated against any in-air state.
+static MagCalibrator mag_calibrator;
+static int64_t mag_cal_last_status_us = 0;
+static bool    mag_cal_status_dirty   = false;  // true → publish on next tick regardless of cadence
+
+// IIS2MDC OFFSET regs are zeroed by softReset() inside sensor_collector.begin(),
+// so a calibrated boot has to defer the chip-side write until after begin()
+// completes.  Loaded from NVS in setup(); applied after sensor_collector.begin().
+static int16_t pending_mag_cx = 0, pending_mag_cy = 0, pending_mag_cz = 0;
+static bool    pending_mag_apply = false;
 
 static ISM6HG256Data ism6hg256_data;
 static uint8_t ism6hg256_data_buffer[SIZE_OF_ISM6HG256_DATA];
@@ -1277,6 +1290,49 @@ static void setup_fc()
     }
     prefs.end();
 
+    // Restore magnetometer hard-iron offset from NVS (namespace "mag_cal", issue #96).
+    // Apply to IIS2MDC OFFSET_X/Y/Z if the chip is active, and to the
+    // MMC5983MA software-offset path in the converter regardless (the
+    // converter is a no-op on uncalibrated MMC counts since defaults are
+    // zero).  IIS2MDC offsets must be reapplied AFTER sensor_collector.begin()
+    // because softReset() inside begin() zeroes them — ensure call order
+    // below.  The converter offset is set here too even though the IIS2MDC
+    // chip handles its own subtraction; this lets a single NVS schema cover
+    // both mag chips without divergence.
+    prefs.begin("mag_cal", false);
+    if (prefs.isKey("ver"))
+    {
+        const uint8_t schema = prefs.getUChar("ver", 0);
+        if (schema == MAG_CAL_NVS_SCHEMA_VERSION && prefs.getBool("done", false))
+        {
+            const int16_t cx = (int16_t)prefs.getShort("cx", 0);
+            const int16_t cy = (int16_t)prefs.getShort("cy", 0);
+            const int16_t cz = (int16_t)prefs.getShort("cz", 0);
+            const float   R  = prefs.getFloat("R_uT", 0.0f);
+            const int32_t mmc_cx = prefs.getInt("mmc_cx", 0);
+            const int32_t mmc_cy = prefs.getInt("mmc_cy", 0);
+            const int32_t mmc_cz = prefs.getInt("mmc_cz", 0);
+            sensor_converter.setMMCOffset(mmc_cx, mmc_cy, mmc_cz);
+            ESP_LOGI(TAG, "NVS mag_cal: offset=(%d,%d,%d) raw counts, R=%.2f µT (apply after sensor_collector.begin)",
+                          (int)cx, (int)cy, (int)cz, (double)R);
+            // Stash on the side; we'll apply to the IIS2MDC chip after begin()
+            // returns (softReset inside begin() zeroes OFFSET_X/Y/Z).
+            pending_mag_cx = cx;
+            pending_mag_cy = cy;
+            pending_mag_cz = cz;
+            pending_mag_apply = true;
+        }
+        else if (schema != MAG_CAL_NVS_SCHEMA_VERSION)
+        {
+            ESP_LOGW(TAG, "NVS mag_cal: schema %u != %u, ignoring", schema, (unsigned)MAG_CAL_NVS_SCHEMA_VERSION);
+        }
+    }
+    else
+    {
+        ESP_LOGI(TAG, "NVS mag_cal: none (uncalibrated)");
+    }
+    prefs.end();
+
     // Load roll profile from NVS (namespace "rollp")
     prefs.begin("rollp", false);  // read-write (creates namespace on first boot)
     if (prefs.isKey("prof"))
@@ -1345,6 +1401,17 @@ static void setup_fc()
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
+
+    // Apply mag hard-iron offset to the IIS2MDC chip now that begin() has
+    // finished its softReset (which zeroes OFFSET_X/Y/Z).  Issue #96.
+    if (pending_mag_apply && sensor_collector.isIIS2MDCActive())
+    {
+        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+                          pending_mag_cx, pending_mag_cy, pending_mag_cz);
+        ESP_LOGI(TAG, "IIS2MDC OFFSET applied: (%d,%d,%d) %s",
+                 (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
+                 ok ? "OK" : "FAILED");
+    }
 
     out_status_query_data.ism6_low_g_fs_g = config::ISM6_LOW_G_FS_G;
     out_status_query_data.ism6_high_g_fs_g = config::ISM6_HIGH_G_FS_G;
@@ -1716,6 +1783,21 @@ static void loop_fc()
         (void)enqueueI2STx(IIS2MDC_MSG,
                            iis2mdc_data_buffer,
                            SIZE_OF_IIS2MDC_DATA);
+
+        // Issue #96 — feed every fresh raw sample into the calibrator while
+        // we're in MAG_CALIBRATION.  Outside that state the calibrator is
+        // IDLE and addSample() short-circuits.  When the buffer fills it
+        // returns true so we publish the REVIEW frame promptly without
+        // waiting for the 5 Hz cadence.
+        if (rocket_state == MAG_CALIBRATION)
+        {
+            if (mag_calibrator.addSample(iis2mdc_data.mag_x,
+                                         iis2mdc_data.mag_y,
+                                         iis2mdc_data.mag_z))
+            {
+                mag_cal_status_dirty = true;
+            }
+        }
     }
 
     if (sensor_collector.getGNSSData(gnss_data))
@@ -1732,6 +1814,28 @@ static void loop_fc()
         (void)enqueueI2STx(GNSS_MSG,
                            gnss_data_buffer,
                            SIZE_OF_GNSS_DATA);
+    }
+
+    // Issue #96 — periodic mag-cal status frame.  5 Hz cadence in
+    // SAMPLING; immediate publish on REVIEW/APPLIED/ABORTED transitions
+    // (mag_cal_status_dirty).  Outside MAG_CALIBRATION the calibrator is
+    // IDLE; we still publish ABORTED/APPLIED transitions but otherwise
+    // stay quiet so the BLE channel isn't carrying useless idle frames.
+    {
+        constexpr int64_t MAG_CAL_STATUS_PERIOD_US = 200000;  // 5 Hz
+        const int64_t now = esp_timer_get_time();
+        const bool in_state = (rocket_state == MAG_CALIBRATION);
+        const bool elapsed  = (now - mag_cal_last_status_us) >= MAG_CAL_STATUS_PERIOD_US;
+        if (mag_cal_status_dirty || (in_state && elapsed))
+        {
+            MagCalStatusData s{};
+            mag_calibrator.buildStatusFrame((uint32_t)now, s);
+            uint8_t buf[sizeof(MagCalStatusData)];
+            memcpy(buf, &s, sizeof(buf));
+            (void)enqueueI2STx(MAG_CAL_STATUS_MSG, buf, sizeof(buf));
+            mag_cal_last_status_us = now;
+            mag_cal_status_dirty = false;
+        }
     }
 
     // --- Flight logic update ---
@@ -1760,7 +1864,8 @@ static void loop_fc()
             // logic is tested in simulation.
             if (bmp_latest_si.pressure > 0.0f &&
                 (rocket_state == INITIALIZATION ||
-                 rocket_state == READY))
+                 rocket_state == READY ||
+                 rocket_state == MAG_CALIBRATION))
             {
                 ground_pressure_pa = bmp_latest_si.pressure;
                 ground_pressure_found = true;
@@ -2405,6 +2510,99 @@ static void loop_fc()
                 prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
                 prefs.end();
                 ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+            }
+            // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
+            // Entry is gated to READY only.  All transitions produce one
+            // immediate status frame so the iOS UI updates without waiting
+            // for the 5 Hz cadence.
+            else if (out_pending_command == MAG_CAL_START)
+            {
+                if (rocket_state != READY)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] start refused: state=%u (require READY)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "[MAGCAL] start: entering MAG_CALIBRATION");
+                    rocket_state = MAG_CALIBRATION;
+                    mag_calibrator.start();
+                    mag_cal_status_dirty = true;
+                }
+            }
+            else if (out_pending_command == MAG_CAL_ABORT)
+            {
+                ESP_LOGI(TAG, "[MAGCAL] abort");
+                mag_calibrator.abort();
+                mag_cal_status_dirty = true;
+                if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
+                mag_calibrator.clear();
+            }
+            else if (out_pending_command == MAG_CAL_RETRY)
+            {
+                if (rocket_state != MAG_CALIBRATION)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] retry refused: not in MAG_CALIBRATION");
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "[MAGCAL] retry");
+                    mag_calibrator.retry();
+                    mag_cal_status_dirty = true;
+                }
+            }
+            else if (out_pending_command == MAG_CAL_ACCEPT)
+            {
+                if (rocket_state != MAG_CALIBRATION)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] accept refused: not in MAG_CALIBRATION");
+                }
+                else if (!mag_calibrator.accept())
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] accept refused: no fit available (still SAMPLING?)");
+                }
+                else
+                {
+                    int16_t cx, cy, cz;
+                    float R_uT, res_uT;
+                    uint8_t reject;
+                    mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
+
+                    // Apply to active mag chip immediately so the user can
+                    // verify the fix without a reboot.
+                    if (sensor_collector.isIIS2MDCActive())
+                    {
+                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
+                        ESP_LOGI(TAG, "[MAGCAL] IIS2MDC OFFSET applied: (%d,%d,%d) %s",
+                                 (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
+                    }
+                    // The MMC software-offset path requires int32 centered-counts;
+                    // the sphere fit was run in IIS2MDC int16 LSB units so it
+                    // doesn't apply directly.  Persist zeros for MMC; legacy
+                    // boards that need MMC cal can be added in a follow-up.
+                    sensor_converter.setMMCOffset(0, 0, 0);
+
+                    // Persist to NVS so boot reapplies the offset.
+                    prefs.begin("mag_cal", false);
+                    prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+                    prefs.putBool ("done",   true);
+                    prefs.putShort("cx",     cx);
+                    prefs.putShort("cy",     cy);
+                    prefs.putShort("cz",     cz);
+                    prefs.putFloat("R_uT",   R_uT);
+                    prefs.putFloat("res_uT", res_uT);
+                    prefs.putInt  ("mmc_cx", 0);
+                    prefs.putInt  ("mmc_cy", 0);
+                    prefs.putInt  ("mmc_cz", 0);
+                    prefs.end();
+
+                    ESP_LOGI(TAG, "[MAGCAL] accepted + saved: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
+                             (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
+
+                    mag_cal_status_dirty = true;
+                    rocket_state = READY;
+                    mag_calibrator.clear();
+                }
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
             {
@@ -3212,6 +3410,15 @@ static void loop_fc()
                         }
                     }
                 }
+                break;
+            }
+            case MAG_CALIBRATION:
+            {
+                // No state-machine transitions out — driven entirely by
+                // BLE commands (MAG_CAL_ABORT/ACCEPT/RETRY).  The user is
+                // physically tumbling the rocket on the bench, so we
+                // explicitly do NOT promote to PRELAUNCH on motion or any
+                // other auto-detect.  Issue #96.
                 break;
             }
             default:

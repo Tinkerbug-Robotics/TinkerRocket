@@ -49,6 +49,13 @@ public:
     // Subtracted from ISM6HG256 high-g output during conversion.
     void setHighGBias(float bx, float by, float bz);
 
+    // Set MMC5983MA hard-iron offset in centered-counts (issue #96).
+    // The MMC chip has no on-board offset register, so the offset is
+    // applied here — subtracted from the post-centering counts before
+    // scaling to µT.  IIS2MDC has its own OFFSET_X/Y/Z registers so this
+    // setter is irrelevant on the new PCB rev's mag path.
+    void setMMCOffset(int32_t cx_counts, int32_t cy_counts, int32_t cz_counts);
+
     // --- Data Conversion Functions ---
     // Convert from packed to human readable SI
     void convertGNSSData(const GNSSData& in, 
@@ -90,6 +97,11 @@ private:
 
     // High-g accelerometer bias (m/s², body frame)
     float hg_bias_x_ = 0.0f, hg_bias_y_ = 0.0f, hg_bias_z_ = 0.0f;
+
+    // MMC5983MA hard-iron offset (centered-counts, issue #96).  Applied in
+    // convertMMC5983MAData; zero by default so behaviour is unchanged
+    // until the FC pushes a calibrated offset via setMMCOffset.
+    int32_t mmc_offset_cx_ = 0, mmc_offset_cy_ = 0, mmc_offset_cz_ = 0;
   
     // --- Encode/Decode Helpers ---
     static float decodeVoltageFromInt(uint16_t raw);

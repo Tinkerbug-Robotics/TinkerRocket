@@ -74,6 +74,21 @@ void SensorConverter::setHighGBias(float bx, float by, float bz)
 #endif
 }
 
+void SensorConverter::setMMCOffset(int32_t cx_counts, int32_t cy_counts, int32_t cz_counts)
+{
+    if (cx_counts == mmc_offset_cx_ && cy_counts == mmc_offset_cy_ && cz_counts == mmc_offset_cz_)
+    {
+        return;  // No change
+    }
+    mmc_offset_cx_ = cx_counts;
+    mmc_offset_cy_ = cy_counts;
+    mmc_offset_cz_ = cz_counts;
+#ifdef ESP_PLATFORM
+    ESP_LOGI("Converter", "MMC hard-iron offset set: %ld, %ld, %ld counts",
+             (long)cx_counts, (long)cy_counts, (long)cz_counts);
+#endif
+}
+
 
 // --- GNSS ---
 void SensorConverter::convertGNSSData(const GNSSData& in, GNSSDataSI& out)
@@ -205,9 +220,13 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
 {
   out.time_us = in.time_us;
 
-  const int32_t cx = mmc5983ma_centered_counts(in.mag_x);
-  const int32_t cy = mmc5983ma_centered_counts(in.mag_y);
-  const int32_t cz = mmc5983ma_centered_counts(in.mag_z);
+  // Subtract the hard-iron offset (issue #96).  The MMC chip has no
+  // on-board offset register, so the cal flow stores the offset in the
+  // converter and we apply it post-centering.  Defaults to zero, so
+  // behaviour is unchanged on uncalibrated boards.
+  const int32_t cx = mmc5983ma_centered_counts(in.mag_x) - mmc_offset_cx_;
+  const int32_t cy = mmc5983ma_centered_counts(in.mag_y) - mmc_offset_cy_;
+  const int32_t cz = mmc5983ma_centered_counts(in.mag_z) - mmc_offset_cz_;
 
   // Gauss = centered * (8 / 131072)
   // SI: uT = Gauss * 100
@@ -227,9 +246,10 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
 }
 
 // --- IIS2MDC (new-PCB magnetometer) ---
-// Sensitivity per datasheet 9.13: 1.5 mgauss/LSB = 0.15 uT/LSB. Raw is
-// already signed int16 centered at 0 (no offset register subtract here —
-// see TR_IIS2MDC's softReset path which zeroes OFFSET_X/Y/Z).
+// Sensitivity per datasheet 9.13: 1.5 mgauss/LSB = 0.15 uT/LSB.  Raw is
+// already signed int16 centered at 0; if the FC has loaded a hard-iron
+// calibration (issue #96), the chip's OFFSET_X/Y/Z registers have already
+// subtracted the offset upstream — no software subtract needed here.
 void SensorConverter::convertIIS2MDCData(const IIS2MDCData& in, IIS2MDCDataSI& out)
 {
     out.time_us = in.time_us;

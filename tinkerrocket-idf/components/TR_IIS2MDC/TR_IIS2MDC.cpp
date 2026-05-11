@@ -154,6 +154,28 @@ TR_IIS2MDCStatus TR_IIS2MDC::readWhoAmI(uint8_t *id)
 }
 
 // ---------------------------------------------------------------------------
+//  setHardIronOffset – write OFFSET_X/Y/Z (0x45..0x4A) in raw LSB units
+// ---------------------------------------------------------------------------
+TR_IIS2MDCStatus TR_IIS2MDC::setHardIronOffset(int16_t cx, int16_t cy, int16_t cz)
+{
+    // Datasheet 9.7: each axis is a signed 16-bit offset stored L then H.
+    // Sub-address auto-increments across the 6-byte block on multi-byte
+    // writes (datasheet 6.1.1), but we issue 6 single-byte writes for
+    // simplicity — this is one-shot per cal accept / boot, not a hot path.
+    const uint16_t ux = (uint16_t)cx;
+    const uint16_t uy = (uint16_t)cy;
+    const uint16_t uz = (uint16_t)cz;
+
+    if (writeRegister(IIS2MDC_Reg::OFFSET_X_REG_L, (uint8_t)(ux & 0xFF))      != TR_IIS2MDC_OK) return TR_IIS2MDC_ERROR;
+    if (writeRegister(IIS2MDC_Reg::OFFSET_X_REG_H, (uint8_t)((ux >> 8) & 0xFF)) != TR_IIS2MDC_OK) return TR_IIS2MDC_ERROR;
+    if (writeRegister(IIS2MDC_Reg::OFFSET_Y_REG_L, (uint8_t)(uy & 0xFF))      != TR_IIS2MDC_OK) return TR_IIS2MDC_ERROR;
+    if (writeRegister(IIS2MDC_Reg::OFFSET_Y_REG_H, (uint8_t)((uy >> 8) & 0xFF)) != TR_IIS2MDC_OK) return TR_IIS2MDC_ERROR;
+    if (writeRegister(IIS2MDC_Reg::OFFSET_Z_REG_L, (uint8_t)(uz & 0xFF))      != TR_IIS2MDC_OK) return TR_IIS2MDC_ERROR;
+    if (writeRegister(IIS2MDC_Reg::OFFSET_Z_REG_H, (uint8_t)((uz >> 8) & 0xFF)) != TR_IIS2MDC_OK) return TR_IIS2MDC_ERROR;
+    return TR_IIS2MDC_OK;
+}
+
+// ---------------------------------------------------------------------------
 //  Low-level I2C register access (8-bit registers)
 // ---------------------------------------------------------------------------
 TR_IIS2MDCStatus TR_IIS2MDC::writeRegister(uint8_t reg, uint8_t value)

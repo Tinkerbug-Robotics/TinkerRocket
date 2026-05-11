@@ -121,6 +121,13 @@ public:
     /// Read X, Y, Z magnetic field as raw signed 16-bit counts (one 6-byte burst).
     TR_IIS2MDCStatus readRawXYZ(IIS2MDC_RawData *out);
 
+    /// Program the chip's hard-iron OFFSET_X/Y/Z registers.  Values are in
+    /// raw LSB units (0.15 µT/LSB, signed 16-bit).  The chip subtracts
+    /// these from every sample before producing OUT registers, so the
+    /// I2S-streamed counts are already corrected — no further work for
+    /// downstream consumers (OC, EKF, telemetry).  Issue #96.
+    TR_IIS2MDCStatus setHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+
     /// Read X, Y, Z magnetic field in microtesla.
     TR_IIS2MDCStatus readFieldsXYZ_uT(float *x_uT, float *y_uT, float *z_uT);
 

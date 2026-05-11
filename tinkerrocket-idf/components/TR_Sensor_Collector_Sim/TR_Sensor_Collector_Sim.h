@@ -47,6 +47,13 @@ public:
     float hg_bias_x = 0.0f, hg_bias_y = 0.0f, hg_bias_z = 0.0f;
     float cal_gravity_mag = 0.0f;
 
+    // Mag hard-iron offset passthrough (issue #96).  In sim, the IIS2MDC
+    // path is offline so the setter is a no-op; isIIS2MDCActive() returns
+    // the real-collector's state regardless of sim mode so the boot apply
+    // path still works after reverting from sim to live.
+    bool isIIS2MDCActive() const { return real_.isIIS2MDCActive(); }
+    bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+
     // ---- Sim control ----
     void configureSim(const SimConfigData& cfg);
     void configureSimRotation(float ism6_rot_z_deg);
