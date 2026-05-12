@@ -19,6 +19,7 @@
 #include <unistd.h>               // fsync() — periodic-flush SD commit (#107)
 
 #include "config.h"
+#include "bs_log_policy.h"        // parseSequentialFilename() (#137)
 
 #include <TR_LoRa_Comms.h>
 #include <TR_Sensor_Data_Converter.h>
@@ -401,8 +402,13 @@ static uint16_t findNextFileNumber()
     struct dirent* entry;
     while ((entry = readdir(dir)) != nullptr)
     {
+        // #137: use the strict parser so timestamped siblings (e.g.
+        // lora_20260509_164143.csv) don't get matched as "lora_NNN.csv"
+        // with the leading digits truncated to the low 16 bits (= 9885).
+        // Pre-fix, that quirk made the BS pick lora_9886.csv after every
+        // no-time-sync boot whose SD already held timestamped flights.
         uint16_t num = 0;
-        if (sscanf(entry->d_name, "lora_%hu.csv", &num) == 1)
+        if (bs_log_policy::parseSequentialFilename(entry->d_name, num))
         {
             if (num > max_num) max_num = num;
         }
@@ -3117,10 +3123,17 @@ static void loop_bs()
         stopLogging();
     }
 
-    // Silence timeout (safety net): close log if no packets for 30s
-    if (logging_active && (millis() - log_last_write_ms) >= config::LOG_SILENCE_TIMEOUT_MS)
+    // Silence timeout: close log if no packets for LOG_SILENCE_TIMEOUT_MS
+    // (5 min, #137).  Applies in every rocket state — pre-#137 this was 30 s
+    // which closed mid-flight on altitude-driven RX gaps near apogee, but
+    // bumping to 5 min handles even the worst-case descent silence on the
+    // Estes-class flights we test with while still flushing the log a
+    // reasonable interval after the rocket is powered off post-recovery.
+    if (logging_active &&
+        (millis() - log_last_write_ms) >= config::LOG_SILENCE_TIMEOUT_MS)
     {
-        ESP_LOGW(TAG, "[LOG] Silence timeout, closing log file");
+        ESP_LOGW(TAG, "[LOG] Silence timeout (state=%s), closing log file",
+                 rocketStateToString(last_rocket_state));
         stopLogging();
     }
 
