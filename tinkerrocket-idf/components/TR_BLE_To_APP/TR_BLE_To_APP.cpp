@@ -1082,6 +1082,13 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("bvol", data.bs_voltage, 2);
     addFloat("bcur", data.bs_current, 0);
     addBool("bslog", data.bs_logging_active);
+    // Countdown to the silence-timeout close — only emitted while the log
+    // is actually open (saves ~10 B per telemetry packet when idle).  iOS
+    // renders this next to the Base Stn Log badge so the operator can see
+    // the auto-close approaching during a long quiet stretch.
+    if (data.bs_logging_active && data.bs_log_silence_remaining_s != 0xFFFF) {
+        addUint("slrm", data.bs_log_silence_remaining_s);
+    }
 
     // Power rail state
     addBool("pwr", data.pwr_pin_on);

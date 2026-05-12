@@ -569,7 +569,7 @@ struct TelemetryStatusBanner: View {
     private var subtitle: String {
         switch status {
         case .syncing: return "Base station hasn't received any telemetry yet. Power on the rocket and wait for the link to sync."
-        case .stale:   return String(format: "Last packet %.1f s ago. Showing cached values.", Double(ageMs) / 1000.0)
+        case .stale:   return "Last packet \(formatElapsed(ms: ageMs)) ago. Showing cached values."
         case .live:    return ""
         }
     }
@@ -992,6 +992,25 @@ struct StatusFlagsView: View {
                 Text("File: \(telemetry.active_file)")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+
+            // BS silence-close countdown.  Only rendered when the base
+            // station reports a remaining-seconds value, which the BS only
+            // sends while bs_logging_active=true (see TR_BLE_To_APP.cpp).
+            // Color tracks urgency: > 60 s green, 11..60 s orange, ≤ 10 s
+            // red so the operator can spot an imminent close at a glance.
+            if isBaseStation,
+               telemetry.bs_logging_active,
+               let remaining = telemetry.bs_log_silence_remaining_s {
+                let secs = Int(remaining)
+                let color: Color = secs > 60 ? .green : (secs > 10 ? .orange : .red)
+                HStack(spacing: 6) {
+                    Image(systemName: "timer")
+                        .foregroundColor(color)
+                    Text("Auto-close in \(formatElapsed(seconds: secs))")
+                        .font(.caption)
+                        .foregroundColor(color)
+                }
             }
         }
         .padding()

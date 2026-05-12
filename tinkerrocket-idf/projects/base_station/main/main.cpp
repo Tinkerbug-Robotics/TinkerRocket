@@ -861,6 +861,23 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
 
     // Base station's own CSV logging state (shown as separate indicator)
     out.bs_logging_active = logging_active;
+    // Seconds remaining until silence-timeout fires (#137 follow-up).  When
+    // the log is open, iOS renders a countdown next to the Base Stn Log
+    // badge so the operator can see the auto-close approaching during long
+    // post-flight idles.  We sit-clamp at 0 rather than going negative
+    // because the close runs out of band with this packet build.
+    if (logging_active)
+    {
+        const uint32_t age_ms   = millis() - log_last_write_ms;
+        const uint32_t remain_ms = (age_ms >= config::LOG_SILENCE_TIMEOUT_MS)
+                                 ? 0
+                                 : (config::LOG_SILENCE_TIMEOUT_MS - age_ms);
+        out.bs_log_silence_remaining_s = (uint16_t)(remain_ms / 1000U);
+    }
+    else
+    {
+        out.bs_log_silence_remaining_s = 0xFFFF;  // sentinel — omit from JSON
+    }
 
     // Data rates -- not applicable for base station
     out.rx_kbs = NAN;
