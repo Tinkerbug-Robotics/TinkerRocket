@@ -949,18 +949,36 @@ void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
 
 String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
 {
-    // Use a pre-allocated char buffer to build JSON efficiently.
-    // Max telemetry JSON is well under 512 bytes.
-    char buf[512];
+    // Stack buffer for JSON construction.  Sized with comfortable headroom
+    // above the negotiated BLE MTU (typically 512, payload window 509) so
+    // a near-full frame still has slack — every add* lambda below does an
+    // upfront fit check and silently drops the field rather than memcpy'ing
+    // past the end.  Unchecked overflow here previously crashed the BS
+    // (cache-disabled MMU fault from corrupted stack) and silently dropped
+    // every telemetry update once size crept past 512.  See #138 / memory:
+    // "BLE telemetry JSON exceeding MTU silently drops all updates".
+    char buf[640];
     size_t pos = 0;
     bool first = true;
+    // Reserve trailing bytes for closing '}' + '\0'.
+    const size_t kReserve = 2;
 
     buf[pos++] = '{';
 
-    // Comma separator helper
+    // Returns true if `n` more bytes (plus the reserved tail) still fit.
+    auto room = [&](size_t n) -> bool {
+        return pos + n + kReserve <= sizeof(buf);
+    };
+
+    // Comma separator helper.  Bytes accounted for in each caller's fit check.
     auto sep = [&]() { if (!first) buf[pos++] = ','; first = false; };
 
-    // Append a key (quoted)
+    // Bytes appendKey will write for `key`: optional ',' + '"' + key + '":'
+    auto keyBytes = [&](const char* key) -> size_t {
+        return (first ? 0 : 1) + 2 + strlen(key) + 1;
+    };
+
+    // Append a key (quoted).  Assumes caller pre-checked space via `room()`.
     auto appendKey = [&](const char* key) {
         sep();
         buf[pos++] = '"';
@@ -971,9 +989,14 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
         buf[pos++] = ':';
     };
 
-    // Optional float — skips NaN values entirely to save BLE payload bytes
+    // Numeric max-width budget: floats/doubles at any reasonable precision
+    // and 32-bit ints both fit comfortably in 24 chars (incl. sign/decimal).
+    const size_t kNumMax = 24;
+
+    // Optional float — skips NaN values entirely to save BLE payload bytes.
     auto addFloat = [&](const char* key, float value, int decimals) {
         if (std::isnan(value)) return;
+        if (!room(keyBytes(key) + kNumMax)) return;
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%.*f", decimals, (double)value);
     };
@@ -981,60 +1004,51 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Optional double — skips NaN values
     auto addDouble = [&](const char* key, double value, int decimals) {
         if (std::isnan(value)) return;
+        if (!room(keyBytes(key) + kNumMax)) return;
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%.*f", decimals, value);
     };
 
-    // Always-present helpers
     auto addInt = [&](const char* key, int value) {
+        if (!room(keyBytes(key) + kNumMax)) return;
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%d", value);
     };
     auto addUint = [&](const char* key, uint32_t value) {
+        if (!room(keyBytes(key) + kNumMax)) return;
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%lu", (unsigned long)value);
     };
     auto addString = [&](const char* key, const char* value) {
+        size_t vlen = value ? strlen(value) : 0;
+        // 2 extra for the value's surrounding quotes.
+        if (!room(keyBytes(key) + 2 + vlen)) return;
         appendKey(key);
         buf[pos++] = '"';
         if (value) {
-            size_t vlen = strlen(value);
             memcpy(buf + pos, value, vlen);
             pos += vlen;
         }
         buf[pos++] = '"';
     };
-    auto addBool = [&](const char* key, bool value) {
-        appendKey(key);
-        const char* s = value ? "true" : "false";
-        size_t slen = strlen(s);
-        memcpy(buf + pos, s, slen);
-        pos += slen;
-    };
+    // (addBool removed — every bool now lives in the "fs" bitfield.)
 
     // Battery
     addFloat("soc", data.soc, 1);
     addFloat("cur", data.current, 1);
     addFloat("vol", data.voltage, 2);
 
-    // GPS
-    addDouble("lat", data.latitude, 7);
-    addDouble("lon", data.longitude, 7);
+    // GPS — 5 decimals = ~1.1 m precision, plenty for tracking and saves
+    // ~4 B/frame vs 7 decimals.  iOS decodes as Double regardless.
+    addDouble("lat", data.latitude, 5);
+    addDouble("lon", data.longitude, 5);
     addInt("nsat", data.num_sats);
 
     // State
     addString("st", data.state);
 
-    // Status flags
-    addBool("cam", data.camera_recording);
-    addBool("log", data.logging_active);
+    // Logging filename (camera/log/bslog flags now packed into "fs" below).
     addString("af", data.active_file);
-
-    // Flight event flags
-    addBool("lnch", data.launch_flag);
-    addBool("vapo", data.vel_u_apogee_flag);
-    addBool("aapo", data.alt_apogee_flag);
-    addBool("land", data.alt_landed_flag);
 
     // Data rates
     addFloat("rxk", data.rx_kbs, 1);
@@ -1066,12 +1080,14 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("gy", data.gyro_y, 1);
     addFloat("gz", data.gyro_z, 1);
 
-    // Roll command + quaternion
+    // Roll command + quaternion — quat at 3 decimals gives ~0.06° angle
+    // error in the derived Euler display, well under the dashboard's
+    // %.1f° formatting.  Saves ~4 B per frame vs 4 decimals.
     addFloat("rcmd", data.roll_cmd, 1);
-    addFloat("q0", data.q0, 4);
-    addFloat("q1", data.q1, 4);
-    addFloat("q2", data.q2, 4);
-    addFloat("q3", data.q3, 4);
+    addFloat("q0", data.q0, 3);
+    addFloat("q1", data.q1, 3);
+    addFloat("q2", data.q2, 3);
+    addFloat("q3", data.q3, 3);
 
     // LoRa signal quality (NaN on direct connection — will be omitted)
     addFloat("rssi", data.rssi, 0);
@@ -1081,7 +1097,6 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("bsoc", data.bs_soc, 1);
     addFloat("bvol", data.bs_voltage, 2);
     addFloat("bcur", data.bs_current, 0);
-    addBool("bslog", data.bs_logging_active);
     // Countdown to the silence-timeout close — only emitted while the log
     // is actually open (saves ~10 B per telemetry packet when idle).  iOS
     // renders this next to the Base Stn Log badge so the operator can see
@@ -1090,8 +1105,23 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
         addUint("slrm", data.bs_log_silence_remaining_s);
     }
 
-    // Power rail state
-    addBool("pwr", data.pwr_pin_on);
+    // Packed flight-status bits (saves ~90 B vs 8 separate JSON booleans).
+    // The pyro flags use the same trick via "ps" — same pattern.
+    //   b0  launch_flag           b4  pwr_pin_on
+    //   b1  vel_u_apogee_flag     b5  camera_recording
+    //   b2  alt_apogee_flag       b6  logging_active
+    //   b3  alt_landed_flag       b7  bs_logging_active
+    {
+        uint8_t fs = (data.launch_flag        ? 0x01 : 0)
+                   | (data.vel_u_apogee_flag  ? 0x02 : 0)
+                   | (data.alt_apogee_flag    ? 0x04 : 0)
+                   | (data.alt_landed_flag    ? 0x08 : 0)
+                   | (data.pwr_pin_on         ? 0x10 : 0)
+                   | (data.camera_recording   ? 0x20 : 0)
+                   | (data.logging_active     ? 0x40 : 0)
+                   | (data.bs_logging_active  ? 0x80 : 0);
+        addInt("fs", fs);
+    }
 
     // Pyro channel status — packed into single byte to minimize JSON size
     {

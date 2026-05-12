@@ -16,8 +16,6 @@ struct TelemetryData: Codable {
     var gdop: Float?                  // GPS dilution of precision
     var num_sats: Int = 0             // Number of GPS satellites
     var state: String = "UNKNOWN"     // Rocket state
-    var camera_recording: Bool = false
-    var logging_active: Bool = false
     var active_file: String = ""
     var rx_kbs: Float?                // I2C RX rate kB/s
     var wr_kbs: Float?                // Flash write rate kB/s
@@ -82,20 +80,24 @@ struct TelemetryData: Codable {
     var bs_soc: Float?                // Base station SOC %
     var bs_voltage: Float?            // Base station voltage V
     var bs_current: Float?            // Base station current mA
-    var bs_logging_active: Bool = false // Base station CSV logging active
     // Seconds remaining until the BS silence-timeout closes the active log.
     // Sent only when bs_logging_active is true (BS omits the JSON key
     // otherwise) — nil here = no countdown to show.
     var bs_log_silence_remaining_s: UInt16?
 
-    // Flight event flags (optional for backward compat with old firmware)
-    var launch_flag: Bool?            // Launch detected
-    var vel_apo: Bool?                // Velocity apogee (vertical vel crossed zero)
-    var alt_apo: Bool?                // Altitude apogee (alt started decreasing)
-    var landed_flag: Bool?            // Landing detected
-
-    // Power rail state
-    var pwr_pin_on: Bool = false      // FlightComputer + sensors powered on
+    // Packed flight-status bits ("fs" JSON key, decoded in init).  Replaces
+    // 8 separate boolean keys to keep the BLE notify payload under MTU —
+    // see TR_BLE_To_APP.cpp:buildTelemetryJSON.  Bit layout must stay in
+    // sync with the firmware side.
+    var flight_status_bits: Int = 0
+    var launch_flag: Bool       { (flight_status_bits & 0x01) != 0 }
+    var vel_apo: Bool           { (flight_status_bits & 0x02) != 0 }
+    var alt_apo: Bool           { (flight_status_bits & 0x04) != 0 }
+    var landed_flag: Bool       { (flight_status_bits & 0x08) != 0 }
+    var pwr_pin_on: Bool        { (flight_status_bits & 0x10) != 0 }
+    var camera_recording: Bool  { (flight_status_bits & 0x20) != 0 }
+    var logging_active: Bool    { (flight_status_bits & 0x40) != 0 }
+    var bs_logging_active: Bool { (flight_status_bits & 0x80) != 0 }
 
     // Source rocket identity (base station relay only, nil for direct BLE)
     var source_rocket_id: Int?        // rocket_id from LoRa header
@@ -126,8 +128,6 @@ struct TelemetryData: Codable {
         case longitude = "lon"
         case num_sats = "nsat"
         case state = "st"
-        case camera_recording = "cam"
-        case logging_active = "log"
         case active_file = "af"
         case rx_kbs = "rxk"
         case wr_kbs = "wrk"
@@ -153,13 +153,10 @@ struct TelemetryData: Codable {
         case bs_soc = "bsoc"
         case bs_voltage = "bvol"
         case bs_current = "bcur"
-        case bs_logging_active = "bslog"
         case bs_log_silence_remaining_s = "slrm"
-        case launch_flag = "lnch"
-        case vel_apo = "vapo"
-        case alt_apo = "aapo"
-        case landed_flag = "land"
-        case pwr_pin_on = "pwr"
+        // Packed flight-status bitfield (replaces lnch/vapo/aapo/land/pwr/
+        // cam/log/bslog).  Bit layout mirrors TR_BLE_To_APP.cpp.
+        case flight_status_bits = "fs"
         case pyro_status_bits = "ps"  // packed bitfield: b0=ch1_armed, b1=ch1_cont, b2=ch1_fired, b3=ch2_armed, b4=ch2_cont, b5=ch2_fired
         case source_rocket_id = "rid"
         case source_unit_name = "run"
@@ -177,8 +174,6 @@ struct TelemetryData: Codable {
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         num_sats = try c.decodeIfPresent(Int.self, forKey: .num_sats) ?? 0
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "UNKNOWN"
-        camera_recording = try c.decodeIfPresent(Bool.self, forKey: .camera_recording) ?? false
-        logging_active = try c.decodeIfPresent(Bool.self, forKey: .logging_active) ?? false
         active_file = try c.decodeIfPresent(String.self, forKey: .active_file) ?? ""
         rx_kbs = try c.decodeIfPresent(Float.self, forKey: .rx_kbs)
         wr_kbs = try c.decodeIfPresent(Float.self, forKey: .wr_kbs)
@@ -208,13 +203,8 @@ struct TelemetryData: Codable {
         bs_soc = try c.decodeIfPresent(Float.self, forKey: .bs_soc)
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
-        bs_logging_active = try c.decodeIfPresent(Bool.self, forKey: .bs_logging_active) ?? false
         bs_log_silence_remaining_s = try c.decodeIfPresent(UInt16.self, forKey: .bs_log_silence_remaining_s)
-        launch_flag = try c.decodeIfPresent(Bool.self, forKey: .launch_flag)
-        vel_apo = try c.decodeIfPresent(Bool.self, forKey: .vel_apo)
-        alt_apo = try c.decodeIfPresent(Bool.self, forKey: .alt_apo)
-        landed_flag = try c.decodeIfPresent(Bool.self, forKey: .landed_flag)
-        pwr_pin_on = try c.decodeIfPresent(Bool.self, forKey: .pwr_pin_on) ?? false
+        flight_status_bits = try c.decodeIfPresent(Int.self, forKey: .flight_status_bits) ?? 0
         pyro_status_bits = try c.decodeIfPresent(Int.self, forKey: .pyro_status_bits) ?? 0
         source_rocket_id = try c.decodeIfPresent(Int.self, forKey: .source_rocket_id)
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)

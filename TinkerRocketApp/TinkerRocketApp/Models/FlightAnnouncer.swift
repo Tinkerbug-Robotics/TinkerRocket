@@ -10,7 +10,16 @@ import Foundation
 import AVFoundation
 import Combine
 
-class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+/// Subset of `FlightAnnouncer` that `BLEDevice` calls during dispatch.
+/// Defined as a protocol so tests can substitute a lightweight spy without
+/// instantiating `AVSpeechSynthesizer` / `AVAudioSession`, and so the
+/// dispatch logic in `BLEDevice` can be exercised end-to-end.
+protocol TelemetryAnnouncer: AnyObject {
+    func processTelemetry(_ telemetry: TelemetryData)
+    func reset()
+}
+
+class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, TelemetryAnnouncer {
 
     @Published var isEnabled: Bool = false
 
@@ -208,6 +217,18 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
             return
         }
 
+        // Skip stale or syncing frames.  When the rocket goes silent
+        // mid-flight (powered off, out of range) the BS keeps forwarding the
+        // last-known telemetry with data_status=STALE and a growing `age`.
+        // Time-gated callouts (descent/altitude) would otherwise re-fire the
+        // same frozen reading every interval forever.  Skipping here also
+        // lets the currently-playing utterance finish naturally — we just
+        // don't queue a new one.
+        guard telemetry.data_status == .live else {
+            previousTelemetry = telemetry
+            return
+        }
+
         let prev = previousTelemetry
         let state = telemetry.state
 
@@ -222,7 +243,7 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         }
 
         // --- Capture launch location on launch flag if not set ---
-        if (telemetry.launch_flag ?? false) && launchLocation == nil {
+        if telemetry.launch_flag && launchLocation == nil {
             if let lat = telemetry.latitude, let lon = telemetry.longitude,
                !lat.isNaN && !lon.isNaN {
                 launchLocation = (lat: lat, lon: lon)
@@ -230,7 +251,7 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         }
 
         // --- INFLIGHT announcements (before apogee) ---
-        if state == "INFLIGHT" && !(telemetry.alt_apo ?? false) {
+        if state == "INFLIGHT" && !telemetry.alt_apo {
             checkBurnout(telemetry)
             // Only announce altitude after burnout — during powered flight there
             // is too much happening and the rapidly changing values aren't useful.
@@ -240,7 +261,7 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         }
 
         // --- Apogee detection ---
-        if (telemetry.alt_apo ?? false) && !(prev?.alt_apo ?? false) && !apogeeAnnounced {
+        if telemetry.alt_apo && !(prev?.alt_apo ?? false) && !apogeeAnnounced {
             apogeeAnnounced = true
             let alt = telemetry.max_alt_m.map { String(format: "%.0f", $0) } ?? "unknown"
             announceImmediate("Apogee. \(alt) meters")
@@ -249,12 +270,12 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         }
 
         // --- Descent callouts (after apogee, before landed) ---
-        if (telemetry.alt_apo ?? false) && !(telemetry.landed_flag ?? false) && state == "INFLIGHT" {
+        if telemetry.alt_apo && !telemetry.landed_flag && state == "INFLIGHT" {
             checkDescentCallout(telemetry)
         }
 
         // --- Landing detection ---
-        if (telemetry.landed_flag ?? false) && !(prev?.landed_flag ?? false) && !landedAnnounced {
+        if telemetry.landed_flag && !(prev?.landed_flag ?? false) && !landedAnnounced {
             landedAnnounced = true
             let distance = horizontalDistanceString(telemetry)
             announceImmediate("Landed. \(distance)")

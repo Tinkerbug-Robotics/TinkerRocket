@@ -91,8 +91,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Rockets seen via this device's LoRa relay (base station only)
     @Published var remoteRockets: [RemoteRocket] = []
 
-    // Flight voice announcer (set by DashboardView)
-    var flightAnnouncer: FlightAnnouncer?
+    // Flight voice announcer (set by DashboardView).  Typed as a protocol so
+    // dispatch tests can inject a spy without touching AVAudioSession.
+    var flightAnnouncer: (any TelemetryAnnouncer)?
 
     // MARK: - Internal state
 
@@ -122,12 +123,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Init
 
-    init(peripheral: CBPeripheral, name: String) {
+    init(peripheral: CBPeripheral?, name: String) {
         self.connectedDeviceName = name
         self.deviceType = BLEDeviceType.from(name: name)
         super.init()
         self.peripheral = peripheral
-        peripheral.delegate = self
+        peripheral?.delegate = self
     }
 
     // MARK: - Connection lifecycle (called by BLEFleet)
@@ -931,7 +932,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Telemetry parsing
 
-    private func parseTelemetryData(_ data: Data?) {
+    func parseTelemetryData(_ data: Data?) {
         guard let data = data else { return }
 
         // Config readback: "type":"config"
@@ -1006,8 +1007,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
             // If telemetry has a source_rocket_id, it's relayed via base station
             // → route to RemoteRocket instead of updating our own telemetry
-            if let rid = newTelemetry.source_rocket_id, rid > 0, isBaseStation,
-               let bsID = peripheral?.identifier {
+            if let rid = newTelemetry.source_rocket_id, rid > 0, isBaseStation {
+                let bsID = peripheral?.identifier ?? UUID()
                 let rocketID = UInt8(rid)
                 if let existing = remoteRockets.first(where: { $0.rocketID == rocketID }) {
                     existing.updateTelemetry(newTelemetry, unitName: newTelemetry.source_unit_name)
@@ -1022,9 +1023,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     print("[BS] New remote rocket: rid=\(rocketID) name=\(remote.unitName)")
                     triggerAutoChannelSelectIfNeeded()
                 }
-                // Still update base station's own telemetry for BS-specific fields
-                // (battery, logging state) but don't overwrite rocket telemetry
                 self.telemetry = newTelemetry
+                // The relayed JSON carries the full rocket state (st/aapo/lnch/
+                // land/mspd/palt — see TR_BLE_To_APP.cpp).  Without this call
+                // voice callouts only fire when paired directly to the rocket,
+                // never during a real flight (phone↔BS↔LoRa↔rocket).  #138.
+                self.flightAnnouncer?.processTelemetry(newTelemetry)
                 return
             }
 
