@@ -83,6 +83,10 @@ struct TelemetryData: Codable {
     var bs_voltage: Float?            // Base station voltage V
     var bs_current: Float?            // Base station current mA
     var bs_logging_active: Bool = false // Base station CSV logging active
+    // Seconds remaining until the BS silence-timeout closes the active log.
+    // Sent only when bs_logging_active is true (BS omits the JSON key
+    // otherwise) — nil here = no countdown to show.
+    var bs_log_silence_remaining_s: UInt16?
 
     // Flight event flags (optional for backward compat with old firmware)
     var launch_flag: Bool?            // Launch detected
@@ -150,6 +154,7 @@ struct TelemetryData: Codable {
         case bs_voltage = "bvol"
         case bs_current = "bcur"
         case bs_logging_active = "bslog"
+        case bs_log_silence_remaining_s = "slrm"
         case launch_flag = "lnch"
         case vel_apo = "vapo"
         case alt_apo = "aapo"
@@ -204,6 +209,7 @@ struct TelemetryData: Codable {
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
         bs_logging_active = try c.decodeIfPresent(Bool.self, forKey: .bs_logging_active) ?? false
+        bs_log_silence_remaining_s = try c.decodeIfPresent(UInt16.self, forKey: .bs_log_silence_remaining_s)
         launch_flag = try c.decodeIfPresent(Bool.self, forKey: .launch_flag)
         vel_apo = try c.decodeIfPresent(Bool.self, forKey: .vel_apo)
         alt_apo = try c.decodeIfPresent(Bool.self, forKey: .alt_apo)
@@ -372,4 +378,26 @@ struct TelemetryData: Codable {
     var rocketLoggingActive: Bool {
         return logging_active && state == "INFLIGHT"
     }
+}
+
+/// Format an elapsed-time interval as H:MM:SS (or M:SS when under an hour).
+/// Used in place of bare seconds so multi-minute waits read as durations
+/// the operator can scan at a glance — e.g. "4:32" remaining on the BS
+/// silence-close, or "1:03:15" since the last received packet during a
+/// long stale stretch.  Negative or implausibly large values clamp to 0.
+func formatElapsed(seconds: Int) -> String {
+    let s = max(0, seconds)
+    let h = s / 3600
+    let m = (s % 3600) / 60
+    let sec = s % 60
+    if h > 0 {
+        return String(format: "%d:%02d:%02d", h, m, sec)
+    }
+    return String(format: "%d:%02d", m, sec)
+}
+
+/// Convenience: same as the Int version but for milliseconds, rounded to
+/// the nearest second.  Avoids divisor noise at the call site.
+func formatElapsed(ms: UInt32) -> String {
+    return formatElapsed(seconds: Int((ms + 500) / 1000))
 }

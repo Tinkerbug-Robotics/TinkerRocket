@@ -68,6 +68,12 @@ public:
         float bs_voltage;       // Base station battery voltage V
         float bs_current;       // Base station battery current mA (NaN if no sensor)
         bool  bs_logging_active;// Base station CSV logging active
+        // Seconds until the silence-timeout closes the current BS log,
+        // when bs_logging_active is true.  Counts down from
+        // LOG_SILENCE_TIMEOUT_MS/1000 (300 s today) on every RX and decreases
+        // as the BS goes longer without a packet.  Omitted from the BLE
+        // payload when bs_logging_active is false (0xFFFF sentinel).
+        uint16_t bs_log_silence_remaining_s;
 
         // Flight event flags (from FlightComputer state machine)
         bool launch_flag;       // Launch detected
