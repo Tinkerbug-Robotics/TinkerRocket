@@ -201,6 +201,21 @@ target_include_directories(test_tr_flightlog_core PRIVATE
 target_link_libraries(test_tr_flightlog_core GTest::gtest_main)
 gtest_discover_tests(test_tr_flightlog_core)
 
+# ---------- test_bs_log_policy ----------
+# Host-side test for the base-station LoRa CSV logging policy helpers
+# (silence-close gating + sequential-filename parser).  Header lives under
+# projects/base_station/main/ so the test adds that to the include path
+# directly — the helpers are pure and don't need any IDF stubs beyond the
+# host_shim that other tests already use.  See test file + bs_log_policy.h
+# for the #137 backstory.
+add_executable(test_bs_log_policy test_bs_log_policy.cpp)
+target_include_directories(test_bs_log_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_log_policy GTest::gtest_main)
+gtest_discover_tests(test_bs_log_policy)
+
 # ---------- test_tr_flightlog_wire_format ----------
 # Golden-file regression guard on the BLE wire formats iOS depends on.
 # Fixtures under tests_cpp/fixtures/ble_wire_format/ are the source of truth.

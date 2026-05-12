@@ -53,7 +53,13 @@ namespace config
     static constexpr int SD_D3   = 8;
 
     // --- LoRa CSV Logging ---
-    static constexpr uint32_t LOG_SILENCE_TIMEOUT_MS  = 30000;          // Close file after 30s of no packets
+    // Close the log after 5 min of no rocket packets.  Long enough to ride
+    // through the worst-case altitude RX dropout on an Estes-class flight
+    // (signal back during descent) and a typical high-power coast-to-apogee,
+    // short enough that bs_logging_active doesn't stick true forever after
+    // the rocket is powered off post-recovery.  Pre-#137 this was 30 s
+    // which closed mid-flight on any altitude-driven silence.
+    static constexpr uint32_t LOG_SILENCE_TIMEOUT_MS  = 5 * 60 * 1000;
     static constexpr uint32_t LOG_INFLIGHT_SAFETY_MS  = 20 * 60 * 1000; // Safety: close log 20 min after INFLIGHT entry if LANDED never seen (#107)
     static constexpr size_t   BLE_FILE_CHUNK_SIZE    = 170;     // Bytes per BLE download chunk
     static constexpr uint32_t BLE_CHUNK_DELAY_MS     = 15;      // Delay between BLE chunks (ms)

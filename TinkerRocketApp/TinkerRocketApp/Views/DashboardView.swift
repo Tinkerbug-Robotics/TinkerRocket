@@ -978,7 +978,7 @@ struct StatusFlagsView: View {
                 )
                 StatusBadge(
                     label: isBaseStation ? "Rocket Log" : "Logging",
-                    active: telemetry.logging_active
+                    active: telemetry.rocketLoggingActive
                 )
                 if isBaseStation {
                     StatusBadge(
@@ -1533,7 +1533,9 @@ struct ControlsView: View {
             }) {
                 // Cmd 23 starts/stops logging on BOTH rocket and base station, so
                 // reflect "logging in progress" if either side reports active.
-                let isLogging = device.telemetry.logging_active || device.telemetry.bs_logging_active
+                // The rocket side is gated on rocket state (#137 follow-up) — see
+                // rocketLoggingActive on TelemetryData for why.
+                let isLogging = device.telemetry.rocketLoggingActive || device.telemetry.bs_logging_active
                 HStack {
                     Image(systemName: isLogging ? "stop.circle.fill" : "record.circle")
                     Text(isLogging ? "Stop Logging" : "Start Logging")
