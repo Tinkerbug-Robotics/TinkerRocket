@@ -96,6 +96,12 @@ struct config
     static constexpr int8_t CAM_SHUTTER_PIN = 31;    // GoPro shutter pulse
     static constexpr uint16_t GOPRO_PULSE_MS = 120;
 
+    // Time to keep the camera rolling after LANDED before issuing the stop.
+    // Captures post-impact footage and, critically, removes the inline
+    // delay() that previously stalled the main loop on the LANDED edge
+    // (which saturated i2s_tx_queue and dropped END_FLIGHT; see #141).
+    static constexpr uint32_t CAMERA_STOP_DELAY_MS = 30000;  // 30 s
+
     // RunCam UART pins & settings
     static constexpr int8_t RUNCAM_RX_PIN = 31;      // FC receives from RunCam
     static constexpr int8_t RUNCAM_TX_PIN = 32;      // FC sends to RunCam

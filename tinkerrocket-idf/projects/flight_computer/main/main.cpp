@@ -205,6 +205,16 @@ static bool landed_actions_done = false;
 static bool gopro_recording = false;
 static bool gopro_pulse_active = false;
 static uint32_t gopro_pulse_end_ms = 0;
+// Deferred camera-stop sequence (see cameraStop / serviceCameraStop).
+// Idle → DelayBeforeStop (30s post-LANDED) → for RunCam, RunCamToggleSent
+// (500ms after toggle, then power off) → Idle.
+enum class CameraStopPhase : uint8_t {
+    Idle,
+    DelayBeforeStop,
+    RunCamToggleSent,
+};
+static CameraStopPhase camera_stop_phase = CameraStopPhase::Idle;
+static uint32_t camera_stop_due_ms = 0;
 static uint8_t runtime_camera_type = config::CAMERA_TYPE;  // can be overridden via BLE
 static bool servo_enabled = false;
 static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
@@ -1013,24 +1023,65 @@ static void cameraStart(uint32_t now_ms)
     }
 }
 
-static void cameraStop(uint32_t now_ms)
+static inline void serviceCameraStop(uint32_t now_ms);
+
+// Queue a camera stop.  delay_ms = 0 (default) drives the first phase
+// inline so the GPIO/UART action happens in this call (e.g. user manual
+// stop).  delay_ms > 0 schedules — LANDED uses CAMERA_STOP_DELAY_MS to
+// capture post-impact footage and to avoid stalling the i2s_tx_queue
+// long enough to drop END_FLIGHT (#141).  Either way, the RunCam's 500 ms
+// toggle-to-power-off step runs non-blockingly via serviceCameraStop().
+static void cameraStop(uint32_t now_ms, uint32_t delay_ms = 0)
 {
-    if (!gopro_recording) return;  // not recording
-    if (runtime_camera_type == CAM_TYPE_GOPRO)
+    if (!gopro_recording) return;                            // not recording
+    if (camera_stop_phase != CameraStopPhase::Idle) return;  // already stopping
+    camera_stop_phase = CameraStopPhase::DelayBeforeStop;
+    camera_stop_due_ms = now_ms + delay_ms;
+    if (delay_ms > 0)
     {
-        startGoProPulse(now_ms);
-        ESP_LOGI(TAG, "Camera STOP (GoPro)");
+        ESP_LOGI(TAG, "Camera STOP scheduled in %lu ms",
+                 (unsigned long)delay_ms);
+        return;
     }
-    else if (runtime_camera_type == CAM_TYPE_RUNCAM)
+    // Execute first phase immediately so the user-visible stop is sync.
+    serviceCameraStop(now_ms);
+}
+
+static inline void serviceCameraStop(uint32_t now_ms)
+{
+    if (camera_stop_phase == CameraStopPhase::Idle) return;
+    if ((int32_t)(now_ms - camera_stop_due_ms) < 0) return;
+
+    if (camera_stop_phase == CameraStopPhase::DelayBeforeStop)
     {
-        // Send toggle to stop recording, then power off
-        sendRunCamToggle();
-        delay(500);  // let the stop command process
+        if (runtime_camera_type == CAM_TYPE_GOPRO)
+        {
+            startGoProPulse(now_ms);
+            ESP_LOGI(TAG, "Camera STOP (GoPro)");
+            gopro_recording = false;
+            camera_stop_phase = CameraStopPhase::Idle;
+        }
+        else if (runtime_camera_type == CAM_TYPE_RUNCAM)
+        {
+            sendRunCamToggle();
+            ESP_LOGI(TAG, "RunCam toggle sent — power-off in 500 ms");
+            camera_stop_phase = CameraStopPhase::RunCamToggleSent;
+            camera_stop_due_ms = now_ms + 500U;  // let the stop command process
+        }
+        else
+        {
+            gopro_recording = false;
+            camera_stop_phase = CameraStopPhase::Idle;
+        }
+    }
+    else  // RunCamToggleSent
+    {
         if (config::RUNCAM_PWR_PIN >= 0)
             digitalWrite(config::RUNCAM_PWR_PIN, LOW);
         ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off");
+        gopro_recording = false;
+        camera_stop_phase = CameraStopPhase::Idle;
     }
-    gopro_recording = false;
 }
 
 static inline void startBootReadyChirp(uint32_t now_ms, uint32_t now_us)
@@ -3428,13 +3479,17 @@ static void loop_fc()
                     guidance_active = false;
                     reboot_recovery = false;
                     reboot_recovery_telem = false;
-                    cameraStop(now_ms);
-                    if (!end_flight_sent)
+                    cameraStop(now_ms, (uint32_t)config::CAMERA_STOP_DELAY_MS);
+                }
+                // Retry END_FLIGHT until enqueue succeeds.  The one-shot
+                // cleanup above is latched, but i2s_tx_queue can transiently
+                // saturate around LANDED entry and a single failed enqueue
+                // would otherwise lose END_FLIGHT forever (#141).
+                if (!end_flight_sent)
+                {
+                    if (enqueueI2STx(END_FLIGHT, nullptr, 0))
                     {
-                        if (enqueueI2STx(END_FLIGHT, nullptr, 0))
-                        {
-                            end_flight_sent = true;
-                        }
+                        end_flight_sent = true;
                     }
                 }
                 break;
@@ -3631,6 +3686,7 @@ static void loop_fc()
     serviceHeartbeatBeep(now_ms_for_sound);
     serviceBlueLedFlash(now_ms_for_sound);
     serviceGoProPulse(now_ms_for_sound);
+    serviceCameraStop(now_ms_for_sound);
 
     // --- Periodic poll-task timing diagnostics (once per second) ---
     {
