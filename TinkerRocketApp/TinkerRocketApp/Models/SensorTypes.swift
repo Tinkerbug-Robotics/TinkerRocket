@@ -273,10 +273,21 @@ nonisolated struct NonSensorData {
     //   bit 5 PSF_GUIDANCE_ENABLED — FC's live guidance_enabled config
     let pyro_status: UInt8
 
+    // Apogee detector outputs + master vote (appended in #142/#143):
+    //   bit 0 NSF2_GPS_APOGEE
+    //   bit 1 NSF2_PITCH_APOGEE
+    //   bit 2 NSF2_MASTER_APOGEE  — voted result driving pyro logic
+    // Older logs (43-byte struct) decode this field as 0.
+    let apogee_flags: UInt8
+
     init(from data: Data) throws {
+        // Accept both legacy 43-byte logs (pre #142/#143) and the current
+        // 44-byte layout.  apogee_flags reads as 0 on legacy logs, which
+        // matches the historical "we never recorded these bits" behavior.
         guard data.count >= 43 else {
             throw ParseError.invalidSize(expected: 43, got: data.count)
         }
+        let has_apogee_flags = data.count >= 44
 
         var offset = 0
 
@@ -302,6 +313,8 @@ nonisolated struct NonSensorData {
         baro_alt_rate_dmps = data.readInt16LE(at: &offset)
 
         pyro_status = data.readUInt8(at: &offset)
+
+        apogee_flags = has_apogee_flags ? data.readUInt8(at: &offset) : 0
     }
 }
 
@@ -546,6 +559,13 @@ nonisolated struct NonSensorDataSI {
     let alt_apogee_flag: Bool
     let vel_u_apogee_flag: Bool
     let launch_flag: Bool
+
+    // Per #142/#143: full apogee detector set + master voted result.
+    // Decoded from NonSensorData.apogee_flags; legacy 43-byte logs decode all
+    // three as false (those flights pre-date the field).
+    let gps_apogee_flag: Bool
+    let pitch_apogee_flag: Bool
+    let apogee_flag: Bool       // master voted result
 
     let rocket_state: RocketState
 

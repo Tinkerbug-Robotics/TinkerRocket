@@ -125,11 +125,13 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         }
     }
 
-    // Maximum achieved altitude (use raw measurement — not affected by filter lag).
-    // Spike rejection: only accept readings within 50 m of current max to prevent
-    // single-sample noise from ratcheting up the value.  First reading always accepted.
-    if (max_altitude == 0.0f || fabs(pressure_altitude - max_altitude) < 50.0f) {
-        max_altitude = std::max(max_altitude, pressure_altitude);
+    // Maximum achieved altitude (KF-smoothed — raw P_alt during boost saw
+    // ±15 m sample-to-sample spikes on GTV 67mm 2026-05-09 that the previous
+    // 50 m spike-reject window let through, ratcheting max_altitude above the
+    // true climb and tripping the baro apogee detector during ascent — #142).
+    // First reading always accepted.
+    if (max_altitude == 0.0f || fabs(alt_est - max_altitude) < 50.0f) {
+        max_altitude = std::max(max_altitude, alt_est);
     }
 
     // ### Check for Landing ###
@@ -212,9 +214,16 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             vel_u_apogee_flag = true;
         }
 
-        // --- Test 2: Baro altitude (pressure altitude decreasing) ---
-        if (pressure_altitude > 15.0f &&
-            pressure_altitude < max_altitude - 5.0f)
+        // --- Test 2: Baro altitude (filtered altitude decreasing) ---
+        // Uses KF-smoothed alt_est rather than raw pressure_altitude — boost
+        // noise on the raw signal was previously tripping this test during
+        // ascent (#142).  Velocity gate (d_alt_est_ < 20 m/s) keeps the
+        // counter at 0 across the whole boost-coast band where vertical
+        // velocity is far above the apogee neighborhood, regardless of any
+        // remaining noise on the filtered altitude.
+        if (alt_est > 15.0f &&
+            alt_est < max_altitude - 5.0f &&
+            d_alt_est_ < 20.0f)
         {
             apogee_count++;
         }

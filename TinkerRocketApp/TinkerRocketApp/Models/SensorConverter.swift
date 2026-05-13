@@ -345,6 +345,10 @@ nonisolated class SensorConverter {
             alt_apogee_flag: raw.alt_apogee_flag,
             vel_u_apogee_flag: raw.vel_u_apogee_flag,
             launch_flag: raw.launch_flag,
+            // Legacy wire format never carried the extra apogee detectors.
+            gps_apogee_flag: false,
+            pitch_apogee_flag: false,
+            apogee_flag: false,
             rocket_state: rocket_state,
             // Legacy wire format never carried pyro_status — leave unset.
             pyro1_continuity: false,
@@ -390,6 +394,14 @@ nonisolated class SensorConverter {
         let vel_u_apogee_flag = (raw.flags & NSF_VEL_APOGEE) != 0
         let launch_flag = (raw.flags & NSF_LAUNCH) != 0
 
+        // Apogee detector outputs + master vote (appended in #142/#143).
+        let NSF2_GPS_APOGEE: UInt8    = (1 << 0)
+        let NSF2_PITCH_APOGEE: UInt8  = (1 << 1)
+        let NSF2_MASTER_APOGEE: UInt8 = (1 << 2)
+        let gps_apogee_flag   = (raw.apogee_flags & NSF2_GPS_APOGEE) != 0
+        let pitch_apogee_flag = (raw.apogee_flags & NSF2_PITCH_APOGEE) != 0
+        let apogee_flag       = (raw.apogee_flags & NSF2_MASTER_APOGEE) != 0
+
         let rocket_state = RocketState(rawValue: raw.rocket_state) ?? .initialization
 
         // dm/s -> m/s
@@ -420,6 +432,9 @@ nonisolated class SensorConverter {
             alt_apogee_flag: alt_apogee_flag,
             vel_u_apogee_flag: vel_u_apogee_flag,
             launch_flag: launch_flag,
+            gps_apogee_flag: gps_apogee_flag,
+            pitch_apogee_flag: pitch_apogee_flag,
+            apogee_flag: apogee_flag,
             rocket_state: rocket_state,
             pyro1_continuity: (raw.pyro_status & PSF_CH1_CONT) != 0,
             pyro2_continuity: (raw.pyro_status & PSF_CH2_CONT) != 0,
