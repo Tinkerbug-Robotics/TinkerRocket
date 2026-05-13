@@ -25,6 +25,13 @@ class BLEFleet: NSObject, ObservableObject {
     /// Which device the dashboard is currently showing.
     @Published var activeDeviceID: UUID?
 
+    /// Latest usable rocket GPS fix per rocketID.  Lives on the fleet
+    /// (not on a BLEDevice) because BLEFleet destroys+recreates a
+    /// BLEDevice on every BLE disconnect/reconnect — without an outer
+    /// cache, the map would blank every time the phone briefly loses
+    /// the base station.  In-memory only; cleared on app kill.  #140.
+    @Published var lastValidRocketFixes: [UInt8: LastValidRocketFix] = [:]
+
     /// Convenience: the active device, or nil.
     var activeDevice: BLEDevice? {
         guard let id = activeDeviceID else { return devices.first }
@@ -125,6 +132,24 @@ class BLEFleet: NSObject, ObservableObject {
     private func device(for peripheral: CBPeripheral) -> BLEDevice? {
         devices.first { $0.peripheral?.identifier == peripheral.identifier }
     }
+
+    // MARK: - Last-valid rocket fix cache (#140)
+
+    /// Called by BLEDevice on every telemetry packet.  Updates the
+    /// cached fix when the packet carries a usable GPS solution, and
+    /// returns the resulting fix (new or pre-existing) so the caller
+    /// can mirror it onto its own @Published property — including the
+    /// hydrate-on-reconnect case where a brand-new BLEDevice's first
+    /// packet has no GPS but a prior session cached one.
+    @discardableResult
+    func recordRocketFix(from telemetry: TelemetryData,
+                         rocketID: UInt8) -> LastValidRocketFix? {
+        if let fresh = LastValidRocketFix.fromTelemetry(telemetry, rocketID: rocketID) {
+            lastValidRocketFixes[rocketID] = fresh
+            return fresh
+        }
+        return lastValidRocketFixes[rocketID]
+    }
 }
 
 // MARK: - CBCentralManagerDelegate
@@ -196,6 +221,7 @@ extension BLEFleet: CBCentralManagerDelegate {
         reconnectAttempts = 0
 
         let device = BLEDevice(peripheral: peripheral, name: name)
+        device.fleet = self
         device.onConnect()
         devices.append(device)
 

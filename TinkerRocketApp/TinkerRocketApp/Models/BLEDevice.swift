@@ -91,6 +91,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Rockets seen via this device's LoRa relay (base station only)
     @Published var remoteRockets: [RemoteRocket] = []
 
+    /// Latched copy of the most recent usable rocket GPS fix (#140).
+    /// Stays populated when a telemetry packet arrives without fresh
+    /// GPS so the map marker doesn't blank — only a newer valid fix
+    /// replaces it.  Hydrated from the fleet's cache on the first
+    /// telemetry packet after a BLE reconnect so a brief disconnect
+    /// doesn't lose the last known position.
+    @Published var lastValidRocketFix: LastValidRocketFix?
+
+    /// Back-reference to the fleet so this device can read/write the
+    /// cross-session last-valid-fix cache.  Weak: the fleet owns this
+    /// device's lifetime via its `devices` array (didDisconnectPeripheral
+    /// removes us), and a strong link would form a retain cycle.
+    weak var fleet: BLEFleet?
+
     // Flight voice announcer (set by DashboardView).  Typed as a protocol so
     // dispatch tests can inject a spy without touching AVAudioSession.
     var flightAnnouncer: (any TelemetryAnnouncer)?
@@ -1024,6 +1038,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     triggerAutoChannelSelectIfNeeded()
                 }
                 self.telemetry = newTelemetry
+                // Mirror the latched fix (#140).  Only assign when the
+                // cache returns a non-nil value so a GPS-less first
+                // packet for a newly-relayed rocket can't blank a fix
+                // this device just mirrored for a different rocketID.
+                if let fix = fleet?.recordRocketFix(from: newTelemetry, rocketID: rocketID) {
+                    self.lastValidRocketFix = fix
+                }
                 // The relayed JSON carries the full rocket state (st/aapo/lnch/
                 // land/mspd/palt — see TR_BLE_To_APP.cpp).  Without this call
                 // voice callouts only fire when paired directly to the rocket,
@@ -1042,6 +1063,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
             }
             self.telemetry = newTelemetry
+            // Direct rocket connection — use this device's own rocketID
+            // (relayed-telemetry path above uses source_rocket_id instead).
+            // Skip when rocketID is unset so a BS-self packet (which falls
+            // through to here without a source_rocket_id) doesn't nil out
+            // a fix this device just mirrored from a relay packet.
+            if self.rocketID > 0,
+               let fix = fleet?.recordRocketFix(from: newTelemetry, rocketID: self.rocketID) {
+                self.lastValidRocketFix = fix
+            }
             self.flightAnnouncer?.processTelemetry(newTelemetry)
         } catch {
             print("Failed to parse telemetry: \(error)")

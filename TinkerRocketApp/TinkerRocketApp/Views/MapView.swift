@@ -13,6 +13,7 @@ import MapKit
 struct RocketMapView: UIViewRepresentable {
     @Binding var mapType: MKMapType
     var rocketCoordinate: CLLocationCoordinate2D?
+    var rocketSubtitle: String?
     @Binding var region: MKCoordinateRegion
 
     func makeUIView(context: Context) -> MKMapView {
@@ -35,6 +36,7 @@ struct RocketMapView: UIViewRepresentable {
             let annotation = MKPointAnnotation()
             annotation.coordinate = coordinate
             annotation.title = "TinkerRocket"
+            annotation.subtitle = rocketSubtitle
             mapView.addAnnotation(annotation)
         }
 
@@ -107,22 +109,27 @@ struct MapView: View {
     )
     @State private var hasInitializedRegion = false
 
+    /// Always reads from the latched last-valid fix (#140), not raw
+    /// telemetry — so a rocket-side GPS dropout or LoRa loss can't blank
+    /// the marker.  A fresh BLE reconnect hydrates this from the fleet
+    /// cache on the first telemetry packet.
     private var rocketCoordinate: CLLocationCoordinate2D? {
-        guard let lat = device.telemetry.latitude,
-              let lon = device.telemetry.longitude,
-              !(lat == 0 && lon == 0) else {
-            return nil
-        }
-        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        device.lastValidRocketFix?.coordinate
     }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            RocketMapView(
-                mapType: $mapType,
-                rocketCoordinate: rocketCoordinate,
-                region: $region
-            )
+            // TimelineView so the "last fix Ns ago" subtitle keeps ticking
+            // even when telemetry has stopped arriving — without it the age
+            // would freeze at whatever it was on the most recent re-render.
+            TimelineView(.periodic(from: .now, by: 1.0)) { context in
+                RocketMapView(
+                    mapType: $mapType,
+                    rocketCoordinate: rocketCoordinate,
+                    rocketSubtitle: markerSubtitle(now: context.date),
+                    region: $region
+                )
+            }
             .ignoresSafeArea(edges: .bottom)
 
             // Floating control buttons
@@ -160,7 +167,7 @@ struct MapView: View {
         .navigationTitle("Rocket Map")
         .navigationBarTitleDisplayMode(.inline)
         .brandedToolbar()
-        .onChange(of: device.telemetry.latitude) { _ in
+        .onChange(of: device.lastValidRocketFix) { _ in
             if !hasInitializedRegion {
                 centerOnRocket()
                 hasInitializedRegion = true
@@ -177,6 +184,22 @@ struct MapView: View {
             center: coordinate,
             span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
         )
+    }
+
+    /// Callout text under the marker.  Shows sat count and the age of
+    /// the fix so a stale marker can't be mistaken for a live one.
+    private func markerSubtitle(now: Date) -> String? {
+        guard let fix = device.lastValidRocketFix else { return nil }
+        let age = max(0, Int(now.timeIntervalSince(fix.fixDate)))
+        return "\(fix.numSats) sats • \(formatAge(age)) ago"
+    }
+
+    /// Compact age string: bare seconds under a minute, M:SS or H:MM:SS
+    /// above.  Avoids the "0:05" noise of the longer formatter on very
+    /// fresh fixes where seconds is the only thing that matters.
+    private func formatAge(_ seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        return formatElapsed(seconds: seconds)
     }
 }
 
