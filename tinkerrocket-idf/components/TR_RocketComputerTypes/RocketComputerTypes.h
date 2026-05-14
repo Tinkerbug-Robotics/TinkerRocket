@@ -900,10 +900,22 @@ typedef struct __attribute__((packed))
         bit 4–7: reserved
     */
 
+    // Apogee detector outputs (bitfield, appended in #142/#143).
+    // The `flags` byte was full, so the remaining per-detector flags and the
+    // master voted result live here.  alt_apogee_flag and vel_u_apogee_flag
+    // remain in `flags` for backwards-compatible decoding of old logs.
+    uint8_t apogee_flags;
+    /*
+        bit 0: gps_apogee_flag
+        bit 1: pitch_apogee_flag
+        bit 2: apogee_flag (master voted result)
+        bit 3–7: reserved
+    */
+
 } NonSensorData;
 
-static_assert(sizeof(NonSensorData) == 43,
-              "NonSensorData must be 43 bytes");
+static_assert(sizeof(NonSensorData) == 44,
+              "NonSensorData must be 44 bytes");
 
 static constexpr uint8_t NSF_ALT_LANDED   = (1u << 0);
 static constexpr uint8_t NSF_ALT_APOGEE   = (1u << 1);
@@ -913,6 +925,11 @@ static constexpr uint8_t NSF_BURNOUT      = (1u << 4);
 static constexpr uint8_t NSF_GUIDANCE     = (1u << 5);
 static constexpr uint8_t NSF_PYRO1_ARMED  = (1u << 6);
 static constexpr uint8_t NSF_PYRO2_ARMED  = (1u << 7);
+
+// NonSensorData.apogee_flags bit masks (appended in #142/#143).
+static constexpr uint8_t NSF2_GPS_APOGEE     = (1u << 0);
+static constexpr uint8_t NSF2_PITCH_APOGEE   = (1u << 1);
+static constexpr uint8_t NSF2_MASTER_APOGEE  = (1u << 2);
 
 // Pyro status byte bit masks
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
@@ -958,6 +975,11 @@ typedef struct
     bool alt_apogee_flag;
     bool vel_u_apogee_flag;
     bool launch_flag;
+
+    // Per #142/#143: full apogee detector set + master voted result.
+    bool gps_apogee_flag;
+    bool pitch_apogee_flag;
+    bool apogee_flag;        // master voted result
 
     RocketState rocket_state;
 

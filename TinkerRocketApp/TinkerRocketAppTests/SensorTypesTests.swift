@@ -35,7 +35,33 @@ final class SensorTypesTests: XCTestCase {
         assertSize(10) { try POWERData(from: $0) }
     }
 
-    func testNonSensorData_Size43() {
-        assertSize(43) { try NonSensorData(from: $0) }
+    func testNonSensorData_Size43_LegacyAccepted() {
+        // Per #142/#143 the wire format grew from 43 to 44 bytes (added the
+        // apogee_flags byte).  Legacy 43-byte logs must still parse so old
+        // captures in TestFlights/ can be re-converted with new iOS builds.
+        XCTAssertNoThrow(try NonSensorData(from: Data(count: 43)))
+        XCTAssertThrowsError(try NonSensorData(from: Data(count: 42)))
+    }
+
+    func testNonSensorData_Size44_Current() {
+        // Current firmware emits 44-byte frames.
+        XCTAssertNoThrow(try NonSensorData(from: Data(count: 44)))
+    }
+
+    func testNonSensorData_ApogeeFlagsDecodes() {
+        // Construct a 44-byte payload with apogee_flags = NSF2_MASTER_APOGEE.
+        var bytes = [UInt8](repeating: 0, count: 44)
+        bytes[43] = 1 << 2  // NSF2_MASTER_APOGEE
+        let raw = try? NonSensorData(from: Data(bytes))
+        XCTAssertNotNil(raw)
+        XCTAssertEqual(raw?.apogee_flags, 1 << 2)
+    }
+
+    func testNonSensorData_LegacyApogeeFlagsZero() {
+        // 43-byte legacy payloads have no apogee_flags byte; decoder must
+        // return 0 (not crash, not read past the buffer).
+        let raw = try? NonSensorData(from: Data(count: 43))
+        XCTAssertNotNil(raw)
+        XCTAssertEqual(raw?.apogee_flags, 0)
     }
 }

@@ -290,8 +290,16 @@ nonisolated class CSVGenerator {
             // Track max 3D speed from EKF velocity (peak = burnout)
             // Only update before apogee — IMU integration drifts after apogee
             // so post-apogee speeds are unreliable.
+            //
+            // Gate on the master voted apogee_flag — a single per-detector
+            // false positive (#142) previously gated off max-speed tracking
+            // ~6s before real apogee, missing the burnout peak entirely.
+            // Legacy 43-byte logs predate the master flag, so fall back to
+            // requiring BOTH baro and velocity detectors to agree.
             if let ns = nonSensor {
-                if !ns.alt_apogee_flag && !ns.vel_u_apogee_flag {
+                let postApogee = ns.apogee_flag ||
+                                 (ns.alt_apogee_flag && ns.vel_u_apogee_flag)
+                if !postApogee {
                     let speed = sqrt(ns.e_vel * ns.e_vel + ns.n_vel * ns.n_vel + ns.u_vel * ns.u_vel)
                     if maxSpeed == nil || speed > maxSpeed! {
                         maxSpeed = speed
@@ -303,7 +311,13 @@ nonisolated class CSVGenerator {
                     launchTime_us = t
                 }
 
-                if (ns.alt_apogee_flag || ns.vel_u_apogee_flag) && apogeeTime_us == nil {
+                // Source apogee timestamp from the master voted flag — not
+                // from a per-detector OR — to avoid a single noisy detector
+                // (e.g. baro during boost, see #142) polluting the sidecar's
+                // canonical apogee_time_s.  Legacy 43-byte logs decode the
+                // master flag as false, so apogeeTime_us stays nil and the
+                // JSON emits null rather than a per-detector first-fire time.
+                if ns.apogee_flag && apogeeTime_us == nil {
                     apogeeTime_us = t
                 }
             }
@@ -482,8 +496,14 @@ nonisolated class CSVGenerator {
         columns.append("Velocity Up (m/s)")
         columns.append("Altitude Rate (m/s)")
         columns.append("Landed Flag")
-        columns.append("Altitude Apogee Flag")
-        columns.append("Velocity Apogee Flag")
+        // Per #142/#143: per-detector outputs renamed for clarity and master
+        // voted result added alongside.  Old logs (43-byte NonSensorData)
+        // emit 0 for the GPS/Pitch/Master columns.
+        columns.append("Apogee Detector: Baro")
+        columns.append("Apogee Detector: Velocity")
+        columns.append("Apogee Detector: GPS")
+        columns.append("Apogee Detector: Pitch")
+        columns.append("Apogee Flag (Master)")
         columns.append("Launch Flag")
 
         // Pyro status bits (appended in #34 wire format; legacy files emit 0s)
@@ -575,6 +595,9 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.alt_landed_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.alt_apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.vel_u_apogee_flag ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.gps_apogee_flag ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pitch_apogee_flag ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.launch_flag ? "1" : "0" } ?? "")
 
         // Pyro status bits

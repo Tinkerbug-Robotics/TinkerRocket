@@ -3224,8 +3224,15 @@ static void loop_fc()
                     landed_candidate_start_millis = 0;
                     // Clear apogee/landing flags so they start clean at launch.
                     // launch_flag is intentionally preserved (it got us here).
+                    // Per #142/#143: the original reset cleared only baro and
+                    // velocity flags, leaving stale gps_apogee, pitch_apogee,
+                    // and master apogee_flag values that could survive a
+                    // reboot-recovery into the next ascent.
                     kinematics.alt_apogee_flag = false;
                     kinematics.vel_u_apogee_flag = false;
+                    kinematics.gps_apogee_flag = false;
+                    kinematics.pitch_apogee_flag = false;
+                    kinematics.apogee_flag = false;
                     kinematics.alt_landed_flag = false;
                     kinematics.max_speed = 0.0f;
                     // Reset guidance state for new flight
@@ -3612,6 +3619,11 @@ static void loop_fc()
         if (kinematics.launch_flag || (rocket_state == INFLIGHT)) non_sensor_data.flags |= NSF_LAUNCH;
         if (burnout_detected) non_sensor_data.flags |= NSF_BURNOUT;
         if (guidance_active)  non_sensor_data.flags |= NSF_GUIDANCE;
+        // Apogee detector outputs + master vote (#142/#143).
+        non_sensor_data.apogee_flags = 0;
+        if (kinematics.gps_apogee_flag)   non_sensor_data.apogee_flags |= NSF2_GPS_APOGEE;
+        if (kinematics.pitch_apogee_flag) non_sensor_data.apogee_flags |= NSF2_PITCH_APOGEE;
+        if (kinematics.apogee_flag)       non_sensor_data.apogee_flags |= NSF2_MASTER_APOGEE;
         // Snapshot pyro state under spinlock for telemetry
         portENTER_CRITICAL(&pyro_spinlock);
         bool p1_armed = pyro1_armed;

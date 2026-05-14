@@ -65,20 +65,43 @@ TEST_F(KinematicChecksTest, Launch_BriefSpike_NoTrigger) {
 }
 
 TEST_F(KinematicChecksTest, MaxAltitude_SpikeRejection) {
-    // Establish a max altitude of 100m
-    setMockMillis(0);
-    callFlight(100.0f, 5.0f, 0.0f);
-    EXPECT_NEAR(kc.max_altitude, 100.0f, 1.0f);
+    // Per #142, max_altitude tracks the KF-smoothed altitude (alt_est)
+    // rather than the raw pressure_altitude so individual noise spikes
+    // can't ratchet the running max above the true climb.  This test
+    // verifies both: (a) a single huge spike does not drag max with it,
+    // and (b) max still rises when the smoothed altitude rises.
+    //
+    // The KF takes a few samples to converge, so we feed a short ramp
+    // up to ~100m before the spike to seed the filter.
 
-    // Single spike to 500m (>50m from current max) -> should be rejected
-    setMockMillis(2);
+    // Seed the filter at ~100m altitude (held steady — converges fast).
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(i * 2);
+        callFlight(100.0f, 5.0f, 0.0f);
+    }
+    EXPECT_NEAR(kc.max_altitude, 100.0f, 2.0f);
+    const float max_before_spike = kc.max_altitude;
+
+    // Single 400m upward spike — the KF damps it heavily and the
+    // window-reject backstop catches whatever leaks through.
+    setMockMillis(122);
     callFlight(500.0f, 5.0f, 0.0f);
-    EXPECT_LT(kc.max_altitude, 200.0f); // spike rejected
+    EXPECT_LT(kc.max_altitude - max_before_spike, 50.0f)
+        << "single spike ratcheted max_altitude by "
+        << (kc.max_altitude - max_before_spike) << " m";
 
-    // Normal increase within 50m window
-    setMockMillis(4);
-    callFlight(120.0f, 5.0f, 0.0f);
-    EXPECT_NEAR(kc.max_altitude, 120.0f, 1.0f);
+    // A sustained rise to ~120m must still update max.  Feed enough
+    // samples for the KF to recover from the prior spike (d_alt_est_
+    // overshoots, then KF reels alt_est back to truth).  We accept a
+    // small overshoot in the upper bound because the spike injected a
+    // transient into the rate estimate — what matters is the order of
+    // magnitude, not exact equality with 120m.
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(124 + i * 2);
+        callFlight(120.0f, 5.0f, 0.0f);
+    }
+    EXPECT_GT(kc.max_altitude, 115.0f);
+    EXPECT_LT(kc.max_altitude, 135.0f);
 }
 
 TEST_F(KinematicChecksTest, Apogee_GatedOnBurnout) {
