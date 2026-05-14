@@ -111,7 +111,8 @@ FMT_MMC = '<I III'
 FMT_POWER = '<I Hhh'
 # NonSensorData: 42 bytes (q0-q3 as int16*10000, roll_cmd centideg)
 FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
-FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # current (with pyro_status byte)
+FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
+FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
 # OutStatusQueryData: 16 bytes
 FMT_STATUS_QUERY = '<B H H hh B hhh'
 
@@ -135,6 +136,11 @@ NSF_BURNOUT     = (1 << 4)
 NSF_GUIDANCE    = (1 << 5)
 NSF_PYRO1_ARMED = (1 << 6)
 NSF_PYRO2_ARMED = (1 << 7)
+
+# apogee_flags byte (NonSensorData, #142/#143)
+NSF2_GPS_APOGEE    = (1 << 0)
+NSF2_PITCH_APOGEE  = (1 << 1)
+NSF2_MASTER_APOGEE = (1 << 2)
 
 # Pyro status byte bits
 PSF_CH1_CONT  = (1 << 0)
@@ -362,13 +368,19 @@ def parse_binary_file(filepath):
                     "raw_z":    fields[3],
                 })
 
-            elif msg_type == MSG_NON_SENSOR and msg_len in (42, 43):
-                if msg_len == 43:
+            elif msg_type == MSG_NON_SENSOR and msg_len in (42, 43, 44):
+                if msg_len == 44:
+                    fields = struct.unpack(FMT_NONSENSOR_44, payload)
+                    pyro_status = fields[15]
+                    apogee_flags_b = fields[16]
+                elif msg_len == 43:
                     fields = struct.unpack(FMT_NONSENSOR_43, payload)
                     pyro_status = fields[15]
+                    apogee_flags_b = 0
                 else:
                     fields = struct.unpack(FMT_NONSENSOR_42, payload)
                     pyro_status = 0
+                    apogee_flags_b = 0
                 q0 = fields[1] / 10000.0
                 q1 = fields[2] / 10000.0
                 q2 = fields[3] / 10000.0
@@ -408,6 +420,11 @@ def parse_binary_file(filepath):
                     "pyro2_cont":    bool(pyro_status & PSF_CH2_CONT),
                     "pyro1_fired":   bool(pyro_status & PSF_CH1_FIRED),
                     "pyro2_fired":   bool(pyro_status & PSF_CH2_FIRED),
+                    # #142/#143: full apogee detector set + master vote.
+                    # Legacy 42/43-byte logs decode all three as False.
+                    "gps_apogee":     bool(apogee_flags_b & NSF2_GPS_APOGEE),
+                    "pitch_apogee":   bool(apogee_flags_b & NSF2_PITCH_APOGEE),
+                    "apogee_flag":    bool(apogee_flags_b & NSF2_MASTER_APOGEE),
                 })
 
             elif msg_type == MSG_POWER:
