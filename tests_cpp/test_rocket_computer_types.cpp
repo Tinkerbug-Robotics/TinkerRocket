@@ -24,7 +24,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(ISM6HG256Data),  22u);
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
-    EXPECT_EQ(sizeof(NonSensorData),  43u);
+    EXPECT_EQ(sizeof(NonSensorData),  44u);  // #142/#143: +1 apogee_flags byte
     EXPECT_EQ(sizeof(LoRaData),       62u);  // 5-byte routing header (incl. 16-bit seq) + 57-byte payload
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -36,6 +36,15 @@ TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
                   NSF_LAUNCH | NSF_BURNOUT | NSF_GUIDANCE |
                   NSF_PYRO1_ARMED | NSF_PYRO2_ARMED;
     EXPECT_EQ(all, 0xFF); // all 8 bits used, none overlapping
+}
+
+TEST(RocketComputerTypes, NSF2_ApogeeFlagBits_NoOverlap) {
+    // apogee_flags byte (#142/#143) — three bits in use today.
+    uint8_t all = NSF2_GPS_APOGEE | NSF2_PITCH_APOGEE | NSF2_MASTER_APOGEE;
+    EXPECT_EQ(all, 0x07);
+    EXPECT_EQ(__builtin_popcount(NSF2_GPS_APOGEE),    1);
+    EXPECT_EQ(__builtin_popcount(NSF2_PITCH_APOGEE),  1);
+    EXPECT_EQ(__builtin_popcount(NSF2_MASTER_APOGEE), 1);
 }
 
 TEST(RocketComputerTypes, PSF_FlagBits_NoOverlap) {
