@@ -355,18 +355,22 @@ struct TelemetryData: Codable {
     }
 
     /// Whether the rocket itself is currently writing its onboard flight
-    /// log (#137 follow-up).  The raw `logging_active` flag comes from the
-    /// OC's `logger.isLoggingActive()` which returns true while the
-    /// end-flight queue is still draining — so post-flight (state =
-    /// LANDED → READY) it can stay true for several seconds, and if the
-    /// drain wedges (END_FLIGHT lost over I2C, etc.) it can stick true
-    /// indefinitely.  Trust the rocket state instead: the OC's flight log
-    /// only ever opens during INFLIGHT (auto-start at launch detection),
-    /// so a non-INFLIGHT state means the rocket can't really be writing.
-    /// Cleans up the "Rocket Log" indicator + "Stop Logging" button label
-    /// staying lit after a flight.
+    /// log.  The raw `logging_active` flag comes from the OC's
+    /// `logger.isLoggingActive()` which returns true while the end-flight
+    /// queue is still draining — so for several seconds post-landing it
+    /// stays true, and if the drain wedges (END_FLIGHT lost over I2C, etc.)
+    /// it can stick true indefinitely.
+    ///
+    /// Only suppress the indicator during the post-flight drain window
+    /// (state == LANDED).  Trust the flag in every other state — manual
+    /// pre-flight bench-test logging from READY/PRELAUNCH is a real
+    /// scenario and the button label needs to flip to "Stop Logging"
+    /// when it succeeds (#137 originally over-gated this to INFLIGHT only).
+    /// A stuck-true that survives the user resetting to READY is a genuine
+    /// anomaly; surfacing it is more useful than hiding it.
     var rocketLoggingActive: Bool {
-        return logging_active && state == "INFLIGHT"
+        if state == "LANDED" { return false }
+        return logging_active
     }
 }
 
