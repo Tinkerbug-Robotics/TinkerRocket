@@ -67,15 +67,20 @@ struct SettingsView: View {
     // Roll profile waypoints — persisted as JSON string in @AppStorage
     @AppStorage("rollProfileJSON") private var rollProfileJSON: String = "[]"
     @State private var rollWaypoints: [(time: String, angle: String)] = []
-    @State private var rollProfileApplied = false
 
     // Roll control config
     @State private var sRollDelayMs = ""
-    @State private var rollControlApplied = false
 
-    // Apply button feedback
+    // Config "Sent" feedback — transient checkmark in section headers.
     @State private var servoApplied = false
     @State private var pidApplied = false
+    @State private var rollControlApplied = false
+
+    // Self-apply on focus loss (#144): editable config fields are sent to
+    // the rocket when keyboard focus leaves their section, so there's no
+    // separate "apply" button to forget.
+    @FocusState private var focusedField: EditField?
+    @State private var lastFocusedField: EditField?
 
     /// Current active frequency for the connected device, read from the most
     /// recent config readback.  Falls back to the factory default so the
@@ -90,6 +95,67 @@ struct SettingsView: View {
         device.isConnected
         && !device.isBaseStation
         && device.telemetry.state == "INITIALIZATION"
+    }
+
+    // MARK: - Focus-driven self-apply (#144)
+
+    /// Identifies every editable config text field for @FocusState tracking.
+    private enum EditField: Hashable {
+        case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax
+        case pidKp, pidKi, pidKd, pidMin, pidMax
+        case rollDelay
+        case wpTime(Int), wpAngle(Int)
+    }
+
+    /// Config groups — every field in a group is pushed together by one
+    /// `apply*` call when keyboard focus leaves the group.
+    private enum EditGroup {
+        case servo, pid, rollControl, rollWaypoints
+    }
+
+    private func group(of field: EditField?) -> EditGroup? {
+        switch field {
+        case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax:
+            return .servo
+        case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax:
+            return .pid
+        case .rollDelay:
+            return .rollControl
+        case .wpTime, .wpAngle:
+            return .rollWaypoints
+        case nil:
+            return nil
+        }
+    }
+
+    private func applyGroup(_ g: EditGroup) {
+        switch g {
+        case .servo:         applyServoConfig()
+        case .pid:           applyPIDConfig()
+        case .rollControl:   applyRollControlConfig()
+        case .rollWaypoints: applyRollProfile()
+        }
+    }
+
+    /// Push a group's config when keyboard focus leaves it — to another
+    /// group, or to nil when the keyboard dismisses.  This is what makes
+    /// every text field "apply on edit" with no separate button (#144).
+    private func handleFocusChange(_ newField: EditField?) {
+        let previous = lastFocusedField
+        lastFocusedField = newField
+        if let leftGroup = group(of: previous),
+           leftGroup != group(of: newField) {
+            applyGroup(leftGroup)
+        }
+    }
+
+    /// Flush a still-focused field if the view goes away before focus
+    /// cleared (e.g. nav-bar Done tapped with the keyboard still up).
+    private func flushPendingEdits() {
+        if let g = group(of: lastFocusedField) {
+            applyGroup(g)
+        }
+        lastFocusedField = nil
     }
 
     var body: some View {
@@ -159,35 +225,28 @@ struct SettingsView: View {
                 // --- Servo & PID Settings (rocket only) ---
 
                 if !device.isBaseStation {
-                    Section("Servo Biases (\u{00B5}s)") {
-                        stringRow("Servo 1", text: $sBias1)
-                        stringRow("Servo 2", text: $sBias2)
-                        stringRow("Servo 3", text: $sBias3)
-                        stringRow("Servo 4", text: $sBias4)
+                    // Servo biases + timing share one config message, so
+                    // they live in one section that self-applies when focus
+                    // leaves any of its fields (#144).
+                    Section(header: configHeader("Servo", applied: servoApplied)) {
+                        stringRow("Servo 1", text: $sBias1, field: .bias1)
+                        stringRow("Servo 2", text: $sBias2, field: .bias2)
+                        stringRow("Servo 3", text: $sBias3, field: .bias3)
+                        stringRow("Servo 4", text: $sBias4, field: .bias4)
                         Text("Microsecond offset per servo to trim mechanical misalignment.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        stringRow("Frequency", text: $sServoHz, field: .servoHz, unit: "Hz")
+                        stringRow("Min Pulse", text: $sServoMinUs, field: .servoMin, unit: "\u{00B5}s")
+                        stringRow("Max Pulse", text: $sServoMaxUs, field: .servoMax, unit: "\u{00B5}s")
                     }
 
-                    Section("Servo Timing") {
-                        stringRow("Frequency", text: $sServoHz, unit: "Hz")
-                        stringRow("Min Pulse", text: $sServoMinUs, unit: "\u{00B5}s")
-                        stringRow("Max Pulse", text: $sServoMaxUs, unit: "\u{00B5}s")
-                        applyButton(
-                            icon: "gearshape.2",
-                            label: "Apply Servo Config",
-                            applied: servoApplied
-                        ) {
-                            applyServoConfig()
-                        }
-                    }
-
-                    Section("PID Gains") {
-                        stringRow("Kp", text: $sPidKp, decimal: true)
-                        stringRow("Ki", text: $sPidKi, decimal: true)
-                        stringRow("Kd", text: $sPidKd, decimal: true)
-                        stringRow("Min Cmd", text: $sPidMinCmd, unit: "deg")
-                        stringRow("Max Cmd", text: $sPidMaxCmd, unit: "deg")
+                    Section(header: configHeader("PID Gains", applied: pidApplied)) {
+                        stringRow("Kp", text: $sPidKp, field: .pidKp, decimal: true)
+                        stringRow("Ki", text: $sPidKi, field: .pidKi, decimal: true)
+                        stringRow("Kd", text: $sPidKd, field: .pidKd, decimal: true)
+                        stringRow("Min Cmd", text: $sPidMinCmd, field: .pidMin, unit: "deg")
+                        stringRow("Max Cmd", text: $sPidMaxCmd, field: .pidMax, unit: "deg")
                         Toggle("Velocity Gain Scheduling", isOn: $gainScheduleEnabled)
                             .onChange(of: gainScheduleEnabled) { newValue in
                                 device.sendGainScheduleConfig(enabled: newValue)
@@ -195,33 +254,11 @@ struct SettingsView: View {
                         Text("Scales PID gains with (V_ref/V)\u{00B2}. Disable for fixed gains at all speeds.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        applyButton(
-                            icon: "slider.horizontal.3",
-                            label: "Apply PID Config",
-                            applied: pidApplied
-                        ) {
-                            applyPIDConfig()
-                        }
                     }
 
-                    Section("Control Mode") {
-                        Picker("Flight Mode", selection: $guidanceEnabled) {
-                            Text("Roll Only").tag(false)
-                            Text("Roll + Guidance").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        .onChange(of: guidanceEnabled) { newValue in
-                            device.sendGuidanceConfig(enabled: newValue)
-                        }
-                        Text(guidanceEnabled
-                            ? "Roll control during boost, PN guidance from coast to apogee. Guidance activates after burnout + delay, stops at closest approach."
-                            : "Roll rate control only during all flight phases. No lateral steering.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text("Persists across reboots.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    // Control Mode (PN guidance) picker hidden until PN
+                    // guidance is flight-validated (#144).  guidanceEnabled
+                    // @AppStorage + sendGuidanceConfig() plumbing kept intact.
 
                     Section("Camera") {
                         Picker("Camera Type", selection: $cameraType) {
@@ -242,9 +279,24 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    Section("Roll Control") {
-                        Toggle("Use Roll Profile", isOn: $useAngleControl)
-                        Text("When enabled, uses cascaded angle control with roll profile waypoints below. When disabled, uses rate-only control (null roll).")
+                    // Roll Control + Roll Profile unified into one section
+                    // (#144).  The mode picker self-applies cmd 31 on change
+                    // — pre-#144 the "Use Roll Profile" toggle only flipped
+                    // local @AppStorage, so a user could load a profile that
+                    // the FC never activated.  The waypoint editor is only
+                    // shown in Track Profile mode.
+                    Section(header: configHeader("Roll Control", applied: rollControlApplied)) {
+                        Picker("Mode", selection: $useAngleControl) {
+                            Text("Null Roll").tag(false)
+                            Text("Track Profile").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: useAngleControl) { _ in
+                            applyRollControlConfig()
+                        }
+                        Text(useAngleControl
+                            ? "Cascaded angle control \u{2014} fins track the roll profile waypoints below."
+                            : "Rate-only control \u{2014} fins hold zero roll rate. No profile followed.")
                             .font(.caption)
                             .foregroundColor(.secondary)
 
@@ -255,6 +307,7 @@ struct SettingsView: View {
                                 .keyboardType(.numberPad)
                                 .multilineTextAlignment(.trailing)
                                 .frame(width: 80)
+                                .focused($focusedField, equals: .rollDelay)
                             Text("ms")
                                 .foregroundColor(.secondary)
                         }
@@ -262,92 +315,82 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
 
-                        applyButton(
-                            icon: "arrow.triangle.turn.up.right.diamond",
-                            label: "Apply Roll Control",
-                            applied: rollControlApplied
-                        ) {
-                            applyRollControlConfig()
-                        }
-                    }
+                        if useAngleControl {
+                            Text("Define (time, angle) waypoints for the cascaded angle controller. During flight, the target roll angle is interpolated between waypoints.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
 
-                    Section("Roll Profile") {
-                        Text("Define (time, angle) waypoints for the cascaded angle controller. During flight, the target roll angle is interpolated between waypoints.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        ForEach(rollWaypoints.indices, id: \.self) { i in
-                            HStack(spacing: 8) {
-                                Text("WP \(i + 1)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 40)
-                                TextField("Time", text: Binding(
-                                    get: { rollWaypoints[i].time },
-                                    set: { rollWaypoints[i].time = $0 }
-                                ))
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 60)
-                                Text("s")
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 15)
-                                TextField("Angle", text: Binding(
-                                    get: { rollWaypoints[i].angle },
-                                    set: { rollWaypoints[i].angle = $0 }
-                                ))
-                                .keyboardType(.numbersAndPunctuation)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 60)
-                                Text("\u{00B0}")
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 15)
-                                Button(role: .destructive) {
-                                    rollWaypoints.remove(at: i)
-                                    saveRollWaypointsToStorage()
-                                } label: {
-                                    Image(systemName: "minus.circle.fill")
-                                        .foregroundColor(.red)
+                            ForEach(rollWaypoints.indices, id: \.self) { i in
+                                HStack(spacing: 8) {
+                                    Text("WP \(i + 1)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 40)
+                                    TextField("Time", text: Binding(
+                                        get: { rollWaypoints[i].time },
+                                        set: { rollWaypoints[i].time = $0 }
+                                    ))
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 60)
+                                    .focused($focusedField, equals: .wpTime(i))
+                                    Text("s")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 15)
+                                    TextField("Angle", text: Binding(
+                                        get: { rollWaypoints[i].angle },
+                                        set: { rollWaypoints[i].angle = $0 }
+                                    ))
+                                    .keyboardType(.numbersAndPunctuation)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 60)
+                                    .focused($focusedField, equals: .wpAngle(i))
+                                    Text("\u{00B0}")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 15)
+                                    Button(role: .destructive) {
+                                        rollWaypoints.remove(at: i)
+                                        applyRollProfile()
+                                    } label: {
+                                        Image(systemName: "minus.circle.fill")
+                                            .foregroundColor(.red)
+                                    }
+                                    .buttonStyle(.borderless)
                                 }
-                                .buttonStyle(.borderless)
                             }
-                        }
 
-                        if rollWaypoints.count < 8 {
-                            Button {
-                                let defaultTime = rollWaypoints.isEmpty ? "0.0" :
-                                    String(format: "%.1f", (Double(rollWaypoints.last?.time ?? "0") ?? 0) + 1.0)
-                                rollWaypoints.append((time: defaultTime, angle: "0"))
+                            if rollWaypoints.count < 8 {
+                                Button {
+                                    let defaultTime = rollWaypoints.isEmpty ? "0.0" :
+                                        String(format: "%.1f", (Double(rollWaypoints.last?.time ?? "0") ?? 0) + 1.0)
+                                    rollWaypoints.append((time: defaultTime, angle: "0"))
+                                    applyRollProfile()
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "plus.circle.fill")
+                                        Text("Add Waypoint")
+                                    }
+                                }
+                            }
+
+                            Button(role: .destructive) {
+                                rollWaypoints.removeAll()
                                 saveRollWaypointsToStorage()
+                                device.sendRollProfileClear()
+                                showApplied($rollControlApplied)
                             } label: {
                                 HStack {
-                                    Image(systemName: "plus.circle.fill")
-                                    Text("Add Waypoint")
+                                    Image(systemName: "trash")
+                                    Text("Clear Roll Profile")
                                 }
+                                .frame(maxWidth: .infinity)
                             }
+                            .disabled(!device.isConnected)
                         }
 
-                        applyButton(
-                            icon: "arrow.triangle.turn.up.right.diamond",
-                            label: "Send Roll Profile",
-                            applied: rollProfileApplied
-                        ) {
-                            applyRollProfile()
-                        }
-
-                        Button(role: .destructive) {
-                            rollWaypoints.removeAll()
-                            saveRollWaypointsToStorage()
-                            device.sendRollProfileClear()
-                            showApplied($rollProfileApplied)
-                        } label: {
-                            HStack {
-                                Image(systemName: "trash")
-                                Text("Clear Roll Profile")
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .disabled(!device.isConnected)
+                        Text("Persists across reboots.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
@@ -387,6 +430,12 @@ struct SettingsView: View {
             .onAppear {
                 loadStringsFromStorage()
                 loadRollWaypointsFromStorage()
+            }
+            .onChange(of: focusedField) { newField in
+                handleFocusChange(newField)
+            }
+            .onDisappear {
+                flushPendingEdits()
             }
             // Sync settings from rocket config received on BLE connect
             .onReceive(device.$rocketConfig.compactMap { $0 }) { cfg in
@@ -452,7 +501,7 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
-    private func stringRow(_ label: String, text: Binding<String>, unit: String? = nil, decimal: Bool = false) -> some View {
+    private func stringRow(_ label: String, text: Binding<String>, field: EditField, unit: String? = nil, decimal: Bool = false) -> some View {
         HStack {
             Text(label)
             Spacer()
@@ -460,23 +509,25 @@ struct SettingsView: View {
                 .keyboardType(decimal ? .decimalPad : .numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
+                .focused($focusedField, equals: field)
             if let unit = unit {
                 Text(unit).foregroundColor(.secondary).fixedSize().frame(minWidth: 30, alignment: .leading)
             }
         }
     }
 
-    @ViewBuilder
-    private func applyButton(icon: String, label: String, applied: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: applied ? "checkmark.circle.fill" : icon)
-                Text(applied ? "Sent!" : label)
+    /// Section header with a transient "Sent" checkmark, shown for ~2 s
+    /// after the section's config is pushed to the rocket (#144).
+    private func configHeader(_ title: String, applied: Bool) -> some View {
+        HStack {
+            Text(title)
+            if applied {
+                Spacer()
+                Label("Sent", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
             }
-            .frame(maxWidth: .infinity)
-            .foregroundColor(applied ? .green : nil)
         }
-        .disabled(!device.isConnected || applied)
     }
 
     // MARK: - Apply actions
@@ -542,7 +593,7 @@ struct SettingsView: View {
         waypoints.sort { $0.time < $1.time }
         device.sendRollProfile(waypoints: waypoints)
         saveRollWaypointsToStorage()
-        showApplied($rollProfileApplied)
+        showApplied($rollControlApplied)
     }
 
     // MARK: - Roll Profile Persistence
@@ -567,6 +618,9 @@ struct SettingsView: View {
     }
 
     private func showApplied(_ flag: Binding<Bool>) {
+        // Only flash "Sent" when there's actually a rocket to send to —
+        // a false confirmation is the #144 anti-pattern in miniature.
+        guard device.isConnected else { return }
         flag.wrappedValue = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             flag.wrappedValue = false
