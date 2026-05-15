@@ -123,6 +123,7 @@ def replay(binary_file, plot_dir=None):
     baro_ref_pa = None
     baro_samples_for_ref = []
     baro_alt_offset = 0.0  # offset to align baro (pad=0) with GNSS altitude frame
+    baro_alt_offset_set = False
 
     # Recording arrays
     log_time_us = []
@@ -199,8 +200,9 @@ def replay(binary_file, plot_dir=None):
                 continue
 
             # Defer baro offset until we have a valid GNSS fix
-            if baro_alt_offset == 0.0 and latest_gnss is not None:
+            if not baro_alt_offset_set and latest_gnss is not None:
                 baro_alt_offset = latest_gnss["alt_m"]
+                baro_alt_offset_set = True
                 print(f"  Baro alt offset: {baro_alt_offset:.1f}m "
                       f"(from GNSS at t={t_rel:.1f}s)")
 
