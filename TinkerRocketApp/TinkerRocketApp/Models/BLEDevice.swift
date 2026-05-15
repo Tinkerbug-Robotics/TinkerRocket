@@ -353,6 +353,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return true
     }
 
+    /// Relay a new LoRa TX-power value to every tracked rocket and apply
+    /// the same power to this base station.  Keeps freq/SF/BW/CR from the
+    /// current base-station config — only TX power changes.  Reuses the
+    /// transactional Cmd 10 path: the BS relays on OLD, switches to NEW
+    /// power, and rolls back if no rocket beacon is heard within the verify
+    /// window.  Refuses unless `autoApplyRefusalReason()` returns nil.
+    @discardableResult
+    func autoApplyTxPower(_ txPower: Int8) -> Bool {
+        if let refusal = autoApplyRefusalReason() {
+            print("[TXPWR] Auto-apply refused: \(refusal.rawValue)")
+            return false
+        }
+        guard let cfg = rocketConfig,
+              let freq = cfg.loraFreqMHz,
+              let bw = cfg.loraBwKHz,
+              let sf = cfg.loraSF,
+              let cr = cfg.loraCR else { return false }
+        sendLoRaConfig(freqMHz: freq, bwKHz: bw, sf: sf, cr: cr, txPower: txPower)
+        return true
+    }
+
     func sendLoRaConfig(freqMHz: Float, bwKHz: Float, sf: UInt8, cr: UInt8, txPower: Int8) {
         var payload = Data()
         var freq = freqMHz

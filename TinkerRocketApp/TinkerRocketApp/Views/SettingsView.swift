@@ -76,6 +76,12 @@ struct SettingsView: View {
     @State private var pidApplied = false
     @State private var rollControlApplied = false
 
+    // LoRa TX power (base station only).  Hydrated from rocketConfig on
+    // readback; user edits are debounced so a rapid Stepper drag fires one
+    // Cmd 10 transaction at the final value instead of one per tick.
+    @State private var txPowerDbm: Int = 12
+    @State private var txPowerSendWork: DispatchWorkItem?
+
     // Self-apply on focus loss (#144): editable config fields are sent to
     // the rocket when keyboard focus leaves their section, so there's no
     // separate "apply" button to forget.
@@ -218,6 +224,28 @@ struct SettingsView: View {
                             Text(String(format: "%.2f MHz", currentFreqMHz))
                                 .foregroundColor(.secondary)
                                 .font(.system(.body, design: .monospaced))
+                        }
+                    }
+
+                    // LoRa TX power — adjusts both BS and rocket via the
+                    // existing Cmd 10 transactional flow.  Stepper changes
+                    // are debounced; the BS firmware relays the new power
+                    // to the rocket, verifies a beacon on the new setting,
+                    // and rolls back if the rocket can't be heard.
+                    Section(header: Text("LoRa TX Power"),
+                            footer: txPowerFooter) {
+                        Stepper(value: $txPowerDbm, in: -9...22) {
+                            HStack {
+                                Text("Power")
+                                Spacer()
+                                Text("\(txPowerDbm) dBm")
+                                    .foregroundColor(.secondary)
+                                    .font(.system(.body, design: .monospaced))
+                            }
+                        }
+                        .disabled(device.autoApplyRefusalReason() != nil)
+                        .onChange(of: txPowerDbm) { newValue in
+                            scheduleTxPowerSend(newValue)
                         }
                     }
                 }
@@ -455,8 +483,12 @@ struct SettingsView: View {
                 guidanceEnabled = cfg.guidanceEnabled
                 cameraType = Int(cfg.cameraType)
                 // LoRa state is displayed read-only via `currentFreqMHz`;
-                // no per-field bindings to sync since the user can't edit
-                // the preset/TX-power/hop fields here anymore (#136).
+                // SF / BW / CR / hop are still gated behind a developer
+                // flag (#136).  TX power is the one exception: the BS GUI
+                // exposes a Stepper, hydrated here from the readback.
+                if let pwr = cfg.loraTxPower {
+                    txPowerDbm = Int(pwr)
+                }
                 loadStringsFromStorage()
             }
         }
@@ -580,6 +612,34 @@ struct SettingsView: View {
         rollDelayMs = Double(delayMs)
         device.sendRollControlConfig(useAngleControl: useAngleControl, rollDelayMs: delayMs)
         showApplied($rollControlApplied)
+    }
+
+    // MARK: - LoRa TX power (base station only)
+
+    /// Debounce Stepper edits so a held +/- doesn't queue a Cmd 10 per
+    /// tick — the firmware refuses overlapping transactions and the LoRa
+    /// link is throughput-limited.  Skips the send if the new value
+    /// matches what the BS already reports, so hydration from rocketConfig
+    /// doesn't echo back as a no-op transaction.
+    private func scheduleTxPowerSend(_ newValue: Int) {
+        txPowerSendWork?.cancel()
+        let work = DispatchWorkItem {
+            let current = device.rocketConfig?.loraTxPower.map(Int.init) ?? Int.min
+            if newValue != current {
+                device.autoApplyTxPower(Int8(newValue))
+            }
+        }
+        txPowerSendWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    @ViewBuilder
+    private var txPowerFooter: some View {
+        if let refusal = device.autoApplyRefusalReason() {
+            Text(refusal.rawValue).foregroundColor(.orange)
+        } else {
+            Text("Sets transmit power on both the base station and the rocket. The base station relays the change over LoRa, verifies the rocket joined the new setting, and rolls both sides back if it can't be reached.")
+        }
     }
 
     private func applyRollProfile() {
