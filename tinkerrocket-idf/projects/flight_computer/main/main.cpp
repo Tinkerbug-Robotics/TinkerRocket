@@ -597,38 +597,121 @@ static void pyroSafeAll()
     ESP_LOGI(TAG, "[PYRO] All channels safed");
 }
 
-static void pyroArmEnabled()
+// Non-blocking pyro arming + continuity diagnostic.
+//
+// The original pyroArmEnabled() called delay(10) six times on CH1 (1 settle
+// + 5 readback re-reads) plus delayMicroseconds(500) on CH2, blocking the FC
+// main loop for ~60 ms inside the PRELAUNCH→INFLIGHT transition. That stall
+// opened a ~62 ms gap in the sensor stream right at boost ignition.
+//
+// Two entry points share the same state machine:
+//   pyroPrelaunchContTest() — READY→PRELAUNCH: momentary arm + full
+//     diagnostic readback + disarm. Verifies wiring on the pad without
+//     leaving the squib hot during the launch wait.
+//   pyroArmEnabled()        — PRELAUNCH→INFLIGHT: latch ARM=1, mark armed,
+//     do one deferred readback ~10 ms later for sanity. Re-read loop is
+//     skipped — that already ran on the pad.
+//
+// servicePyroArmDiag() advances the state machine each main-loop iteration.
+enum class PyroArmDiagPhase : uint8_t {
+    Idle,
+    Ch1Settle,      // ARM=1 set, waiting 10 ms for VN5E160 settle
+    Ch1ReadRepeat,  // PRELAUNCH only: 5 additional CONT re-reads at 10 ms intervals
+    Ch2Settle,      // ARM=1 set, waiting 10 ms for VN5E160 settle
+};
+static PyroArmDiagPhase  pyro_diag_phase     = PyroArmDiagPhase::Idle;
+static bool              pyro_diag_prelaunch = false;
+static uint8_t           pyro_diag_ch1_reads = 0;
+static constexpr uint8_t PYRO_DIAG_CH1_TOTAL_READS = 6;  // 1 initial + 5 re-reads (preserved)
+static uint32_t          pyro_diag_next_ms   = 0;
+
+static void pyroDiagAdvanceToCh2OrFinish(uint32_t now_ms)
 {
-    if (pyro_config.ch1_enabled) {
-        portENTER_CRITICAL(&pyro_spinlock);
-        gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
-        pyro1_armed = true;
-        portEXIT_CRITICAL(&pyro_spinlock);
-        // Verify ARM pin actually went HIGH and read continuity
-        delay(10);  // 10ms settle for VN5E160 power-up
-        int arm_rb = gpio_get_level((gpio_num_t)config::PYRO1_ARM_PIN);
-        int cont_raw = gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN);
-        ESP_LOGI(TAG, "[PYRO] CH1 armed: ARM_PIN=%d rb=%d  CONT_PIN=%d raw=%d  mode=%u val=%.1f",
-                 config::PYRO1_ARM_PIN, arm_rb,
-                 config::PYRO1_CONT_PIN, cont_raw,
-                 pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value);
-        // Re-read CONT 5 more times to check for transient
-        for (int i = 0; i < 5; i++) {
-            delay(10);
-            ESP_LOGI(TAG, "[PYRO] CH1 CONT re-read[%d]: %d", i,
-                     gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN));
-        }
-    }
     if (pyro_config.ch2_enabled) {
         portENTER_CRITICAL(&pyro_spinlock);
         gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 1);
-        pyro2_armed = true;
+        if (!pyro_diag_prelaunch) pyro2_armed = true;
         portEXIT_CRITICAL(&pyro_spinlock);
-        delayMicroseconds(500);
-        int cont_raw = gpio_get_level((gpio_num_t)config::PYRO2_CONT_PIN);
-        ESP_LOGI(TAG, "[PYRO] CH2 armed (mode=%u val=%.1f) CONT_PIN=%d raw=%d",
-                 pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
-                 config::PYRO2_CONT_PIN, cont_raw);
+        pyro_diag_phase   = PyroArmDiagPhase::Ch2Settle;
+        pyro_diag_next_ms = now_ms + 10;
+    } else {
+        pyro_diag_phase = PyroArmDiagPhase::Idle;
+    }
+}
+
+static void pyroDiagStart(uint32_t now_ms, bool is_prelaunch)
+{
+    if (pyro_diag_phase != PyroArmDiagPhase::Idle) return;
+    pyro_diag_prelaunch = is_prelaunch;
+    pyro_diag_ch1_reads = 0;
+    if (pyro_config.ch1_enabled) {
+        portENTER_CRITICAL(&pyro_spinlock);
+        gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
+        if (!is_prelaunch) pyro1_armed = true;
+        portEXIT_CRITICAL(&pyro_spinlock);
+        pyro_diag_phase   = PyroArmDiagPhase::Ch1Settle;
+        pyro_diag_next_ms = now_ms + 10;
+    } else {
+        pyroDiagAdvanceToCh2OrFinish(now_ms);
+    }
+}
+
+static void pyroPrelaunchContTest(uint32_t now_ms) { pyroDiagStart(now_ms, /*is_prelaunch=*/true);  }
+static void pyroArmEnabled       (uint32_t now_ms) { pyroDiagStart(now_ms, /*is_prelaunch=*/false); }
+
+static void servicePyroArmDiag(uint32_t now_ms)
+{
+    if (pyro_diag_phase == PyroArmDiagPhase::Idle) return;
+    if ((int32_t)(now_ms - pyro_diag_next_ms) < 0) return;
+
+    switch (pyro_diag_phase) {
+        case PyroArmDiagPhase::Ch1Settle: {
+            int arm_rb   = gpio_get_level((gpio_num_t)config::PYRO1_ARM_PIN);
+            int cont_raw = gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN);
+            ESP_LOGI(TAG, "[PYRO] CH1 %s: ARM_PIN=%d rb=%d  CONT_PIN=%d raw=%d  mode=%u val=%.1f",
+                     pyro_diag_prelaunch ? "cont-test" : "armed",
+                     config::PYRO1_ARM_PIN, arm_rb,
+                     config::PYRO1_CONT_PIN, cont_raw,
+                     pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value);
+            pyro_diag_ch1_reads = 1;
+            if (pyro_diag_prelaunch) {
+                pyro_diag_phase   = PyroArmDiagPhase::Ch1ReadRepeat;
+                pyro_diag_next_ms = now_ms + 10;
+            } else {
+                pyroDiagAdvanceToCh2OrFinish(now_ms);
+            }
+            break;
+        }
+        case PyroArmDiagPhase::Ch1ReadRepeat: {
+            int cont_raw = gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN);
+            ESP_LOGI(TAG, "[PYRO] CH1 CONT re-read[%u]: %d",
+                     (unsigned)(pyro_diag_ch1_reads - 1), cont_raw);
+            pyro_diag_ch1_reads++;
+            if (pyro_diag_ch1_reads >= PYRO_DIAG_CH1_TOTAL_READS) {
+                portENTER_CRITICAL(&pyro_spinlock);
+                gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 0);
+                portEXIT_CRITICAL(&pyro_spinlock);
+                pyroDiagAdvanceToCh2OrFinish(now_ms);
+            } else {
+                pyro_diag_next_ms = now_ms + 10;
+            }
+            break;
+        }
+        case PyroArmDiagPhase::Ch2Settle: {
+            int cont_raw = gpio_get_level((gpio_num_t)config::PYRO2_CONT_PIN);
+            ESP_LOGI(TAG, "[PYRO] CH2 %s (mode=%u val=%.1f) CONT_PIN=%d raw=%d",
+                     pyro_diag_prelaunch ? "cont-test" : "armed",
+                     pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
+                     config::PYRO2_CONT_PIN, cont_raw);
+            if (pyro_diag_prelaunch) {
+                portENTER_CRITICAL(&pyro_spinlock);
+                gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 0);
+                portEXIT_CRITICAL(&pyro_spinlock);
+            }
+            pyro_diag_phase = PyroArmDiagPhase::Idle;
+            break;
+        }
+        default: break;
     }
 }
 
@@ -3192,6 +3275,11 @@ static void loop_fc()
         max_alt_m = kinematics.max_altitude;
         max_speed_mps = kinematics.max_speed;
 
+        // Progress any in-flight pyro arming/continuity diagnostic. Must run
+        // every iteration regardless of state/test path so the state machine
+        // started at READY→PRELAUNCH or PRELAUNCH→INFLIGHT finishes promptly.
+        servicePyroArmDiag(now_ms);
+
         if (ground_test_active)
         {
             // Ground test behavior depends on control mode:
@@ -3322,6 +3410,9 @@ static void loop_fc()
                     rocket_state = PRELAUNCH;
                     prelaunch_time_millis = now_ms;
                     // Camera is manually controlled via app — no auto-start on prelaunch
+                    // Verify pyro continuity on the pad via momentary arm-disarm.
+                    // Non-blocking — runs over the next ~60 ms of main loop ticks.
+                    pyroPrelaunchContTest(now_ms);
                     ESP_LOGI(TAG, "[STATE] READY -> PRELAUNCH");
                 }
                 break;
@@ -3380,7 +3471,7 @@ static void loop_fc()
                     pyro1_fire_start_ms = 0;
                     pyro2_fire_start_ms = 0;
                     portEXIT_CRITICAL(&pyro_spinlock);
-                    pyroArmEnabled();
+                    pyroArmEnabled(now_ms);
                     ESP_LOGI(TAG, "[STATE] PRELAUNCH -> INFLIGHT (ground_p=%.0f)",
                                   (double)ground_pressure_pa);
                 }
