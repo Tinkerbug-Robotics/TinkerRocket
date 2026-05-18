@@ -62,13 +62,18 @@ public:
     void controlWithGainSchedule(float roll_rate, float velocity_ms);
 
     // ── Cascaded angle → rate controller ──
-    // Outer loop: rate_cmd = kp_angle * (target_roll_deg - actual_roll_deg)
-    // Inner loop: PID on (rate_cmd - roll_rate_dps) with gain scheduling
+    // Outer loop: rate_cmd = clamp(kp_angle * (target - actual), ±rate_cap_dps)
+    // Inner loop: PID on (rate_cmd - roll_rate_dps) with gain scheduling.
+    // rate_cap_dps caps the outer-loop rate command to prevent a wrapped
+    // angle error from demanding rates the actuators can't track (which
+    // also causes the controller to whipsaw direction during spin recovery).
+    // Pass a large value (e.g. 10000) to effectively disable the cap.
     void controlAngle(float target_roll_deg,
                       float actual_roll_deg,
                       float roll_rate_dps,
                       float velocity_ms,
-                      float kp_angle);
+                      float kp_angle,
+                      float rate_cap_dps);
     void setAngleControlKpAngle(float kp) { kp_angle_ = kp; }
     float getAngleControlKpAngle() const { return kp_angle_; }
 

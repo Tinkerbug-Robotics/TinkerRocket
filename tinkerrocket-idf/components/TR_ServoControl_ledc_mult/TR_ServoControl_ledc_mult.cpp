@@ -263,13 +263,22 @@ void TR_ServoControl::controlAngle(float target_roll_deg,
                                    float actual_roll_deg,
                                    float roll_rate_dps,
                                    float velocity_ms,
-                                   float kp_angle) {
+                                   float kp_angle,
+                                   float rate_cap_dps) {
     // ── Outer loop: angle error → rate command ──
     // Wrap angle error to [-180, +180] degrees
     float angle_error = target_roll_deg - actual_roll_deg;
     while (angle_error > 180.0f)  angle_error -= 360.0f;
     while (angle_error < -180.0f) angle_error += 360.0f;
     float rate_cmd = kp_angle * angle_error;  // deg/s
+
+    // Cap the outer-loop rate command. With a 180 deg wrapped error and
+    // kp_angle=4, this would otherwise demand 720 dps -- a rate the inner
+    // loop can't deliver, which also drives integrator windup and direction
+    // whipsawing during spin recovery.
+    if (rate_cap_dps > 0.0f) {
+        rate_cmd = constrain(rate_cmd, -rate_cap_dps, rate_cap_dps);
+    }
 
     // ── Inner loop: PID on rate error with gain scheduling ──
     // roll_rate_dps is passed in negated (–gyro_x) to match servo sign

@@ -1319,20 +1319,30 @@ static_assert(sizeof(ServoReplayData) == 4, "ServoReplayData must be 4 bytes");
 // Max 8 waypoints: fits in single BLE MTU with header
 static constexpr uint8_t MAX_ROLL_WAYPOINTS = 8;
 
-typedef struct __attribute__((packed))
+// Per-waypoint segment mode: how the controller should behave during the
+// segment that STARTS at this waypoint (and ends at the next waypoint, or
+// holds indefinitely if this is the last waypoint).
+enum RollSegmentMode : uint8_t
 {
-    float time_s;       // seconds after launch
-    float angle_deg;    // target roll angle (deg)
-} RollWaypoint;
-static_assert(sizeof(RollWaypoint) == 8, "RollWaypoint must be 8 bytes");
+    ROLL_SEG_ANGLE     = 0,  // interpolate to next waypoint's angle (cascaded angle PID)
+    ROLL_SEG_NULL_RATE = 1,  // hold roll rate = 0 (rate-only inner PID); angle field ignored
+};
 
 typedef struct __attribute__((packed))
 {
-    uint8_t num_waypoints;      // 0 = no profile (rate-only mode)
-    uint8_t _pad[3];            // alignment padding
+    float   time_s;     // seconds after launch
+    float   angle_deg;  // target roll angle (deg) -- ignored when mode==ROLL_SEG_NULL_RATE
+    uint8_t mode;       // RollSegmentMode for the segment starting at this waypoint
+} RollWaypoint;
+static_assert(sizeof(RollWaypoint) == 9, "RollWaypoint must be 9 bytes");
+
+typedef struct __attribute__((packed))
+{
+    uint8_t      num_waypoints;             // 0 = no profile (rate-only mode)
+    uint8_t      _pad[3];                   // alignment padding
     RollWaypoint waypoints[MAX_ROLL_WAYPOINTS];
 } RollProfileData;
-static_assert(sizeof(RollProfileData) == 68, "RollProfileData must be 68 bytes");
+static_assert(sizeof(RollProfileData) == 76, "RollProfileData must be 76 bytes");
 
 // --- Roll Control Config (runtime-configurable from app) ---
 typedef struct __attribute__((packed))

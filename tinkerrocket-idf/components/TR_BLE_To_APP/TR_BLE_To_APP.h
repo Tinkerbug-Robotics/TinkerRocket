@@ -202,7 +202,7 @@ private:
     volatile uint8_t pending_file_list_page_;
     String pending_delete_filename_;
     String pending_download_filename_;
-    uint8_t pending_payload_[72] = {};   // Raw payload for commands with data (max = RollProfileData 68 bytes)
+    uint8_t pending_payload_[80] = {};   // Raw payload for commands with data (max = RollProfileData 76 bytes)
     size_t  pending_payload_len_ = 0;
     String file_list_json_;              // Persistent storage for file list
     uint8_t* chunk_buffer_;              // Persistent storage for file chunks

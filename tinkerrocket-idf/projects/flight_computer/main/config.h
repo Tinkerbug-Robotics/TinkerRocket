@@ -188,6 +188,13 @@ struct config
     static constexpr float KP_ANGLE = 4.0f;
     static constexpr bool USE_ANGLE_CONTROL = false;  // default; overridden at runtime via app
 
+    // Cascaded angle control: cap on outer-loop rate command (deg/s).
+    // Prevents a large wrapped angle error from demanding rates the inner
+    // loop / actuators cannot deliver, and keeps the inner-loop setpoint
+    // sane during spin-recovery so the controller doesn't whipsaw direction.
+    // Runtime-overridable via NVS key "rcap".
+    static constexpr float KP_ANGLE_RATE_CAP_DPS = 60.0f;
+
     // Roll control activation delay after launch (ms).  Keeps fins neutral
     // for this many ms after launch detection before engaging any roll control.
     static constexpr uint16_t ROLL_CONTROL_DELAY_MS = 0;  // default; overridden at runtime via app
