@@ -26,12 +26,18 @@ public:
                          bool  baro_locked_out = false);
 
     bool launch_flag;
-    bool alt_landed_flag;
+    bool alt_landed_flag;       // Voted master landed
     bool alt_apogee_flag;       // Test 2: baro altitude decreasing
     bool vel_u_apogee_flag;     // Test 1: EKF velocity negative
     bool gps_apogee_flag;       // Test 3: GPS altitude decreasing
     bool pitch_apogee_flag;     // Test 4: pitch below horizontal
     bool apogee_flag;           // Combined voted result
+    // Landing sub-detector flags (#166) — exposed for diagnostics/logging.
+    bool impact_flag;           // High-G ground impact (one-shot latch)
+    bool baro_stable_flag;      // palt low and stable
+    bool gyro_quiet_flag;       // roll-rate quiescent
+    bool gps_stationary_flag;   // EKF speed near zero (GPS fresh)
+    bool accel_1g_flag;         // acc_mag near 1 g
     float max_altitude;
     float max_speed;
     float alt_est;    // Filtered altitude (m)
@@ -43,15 +49,28 @@ private:
     uint32_t landing_check_time;
     float landing_look_back_alt;
     uint32_t landing_check_dt;
-    uint8_t apogee_count;
-    uint16_t landing_checks;
+    uint8_t apogee_count;          // baro apogee leaky counter
+    uint8_t vel_apogee_count_;     // velocity apogee leaky counter
+    uint8_t pitch_apogee_count_;   // pitch apogee leaky counter
     uint16_t impact_seen_count;
+    // Landing sub-detector leaky counters (#166).
+    uint8_t baro_stable_count_;
+    uint8_t gyro_quiet_count_;
+    uint8_t gps_stationary_count_;
+    uint8_t accel_1g_count_;
 
     // GPS apogee test state
     float max_gps_altitude_;
     uint8_t gps_apogee_count_;
     bool gps_available_;
     uint32_t last_gps_time_ms_;
+
+    // Baro rate-gate state (rejects ejection / sensor spikes before they
+    // reach the KF or the landing fast path).
+    bool     baro_gate_init_;
+    float    palt_accepted_;
+    uint32_t last_baro_gate_ms_;
+    uint8_t  consec_baro_rejects_;
     
     // 1D CV Kalman filter for altitude & rate
     bool kf_init_;

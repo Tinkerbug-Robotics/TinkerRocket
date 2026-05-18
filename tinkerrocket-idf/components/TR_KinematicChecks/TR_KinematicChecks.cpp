@@ -11,6 +11,45 @@ constexpr float    LANDING_IMPACT_G       = 15.0f;
 constexpr float    LANDING_IMPACT_ALT_M   = 20.0f;
 constexpr uint16_t LANDING_IMPACT_COUNT   = 5;       // ~5 ms at 1 kHz
 constexpr float    G_MS2                  = 9.80665f;
+
+// Baro rate-gate (#166): rejects |Δpalt|/dt above any plausible rocket
+// dynamic. Self-scales with dt so legitimate large changes after a sensor
+// dropout still pass.  Ejection spikes are O(10-100 km/s), max plausible
+// rocket dynamic is ~200 m/s, so 300 m/s gives wide headroom both ways.
+constexpr float    MAX_BARO_RATE_MS         = 300.0f;
+// After this many consecutive rejects the gate accepts the next sample
+// unconditionally and reseeds, preventing a permanently wedged sensor
+// from blinding the detector for the rest of the flight.
+constexpr uint8_t  MAX_CONSEC_BARO_REJECTS  = 10;
+
+// Apogee sub-detector leaky-counter thresholds (#166).
+// Each test runs +1 on pass / -1 on miss (clamped) so a single false
+// positive can un-vote once conditions reverse, instead of latching for
+// the rest of the flight. HI thresholds preserve original first-fire
+// timing: ~6 ms at 1 kHz for baro/pitch/vel, ~800 ms at 5 Hz for GPS.
+constexpr uint8_t  APOGEE_COUNT_MAX         = 10;
+constexpr uint8_t  APOGEE_COUNT_HI          = 6;
+constexpr uint8_t  GPS_APOGEE_COUNT_MAX     = 8;
+constexpr uint8_t  GPS_APOGEE_COUNT_HI      = 4;
+
+// Landing slow-detector hysteresis (#166). Slow detectors evaluate inside
+// the 1 Hz landing_check_dt gate, so HI=4 → 4 s to fire (matches the
+// original ``landing_checks > 4`` first-fire timing).
+constexpr uint8_t  LANDING_SLOW_COUNT_MAX   = 8;
+constexpr uint8_t  LANDING_SLOW_COUNT_HI    = 4;
+
+// Landing sub-detector thresholds.
+// Lower bound is -50 m, not 0, because ground-pressure drift across a
+// 60-90 s flight can leave a settled palt several m below the pre-launch
+// reference (Roly Poly GTV 5/9 settled at palt ≈ -8 m). The rate-gate
+// upstream filters deep spikes, so this is just a defensive backstop.
+constexpr float    BARO_STABLE_PALT_MIN     = -50.0f;
+constexpr float    BARO_STABLE_PALT_MAX     = 50.0f;
+constexpr float    BARO_STABLE_DELTA_MAX    = 2.0f;     // |Δpalt| over 1 s
+constexpr float    BARO_STABLE_MAX_ALT_MIN  = 15.0f;    // rocket must have flown
+constexpr float    GYRO_QUIET_DPS           = 20.0f;
+constexpr float    GPS_STATIONARY_SPEED_MS  = 1.0f;     // EKF speed proxy
+constexpr float    ACCEL_1G_TOLERANCE_MS2   = 2.94f;    // ≈ 0.3 g
 }
 
 TR_KinematicChecks::TR_KinematicChecks()
@@ -29,12 +68,26 @@ TR_KinematicChecks::TR_KinematicChecks()
     landing_look_back_alt = 0.0;
     landing_check_dt = 1000;
     apogee_count = 0;
-    landing_checks = 0;
+    vel_apogee_count_ = 0;
+    pitch_apogee_count_ = 0;
     impact_seen_count = 0;
+    impact_flag = false;
+    baro_stable_flag = false;
+    gyro_quiet_flag = false;
+    gps_stationary_flag = false;
+    accel_1g_flag = false;
+    baro_stable_count_ = 0;
+    gyro_quiet_count_ = 0;
+    gps_stationary_count_ = 0;
+    accel_1g_count_ = 0;
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
     last_gps_time_ms_ = 0;
+    baro_gate_init_ = false;
+    palt_accepted_ = 0.0f;
+    last_baro_gate_ms_ = 0;
+    consec_baro_rejects_ = 0;
 
     // KF init
     kf_init_ = false;
@@ -70,12 +123,26 @@ void TR_KinematicChecks::reset()
     landing_check_time = 0;
     landing_look_back_alt = 0.0;
     apogee_count = 0;
-    landing_checks = 0;
+    vel_apogee_count_ = 0;
+    pitch_apogee_count_ = 0;
     impact_seen_count = 0;
+    impact_flag = false;
+    baro_stable_flag = false;
+    gyro_quiet_flag = false;
+    gps_stationary_flag = false;
+    accel_1g_flag = false;
+    baro_stable_count_ = 0;
+    gyro_quiet_count_ = 0;
+    gps_stationary_count_ = 0;
+    accel_1g_count_ = 0;
     max_gps_altitude_ = 0.0f;
     gps_apogee_count_ = 0;
     gps_available_ = false;
     last_gps_time_ms_ = 0;
+    baro_gate_init_ = false;
+    palt_accepted_ = 0.0f;
+    last_baro_gate_ms_ = 0;
+    consec_baro_rejects_ = 0;
     kf_init_ = false;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
@@ -95,6 +162,45 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  burnout_detected,
                                          bool  baro_locked_out)
 {
+
+    // ### Baro rate-gate (#166) ###
+    // Reject obvious spikes (ejection charges, sensor glitches) before they
+    // poison the KF or trip the landing fast path.  The rate test self-scales
+    // with dt so a single missed sample doesn't make the next legitimate
+    // reading look like a spike.  After MAX_CONSEC_BARO_REJECTS in a row the
+    // next sample is accepted unconditionally so a wedged sensor reseeds.
+    if (new_baro)
+    {
+        if (baro_gate_init_)
+        {
+            uint32_t dms = millis() - last_baro_gate_ms_;
+            float dt = (dms < 1u) ? 0.001f : (dms * 0.001f);
+            float rate = fabs(pressure_altitude - palt_accepted_) / dt;
+            if (rate > MAX_BARO_RATE_MS &&
+                consec_baro_rejects_ < MAX_CONSEC_BARO_REJECTS)
+            {
+                consec_baro_rejects_++;
+                new_baro = false;
+                pressure_altitude = palt_accepted_;
+            }
+            else
+            {
+                consec_baro_rejects_ = 0;
+                palt_accepted_ = pressure_altitude;
+                last_baro_gate_ms_ = millis();
+            }
+        }
+        else
+        {
+            palt_accepted_ = pressure_altitude;
+            last_baro_gate_ms_ = millis();
+            baro_gate_init_ = true;
+        }
+    }
+    else if (baro_gate_init_)
+    {
+        pressure_altitude = palt_accepted_;
+    }
 
     // ### Altitude ###
 
@@ -134,51 +240,29 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         max_altitude = std::max(max_altitude, alt_est);
     }
 
-    // ### Check for Landing ###
+    // ================================================================
+    // ### Landing Detection: 5 sub-detectors + N-1 voting (#166) ###
+    // Fast path (impact) fires master immediately on unambiguous high-G
+    // ground contact.  Slow path requires 3 of the 4 settle-state
+    // detectors (Baro-stable, Gyro-quiet, GPS-stationary, Accel-1g) to
+    // agree — independent signals so a single noise source can't drive
+    // a false landed.  Master ``alt_landed_flag`` latches once true.
+    // ================================================================
 
-    if (millis() > landing_check_time + landing_check_dt)
-    {
-        float landing_altitude_change = fabs(pressure_altitude - landing_look_back_alt);
-        landing_look_back_alt = pressure_altitude;
-        landing_check_time = millis();
-
-        // Checking landing declaration criteria.
-        // roll_rate threshold: 20 dps tolerates wind-induced body roll on a
-        // landed rocket (RolyPoly 5/3/26 saw 5-22 dps wobbles post-touchdown);
-        // anything below 50 dps is clearly not in flight.
-        if (pressure_altitude < 50.0      // Low current altitude
-         && landing_altitude_change < 2.0 // Less than 2 m change
-         && max_altitude > 15.0           // Max altitude was more than 15 m
-         && fabs(roll_rate) < 20.0)       // Gyro is stable (no longer in flight)
-        {
-            landing_checks++;
-        }
-        else
-        {
-            landing_checks = 0;
-        }
-        // Once the criteria is true for multiple times in a row
-        // indicate we have landed (5 consecutive 1-second checks = 5s)
-        if (landing_checks > 4)
-        {
-            alt_landed_flag = true;
-        }
-    }
-
-    // ### Impact-detected fast path ###
-    // High-energy ground impact is unambiguous: descent tumbling tops out
-    // around 12 g, and a hard landing is several hundred g for ~100 ms.
-    // This runs every call (gyro rate, ~1 kHz) so we don't have to wait
-    // 5 s for the slow path to accumulate when impact already gave us a
-    // definitive ground signal. See issue #113.
+    // --- Fast path: high-G impact, gated on apogee + ground proximity.
+    // The baro rate-gate upstream already filters glitch spikes, but the
+    // defensive ``palt > -10`` lower bound mirrors the gate's intent so
+    // this path is robust even if the gate is bypassed in future.
+    // One-shot latch — impact_flag stays true once a real impact fires.
     if (apogee_flag
+     && pressure_altitude > -10.0f
      && pressure_altitude < LANDING_IMPACT_ALT_M
      && acc_mag > LANDING_IMPACT_G * G_MS2)
     {
         impact_seen_count++;
         if (impact_seen_count >= LANDING_IMPACT_COUNT)
         {
-            alt_landed_flag = true;
+            impact_flag = true;
         }
     }
     else
@@ -186,80 +270,168 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         impact_seen_count = 0;
     }
 
+    // --- Slow detectors: evaluated at 1 Hz inside the existing time gate.
+    if (millis() > landing_check_time + landing_check_dt)
+    {
+        float landing_altitude_change = fabs(pressure_altitude - landing_look_back_alt);
+        landing_look_back_alt = pressure_altitude;
+        landing_check_time = millis();
+
+        // Sub 1: Baro-stable (was the original slow path; +lower bound)
+        const bool baro_stable_pass = (pressure_altitude >= BARO_STABLE_PALT_MIN
+                                       && pressure_altitude <= BARO_STABLE_PALT_MAX
+                                       && landing_altitude_change < BARO_STABLE_DELTA_MAX
+                                       && max_altitude > BARO_STABLE_MAX_ALT_MIN);
+        if (baro_stable_pass) {
+            if (baro_stable_count_ < LANDING_SLOW_COUNT_MAX) baro_stable_count_++;
+        } else {
+            if (baro_stable_count_ > 0) baro_stable_count_--;
+        }
+        if (baro_stable_count_ >= LANDING_SLOW_COUNT_HI) baro_stable_flag = true;
+        else if (baro_stable_count_ == 0)                baro_stable_flag = false;
+
+        // Sub 2: Gyro-quiet — roll_rate (future: generalize to all axes).
+        const bool gyro_quiet_pass = (fabs(roll_rate) < GYRO_QUIET_DPS);
+        if (gyro_quiet_pass) {
+            if (gyro_quiet_count_ < LANDING_SLOW_COUNT_MAX) gyro_quiet_count_++;
+        } else {
+            if (gyro_quiet_count_ > 0) gyro_quiet_count_--;
+        }
+        if (gyro_quiet_count_ >= LANDING_SLOW_COUNT_HI) gyro_quiet_flag = true;
+        else if (gyro_quiet_count_ == 0)                gyro_quiet_flag = false;
+
+        // Sub 3: GPS-stationary — EKF speed proxy; excluded if GPS stale.
+        if (gps_available_ && (millis() - last_gps_time_ms_) < 5000)
+        {
+            const float speed = sqrt(velocity[0]*velocity[0] +
+                                     velocity[1]*velocity[1] +
+                                     velocity[2]*velocity[2]);
+            const bool gps_stationary_pass = (speed < GPS_STATIONARY_SPEED_MS);
+            if (gps_stationary_pass) {
+                if (gps_stationary_count_ < LANDING_SLOW_COUNT_MAX) gps_stationary_count_++;
+            } else {
+                if (gps_stationary_count_ > 0) gps_stationary_count_--;
+            }
+            if (gps_stationary_count_ >= LANDING_SLOW_COUNT_HI) gps_stationary_flag = true;
+            else if (gps_stationary_count_ == 0)                gps_stationary_flag = false;
+        }
+
+        // Sub 4: Accel-1g floor.
+        const bool accel_1g_pass = (fabs(acc_mag - G_MS2) < ACCEL_1G_TOLERANCE_MS2);
+        if (accel_1g_pass) {
+            if (accel_1g_count_ < LANDING_SLOW_COUNT_MAX) accel_1g_count_++;
+        } else {
+            if (accel_1g_count_ > 0) accel_1g_count_--;
+        }
+        if (accel_1g_count_ >= LANDING_SLOW_COUNT_HI) accel_1g_flag = true;
+        else if (accel_1g_count_ == 0)                accel_1g_flag = false;
+    }
+
+    // --- Voting: impact alone fires; otherwise N-1 of N over slow flags.
+    // Gated on apogee_flag — a static rocket on the pad trips gyro_quiet,
+    // gps_stationary, and accel_1g (3 of 4 votes), which would otherwise
+    // fire landed pre-flight (caught on bench 2026-05-18).
+    if (!alt_landed_flag && apogee_flag)
+    {
+        if (impact_flag)
+        {
+            alt_landed_flag = true;
+        }
+        else
+        {
+            uint8_t available = 0;
+            uint8_t passed = 0;
+
+            available++; if (baro_stable_flag) passed++;
+            available++; if (gyro_quiet_flag)  passed++;
+            if (gps_available_ && (millis() - last_gps_time_ms_) < 5000)
+            {
+                available++; if (gps_stationary_flag) passed++;
+            }
+            available++; if (accel_1g_flag) passed++;
+
+            if (available >= 2 && passed >= 2 && passed >= (available - 1))
+            {
+                alt_landed_flag = true;
+            }
+        }
+    }
+
     // ### GPS altitude tracking ###
     // Track max GPS altitude from launch onwards (raw MSL — relative
     // tracking means absolute value doesn't matter).
+    // #166: the 100 m spike-reject window was removed.  On big flights where
+    // GPS lost lock through boost (Eagle Claw 5/17/26), the post-recovery
+    // sample legitimately differs from the pad fix by hundreds of metres,
+    // and the gate permanently rejected those updates — leaving the GPS
+    // apogee detector silent for the entire flight.  Boost-phase dropout is
+    // common, so the gate did more harm than good.
     if (new_gps && launch_flag)
     {
         gps_available_ = true;
         last_gps_time_ms_ = millis();
-
-        // Spike rejection: 100m window (wider than baro's 50m for GPS noise)
-        if (max_gps_altitude_ == 0.0f ||
-            fabs(gps_altitude - max_gps_altitude_) < 100.0f) {
-            max_gps_altitude_ = fmax(max_gps_altitude_, gps_altitude);
-        }
+        max_gps_altitude_ = fmax(max_gps_altitude_, gps_altitude);
     }
 
     // ================================================================
-    // ### Apogee Detection (gated on burnout) ###
-    // Four independent tests with N-1 of N voting.
-    // No apogee flag can latch before motor burnout is confirmed.
+    // ### Apogee Detection (gated on launch + burnout) ###
+    // Four independent tests, each a leaky counter with hysteresis so a
+    // single bad sample (EKF wobble, baro glitch, momentary attitude
+    // excursion) doesn't latch a vote for the rest of the flight (#166).
+    // N-1 of N voting on the sub-flags; master apogee_flag still latches
+    // once true.
     // ================================================================
-    if (burnout_detected)
+    if (launch_flag && burnout_detected)
     {
         // --- Test 1: Velocity (EKF vertical velocity negative) ---
-        if (launch_flag && position[2] > 15.0f && velocity[2] < 0.0f)
-        {
-            vel_u_apogee_flag = true;
+        const bool vel_pass = (position[2] > 15.0f && velocity[2] < 0.0f);
+        if (vel_pass) {
+            if (vel_apogee_count_ < APOGEE_COUNT_MAX) vel_apogee_count_++;
+        } else {
+            if (vel_apogee_count_ > 0) vel_apogee_count_--;
         }
+        if (vel_apogee_count_ >= APOGEE_COUNT_HI)      vel_u_apogee_flag = true;
+        else if (vel_apogee_count_ == 0)               vel_u_apogee_flag = false;
 
         // --- Test 2: Baro altitude (filtered altitude decreasing) ---
         // Uses KF-smoothed alt_est rather than raw pressure_altitude — boost
         // noise on the raw signal was previously tripping this test during
-        // ascent (#142).  Velocity gate (d_alt_est_ < 20 m/s) keeps the
-        // counter at 0 across the whole boost-coast band where vertical
-        // velocity is far above the apogee neighborhood, regardless of any
-        // remaining noise on the filtered altitude.
-        if (alt_est > 15.0f &&
-            alt_est < max_altitude - 5.0f &&
-            d_alt_est_ < 20.0f)
-        {
-            apogee_count++;
+        // ascent (#142). Velocity gate (d_alt_est_ < 20 m/s) is preserved.
+        const bool baro_pass = (alt_est > 15.0f &&
+                                alt_est < max_altitude - 5.0f &&
+                                d_alt_est_ < 20.0f);
+        if (baro_pass) {
+            if (apogee_count < APOGEE_COUNT_MAX) apogee_count++;
+        } else {
+            if (apogee_count > 0) apogee_count--;
         }
-        else
-        {
-            apogee_count = 0;
-        }
-        if (apogee_count > 5)
-        {
-            alt_apogee_flag = true;
-        }
+        if (apogee_count >= APOGEE_COUNT_HI)            alt_apogee_flag = true;
+        else if (apogee_count == 0)                     alt_apogee_flag = false;
 
         // --- Test 3: GPS altitude (GPS altitude decreasing) ---
         if (new_gps && gps_available_ && gps_altitude > 15.0f)
         {
-            if (gps_altitude < max_gps_altitude_ - 10.0f)
-            {
-                gps_apogee_count_++;
+            const bool gps_pass = (gps_altitude < max_gps_altitude_ - 10.0f);
+            if (gps_pass) {
+                if (gps_apogee_count_ < GPS_APOGEE_COUNT_MAX) gps_apogee_count_++;
+            } else {
+                if (gps_apogee_count_ > 0) gps_apogee_count_--;
             }
-            else
-            {
-                gps_apogee_count_ = 0;
-            }
-            if (gps_apogee_count_ > 3)
-            {
-                gps_apogee_flag = true;
-            }
+            if (gps_apogee_count_ >= GPS_APOGEE_COUNT_HI) gps_apogee_flag = true;
+            else if (gps_apogee_count_ == 0)              gps_apogee_flag = false;
         }
 
         // --- Test 4: Pitch below horizontal ---
         // NED convention: +90° = nose up, 0° = horizontal, negative = past horizontal.
         // -5° threshold avoids false trigger from coast oscillation.
-        if (pitch_rad < -0.087f)
-        {
-            pitch_apogee_flag = true;
+        const bool pitch_pass = (pitch_rad < -0.087f);
+        if (pitch_pass) {
+            if (pitch_apogee_count_ < APOGEE_COUNT_MAX) pitch_apogee_count_++;
+        } else {
+            if (pitch_apogee_count_ > 0) pitch_apogee_count_--;
         }
+        if (pitch_apogee_count_ >= APOGEE_COUNT_HI)     pitch_apogee_flag = true;
+        else if (pitch_apogee_count_ == 0)              pitch_apogee_flag = false;
 
         // --- Dynamic N-1 of N voting ---
         if (!apogee_flag)
