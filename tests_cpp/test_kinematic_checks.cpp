@@ -153,8 +153,12 @@ TEST_F(KinematicChecksTest, Landing_StableAlt) {
     ASSERT_TRUE(kc.launch_flag);
     ASSERT_GT(kc.max_altitude, 15.0f);
 
-    // Now simulate landed: alt < 50, stable, low roll rate
-    // Landing needs 5 consecutive 1-second checks
+    // Landing voting is gated on apogee_flag (#166) — set it the same
+    // way Landing_FastPath_ImpactTriggers does.
+    kc.apogee_flag = true;
+
+    // Now simulate landed: alt < 50, stable, low roll rate, accel ~1g.
+    // Voting needs the slow detectors to accumulate over ~4 s.
     for (int second = 0; second < 7; second++) {
         uint32_t base = 1000 + second * 1000;
         // Call many times within each second (landing_check_dt = 1000ms)
@@ -230,6 +234,9 @@ TEST_F(KinematicChecksTest, Landing_RollRate15dps_StillPasses) {
     }
     ASSERT_TRUE(kc.launch_flag);
     ASSERT_GT(kc.max_altitude, 15.0f);
+
+    // Landing voting is gated on apogee_flag (#166).
+    kc.apogee_flag = true;
 
     for (int second = 0; second < 7; second++) {
         uint32_t base = 1000 + second * 1000;
