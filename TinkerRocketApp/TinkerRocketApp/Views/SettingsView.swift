@@ -64,9 +64,12 @@ struct SettingsView: View {
     @State private var sPidMinCmd = ""
     @State private var sPidMaxCmd = ""
 
-    // Roll profile waypoints — persisted as JSON string in @AppStorage
+    // Roll profile waypoints — persisted as JSON string in @AppStorage.
+    // mode is the segment mode for the segment STARTING at this waypoint:
+    //   0 = ROLL_SEG_ANGLE     -- interpolate angle to next waypoint
+    //   1 = ROLL_SEG_NULL_RATE -- hold rate=0; angle field ignored
     @AppStorage("rollProfileJSON") private var rollProfileJSON: String = "[]"
-    @State private var rollWaypoints: [(time: String, angle: String)] = []
+    @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
 
     // Roll control config
     @State private var sRollDelayMs = ""
@@ -344,46 +347,62 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
 
                         if useAngleControl {
-                            Text("Define (time, angle) waypoints for the cascaded angle controller. During flight, the target roll angle is interpolated between waypoints.")
+                            Text("Each waypoint defines the START of a segment. Pick the mode per waypoint: Angle interpolates the target roll angle to the next waypoint's angle; Null Rate holds zero roll rate (angle field ignored) for the duration of the segment.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
                             ForEach(rollWaypoints.indices, id: \.self) { i in
-                                HStack(spacing: 8) {
-                                    Text("WP \(i + 1)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 40)
-                                    TextField("Time", text: Binding(
-                                        get: { rollWaypoints[i].time },
-                                        set: { rollWaypoints[i].time = $0 }
-                                    ))
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 60)
-                                    .focused($focusedField, equals: .wpTime(i))
-                                    Text("s")
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 15)
-                                    TextField("Angle", text: Binding(
-                                        get: { rollWaypoints[i].angle },
-                                        set: { rollWaypoints[i].angle = $0 }
-                                    ))
-                                    .keyboardType(.numbersAndPunctuation)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 60)
-                                    .focused($focusedField, equals: .wpAngle(i))
-                                    Text("\u{00B0}")
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 15)
-                                    Button(role: .destructive) {
-                                        rollWaypoints.remove(at: i)
-                                        applyRollProfile()
-                                    } label: {
-                                        Image(systemName: "minus.circle.fill")
-                                            .foregroundColor(.red)
+                                VStack(spacing: 4) {
+                                    HStack(spacing: 8) {
+                                        Text("WP \(i + 1)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 40)
+                                        TextField("Time", text: Binding(
+                                            get: { rollWaypoints[i].time },
+                                            set: { rollWaypoints[i].time = $0 }
+                                        ))
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width: 60)
+                                        .focused($focusedField, equals: .wpTime(i))
+                                        Text("s")
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 15)
+                                        TextField("Angle", text: Binding(
+                                            get: { rollWaypoints[i].angle },
+                                            set: { rollWaypoints[i].angle = $0 }
+                                        ))
+                                        .keyboardType(.numbersAndPunctuation)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width: 60)
+                                        .focused($focusedField, equals: .wpAngle(i))
+                                        .disabled(rollWaypoints[i].mode == 1)
+                                        .foregroundColor(rollWaypoints[i].mode == 1 ? .secondary : .primary)
+                                        Text("\u{00B0}")
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 15)
+                                        Button(role: .destructive) {
+                                            rollWaypoints.remove(at: i)
+                                            applyRollProfile()
+                                        } label: {
+                                            Image(systemName: "minus.circle.fill")
+                                                .foregroundColor(.red)
+                                        }
+                                        .buttonStyle(.borderless)
                                     }
-                                    .buttonStyle(.borderless)
+                                    Picker("Mode", selection: Binding(
+                                        get: { rollWaypoints[i].mode },
+                                        set: {
+                                            rollWaypoints[i].mode = $0
+                                            applyRollProfile()
+                                        }
+                                    )) {
+                                        Text("Angle").tag(UInt8(0))
+                                        Text("Null Rate").tag(UInt8(1))
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .padding(.leading, 40)
                                 }
                             }
 
@@ -391,7 +410,7 @@ struct SettingsView: View {
                                 Button {
                                     let defaultTime = rollWaypoints.isEmpty ? "0.0" :
                                         String(format: "%.1f", (Double(rollWaypoints.last?.time ?? "0") ?? 0) + 1.0)
-                                    rollWaypoints.append((time: defaultTime, angle: "0"))
+                                    rollWaypoints.append((time: defaultTime, angle: "0", mode: 0))
                                     applyRollProfile()
                                 } label: {
                                     HStack {
@@ -643,11 +662,11 @@ struct SettingsView: View {
     }
 
     private func applyRollProfile() {
-        var waypoints: [(time: Float, angle: Float)] = []
+        var waypoints: [(time: Float, angle: Float, mode: UInt8)] = []
         for wp in rollWaypoints {
             let t = Float(wp.time) ?? 0.0
             let a = Float(wp.angle) ?? 0.0
-            waypoints.append((time: t, angle: a))
+            waypoints.append((time: t, angle: a, mode: wp.mode))
         }
         // Sort by time
         waypoints.sort { $0.time < $1.time }
@@ -664,13 +683,20 @@ struct SettingsView: View {
             rollWaypoints = []
             return
         }
-        rollWaypoints = decoded.map { pair in
-            (time: pair.count > 0 ? pair[0] : "0", angle: pair.count > 1 ? pair[1] : "0")
+        // Triples are [time, angle, mode]; tolerate older [time, angle] pairs
+        // by defaulting mode to "0" (ROLL_SEG_ANGLE) for backward compat.
+        rollWaypoints = decoded.map { entry in
+            let t = entry.count > 0 ? entry[0] : "0"
+            let a = entry.count > 1 ? entry[1] : "0"
+            let m = (entry.count > 2 ? UInt8(entry[2]) : nil) ?? 0
+            return (time: t, angle: a, mode: m)
         }
     }
 
     private func saveRollWaypointsToStorage() {
-        let encoded: [[String]] = rollWaypoints.map { [String($0.time), String($0.angle)] }
+        let encoded: [[String]] = rollWaypoints.map {
+            [String($0.time), String($0.angle), String($0.mode)]
+        }
         if let data = try? JSONEncoder().encode(encoded),
            let json = String(data: data, encoding: .utf8) {
             rollProfileJSON = json

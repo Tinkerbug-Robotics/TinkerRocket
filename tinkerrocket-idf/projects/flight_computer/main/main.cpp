@@ -232,6 +232,7 @@ static bool servo_enabled = false;
 static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
 static bool use_angle_control = config::USE_ANGLE_CONTROL;
 static uint16_t roll_delay_ms = config::ROLL_CONTROL_DELAY_MS;
+static float kp_angle_rate_cap_dps = config::KP_ANGLE_RATE_CAP_DPS;
 // --- Guidance (PN) state ---
 static TR_GuidancePN guidance;
 static TR_ControlMixer control_mixer;
@@ -799,43 +800,68 @@ static void servicePyroChannels(uint32_t now_ms)
 }
 
 // ── Roll profile interpolation ────────────────────────────────────────────────
-// Linearly interpolates between waypoints using time since launch.
-// Before the first waypoint → hold first angle.
-// After the last waypoint → hold last angle.
-// If no waypoints (rate-only mode) → return 0 (setpoint passed to rate PID).
-static float roll_profile_interpolate(float t_flight_s)
+// Returns the desired (angle, mode) for the current flight time.
+// Mode is the segment mode of the waypoint that STARTS the current segment.
+// Linear interpolation of angle between consecutive waypoints (ROLL_SEG_ANGLE
+// segments); ROLL_SEG_NULL_RATE segments instead null roll rate to 0 in the
+// inner loop and ignore the angle field. Before WP1 or after WPn we hold that
+// waypoint's mode and angle.
+// If no waypoints are loaded, defaults to NULL_RATE / 0 deg.
+struct RollProfileQuery
 {
+    float   angle_deg;
+    uint8_t mode;
+};
+
+static RollProfileQuery roll_profile_query(float t_flight_s)
+{
+    RollProfileQuery out{};
+    out.angle_deg = config::ROLL_RATE_SET_POINT;
+    out.mode      = ROLL_SEG_NULL_RATE;
+
     if (roll_profile.num_waypoints == 0)
     {
-        return config::ROLL_RATE_SET_POINT;  // no profile → default setpoint (typically 0)
+        return out;
     }
     const uint8_t n = roll_profile.num_waypoints;
 
-    // Before first waypoint: hold first angle
+    // Before first waypoint: hold first angle & mode
     if (t_flight_s <= roll_profile.waypoints[0].time_s)
     {
-        return roll_profile.waypoints[0].angle_deg;
+        out.angle_deg = roll_profile.waypoints[0].angle_deg;
+        out.mode      = roll_profile.waypoints[0].mode;
+        return out;
     }
-    // After last waypoint: hold last angle
+    // After last waypoint: hold last angle & mode
     if (t_flight_s >= roll_profile.waypoints[n - 1].time_s)
     {
-        return roll_profile.waypoints[n - 1].angle_deg;
+        out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
+        out.mode      = roll_profile.waypoints[n - 1].mode;
+        return out;
     }
-    // Linear interpolation between surrounding waypoints
+    // Inside profile -- find the segment [i, i+1)
     for (uint8_t i = 0; i < n - 1; ++i)
     {
         if (t_flight_s < roll_profile.waypoints[i + 1].time_s)
         {
-            float t0 = roll_profile.waypoints[i].time_s;
-            float t1 = roll_profile.waypoints[i + 1].time_s;
-            float a0 = roll_profile.waypoints[i].angle_deg;
-            float a1 = roll_profile.waypoints[i + 1].angle_deg;
-            if (t1 <= t0) return a0;  // guard against duplicate timestamps
-            float frac = (t_flight_s - t0) / (t1 - t0);
-            return a0 + frac * (a1 - a0);
+            const float t0 = roll_profile.waypoints[i].time_s;
+            const float t1 = roll_profile.waypoints[i + 1].time_s;
+            const float a0 = roll_profile.waypoints[i].angle_deg;
+            const float a1 = roll_profile.waypoints[i + 1].angle_deg;
+            out.mode = roll_profile.waypoints[i].mode;
+            if (t1 <= t0)
+            {
+                out.angle_deg = a0;  // guard against duplicate timestamps
+                return out;
+            }
+            const float frac = (t_flight_s - t0) / (t1 - t0);
+            out.angle_deg = a0 + frac * (a1 - a0);
+            return out;
         }
     }
-    return roll_profile.waypoints[n - 1].angle_deg;
+    out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
+    out.mode      = roll_profile.waypoints[n - 1].mode;
+    return out;
 }
 
 static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t len)
@@ -1509,14 +1535,16 @@ static void setup_fc()
                       (double)kp, (double)ki, (double)kd,
                       (double)mincmd, (double)maxcmd);
     }
-    gain_sched_enabled = prefs.getBool("gs", config::GAIN_SCHEDULE_ENABLED);
-    use_angle_control  = prefs.getBool("ac", config::USE_ANGLE_CONTROL);
-    roll_delay_ms      = prefs.getUShort("rdly", config::ROLL_CONTROL_DELAY_MS);
-    guidance_enabled   = prefs.getBool("guid_en", config::GUIDANCE_ENABLED);
+    gain_sched_enabled      = prefs.getBool("gs", config::GAIN_SCHEDULE_ENABLED);
+    use_angle_control       = prefs.getBool("ac", config::USE_ANGLE_CONTROL);
+    roll_delay_ms           = prefs.getUShort("rdly", config::ROLL_CONTROL_DELAY_MS);
+    kp_angle_rate_cap_dps   = prefs.getFloat("rcap", config::KP_ANGLE_RATE_CAP_DPS);
+    guidance_enabled        = prefs.getBool("guid_en", config::GUIDANCE_ENABLED);
     prefs.end();
     ESP_LOGI(TAG, "Gain scheduling: %s", gain_sched_enabled ? "ON" : "OFF");
-    ESP_LOGI(TAG, "Angle control: %s  Roll delay: %u ms",
-                  use_angle_control ? "ON" : "OFF", (unsigned)roll_delay_ms);
+    ESP_LOGI(TAG, "Angle control: %s  Roll delay: %u ms  Rate cap: %.1f dps",
+                  use_angle_control ? "ON" : "OFF", (unsigned)roll_delay_ms,
+                  (double)kp_angle_rate_cap_dps);
 #if TR_GUIDANCE_AVAILABLE
     ESP_LOGI(TAG, "PN Guidance: %s (compiled in)", guidance_enabled ? "ON" : "OFF");
 #else
@@ -1612,9 +1640,10 @@ static void setup_fc()
             ESP_LOGI(TAG, "NVS roll profile: %d waypoints", roll_profile.num_waypoints);
             for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
             {
-                ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f°", i,
+                ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f° mode=%s", i,
                               (double)roll_profile.waypoints[i].time_s,
-                              (double)roll_profile.waypoints[i].angle_deg);
+                              (double)roll_profile.waypoints[i].angle_deg,
+                              roll_profile.waypoints[i].mode == ROLL_SEG_NULL_RATE ? "NULL_RATE" : "ANGLE");
             }
         }
         else
@@ -3619,7 +3648,18 @@ static void loop_fc()
                             // --- Roll-only mode (powered flight or guidance disabled) ---
                             guidance_active = false;
 
-                            if (use_angle_control && ekf_initialized)
+                            // Decide per-segment whether to track angle or null rate.
+                            // Profile-mode lookup is only meaningful when angle
+                            // control is enabled and the EKF is initialized.
+                            const float t_flight = (float)(now_ms - launch_time_millis) / 1000.0f;
+                            const bool angle_mode_active = use_angle_control && ekf_initialized;
+                            RollProfileQuery seg = {0.0f, ROLL_SEG_NULL_RATE};
+                            if (angle_mode_active)
+                            {
+                                seg = roll_profile_query(t_flight);
+                            }
+
+                            if (angle_mode_active && seg.mode == ROLL_SEG_ANGLE)
                             {
                                 // Quaternion-based roll extraction (gimbal-lock-free).
                                 float quat[4];
@@ -3629,17 +3669,18 @@ static void loop_fc()
                                 float z_east  = 2.0f * (qy*qz - qw*qx);
                                 float actual_roll_deg = -atan2f(z_east, z_north) * (180.0f / (float)M_PI);
 
-                                float t_flight = (float)(now_ms - launch_time_millis) / 1000.0f;
-                                float target_roll_deg = roll_profile_interpolate(t_flight);
-
-                                servo_control.controlAngle(target_roll_deg,
+                                servo_control.controlAngle(seg.angle_deg,
                                                            actual_roll_deg,
                                                            -roll_rate_dps,
                                                            speed,
-                                                           config::KP_ANGLE);
+                                                           config::KP_ANGLE,
+                                                           kp_angle_rate_cap_dps);
                             }
                             else if (gain_sched_enabled)
                             {
+                                // Rate-null path (used when angle control is off,
+                                // OR when angle control is on but the current
+                                // profile segment selects ROLL_SEG_NULL_RATE).
                                 servo_control.controlWithGainSchedule(-roll_rate_dps, speed);
                             }
                             else

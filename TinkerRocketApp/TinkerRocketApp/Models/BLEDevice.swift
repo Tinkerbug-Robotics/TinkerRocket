@@ -494,16 +494,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendCommand(25)
     }
 
-    func sendRollProfile(waypoints: [(time: Float, angle: Float)]) {
+    // Wire format matches firmware RollProfileData (packed): 1-byte
+    // num_waypoints + 3 pad bytes, then 8 entries of RollWaypoint where
+    // each entry is float time_s (4) + float angle_deg (4) + uint8_t mode (1)
+    // = 9 bytes per waypoint. Total payload = 1 + 3 + 8*9 = 76 bytes.
+    // mode: 0 = ROLL_SEG_ANGLE, 1 = ROLL_SEG_NULL_RATE.
+    func sendRollProfile(waypoints: [(time: Float, angle: Float, mode: UInt8)]) {
         var payload = Data()
         let n = UInt8(min(waypoints.count, 8))
         payload.append(n)
         payload.append(contentsOf: [0, 0, 0])
         for i in 0..<8 {
-            var t: Float = i < waypoints.count ? waypoints[i].time : 0.0
+            var t: Float = i < waypoints.count ? waypoints[i].time  : 0.0
             var a: Float = i < waypoints.count ? waypoints[i].angle : 0.0
+            let  m: UInt8 = i < waypoints.count ? waypoints[i].mode : 0
             payload.append(Data(bytes: &t, count: 4))
             payload.append(Data(bytes: &a, count: 4))
+            payload.append(m)
         }
         sendRawCommand(26, payload: payload)
     }
