@@ -11,8 +11,10 @@
 #include <driver/i2c_master.h>
 
 #include <cstdio>
+#include <cstdlib>                // setenv() — UTC TZ for the log-rename helper (#168)
 #include <cstring>
 #include <cerrno>
+#include <ctime>                  // mktime / gmtime_r for the rename-on-time-sync path (#168)
 #include <string>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -393,6 +395,54 @@ static void getCurrentTime(uint16_t& year, uint8_t& month, uint8_t& day,
     }
 }
 
+// Sync time → UTC seconds since the Unix epoch.  Relies on TZ=UTC0 being
+// set in setup_bs() so mktime() interprets the broken-down time as UTC
+// rather than local.  Returns 0 if no sync has happened yet.
+static time_t syncedEpoch()
+{
+    if (!time_synced) return 0;
+    struct tm tm_sync = {};
+    tm_sync.tm_year = (int)sync_year - 1900;
+    tm_sync.tm_mon  = (int)sync_month - 1;
+    tm_sync.tm_mday = (int)sync_day;
+    tm_sync.tm_hour = (int)sync_hour;
+    tm_sync.tm_min  = (int)sync_minute;
+    tm_sync.tm_sec  = (int)sync_second;
+    return mktime(&tm_sync);
+}
+
+// Build "<mount>/lora_YYYYMMDD_HHMMSS.csv" for the given UTC epoch, walking
+// _2/_3/.. suffixes on collision until a free path is found.  Mirrors the
+// inline collision loop in startLogging() — extracted so the rename-on-
+// time-sync path (#168) reuses the same naming + collision rules.
+static void buildTimestampedLogPathForEpoch(time_t epoch,
+                                             char* out_path, size_t out_len)
+{
+    struct tm tm_buf = {};
+    gmtime_r(&epoch, &tm_buf);
+    char basename[40];
+    snprintf(basename, sizeof(basename),
+             "lora_%04d%02d%02d_%02d%02d%02d.csv",
+             tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
+             tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+    snprintf(out_path, out_len, "%s/%s", SD_MOUNT_POINT, basename);
+
+    struct stat st;
+    if (stat(out_path, &st) != 0) return;
+
+    char base_no_ext[40];
+    const size_t blen = strlen(basename);
+    const size_t copy = (blen >= 4) ? (blen - 4) : blen;  // strip ".csv"
+    memcpy(base_no_ext, basename, copy);
+    base_no_ext[copy] = '\0';
+    for (int suffix = 2; suffix < 100; suffix++)
+    {
+        snprintf(out_path, out_len, "%s/%s_%d.csv",
+                 SD_MOUNT_POINT, base_no_ext, suffix);
+        if (stat(out_path, &st) != 0) return;
+    }
+}
+
 static uint16_t findNextFileNumber()
 {
     uint16_t max_num = 0;
@@ -508,6 +558,77 @@ static void stopLogging()
     log_last_open_attempt_ms = 0;  // allow the next packet to retry immediately (#107)
 
     ESP_LOGI(TAG, "[LOG] Closed log: %s", log_filename);
+}
+
+// Called from the BLE time-sync command (#9) right after the sync clock is
+// established.  If the currently-open log was opened pre-sync and therefore
+// carries a sequential `lora_NNN.csv` name, rename it on disk to its proper
+// `lora_YYYYMMDD_HHMMSS.csv` form using the wall-clock at which the file
+// actually opened (computed as sync_time minus elapsed millis since open).
+// Safe no-op when there's no open log, time isn't synced, or the file is
+// already timestamped.  This is the root-cause fix for #168 — the 5/17/26
+// test day produced `lora_002.csv` / `lora_003.csv` / `lora_004.csv` halves
+// of three flights alongside their timestamped post-landing remnants
+// because iOS BLE time-sync landed within a few seconds of each launch.
+static void renameOpenLogIfSequential()
+{
+    if (!logging_active || !time_synced || log_file == nullptr) return;
+
+    const char* slash = strrchr(log_filename, '/');
+    const char* basename = slash ? (slash + 1) : log_filename;
+    uint16_t parsed_num = 0;
+    if (!bs_log_policy::parseSequentialFilename(basename, parsed_num)) {
+        // Already timestamped (or shape we don't manage) — nothing to do.
+        return;
+    }
+
+    const time_t epoch_sync = syncedEpoch();
+    if (epoch_sync <= 0) return;
+    const uint32_t back_s = (time_sync_millis > log_start_ms)
+                              ? (time_sync_millis - log_start_ms) / 1000U
+                              : 0U;
+    const time_t epoch_open = epoch_sync - (time_t)back_s;
+
+    char new_path[64];
+    buildTimestampedLogPathForEpoch(epoch_open, new_path, sizeof(new_path));
+
+    char old_path[64];
+    strncpy(old_path, log_filename, sizeof(old_path) - 1);
+    old_path[sizeof(old_path) - 1] = '\0';
+
+    // Flush + close, rename on disk, then reopen append.  fflush alone
+    // wouldn't be enough — FATFS needs the file closed before rename().
+    fflush(log_file);
+    if (!using_internal_flash) fsync(fileno(log_file));
+    fclose(log_file);
+    log_file = nullptr;
+
+    if (rename(old_path, new_path) != 0)
+    {
+        ESP_LOGW(TAG, "[LOG] rename %s -> %s failed (errno=%d %s); reopening original",
+                 old_path, new_path, errno, strerror(errno));
+        log_file = fopen(old_path, "a");
+        if (!log_file)
+        {
+            ESP_LOGE(TAG, "[LOG] Could not reopen %s after failed rename — logging stopped",
+                     old_path);
+            logging_active = false;
+        }
+        return;
+    }
+
+    log_file = fopen(new_path, "a");
+    if (!log_file)
+    {
+        ESP_LOGE(TAG, "[LOG] Could not open %s after rename — logging stopped",
+                 new_path);
+        logging_active = false;
+        return;
+    }
+    strncpy(log_filename, new_path, sizeof(log_filename) - 1);
+    log_filename[sizeof(log_filename) - 1] = '\0';
+    log_last_flush_ms = millis();
+    ESP_LOGI(TAG, "[LOG] Time-sync arrived; renamed sequential log -> %s", log_filename);
 }
 
 static uint32_t log_write_count = 0;  // Tracks calls for periodic flash check
@@ -2380,6 +2501,11 @@ static void setup_bs()
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
     ESP_LOGI(TAG, "======================================");
 
+    // BLE time-sync arrives as broken-down UTC; pin TZ so mktime() in the
+    // log-rename helper (#168) interprets it as UTC seconds, not local.
+    setenv("TZ", "UTC0", 1);
+    tzset();
+
     // Initialize storage: prefer SD (SDMMC 4-bit), fall back to SPIFFS on internal flash.
     {
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
@@ -2905,17 +3031,25 @@ static void loop_bs()
 
                 printTelemetry(decoded, ls.last_rssi, ls.last_snr, lat_deg, lon_deg, alt_m);
 
-                // Base station CSV logging policy (#107):
-                //   • Start a log whenever a rocket packet arrives and we
-                //     aren't already logging.  Every state counts — even
-                //     READY pre-flight setup is worth keeping.
+                // Base station CSV logging policy (#107, refined in #168):
+                //   • Start a log whenever a non-LANDED packet arrives and
+                //     we aren't already logging.  Every flight state counts
+                //     — even READY pre-flight setup is worth keeping.
+                //   • Refuse to auto-open while the rocket reports LANDED
+                //     (#168).  Without this gate, the close-on-LANDED-
+                //     transition (below) would be immediately undone by
+                //     the next LANDED packet, generating a remnant file
+                //     that only contains post-landing telemetry — that's
+                //     the LANDED-only files in the 5/17/26 flight folders.
+                //     Operators can still capture LANDED telemetry via the
+                //     manual BLE cmd 23 start, which bypasses this gate.
                 //   • Close on LANDED transition so the flight's data is
-                //     committed to disk immediately; the next packet will
-                //     auto-open a fresh file for any post-landing telemetry
-                //     (or the next flight, if the rocket is reused).
+                //     committed to disk immediately; the next non-LANDED
+                //     packet (e.g., a re-flight) auto-opens a fresh file.
                 //   • Throttled by LOG_OPEN_RETRY_MS so a persistent
                 //     fopen() failure (wedged SD) doesn't log-spam.
                 if (!logging_active && !log_manual_inhibit &&
+                    decoded.rocket_state != LANDED &&
                     (log_last_open_attempt_ms == 0 ||
                      (millis() - log_last_open_attempt_ms) >= config::LOG_OPEN_RETRY_MS))
                 {
@@ -3353,6 +3487,10 @@ static void loop_bs()
             ESP_LOGI(TAG, "[BLE] Time synced: %04u-%02u-%02u %02u:%02u:%02u UTC",
                      sync_year, sync_month, sync_day,
                      sync_hour, sync_minute, sync_second);
+
+            // If a sequential-named log was opened before sync arrived,
+            // promote it to its proper timestamped name now (#168).
+            renameOpenLogIfSequential();
         }
     }
     else if (ble_cmd == 10)
