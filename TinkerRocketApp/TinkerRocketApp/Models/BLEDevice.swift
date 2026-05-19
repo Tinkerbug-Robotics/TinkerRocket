@@ -565,6 +565,32 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// "finishes."
     func sendMagCalComputeFit() { sendCommand(54) }
 
+    // Issue #132 — rocket-profile auto-sync.  The app holds source-of-truth
+    // for mag cal as part of the active rocket profile.  APPLY pushes the
+    // saved cal back into FC NVS on connect; READ queries what's currently
+    // in NVS so the syncer can diff against the profile.  Both bypass the
+    // sampling / sphere-fit flow — APPLY is gated FC-side to READY.
+
+    /// Push a saved cal (hard-iron offsets + R/residual diagnostics) into
+    /// the rocket's NVS.  Wire format mirrors `MagCalApplyData` in
+    /// RocketComputerTypes.h: int16 cx, cy, cz, float R_uT, float res_uT
+    /// (little-endian, packed, 14 bytes total).
+    func sendMagCalApply(cx: Int16, cy: Int16, cz: Int16,
+                         fieldR_uT: Float, residualUT: Float) {
+        var payload = Data()
+        var cxv = cx;       payload.append(Data(bytes: &cxv, count: 2))
+        var cyv = cy;       payload.append(Data(bytes: &cyv, count: 2))
+        var czv = cz;       payload.append(Data(bytes: &czv, count: 2))
+        var rv  = fieldR_uT; payload.append(Data(bytes: &rv,  count: 4))
+        var sv  = residualUT; payload.append(Data(bytes: &sv,  count: 4))
+        sendRawCommand(55, payload: payload)
+    }
+
+    /// Ask the FC to publish a status frame built from current NVS values.
+    /// The reply lands on `magCalStatus` like any other cal status frame
+    /// (subType=APPLIED if cal is present, IDLE otherwise).
+    func sendMagCalRead() { sendCommand(56) }
+
     func sendToggleLogging() {
         sendCommand(23)
     }

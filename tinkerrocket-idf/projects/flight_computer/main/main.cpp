@@ -976,6 +976,45 @@ static inline void serviceBlueLedFlash(uint32_t now_ms)
     }
 }
 
+// Issue #132 — publish a one-shot status frame built from whatever the
+// "mag_cal" NVS namespace currently holds.  Used by MAG_CAL_APPLY (after
+// persisting a pushed cal) and MAG_CAL_READ (pure query) so the app sees
+// the FC's stored cal without waiting for the 5 Hz cadence — and without
+// needing the MagCalibrator object, which is in IDLE outside an active
+// cal flow.
+static void publishMagCalStatusFromNVS()
+{
+    MagCalStatusData s{};
+    s.time_us = (uint32_t)esp_timer_get_time();
+
+    Preferences p;
+    p.begin("mag_cal", true);  // read-only
+    const bool has_cal = p.isKey("ver") &&
+                        p.getUChar("ver", 0) == MAG_CAL_NVS_SCHEMA_VERSION &&
+                        p.getBool("done", false);
+    if (has_cal)
+    {
+        s.sub_type        = MAG_CAL_SUB_APPLIED;
+        s.offset_x        = (int16_t)p.getShort("cx", 0);
+        s.offset_y        = (int16_t)p.getShort("cy", 0);
+        s.offset_z        = (int16_t)p.getShort("cz", 0);
+        const float R     = p.getFloat("R_uT",   0.0f);
+        const float res   = p.getFloat("res_uT", 0.0f);
+        s.field_R_uT_x10  = (uint16_t)lroundf(R   * 10.0f);
+        s.residual_uT_x10 = (uint16_t)lroundf(res * 10.0f);
+        s.reject_code     = MAG_CAL_OK;
+    }
+    else
+    {
+        s.sub_type = MAG_CAL_SUB_IDLE;
+    }
+    p.end();
+
+    uint8_t buf[sizeof(MagCalStatusData)];
+    memcpy(buf, &s, sizeof(buf));
+    (void)enqueueI2STx(MAG_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
 static void piezoToggleCb(void *)
 {
     if (!piezo_wave_active)
@@ -2922,6 +2961,71 @@ static void loop_fc()
                     rocket_state = READY;
                     mag_calibrator.clear();
                 }
+            }
+            // Issue #132 — app pushes a saved cal from the active rocket profile
+            // back into FC NVS.  Bypasses the sampling / sphere-fit flow entirely
+            // but writes the same NVS keys as MAG_CAL_ACCEPT so the boot-time
+            // load path is identical.  Gated to READY (same as MAG_CAL_START) so
+            // the IIS2MDC OFFSET registers don't change mid-flight or mid-cal.
+            else if (out_pending_command == MAG_CAL_APPLY_PENDING)
+            {
+                if (rocket_state != READY)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] apply refused: state=%u (require READY)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    delay(1);
+                    uint8_t cfg_payload[sizeof(MagCalApplyData)];
+                    size_t  cfg_len = 0;
+                    if (readConfigFrame(MAG_CAL_APPLY_MSG, sizeof(MagCalApplyData),
+                                        cfg_payload, sizeof(cfg_payload), cfg_len)
+                        && cfg_len >= sizeof(MagCalApplyData))
+                    {
+                        MagCalApplyData ap;
+                        memcpy(&ap, cfg_payload, sizeof(ap));
+
+                        if (sensor_collector.isIIS2MDCActive())
+                        {
+                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(ap.cx, ap.cy, ap.cz);
+                            ESP_LOGI(TAG, "[MAGCAL] APPLY IIS2MDC OFFSET (%d,%d,%d) %s",
+                                     (int)ap.cx, (int)ap.cy, (int)ap.cz, ok ? "OK" : "FAIL");
+                        }
+                        sensor_converter.setMMCOffset(0, 0, 0);
+
+                        prefs.begin("mag_cal", false);
+                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+                        prefs.putBool ("done",   true);
+                        prefs.putShort("cx",     ap.cx);
+                        prefs.putShort("cy",     ap.cy);
+                        prefs.putShort("cz",     ap.cz);
+                        prefs.putFloat("R_uT",   ap.R_uT);
+                        prefs.putFloat("res_uT", ap.res_uT);
+                        prefs.putInt  ("mmc_cx", 0);
+                        prefs.putInt  ("mmc_cy", 0);
+                        prefs.putInt  ("mmc_cz", 0);
+                        prefs.end();
+
+                        ESP_LOGI(TAG, "[MAGCAL] APPLY+saved: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
+                                 (int)ap.cx, (int)ap.cy, (int)ap.cz,
+                                 (double)ap.R_uT, (double)ap.res_uT);
+
+                        publishMagCalStatusFromNVS();
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "[MAGCAL] APPLY payload read failed");
+                    }
+                }
+            }
+            // Issue #132 — pure NVS query.  No state side-effect; publishes one
+            // status frame so the app can diff against the active profile and
+            // decide push / pull / re-cal.
+            else if (out_pending_command == MAG_CAL_READ)
+            {
+                ESP_LOGI(TAG, "[MAGCAL] READ -> publish status from NVS");
+                publishMagCalStatusFromNVS();
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
             {

@@ -1057,7 +1057,8 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == ROLL_CTRL_CONFIG_PENDING ||
            cmd == PYRO_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
-           cmd == PYRO_FIRE_TEST;
+           cmd == PYRO_FIRE_TEST ||
+           cmd == MAG_CAL_APPLY_PENDING;  // #132: app-pushed cal payload
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -4853,6 +4854,32 @@ static void loop_oc()
         {
             setPendingCommand(MAG_CAL_COMPUTE_FIT);
             ESP_LOGI("BLE", "Mag cal COMPUTE_FIT -> FlightComputer");
+        }
+        // Issue #132 — app pushes a saved cal back into FC NVS as part of the
+        // rocket-profile auto-sync on connect.  14-byte payload mirrors the
+        // values cmd 52 would have persisted after a fresh sphere fit.
+        else if (ble_cmd == 55)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(MagCalApplyData))
+            {
+                memcpy(pending_config_data, payload, sizeof(MagCalApplyData));
+                pending_config_data_len = sizeof(MagCalApplyData);
+                pending_config_msg_type = MAG_CAL_APPLY_MSG;
+                setPendingCommand(MAG_CAL_APPLY_PENDING);
+                ESP_LOGI("BLE", "Mag cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Mag cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(MagCalApplyData));
+            }
+        }
+        else if (ble_cmd == 56)
+        {
+            setPendingCommand(MAG_CAL_READ);
+            ESP_LOGI("BLE", "Mag cal READ -> FlightComputer");
         }
     }
 
