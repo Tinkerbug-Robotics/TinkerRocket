@@ -398,11 +398,15 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
             }
         }
 
-        // Dynamic model: Airborne <4g (6)
+        // Dynamic model: Airborne <4g (DYN_MODEL_AIRBORNE4g = 8).
+        // NOTE (#174): value 6 is Airborne <1g, not <4g — the receiver then
+        // assumes <1g dynamics and drops the fix the instant the motor lights
+        // (>1g), not reacquiring until the rocket slows on descent, which
+        // starved the EKF of GNSS through the whole boost+coast.
         ok = false;
         for (i = 0; i < 8; i++)
         {
-            if (gnss.setVal8(UBLOX_CFG_NAVSPG_DYNMODEL, 6)) { ok = true; break; }
+            if (gnss.setVal8(UBLOX_CFG_NAVSPG_DYNMODEL, DYN_MODEL_AIRBORNE4g)) { ok = true; break; }
             ESP_LOGW(TAG, "Failed to set dynamic model");
             delay(150);
         }
