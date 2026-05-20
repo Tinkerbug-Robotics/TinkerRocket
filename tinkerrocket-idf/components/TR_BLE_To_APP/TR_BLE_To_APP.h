@@ -169,6 +169,12 @@ public:
     // 0xAA / 0xCA, so all four payload kinds coexist on this channel.
     void sendMagCalStatus(const uint8_t* status_bytes, size_t len);
 
+    // Send a sensor (gyro + high-g) calibration readback frame on the
+    // file-ops characteristic (issue #132).  Format:
+    //   [0][0xCB marker] [1..19][SensorCalStatusData LE bytes]
+    // Sibling discriminator to mag cal's 0xCA.
+    void sendSensorCalStatus(const uint8_t* status_bytes, size_t len);
+
     // Get pending download filename (empty if none)
     // Clears the filename after reading
     String getDownloadFilename();

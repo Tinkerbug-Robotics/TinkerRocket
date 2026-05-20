@@ -22,6 +22,7 @@ import Combine
 
 struct MagCalView: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var store: RocketProfileStore
     @Environment(\.dismiss) var dismiss
 
     /// Latest status frame, or nil if the FC hasn't published one yet
@@ -48,6 +49,14 @@ struct MagCalView: View {
         }
         .navigationTitle("Mag Calibration")
         .navigationBarTitleDisplayMode(.inline)
+        // Snapshot a freshly-accepted cal into the active rocket profile (#132),
+        // tagged with this board's id so the syncer can re-apply it on connect
+        // and warn if a different board is later used.
+        .onChange(of: device.magCalStatus) { newStatus in
+            guard let s = newStatus, s.subType == .applied,
+                  !device.unitID.isEmpty, let id = store.activeId else { return }
+            store.update(id) { $0.magCal = MagCalData(status: s, unitID: device.unitID) }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 if status?.subType == .sampling || status?.subType == .review {

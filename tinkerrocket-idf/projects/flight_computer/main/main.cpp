@@ -86,6 +86,12 @@ static bool    mag_cal_status_dirty   = false;  // true → publish on next tick
 static int16_t pending_mag_cx = 0, pending_mag_cy = 0, pending_mag_cz = 0;
 static bool    pending_mag_apply = false;
 
+// Gyro zero-rate bias restored from NVS (#132).  Applied to sensor_collector
+// after begin(), alongside the mag offsets, so a stored sensor cal survives
+// reboots without the app connected.
+static int16_t pending_gyro_cal_x = 0, pending_gyro_cal_y = 0, pending_gyro_cal_z = 0;
+static bool    pending_gyro_cal_apply = false;
+
 static ISM6HG256Data ism6hg256_data;
 static uint8_t ism6hg256_data_buffer[SIZE_OF_ISM6HG256_DATA];
 static BMP585Data bmp585_data;
@@ -976,6 +982,73 @@ static inline void serviceBlueLedFlash(uint32_t now_ms)
     }
 }
 
+// Issue #132 — publish a one-shot status frame built from whatever the
+// "mag_cal" NVS namespace currently holds.  Used by MAG_CAL_APPLY (after
+// persisting a pushed cal) and MAG_CAL_READ (pure query) so the app sees
+// the FC's stored cal without waiting for the 5 Hz cadence — and without
+// needing the MagCalibrator object, which is in IDLE outside an active
+// cal flow.
+static void publishMagCalStatusFromNVS()
+{
+    MagCalStatusData s{};
+    s.time_us = (uint32_t)esp_timer_get_time();
+
+    Preferences p;
+    p.begin("mag_cal", true);  // read-only
+    const bool has_cal = p.isKey("ver") &&
+                        p.getUChar("ver", 0) == MAG_CAL_NVS_SCHEMA_VERSION &&
+                        p.getBool("done", false);
+    if (has_cal)
+    {
+        s.sub_type        = MAG_CAL_SUB_APPLIED;
+        s.offset_x        = (int16_t)p.getShort("cx", 0);
+        s.offset_y        = (int16_t)p.getShort("cy", 0);
+        s.offset_z        = (int16_t)p.getShort("cz", 0);
+        const float R     = p.getFloat("R_uT",   0.0f);
+        const float res   = p.getFloat("res_uT", 0.0f);
+        s.field_R_uT_x10  = (uint16_t)lroundf(R   * 10.0f);
+        s.residual_uT_x10 = (uint16_t)lroundf(res * 10.0f);
+        s.reject_code     = MAG_CAL_OK;
+    }
+    else
+    {
+        s.sub_type = MAG_CAL_SUB_IDLE;
+    }
+    p.end();
+
+    uint8_t buf[sizeof(MagCalStatusData)];
+    memcpy(buf, &s, sizeof(buf));
+    (void)enqueueI2STx(MAG_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
+// Issue #132 — publish the gyro + high-g sensor cal currently stored in NVS
+// (namespace "cal") so the app can snapshot it after a pad cal and diff it on
+// connect.  valid=0 when nothing is stored.
+static void publishSensorCalFromNVS()
+{
+    SensorCalStatusData s{};
+
+    Preferences p;
+    p.begin("cal", true);  // read-only
+    const bool has_hg = p.isKey("hgbx");
+    const bool has_gyro = p.isKey("gx");
+    if (has_hg || has_gyro)
+    {
+        s.valid  = 1;
+        s.gyro_x = (int16_t)p.getShort("gx", 0);
+        s.gyro_y = (int16_t)p.getShort("gy", 0);
+        s.gyro_z = (int16_t)p.getShort("gz", 0);
+        s.hg_x   = p.getFloat("hgbx", 0.0f);
+        s.hg_y   = p.getFloat("hgby", 0.0f);
+        s.hg_z   = p.getFloat("hgbz", 0.0f);
+    }
+    p.end();
+
+    uint8_t buf[sizeof(SensorCalStatusData)];
+    memcpy(buf, &s, sizeof(buf));
+    (void)enqueueI2STx(SENSOR_CAL_STATUS_MSG, buf, sizeof(buf));
+}
+
 static void piezoToggleCb(void *)
 {
     if (!piezo_wave_active)
@@ -1579,6 +1652,16 @@ static void setup_fc()
         ESP_LOGI(TAG, "NVS HG bias: %.3f, %.3f, %.3f m/s²",
                       (double)bx, (double)by, (double)bz);
     }
+    // Gyro zero-rate bias (#132) — applied after begin() (see below).
+    if (prefs.isKey("gx"))
+    {
+        pending_gyro_cal_x = (int16_t)prefs.getShort("gx", 0);
+        pending_gyro_cal_y = (int16_t)prefs.getShort("gy", 0);
+        pending_gyro_cal_z = (int16_t)prefs.getShort("gz", 0);
+        pending_gyro_cal_apply = true;
+        ESP_LOGI(TAG, "NVS gyro cal: %d, %d, %d (apply after begin)",
+                      (int)pending_gyro_cal_x, (int)pending_gyro_cal_y, (int)pending_gyro_cal_z);
+    }
     prefs.end();
 
     // Restore magnetometer hard-iron offset from NVS (namespace "mag_cal", issue #96).
@@ -1703,6 +1786,16 @@ static void setup_fc()
         ESP_LOGI(TAG, "IIS2MDC OFFSET applied: (%d,%d,%d) %s",
                  (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
                  ok ? "OK" : "FAILED");
+    }
+
+    // Apply restored gyro zero-rate bias now that begin() is done (#132).
+    if (pending_gyro_cal_apply)
+    {
+        sensor_collector_hw.gyro_cal_x = pending_gyro_cal_x;
+        sensor_collector_hw.gyro_cal_y = pending_gyro_cal_y;
+        sensor_collector_hw.gyro_cal_z = pending_gyro_cal_z;
+        ESP_LOGI(TAG, "Gyro cal applied: (%d,%d,%d)",
+                 (int)pending_gyro_cal_x, (int)pending_gyro_cal_y, (int)pending_gyro_cal_z);
     }
 
     out_status_query_data.ism6_low_g_fs_g = config::ISM6_LOW_G_FS_G;
@@ -2803,13 +2896,18 @@ static void loop_fc()
                 out_status_query_data.hg_bias_x_cmss = (int16_t)lroundf(sensor_collector.hg_bias_x * 100.0f);
                 out_status_query_data.hg_bias_y_cmss = (int16_t)lroundf(sensor_collector.hg_bias_y * 100.0f);
                 out_status_query_data.hg_bias_z_cmss = (int16_t)lroundf(sensor_collector.hg_bias_z * 100.0f);
-                // Persist to NVS
+                // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
                 prefs.begin("cal", false);
                 prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
                 prefs.putFloat("hgby", sensor_collector.hg_bias_y);
                 prefs.putFloat("hgbz", sensor_collector.hg_bias_z);
+                prefs.putShort("gx", sensor_collector_hw.gyro_cal_x);
+                prefs.putShort("gy", sensor_collector_hw.gyro_cal_y);
+                prefs.putShort("gz", sensor_collector_hw.gyro_cal_z);
                 prefs.end();
                 ESP_LOGI(TAG, "[CAL] Sensor calibration complete (saved to NVS)");
+                // Push the result up so the app can snapshot it into the profile.
+                publishSensorCalFromNVS();
             }
             // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
             // Entry is gated to READY only.  All transitions produce one
@@ -2922,6 +3020,125 @@ static void loop_fc()
                     rocket_state = READY;
                     mag_calibrator.clear();
                 }
+            }
+            // Issue #132 — app pushes a saved cal from the active rocket profile
+            // back into FC NVS.  Bypasses the sampling / sphere-fit flow entirely
+            // but writes the same NVS keys as MAG_CAL_ACCEPT so the boot-time
+            // load path is identical.  Gated to READY (same as MAG_CAL_START) so
+            // the IIS2MDC OFFSET registers don't change mid-flight or mid-cal.
+            else if (out_pending_command == MAG_CAL_APPLY_PENDING)
+            {
+                if (rocket_state != READY)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] apply refused: state=%u (require READY)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    delay(1);
+                    uint8_t cfg_payload[sizeof(MagCalApplyData)];
+                    size_t  cfg_len = 0;
+                    if (readConfigFrame(MAG_CAL_APPLY_MSG, sizeof(MagCalApplyData),
+                                        cfg_payload, sizeof(cfg_payload), cfg_len)
+                        && cfg_len >= sizeof(MagCalApplyData))
+                    {
+                        MagCalApplyData ap;
+                        memcpy(&ap, cfg_payload, sizeof(ap));
+
+                        if (sensor_collector.isIIS2MDCActive())
+                        {
+                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(ap.cx, ap.cy, ap.cz);
+                            ESP_LOGI(TAG, "[MAGCAL] APPLY IIS2MDC OFFSET (%d,%d,%d) %s",
+                                     (int)ap.cx, (int)ap.cy, (int)ap.cz, ok ? "OK" : "FAIL");
+                        }
+                        sensor_converter.setMMCOffset(0, 0, 0);
+
+                        prefs.begin("mag_cal", false);
+                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+                        prefs.putBool ("done",   true);
+                        prefs.putShort("cx",     ap.cx);
+                        prefs.putShort("cy",     ap.cy);
+                        prefs.putShort("cz",     ap.cz);
+                        prefs.putFloat("R_uT",   ap.R_uT);
+                        prefs.putFloat("res_uT", ap.res_uT);
+                        prefs.putInt  ("mmc_cx", 0);
+                        prefs.putInt  ("mmc_cy", 0);
+                        prefs.putInt  ("mmc_cz", 0);
+                        prefs.end();
+
+                        ESP_LOGI(TAG, "[MAGCAL] APPLY+saved: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
+                                 (int)ap.cx, (int)ap.cy, (int)ap.cz,
+                                 (double)ap.R_uT, (double)ap.res_uT);
+
+                        publishMagCalStatusFromNVS();
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "[MAGCAL] APPLY payload read failed");
+                    }
+                }
+            }
+            // Issue #132 — pure NVS query.  No state side-effect; publishes one
+            // status frame so the app can diff against the active profile and
+            // decide push / pull / re-cal.
+            else if (out_pending_command == MAG_CAL_READ)
+            {
+                ESP_LOGI(TAG, "[MAGCAL] READ -> publish status from NVS");
+                publishMagCalStatusFromNVS();
+            }
+            // Issue #132 — app pushes a saved sensor cal (gyro + high-g) back
+            // into NVS and applies it.  Gated to READY like the pad cal.
+            else if (out_pending_command == SENSOR_CAL_APPLY_PENDING)
+            {
+                if (rocket_state != READY)
+                {
+                    ESP_LOGW(TAG, "[SENSORCAL] apply refused: state=%u (require READY)",
+                             (unsigned)rocket_state);
+                }
+                else
+                {
+                    delay(1);
+                    uint8_t cfg_payload[sizeof(SensorCalApplyData)];
+                    size_t  cfg_len = 0;
+                    if (readConfigFrame(SENSOR_CAL_APPLY_MSG, sizeof(SensorCalApplyData),
+                                        cfg_payload, sizeof(cfg_payload), cfg_len)
+                        && cfg_len >= sizeof(SensorCalApplyData))
+                    {
+                        SensorCalApplyData ap;
+                        memcpy(&ap, cfg_payload, sizeof(ap));
+
+                        sensor_collector_hw.gyro_cal_x = ap.gyro_x;
+                        sensor_collector_hw.gyro_cal_y = ap.gyro_y;
+                        sensor_collector_hw.gyro_cal_z = ap.gyro_z;
+                        sensor_converter.setHighGBias(ap.hg_x, ap.hg_y, ap.hg_z);
+                        out_status_query_data.hg_bias_x_cmss = (int16_t)lroundf(ap.hg_x * 100.0f);
+                        out_status_query_data.hg_bias_y_cmss = (int16_t)lroundf(ap.hg_y * 100.0f);
+                        out_status_query_data.hg_bias_z_cmss = (int16_t)lroundf(ap.hg_z * 100.0f);
+
+                        prefs.begin("cal", false);
+                        prefs.putFloat("hgbx", ap.hg_x);
+                        prefs.putFloat("hgby", ap.hg_y);
+                        prefs.putFloat("hgbz", ap.hg_z);
+                        prefs.putShort("gx", ap.gyro_x);
+                        prefs.putShort("gy", ap.gyro_y);
+                        prefs.putShort("gz", ap.gyro_z);
+                        prefs.end();
+
+                        ESP_LOGI(TAG, "[SENSORCAL] APPLY+saved: gyro=(%d,%d,%d) hg=(%.3f,%.3f,%.3f)",
+                                 (int)ap.gyro_x, (int)ap.gyro_y, (int)ap.gyro_z,
+                                 (double)ap.hg_x, (double)ap.hg_y, (double)ap.hg_z);
+                        publishSensorCalFromNVS();
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "[SENSORCAL] APPLY payload read failed");
+                    }
+                }
+            }
+            else if (out_pending_command == SENSOR_CAL_READ)
+            {
+                ESP_LOGI(TAG, "[SENSORCAL] READ -> publish status from NVS");
+                publishSensorCalFromNVS();
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
             {

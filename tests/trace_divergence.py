@@ -57,11 +57,17 @@ def main():
 
     first_time = None
     for msg_type, msg_len, payload in frames:
-        if msg_type == 0xA5 and msg_len in (42, 43):  # NON_SENSOR (43=current, 42=legacy)
-            # Current: uint32 time + i16*4 quat + i16 roll_cmd + i32*3 pos + i32*3 vel
-            #          + u8 flags + u8 rocket_state + i16 baro_alt_rate_dmps + u8 pyro_status
-            # Legacy (42 bytes) is the same minus the trailing pyro_status byte.
-            fmt = '<I hhhh h iii iii BB h B' if msg_len == 43 else '<I hhhh h iii iii BB h'
+        if msg_type == 0xA5 and msg_len in (42, 43, 44):  # NON_SENSOR (44=current)
+            # Current (44): uint32 time + i16*4 quat + i16 roll_cmd + i32*3 pos
+            #   + i32*3 vel + u8 flags + u8 rocket_state + i16 baro_alt_rate_dmps
+            #   + u8 pyro_status + u8 apogee_flags  (apogee_flags added in #142/#143).
+            # 43 = same minus apogee_flags; 42 = also minus pyro_status (oldest).
+            if msg_len == 44:
+                fmt = '<I hhhh h iii iii BB h BB'
+            elif msg_len == 43:
+                fmt = '<I hhhh h iii iii BB h B'
+            else:
+                fmt = '<I hhhh h iii iii BB h'
             fields = struct.unpack(fmt, payload)
             t = fields[0]
             if first_time is None: first_time = t

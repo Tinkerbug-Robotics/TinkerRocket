@@ -807,6 +807,52 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(MagCalStatusData) == 32,
               "MagCalStatusData must be 32 bytes");
 
+// 14-byte payload for MAG_CAL_APPLY_MSG (issue #132).  Carries the hard-iron
+// offsets in IIS2MDC LSB units plus the R / residual diagnostics so NVS state
+// is bit-identical to what cmd 52 writes after a fresh cal — re-boot path is
+// the same regardless of whether cal came from the sphere fit or an app push.
+// No soft-iron / no MMC offsets: v1 behaviour matches MAG_CAL_ACCEPT.
+typedef struct __attribute__((packed))
+{
+    int16_t cx;        // raw IIS2MDC LSB
+    int16_t cy;
+    int16_t cz;
+    float   R_uT;      // fitted field magnitude when the cal was originally accepted
+    float   res_uT;    // fit RMS residual when the cal was originally accepted
+} MagCalApplyData;
+static_assert(sizeof(MagCalApplyData) == 14,
+              "MagCalApplyData must be 14 bytes");
+
+// Sensor cal payload (issue #132): gyro zero-rate bias in raw LSB (subtracted
+// from raw gyro) + high-g accel bias in m/s².  app→FC via SENSOR_CAL_APPLY_MSG.
+typedef struct __attribute__((packed))
+{
+    int16_t gyro_x;    // raw gyro LSB
+    int16_t gyro_y;
+    int16_t gyro_z;
+    float   hg_x;      // high-g accel bias, m/s²
+    float   hg_y;
+    float   hg_z;
+} SensorCalApplyData;
+static_assert(sizeof(SensorCalApplyData) == 18,
+              "SensorCalApplyData must be 18 bytes");
+
+// FC→OC/app sensor-cal readback: same fields plus a validity flag (0 when the
+// rocket has no stored sensor cal).  Rides the file_ops characteristic behind
+// a 0xCB discriminator, like mag cal's 0xCA frame.
+typedef struct __attribute__((packed))
+{
+    uint8_t valid;     // 1 if a sensor cal is stored in NVS, else 0
+    int16_t gyro_x;
+    int16_t gyro_y;
+    int16_t gyro_z;
+    float   hg_x;
+    float   hg_y;
+    float   hg_z;
+} SensorCalStatusData;
+static_assert(sizeof(SensorCalStatusData) == 19,
+              "SensorCalStatusData must be 19 bytes");
+
 // MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
 // int32_t in the same 18-bit signed centered-counts space as
 // mmc5983ma_centered_counts() returns.  Subtracted before scaling to µT.
@@ -1238,6 +1284,26 @@ static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: persist curre
 static constexpr uint8_t MAG_CAL_RETRY        = 0xD7;  // OC→FC: discard fit, restart sampling
 static constexpr uint8_t MAG_CAL_STATUS_MSG   = 0xD8;  // FC→OC: live progress / final result (MagCalStatusData)
 static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fit on current buffer, transition to REVIEW
+
+// --- App-driven mag cal apply / read (issue #132 — rocket profiles) ---
+// The iOS app holds source-of-truth for cal as part of a rocket profile.
+// On connect, the app pushes the saved cal back into FC NVS (APPLY) or
+// reads what's already there (READ).  Both bypass the cal flow entirely
+// — no sphere fit, no MAG_CALIBRATION state transition.
+static constexpr uint8_t MAG_CAL_APPLY_PENDING = 0xDA;  // OC→FC: payload follows as MAG_CAL_APPLY_MSG
+static constexpr uint8_t MAG_CAL_APPLY_MSG     = 0xDB;  // 14-byte MagCalApplyData payload
+static constexpr uint8_t MAG_CAL_READ          = 0xDC;  // OC→FC: publish current NVS cal as a status frame
+
+// --- App-driven sensor cal apply / read (issue #132 — rocket profiles) ---
+// The on-pad "Calibrate Sensors" routine produces a gyro zero-rate bias and
+// a high-g accel bias.  Mirroring mag cal, the app stores both per-rocket and
+// pushes them back on connect (APPLY) or reads what's stored (READ).  The
+// low-g accelerometer is the cal reference, not itself corrected, so there is
+// nothing to store for it.
+static constexpr uint8_t SENSOR_CAL_APPLY_PENDING = 0xDD;  // OC→FC: payload follows as SENSOR_CAL_APPLY_MSG
+static constexpr uint8_t SENSOR_CAL_APPLY_MSG     = 0xDE;  // 18-byte SensorCalApplyData payload
+static constexpr uint8_t SENSOR_CAL_READ          = 0xDF;  // OC→FC: publish current NVS sensor cal
+static constexpr uint8_t SENSOR_CAL_STATUS_MSG    = 0xE0;  // FC→OC: SensorCalStatusData
 
 static constexpr uint8_t LORA_MSG            = 0xF1;
 

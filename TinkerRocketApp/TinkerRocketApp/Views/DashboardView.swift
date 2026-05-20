@@ -29,6 +29,8 @@ struct DashboardView: View {
     @StateObject private var fleet = BLEFleet()
     @StateObject private var flightAnnouncer = FlightAnnouncer()
     @StateObject private var locationManager = LocationManager()
+    @EnvironmentObject private var profileStore: RocketProfileStore
+    @EnvironmentObject private var syncer: ActiveRocketSyncer
     @State private var activeSheet: DashboardSheet?
     @State private var showProvisioning = false
 
@@ -132,12 +134,24 @@ struct DashboardView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if let device = fleet.activeDevice {
                         HStack(spacing: 16) {
+                            // Rocket icon → pick / manage rocket profiles (#132).
+                            // Hidden on a base station: rocket selection is
+                            // read-only there (you manage rockets connected
+                            // directly to a rocket).
+                            if !device.isBaseStation {
+                                NavigationLink(destination: RocketProfileView(device: device)) {
+                                    Image("RocketIcon")
+                                        .resizable()
+                                        .renderingMode(.template)
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: 22, height: 22)
+                                }
+                            }
+
+                            // Book icon → stored flights on the rocket (where the
+                            // rocket icon used to go).
                             NavigationLink(destination: FileManagerView(device: device)) {
-                                Image("RocketIcon")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: 22, height: 22)
+                                Image(systemName: "book.fill")
                             }
 
                             NavigationLink(destination: MapView(device: device)) {
@@ -174,10 +188,18 @@ struct DashboardView: View {
         .navigationViewStyle(.stack)
         .onAppear {
             fleet.activeDevice?.flightAnnouncer = flightAnnouncer
+            if fleet.isConnected, let dev = fleet.activeDevice {
+                syncer.attach(device: dev, store: profileStore)
+            }
         }
         .onChange(of: fleet.isConnected) { connected in
             if connected {
                 fleet.activeDevice?.flightAnnouncer = flightAnnouncer
+                if let dev = fleet.activeDevice {
+                    syncer.attach(device: dev, store: profileStore)
+                }
+            } else {
+                syncer.detach()
             }
             if !connected && !fleet.isScanning {
                 fleet.startScanning()
@@ -247,6 +269,9 @@ struct ConnectedDashboardView: View {
     @Binding var activeSheet: DashboardSheet?
 
     var body: some View {
+        // Active rocket profile summary + sync status (#132).
+        ActiveRocketHeader(device: device)
+
         // Device chip bar (multi-device) or simple status (single device)
         if fleet.devices.count > 1 {
             DeviceChipBar(fleet: fleet, activeDevice: device)
@@ -368,9 +393,8 @@ struct ConnectedDashboardView: View {
 
             TestingControlsView(device: device, activeSheet: $activeSheet)
 
-            if !device.isBaseStation {
-                OnPadCalibrationView(device: device)
-            }
+            // Gyro/accel calibration lives in Settings → General → Calibration
+            // now (#132), so it's no longer shown on the dashboard.
 
             if !device.isBaseStation {
                 Button {
@@ -1450,6 +1474,7 @@ struct PyroChannelsView: View {
 
 struct PyroConfigSheet: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var store: RocketProfileStore
     let channel: Int
     @Environment(\.dismiss) var dismiss
 
@@ -1520,6 +1545,18 @@ struct PyroConfigSheet: View {
             ch1Enabled: cfg.pyro1Enabled, ch1Mode: cfg.pyro1TriggerMode, ch1Value: cfg.pyro1TriggerValue,
             ch2Enabled: cfg.pyro2Enabled, ch2Mode: cfg.pyro2TriggerMode, ch2Value: cfg.pyro2TriggerValue
         )
+        // Persist pyro config to the active rocket profile too (#132) so the
+        // connect-time syncer doesn't push a stale value back over this edit.
+        if let id = store.activeId {
+            store.update(id) {
+                $0.pyro1Enabled = cfg.pyro1Enabled
+                $0.pyro1TriggerMode = cfg.pyro1TriggerMode
+                $0.pyro1TriggerValue = cfg.pyro1TriggerValue
+                $0.pyro2Enabled = cfg.pyro2Enabled
+                $0.pyro2TriggerMode = cfg.pyro2TriggerMode
+                $0.pyro2TriggerValue = cfg.pyro2TriggerValue
+            }
+        }
     }
 }
 
@@ -1734,18 +1771,28 @@ struct TestingControlsView: View {
 
 struct OnPadCalibrationView: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var store: RocketProfileStore
+    /// When embedded in a Form (e.g. the settings General tab) we drop the
+    /// card chrome + headline so it sits naturally as a row (#132).
+    var embedded: Bool = false
     @State private var calibrating = false
     @State private var showGravityWarning = false
     @State private var gravityMag: Float = 0.0
     @State private var gravityError: Float = 0.0
+    /// Set when the user kicks off a cal so the next sensor-cal readback gets
+    /// snapshotted into the active profile (#132) — not arbitrary frames.
+    @State private var pendingCalSnapshot = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("On Pad Calibration")
-                .font(.headline)
+            if !embedded {
+                Text("On Pad Calibration")
+                    .font(.headline)
+            }
 
             Button(action: {
                 calibrating = true
+                pendingCalSnapshot = true
                 device.sendCommand(21)
                 // Calibration takes ~10 seconds (1000 samples x 10ms)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) {
@@ -1773,7 +1820,7 @@ struct OnPadCalibrationView: View {
                             .tint(.white)
                     }
                     Image(systemName: "gyroscope")
-                    Text(calibrating ? "Calibrating..." : "Calibrate Sensors")
+                    Text(calibrating ? "Calibrating..." : "Calibrate Gyro and Accel")
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
@@ -1781,20 +1828,28 @@ struct OnPadCalibrationView: View {
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
-            .disabled(calibrating || !device.isConnected)
+            .disabled(calibrating || !device.isConnected || !device.telemetry.pwr_pin_on)
 
             Text("Place rocket on pad and keep still. Calibrates gyro bias and accelerometer offsets (~10 seconds).")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding()
+        .padding(embedded ? 0 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
+        .background(embedded ? Color.clear : Color(.systemGray6))
+        .cornerRadius(embedded ? 0 : 10)
         .alert("Accelerometer Warning", isPresented: $showGravityWarning) {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Low-G accelerometer magnitude (\(String(format: "%.2f", gravityMag)) m/s²) differs from expected gravity (9.81 m/s²) by \(String(format: "%.1f", gravityError))%. Consider running a bench calibration before flight.")
+        }
+        // Snapshot the freshly-run sensor cal into the active profile (#132),
+        // tagged with this board's id so the syncer re-applies it on connect.
+        .onChange(of: device.sensorCalStatus) { newStatus in
+            guard pendingCalSnapshot, let s = newStatus, s.valid,
+                  !device.unitID.isEmpty, let id = store.activeId else { return }
+            pendingCalSnapshot = false
+            store.update(id) { $0.sensorCal = SensorCalData(status: s, unitID: device.unitID) }
         }
     }
 }
