@@ -67,6 +67,10 @@ final class RocketProfileStoreTests: XCTestCase {
                                    fieldR_uT: 48, residualUT: 2,
                                    calibratedOnUnitID: "ABC123",
                                    calibratedAt: Date())
+            $0.sensorCal = SensorCalData(gyroX: 4, gyroY: 5, gyroZ: 6,
+                                         hgX: 0.1, hgY: 0.2, hgZ: 0.3,
+                                         calibratedOnUnitID: "ABC123",
+                                         calibratedAt: Date())
         }
 
         let copy = store.duplicate(src.id)
@@ -74,6 +78,7 @@ final class RocketProfileStoreTests: XCTestCase {
         XCTAssertEqual(copy?.name, "Source copy")
         XCTAssertEqual(copy?.pidKp, 0.42)          // tuning copied
         XCTAssertNil(copy?.magCal)                  // cal NOT copied (board-specific)
+        XCTAssertNil(copy?.sensorCal)               // sensor cal NOT copied either
         XCTAssertNil(copy?.lastUsedUnitID)
         XCTAssertNotEqual(copy?.id, src.id)
         XCTAssertEqual(store.profiles.count, 2)
@@ -176,6 +181,10 @@ final class RocketProfileStoreTests: XCTestCase {
                               fieldR_uT: 49.5, residualUT: 1.5,
                               calibratedOnUnitID: "DEAD::BEEF",
                               calibratedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        p.sensorCal = SensorCalData(gyroX: -8, gyroY: 9, gyroZ: -10,
+                                    hgX: 0.05, hgY: -0.06, hgZ: 9.81,
+                                    calibratedOnUnitID: "DEAD::BEEF",
+                                    calibratedAt: Date(timeIntervalSince1970: 1_700_000_500))
 
         let data = try JSONEncoder().encode(p)
         let back = try JSONDecoder().decode(RocketProfile.self, from: data)

@@ -35,8 +35,9 @@ final class ActiveRocketSyncer: ObservableObject {
         case failed(String)
     }
 
-    /// Mag cal is tied to a physical board, so it can't be blindly pushed.
-    enum MagCalAdvisory: Equatable {
+    /// Calibration is tied to a physical board, so it can't be blindly pushed.
+    /// Shared by mag cal and sensor cal.
+    enum CalAdvisory: Equatable {
         case none
         case missing                                   // no cal anywhere — run calibration
         case boardMismatch(savedOn: String, current: String)  // profile cal is for another board
@@ -44,7 +45,8 @@ final class ActiveRocketSyncer: ObservableObject {
     }
 
     @Published private(set) var syncState: SyncState = .idle
-    @Published private(set) var magCalAdvisory: MagCalAdvisory = .none
+    @Published private(set) var magCalAdvisory: CalAdvisory = .none
+    @Published private(set) var sensorCalAdvisory: CalAdvisory = .none
     /// A profile previously flown on the just-connected board, offered as a
     /// soft switch suggestion.  The user always confirms — never auto-applied.
     @Published private(set) var suggestedProfileId: UUID?
@@ -53,6 +55,7 @@ final class ActiveRocketSyncer: ObservableObject {
     private weak var store: RocketProfileStore?
     private var cancellables = Set<AnyCancellable>()
     private var magCalReadPending = false
+    private var sensorCalReadPending = false
 
     // MARK: - Lifecycle
 
@@ -79,11 +82,17 @@ final class ActiveRocketSyncer: ObservableObject {
             .sink { [weak self] _ in self?.onReadyToSync() }
             .store(in: &cancellables)
 
-        // Connect-time mag-cal READ reply (only honoured right after we ask).
+        // Connect-time cal READ replies (only honoured right after we ask).
         device.$magCalStatus
             .compactMap { $0 }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in self?.handleMagCalStatus(status) }
+            .store(in: &cancellables)
+
+        device.$sensorCalStatus
+            .compactMap { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in self?.handleSensorCalStatus(status) }
             .store(in: &cancellables)
 
         // Re-push when the user switches the active profile mid-connection.
@@ -100,8 +109,10 @@ final class ActiveRocketSyncer: ObservableObject {
         device = nil
         store = nil
         magCalReadPending = false
+        sensorCalReadPending = false
         syncState = .idle
         magCalAdvisory = .none
+        sensorCalAdvisory = .none
         suggestedProfileId = nil
     }
 
@@ -157,6 +168,7 @@ final class ActiveRocketSyncer: ObservableObject {
             ch2Value: profile.pyro2TriggerValue)
 
         syncMagCal(profile: profile, device: device)
+        syncSensorCal(profile: profile, device: device)
 
         // Record which board this profile last flew on (soft pre-select).
         store.update(profile.id) { $0.lastUsedUnitID = device.unitID }
@@ -226,6 +238,55 @@ final class ActiveRocketSyncer: ObservableObject {
         magCalAdvisory = .none
     }
 
+    // MARK: - Sensor cal (gyro + high-g) — mirrors mag cal
+
+    enum SensorCalSyncAction: Equatable {
+        case push(SensorCalData)
+        case warnMismatch(savedOn: String, current: String)
+        case readRocket
+    }
+
+    static func sensorCalSyncAction(profileCal: SensorCalData?,
+                                    deviceUnitID: String) -> SensorCalSyncAction {
+        guard let cal = profileCal else { return .readRocket }
+        if cal.calibratedOnUnitID == deviceUnitID {
+            return .push(cal)
+        }
+        return .warnMismatch(savedOn: cal.calibratedOnUnitID, current: deviceUnitID)
+    }
+
+    private func syncSensorCal(profile: RocketProfile, device: BLEDevice) {
+        switch Self.sensorCalSyncAction(profileCal: profile.sensorCal,
+                                        deviceUnitID: device.unitID) {
+        case .push(let cal):
+            sensorCalAdvisory = .none
+            device.sendSensorCalApply(gyroX: cal.gyroX, gyroY: cal.gyroY, gyroZ: cal.gyroZ,
+                                      hgX: cal.hgX, hgY: cal.hgY, hgZ: cal.hgZ)
+        case .warnMismatch(let savedOn, let current):
+            sensorCalAdvisory = .boardMismatch(savedOn: savedOn, current: current)
+        case .readRocket:
+            sensorCalReadPending = true
+            device.sendSensorCalRead()
+        }
+    }
+
+    private func handleSensorCalStatus(_ status: SensorCalStatus) {
+        guard sensorCalReadPending else { return }
+        sensorCalReadPending = false
+        sensorCalAdvisory = status.valid ? .rocketHasUnsavedCal : .missing
+    }
+
+    func importRocketSensorCalIntoActiveProfile() {
+        guard let device, let store,
+              let profile = store.activeProfile,
+              let status = device.sensorCalStatus, status.valid
+        else { return }
+        store.update(profile.id) {
+            $0.sensorCal = SensorCalData(status: status, unitID: device.unitID)
+        }
+        sensorCalAdvisory = .none
+    }
+
     // MARK: - Suggestion
 
     private func computeSuggestion() {
@@ -252,6 +313,21 @@ extension MagCalData {
                   offsetZ: status.offsetZ,
                   fieldR_uT: status.fieldR_uT,
                   residualUT: status.residualUT,
+                  calibratedOnUnitID: unitID,
+                  calibratedAt: Date())
+    }
+}
+
+extension SensorCalData {
+    /// Snapshot a sensor cal readback into a savable profile cal, tagged with
+    /// the board it was captured on.
+    init(status: SensorCalStatus, unitID: String) {
+        self.init(gyroX: status.gyroX,
+                  gyroY: status.gyroY,
+                  gyroZ: status.gyroZ,
+                  hgX: status.hgX,
+                  hgY: status.hgY,
+                  hgZ: status.hgZ,
                   calibratedOnUnitID: unitID,
                   calibratedAt: Date())
     }

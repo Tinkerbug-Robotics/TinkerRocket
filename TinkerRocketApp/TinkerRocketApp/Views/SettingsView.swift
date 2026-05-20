@@ -209,6 +209,7 @@ struct SettingsView: View {
                 summaryRow("Camera", cameraLabel(p.cameraType))
                 summaryRow("Gain scheduling", p.gainScheduleEnabled ? "On" : "Off")
                 summaryRow("Mag cal", p.magCal == nil ? "Not saved" : "Saved")
+                summaryRow("Sensor cal", p.sensorCal == nil ? "Not saved" : "Saved")
             }
         }
 

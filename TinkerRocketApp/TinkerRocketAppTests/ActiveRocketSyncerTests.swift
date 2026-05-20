@@ -39,6 +39,40 @@ final class ActiveRocketSyncerTests: XCTestCase {
         XCTAssertEqual(action, .warnMismatch(savedOn: "BOARD1", current: "BOARD2"))
     }
 
+    // MARK: - Sensor cal action
+
+    private func sensorCal(on unitID: String) -> SensorCalData {
+        SensorCalData(gyroX: 1, gyroY: 2, gyroZ: 3, hgX: 0.1, hgY: 0.2, hgZ: 0.3,
+                      calibratedOnUnitID: unitID, calibratedAt: Date())
+    }
+
+    func testNoProfileSensorCalAsksRocket() {
+        XCTAssertEqual(ActiveRocketSyncer.sensorCalSyncAction(profileCal: nil,
+                                                              deviceUnitID: "B1"), .readRocket)
+    }
+
+    func testMatchingBoardPushesSensorCal() {
+        let c = sensorCal(on: "B1")
+        XCTAssertEqual(ActiveRocketSyncer.sensorCalSyncAction(profileCal: c,
+                                                              deviceUnitID: "B1"), .push(c))
+    }
+
+    func testDifferentBoardWarnsSensorCal() {
+        let c = sensorCal(on: "B1")
+        XCTAssertEqual(ActiveRocketSyncer.sensorCalSyncAction(profileCal: c, deviceUnitID: "B2"),
+                       .warnMismatch(savedOn: "B1", current: "B2"))
+    }
+
+    func testSensorCalDataFromStatusTagsBoard() {
+        let status = SensorCalStatus(valid: true, gyroX: -3, gyroY: 4, gyroZ: -5,
+                                     hgX: 0.11, hgY: -0.22, hgZ: 9.7)
+        let data = SensorCalData(status: status, unitID: "B9")
+        XCTAssertEqual(data.gyroX, -3)
+        XCTAssertEqual(data.gyroZ, -5)
+        XCTAssertEqual(data.hgZ, 9.7, accuracy: 1e-4)
+        XCTAssertEqual(data.calibratedOnUnitID, "B9")
+    }
+
     // MARK: - Suggestion
 
     func testSuggestionMatchesLastUsedBoard() {

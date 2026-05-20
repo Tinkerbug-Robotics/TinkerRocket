@@ -74,6 +74,7 @@ final class RocketProfileStore: ObservableObject {
         copy.updatedAt = Date()
         copy.lastUsedUnitID = nil
         copy.magCal = nil
+        copy.sensorCal = nil
         profiles.append(copy)
         sortProfiles()
         save(copy)

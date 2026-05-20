@@ -1767,6 +1767,7 @@ struct TestingControlsView: View {
 
 struct OnPadCalibrationView: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var store: RocketProfileStore
     /// When embedded in a Form (e.g. the settings General tab) we drop the
     /// card chrome + headline so it sits naturally as a row (#132).
     var embedded: Bool = false
@@ -1774,6 +1775,9 @@ struct OnPadCalibrationView: View {
     @State private var showGravityWarning = false
     @State private var gravityMag: Float = 0.0
     @State private var gravityError: Float = 0.0
+    /// Set when the user kicks off a cal so the next sensor-cal readback gets
+    /// snapshotted into the active profile (#132) — not arbitrary frames.
+    @State private var pendingCalSnapshot = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1784,6 +1788,7 @@ struct OnPadCalibrationView: View {
 
             Button(action: {
                 calibrating = true
+                pendingCalSnapshot = true
                 device.sendCommand(21)
                 // Calibration takes ~10 seconds (1000 samples x 10ms)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) {
@@ -1833,6 +1838,14 @@ struct OnPadCalibrationView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Low-G accelerometer magnitude (\(String(format: "%.2f", gravityMag)) m/s²) differs from expected gravity (9.81 m/s²) by \(String(format: "%.1f", gravityError))%. Consider running a bench calibration before flight.")
+        }
+        // Snapshot the freshly-run sensor cal into the active profile (#132),
+        // tagged with this board's id so the syncer re-applies it on connect.
+        .onChange(of: device.sensorCalStatus) { newStatus in
+            guard pendingCalSnapshot, let s = newStatus, s.valid,
+                  !device.unitID.isEmpty, let id = store.activeId else { return }
+            pendingCalSnapshot = false
+            store.update(id) { $0.sensorCal = SensorCalData(status: s, unitID: device.unitID) }
         }
     }
 }

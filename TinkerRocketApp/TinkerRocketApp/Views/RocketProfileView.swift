@@ -122,6 +122,7 @@ struct RocketProfileView: View {
             summaryRow("Camera", cameraLabel(active.cameraType))
             summaryRow("Gain scheduling", active.gainScheduleEnabled ? "On" : "Off")
             summaryRow("Mag cal", active.magCal == nil ? "Not saved" : "Saved")
+            summaryRow("Sensor cal", active.sensorCal == nil ? "Not saved" : "Saved")
 
             if let device, device.isConnected, !device.isBaseStation {
                 Button {
@@ -159,29 +160,34 @@ struct RocketProfileView: View {
                 }
             }
 
-            magCalAdvisoryRow
+            calAdvisoryView("magnetometer", advisory: syncer.magCalAdvisory) {
+                syncer.importRocketCalIntoActiveProfile()
+            }
+            calAdvisoryView("sensor", advisory: syncer.sensorCalAdvisory) {
+                syncer.importRocketSensorCalIntoActiveProfile()
+            }
         }
     }
 
     @ViewBuilder
-    private var magCalAdvisoryRow: some View {
-        switch syncer.magCalAdvisory {
+    private func calAdvisoryView(_ kind: String,
+                                 advisory adv: ActiveRocketSyncer.CalAdvisory,
+                                 onImport: @escaping () -> Void) -> some View {
+        switch adv {
         case .none:
             EmptyView()
         case .missing:
-            advisory("No magnetometer calibration saved. Run calibration in Settings for accurate heading.",
+            advisory("No \(kind) calibration saved. Run calibration in Settings.",
                      systemImage: "exclamationmark.triangle", color: .orange)
         case .boardMismatch(let savedOn, let current):
-            advisory("This profile's mag cal was done on board \(short(savedOn)). The connected board is \(short(current)) — re-run calibration so heading doesn't drift.",
+            advisory("This profile's \(kind) cal was done on board \(short(savedOn)). The connected board is \(short(current)) — re-run calibration.",
                      systemImage: "exclamationmark.triangle.fill", color: .orange)
         case .rocketHasUnsavedCal:
             VStack(alignment: .leading, spacing: 6) {
-                advisory("This rocket has a calibration the profile doesn't. Save it to the profile?",
+                advisory("This rocket has a \(kind) calibration the profile doesn't. Save it to the profile?",
                          systemImage: "square.and.arrow.down", color: .blue)
-                Button("Save Calibration to Profile") {
-                    syncer.importRocketCalIntoActiveProfile()
-                }
-                .buttonStyle(.bordered)
+                Button("Save \(kind.capitalized) Cal to Profile", action: onImport)
+                    .buttonStyle(.bordered)
             }
         }
     }

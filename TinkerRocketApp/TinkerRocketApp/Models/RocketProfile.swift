@@ -49,6 +49,22 @@ struct MagCalData: Codable, Equatable {
     var calibratedAt: Date
 }
 
+/// Saved on-pad sensor calibration (issue #132): gyro zero-rate bias (raw
+/// LSB) + high-g accel bias (m/s²).  Like mag cal it's board-specific, so
+/// it's tagged with the hardware ID it was captured on and only re-applied to
+/// a matching board.  The low-g accelerometer is the cal reference and isn't
+/// itself corrected, so there's nothing to store for it.
+struct SensorCalData: Codable, Equatable {
+    var gyroX: Int16
+    var gyroY: Int16
+    var gyroZ: Int16
+    var hgX: Float            // high-g accel bias, m/s²
+    var hgY: Float
+    var hgZ: Float
+    var calibratedOnUnitID: String
+    var calibratedAt: Date
+}
+
 struct RocketProfile: Codable, Equatable, Identifiable {
     // MARK: Identity / meta
     var id: UUID = UUID()
@@ -99,8 +115,9 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var pyro2TriggerMode: UInt8 = 0
     var pyro2TriggerValue: Float = 100.0
 
-    // MARK: Mag cal (per physical airframe)
+    // MARK: Calibration (per physical airframe / board)
     var magCal: MagCalData? = nil
+    var sensorCal: SensorCalData? = nil
 
     /// A profile with all firmware factory defaults and the given name.
     static func makeDefault(name: String) -> RocketProfile {
