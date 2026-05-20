@@ -29,6 +29,8 @@ struct DashboardView: View {
     @StateObject private var fleet = BLEFleet()
     @StateObject private var flightAnnouncer = FlightAnnouncer()
     @StateObject private var locationManager = LocationManager()
+    @EnvironmentObject private var profileStore: RocketProfileStore
+    @EnvironmentObject private var syncer: ActiveRocketSyncer
     @State private var activeSheet: DashboardSheet?
     @State private var showProvisioning = false
 
@@ -132,12 +134,19 @@ struct DashboardView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if let device = fleet.activeDevice {
                         HStack(spacing: 16) {
-                            NavigationLink(destination: FileManagerView(device: device)) {
+                            // Rocket icon → pick / manage rocket profiles (#132).
+                            NavigationLink(destination: RocketProfileView(device: device)) {
                                 Image("RocketIcon")
                                     .resizable()
                                     .renderingMode(.template)
                                     .aspectRatio(contentMode: .fit)
                                     .frame(width: 22, height: 22)
+                            }
+
+                            // Book icon → stored flights on the rocket (where the
+                            // rocket icon used to go).
+                            NavigationLink(destination: FileManagerView(device: device)) {
+                                Image(systemName: "book.fill")
                             }
 
                             NavigationLink(destination: MapView(device: device)) {
@@ -174,10 +183,18 @@ struct DashboardView: View {
         .navigationViewStyle(.stack)
         .onAppear {
             fleet.activeDevice?.flightAnnouncer = flightAnnouncer
+            if fleet.isConnected, let dev = fleet.activeDevice {
+                syncer.attach(device: dev, store: profileStore)
+            }
         }
         .onChange(of: fleet.isConnected) { connected in
             if connected {
                 fleet.activeDevice?.flightAnnouncer = flightAnnouncer
+                if let dev = fleet.activeDevice {
+                    syncer.attach(device: dev, store: profileStore)
+                }
+            } else {
+                syncer.detach()
             }
             if !connected && !fleet.isScanning {
                 fleet.startScanning()
@@ -247,6 +264,9 @@ struct ConnectedDashboardView: View {
     @Binding var activeSheet: DashboardSheet?
 
     var body: some View {
+        // Active rocket profile summary + sync status (#132).
+        ActiveRocketHeader(device: device)
+
         // Device chip bar (multi-device) or simple status (single device)
         if fleet.devices.count > 1 {
             DeviceChipBar(fleet: fleet, activeDevice: device)
@@ -1450,6 +1470,7 @@ struct PyroChannelsView: View {
 
 struct PyroConfigSheet: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var store: RocketProfileStore
     let channel: Int
     @Environment(\.dismiss) var dismiss
 
@@ -1520,6 +1541,18 @@ struct PyroConfigSheet: View {
             ch1Enabled: cfg.pyro1Enabled, ch1Mode: cfg.pyro1TriggerMode, ch1Value: cfg.pyro1TriggerValue,
             ch2Enabled: cfg.pyro2Enabled, ch2Mode: cfg.pyro2TriggerMode, ch2Value: cfg.pyro2TriggerValue
         )
+        // Persist pyro config to the active rocket profile too (#132) so the
+        // connect-time syncer doesn't push a stale value back over this edit.
+        if let id = store.activeId {
+            store.update(id) {
+                $0.pyro1Enabled = cfg.pyro1Enabled
+                $0.pyro1TriggerMode = cfg.pyro1TriggerMode
+                $0.pyro1TriggerValue = cfg.pyro1TriggerValue
+                $0.pyro2Enabled = cfg.pyro2Enabled
+                $0.pyro2TriggerMode = cfg.pyro2TriggerMode
+                $0.pyro2TriggerValue = cfg.pyro2TriggerValue
+            }
+        }
     }
 }
 
