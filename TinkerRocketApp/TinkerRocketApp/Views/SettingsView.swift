@@ -73,6 +73,13 @@ struct SettingsView: View {
             && device.telemetry.state == "INITIALIZATION"
     }
 
+    /// Calibrations run on the rocket, so they need it connected AND powered
+    /// on (its sensors aren't running otherwise).  Other settings stay
+    /// editable offline — only the cal rows are gated.
+    private var canCalibrate: Bool {
+        device.isConnected && !device.isBaseStation && device.telemetry.pwr_pin_on
+    }
+
     /// Convenience: the active profile, or a throwaway default so getters have
     /// something to read before a profile is selected.  Writes always go
     /// through `updateProfile`, which no-ops when there's no active id.
@@ -384,9 +391,15 @@ struct SettingsView: View {
             } label: {
                 Label("Magnetometer Calibration", systemImage: "location.north.line")
             }
+            .disabled(!canCalibrate)
             OnPadCalibrationView(device: device, embedded: true)
-            Text("Mag cal is saved to this rocket's profile and re-applied on connect. Sensor (gyro/accel) calibration runs on the connected rocket — place it on the pad and keep still.")
-                .font(.caption).foregroundColor(.secondary)
+            if canCalibrate {
+                Text("Mag and sensor cal are saved to this rocket's profile and re-applied on connect. Place the rocket on the pad and keep still while calibrating.")
+                    .font(.caption).foregroundColor(.secondary)
+            } else {
+                Label("Power on the rocket to run calibrations.", systemImage: "bolt.slash")
+                    .font(.caption).foregroundColor(.orange)
+            }
         }
     }
 

@@ -1819,7 +1819,7 @@ struct OnPadCalibrationView: View {
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
-            .disabled(calibrating || !device.isConnected)
+            .disabled(calibrating || !device.isConnected || !device.telemetry.pwr_pin_on)
 
             Text("Place rocket on pad and keep still. Calibrates gyro bias and accelerometer offsets (~10 seconds).")
                 .font(.caption)
