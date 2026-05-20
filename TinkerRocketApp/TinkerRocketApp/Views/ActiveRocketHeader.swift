@@ -16,43 +16,54 @@ struct ActiveRocketHeader: View {
     @EnvironmentObject var syncer: ActiveRocketSyncer
 
     var body: some View {
-        NavigationLink(destination: RocketProfileView(device: device)) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image("RocketIcon")
-                        .resizable().renderingMode(.template)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 20, height: 20)
-                        .foregroundColor(.accentColor)
-                    Text(store.activeProfile?.name ?? "No rocket selected")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    Spacer()
+        // On a base station the active rocket is read-only — the picker isn't
+        // reachable here (you change/manage rockets connected directly to a
+        // rocket).  So the header navigates only for a direct rocket link.
+        if device.isBaseStation {
+            card
+        } else {
+            NavigationLink(destination: RocketProfileView(device: device)) { card }
+                .buttonStyle(.plain)
+        }
+    }
+
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image("RocketIcon")
+                    .resizable().renderingMode(.template)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 20, height: 20)
+                    .foregroundColor(.accentColor)
+                Text(store.activeProfile?.name ?? "No rocket selected")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Spacer()
+                if !device.isBaseStation {
                     Image(systemName: "chevron.right")
                         .font(.caption).foregroundColor(.secondary)
                 }
-
-                if let p = store.activeProfile {
-                    Text(keyline(p))
-                        .font(.caption).foregroundColor(.secondary)
-                } else {
-                    Text("Tap to pick or create a rocket.")
-                        .font(.caption).foregroundColor(.secondary)
-                }
-
-                if device.isBaseStation {
-                    Text("Settings are edited on the rocket.")
-                        .font(.caption2).foregroundColor(.secondary)
-                } else {
-                    SyncStatusRow(state: syncer.syncState)
-                }
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground))
-            .cornerRadius(10)
+
+            if let p = store.activeProfile {
+                Text(keyline(p))
+                    .font(.caption).foregroundColor(.secondary)
+            } else if !device.isBaseStation {
+                Text("Tap to pick or create a rocket.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
+            if device.isBaseStation {
+                Text("Settings are edited on the rocket.")
+                    .font(.caption2).foregroundColor(.secondary)
+            } else {
+                SyncStatusRow(state: syncer.syncState)
+            }
         }
-        .buttonStyle(.plain)
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(10)
     }
 
     private func keyline(_ p: RocketProfile) -> String {

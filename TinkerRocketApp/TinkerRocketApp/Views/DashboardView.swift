@@ -135,12 +135,17 @@ struct DashboardView: View {
                     if let device = fleet.activeDevice {
                         HStack(spacing: 16) {
                             // Rocket icon → pick / manage rocket profiles (#132).
-                            NavigationLink(destination: RocketProfileView(device: device)) {
-                                Image("RocketIcon")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: 22, height: 22)
+                            // Hidden on a base station: rocket selection is
+                            // read-only there (you manage rockets connected
+                            // directly to a rocket).
+                            if !device.isBaseStation {
+                                NavigationLink(destination: RocketProfileView(device: device)) {
+                                    Image("RocketIcon")
+                                        .resizable()
+                                        .renderingMode(.template)
+                                        .aspectRatio(contentMode: .fit)
+                                        .frame(width: 22, height: 22)
+                                }
                             }
 
                             // Book icon → stored flights on the rocket (where the
