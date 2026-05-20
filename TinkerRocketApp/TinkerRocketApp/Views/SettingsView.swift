@@ -51,6 +51,16 @@ struct SettingsView: View {
     @FocusState private var focusedField: EditField?
     @State private var lastFocusedField: EditField?
 
+    // Settings are grouped into tabs (one panel at a time) on phone screens
+    // (#132 / #147).  Switching a tab flushes the leaving tab's pending edit.
+    @State private var tab: SettingsTab = .flight
+    private enum SettingsTab: String, CaseIterable {
+        case flight = "Flight"
+        case airframe = "Airframe"
+        case camera = "Camera"
+        case general = "General"
+    }
+
     private var currentFreqMHz: Float { device.rocketConfig?.loraFreqMHz ?? 915.0 }
 
     private var isInitializing: Bool {
@@ -63,6 +73,12 @@ struct SettingsView: View {
     /// through `updateProfile`, which no-ops when there's no active id.
     private var profile: RocketProfile {
         store.activeProfile ?? RocketProfile.makeDefault(name: "")
+    }
+
+    /// Editing a rocket shows its name as the title; otherwise generic.
+    private var navTitle: String {
+        if !device.isBaseStation, let active = store.activeProfile { return active.name }
+        return "Settings"
     }
 
     // MARK: - Focus-driven self-apply (#144)
@@ -119,7 +135,7 @@ struct SettingsView: View {
                     rocketSettingsSections
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle(navTitle)
             .overlay { if isInitializing { initializingOverlay } }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -136,6 +152,12 @@ struct SettingsView: View {
             }
             .onAppear { loadFromProfile() }
             .onChange(of: store.activeId) { _ in loadFromProfile() }
+            // Leaving a tab commits its pending text edit; reloading then snaps
+            // any unparseable input back to the last saved (valid) value.
+            .onChange(of: tab) { _ in
+                flushPendingEdits()
+                loadFromProfile()
+            }
             .onChange(of: focusedField) { handleFocusChange($0) }
             .onDisappear { flushPendingEdits() }
             .onReceive(device.$rocketConfig.compactMap { $0 }) { cfg in
@@ -230,39 +252,23 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var rocketSettingsSections: some View {
-        Section("Rocket") {
-            HStack {
-                Text("Active rocket")
-                Spacer()
-                Text(profile.name).foregroundColor(.secondary)
+        Section {
+            Picker("Group", selection: $tab) {
+                ForEach(SettingsTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
-            Toggle("Enable Sounds", isOn: bind(\.soundsEnabled) {
-                device.sendSoundConfig(enabled: $0)
-            })
-            Toggle("Enable Servo Control", isOn: bind(\.servoControlEnabled) {
-                device.sendServoControlConfig(enabled: $0)
-            })
-            NavigationLink {
-                MagCalView(device: device)
-            } label: {
-                Label("Magnetometer Calibration", systemImage: "location.north.line")
-            }
-            Text("Stored in the rocket profile. Persists across reboots.")
-                .font(.caption).foregroundColor(.secondary)
+            .pickerStyle(.segmented)
         }
 
-        Section(header: configHeader("Servo", applied: servoApplied)) {
-            stringRow("Servo 1", text: $sBias1, field: .bias1)
-            stringRow("Servo 2", text: $sBias2, field: .bias2)
-            stringRow("Servo 3", text: $sBias3, field: .bias3)
-            stringRow("Servo 4", text: $sBias4, field: .bias4)
-            Text("Microsecond offset per servo to trim mechanical misalignment.")
-                .font(.caption).foregroundColor(.secondary)
-            stringRow("Frequency", text: $sServoHz, field: .servoHz, unit: "Hz")
-            stringRow("Min Pulse", text: $sServoMinUs, field: .servoMin, unit: "\u{00B5}s")
-            stringRow("Max Pulse", text: $sServoMaxUs, field: .servoMax, unit: "\u{00B5}s")
+        switch tab {
+        case .flight:   flightSections
+        case .airframe: airframeSections
+        case .camera:   cameraSections
+        case .general:  generalSections
         }
+    }
 
+    @ViewBuilder
+    private var flightSections: some View {
         Section(header: configHeader("PID Gains", applied: pidApplied)) {
             stringRow("Kp", text: $sPidKp, field: .pidKp, decimal: true)
             stringRow("Ki", text: $sPidKi, field: .pidKi, decimal: true)
@@ -275,7 +281,35 @@ struct SettingsView: View {
             Text("Scales PID gains with (V_ref/V)\u{00B2}. Disable for fixed gains at all speeds.")
                 .font(.caption).foregroundColor(.secondary)
         }
+        rollControlSection
+    }
 
+    @ViewBuilder
+    private var airframeSections: some View {
+        Section(header: configHeader("Servo", applied: servoApplied)) {
+            stringRow("Servo 1", text: $sBias1, field: .bias1)
+            stringRow("Servo 2", text: $sBias2, field: .bias2)
+            stringRow("Servo 3", text: $sBias3, field: .bias3)
+            stringRow("Servo 4", text: $sBias4, field: .bias4)
+            Text("Microsecond offset per servo to trim mechanical misalignment.")
+                .font(.caption).foregroundColor(.secondary)
+            stringRow("Frequency", text: $sServoHz, field: .servoHz, unit: "Hz")
+            stringRow("Min Pulse", text: $sServoMinUs, field: .servoMin, unit: "\u{00B5}s")
+            stringRow("Max Pulse", text: $sServoMaxUs, field: .servoMax, unit: "\u{00B5}s")
+        }
+        Section("Magnetometer") {
+            NavigationLink {
+                MagCalView(device: device)
+            } label: {
+                Label("Magnetometer Calibration", systemImage: "location.north.line")
+            }
+            Text("Calibration is saved per rocket. Persists across reboots.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var cameraSections: some View {
         Section("Camera") {
             Picker("Camera Type", selection: cameraBinding) {
                 Text("None").tag(0)
@@ -286,8 +320,25 @@ struct SettingsView: View {
             Text(cameraHint(Int(profile.cameraType)))
                 .font(.caption).foregroundColor(.secondary)
         }
+    }
 
-        rollControlSection
+    @ViewBuilder
+    private var generalSections: some View {
+        Section("Rocket") {
+            HStack {
+                Text("Active rocket")
+                Spacer()
+                Text(profile.name).foregroundColor(.secondary)
+            }
+            Toggle("Enable Sounds", isOn: bind(\.soundsEnabled) {
+                device.sendSoundConfig(enabled: $0)
+            })
+            Toggle("Enable Servo Control", isOn: bind(\.servoControlEnabled) {
+                device.sendServoControlConfig(enabled: $0)
+            })
+            Text("Stored in the rocket profile. Persists across reboots.")
+                .font(.caption).foregroundColor(.secondary)
+        }
     }
 
     @ViewBuilder
