@@ -14,7 +14,7 @@ MSG_TYPES = {
     0xA2: ("ISM6HG256", 22),
     0xA3: ("BMP585", 12),
     0xA4: ("MMC5983MA", 16),
-    0xA5: ("NON_SENSOR", 43),
+    0xA5: ("NON_SENSOR", 44),
     0xA6: ("POWER", 10),
     0xA7: ("START_LOGGING", 0),
     0xA8: ("END_FLIGHT", 0),
@@ -79,9 +79,15 @@ def parse_mag(payload):
 
 def parse_nonsensor(payload):
     # Struct: uint32 time, i16*4 quat, i16 roll_cmd, i32*3 pos, i32*3 vel,
-    #         u8 flags, u8 rocket_state, i16 baro_alt_rate_dmps, u8 pyro_status
-    fields = struct.unpack('<I hhhh h iii iii BB h B', payload)
+    #         u8 flags, u8 rocket_state, i16 baro_alt_rate_dmps, u8 pyro_status,
+    #         u8 apogee_flags
+    # apogee_flags was appended in #142/#143 (frame grew 43 -> 44 bytes); old
+    # 43-byte logs are still decoded, with apogee_flags defaulting to 0.
+    has_apogee = len(payload) >= 44
+    fmt = '<I hhhh h iii iii BB h BB' if has_apogee else '<I hhhh h iii iii BB h B'
+    fields = struct.unpack(fmt, payload)
     pyro_status = fields[15]
+    apogee_flags = fields[16] if has_apogee else 0
     return {
         'time_us': fields[0],
         'q0': fields[1] / 10000.0, 'q1': fields[2] / 10000.0,
@@ -93,6 +99,11 @@ def parse_nonsensor(payload):
         'rocket_state': fields[13],
         'baro_alt_rate_ms': fields[14] / 10.0,
         'pyro_status': pyro_status,
+        'apogee_flags': apogee_flags,
+        # apogee_flags bits: 0=gps_apogee, 1=pitch_apogee, 2=apogee (voted master)
+        'gps_apogee': bool(apogee_flags & 0x01),
+        'pitch_apogee': bool(apogee_flags & 0x02),
+        'apogee_voted': bool(apogee_flags & 0x04),
         'guidance_enabled': bool(pyro_status & PSF_GUIDANCE_ENABLED),
     }
 
@@ -214,7 +225,7 @@ def parse_file(path):
             parsed = parse_baro(payload)
         elif msg_type == 0xA4 and msg_len == 16:
             parsed = parse_mag(payload)
-        elif msg_type == 0xA5 and msg_len == 43:
+        elif msg_type == 0xA5 and msg_len in (43, 44):
             parsed = parse_nonsensor(payload)
         elif msg_type == 0xA6 and msg_len == 10:
             parsed = parse_power(payload)
