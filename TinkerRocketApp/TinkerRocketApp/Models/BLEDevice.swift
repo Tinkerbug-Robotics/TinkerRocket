@@ -57,6 +57,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // disconnect so a stale REVIEW state doesn't bleed across sessions.
     @Published var magCalStatus: MagCalStatus?
 
+    /// Latest sensor (gyro + high-g) cal readback from the FC, received on
+    /// the file_ops characteristic behind a 0xCB discriminator (#132).
+    @Published var sensorCalStatus: SensorCalStatus?
+
     /// Set once per connected-session after the first-time-seen base station
     /// has auto-picked and pushed a quiet channel.  Gates the auto-pick so it
     /// only runs once per session; cleared on disconnect so that a BS reboot
@@ -176,6 +180,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // session doesn't show up on reconnect (issue #96).  The FC
         // republishes IDLE on reconnect anyway.
         magCalStatus = nil
+        sensorCalStatus = nil
         flightAnnouncer?.reset()
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -591,6 +596,25 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// (subType=APPLIED if cal is present, IDLE otherwise).
     func sendMagCalRead() { sendCommand(56) }
 
+    /// Push a saved sensor cal (gyro zero-rate bias + high-g accel bias) into
+    /// the rocket's NVS (#132).  Wire format mirrors `SensorCalApplyData`:
+    /// int16 gyro x/y/z, float hg x/y/z (little-endian, packed, 18 bytes).
+    func sendSensorCalApply(gyroX: Int16, gyroY: Int16, gyroZ: Int16,
+                            hgX: Float, hgY: Float, hgZ: Float) {
+        var payload = Data()
+        var gx = gyroX; payload.append(Data(bytes: &gx, count: 2))
+        var gy = gyroY; payload.append(Data(bytes: &gy, count: 2))
+        var gz = gyroZ; payload.append(Data(bytes: &gz, count: 2))
+        var hx = hgX;   payload.append(Data(bytes: &hx, count: 4))
+        var hy = hgY;   payload.append(Data(bytes: &hy, count: 4))
+        var hz = hgZ;   payload.append(Data(bytes: &hz, count: 4))
+        sendRawCommand(57, payload: payload)
+    }
+
+    /// Ask the FC to publish its stored sensor cal; the reply lands on
+    /// `sensorCalStatus` (valid=false when the rocket has none).
+    func sendSensorCalRead() { sendCommand(58) }
+
     func sendToggleLogging() {
         sendCommand(23)
     }
@@ -989,7 +1013,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // can never collide with it.
                 switch data.first {
                 case 0xAA: parseScanResult(data)
-                case 0xCA: parseMagCalStatus(data)   // issue #96
+                case 0xCA: parseMagCalStatus(data)     // issue #96
+                case 0xCB: parseSensorCalStatus(data)  // issue #132
                 default:   parseFileList(data)
                 }
             }
@@ -1166,6 +1191,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         magCalStatus = status
+    }
+
+    private func parseSensorCalStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 20, bytes[0] == 0xCB else {
+            print("[SENSORCAL] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        let payload = Array(bytes[1..<bytes.count])
+        guard let status = SensorCalStatus.decode(payload) else {
+            print("[SENSORCAL] decode failed (payload=\(payload.count) bytes)")
+            return
+        }
+        sensorCalStatus = status
     }
 
     private func parseScanResult(_ data: Data) {

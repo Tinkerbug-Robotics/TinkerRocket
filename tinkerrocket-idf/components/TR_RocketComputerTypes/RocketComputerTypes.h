@@ -823,6 +823,36 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(MagCalApplyData) == 14,
               "MagCalApplyData must be 14 bytes");
 
+// Sensor cal payload (issue #132): gyro zero-rate bias in raw LSB (subtracted
+// from raw gyro) + high-g accel bias in m/s².  app→FC via SENSOR_CAL_APPLY_MSG.
+typedef struct __attribute__((packed))
+{
+    int16_t gyro_x;    // raw gyro LSB
+    int16_t gyro_y;
+    int16_t gyro_z;
+    float   hg_x;      // high-g accel bias, m/s²
+    float   hg_y;
+    float   hg_z;
+} SensorCalApplyData;
+static_assert(sizeof(SensorCalApplyData) == 18,
+              "SensorCalApplyData must be 18 bytes");
+
+// FC→OC/app sensor-cal readback: same fields plus a validity flag (0 when the
+// rocket has no stored sensor cal).  Rides the file_ops characteristic behind
+// a 0xCB discriminator, like mag cal's 0xCA frame.
+typedef struct __attribute__((packed))
+{
+    uint8_t valid;     // 1 if a sensor cal is stored in NVS, else 0
+    int16_t gyro_x;
+    int16_t gyro_y;
+    int16_t gyro_z;
+    float   hg_x;
+    float   hg_y;
+    float   hg_z;
+} SensorCalStatusData;
+static_assert(sizeof(SensorCalStatusData) == 19,
+              "SensorCalStatusData must be 19 bytes");
+
 // MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
 // int32_t in the same 18-bit signed centered-counts space as
 // mmc5983ma_centered_counts() returns.  Subtracted before scaling to µT.
@@ -1263,6 +1293,17 @@ static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fi
 static constexpr uint8_t MAG_CAL_APPLY_PENDING = 0xDA;  // OC→FC: payload follows as MAG_CAL_APPLY_MSG
 static constexpr uint8_t MAG_CAL_APPLY_MSG     = 0xDB;  // 14-byte MagCalApplyData payload
 static constexpr uint8_t MAG_CAL_READ          = 0xDC;  // OC→FC: publish current NVS cal as a status frame
+
+// --- App-driven sensor cal apply / read (issue #132 — rocket profiles) ---
+// The on-pad "Calibrate Sensors" routine produces a gyro zero-rate bias and
+// a high-g accel bias.  Mirroring mag cal, the app stores both per-rocket and
+// pushes them back on connect (APPLY) or reads what's stored (READ).  The
+// low-g accelerometer is the cal reference, not itself corrected, so there is
+// nothing to store for it.
+static constexpr uint8_t SENSOR_CAL_APPLY_PENDING = 0xDD;  // OC→FC: payload follows as SENSOR_CAL_APPLY_MSG
+static constexpr uint8_t SENSOR_CAL_APPLY_MSG     = 0xDE;  // 18-byte SensorCalApplyData payload
+static constexpr uint8_t SENSOR_CAL_READ          = 0xDF;  // OC→FC: publish current NVS sensor cal
+static constexpr uint8_t SENSOR_CAL_STATUS_MSG    = 0xE0;  // FC→OC: SensorCalStatusData
 
 static constexpr uint8_t LORA_MSG            = 0xF1;
 

@@ -1058,7 +1058,8 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == PYRO_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
-           cmd == MAG_CAL_APPLY_PENDING;  // #132: app-pushed cal payload
+           cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
+           cmd == SENSOR_CAL_APPLY_PENDING;    // #132: app-pushed sensor cal payload
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -1413,6 +1414,15 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(MagCalStatusData))
         {
             ble_app.sendMagCalStatus(payload, sizeof(MagCalStatusData));
+        }
+    }
+    else if (type == SENSOR_CAL_STATUS_MSG)
+    {
+        // Issue #132: FC→OC sensor cal readback.  Forward to BLE on file-ops
+        // with a 0xCB discriminator (sibling of mag cal's 0xCA).
+        if (payload_len >= sizeof(SensorCalStatusData))
+        {
+            ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
         }
     }
     else if (type == GNSS_MSG)
@@ -4880,6 +4890,31 @@ static void loop_oc()
         {
             setPendingCommand(MAG_CAL_READ);
             ESP_LOGI("BLE", "Mag cal READ -> FlightComputer");
+        }
+        // Issue #132 — app pushes a saved sensor cal (gyro + high-g) back into
+        // FC NVS as part of the rocket-profile auto-sync on connect.
+        else if (ble_cmd == 57)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(SensorCalApplyData))
+            {
+                memcpy(pending_config_data, payload, sizeof(SensorCalApplyData));
+                pending_config_data_len = sizeof(SensorCalApplyData);
+                pending_config_msg_type = SENSOR_CAL_APPLY_MSG;
+                setPendingCommand(SENSOR_CAL_APPLY_PENDING);
+                ESP_LOGI("BLE", "Sensor cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Sensor cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(SensorCalApplyData));
+            }
+        }
+        else if (ble_cmd == 58)
+        {
+            setPendingCommand(SENSOR_CAL_READ);
+            ESP_LOGI("BLE", "Sensor cal READ -> FlightComputer");
         }
     }
 
