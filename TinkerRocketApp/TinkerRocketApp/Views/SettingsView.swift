@@ -39,10 +39,15 @@ struct SettingsView: View {
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
 
+    // Pyro trigger values edited as strings (seconds or meters by mode).
+    @State private var sPyro1Value = ""
+    @State private var sPyro2Value = ""
+
     // "Sent" feedback in section headers.
     @State private var servoApplied = false
     @State private var pidApplied = false
     @State private var rollControlApplied = false
+    @State private var pyroApplied = false
 
     // LoRa TX power (BS only) — hydrated from rocketConfig, debounced send.
     @State private var txPowerDbm: Int = 12
@@ -57,7 +62,7 @@ struct SettingsView: View {
     private enum SettingsTab: String, CaseIterable {
         case flight = "Flight"
         case airframe = "Airframe"
-        case camera = "Camera"
+        case pyro = "Pyro"
         case general = "General"
     }
 
@@ -88,9 +93,10 @@ struct SettingsView: View {
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
         case wpTime(Int), wpAngle(Int)
+        case pyro1Value, pyro2Value
     }
 
-    private enum EditGroup { case servo, pid, rollControl, rollWaypoints }
+    private enum EditGroup { case servo, pid, rollControl, rollWaypoints, pyro }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
@@ -98,6 +104,7 @@ struct SettingsView: View {
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay: return .rollControl
         case .wpTime, .wpAngle: return .rollWaypoints
+        case .pyro1Value, .pyro2Value: return .pyro
         case nil: return nil
         }
     }
@@ -108,6 +115,7 @@ struct SettingsView: View {
         case .pid: applyPIDConfig()
         case .rollControl: applyRollControlConfig()
         case .rollWaypoints: applyRollProfile()
+        case .pyro: applyPyroConfig()
         }
     }
 
@@ -262,7 +270,7 @@ struct SettingsView: View {
         switch tab {
         case .flight:   flightSections
         case .airframe: airframeSections
-        case .camera:   cameraSections
+        case .pyro:     pyroSections
         case .general:  generalSections
         }
     }
@@ -309,16 +317,43 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var cameraSections: some View {
-        Section("Camera") {
-            Picker("Camera Type", selection: cameraBinding) {
-                Text("None").tag(0)
-                Text("GoPro").tag(1)
-                Text("RunCam").tag(2)
-            }
-            .pickerStyle(.segmented)
-            Text(cameraHint(Int(profile.cameraType)))
+    private var pyroSections: some View {
+        pyroChannelSection(1)
+        pyroChannelSection(2)
+        Section {
+            Text("Channels arm automatically at launch. Test continuity and test-fire from the rocket dashboard before flight.")
                 .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private func pyroChannelSection(_ ch: Int) -> some View {
+        let enabled = (ch == 1) ? profile.pyro1Enabled : profile.pyro2Enabled
+        let mode = Int((ch == 1) ? profile.pyro1TriggerMode : profile.pyro2TriggerMode)
+        return Section(header: configHeader("Pyro Channel \(ch)", applied: pyroApplied)) {
+            Toggle("Enabled", isOn: pyroEnabledBinding(ch))
+            if enabled {
+                Picker("Trigger", selection: pyroModeBinding(ch)) {
+                    Text("Time after apogee").tag(0)
+                    Text("Altitude on descent").tag(1)
+                }
+                .pickerStyle(.segmented)
+                HStack {
+                    Text(mode == 0 ? "Delay" : "Altitude")
+                    Spacer()
+                    TextField(mode == 0 ? "0.0" : "0",
+                              text: (ch == 1) ? $sPyro1Value : $sPyro2Value)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .focused($focusedField, equals: (ch == 1) ? .pyro1Value : .pyro2Value)
+                    Text(mode == 0 ? "s after apogee" : "m on descent")
+                        .foregroundColor(.secondary)
+                }
+                Text(mode == 0
+                    ? "Fires this many seconds after apogee is detected."
+                    : "Fires when the rocket descends through this altitude (AGL).")
+                    .font(.caption).foregroundColor(.secondary)
+            }
         }
     }
 
@@ -337,6 +372,17 @@ struct SettingsView: View {
                 device.sendServoControlConfig(enabled: $0)
             })
             Text("Stored in the rocket profile. Persists across reboots.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+
+        Section("Camera") {
+            Picker("Camera Type", selection: cameraBinding) {
+                Text("None").tag(0)
+                Text("GoPro").tag(1)
+                Text("RunCam").tag(2)
+            }
+            .pickerStyle(.segmented)
+            Text(cameraHint(Int(profile.cameraType)))
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -494,6 +540,32 @@ struct SettingsView: View {
             })
     }
 
+    // Pyro enable / mode apply immediately (like toggles); the trigger value
+    // commits on focus loss via the .pyro EditGroup.
+    private func pyroEnabledBinding(_ ch: Int) -> Binding<Bool> {
+        Binding(
+            get: { (ch == 1) ? profile.pyro1Enabled : profile.pyro2Enabled },
+            set: { newValue in
+                updateProfile {
+                    if ch == 1 { $0.pyro1Enabled = newValue } else { $0.pyro2Enabled = newValue }
+                }
+                applyPyroConfig()
+            })
+    }
+
+    private func pyroModeBinding(_ ch: Int) -> Binding<Int> {
+        Binding(
+            get: { Int((ch == 1) ? profile.pyro1TriggerMode : profile.pyro2TriggerMode) },
+            set: { newValue in
+                updateProfile {
+                    if ch == 1 { $0.pyro1TriggerMode = UInt8(newValue) }
+                    else { $0.pyro2TriggerMode = UInt8(newValue) }
+                }
+                reloadPyroValueStrings()   // reformat for the new unit (s vs m)
+                applyPyroConfig()
+            })
+    }
+
     // MARK: - String ↔ profile sync
 
     private func loadFromProfile() {
@@ -514,6 +586,18 @@ struct SettingsView: View {
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg), mode: $0.mode.rawValue)
         }
+        reloadPyroValueStrings()
+    }
+
+    private func reloadPyroValueStrings() {
+        let p = profile
+        sPyro1Value = formatPyro(p.pyro1TriggerValue, mode: p.pyro1TriggerMode)
+        sPyro2Value = formatPyro(p.pyro2TriggerValue, mode: p.pyro2TriggerMode)
+    }
+
+    /// Time-after-apogee shows one decimal (seconds); altitude shows whole metres.
+    private func formatPyro(_ v: Float, mode: UInt8) -> String {
+        String(format: mode == 0 ? "%.1f" : "%.0f", v)
     }
 
     private func formatInt(_ v: Double) -> String {
@@ -597,6 +681,32 @@ struct SettingsView: View {
             device.sendServoConfig(biases: [b1, b2, b3, b4], hz: hz, minUs: mn, maxUs: mx)
         }
         showApplied($servoApplied)
+    }
+
+    private func applyPyroConfig() {
+        let v1 = Float(sPyro1Value) ?? profile.pyro1TriggerValue
+        let v2 = Float(sPyro2Value) ?? profile.pyro2TriggerValue
+        updateProfile {
+            $0.pyro1TriggerValue = v1
+            $0.pyro2TriggerValue = v2
+        }
+        let p = profile
+        if device.isConnected {
+            device.sendPyroConfig(
+                ch1Enabled: p.pyro1Enabled, ch1Mode: p.pyro1TriggerMode, ch1Value: p.pyro1TriggerValue,
+                ch2Enabled: p.pyro2Enabled, ch2Mode: p.pyro2TriggerMode, ch2Value: p.pyro2TriggerValue)
+            // Mirror into rocketConfig so the dashboard pyro tiles update live.
+            if var cfg = device.rocketConfig {
+                cfg.pyro1Enabled = p.pyro1Enabled
+                cfg.pyro1TriggerMode = p.pyro1TriggerMode
+                cfg.pyro1TriggerValue = p.pyro1TriggerValue
+                cfg.pyro2Enabled = p.pyro2Enabled
+                cfg.pyro2TriggerMode = p.pyro2TriggerMode
+                cfg.pyro2TriggerValue = p.pyro2TriggerValue
+                device.rocketConfig = cfg
+            }
+        }
+        showApplied($pyroApplied)
     }
 
     private func applyPIDConfig() {
