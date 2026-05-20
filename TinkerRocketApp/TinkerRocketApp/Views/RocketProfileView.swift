@@ -76,24 +76,18 @@ struct RocketProfileView: View {
     private func profileRow(_ profile: RocketProfile) -> some View {
         let selected = profile.id == store.activeId
         return HStack(spacing: 12) {
-            // Rocket icon → make this the active rocket and open its settings.
+            // Tapping the icon or the name makes this the active rocket and
+            // opens its settings.
             Button {
                 store.setActive(profile.id)
                 showSettings = true
             } label: {
-                Image("RocketIcon")
-                    .resizable().renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 26, height: 26)
-                    .foregroundColor(selected ? .blue : .secondary)
-            }
-            .buttonStyle(.borderless)
-
-            // Name → select (make active) without opening settings.
-            Button {
-                store.setActive(profile.id)
-            } label: {
-                HStack {
+                HStack(spacing: 12) {
+                    Image("RocketIcon")
+                        .resizable().renderingMode(.template)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 26, height: 26)
+                        .foregroundColor(selected ? .blue : .secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name)
                             .foregroundColor(selected ? .blue : .primary)
