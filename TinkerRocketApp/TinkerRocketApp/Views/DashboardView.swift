@@ -1767,6 +1767,9 @@ struct TestingControlsView: View {
 
 struct OnPadCalibrationView: View {
     @ObservedObject var device: BLEDevice
+    /// When embedded in a Form (e.g. the settings General tab) we drop the
+    /// card chrome + headline so it sits naturally as a row (#132).
+    var embedded: Bool = false
     @State private var calibrating = false
     @State private var showGravityWarning = false
     @State private var gravityMag: Float = 0.0
@@ -1774,8 +1777,10 @@ struct OnPadCalibrationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("On Pad Calibration")
-                .font(.headline)
+            if !embedded {
+                Text("On Pad Calibration")
+                    .font(.headline)
+            }
 
             Button(action: {
                 calibrating = true
@@ -1820,10 +1825,10 @@ struct OnPadCalibrationView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding()
+        .padding(embedded ? 0 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray6))
-        .cornerRadius(10)
+        .background(embedded ? Color.clear : Color(.systemGray6))
+        .cornerRadius(embedded ? 0 : 10)
         .alert("Accelerometer Warning", isPresented: $showGravityWarning) {
             Button("OK", role: .cancel) { }
         } message: {

@@ -58,10 +58,10 @@ struct SettingsView: View {
 
     // Settings are grouped into tabs (one panel at a time) on phone screens
     // (#132 / #147).  Switching a tab flushes the leaving tab's pending edit.
-    @State private var tab: SettingsTab = .flight
+    @State private var tab: SettingsTab = .control
     private enum SettingsTab: String, CaseIterable {
-        case flight = "Flight"
-        case airframe = "Airframe"
+        case control = "Control"
+        case camera = "Camera"
         case pyro = "Pyro"
         case general = "General"
     }
@@ -268,15 +268,15 @@ struct SettingsView: View {
         }
 
         switch tab {
-        case .flight:   flightSections
-        case .airframe: airframeSections
+        case .control:  controlSections
+        case .camera:   cameraSections
         case .pyro:     pyroSections
         case .general:  generalSections
         }
     }
 
     @ViewBuilder
-    private var flightSections: some View {
+    private var controlSections: some View {
         Section(header: configHeader("PID Gains", applied: pidApplied)) {
             stringRow("Kp", text: $sPidKp, field: .pidKp, decimal: true)
             stringRow("Ki", text: $sPidKi, field: .pidKi, decimal: true)
@@ -289,12 +289,11 @@ struct SettingsView: View {
             Text("Scales PID gains with (V_ref/V)\u{00B2}. Disable for fixed gains at all speeds.")
                 .font(.caption).foregroundColor(.secondary)
         }
-        rollControlSection
-    }
 
-    @ViewBuilder
-    private var airframeSections: some View {
         Section(header: configHeader("Servo", applied: servoApplied)) {
+            Toggle("Enable Servo Control", isOn: bind(\.servoControlEnabled) {
+                device.sendServoControlConfig(enabled: $0)
+            })
             stringRow("Servo 1", text: $sBias1, field: .bias1)
             stringRow("Servo 2", text: $sBias2, field: .bias2)
             stringRow("Servo 3", text: $sBias3, field: .bias3)
@@ -305,13 +304,20 @@ struct SettingsView: View {
             stringRow("Min Pulse", text: $sServoMinUs, field: .servoMin, unit: "\u{00B5}s")
             stringRow("Max Pulse", text: $sServoMaxUs, field: .servoMax, unit: "\u{00B5}s")
         }
-        Section("Magnetometer") {
-            NavigationLink {
-                MagCalView(device: device)
-            } label: {
-                Label("Magnetometer Calibration", systemImage: "location.north.line")
+
+        rollControlSection
+    }
+
+    @ViewBuilder
+    private var cameraSections: some View {
+        Section("Camera") {
+            Picker("Camera Type", selection: cameraBinding) {
+                Text("None").tag(0)
+                Text("GoPro").tag(1)
+                Text("RunCam").tag(2)
             }
-            Text("Calibration is saved per rocket. Persists across reboots.")
+            .pickerStyle(.segmented)
+            Text(cameraHint(Int(profile.cameraType)))
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -368,21 +374,18 @@ struct SettingsView: View {
             Toggle("Enable Sounds", isOn: bind(\.soundsEnabled) {
                 device.sendSoundConfig(enabled: $0)
             })
-            Toggle("Enable Servo Control", isOn: bind(\.servoControlEnabled) {
-                device.sendServoControlConfig(enabled: $0)
-            })
             Text("Stored in the rocket profile. Persists across reboots.")
                 .font(.caption).foregroundColor(.secondary)
         }
 
-        Section("Camera") {
-            Picker("Camera Type", selection: cameraBinding) {
-                Text("None").tag(0)
-                Text("GoPro").tag(1)
-                Text("RunCam").tag(2)
+        Section("Calibration") {
+            NavigationLink {
+                MagCalView(device: device)
+            } label: {
+                Label("Magnetometer Calibration", systemImage: "location.north.line")
             }
-            .pickerStyle(.segmented)
-            Text(cameraHint(Int(profile.cameraType)))
+            OnPadCalibrationView(device: device, embedded: true)
+            Text("Mag cal is saved to this rocket's profile and re-applied on connect. Sensor (gyro/accel) calibration runs on the connected rocket — place it on the pad and keep still.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
