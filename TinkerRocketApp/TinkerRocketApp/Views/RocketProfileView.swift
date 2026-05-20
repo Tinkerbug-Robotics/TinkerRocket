@@ -44,10 +44,6 @@ struct RocketProfileView: View {
                     Label("Add Rocket", systemImage: "plus")
                 }
             }
-
-            if let active = store.activeProfile {
-                activeSection(active)
-            }
         }
         .navigationTitle("Rockets")
         .alert("New Rocket", isPresented: $showingAdd) {
@@ -78,22 +74,42 @@ struct RocketProfileView: View {
     // MARK: - Rows
 
     private func profileRow(_ profile: RocketProfile) -> some View {
-        Button {
-            store.setActive(profile.id)
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(profile.name)
-                        .foregroundColor(.primary)
-                    if !profile.notes.isEmpty {
-                        Text(profile.notes)
-                            .font(.caption).foregroundColor(.secondary).lineLimit(1)
+        let selected = profile.id == store.activeId
+        return HStack(spacing: 12) {
+            // Rocket icon → make this the active rocket and open its settings.
+            Button {
+                store.setActive(profile.id)
+                showSettings = true
+            } label: {
+                Image("RocketIcon")
+                    .resizable().renderingMode(.template)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 26, height: 26)
+                    .foregroundColor(selected ? .blue : .secondary)
+            }
+            .buttonStyle(.borderless)
+
+            // Name → select (make active) without opening settings.
+            Button {
+                store.setActive(profile.id)
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.name)
+                            .foregroundColor(selected ? .blue : .primary)
+                        if !profile.notes.isEmpty {
+                            Text(profile.notes)
+                                .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                        }
                     }
+                    Spacer()
                 }
-                Spacer()
-                if profile.id == store.activeId {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(.accentColor)
-                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+
+            if selected {
+                Image(systemName: "checkmark.circle.fill").foregroundColor(.blue)
             }
         }
         .swipeActions(edge: .trailing) {
@@ -110,30 +126,6 @@ struct RocketProfileView: View {
             }
             Button(role: .destructive) { store.delete(profile.id) } label: {
                 Label("Delete", systemImage: "trash")
-            }
-        }
-    }
-
-    // MARK: - Active profile section
-
-    private func activeSection(_ active: RocketProfile) -> some View {
-        Section(header: Text("Active: \(active.name)")) {
-            summaryRow("Control mode", active.useAngleControl ? "Track Profile" : "Null Roll")
-            summaryRow("Camera", cameraLabel(active.cameraType))
-            summaryRow("Gain scheduling", active.gainScheduleEnabled ? "On" : "Off")
-            summaryRow("Mag cal", active.magCal == nil ? "Not saved" : "Saved")
-            summaryRow("Sensor cal", active.sensorCal == nil ? "Not saved" : "Saved")
-
-            if let device, device.isConnected, !device.isBaseStation {
-                Button {
-                    showSettings = true
-                } label: {
-                    Label("Edit Settings", systemImage: "slider.horizontal.3")
-                }
-            } else {
-                Label("Connect to a rocket to edit and apply settings",
-                      systemImage: "antenna.radiowaves.left.and.right.slash")
-                    .font(.caption).foregroundColor(.secondary)
             }
         }
     }
@@ -194,17 +186,9 @@ struct RocketProfileView: View {
 
     // MARK: - Bits
 
-    private func summaryRow(_ label: String, _ value: String) -> some View {
-        HStack { Text(label); Spacer(); Text(value).foregroundColor(.secondary) }
-    }
-
     private func advisory(_ text: String, systemImage: String, color: Color) -> some View {
         Label(text, systemImage: systemImage)
             .font(.caption).foregroundColor(color)
-    }
-
-    private func cameraLabel(_ t: UInt8) -> String {
-        switch t { case 1: return "GoPro"; case 2: return "RunCam"; default: return "None" }
     }
 
     /// Shorten a long hardware id for display.

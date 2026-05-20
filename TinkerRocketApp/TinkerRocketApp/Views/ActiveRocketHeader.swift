@@ -60,7 +60,8 @@ struct ActiveRocketHeader: View {
         let cam: String = {
             switch p.cameraType { case 1: return "GoPro"; case 2: return "RunCam"; default: return "No cam" }
         }()
+        let pyro = (p.pyro1Enabled || p.pyro2Enabled) ? "Pyro on" : "Pyro off"
         let cal = p.magCal == nil ? "Uncalibrated" : "Cal saved"
-        return "\(mode) \u{2022} \(cam) \u{2022} \(cal)"
+        return "\(mode) \u{2022} \(cam) \u{2022} \(pyro) \u{2022} \(cal)"
     }
 }
