@@ -388,9 +388,8 @@ struct ConnectedDashboardView: View {
 
             TestingControlsView(device: device, activeSheet: $activeSheet)
 
-            if !device.isBaseStation {
-                OnPadCalibrationView(device: device)
-            }
+            // Gyro/accel calibration lives in Settings → General → Calibration
+            // now (#132), so it's no longer shown on the dashboard.
 
             if !device.isBaseStation {
                 Button {
@@ -1816,7 +1815,7 @@ struct OnPadCalibrationView: View {
                             .tint(.white)
                     }
                     Image(systemName: "gyroscope")
-                    Text(calibrating ? "Calibrating..." : "Calibrate Sensors")
+                    Text(calibrating ? "Calibrating..." : "Calibrate Gyro and Accel")
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
