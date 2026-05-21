@@ -762,3 +762,51 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
     // SF12 at sensitivity (-20 dB) must also pass.
     EXPECT_GE(-20.0f, loraMinValidSnrDb(12));
 }
+
+// --- Flight settings snapshot (#165) ---
+// The settings frame is decoded by the iOS app (SensorTypes.swift) and built
+// by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
+// here so a struct edit can't silently desync the cross-language decode.
+TEST(RocketComputerTypes, FlightSettingsData_Layout) {
+    EXPECT_EQ(sizeof(FlightSettingsData), 176u);
+    EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
+
+    EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
+    EXPECT_EQ(offsetof(FlightSettingsData, version),            4u);
+    EXPECT_EQ(offsetof(FlightSettingsData, flags),              5u);
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_delay_ms),      6u);
+    EXPECT_EQ(offsetof(FlightSettingsData, kp),                 8u);
+    EXPECT_EQ(offsetof(FlightSettingsData, min_cmd_deg),        24u);
+    EXPECT_EQ(offsetof(FlightSettingsData, kp_angle),           32u);
+    EXPECT_EQ(offsetof(FlightSettingsData, gs_v_ref),           40u);
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_rate_set_point), 52u);
+    EXPECT_EQ(offsetof(FlightSettingsData, ism6_low_g_fs_g),    56u);
+    EXPECT_EQ(offsetof(FlightSettingsData, ism6_high_g_fs_g),   57u);
+    EXPECT_EQ(offsetof(FlightSettingsData, ism6_gyro_fs_dps),   59u);
+    EXPECT_EQ(offsetof(FlightSettingsData, servo_bias_us),      61u);
+    EXPECT_EQ(offsetof(FlightSettingsData, servo_hz),           69u);
+    EXPECT_EQ(offsetof(FlightSettingsData, servo_min_us),       71u);
+    EXPECT_EQ(offsetof(FlightSettingsData, servo_max_us),       73u);
+    EXPECT_EQ(offsetof(FlightSettingsData, camera_type),        75u);
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro),               76u);
+    EXPECT_EQ(offsetof(FlightSettingsData, fw_git_sha),         88u);
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_profile),       100u);
+
+    // Embedded PyroConfigData reaches the right absolute offsets.
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch1_trigger_value), 78u);
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch2_enabled),       82u);
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch2_trigger_value), 84u);
+
+    // Roll profile waypoints start (RollProfileData @ 100, after num+pad).
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_profile) + offsetof(RollProfileData, waypoints), 104u);
+}
+
+TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
+    uint8_t all = (uint8_t)((1u << FlightSettingsData::F_USE_ANGLE_CONTROL) |
+                            (1u << FlightSettingsData::F_GAIN_SCHEDULE) |
+                            (1u << FlightSettingsData::F_GUIDANCE) |
+                            (1u << FlightSettingsData::F_SERVO_ENABLED) |
+                            (1u << FlightSettingsData::F_FW_DIRTY) |
+                            (1u << FlightSettingsData::F_SOUNDS));
+    EXPECT_EQ(all, 0x3Fu);  // bits 0-5, no overlap
+}

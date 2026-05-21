@@ -23,6 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
+    case flightSettings = 0xE1  // FlightSettingsData (149B) — runtime settings snapshot at launch (#165)
     case lora = 0xF1
 }
 
@@ -64,6 +65,150 @@ nonisolated struct OutStatusQueryData {
     var imuRotationDeg: Double { Double(ism6_rot_z_cdeg) / 100.0 }
     /// Magnetometer rotation in degrees
     var magRotationDeg: Double { Double(mmc_rot_z_cdeg) / 100.0 }
+}
+
+// MARK: - Flight Settings Snapshot (176 bytes) — runtime config at launch (#165)
+
+/// One roll-profile waypoint as stored in the flight settings frame.
+nonisolated struct RollWaypointRaw {
+    let time_s: Float
+    let angle_deg: Float
+    let mode: UInt8       // 0 = ROLL_SEG_ANGLE, 1 = ROLL_SEG_NULL_RATE
+}
+
+/// Decoded FlightSettingsData wire frame. Layout mirrors the packed C++
+/// struct in RocketComputerTypes.h byte-for-byte (verified by offset).
+nonisolated struct FlightSettingsData {
+    // flags bit positions (match FlightSettingsData::F_* in firmware)
+    static let fUseAngleControl: UInt8 = 0
+    static let fGainSchedule: UInt8    = 1
+    static let fGuidance: UInt8        = 2
+    static let fServoEnabled: UInt8    = 3
+    static let fFwDirty: UInt8         = 4
+    static let fSounds: UInt8          = 5
+
+    let time_us: UInt32
+    let version: UInt8
+    let flags: UInt8
+    let roll_delay_ms: UInt16
+
+    let kp: Float
+    let ki: Float
+    let kd: Float
+    let d_lpf_hz: Float
+    let min_cmd_deg: Float
+    let max_cmd_deg: Float
+
+    let kp_angle: Float
+    let kp_angle_rate_cap_dps: Float
+
+    let gs_v_ref: Float
+    let gs_v_min: Float
+    let gs_scale_cap: Float
+
+    let roll_rate_set_point: Float
+
+    let ism6_low_g_fs_g: UInt8
+    let ism6_high_g_fs_g: UInt16
+    let ism6_gyro_fs_dps: UInt16
+
+    let servo_bias_us: [Int16]   // 4 entries
+    let servo_hz: Int16
+    let servo_min_us: Int16
+    let servo_max_us: Int16
+
+    let camera_type: UInt8
+
+    let pyro1_enabled: Bool
+    let pyro1_trigger_mode: UInt8   // 0 = time-after-apogee, 1 = altitude-on-descent
+    let pyro1_trigger_value: Float
+    let pyro2_enabled: Bool
+    let pyro2_trigger_mode: UInt8
+    let pyro2_trigger_value: Float
+
+    let fw_git_sha: String
+    let num_waypoints: UInt8
+    let waypoints: [RollWaypointRaw]
+
+    var useAngleControl: Bool { flags & (1 << FlightSettingsData.fUseAngleControl) != 0 }
+    var gainScheduleEnabled: Bool { flags & (1 << FlightSettingsData.fGainSchedule) != 0 }
+    var guidanceEnabled: Bool { flags & (1 << FlightSettingsData.fGuidance) != 0 }
+    var servoEnabled: Bool { flags & (1 << FlightSettingsData.fServoEnabled) != 0 }
+    var fwDirty: Bool { flags & (1 << FlightSettingsData.fFwDirty) != 0 }
+    var soundsEnabled: Bool { flags & (1 << FlightSettingsData.fSounds) != 0 }
+
+    init(from data: Data) throws {
+        guard data.count >= 176 else {
+            throw ParseError.invalidSize(expected: 176, got: data.count)
+        }
+
+        var offset = 0
+        time_us = data.readUInt32LE(at: &offset)
+        version = data.readUInt8(at: &offset)
+        flags = data.readUInt8(at: &offset)
+        roll_delay_ms = data.readUInt16LE(at: &offset)
+
+        kp = data.readFloat32LE(at: &offset)
+        ki = data.readFloat32LE(at: &offset)
+        kd = data.readFloat32LE(at: &offset)
+        d_lpf_hz = data.readFloat32LE(at: &offset)
+        min_cmd_deg = data.readFloat32LE(at: &offset)
+        max_cmd_deg = data.readFloat32LE(at: &offset)
+
+        kp_angle = data.readFloat32LE(at: &offset)
+        kp_angle_rate_cap_dps = data.readFloat32LE(at: &offset)
+
+        gs_v_ref = data.readFloat32LE(at: &offset)
+        gs_v_min = data.readFloat32LE(at: &offset)
+        gs_scale_cap = data.readFloat32LE(at: &offset)
+
+        roll_rate_set_point = data.readFloat32LE(at: &offset)
+
+        ism6_low_g_fs_g = data.readUInt8(at: &offset)
+        ism6_high_g_fs_g = data.readUInt16LE(at: &offset)
+        ism6_gyro_fs_dps = data.readUInt16LE(at: &offset)
+
+        // Servo trim + timing (offset 61)
+        servo_bias_us = [
+            data.readInt16LE(at: &offset),
+            data.readInt16LE(at: &offset),
+            data.readInt16LE(at: &offset),
+            data.readInt16LE(at: &offset),
+        ]
+        servo_hz = data.readInt16LE(at: &offset)
+        servo_min_us = data.readInt16LE(at: &offset)
+        servo_max_us = data.readInt16LE(at: &offset)
+
+        camera_type = data.readUInt8(at: &offset)   // offset 75
+
+        // PyroConfigData (offset 76, 12 bytes)
+        pyro1_enabled = data.readUInt8(at: &offset) != 0
+        pyro1_trigger_mode = data.readUInt8(at: &offset)
+        pyro1_trigger_value = data.readFloat32LE(at: &offset)
+        pyro2_enabled = data.readUInt8(at: &offset) != 0
+        pyro2_trigger_mode = data.readUInt8(at: &offset)
+        pyro2_trigger_value = data.readFloat32LE(at: &offset)
+
+        // fw_git_sha: 12-byte NUL-terminated char array (offset 88..99)
+        let shaBytes = data.subdata(in: offset..<(offset + 12))
+        fw_git_sha = String(bytes: shaBytes.prefix(while: { $0 != 0 }), encoding: .utf8) ?? ""
+        offset += 12
+
+        // roll_profile: RollProfileData @ offset 100
+        let nRaw = data.readUInt8(at: &offset)      // num_waypoints (offset 100)
+        offset += 3                                  // _pad[3]
+        let n = min(Int(nRaw), 8)
+        num_waypoints = UInt8(n)
+        var wps: [RollWaypointRaw] = []
+        wps.reserveCapacity(n)
+        for _ in 0..<n {                             // waypoints @ offset 104, 9 bytes each
+            let t = data.readFloat32LE(at: &offset)
+            let a = data.readFloat32LE(at: &offset)
+            let m = data.readUInt8(at: &offset)
+            wps.append(RollWaypointRaw(time_s: t, angle_deg: a, mode: m))
+        }
+        waypoints = wps
+    }
 }
 
 // MARK: - Raw Packed Data Structures
