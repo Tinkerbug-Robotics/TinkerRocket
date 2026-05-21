@@ -60,6 +60,15 @@ class BLEFleet: NSObject, ObservableObject {
     private var userInitiatedDisconnect = false
     private var reconnectingPeripheral: CBPeripheral?
 
+    // Strong references to peripherals while a connection is in flight (#173).
+    // CBCentralManager only retains peripherals weakly, so without our own
+    // strong reference the CBPeripheral can be deallocated mid-connect (e.g.
+    // when `discoveredDevices` is mutated), and CoreBluetooth cancels with
+    // "API MISUSE: Cancelling connection for unused peripheral … Did you
+    // forget to keep a reference to it?".  Held from connect() until the
+    // connection resolves (didConnect / didFailToConnect / didDisconnect).
+    private var connectingPeripherals: [UUID: CBPeripheral] = [:]
+
     // MARK: - Init
 
     override init() {
@@ -107,6 +116,8 @@ class BLEFleet: NSObject, ObservableObject {
     func connect(to device: DiscoveredDevice) {
         stopScanning()
         statusMessage = "Connecting to \(device.name)..."
+        // Retain the peripheral for the duration of the connect (#173).
+        connectingPeripherals[device.peripheral.identifier] = device.peripheral
         centralManager.connect(device.peripheral, options: nil)
     }
 
@@ -219,6 +230,8 @@ extension BLEFleet: CBCentralManagerDelegate {
         let name = peripheral.name ?? "Unknown"
         print("Connected to \(name)")
         reconnectAttempts = 0
+        // Connection resolved — the BLEDevice now owns the peripheral (#173).
+        connectingPeripherals[peripheral.identifier] = nil
 
         let device = BLEDevice(peripheral: peripheral, name: name)
         device.fleet = self
@@ -243,6 +256,9 @@ extension BLEFleet: CBCentralManagerDelegate {
             device.onDisconnect()
         }
         devices.removeAll { $0.peripheral?.identifier == peripheral.identifier }
+        // No longer connecting/connected — drop the strong ref (the reconnect
+        // path below re-adds it before its connect attempt) (#173).
+        connectingPeripherals[peripheral.identifier] = nil
 
         // Update active device
         if activeDeviceID == peripheral.identifier {
@@ -267,6 +283,8 @@ extension BLEFleet: CBCentralManagerDelegate {
             let delay = pow(2.0, Double(reconnectAttempts - 1))
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self, self.device(for: peripheral) == nil else { return }
+                // Retain across the reconnect attempt too (#173).
+                self.connectingPeripherals[peripheral.identifier] = peripheral
                 self.centralManager.connect(peripheral, options: nil)
             }
         } else {
@@ -283,6 +301,8 @@ extension BLEFleet: CBCentralManagerDelegate {
                        didFailToConnect peripheral: CBPeripheral,
                        error: Error?) {
         print("Failed to connect: \(error?.localizedDescription ?? "Unknown error")")
+        // Connection attempt resolved (failed) — release the strong ref (#173).
+        connectingPeripherals[peripheral.identifier] = nil
         statusMessage = "Connection failed"
     }
 }
