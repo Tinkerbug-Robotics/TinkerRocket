@@ -328,12 +328,46 @@ static uint8_t  sync_hour = 0, sync_minute = 0, sync_second = 0;
 // The chip is read/configured through the TR_MAX17205G component.
 // updateBattery() fans the latest readings into the global fields used by
 // the BLE telemetry builder.
+
+// Keep the new-board (BQ27Z746) battery protection FETs enabled. The gauge
+// ships with FET_EN=0 (and a reset reverts to it), so we (re)enable whenever
+// FET_EN has dropped and there is no active safety fault -- never overriding a
+// real protection event. Also flags the "commanded on but not conducting" case
+// (gate-drive / assembly fault, e.g. the EFC8811 open joint we hit). No-op on
+// the MAX17205 board. Call right after bq_gauge.update() so the flags are fresh.
+static void maintainBatteryFets()
+{
+    if (gauge_kind != GaugeKind::BQ27Z746) return;
+    const TR_BQ27Z746_Data& d = bq_gauge.data();
+
+    if (!d.fet_en)
+    {
+        // enableFetsIfNeeded() re-reads status and refuses while a fault is
+        // active, so this is safe even mid-fault; it logs its own result.
+        bq_gauge.enableFetsIfNeeded();
+    }
+    else if (!d.chg_fet_on || !d.dsg_fet_on)
+    {
+        static uint8_t throttle = 0;            // rate-limit (~every 15th cycle)
+        if ((throttle++ % 15) == 0)
+        {
+            if (d.safety_active)
+                ESP_LOGW(TAG, "BQ27Z746 safety protection holding a FET off (BattStatus=0x%04X)",
+                         d.batt_status);
+            else
+                ESP_LOGW(TAG, "BQ27Z746 FET_EN=1, no fault, but CHG=%d DSG=%d -- FETs not conducting "
+                              "(gate-drive/assembly?)", d.chg_fet_on, d.dsg_fet_on);
+        }
+    }
+}
+
 static void updateBattery()
 {
     if (!fuel_gauge_present) return;
     if (gauge_kind == GaugeKind::BQ27Z746)
     {
         bq_gauge.update();
+        maintainBatteryFets();
         bs_voltage     = bq_gauge.voltage();
         bs_soc         = bq_gauge.soc();
         bs_current     = bq_gauge.current();
@@ -2639,7 +2673,8 @@ static void setup_bs()
             // New PCB: BQ27Z746 single-cell gauge + protection.
             TR_BQ27Z746_Config bq_cfg;
             bq_cfg.current_invert   = false;  // TODO: verify SRP/SRN polarity on the new board
-            bq_cfg.auto_enable_fets = true;   // enable CHG/DSG FETs if FET_EN=0 and no fault
+            bq_cfg.auto_enable_fets = false;  // FET enable/maintenance owned by maintainBatteryFets()
+                                              //   (runs via updateBattery() at boot + every cycle)
             if (bq_gauge.begin(i2c_bus, bq_cfg, config::I2C_FREQ_HZ) == ESP_OK)
             {
                 gauge_kind = GaugeKind::BQ27Z746;
