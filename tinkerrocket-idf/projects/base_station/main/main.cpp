@@ -8,6 +8,11 @@
 #include <esp_spiffs.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
+#include <esp_flash.h>
+#include <esp_flash_spi_init.h>
+#include <esp_partition.h>
+#include <driver/spi_common.h>
+#include <wear_levelling.h>
 #include <driver/i2c_master.h>
 
 #include <cstdio>
@@ -105,6 +110,60 @@ static bool     uplink_pending = false;
 static const char* SD_MOUNT_POINT = "/sdcard";
 static sdmmc_card_t* sd_card = nullptr;
 static bool using_internal_flash = false;
+static bool using_external_flash = false;   // V2: FAT on the external SPI flash
+#if BS_BOARD_V2
+static esp_flash_t* s_ext_flash = nullptr;
+static wl_handle_t  s_ext_wl    = WL_INVALID_HANDLE;
+
+// Mount a wear-leveled FAT filesystem on the external SPI NOR flash used for
+// logging on the new PCB (M_* pins on SPI3_HOST; LoRa owns SPI2_HOST). NOR is
+// assumed -- esp_flash auto-detects JEDEC ID/size; a SPI NAND part would need
+// the spi_nand_flash component. On success repoints SD_MOUNT_POINT and sets
+// using_external_flash; otherwise returns the error so the caller falls back to
+// internal SPIFFS.
+static esp_err_t mountExternalFlashFat()
+{
+    spi_bus_config_t buscfg = {};
+    buscfg.mosi_io_num   = config::FLASH_MOSI;
+    buscfg.miso_io_num   = config::FLASH_MISO;
+    buscfg.sclk_io_num   = config::FLASH_SCK;
+    buscfg.quadwp_io_num = -1;
+    buscfg.quadhd_io_num = -1;
+    esp_err_t e = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash SPI bus init failed (0x%x)", (int)e); return e; }
+
+    esp_flash_spi_device_config_t devcfg = {};
+    devcfg.host_id   = SPI3_HOST;
+    devcfg.cs_id     = 0;
+    devcfg.cs_io_num = (gpio_num_t)config::FLASH_CS;
+    devcfg.io_mode   = SPI_FLASH_FASTRD;   // 1-line read, safe on any NOR; raise to DIO/QIO once the chip is confirmed
+    devcfg.freq_mhz  = 40;
+    e = spi_bus_add_flash_device(&s_ext_flash, &devcfg);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash add device failed (0x%x)", (int)e); return e; }
+
+    e = esp_flash_init(s_ext_flash);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash init failed (0x%x) -- wrong type (NAND?) or wiring", (int)e); return e; }
+    ESP_LOGI(TAG, "External flash detected: %u KB", (unsigned)(s_ext_flash->size / 1024));
+
+    const esp_partition_t* part = nullptr;
+    e = esp_partition_register_external(s_ext_flash, 0, s_ext_flash->size, "extlog",
+                                        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, &part);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash partition register failed (0x%x)", (int)e); return e; }
+
+    esp_vfs_fat_mount_config_t mcfg = {};
+    mcfg.format_if_mount_failed = true;
+    mcfg.max_files              = 5;
+    mcfg.allocation_unit_size   = 4096;
+    e = esp_vfs_fat_spiflash_mount_rw_wl("/extflash", "extlog", &mcfg, &s_ext_wl);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash FAT mount failed (0x%x)", (int)e); return e; }
+
+    SD_MOUNT_POINT = "/extflash";
+    using_external_flash = true;
+    ESP_LOGI(TAG, "External-flash FAT mounted at %s (%u KB)", SD_MOUNT_POINT,
+             (unsigned)(s_ext_flash->size / 1024));
+    return ESP_OK;
+}
+#endif  // BS_BOARD_V2
 static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
 // CSV logging state
@@ -2556,8 +2615,15 @@ static void setup_bs()
     setenv("TZ", "UTC0", 1);
     tzset();
 
-    // Initialize storage: prefer SD (SDMMC 4-bit), fall back to SPIFFS on internal flash.
+    // Initialize storage. V2 (new PCB) -> wear-leveled FAT on the external SPI
+    // flash; V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
+    // internal flash. Logging is backend-agnostic (uses SD_MOUNT_POINT + the
+    // standard file API), so only the mount differs per board.
     {
+        esp_err_t ret;
+#if BS_BOARD_V2
+        ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
+#else
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
@@ -2576,8 +2642,7 @@ static void setup_bs()
         mount_cfg.max_files = 5;
         mount_cfg.allocation_unit_size = 16 * 1024;
 
-        esp_err_t ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot,
-                                                 &mount_cfg, &sd_card);
+        ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mount_cfg, &sd_card);
         if (ret == ESP_OK)
         {
             sdmmc_card_print_info(stdout, sd_card);
@@ -2595,9 +2660,10 @@ static void setup_bs()
                          (unsigned long long)(free_bytes / (1024 * 1024)));
             }
         }
-        else
+#endif
+        if (ret != ESP_OK)
         {
-            ESP_LOGW(TAG, "SD card mount failed (0x%x) — falling back to internal flash (SPIFFS)",
+            ESP_LOGW(TAG, "Primary storage mount failed (0x%x) — falling back to internal flash (SPIFFS)",
                      (int)ret);
             sd_card = nullptr;
 
@@ -2631,7 +2697,7 @@ static void setup_bs()
         }
 
         // Write test covers both backends
-        if (sd_card || using_internal_flash)
+        if (sd_card || using_internal_flash || using_external_flash)
         {
             char test_path[48];
             snprintf(test_path, sizeof(test_path), "%s/.write_test", SD_MOUNT_POINT);

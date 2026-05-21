@@ -78,10 +78,17 @@ namespace config
     static constexpr uint32_t UPLINK_RETRY_INTERVAL_MS = 100;   // Delay between retries
 
     // --- Storage ---
-    // NOTE (V2/new PCB): the new board replaces the SDMMC SD card with a SPI NOR
-    // flash for logging -- M_SCK=GPIO4, M_MOSI=GPIO5, M_FLASH_CS=GPIO6,
-    // M_MISO=GPIO7 (schematic). Flash-backed logging needs a separate storage
-    // driver and is NOT yet wired; the SDMMC pins below are for the original PCB.
+    // V2/new PCB logs to an external SPI NOR flash (M_*, on SPI3_HOST since LoRa
+    // owns SPI2_HOST); V1 uses an SDMMC SD card. Both mount as FAT behind
+    // SD_MOUNT_POINT, so the logging code is backend-agnostic. NOR is assumed
+    // (esp_flash auto-detects JEDEC ID/size); a SPI NAND part would need the
+    // spi_nand_flash component instead.
+#if BS_BOARD_V2
+    static constexpr int FLASH_SCK  = 4;   // M_SCK
+    static constexpr int FLASH_MOSI = 5;   // M_MOSI
+    static constexpr int FLASH_CS   = 6;   // M_FLASH_CS
+    static constexpr int FLASH_MISO = 7;   // M_MISO
+#endif
     // --- SD Card (SDMMC 4-bit, original PCB) ---
     static constexpr int SD_CLK  = 6;
     static constexpr int SD_CMD  = 7;
