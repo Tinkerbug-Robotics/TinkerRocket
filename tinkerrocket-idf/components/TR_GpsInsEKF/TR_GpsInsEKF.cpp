@@ -786,22 +786,47 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
     float S_inv[36];
     if (!invertMatrix6x6(S, S_inv)) return;  // singular S — skip update
 
-    // ── Gate 2: Chi-squared innovation test ──
-    // Reject GNSS measurement if innovation is statistically inconsistent
-    // with the current state + covariance.  Test statistic: y^T * S^-1 * y
-    // follows chi-squared with 6 DOF.  Threshold ≈ 22.46 corresponds to
-    // p = 0.001 (99.9% confidence), generous enough to avoid rejecting
-    // legitimate measurements during high dynamics.
+    // ── Gate 2: split position / velocity innovation tests (#174) ──
+    // A single 6-DOF NIS gate let a large innovation in one block — e.g.
+    // vertical velocity lagging during high-g boost — reject the ENTIRE
+    // pos+vel update, discarding the good horizontal-velocity correction so
+    // horizontal velocity dead-reckons and runs away.  Test the position
+    // (3-DOF) and velocity (3-DOF) blocks independently; on a trip de-weight
+    // only that block (inflate its R) rather than dropping the whole
+    // measurement.  The marginal precision of each block is the inverse of
+    // that block of S.  chi²(3, 0.001) ≈ 16.27.
     {
-        float nis = 0.0f; // Normalized Innovation Squared
-        for (int i = 0; i < 6; i++) {
-            float row_sum = 0.0f;
-            for (int j = 0; j < 6; j++)
-                row_sum += S_inv[i * 6 + j] * y[j];
-            nis += y[i] * row_sum;
+        static constexpr float CHI2_GATE_3DOF = 16.27f;
+        float Spp[9] = { S[0],  S[1],  S[2],  S[6],  S[7],  S[8],  S[12], S[13], S[14] };
+        float Svv[9] = { S[21], S[22], S[23], S[27], S[28], S[29], S[33], S[34], S[35] };
+        float Sinv3[9];
+        // Huber-style soft de-weight: when a block's NIS exceeds the gate,
+        // inflate that block's R by (NIS/gate) instead of rejecting it.  An
+        // inconsistent measurement is down-weighted in proportion to how far
+        // out it is (so a true outlier has near-zero influence) but never
+        // fully discarded — so the filter can still recover after it has
+        // drifted (e.g. a large reacquired-GNSS velocity innovation following
+        // a GNSS gap keeps pulling the estimate back).
+        float infl_pos = 1.0f, infl_vel = 1.0f;
+        if (invertMatrix3x3(Spp, Sinv3)) {
+            float nis = 0.0f;
+            for (int i=0;i<3;i++){ float r=0; for(int j=0;j<3;j++) r+=Sinv3[i*3+j]*y[j]; nis+=y[i]*r; }
+            if (nis > CHI2_GATE_3DOF) infl_pos = nis / CHI2_GATE_3DOF;
         }
-        static constexpr float CHI2_GATE_6DOF = 22.46f; // chi²(6, 0.001)
-        if (nis > CHI2_GATE_6DOF) return; // reject outlier measurement
+        if (invertMatrix3x3(Svv, Sinv3)) {
+            float nis = 0.0f;
+            for (int i=0;i<3;i++){ float r=0; for(int j=0;j<3;j++) r+=Sinv3[i*3+j]*y[3+j]; nis+=y[3+i]*r; }
+            if (nis > CHI2_GATE_3DOF) infl_vel = nis / CHI2_GATE_3DOF;
+        }
+        if (infl_pos > 1.0f || infl_vel > 1.0f) {
+            R_scaled[0][0]*=infl_pos; R_scaled[1][1]*=infl_pos; R_scaled[2][2]*=infl_pos;
+            R_scaled[3][3]*=infl_vel; R_scaled[4][4]*=infl_vel; R_scaled[5][5]*=infl_vel;
+            for (int i=0;i<6;i++) for (int j=0;j<6;j++) {
+                float s=0.0f; for (int k=0;k<15;k++) s+=H_P[i][k]*H_T[k][j];
+                S[i*6+j]=s+R_scaled[i][j];
+            }
+            if (!invertMatrix6x6(S, S_inv)) return;
+        }
     }
 
     float P_Ht[15][6]={};
