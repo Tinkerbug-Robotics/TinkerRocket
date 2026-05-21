@@ -1,0 +1,7 @@
+## Managed dependencies (component manager).
+## SPI NAND logging flash on the new PCB: the fatfs adapter pulls in
+## spi_nand_flash + the Dhara FTL. spi_nand_flash is then vendored + patched in
+## components/spi_nand_flash to add FORESEE/Longsys (mfr 0xCD) support, which the
+## upstream driver lacks; the adapter and FTL stay as managed deps.
+dependencies:
+  espressif/spi_nand_flash_fatfs: "*"

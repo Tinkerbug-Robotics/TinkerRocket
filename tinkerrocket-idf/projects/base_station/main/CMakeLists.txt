@@ -17,8 +17,7 @@ idf_component_register(
         sdmmc
         spiffs
         vfs
-        spi_flash
-        esp_partition
-        wear_levelling
+        spi_nand_flash
+        spi_nand_flash_fatfs
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)

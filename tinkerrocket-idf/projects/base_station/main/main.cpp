@@ -8,11 +8,9 @@
 #include <esp_spiffs.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
-#include <esp_flash.h>
-#include <esp_flash_spi_init.h>
-#include <esp_partition.h>
 #include <driver/spi_common.h>
-#include <wear_levelling.h>
+#include <driver/spi_master.h>
+#include <esp_vfs_fat_nand.h>
 #include <driver/i2c_master.h>
 
 #include <cstdio>
@@ -112,55 +110,63 @@ static sdmmc_card_t* sd_card = nullptr;
 static bool using_internal_flash = false;
 static bool using_external_flash = false;   // V2: FAT on the external SPI flash
 #if BS_BOARD_V2
-static esp_flash_t* s_ext_flash = nullptr;
-static wl_handle_t  s_ext_wl    = WL_INVALID_HANDLE;
+static spi_device_handle_t      s_ext_spi = nullptr;
+static spi_nand_flash_device_t *s_nand    = nullptr;
 
-// Mount a wear-leveled FAT filesystem on the external SPI NOR flash used for
-// logging on the new PCB (M_* pins on SPI3_HOST; LoRa owns SPI2_HOST). NOR is
-// assumed -- esp_flash auto-detects JEDEC ID/size; a SPI NAND part would need
-// the spi_nand_flash component. On success repoints SD_MOUNT_POINT and sets
+// Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
+// flash used for logging on the new PCB (M_* pins on SPI3_HOST; LoRa owns
+// SPI2_HOST). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
+// the vendored+patched spi_nand_flash component (components/spi_nand_flash/src/
+// devices/nand_foresee.c). On success repoints SD_MOUNT_POINT and sets
 // using_external_flash; otherwise returns the error so the caller falls back to
 // internal SPIFFS.
 static esp_err_t mountExternalFlashFat()
 {
     spi_bus_config_t buscfg = {};
-    buscfg.mosi_io_num   = config::FLASH_MOSI;
-    buscfg.miso_io_num   = config::FLASH_MISO;
-    buscfg.sclk_io_num   = config::FLASH_SCK;
-    buscfg.quadwp_io_num = -1;
-    buscfg.quadhd_io_num = -1;
+    buscfg.mosi_io_num     = config::FLASH_MOSI;
+    buscfg.miso_io_num     = config::FLASH_MISO;
+    buscfg.sclk_io_num     = config::FLASH_SCK;
+    buscfg.quadwp_io_num   = -1;
+    buscfg.quadhd_io_num   = -1;
+    buscfg.max_transfer_sz = 4096 + 256;     // page + spare
     esp_err_t e = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
     if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash SPI bus init failed (0x%x)", (int)e); return e; }
 
-    esp_flash_spi_device_config_t devcfg = {};
-    devcfg.host_id   = SPI3_HOST;
-    devcfg.cs_id     = 0;
-    devcfg.cs_io_num = (gpio_num_t)config::FLASH_CS;
-    devcfg.io_mode   = SPI_FLASH_FASTRD;   // 1-line read, safe on any NOR; raise to DIO/QIO once the chip is confirmed
-    devcfg.freq_mhz  = 40;
-    e = spi_bus_add_flash_device(&s_ext_flash, &devcfg);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash add device failed (0x%x)", (int)e); return e; }
+    const uint32_t spi_flags = SPI_DEVICE_HALFDUPLEX;
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = 20 * 1000 * 1000;   // conservative for bring-up (chip rated 166 MHz)
+    devcfg.mode           = 0;
+    devcfg.spics_io_num   = config::FLASH_CS;
+    devcfg.queue_size     = 10;
+    devcfg.flags          = spi_flags;
+    e = spi_bus_add_device(SPI3_HOST, &devcfg, &s_ext_spi);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash add SPI device failed (0x%x)", (int)e); return e; }
 
-    e = esp_flash_init(s_ext_flash);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash init failed (0x%x) -- wrong type (NAND?) or wiring", (int)e); return e; }
-    ESP_LOGI(TAG, "External flash detected: %u KB", (unsigned)(s_ext_flash->size / 1024));
+    spi_nand_flash_config_t nand_cfg = {};
+    nand_cfg.device_handle = s_ext_spi;
+    nand_cfg.io_mode       = SPI_NAND_IO_MODE_SIO;
+    nand_cfg.flags         = spi_flags;
+    e = spi_nand_flash_init_device(&nand_cfg, &s_nand);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "SPI NAND init failed (0x%x) -- unsupported chip or wiring", (int)e); return e; }
 
-    const esp_partition_t* part = nullptr;
-    e = esp_partition_register_external(s_ext_flash, 0, s_ext_flash->size, "extlog",
-                                        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, &part);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash partition register failed (0x%x)", (int)e); return e; }
+    uint32_t blocks = 0, block_sz = 0, page_sz = 0;
+    spi_nand_flash_get_block_num(s_nand, &blocks);
+    spi_nand_flash_get_block_size(s_nand, &block_sz);
+    spi_nand_flash_get_page_size(s_nand, &page_sz);
+    ESP_LOGI(TAG, "SPI NAND up: %lu blocks x %lu B (page %lu B) = %llu MB",
+             (unsigned long)blocks, (unsigned long)block_sz, (unsigned long)page_sz,
+             (unsigned long long)((uint64_t)blocks * block_sz / (1024 * 1024)));
 
     esp_vfs_fat_mount_config_t mcfg = {};
     mcfg.format_if_mount_failed = true;
     mcfg.max_files              = 5;
-    mcfg.allocation_unit_size   = 4096;
-    e = esp_vfs_fat_spiflash_mount_rw_wl("/extflash", "extlog", &mcfg, &s_ext_wl);
+    mcfg.allocation_unit_size   = 0;   // FATFS default cluster size
+    e = esp_vfs_fat_nand_mount("/extflash", s_nand, &mcfg);
     if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash FAT mount failed (0x%x)", (int)e); return e; }
 
     SD_MOUNT_POINT = "/extflash";
     using_external_flash = true;
-    ESP_LOGI(TAG, "External-flash FAT mounted at %s (%u KB)", SD_MOUNT_POINT,
-             (unsigned)(s_ext_flash->size / 1024));
+    ESP_LOGI(TAG, "External-flash FAT mounted at %s", SD_MOUNT_POINT);
     return ESP_OK;
 }
 #endif  // BS_BOARD_V2
