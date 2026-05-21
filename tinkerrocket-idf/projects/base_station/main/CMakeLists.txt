@@ -10,6 +10,7 @@ idf_component_register(
         TR_BLE_To_APP
         TR_LoRa_Comms
         TR_MAX17205G
+        TR_BQ27Z746
         driver
         esp_timer
         fatfs

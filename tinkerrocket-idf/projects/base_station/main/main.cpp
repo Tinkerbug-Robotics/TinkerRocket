@@ -28,6 +28,7 @@
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
+#include <TR_BQ27Z746.h>
 #include <RocketComputerTypes.h>
 
 static const char* TAG = "BS";
@@ -67,7 +68,11 @@ static float bs_temperature = NAN;
 static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
-static bool fuel_gauge_present = false;
+static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
+// Which gauge runtime detection found (one firmware image, both PCBs).
+enum class GaugeKind { None, MAX17205, BQ27Z746 };
+static GaugeKind gauge_kind = GaugeKind::None;
+static bool fuel_gauge_present = false;   // true if EITHER gauge is present
 
 // Servo/PID config cache (for BLE readback — mirrors what was sent to rocket)
 static int16_t cfg_servo_bias1 = 0;
@@ -326,11 +331,22 @@ static uint8_t  sync_hour = 0, sync_minute = 0, sync_second = 0;
 static void updateBattery()
 {
     if (!fuel_gauge_present) return;
-    fuel_gauge.update();
-    bs_voltage     = fuel_gauge.voltage();
-    bs_soc         = fuel_gauge.soc();
-    bs_current     = fuel_gauge.current();
-    bs_temperature = fuel_gauge.temperature();
+    if (gauge_kind == GaugeKind::BQ27Z746)
+    {
+        bq_gauge.update();
+        bs_voltage     = bq_gauge.voltage();
+        bs_soc         = bq_gauge.soc();
+        bs_current     = bq_gauge.current();
+        bs_temperature = bq_gauge.temperature();
+    }
+    else
+    {
+        fuel_gauge.update();
+        bs_voltage     = fuel_gauge.voltage();
+        bs_soc         = fuel_gauge.soc();
+        bs_current     = fuel_gauge.current();
+        bs_temperature = fuel_gauge.temperature();
+    }
 }
 
 // ============================================================================
@@ -2602,7 +2618,8 @@ static void setup_bs()
         }
     }
 
-    // Configure I2C for MAX17205G fuel gauge
+    // Configure I2C and auto-detect the fuel gauge (one firmware, both PCBs):
+    // probe the new-PCB BQ27Z746 (0x55) first, then the original MAX17205 (0x36).
     {
         i2c_master_bus_config_t bus_cfg = {};
         bus_cfg.i2c_port     = I2C_NUM_0;
@@ -2613,9 +2630,35 @@ static void setup_bs()
         bus_cfg.flags.enable_internal_pullup = false;
 
         esp_err_t err = i2c_new_master_bus(&bus_cfg, &i2c_bus);
-        if (err == ESP_OK &&
-            i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
+        if (err != ESP_OK)
         {
+            ESP_LOGW(TAG, "I2C bus init failed (%d) — battery readings unavailable", (int)err);
+        }
+        else if (i2c_master_probe(i2c_bus, config::BQ27Z746_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
+        {
+            // New PCB: BQ27Z746 single-cell gauge + protection.
+            TR_BQ27Z746_Config bq_cfg;
+            bq_cfg.current_invert   = false;  // TODO: verify SRP/SRN polarity on the new board
+            bq_cfg.auto_enable_fets = true;   // enable CHG/DSG FETs if FET_EN=0 and no fault
+            if (bq_gauge.begin(i2c_bus, bq_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+            {
+                gauge_kind = GaugeKind::BQ27Z746;
+                fuel_gauge_present = true;
+                ESP_LOGI(TAG, "BQ27Z746 fuel gauge found on I2C (0x%02X), devtype 0x%04X",
+                         config::BQ27Z746_ADDR, bq_gauge.deviceType());
+                updateBattery();
+                ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
+                         (double)bs_voltage, (double)bs_soc, (double)bs_current);
+                bq_gauge.logDiagnostics(TAG);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "BQ27Z746 probe succeeded but begin() failed");
+            }
+        }
+        else if (i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
+        {
+            // Original PCB: MAX17205 gauge.
             TR_MAX17205G_Config fg_cfg;
             fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
             fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
@@ -2628,6 +2671,7 @@ static void setup_bs()
 
             if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
             {
+                gauge_kind = GaugeKind::MAX17205;
                 fuel_gauge_present = true;
                 ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
                 fuel_gauge.initIfNeeded();
@@ -2643,7 +2687,7 @@ static void setup_bs()
         }
         else
         {
-            ESP_LOGW(TAG, "MAX17205G not found — battery readings unavailable");
+            ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205 0x36) — battery readings unavailable");
         }
     }
 
