@@ -781,7 +781,7 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
         if (total > 0 && used > (total * 9 / 10))
         {
             ESP_LOGW(TAG, "[LOG] %s nearly full! %llu/%llu bytes (%.0f%%)",
-                     using_internal_flash ? "Internal flash" : "SD card",
+                     using_internal_flash ? "Internal flash" : using_external_flash ? "External NAND" : "SD card",
                      (unsigned long long)used, (unsigned long long)total,
                      (double)used * 100.0 / (double)total);
         }
@@ -2714,7 +2714,7 @@ static void setup_bs()
                 fclose(test);
                 remove(test_path);
                 ESP_LOGI(TAG, "Storage write test: OK (%s)",
-                         using_internal_flash ? "internal flash" : "SD card");
+                         using_internal_flash ? "internal flash" : using_external_flash ? "external NAND" : "SD card");
             }
             else
             {

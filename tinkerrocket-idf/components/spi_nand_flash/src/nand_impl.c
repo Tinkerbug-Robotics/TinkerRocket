@@ -418,7 +418,17 @@ static bool is_ecc_error(spi_nand_flash_device_t *dev, uint8_t status)
 {
     bool is_ecc_err = false;
     nand_ecc_status_t bits_corrected_status = NAND_ECC_OK;
-    if (dev->chip.ecc_data.ecc_status_reg_len_in_bits == 2) {
+    if (dev->device_info.manufacturer_id == SPI_NAND_FLASH_FORESEE_MI) {
+        // FORESEE/Longsys ECCS2-0 (status[6:4]) is a linear bit-count, NOT the
+        // Micron-style packing the generic 3-bit path assumes:
+        //   0=OK, 1=<=3 corrected, 2=4, 3=5, 4=6, 5=7, 6=8, 7=uncorrectable.
+        uint8_t eccs = (status >> 4) & 0x7;
+        if (eccs == 0)       bits_corrected_status = NAND_ECC_OK;
+        else if (eccs == 1)  bits_corrected_status = NAND_ECC_1_TO_3_BITS_CORRECTED;
+        else if (eccs <= 4)  bits_corrected_status = NAND_ECC_4_TO_6_BITS_CORRECTED; // 4-6 bits
+        else if (eccs <= 6)  bits_corrected_status = NAND_ECC_7_8_BITS_CORRECTED;    // 7-8 bits
+        else                 bits_corrected_status = NAND_ECC_NOT_CORRECTED;         // >8 bits
+    } else if (dev->chip.ecc_data.ecc_status_reg_len_in_bits == 2) {
         bits_corrected_status = PACK_2BITS_STATUS(status, STAT_ECC1, STAT_ECC0);
     } else if (dev->chip.ecc_data.ecc_status_reg_len_in_bits == 3) {
         bits_corrected_status = PACK_3BITS_STATUS(status, STAT_ECC2, STAT_ECC1, STAT_ECC0);

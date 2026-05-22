@@ -27,12 +27,12 @@ esp_err_t spi_nand_foresee_init(spi_nand_flash_device_t *dev)
              "foresee-0x%02" PRIx8, device_id);
     ESP_LOGD(TAG, "%s: device_id: %x\n", __func__, device_id);
 
-    // On-die 8-bit ECC with a 3-bit status field (ECCS2-0).
-    // NOTE: FORESEE's ECCS encoding is a linear bit-count (010=4 bits CORRECTED,
-    // 111=uncorrectable), which differs from the Micron-style mapping the generic
-    // 3-bit path in is_ecc_error() assumes. Fresh-chip reads (ECCS=000=OK) are
-    // interpreted correctly; wear-time correction levels are NOT yet remapped --
-    // see follow-up before relying on ECC reporting for data-integrity decisions.
+    // On-die 8-bit ECC with a 3-bit status field (ECCS2-0). FORESEE's ECCS is a
+    // linear bit-count (010=4 bits corrected, 111=uncorrectable), which differs
+    // from the Micron-style mapping the generic 3-bit path assumes -- so
+    // is_ecc_error() has a FORESEE-specific branch (keyed on manufacturer 0xCD)
+    // that maps it correctly to nand_ecc_status_t. The field below is set for
+    // completeness; the FORESEE branch takes precedence.
     dev->chip.ecc_data.ecc_status_reg_len_in_bits = 3;
     dev->chip.read_page_delay_us    = 115;   // tRD  (datasheet max)
     dev->chip.program_page_delay_us = 450;   // tPROG (typ 350 us + margin)
