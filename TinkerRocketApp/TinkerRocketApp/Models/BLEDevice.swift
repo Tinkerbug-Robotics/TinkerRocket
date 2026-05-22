@@ -245,7 +245,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func beginPowerOn() {
         poweringOn = true
         poweringOnTimer?.invalidate()
-        poweringOnTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
+        // 3 min: after cmd 8 the OC blocks its main loop (no telemetry sent)
+        // while it flushes and recovers the on-NAND flight log, which can run
+        // up to ~90s on a large/unclean log.  The watchdog must outlast that
+        // worst case so it only fires on a genuinely-dropped command, not a
+        // slow-but-normal recovery.
+        poweringOnTimer = Timer.scheduledTimer(withTimeInterval: 180.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.clearPoweringOn() }
         }
         sendPowerToggle()
