@@ -12,6 +12,7 @@ struct FlightDetailView: View {
     var onDelete: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     var body: some View {
         List {
@@ -124,11 +125,7 @@ struct FlightDetailView: View {
     // MARK: - Formatting Helpers
 
     private func formatAltitude(_ meters: Double) -> String {
-        if meters >= 1000 {
-            return String(format: "%.2f km", meters / 1000.0)
-        } else {
-            return String(format: "%.0f m", meters)
-        }
+        UnitFormatter.altitude(meters, system: unitSystem)
     }
 
     /// ISA speed of sound at a given altitude (meters).
@@ -143,9 +140,8 @@ struct FlightDetailView: View {
         let a = altM > 0 ? speedOfSound(atAltitudeM: altM) : 343.0
         if mps >= a {
             return String(format: "Mach %.1f", mps / a)
-        } else {
-            return String(format: "%.0f m/s", mps)
         }
+        return UnitFormatter.speed(mps, decimals: 0, system: unitSystem)
     }
 
     private func formatTime(_ seconds: Double) -> String {

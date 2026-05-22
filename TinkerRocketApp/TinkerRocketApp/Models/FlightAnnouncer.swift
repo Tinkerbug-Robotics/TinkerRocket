@@ -263,8 +263,8 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
         // --- Apogee detection ---
         if telemetry.alt_apo && !(prev?.alt_apo ?? false) && !apogeeAnnounced {
             apogeeAnnounced = true
-            let alt = telemetry.max_alt_m.map { String(format: "%.0f", $0) } ?? "unknown"
-            announceImmediate("Apogee. \(alt) meters")
+            let alt = telemetry.max_alt_m.map { UnitFormatter.spokenAltitude(Double($0)) } ?? "altitude unknown"
+            announceImmediate("Apogee. \(alt)")
             // First descent callout 5 seconds after apogee (not the full 10s interval)
             lastDescentAnnounceTime = Date().addingTimeInterval(-(Self.descentInterval - 5.0))
         }
@@ -318,8 +318,7 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
             maxSpeedStableCount += 1
             if maxSpeedStableCount >= Self.burnoutStableThreshold {
                 burnoutAnnounced = true
-                let speedStr = String(format: "%.0f", lastMaxSpeed)
-                announceImmediate("Burnout. Max speed \(speedStr) meters per second")
+                announceImmediate("Burnout. Max speed \(UnitFormatter.spokenSpeed(Double(lastMaxSpeed)))")
             }
         }
     }
@@ -330,14 +329,13 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
         guard let alt = telemetry.pressure_alt else { return }
 
         lastAltitudeAnnounceTime = now
-        let altStr = String(format: "%.0f", alt)
+        let altStr = UnitFormatter.spokenAltitude(Double(alt))
         // Only include climb rate after burnout — during powered flight the
         // rate changes too rapidly and isn't meaningful to announce.
         if burnoutAnnounced, let rate = telemetry.altitude_rate, abs(rate) > 1.0 {
-            let rateStr = String(format: "%.0f", abs(rate))
-            announce("\(altStr) meters, climbing \(rateStr) meters per second")
+            announce("\(altStr), climbing \(UnitFormatter.spokenSpeed(Double(abs(rate))))")
         } else {
-            announce("\(altStr) meters")
+            announce(altStr)
         }
     }
 
@@ -348,12 +346,11 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
 
         lastDescentAnnounceTime = now
 
-        let altStr = String(format: "%.0f", alt)
+        let altStr = UnitFormatter.spokenAltitude(Double(alt))
         if let rate = telemetry.altitude_rate, abs(rate) > 1.0 {
-            let rateStr = String(format: "%.0f", abs(rate))
-            announce("\(altStr) meters, descending \(rateStr) meters per second")
+            announce("\(altStr), descending \(UnitFormatter.spokenSpeed(Double(abs(rate))))")
         } else {
-            announce("\(altStr) meters")
+            announce(altStr)
         }
     }
 
@@ -368,7 +365,7 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
 
         let dist = haversineDistance(lat1: launch.lat, lon1: launch.lon,
                                      lat2: lat, lon2: lon)
-        return String(format: "%.0f meters away", dist)
+        return UnitFormatter.spokenDistance(dist) + " away"
     }
 
     /// Haversine formula: returns distance in meters between two GPS coordinates

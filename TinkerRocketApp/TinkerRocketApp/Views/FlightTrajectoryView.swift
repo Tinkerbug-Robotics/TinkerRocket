@@ -97,6 +97,7 @@ struct FlightMapView: UIViewRepresentable {
     let launchPoint: TrackPoint?
     let apogeePoint: TrackPoint?
     let landingPoint: TrackPoint?
+    let unitSystem: UnitSystem
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
@@ -106,7 +107,7 @@ struct FlightMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        let hash = "\(trackPoints.count),\(trackPoints.first?.lat ?? 0),\(trackPoints.last?.lat ?? 0)"
+        let hash = "\(trackPoints.count),\(trackPoints.first?.lat ?? 0),\(trackPoints.last?.lat ?? 0),\(unitSystem.rawValue)"
         guard hash != context.coordinator.lastHash else { return }
         context.coordinator.lastHash = hash
         context.coordinator.trackPoints = trackPoints
@@ -124,7 +125,7 @@ struct FlightMapView: UIViewRepresentable {
         if let pt = apogeePoint {
             let ann = MKPointAnnotation()
             ann.coordinate = CLLocationCoordinate2D(latitude: pt.lat, longitude: pt.lon)
-            ann.title = String(format: "Apogee · %.0f ft", pt.altAglFt)
+            ann.title = "Apogee · " + UnitFormatter.altitude(ftToM(pt.altAglFt), system: unitSystem)
             ann.subtitle = "apogee"
             mapView.addAnnotation(ann)
         }
@@ -224,6 +225,7 @@ struct FlightScene3DView: UIViewRepresentable {
     let launchPoint: TrackPoint?
     let apogeePoint: TrackPoint?
     let landingPoint: TrackPoint?
+    let unitSystem: UnitSystem
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
@@ -239,13 +241,14 @@ struct FlightScene3DView: UIViewRepresentable {
             scnView.scene = nil
             return
         }
-        let hash = "\(trackPoints.count),\(trackPoints.first?.lat ?? 0),\(trackPoints.last?.lat ?? 0)"
+        let hash = "\(trackPoints.count),\(trackPoints.first?.lat ?? 0),\(trackPoints.last?.lat ?? 0),\(unitSystem.rawValue)"
         if context.coordinator.lastHash != hash {
             context.coordinator.lastHash = hash
             let scenePts = downsample(trackPoints, maxCount: 500)
             let (scene, groundNode, extent) = Self.buildScene(
                 trackPoints: scenePts,
-                launchPoint: launchPoint, apogeePoint: apogeePoint, landingPoint: landingPoint
+                launchPoint: launchPoint, apogeePoint: apogeePoint, landingPoint: landingPoint,
+                unitSystem: unitSystem
             )
             scnView.scene = scene
             scnView.pointOfView = scene.rootNode.childNode(
@@ -315,7 +318,8 @@ struct FlightScene3DView: UIViewRepresentable {
 
     static func buildScene(
         trackPoints: [TrackPoint],
-        launchPoint: TrackPoint?, apogeePoint: TrackPoint?, landingPoint: TrackPoint?
+        launchPoint: TrackPoint?, apogeePoint: TrackPoint?, landingPoint: TrackPoint?,
+        unitSystem: UnitSystem
     ) -> (SCNScene, SCNNode, Float) {
         let scene = SCNScene()
         let root = scene.rootNode
@@ -440,7 +444,8 @@ struct FlightScene3DView: UIViewRepresentable {
                  position: SCNVector3(apogeePos.x, apogeePos.y + Float(markerSize) * 2.5, apogeePos.z),
                  color: UIColor(red: 0.30, green: 0.67, blue: 0.97, alpha: 1), scale: labelScale)
         if let ap = apogeePoint {
-            let altLabel = String(format: "%.0f ft AGL", ap.altAglFt - (launchPoint?.altAglFt ?? 0))
+            let aglM = ftToM(ap.altAglFt - (launchPoint?.altAglFt ?? 0))
+            let altLabel = UnitFormatter.altitude(aglM, system: unitSystem) + " AGL"
             addLabel(to: root, text: altLabel,
                      position: SCNVector3(apogeePos.x, apogeePos.y + Float(markerSize) * 1.0, apogeePos.z),
                      color: UIColor(white: 0.7, alpha: 1), scale: labelScale * 0.7)
@@ -603,6 +608,7 @@ struct FlightScene3DView: UIViewRepresentable {
 
 struct FlightTrajectoryView: View {
     let flight: CachedFlight
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     @State private var trackPoints: [TrackPoint] = []
     @State private var launchPoint: TrackPoint?
@@ -666,7 +672,8 @@ struct FlightTrajectoryView: View {
                         trackPoints: trackPoints,
                         launchPoint: launchPoint,
                         apogeePoint: apogeePoint,
-                        landingPoint: landingPoint
+                        landingPoint: landingPoint,
+                        unitSystem: unitSystem
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal)
@@ -675,7 +682,8 @@ struct FlightTrajectoryView: View {
                         trackPoints: trackPoints,
                         launchPoint: launchPoint,
                         apogeePoint: apogeePoint,
-                        landingPoint: landingPoint
+                        landingPoint: landingPoint,
+                        unitSystem: unitSystem
                     )
                     .cornerRadius(12)
                     .padding(.horizontal)
@@ -701,7 +709,7 @@ struct FlightTrajectoryView: View {
 
         return HStack(spacing: 20) {
             VStack(spacing: 2) {
-                Text(String(format: "%.0f ft", maxAlt))
+                Text(UnitFormatter.altitude(ftToM(maxAlt), system: unitSystem))
                     .font(.system(.caption, design: .monospaced).bold())
                 Text("Max Alt")
                     .font(.caption2)

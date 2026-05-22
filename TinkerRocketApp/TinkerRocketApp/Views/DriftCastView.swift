@@ -181,6 +181,7 @@ struct DriftCastMapView: UIViewRepresentable {
 /// Supports interactive rotation/zoom via allowsCameraControl.
 struct Trajectory3DView: UIViewRepresentable {
     var result: GuidanceResult?
+    var unitSystem: UnitSystem
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
@@ -197,10 +198,10 @@ struct Trajectory3DView: UIViewRepresentable {
             return
         }
         // Only rebuild if result changed
-        let hash = "\(r.guidanceLat),\(r.guidanceLon),\(r.apogeeFt)"
+        let hash = "\(r.guidanceLat),\(r.guidanceLon),\(r.apogeeFt),\(unitSystem.rawValue)"
         if context.coordinator.lastHash != hash {
             context.coordinator.lastHash = hash
-            let (scene, groundNode, extent) = Self.buildScene(for: r)
+            let (scene, groundNode, extent) = Self.buildScene(for: r, unitSystem: unitSystem)
             scnView.scene = scene
             // Explicitly set the point of view so camera control works
             scnView.pointOfView = scene.rootNode.childNode(
@@ -274,7 +275,7 @@ struct Trajectory3DView: UIViewRepresentable {
 
     /// Build the 3D scene. Returns the scene, the ground node (for texture update),
     /// and the extent (for satellite fetch region).
-    static func buildScene(for r: GuidanceResult) -> (SCNScene, SCNNode, Float) {
+    static func buildScene(for r: GuidanceResult, unitSystem: UnitSystem) -> (SCNScene, SCNNode, Float) {
         let scene = SCNScene()
         let root = scene.rootNode
         let refLat = r.launchLat
@@ -360,7 +361,7 @@ struct Trajectory3DView: UIViewRepresentable {
         Self.addLabel(to: root, text: "Guidance",
                      position: SCNVector3(guidancePos.x, guidancePos.y + Float(markerSize) * 2.5, guidancePos.z),
                      color: UIColor(red: 0.30, green: 0.67, blue: 0.97, alpha: 1), scale: labelScale)
-        let altLabel = String(format: "%.0f ft AGL", r.apogeeFt)
+        let altLabel = UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem) + " AGL"
         Self.addLabel(to: root, text: altLabel,
                      position: SCNVector3(guidancePos.x, guidancePos.y + Float(markerSize) * 1.0, guidancePos.z),
                      color: UIColor(white: 0.7, alpha: 1), scale: labelScale * 0.7)
@@ -527,6 +528,11 @@ struct DriftCastView: View {
     @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
+    // Display units (#160).  DriftCast is feet/knots-native (winds-aloft
+    // convention); only the result readouts respect this toggle — the wind
+    // profile table and ft/fps inputs stay as-is.
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
+
     // Map state
     @State private var mapType: MKMapType = .hybrid
     @State private var mapRegion = MKCoordinateRegion(
@@ -648,8 +654,8 @@ struct DriftCastView: View {
                 Button("OK") { }
             } message: {
                 if let r = result {
-                    Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: %.0f ft AGL",
-                                r.guidanceLat, r.guidanceLon, r.apogeeFt))
+                    Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: ", r.guidanceLat, r.guidanceLon)
+                         + UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem) + " AGL")
                 }
             }
             .alert("Send to Unit?", isPresented: $showSendConfirm) {
@@ -657,9 +663,9 @@ struct DriftCastView: View {
                 Button("Cancel", role: .cancel) { }
             } message: {
                 if let r = result {
-                    Text(String(format: "Send guidance point (%.6f, %.6f) at %.0f ft AGL to %@?",
-                                r.guidanceLat, r.guidanceLon, r.apogeeFt,
-                                device.connectedDeviceName))
+                    Text(String(format: "Send guidance point (%.6f, %.6f) at ", r.guidanceLat, r.guidanceLon)
+                         + UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem)
+                         + String(format: " AGL to %@?", device.connectedDeviceName))
                 }
             }
         }
@@ -698,7 +704,7 @@ struct DriftCastView: View {
 
             // Map view: 2D or 3D
             if show3D {
-                Trajectory3DView(result: result)
+                Trajectory3DView(result: result, unitSystem: unitSystem)
                     .frame(height: 350)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal)
@@ -830,11 +836,11 @@ struct DriftCastView: View {
             resultRow("Descent time",
                       String(format: "%.0f s (%.1f min)", r.totalDescentTimeS, r.totalDescentTimeS / 60))
             resultRow("Total drift",
-                      String(format: "%.0f m", r.totalDriftM))
+                      UnitFormatter.distance(r.totalDriftM, system: unitSystem))
             resultRow("Verification error",
-                      String(format: "%.1f m", r.landingErrorM))
+                      UnitFormatter.distance(r.landingErrorM, system: unitSystem))
             resultRow("Ground elev",
-                      String(format: "%.0f ft ASL", r.windProfile.groundElevFt))
+                      UnitFormatter.altitude(ftToM(r.windProfile.groundElevFt), system: unitSystem) + " ASL")
         }
     }
 

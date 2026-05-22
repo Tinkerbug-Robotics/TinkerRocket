@@ -12,6 +12,8 @@ import Charts
 struct FlightChartView: View {
     let flight: CachedFlight
 
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
+
     @State private var csvData: FlightCSVData?
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -143,6 +145,9 @@ struct FlightChartView: View {
         }
         .onChange(of: selectedColumns) { newSelection in
             updateChartSeries(for: newSelection)
+        }
+        .onChange(of: unitSystem) { _ in
+            updateChartSeries(for: selectedColumns)
         }
         .task {
             await loadCSV()
@@ -392,7 +397,10 @@ struct FlightChartView: View {
             }
 
             guard !cleanX.isEmpty else { return nil }
-            return FullColumnData(id: columnName, x: cleanX, y: cleanY)
+            // Convert values + relabel the series for the chosen unit system.
+            // Logs are canonical SI; conversion happens only at render time.
+            let converted = UnitFormatter.convertSeries(column: columnName, values: cleanY, system: unitSystem)
+            return FullColumnData(id: converted.label, x: cleanX, y: converted.values)
         }
 
         fullSeriesData = newFullData

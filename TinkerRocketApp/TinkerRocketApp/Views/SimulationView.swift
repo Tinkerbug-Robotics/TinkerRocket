@@ -19,6 +19,12 @@ struct SimulationView: View {
     @AppStorage("simBurnTimeSeconds") private var burnTimeSeconds: String = "1.5"
     @AppStorage("simDescentRateMps") private var descentRateMps: String = "5.0"
 
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
+    // Editable descent-rate text in the current display unit (m/s or ft/s).
+    // The persisted store above stays canonical m/s; this is synced on appear
+    // and whenever the unit system changes, and committed back on edit.
+    @State private var descentRateText: String = ""
+
     /// Whether all input fields parse to valid positive numbers
     private var inputsValid: Bool {
         guard let m = Float(massGrams), m > 0,
@@ -37,7 +43,9 @@ struct SimulationView: View {
                     parameterRow(label: "Mass", value: $massGrams, unit: "g", placeholder: "grams")
                     parameterRow(label: "Thrust", value: $thrustNewtons, unit: "N", placeholder: "newtons")
                     parameterRow(label: "Burn Time", value: $burnTimeSeconds, unit: "s", placeholder: "seconds")
-                    parameterRow(label: "Descent Rate", value: $descentRateMps, unit: "m/s", placeholder: "m/s")
+                    parameterRow(label: "Descent Rate", value: $descentRateText,
+                                 unit: UnitFormatter.speedUnit(unitSystem),
+                                 placeholder: UnitFormatter.speedUnit(unitSystem))
                 }
 
                 Section("Estimated Performance") {
@@ -77,7 +85,33 @@ struct SimulationView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onAppear { syncDescentRateText() }
+            .onChange(of: descentRateText) { _ in commitDescentRate() }
+            .onChange(of: unitSystem) { _ in syncDescentRateText() }
         }
+    }
+
+    // MARK: - Descent-rate unit sync (#160)
+
+    /// Load the editable text from the canonical m/s store, in the current unit.
+    private func syncDescentRateText() {
+        guard let mps = Double(descentRateMps) else { descentRateText = descentRateMps; return }
+        descentRateText = formatRate(UnitFormatter.mpsToDisplay(mps, system: unitSystem))
+    }
+
+    /// Commit the editable text back to the canonical m/s store.  Invalid /
+    /// empty input clears the store so `inputsValid` fails, as before.
+    private func commitDescentRate() {
+        guard let display = Double(descentRateText) else { descentRateMps = ""; return }
+        descentRateMps = String(UnitFormatter.displayToMps(display, system: unitSystem))
+    }
+
+    /// Trim a converted rate to at most 2 decimals with no trailing zeros.
+    private func formatRate(_ value: Double) -> String {
+        var s = String(format: "%.2f", value)
+        while s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s
     }
 
     // MARK: - UI Helpers
@@ -92,7 +126,8 @@ struct SimulationView: View {
                 .frame(width: 80)
             Text(unit)
                 .foregroundColor(.secondary)
-                .frame(width: 20, alignment: .leading)
+                .fixedSize()
+                .frame(minWidth: 28, alignment: .leading)
         }
     }
 
@@ -192,8 +227,8 @@ struct SimulationView: View {
         let totalTime = time + descentTime
 
         return (
-            maxSpeed: String(format: "%.0f m/s", maxSpeed),
-            maxAlt: String(format: "%.0f m", maxAlt),
+            maxSpeed: UnitFormatter.speed(Double(maxSpeed), decimals: 0, system: unitSystem),
+            maxAlt: UnitFormatter.altitude(Double(maxAlt), system: unitSystem),
             flightTime: String(format: "%.0f s", totalTime)
         )
     }
