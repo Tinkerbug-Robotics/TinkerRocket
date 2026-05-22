@@ -5,19 +5,52 @@
 
 namespace config
 {
+    // --- Board variant (working toward a single firmware for both PCBs) ---
+    // V2 (=1): new PCB  -> BQ27Z746 gauge, SPI-flash storage, LoRa RST on GPIO33,
+    //                      extra LoRa control lines (RXEN/DIO2/DIO3) wired.
+    // V1 (=0): original -> MAX17205 gauge, SDMMC SD card, original LoRa pin map.
+    // The fuel gauge is auto-detected at runtime (probe 0x55 then 0x36), so it
+    // does NOT depend on this switch. Pins the silicon can't probe (LoRa, storage)
+    // are selected here at compile time for now; moving them to runtime board
+    // detection is the follow-up to fully unify into one binary.
+    #ifndef BS_BOARD_V2
+    #define BS_BOARD_V2 1
+    #endif
+
     // --- Debug ---
     static constexpr bool DEBUG = true;
     static constexpr uint32_t STATS_PERIOD_MS = 5000;
 
     // --- LoRa Radio (LLCC68 via RadioLib) ---
-    // Must match OutComputer radio parameters exactly
-    static constexpr int LORA_SPI_SCK  = 10;//36
-    static constexpr int LORA_SPI_MISO = 13;//34
-    static constexpr int LORA_SPI_MOSI = 12;//35
-    static constexpr int LORA_CS_PIN   = 11;//38
-    static constexpr int LORA_DIO1_PIN = 21;//18
-    static constexpr int LORA_RST_PIN  = 36;//37
-    static constexpr int LORA_BUSY_PIN = 14;//17
+    // Must match OutComputer radio parameters exactly.
+    // The V1 values below are the original-board assignments (previously the
+    // "//" comments here); V2 is the new-PCB schematic. NOTE: on the new board
+    // LoRa RST = GPIO33 (differs from BOTH the prior config value 36 and the
+    // original-board 37).
+#if BS_BOARD_V2
+    static constexpr int LORA_SPI_SCK  = 10;   // L_SCK
+    static constexpr int LORA_SPI_MISO = 13;   // L_MISO
+    static constexpr int LORA_SPI_MOSI = 12;   // L_MOSI
+    static constexpr int LORA_CS_PIN   = 11;   // L_CS
+    static constexpr int LORA_DIO1_PIN = 21;   // L_DIO1
+    static constexpr int LORA_RST_PIN  = 33;   // L_RST
+    static constexpr int LORA_BUSY_PIN = 14;   // L_BUSY
+    // Extra control lines wired on the new PCB (LLCC68):
+    static constexpr int LORA_RXEN_PIN = 17;   // L_RXEN (RF switch RX enable)
+    static constexpr int LORA_DIO2_PIN = 18;   // L_DIO2
+    static constexpr int LORA_DIO3_PIN = 3;    // L_DIO3
+#else
+    static constexpr int LORA_SPI_SCK  = 36;
+    static constexpr int LORA_SPI_MISO = 34;
+    static constexpr int LORA_SPI_MOSI = 35;
+    static constexpr int LORA_CS_PIN   = 38;
+    static constexpr int LORA_DIO1_PIN = 18;
+    static constexpr int LORA_RST_PIN  = 37;
+    static constexpr int LORA_BUSY_PIN = 17;
+    static constexpr int LORA_RXEN_PIN = -1;   // not wired on the original PCB
+    static constexpr int LORA_DIO2_PIN = -1;
+    static constexpr int LORA_DIO3_PIN = -1;
+#endif
 
     static constexpr float   LORA_FREQ_MHZ       = 915.0f;
     static constexpr uint8_t LORA_SF              = 8;
@@ -44,7 +77,19 @@ namespace config
     static constexpr uint8_t  UPLINK_RETRIES           = 8;     // TX attempts per command
     static constexpr uint32_t UPLINK_RETRY_INTERVAL_MS = 100;   // Delay between retries
 
-    // --- SD Card (SDMMC 4-bit) ---
+    // --- Storage ---
+    // V2/new PCB logs to an external SPI NOR flash (M_*, on SPI3_HOST since LoRa
+    // owns SPI2_HOST); V1 uses an SDMMC SD card. Both mount as FAT behind
+    // SD_MOUNT_POINT, so the logging code is backend-agnostic. NOR is assumed
+    // (esp_flash auto-detects JEDEC ID/size); a SPI NAND part would need the
+    // spi_nand_flash component instead.
+#if BS_BOARD_V2
+    static constexpr int FLASH_SCK  = 4;   // M_SCK
+    static constexpr int FLASH_MOSI = 5;   // M_MOSI
+    static constexpr int FLASH_CS   = 6;   // M_FLASH_CS
+    static constexpr int FLASH_MISO = 7;   // M_MISO
+#endif
+    // --- SD Card (SDMMC 4-bit, original PCB) ---
     static constexpr int SD_CLK  = 6;
     static constexpr int SD_CMD  = 7;
     static constexpr int SD_D0   = 5;
@@ -77,7 +122,8 @@ namespace config
     // cadence (Long Range preset ≈ 2 Hz) plus a couple of misses.
     static constexpr uint32_t BLE_TELEMETRY_STALE_MS = 3000;
 
-    // --- I2C Bus (MAX17205G fuel gauge) ---
+    // --- I2C Bus (fuel gauge; "SCL_SENS/SDA_SENS" on the new-PCB schematic) ---
+    // Same pins on both boards. External pull-ups on-board (internal OFF).
     static constexpr int      I2C_SCL_PIN       = 37;
     static constexpr int      I2C_SDA_PIN       = 38;
     static constexpr uint32_t I2C_FREQ_HZ       = 400'000;  // 400 kHz
@@ -86,9 +132,15 @@ namespace config
     static constexpr uint8_t DEFAULT_NETWORK_ID = 0;
     static constexpr const char* DEVICE_TYPE     = "B";  // "B" = base station
 
-    // --- Battery Monitoring (MAX17205G) ---
-    static constexpr uint16_t MAX17205_ADDR      = 0x36;     // Primary I2C address
-    static constexpr int      NUM_BATTERY_CELLS  = 2;        // 2S NCR18650B
+    // --- Battery Monitoring ---
+    // Fuel gauge is auto-detected at runtime: BQ27Z746 (new PCB) probed first at
+    // 0x55, then MAX17205 (original PCB) at 0x36. Both addresses are always
+    // defined so one firmware image covers both boards. The MAX17205-specific
+    // seed values (cells/Rsense/design mAh) below are used only on the MAX path;
+    // the BQ27Z746 self-gauges from its own data-flash config.
+    static constexpr uint16_t MAX17205_ADDR      = 0x36;     // original PCB gauge
+    static constexpr uint16_t BQ27Z746_ADDR      = 0x55;     // new PCB gauge
+    static constexpr int      NUM_BATTERY_CELLS  = 2;        // 2S NCR18650B (original PCB / MAX path)
     static constexpr float    RSENSE_MOHM        = 10.0f;    // Sense resistor (mΩ)
     static constexpr uint32_t PWR_UPDATE_PERIOD_MS = 2000;   // Battery read interval
     // Pack design capacity in mAh. Two 2800 mAh 18650 cells in 2S = 2800 mAh

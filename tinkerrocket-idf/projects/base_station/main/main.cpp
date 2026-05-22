@@ -8,6 +8,9 @@
 #include <esp_spiffs.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
+#include <driver/spi_common.h>
+#include <driver/spi_master.h>
+#include <esp_vfs_fat_nand.h>
 #include <driver/i2c_master.h>
 
 #include <cstdio>
@@ -28,6 +31,7 @@
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
+#include <TR_BQ27Z746.h>
 #include <RocketComputerTypes.h>
 
 static const char* TAG = "BS";
@@ -67,7 +71,11 @@ static float bs_temperature = NAN;
 static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
-static bool fuel_gauge_present = false;
+static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
+// Which gauge runtime detection found (one firmware image, both PCBs).
+enum class GaugeKind { None, MAX17205, BQ27Z746 };
+static GaugeKind gauge_kind = GaugeKind::None;
+static bool fuel_gauge_present = false;   // true if EITHER gauge is present
 
 // Servo/PID config cache (for BLE readback — mirrors what was sent to rocket)
 static int16_t cfg_servo_bias1 = 0;
@@ -100,6 +108,68 @@ static bool     uplink_pending = false;
 static const char* SD_MOUNT_POINT = "/sdcard";
 static sdmmc_card_t* sd_card = nullptr;
 static bool using_internal_flash = false;
+static bool using_external_flash = false;   // V2: FAT on the external SPI flash
+#if BS_BOARD_V2
+static spi_device_handle_t      s_ext_spi = nullptr;
+static spi_nand_flash_device_t *s_nand    = nullptr;
+
+// Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
+// flash used for logging on the new PCB (M_* pins on SPI3_HOST; LoRa owns
+// SPI2_HOST). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
+// the vendored+patched spi_nand_flash component (components/spi_nand_flash/src/
+// devices/nand_foresee.c). On success repoints SD_MOUNT_POINT and sets
+// using_external_flash; otherwise returns the error so the caller falls back to
+// internal SPIFFS.
+static esp_err_t mountExternalFlashFat()
+{
+    spi_bus_config_t buscfg = {};
+    buscfg.mosi_io_num     = config::FLASH_MOSI;
+    buscfg.miso_io_num     = config::FLASH_MISO;
+    buscfg.sclk_io_num     = config::FLASH_SCK;
+    buscfg.quadwp_io_num   = -1;
+    buscfg.quadhd_io_num   = -1;
+    buscfg.max_transfer_sz = 4096 + 256;     // page + spare
+    esp_err_t e = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash SPI bus init failed (0x%x)", (int)e); return e; }
+
+    const uint32_t spi_flags = SPI_DEVICE_HALFDUPLEX;
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = 20 * 1000 * 1000;   // conservative for bring-up (chip rated 166 MHz)
+    devcfg.mode           = 0;
+    devcfg.spics_io_num   = config::FLASH_CS;
+    devcfg.queue_size     = 10;
+    devcfg.flags          = spi_flags;
+    e = spi_bus_add_device(SPI3_HOST, &devcfg, &s_ext_spi);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash add SPI device failed (0x%x)", (int)e); return e; }
+
+    spi_nand_flash_config_t nand_cfg = {};
+    nand_cfg.device_handle = s_ext_spi;
+    nand_cfg.io_mode       = SPI_NAND_IO_MODE_SIO;
+    nand_cfg.flags         = spi_flags;
+    e = spi_nand_flash_init_device(&nand_cfg, &s_nand);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "SPI NAND init failed (0x%x) -- unsupported chip or wiring", (int)e); return e; }
+
+    uint32_t blocks = 0, block_sz = 0, page_sz = 0;
+    spi_nand_flash_get_block_num(s_nand, &blocks);
+    spi_nand_flash_get_block_size(s_nand, &block_sz);
+    spi_nand_flash_get_page_size(s_nand, &page_sz);
+    ESP_LOGI(TAG, "SPI NAND up: %lu blocks x %lu B (page %lu B) = %llu MB",
+             (unsigned long)blocks, (unsigned long)block_sz, (unsigned long)page_sz,
+             (unsigned long long)((uint64_t)blocks * block_sz / (1024 * 1024)));
+
+    esp_vfs_fat_mount_config_t mcfg = {};
+    mcfg.format_if_mount_failed = true;
+    mcfg.max_files              = 5;
+    mcfg.allocation_unit_size   = 0;   // FATFS default cluster size
+    e = esp_vfs_fat_nand_mount("/extflash", s_nand, &mcfg);
+    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash FAT mount failed (0x%x)", (int)e); return e; }
+
+    SD_MOUNT_POINT = "/extflash";
+    using_external_flash = true;
+    ESP_LOGI(TAG, "External-flash FAT mounted at %s", SD_MOUNT_POINT);
+    return ESP_OK;
+}
+#endif  // BS_BOARD_V2
 static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
 // CSV logging state
@@ -323,14 +393,59 @@ static uint8_t  sync_hour = 0, sync_minute = 0, sync_second = 0;
 // The chip is read/configured through the TR_MAX17205G component.
 // updateBattery() fans the latest readings into the global fields used by
 // the BLE telemetry builder.
+
+// Keep the new-board (BQ27Z746) battery protection FETs enabled. The gauge
+// ships with FET_EN=0 (and a reset reverts to it), so we (re)enable whenever
+// FET_EN has dropped and there is no active safety fault -- never overriding a
+// real protection event. Also flags the "commanded on but not conducting" case
+// (gate-drive / assembly fault, e.g. the EFC8811 open joint we hit). No-op on
+// the MAX17205 board. Call right after bq_gauge.update() so the flags are fresh.
+static void maintainBatteryFets()
+{
+    if (gauge_kind != GaugeKind::BQ27Z746) return;
+    const TR_BQ27Z746_Data& d = bq_gauge.data();
+
+    if (!d.fet_en)
+    {
+        // enableFetsIfNeeded() re-reads status and refuses while a fault is
+        // active, so this is safe even mid-fault; it logs its own result.
+        bq_gauge.enableFetsIfNeeded();
+    }
+    else if (!d.chg_fet_on || !d.dsg_fet_on)
+    {
+        static uint8_t throttle = 0;            // rate-limit (~every 15th cycle)
+        if ((throttle++ % 15) == 0)
+        {
+            if (d.safety_active)
+                ESP_LOGW(TAG, "BQ27Z746 safety protection holding a FET off (BattStatus=0x%04X)",
+                         d.batt_status);
+            else
+                ESP_LOGW(TAG, "BQ27Z746 FET_EN=1, no fault, but CHG=%d DSG=%d -- FETs not conducting "
+                              "(gate-drive/assembly?)", d.chg_fet_on, d.dsg_fet_on);
+        }
+    }
+}
+
 static void updateBattery()
 {
     if (!fuel_gauge_present) return;
-    fuel_gauge.update();
-    bs_voltage     = fuel_gauge.voltage();
-    bs_soc         = fuel_gauge.soc();
-    bs_current     = fuel_gauge.current();
-    bs_temperature = fuel_gauge.temperature();
+    if (gauge_kind == GaugeKind::BQ27Z746)
+    {
+        bq_gauge.update();
+        maintainBatteryFets();
+        bs_voltage     = bq_gauge.voltage();
+        bs_soc         = bq_gauge.soc();
+        bs_current     = bq_gauge.current();
+        bs_temperature = bq_gauge.temperature();
+    }
+    else
+    {
+        fuel_gauge.update();
+        bs_voltage     = fuel_gauge.voltage();
+        bs_soc         = fuel_gauge.soc();
+        bs_current     = fuel_gauge.current();
+        bs_temperature = fuel_gauge.temperature();
+    }
 }
 
 // ============================================================================
@@ -666,7 +781,7 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
         if (total > 0 && used > (total * 9 / 10))
         {
             ESP_LOGW(TAG, "[LOG] %s nearly full! %llu/%llu bytes (%.0f%%)",
-                     using_internal_flash ? "Internal flash" : "SD card",
+                     using_internal_flash ? "Internal flash" : using_external_flash ? "External NAND" : "SD card",
                      (unsigned long long)used, (unsigned long long)total,
                      (double)used * 100.0 / (double)total);
         }
@@ -2506,8 +2621,15 @@ static void setup_bs()
     setenv("TZ", "UTC0", 1);
     tzset();
 
-    // Initialize storage: prefer SD (SDMMC 4-bit), fall back to SPIFFS on internal flash.
+    // Initialize storage. V2 (new PCB) -> wear-leveled FAT on the external SPI
+    // flash; V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
+    // internal flash. Logging is backend-agnostic (uses SD_MOUNT_POINT + the
+    // standard file API), so only the mount differs per board.
     {
+        esp_err_t ret;
+#if BS_BOARD_V2
+        ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
+#else
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
@@ -2526,8 +2648,7 @@ static void setup_bs()
         mount_cfg.max_files = 5;
         mount_cfg.allocation_unit_size = 16 * 1024;
 
-        esp_err_t ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot,
-                                                 &mount_cfg, &sd_card);
+        ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mount_cfg, &sd_card);
         if (ret == ESP_OK)
         {
             sdmmc_card_print_info(stdout, sd_card);
@@ -2545,9 +2666,10 @@ static void setup_bs()
                          (unsigned long long)(free_bytes / (1024 * 1024)));
             }
         }
-        else
+#endif
+        if (ret != ESP_OK)
         {
-            ESP_LOGW(TAG, "SD card mount failed (0x%x) — falling back to internal flash (SPIFFS)",
+            ESP_LOGW(TAG, "Primary storage mount failed (0x%x) — falling back to internal flash (SPIFFS)",
                      (int)ret);
             sd_card = nullptr;
 
@@ -2581,7 +2703,7 @@ static void setup_bs()
         }
 
         // Write test covers both backends
-        if (sd_card || using_internal_flash)
+        if (sd_card || using_internal_flash || using_external_flash)
         {
             char test_path[48];
             snprintf(test_path, sizeof(test_path), "%s/.write_test", SD_MOUNT_POINT);
@@ -2592,7 +2714,7 @@ static void setup_bs()
                 fclose(test);
                 remove(test_path);
                 ESP_LOGI(TAG, "Storage write test: OK (%s)",
-                         using_internal_flash ? "internal flash" : "SD card");
+                         using_internal_flash ? "internal flash" : using_external_flash ? "external NAND" : "SD card");
             }
             else
             {
@@ -2602,7 +2724,8 @@ static void setup_bs()
         }
     }
 
-    // Configure I2C for MAX17205G fuel gauge
+    // Configure I2C and auto-detect the fuel gauge (one firmware, both PCBs):
+    // probe the new-PCB BQ27Z746 (0x55) first, then the original MAX17205 (0x36).
     {
         i2c_master_bus_config_t bus_cfg = {};
         bus_cfg.i2c_port     = I2C_NUM_0;
@@ -2613,9 +2736,48 @@ static void setup_bs()
         bus_cfg.flags.enable_internal_pullup = false;
 
         esp_err_t err = i2c_new_master_bus(&bus_cfg, &i2c_bus);
-        if (err == ESP_OK &&
-            i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
+        if (err != ESP_OK)
         {
+            ESP_LOGW(TAG, "I2C bus init failed (%d) — battery readings unavailable", (int)err);
+        }
+        else if (i2c_master_probe(i2c_bus, config::BQ27Z746_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
+        {
+            // New PCB: BQ27Z746 single-cell gauge + protection.
+            TR_BQ27Z746_Config bq_cfg;
+            bq_cfg.current_invert   = false;  // TODO: verify SRP/SRN polarity on the new board
+            bq_cfg.auto_enable_fets = false;  // FET enable/maintenance owned by maintainBatteryFets()
+                                              //   (runs via updateBattery() at boot + every cycle)
+            if (bq_gauge.begin(i2c_bus, bq_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+            {
+                gauge_kind = GaugeKind::BQ27Z746;
+                fuel_gauge_present = true;
+                ESP_LOGI(TAG, "BQ27Z746 fuel gauge found on I2C (0x%02X), devtype 0x%04X",
+                         config::BQ27Z746_ADDR, bq_gauge.deviceType());
+                updateBattery();
+                ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
+                         (double)bs_voltage, (double)bs_soc, (double)bs_current);
+                bq_gauge.logDiagnostics(TAG);
+
+                // New-PCB gauge bring-up: the BQ27Z746 ships with a 5300 mAh
+                // default DesignCapacity and was never configured for our 2800 mAh
+                // 18650, so SoC/capacity are meaningless until provisioned. One-shot,
+                // self-gated (no-op once correct), read-back verified.
+                bq_gauge.provisionDesignCapacity((int16_t)config::BATTERY_DESIGN_MAH);
+                // Read-only diagnostic: raw coulomb-counter ADC. If this tracks real
+                // battery current (charge vs discharge) the current path is good and
+                // only CC Gain needs a known-current calibration; if it's frozen, the
+                // shunt/Kelvin sense is the problem.
+                int16_t bq_raw_cc = 0;
+                (void)bq_gauge.readRawCcCurrent(bq_raw_cc);
+            }
+            else
+            {
+                ESP_LOGW(TAG, "BQ27Z746 probe succeeded but begin() failed");
+            }
+        }
+        else if (i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
+        {
+            // Original PCB: MAX17205 gauge.
             TR_MAX17205G_Config fg_cfg;
             fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
             fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
@@ -2628,6 +2790,7 @@ static void setup_bs()
 
             if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
             {
+                gauge_kind = GaugeKind::MAX17205;
                 fuel_gauge_present = true;
                 ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
                 fuel_gauge.initIfNeeded();
@@ -2643,7 +2806,7 @@ static void setup_bs()
         }
         else
         {
-            ESP_LOGW(TAG, "MAX17205G not found — battery readings unavailable");
+            ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205 0x36) — battery readings unavailable");
         }
     }
 
