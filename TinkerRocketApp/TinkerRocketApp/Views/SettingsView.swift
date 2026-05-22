@@ -21,8 +21,10 @@ struct SettingsView: View {
     @EnvironmentObject var store: RocketProfileStore
     @Environment(\.dismiss) var dismiss
 
-    // App-wide display-unit preference (#160).  Display-layer only — logs,
-    // exports, and the wire protocol stay SI.
+    // App-wide display-unit preference (#160).  The picker lives on the
+    // dashboard (front screen); this is read here only to show/edit the pyro
+    // "altitude on descent" field in the chosen unit.  Display-layer only —
+    // logs, exports, and the wire protocol stay SI.
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     // Editable string fields — parsed on focus loss, not per keystroke.
@@ -146,7 +148,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             Form {
-                unitsSection
                 if device.isBaseStation {
                     baseStationSections
                 } else if store.activeProfile == nil {
@@ -190,18 +191,6 @@ struct SettingsView: View {
                 // truth) so we no longer pull config back into local state.
                 if let pwr = cfg.loraTxPower { txPowerDbm = Int(pwr) }
             }
-        }
-    }
-
-    // MARK: - Display units (app-wide, #160)
-
-    private var unitsSection: some View {
-        Section(header: Text("Display Units"),
-                footer: Text("Switches displayed altitude, speed, and acceleration units app-wide. Flight logs and exports always stay metric (SI).")) {
-            Picker("Units", selection: $unitSystem) {
-                ForEach(UnitSystem.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
         }
     }
 

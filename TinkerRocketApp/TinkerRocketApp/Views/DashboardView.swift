@@ -31,6 +31,7 @@ struct DashboardView: View {
     @StateObject private var locationManager = LocationManager()
     @EnvironmentObject private var profileStore: RocketProfileStore
     @EnvironmentObject private var syncer: ActiveRocketSyncer
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
     @State private var activeSheet: DashboardSheet?
     @State private var showProvisioning = false
 
@@ -47,6 +48,18 @@ struct DashboardView: View {
         guard flightAnnouncer.isEnabled else { return .gray }
         if flightAnnouncer.lastSessionError != nil { return .red }
         return flightAnnouncer.audioSessionActive ? .green : .orange
+    }
+
+    /// App-wide display-unit picker (#160).  Lives on the front screen so it's
+    /// reachable whether or not a rocket is connected; the choice is global.
+    private var unitsMenu: some View {
+        Menu {
+            Picker("Display Units", selection: $unitSystem) {
+                ForEach(UnitSystem.allCases) { Text($0.label).tag($0) }
+            }
+        } label: {
+            Image(systemName: "ruler")
+        }
     }
 
     var body: some View {
@@ -122,12 +135,15 @@ struct DashboardView: View {
             .navigationTitle(fleet.isConnected ? "" : "TinkerRocket")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if fleet.isConnected {
-                        Button {
-                            fleet.disconnectAll()
-                        } label: {
-                            Image(systemName: "chevron.backward")
+                    HStack(spacing: 16) {
+                        if fleet.isConnected {
+                            Button {
+                                fleet.disconnectAll()
+                            } label: {
+                                Image(systemName: "chevron.backward")
+                            }
                         }
+                        unitsMenu
                     }
                 }
 
