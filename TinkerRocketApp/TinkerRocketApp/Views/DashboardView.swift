@@ -305,19 +305,26 @@ struct ConnectedDashboardView: View {
             BatteryView(telemetry: device.telemetry, isBaseStation: false)
 
             Button {
-                device.sendPowerToggle()
+                device.beginPowerOn()
             } label: {
                 HStack {
-                    Image(systemName: "bolt.fill")
-                    Text("Power On")
+                    if device.poweringOn {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        Text("Powering on…")
+                    } else {
+                        Image(systemName: "bolt.fill")
+                        Text("Power On")
+                    }
                 }
                 .font(.system(.title2, design: .default).weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(Color.green)
+                .background(device.poweringOn ? Color.gray : Color.green)
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
+            .disabled(device.poweringOn)
         } else {
             // --- Powered ON (or base station): full telemetry dashboard ---
 

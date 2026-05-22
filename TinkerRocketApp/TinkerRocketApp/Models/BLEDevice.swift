@@ -44,6 +44,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var downloadStates: [String: DownloadState] = [:]
     @Published var simLaunched = false
     @Published var groundTestActive = false
+    // #159: drives the Power On button's busy state.  The OC can spend
+    // seconds-to-tens-of-seconds flushing the flight log before it acts on
+    // cmd 8, during which the press otherwise looks lost.
+    @Published var poweringOn = false
     @Published var connectedRSSI: Int?
     @Published var rocketConfig: RocketConfig?
 
@@ -124,6 +128,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private var downloadCompletionHandler: ((URL?) -> Void)?
     private var downloadStallTimer: Timer?
     private var rssiTimer: Timer?
+    private var poweringOnTimer: Timer?
 
     // CoreBluetooth objects (peripheral is set by BLEFleet on connect)
     var peripheral: CBPeripheral?
@@ -169,6 +174,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         currentPage = 0
         hasMoreFiles = false
         clearSimBanner()
+        clearPoweringOn()
         rocketConfig = nil
         // Reset so the next reconnect (including after a BS reboot) triggers
         // another auto-pick.  Any pending scan-and-apply is also dropped —
@@ -227,6 +233,28 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func sendPowerToggle() {
         sendCommand(8)
+    }
+
+    /// Power-on press handler (#159).  Lights the button's busy state and
+    /// arms a watchdog before sending the toggle.  `poweringOn` clears on the
+    /// first `pwr_pin_on` telemetry frame (see telemetry decode) or on
+    /// disconnect; the watchdog is a backstop so a silently-dropped command
+    /// can't leave the button spinning forever.  Cmd 8 is a toggle, so the
+    /// button stays disabled while busy to prevent a double-press from
+    /// powering the rocket back off.
+    func beginPowerOn() {
+        poweringOn = true
+        poweringOnTimer?.invalidate()
+        poweringOnTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async { self?.clearPoweringOn() }
+        }
+        sendPowerToggle()
+    }
+
+    func clearPoweringOn() {
+        poweringOnTimer?.invalidate()
+        poweringOnTimer = nil
+        poweringOn = false
     }
 
     func sendRawCommand(_ command: UInt8, payload: Data = Data()) {
@@ -1142,6 +1170,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
             }
             self.telemetry = newTelemetry
+            // #159: the rocket has finished flushing and powered on — drop the
+            // Power On button's busy state.  Guarded so we don't republish on
+            // every frame while already powered on.
+            if newTelemetry.pwr_pin_on && self.poweringOn {
+                self.clearPoweringOn()
+            }
             // Direct rocket connection — use this device's own rocketID
             // (relayed-telemetry path above uses source_rocket_id instead).
             // Skip when rocketID is unset so a BS-self packet (which falls
