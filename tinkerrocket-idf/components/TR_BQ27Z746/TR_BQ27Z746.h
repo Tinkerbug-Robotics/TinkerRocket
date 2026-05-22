@@ -40,12 +40,14 @@ namespace BQ27Z746_Reg {
     static constexpr uint16_t OPA_XDSG = (1u << 13);  // 1 = discharging disabled (DSG FET off)
     static constexpr uint16_t OPA_SS   = (1u << 11);  // 1 = a Safety protection is active
     // ManufacturingStatus bits
+    static constexpr uint16_t MFG_CAL_EN   = (1u << 15);  // CALIBRATION mode
     static constexpr uint16_t MFG_FET_EN   = (1u << 4);
     static constexpr uint16_t MFG_GAUGE_EN = (1u << 3);
 
     // Data-flash + calibration access (TRM SLUUCA6 §15.1.28/29, §16, §17)
     static constexpr uint8_t  MAC_DATA_CHECKSUM = 0x60;  // ~(addr+data) sum
     static constexpr uint8_t  MAC_DATA_LENGTH   = 0x61;  // = data bytes + 4
+    static constexpr uint16_t SUB_CAL_TOGGLE     = 0x002D;  // toggles ManufacturingStatus[CAL_EN]
     static constexpr uint16_t SUB_CAL_OUTPUT     = 0xF081;  // raw CC/ADC -> MACData (needs CAL_EN)
     static constexpr uint16_t SUB_CAL_OUTPUT_OFF = 0xF080;  // exit calibration output mode
     // Data-flash addresses (little-endian values per §16.2.2)

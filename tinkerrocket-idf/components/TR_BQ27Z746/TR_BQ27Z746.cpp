@@ -262,19 +262,44 @@ esp_err_t TR_BQ27Z746::provisionDesignCapacity(int16_t design_mah)
 bool TR_BQ27Z746::readRawCcCurrent(int16_t& raw_cc)
 {
     if (_dev == nullptr) return false;
-    if (macCmd(Reg::SUB_CAL_OUTPUT) != ESP_OK) return false;
-    vTaskDelay(pdMS_TO_TICKS(20));
 
-    uint8_t reg = Reg::ALT_MFR_ACCESS;            // 0x3E
+    // 0xF081 only streams raw ADC while ManufacturingStatus[CAL_EN] (Bit 15) is
+    // set, and it is OFF in normal operation. Enable it if needed, read, then
+    // restore so the gauge returns to normal gauging.
+    bool toggled = false;
+    uint8_t mf[4] = {};
+    if (macRead(Reg::SUB_MFG_STATUS, mf, sizeof(mf)) == ESP_OK)
+    {
+        uint16_t mfg = (uint16_t)mf[0] | ((uint16_t)mf[1] << 8);
+        if (!(mfg & Reg::MFG_CAL_EN))
+        {
+            if (macCmd(Reg::SUB_CAL_TOGGLE) == ESP_OK)   // 0x002D -> CAL_EN on
+            {
+                toggled = true;
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        }
+    }
+
+    macCmd(Reg::SUB_CAL_OUTPUT);                  // 0xF081
+    vTaskDelay(pdMS_TO_TICKS(50));
+    uint8_t reg = Reg::ALT_MFR_ACCESS;            // read from 0x3E so the block refreshes
     uint8_t blk[8] = {};
     esp_err_t e = i2c_master_transmit_receive(_dev, &reg, 1, blk, sizeof(blk), I2C_TIMEOUT_MS);
-    macCmd(Reg::SUB_CAL_OUTPUT_OFF);              // 0xF080 stop raw output (non-invasive)
+    macCmd(Reg::SUB_CAL_OUTPUT_OFF);              // 0xF080 stop raw output
+    if (toggled) macCmd(Reg::SUB_CAL_TOGGLE);     // restore CAL_EN -> off
     if (e != ESP_OK) return false;
 
+    uint16_t echo = (uint16_t)blk[0] | ((uint16_t)blk[1] << 8);
     raw_cc = (int16_t)((uint16_t)blk[4] | ((uint16_t)blk[5] << 8));
-    ESP_LOGI(DTAG, "[CAL] 0xF081 echo=0x%02X%02X cnt=%u status=%u rawCC=%d  raw=[%02X %02X %02X %02X %02X %02X %02X %02X]",
-             blk[1], blk[0], blk[2], blk[3], raw_cc,
-             blk[0], blk[1], blk[2], blk[3], blk[4], blk[5], blk[6], blk[7]);
+    if (echo != Reg::SUB_CAL_OUTPUT)             // not the 0xF081 block -> CAL_EN not active
+    {
+        ESP_LOGW(DTAG, "[CAL] 0xF081 not active (echo=0x%04X) raw=[%02X %02X %02X %02X %02X %02X %02X %02X]",
+                 echo, blk[0], blk[1], blk[2], blk[3], blk[4], blk[5], blk[6], blk[7]);
+        return false;
+    }
+    ESP_LOGI(DTAG, "[CAL] 0xF081 cnt=%u status=%u rawCC=%d  raw=[%02X %02X %02X %02X %02X %02X %02X %02X]",
+             blk[2], blk[3], raw_cc, blk[0], blk[1], blk[2], blk[3], blk[4], blk[5], blk[6], blk[7]);
     return true;
 }
 
