@@ -248,43 +248,52 @@ struct TelemetryData: Codable {
 
     var maxAltDisplay: String {
         if let max_alt_m = max_alt_m {
-            return String(format: "%.1f m", max_alt_m)
+            return UnitFormatter.altitude(Double(max_alt_m))
         }
         return "N/A"
     }
 
     var maxSpeedDisplay: String {
         if let max_speed_mps = max_speed_mps {
-            return String(format: "%.1f m/s", max_speed_mps)
+            return UnitFormatter.speed(Double(max_speed_mps))
         }
         return "N/A"
     }
 
     var pressureAltDisplay: String {
         if let alt = pressure_alt {
-            return String(format: "%.1f m", alt)
+            return UnitFormatter.altitude(Double(alt))
         }
         return "N/A"
     }
 
     var altitudeRateDisplay: String {
         if let rate = altitude_rate {
-            return String(format: "%.1f m/s", rate)
+            return UnitFormatter.speed(Double(rate))
         }
         return "N/A"
     }
 
-    // IMU display helpers
+    // IMU display helpers.  Values are converted to the display unit (m/s² or
+    // g); the unit label is shown separately by the IMU row.
     var lowGDisplay: String {
         if let x = low_g_x, let y = low_g_y, let z = low_g_z {
-            return String(format: "%.2f  %.2f  %.2f", x, y, z)
+            let s = UnitSystem.current
+            return String(format: "%.2f  %.2f  %.2f",
+                          UnitFormatter.accelerationValue(Double(x), system: s),
+                          UnitFormatter.accelerationValue(Double(y), system: s),
+                          UnitFormatter.accelerationValue(Double(z), system: s))
         }
         return "N/A"
     }
 
     var highGDisplay: String {
         if let x = high_g_x, let y = high_g_y, let z = high_g_z {
-            return String(format: "%.1f  %.1f  %.1f", x, y, z)
+            let s = UnitSystem.current
+            return String(format: "%.1f  %.1f  %.1f",
+                          UnitFormatter.accelerationValue(Double(x), system: s),
+                          UnitFormatter.accelerationValue(Double(y), system: s),
+                          UnitFormatter.accelerationValue(Double(z), system: s))
         }
         return "N/A"
     }

@@ -904,13 +904,13 @@ struct IMUView: View {
 
             IMURow(label: "Low-G", unit: "m/s\u{00B2}",
                    x: telemetry.low_g_x, y: telemetry.low_g_y, z: telemetry.low_g_z,
-                   decimals: 2)
+                   decimals: 2, isAcceleration: true)
 
             // High-G only available on direct rocket connection (not via LoRa)
             if !isBaseStation {
                 IMURow(label: "High-G", unit: "m/s\u{00B2}",
                        x: telemetry.high_g_x, y: telemetry.high_g_y, z: telemetry.high_g_z,
-                       decimals: 1)
+                       decimals: 1, isAcceleration: true)
             }
 
             IMURow(label: "Gyro", unit: "\u{00B0}/s",
@@ -931,10 +931,20 @@ struct IMURow: View {
     let y: Float?
     let z: Float?
     let decimals: Int
+    // Acceleration rows convert to g in imperial; gyro (°/s) stays as-is.
+    var isAcceleration: Bool = false
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
+
+    private var displayUnit: String {
+        isAcceleration ? UnitFormatter.accelerationUnit(unitSystem) : unit
+    }
 
     private func fmt(_ val: Float?) -> String {
         guard let v = val else { return "—" }
-        return String(format: "%.\(decimals)f", v)
+        let value = isAcceleration
+            ? UnitFormatter.accelerationValue(Double(v), system: unitSystem)
+            : Double(v)
+        return String(format: "%.\(decimals)f", value)
     }
 
     var body: some View {
@@ -942,7 +952,7 @@ struct IMURow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.caption)
-                Text(unit)
+                Text(displayUnit)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -1292,6 +1302,7 @@ struct StatusBadge: View {
 struct RocketDirectionView: View {
     let telemetry: TelemetryData
     @ObservedObject var locationManager: LocationManager
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     var body: some View {
         if let rocketLat = telemetry.latitude,
@@ -1320,7 +1331,7 @@ struct RocketDirectionView: View {
                     .rotationEffect(.degrees(arrowAngle))
                     .animation(.easeOut(duration: 0.3), value: arrowAngle)
 
-                Text(formatDistance(dist))
+                Text(UnitFormatter.distance(dist, system: unitSystem))
                     .font(.title2)
                     .fontWeight(.semibold)
             }
@@ -1328,14 +1339,6 @@ struct RocketDirectionView: View {
             .frame(maxWidth: .infinity)
             .background(Color(.systemGray6))
             .cornerRadius(10)
-        }
-    }
-
-    private func formatDistance(_ meters: Double) -> String {
-        if meters >= 1000 {
-            return String(format: "%.1f km", meters / 1000.0)
-        } else {
-            return String(format: "%.0f m", meters)
         }
     }
 }
@@ -1775,6 +1778,7 @@ struct OnPadCalibrationView: View {
     /// When embedded in a Form (e.g. the settings General tab) we drop the
     /// card chrome + headline so it sits naturally as a row (#132).
     var embedded: Bool = false
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
     @State private var calibrating = false
     @State private var showGravityWarning = false
     @State private var gravityMag: Float = 0.0
@@ -1841,7 +1845,7 @@ struct OnPadCalibrationView: View {
         .alert("Accelerometer Warning", isPresented: $showGravityWarning) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text("Low-G accelerometer magnitude (\(String(format: "%.2f", gravityMag)) m/s²) differs from expected gravity (9.81 m/s²) by \(String(format: "%.1f", gravityError))%. Consider running a bench calibration before flight.")
+            Text("Low-G accelerometer magnitude (\(UnitFormatter.acceleration(Double(gravityMag), system: unitSystem))) differs from expected gravity (\(UnitFormatter.acceleration(9.80665, system: unitSystem))) by \(String(format: "%.1f", gravityError))%. Consider running a bench calibration before flight.")
         }
         // Snapshot the freshly-run sensor cal into the active profile (#132),
         // tagged with this board's id so the syncer re-applies it on connect.
@@ -1883,6 +1887,7 @@ struct SignalStrengthView: View {
     let bleRSSI: Int?
     let isBaseStation: Bool
     var locationManager: LocationManager? = nil
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     var body: some View {
         VStack(spacing: 10) {
@@ -1917,12 +1922,12 @@ struct SignalStrengthView: View {
                         if let phoneAlt = locMgr.userAltitude,
                            let rocketAlt = telemetry.gnss_alt ?? telemetry.pressure_alt {
                             let altDiff = Double(rocketAlt) - phoneAlt
-                            Text("\(formatDistance(abs(altDiff))) \(altDiff >= 0 ? "Up" : "Down")")
+                            Text("\(UnitFormatter.altitude(abs(altDiff), system: unitSystem)) \(altDiff >= 0 ? "Up" : "Down")")
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundColor(.primary)
                         }
 
-                        Text("\(formatDistance(dist)) Away")
+                        Text("\(UnitFormatter.distance(dist, system: unitSystem)) Away")
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.primary)
 
@@ -1963,14 +1968,6 @@ struct SignalStrengthView: View {
         .frame(maxWidth: .infinity)
         .background(Color(.systemGray6))
         .cornerRadius(10)
-    }
-
-    private func formatDistance(_ meters: Double) -> String {
-        if meters >= 1000 {
-            return String(format: "%.1f km", meters / 1000.0)
-        } else {
-            return String(format: "%.0f m", meters)
-        }
     }
 
     // MARK: - LoRa RSSI mapping (-130 to -30 dBm)
