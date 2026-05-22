@@ -42,6 +42,16 @@ namespace BQ27Z746_Reg {
     // ManufacturingStatus bits
     static constexpr uint16_t MFG_FET_EN   = (1u << 4);
     static constexpr uint16_t MFG_GAUGE_EN = (1u << 3);
+
+    // Data-flash + calibration access (TRM SLUUCA6 §15.1.28/29, §16, §17)
+    static constexpr uint8_t  MAC_DATA_CHECKSUM = 0x60;  // ~(addr+data) sum
+    static constexpr uint8_t  MAC_DATA_LENGTH   = 0x61;  // = data bytes + 4
+    static constexpr uint16_t SUB_CAL_OUTPUT     = 0xF081;  // raw CC/ADC -> MACData (needs CAL_EN)
+    static constexpr uint16_t SUB_CAL_OUTPUT_OFF = 0xF080;  // exit calibration output mode
+    // Data-flash addresses (little-endian values per §16.2.2)
+    static constexpr uint16_t DF_DESIGN_CAP_MAH = 0x4600;  // I2, mAh (factory default 5300)
+    static constexpr uint16_t DF_CC_GAIN        = 0x4006;  // F4, default 3.68 (needs known-current cal)
+    static constexpr uint16_t DF_CAPACITY_GAIN  = 0x400A;  // F4
 }
 
 struct TR_BQ27Z746_Data
@@ -104,11 +114,29 @@ public:
     esp_err_t macRead(uint16_t sub, uint8_t* blk, size_t n);
     esp_err_t macCmd(uint16_t sub);
 
+    // --- Data-flash provisioning + diagnostics (new-PCB bring-up) ---
+    // Read/write a 16-bit little-endian data-flash word (TRM §16). The write
+    // verifies by read-back; the gauge validates checksum+length and rejects a
+    // malformed write (so a wrong protocol is non-destructive, just returns false).
+    bool readDataFlashI16(uint16_t addr, int16_t& value);
+    bool writeDataFlashI16(uint16_t addr, int16_t value);
+
+    // One-shot: ensure the gauge's DesignCapacity matches design_mah. The part
+    // ships at 5300 mAh; we never configured it, so SOC/capacity are meaningless
+    // until this runs. No-op (no flash write) once it already matches.
+    esp_err_t provisionDesignCapacity(int16_t design_mah);
+
+    // Diagnostic (read-only): raw coulomb-counter ADC current via 0xF081. Tells
+    // whether the current channel actually sees the sense resistor (varies with
+    // real battery current) vs. a stuck/garbage reading. Logs the raw block.
+    bool readRawCcCurrent(int16_t& raw_cc);
+
     // One-shot diagnostic dump under the given log tag.
     void logDiagnostics(const char* log_tag);
 
 private:
     esp_err_t readFetStatus();   // refresh chg/dsg/fet_en/safety flags in _data
+    esp_err_t macWrite(uint16_t addr, const uint8_t* data, size_t n);  // MAC/DF block write (checksum+length)
 
     i2c_master_dev_handle_t _dev;
     uint8_t                 _addr;

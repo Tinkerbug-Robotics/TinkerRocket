@@ -177,6 +177,108 @@ esp_err_t TR_BQ27Z746::update()
 }
 
 // ---------------------------------------------------------------------------
+// Data-flash block write (TRM SLUUCA6 §15.1.28/29): write [addr_lo, addr_hi,
+// data...] to 0x3E, then the checksum+length word to 0x60/0x61.
+//   checksum = ~( addr_lo + addr_hi + Σ data ) & 0xFF
+//   length   = (data bytes) + 4   (2 command bytes + checksum + length byte)
+// The gauge validates checksum+length and ignores a malformed write, so this is
+// non-destructive if the protocol is wrong — callers verify by read-back.
+// ---------------------------------------------------------------------------
+esp_err_t TR_BQ27Z746::macWrite(uint16_t addr, const uint8_t* data, size_t n)
+{
+    if (_dev == nullptr || n == 0 || n > 32) return ESP_ERR_INVALID_ARG;
+
+    uint8_t blk[3 + 32];
+    blk[0] = Reg::ALT_MFR_ACCESS;                 // 0x3E
+    blk[1] = (uint8_t)(addr & 0xFF);
+    blk[2] = (uint8_t)(addr >> 8);
+    for (size_t i = 0; i < n; ++i) blk[3 + i] = data[i];
+    esp_err_t e = i2c_master_transmit(_dev, blk, 3 + n, I2C_TIMEOUT_MS);
+    if (e != ESP_OK) return e;
+
+    uint8_t sum = (uint8_t)(blk[1] + blk[2]);
+    for (size_t i = 0; i < n; ++i) sum = (uint8_t)(sum + data[i]);
+    uint8_t cs[3] = { Reg::MAC_DATA_CHECKSUM, (uint8_t)(~sum), (uint8_t)(n + 4) };
+    e = i2c_master_transmit(_dev, cs, sizeof(cs), I2C_TIMEOUT_MS);
+    if (e != ESP_OK) return e;
+
+    vTaskDelay(pdMS_TO_TICKS(100));               // allow the flash write to settle
+    return ESP_OK;
+}
+
+// Read a 16-bit LE data-flash word. macRead() reads MACData (0x40), which holds
+// the data directly (no address echo — same as the status reads in
+// readFetStatus()).
+bool TR_BQ27Z746::readDataFlashI16(uint16_t addr, int16_t& value)
+{
+    uint8_t blk[2] = {};
+    if (macRead(addr, blk, sizeof(blk)) != ESP_OK) return false;
+    value = (int16_t)((uint16_t)blk[0] | ((uint16_t)blk[1] << 8));
+    return true;
+}
+
+bool TR_BQ27Z746::writeDataFlashI16(uint16_t addr, int16_t value)
+{
+    uint8_t data[2] = { (uint8_t)(value & 0xFF), (uint8_t)(((uint16_t)value) >> 8) };
+    if (macWrite(addr, data, sizeof(data)) != ESP_OK) return false;
+    int16_t rb = 0;
+    if (!readDataFlashI16(addr, rb)) return false;
+    return rb == value;                           // verified write
+}
+
+esp_err_t TR_BQ27Z746::provisionDesignCapacity(int16_t design_mah)
+{
+    int16_t cur = 0;
+    if (!readDataFlashI16(Reg::DF_DESIGN_CAP_MAH, cur))
+    {
+        ESP_LOGW(DTAG, "provision: DesignCapacity DF read failed");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(DTAG, "provision: DesignCapacity reads %d mAh (target %d)", cur, design_mah);
+    if (cur == design_mah) return ESP_OK;         // already correct -> no flash write
+
+    // Only commit a write when we see the documented factory default (5300) —
+    // that confirms our DF read protocol is correct before we touch flash.
+    if (cur != 5300)
+    {
+        ESP_LOGW(DTAG, "provision: DesignCapacity=%d is neither target nor the 5300 default; "
+                       "skipping write until the read protocol is confirmed", cur);
+        return ESP_FAIL;
+    }
+    ESP_LOGW(DTAG, "provision: writing DesignCapacity 5300 -> %d mAh", design_mah);
+    if (!writeDataFlashI16(Reg::DF_DESIGN_CAP_MAH, design_mah))
+    {
+        ESP_LOGE(DTAG, "provision: DesignCapacity write/verify FAILED (gauge sealed or DF write rejected)");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(DTAG, "provision: DesignCapacity now %d mAh (verified)", design_mah);
+    return ESP_OK;
+}
+
+// Read-only diagnostic: raw coulomb-counter ADC current. 0xF081 streams raw ADC
+// to MACData (needs ManufacturingStatus[CAL_EN], default ON on an unconfigured
+// gauge). Per TRM §13, the read must start at 0x3E so the block refreshes; the
+// first two bytes are the subcommand echo, then ZZ(counter) YY(status) aaAA(CC).
+bool TR_BQ27Z746::readRawCcCurrent(int16_t& raw_cc)
+{
+    if (_dev == nullptr) return false;
+    if (macCmd(Reg::SUB_CAL_OUTPUT) != ESP_OK) return false;
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    uint8_t reg = Reg::ALT_MFR_ACCESS;            // 0x3E
+    uint8_t blk[8] = {};
+    esp_err_t e = i2c_master_transmit_receive(_dev, &reg, 1, blk, sizeof(blk), I2C_TIMEOUT_MS);
+    macCmd(Reg::SUB_CAL_OUTPUT_OFF);              // 0xF080 stop raw output (non-invasive)
+    if (e != ESP_OK) return false;
+
+    raw_cc = (int16_t)((uint16_t)blk[4] | ((uint16_t)blk[5] << 8));
+    ESP_LOGI(DTAG, "[CAL] 0xF081 echo=0x%02X%02X cnt=%u status=%u rawCC=%d  raw=[%02X %02X %02X %02X %02X %02X %02X %02X]",
+             blk[1], blk[0], blk[2], blk[3], raw_cc,
+             blk[0], blk[1], blk[2], blk[3], blk[4], blk[5], blk[6], blk[7]);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // logDiagnostics
 // ---------------------------------------------------------------------------
 void TR_BQ27Z746::logDiagnostics(const char* log_tag)

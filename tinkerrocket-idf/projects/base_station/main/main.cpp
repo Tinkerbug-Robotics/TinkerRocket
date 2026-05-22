@@ -2757,6 +2757,18 @@ static void setup_bs()
                 ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
                          (double)bs_voltage, (double)bs_soc, (double)bs_current);
                 bq_gauge.logDiagnostics(TAG);
+
+                // New-PCB gauge bring-up: the BQ27Z746 ships with a 5300 mAh
+                // default DesignCapacity and was never configured for our 2800 mAh
+                // 18650, so SoC/capacity are meaningless until provisioned. One-shot,
+                // self-gated (no-op once correct), read-back verified.
+                bq_gauge.provisionDesignCapacity((int16_t)config::BATTERY_DESIGN_MAH);
+                // Read-only diagnostic: raw coulomb-counter ADC. If this tracks real
+                // battery current (charge vs discharge) the current path is good and
+                // only CC Gain needs a known-current calibration; if it's frozen, the
+                // shunt/Kelvin sense is the problem.
+                int16_t bq_raw_cc = 0;
+                (void)bq_gauge.readRawCcCurrent(bq_raw_cc);
             }
             else
             {
