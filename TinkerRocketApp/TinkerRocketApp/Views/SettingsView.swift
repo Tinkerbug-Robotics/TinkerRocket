@@ -179,6 +179,10 @@ struct SettingsView: View {
                 loadFromProfile()
             }
             .onChange(of: focusedField) { handleFocusChange($0) }
+            // Flipping the unit picker reformats the altitude pyro field from
+            // the canonical (metres) profile value into the new unit.  Reload
+            // (not flush) so a mid-edit value isn't re-parsed in the wrong unit.
+            .onChange(of: unitSystem) { _ in reloadPyroValueStrings() }
             .onDisappear { flushPendingEdits() }
             .onReceive(device.$rocketConfig.compactMap { $0 }) { cfg in
                 // Only LoRa TX power is hydrated from the rocket now — every
@@ -377,7 +381,7 @@ struct SettingsView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
                         .focused($focusedField, equals: (ch == 1) ? .pyro1Value : .pyro2Value)
-                    Text(mode == 0 ? "s after apogee" : "m on descent")
+                    Text(mode == 0 ? "s after apogee" : "\(UnitFormatter.altitudeUnit(unitSystem)) on descent")
                         .foregroundColor(.secondary)
                 }
                 Text(mode == 0
@@ -629,9 +633,20 @@ struct SettingsView: View {
         sPyro2Value = formatPyro(p.pyro2TriggerValue, mode: p.pyro2TriggerMode)
     }
 
-    /// Time-after-apogee shows one decimal (seconds); altitude shows whole metres.
+    /// Time-after-apogee shows one decimal (seconds); altitude is stored in
+    /// metres but shown in the display unit, whole numbers (#160).
     private func formatPyro(_ v: Float, mode: UInt8) -> String {
-        String(format: mode == 0 ? "%.1f" : "%.0f", v)
+        if mode == 0 { return String(format: "%.1f", v) }
+        return String(format: "%.0f", UnitFormatter.metersToDisplay(Double(v), system: unitSystem))
+    }
+
+    /// Inverse of `formatPyro`: parse an entered value back to canonical units
+    /// — seconds for time mode, metres for altitude mode (entered in the
+    /// display unit).
+    private func parsePyroValue(_ s: String, mode: UInt8, fallback: Float) -> Float {
+        guard let entered = Float(s) else { return fallback }
+        if mode == 0 { return entered }
+        return Float(UnitFormatter.displayToMeters(Double(entered), system: unitSystem))
     }
 
     private func formatInt(_ v: Double) -> String {
@@ -718,8 +733,8 @@ struct SettingsView: View {
     }
 
     private func applyPyroConfig() {
-        let v1 = Float(sPyro1Value) ?? profile.pyro1TriggerValue
-        let v2 = Float(sPyro2Value) ?? profile.pyro2TriggerValue
+        let v1 = parsePyroValue(sPyro1Value, mode: profile.pyro1TriggerMode, fallback: profile.pyro1TriggerValue)
+        let v2 = parsePyroValue(sPyro2Value, mode: profile.pyro2TriggerMode, fallback: profile.pyro2TriggerValue)
         updateProfile {
             $0.pyro1TriggerValue = v1
             $0.pyro2TriggerValue = v2

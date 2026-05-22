@@ -57,6 +57,12 @@ enum UnitFormatter {
         }
     }
 
+    /// Base altitude unit label ("m" / "ft") for input-field suffixes like
+    /// "ft on descent" — no km/mi promotion.
+    static func altitudeUnit(_ system: UnitSystem = .current) -> String {
+        system == .metric ? "m" : "ft"
+    }
+
     // MARK: - Horizontal distance (promotes to km / mi when large)
 
     static func distance(_ meters: Double, system: UnitSystem = .current) -> String {

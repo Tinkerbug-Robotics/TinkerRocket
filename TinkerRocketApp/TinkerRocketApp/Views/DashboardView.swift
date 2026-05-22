@@ -1347,6 +1347,7 @@ struct RocketDirectionView: View {
 
 struct PyroChannelsView: View {
     @ObservedObject var device: BLEDevice
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
     @State private var showPyroSheet = false
     @State private var editingChannel: Int = 1
     @State private var contTestChannel: Int = 0   // 0 = none, 1 = CH1, 2 = CH2
@@ -1469,9 +1470,10 @@ struct PyroChannelsView: View {
     func triggerDescription(mode: UInt8, value: Float) -> String {
         if mode == 0 {
             return String(format: "%.1fs after apogee", value)
-        } else {
-            return String(format: "%.0fm on descent", value)
         }
+        // Altitude on descent: stored in meters, shown in the display unit.
+        let alt = UnitFormatter.metersToDisplay(Double(value), system: unitSystem)
+        return String(format: "%.0f%@ on descent", alt, UnitFormatter.altitudeUnit(unitSystem))
     }
 }
 
@@ -1480,6 +1482,7 @@ struct PyroConfigSheet: View {
     @EnvironmentObject var store: RocketProfileStore
     let channel: Int
     @Environment(\.dismiss) var dismiss
+    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     @State private var enabled: Bool = false
     @State private var triggerMode: Int = 0  // 0=time, 1=altitude
@@ -1496,7 +1499,7 @@ struct PyroConfigSheet: View {
                 }
 
                 HStack {
-                    Text(triggerMode == 0 ? "Delay (s)" : "Altitude (m)")
+                    Text(triggerMode == 0 ? "Delay (s)" : "Altitude (\(UnitFormatter.altitudeUnit(unitSystem)))")
                     Spacer()
                     TextField("Value", text: $triggerValue)
                         .keyboardType(.decimalPad)
@@ -1523,16 +1526,29 @@ struct PyroConfigSheet: View {
         if channel == 1 {
             enabled = cfg.pyro1Enabled
             triggerMode = Int(cfg.pyro1TriggerMode)
-            triggerValue = String(format: triggerMode == 0 ? "%.1f" : "%.0f", cfg.pyro1TriggerValue)
+            triggerValue = formatTriggerValue(cfg.pyro1TriggerValue, mode: triggerMode)
         } else {
             enabled = cfg.pyro2Enabled
             triggerMode = Int(cfg.pyro2TriggerMode)
-            triggerValue = String(format: triggerMode == 0 ? "%.1f" : "%.0f", cfg.pyro2TriggerValue)
+            triggerValue = formatTriggerValue(cfg.pyro2TriggerValue, mode: triggerMode)
         }
     }
 
+    /// Time stays in seconds; altitude is stored in meters but shown/edited
+    /// in the display unit.
+    private func formatTriggerValue(_ v: Float, mode: Int) -> String {
+        if mode == 0 { return String(format: "%.1f", v) }
+        return String(format: "%.0f", UnitFormatter.metersToDisplay(Double(v), system: unitSystem))
+    }
+
+    private func parseTriggerValue(_ s: String, mode: Int) -> Float {
+        let entered = Float(s) ?? 0
+        if mode == 0 { return entered }
+        return Float(UnitFormatter.displayToMeters(Double(entered), system: unitSystem))
+    }
+
     func saveAndSend() {
-        let val = Float(triggerValue) ?? 0
+        let val = parseTriggerValue(triggerValue, mode: triggerMode)
         guard var cfg = device.rocketConfig else { return }
         if channel == 1 {
             cfg.pyro1Enabled = enabled

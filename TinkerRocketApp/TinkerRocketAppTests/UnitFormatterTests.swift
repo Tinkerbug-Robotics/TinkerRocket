@@ -126,6 +126,27 @@ final class UnitFormatterTests: XCTestCase {
         }
     }
 
+    // MARK: - Base unit label + raw conversions (pyro / input fields)
+
+    func testAltitudeUnit() {
+        XCTAssertEqual(UnitFormatter.altitudeUnit(.metric), "m")
+        XCTAssertEqual(UnitFormatter.altitudeUnit(.imperial), "ft")
+    }
+
+    func testMetersDisplayRoundTrip() {
+        // Metric is identity.
+        XCTAssertEqual(UnitFormatter.metersToDisplay(150, system: .metric), 150, accuracy: 1e-9)
+        XCTAssertEqual(UnitFormatter.displayToMeters(150, system: .metric), 150, accuracy: 1e-9)
+
+        // Imperial: 150 m -> 492.13 ft; entering 500 ft -> 152.4 m.
+        XCTAssertEqual(UnitFormatter.metersToDisplay(150, system: .imperial), 492.126, accuracy: 1e-2)
+        XCTAssertEqual(UnitFormatter.displayToMeters(500, system: .imperial), 152.4, accuracy: 1e-3)
+
+        // A pyro altitude entered in feet then redisplayed must round-trip.
+        let stored = UnitFormatter.displayToMeters(500, system: .imperial)
+        XCTAssertEqual(UnitFormatter.metersToDisplay(stored, system: .imperial), 500, accuracy: 1e-6)
+    }
+
     // MARK: - UnitSystem persistence
 
     func testUnitSystemRawValues() {
