@@ -54,10 +54,31 @@ public:
     // Reset PID internal state (for replay / test sessions)
     void resetPID();
 
+    // Max gain-schedule scale factor. Caps (V_ref/V)² so servos saturate on
+    // real ~50 deg/s errors at low speed, not on gyro noise.
+    static constexpr float GAIN_SCHEDULE_SCALE_CAP = 3.0f;
+
     // Gain scheduling configuration
     void enableGainSchedule(float v_ref, float v_min);
     void disableGainSchedule();
     bool isGainScheduleEnabled() const { return gain_schedule_enabled; }
+
+    // Live PID gains / limits — base (pre-gain-schedule) values, i.e. what
+    // was loaded from NVS or config and pushed via setPIDGains/setPIDLimits.
+    // Used to snapshot the flown settings into the flight log (#165).
+    float getKp() const { return kp_base; }
+    float getKi() const { return ki_base; }
+    float getKd() const { return kd_base; }
+    float getMinCmd() const { return min_cmd; }
+    float getMaxCmd() const { return max_cmd; }
+
+    // Live servo trim / timing — for the flight settings snapshot (#165).
+    int getServoBiasUs(int servoIndex) const {
+        return (servoIndex >= 0 && servoIndex < 4) ? servo_bias_us_[servoIndex] : 0;
+    }
+    int getServoHz() const { return servo_hz; }
+    int getServoMinUs() const { return servo_min_us; }
+    int getServoMaxUs() const { return servo_max_us; }
     // update PWM outputs with velocity-based gain scaling
     void controlWithGainSchedule(float roll_rate, float velocity_ms);
 

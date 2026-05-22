@@ -1232,6 +1232,7 @@ static bool isKnownMessageType(uint8_t type)
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
+        case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
             return true;
         default:
             return false;

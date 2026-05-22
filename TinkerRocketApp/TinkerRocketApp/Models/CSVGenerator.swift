@@ -351,11 +351,20 @@ nonisolated class CSVGenerator {
             return Double(apogee - launch) / 1_000_000.0
         }()
 
+        // Decode the flight settings snapshot (#165), if present. The FC emits
+        // it a few times right after launch for redundancy; all copies are
+        // identical, so take the first one that decodes.
+        let flightSettings: FlightSettings? = frames
+            .first(where: { $0.type == MessageType.flightSettings.rawValue })
+            .flatMap { try? FlightSettingsData(from: $0.payload) }
+            .map { FlightSettings(from: $0) }
+
         return FlightSummary(
             max_altitude_m: maxPressureAlt,
             max_speed_mps: maxSpeed,
             burnout_time_s: burnoutTime,
-            apogee_time_s: apogeeTime
+            apogee_time_s: apogeeTime,
+            settings: flightSettings
         )
     }
 
@@ -624,6 +633,180 @@ nonisolated struct FlightSummary: Codable, Sendable {
     let burnout_time_s: Double?
     /// Time from launch to apogee (seconds). Apogee = first altitude or velocity apogee flag.
     let apogee_time_s: Double?
+    /// Runtime roll-control / IMU settings the FC flew with, snapshotted into
+    /// the log at launch (#165). nil for flights logged before the firmware
+    /// emitted the settings frame.
+    let settings: FlightSettings?
+}
+
+// MARK: - Flight Settings (#165)
+
+/// Round a float32 to `digits` significant figures so the JSON shows clean
+/// gains (e.g. 0.04, not 0.039999999105930) instead of float32→Double noise.
+private func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
+    let d = Double(v)
+    if d == 0 || !d.isFinite { return d }
+    let mag = floor(log10(abs(d)))
+    let factor = pow(10.0, Double(digits - 1) - mag)
+    return (d * factor).rounded() / factor
+}
+
+/// Settings block written into the per-flight summary JSON. Mirrors every
+/// per-rocket setting editable in the app's settings UI (#165) plus the
+/// issue's IMU full-scale and outer-loop knobs.
+nonisolated struct FlightSettings: Codable, Sendable {
+    let fw_git_sha: String
+    let fw_dirty: Bool
+    let sounds_enabled: Bool
+    let roll_control: RollControlSettings
+    let servo: ServoSettings
+    let camera: CameraSettings
+    let pyro: PyroSettings
+    let imu: IMUSettings
+
+    init(from raw: FlightSettingsData) {
+        fw_git_sha = raw.fw_git_sha
+        fw_dirty = raw.fwDirty
+        sounds_enabled = raw.soundsEnabled
+        roll_control = RollControlSettings(from: raw)
+        servo = ServoSettings(from: raw)
+        camera = CameraSettings(type: CameraSettings.label(raw.camera_type))
+        pyro = PyroSettings(from: raw)
+        imu = IMUSettings(
+            gyro_fs_dps: Int(raw.ism6_gyro_fs_dps),
+            low_g_fs_g: Int(raw.ism6_low_g_fs_g),
+            high_g_fs_g: Int(raw.ism6_high_g_fs_g)
+        )
+    }
+}
+
+nonisolated struct RollControlSettings: Codable, Sendable {
+    /// "rate" (null-rate inner loop), "angle" (cascaded, single setpoint),
+    /// or "angle_profile" (cascaded, follows the waypoint profile).
+    let mode: String
+    let kp: Double
+    let ki: Double
+    let kd: Double
+    let d_lpf_hz: Double
+    let kp_angle: Double
+    let cmd_limit_min_deg: Double
+    let cmd_limit_max_deg: Double
+    let delay_ms: Int
+    let rate_cap_dps: Double
+    let roll_rate_set_point: Double
+    let guidance_enabled: Bool
+    let gain_schedule: GainScheduleSettings
+    let profile: [RollWaypointJSON]
+
+    init(from raw: FlightSettingsData) {
+        if raw.num_waypoints > 0 {
+            mode = "angle_profile"
+        } else if raw.useAngleControl {
+            mode = "angle"
+        } else {
+            mode = "rate"
+        }
+        kp = sigFig(raw.kp)
+        ki = sigFig(raw.ki)
+        kd = sigFig(raw.kd)
+        d_lpf_hz = sigFig(raw.d_lpf_hz)
+        kp_angle = sigFig(raw.kp_angle)
+        cmd_limit_min_deg = sigFig(raw.min_cmd_deg)
+        cmd_limit_max_deg = sigFig(raw.max_cmd_deg)
+        delay_ms = Int(raw.roll_delay_ms)
+        rate_cap_dps = sigFig(raw.kp_angle_rate_cap_dps)
+        roll_rate_set_point = sigFig(raw.roll_rate_set_point)
+        guidance_enabled = raw.guidanceEnabled
+        gain_schedule = GainScheduleSettings(
+            enabled: raw.gainScheduleEnabled,
+            v_ref: sigFig(raw.gs_v_ref),
+            v_min: sigFig(raw.gs_v_min),
+            scale_cap: sigFig(raw.gs_scale_cap)
+        )
+        profile = raw.waypoints.map {
+            RollWaypointJSON(
+                time_s: sigFig($0.time_s),
+                angle_deg: sigFig($0.angle_deg),
+                mode: $0.mode == 1 ? "null_rate" : "angle"
+            )
+        }
+    }
+}
+
+nonisolated struct GainScheduleSettings: Codable, Sendable {
+    let enabled: Bool
+    let v_ref: Double
+    let v_min: Double
+    let scale_cap: Double
+}
+
+nonisolated struct RollWaypointJSON: Codable, Sendable {
+    let time_s: Double
+    let angle_deg: Double
+    let mode: String   // "angle" or "null_rate"
+}
+
+nonisolated struct ServoSettings: Codable, Sendable {
+    let enabled: Bool
+    let bias_us: [Int]
+    let frequency_hz: Int
+    let min_pulse_us: Int
+    let max_pulse_us: Int
+
+    init(from raw: FlightSettingsData) {
+        enabled = raw.servoEnabled
+        bias_us = raw.servo_bias_us.map { Int($0) }
+        frequency_hz = Int(raw.servo_hz)
+        min_pulse_us = Int(raw.servo_min_us)
+        max_pulse_us = Int(raw.servo_max_us)
+    }
+}
+
+nonisolated struct CameraSettings: Codable, Sendable {
+    let type: String   // "none" | "gopro" | "runcam"
+
+    static func label(_ t: UInt8) -> String {
+        switch t {
+        case 1: return "gopro"
+        case 2: return "runcam"
+        default: return "none"
+        }
+    }
+}
+
+nonisolated struct PyroSettings: Codable, Sendable {
+    let ch1: PyroChannelSettings
+    let ch2: PyroChannelSettings
+
+    init(from raw: FlightSettingsData) {
+        ch1 = PyroChannelSettings(
+            enabled: raw.pyro1_enabled,
+            mode: raw.pyro1_trigger_mode,
+            value: raw.pyro1_trigger_value)
+        ch2 = PyroChannelSettings(
+            enabled: raw.pyro2_enabled,
+            mode: raw.pyro2_trigger_mode,
+            value: raw.pyro2_trigger_value)
+    }
+}
+
+nonisolated struct PyroChannelSettings: Codable, Sendable {
+    let enabled: Bool
+    /// "time_after_apogee" (value = seconds) or "altitude_on_descent" (value = meters AGL).
+    let trigger_mode: String
+    let trigger_value: Double
+
+    init(enabled: Bool, mode: UInt8, value: Float) {
+        self.enabled = enabled
+        self.trigger_mode = mode == 1 ? "altitude_on_descent" : "time_after_apogee"
+        self.trigger_value = sigFig(value)
+    }
+}
+
+nonisolated struct IMUSettings: Codable, Sendable {
+    let gyro_fs_dps: Int
+    let low_g_fs_g: Int
+    let high_g_fs_g: Int
 }
 
 // MARK: - CSV Errors

@@ -1305,6 +1305,11 @@ static constexpr uint8_t SENSOR_CAL_APPLY_MSG     = 0xDE;  // 18-byte SensorCalA
 static constexpr uint8_t SENSOR_CAL_READ          = 0xDF;  // OC→FC: publish current NVS sensor cal
 static constexpr uint8_t SENSOR_CAL_STATUS_MSG    = 0xE0;  // FC→OC: SensorCalStatusData
 
+// FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
+// snapshot of the active roll-control / IMU settings so the per-flight .bin
+// (and the .json the app derives from it) records what actually flew (#165).
+static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
+
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types
@@ -1419,6 +1424,81 @@ typedef struct __attribute__((packed))
 } RollControlConfigData;
 static_assert(sizeof(RollControlConfigData) == 4, "RollControlConfigData must be 4 bytes");
 
+// --- Flight settings snapshot (#165) ---
+// One-shot snapshot of the rocket's runtime settings, emitted FC→OC over I2S
+// at the PRELAUNCH→INFLIGHT transition and logged into the per-flight .bin.
+// The iOS app decodes it into the flight summary .json so post-flight analysis
+// can reconstruct the exact loop that flew, instead of guessing from config.h
+// defaults (the original confusion in #165 — wrong Kp sent reconstruction off
+// by 5x).  Covers every per-rocket setting editable in the app's settings UI
+// (PID, gain schedule, servo trim/timing, roll control + profile, camera,
+// pyro, sounds) plus the issue's IMU full-scale and outer-loop knobs.  Read at
+// the snapshot point from the live servo_control values, the runtime override
+// globals, config:: constants, pyro_config, and the active roll_profile.
+// time_us is first so the generic frame parser's "timestamp = first 4 payload
+// bytes" convention still holds.
+struct __attribute__((packed)) FlightSettingsData
+{
+    static constexpr uint8_t VERSION = 1;
+
+    // flags bit positions
+    static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
+    static constexpr uint8_t F_GAIN_SCHEDULE     = 1;  // gain scheduling enabled
+    static constexpr uint8_t F_GUIDANCE          = 2;  // PN guidance enabled
+    static constexpr uint8_t F_SERVO_ENABLED     = 3;  // servo/roll control enabled at all
+    static constexpr uint8_t F_FW_DIRTY          = 4;  // build had uncommitted changes
+    static constexpr uint8_t F_SOUNDS            = 5;  // piezo sounds enabled
+
+    uint32_t time_us;            // micros() at snapshot
+    uint8_t  version;            // = VERSION
+    uint8_t  flags;              // see F_* bit positions above
+    uint16_t roll_delay_ms;      // roll-control activation delay after launch (ms)
+
+    // Inner rate PID — gain-schedule base gains (what the loop uses at V_ref)
+    float    kp;
+    float    ki;
+    float    kd;
+    float    d_lpf_hz;           // D-term low-pass cutoff (Hz; 0 = disabled)
+    float    min_cmd_deg;        // fin command lower limit (deg)
+    float    max_cmd_deg;        // fin command upper limit (deg)
+
+    // Outer (cascaded angle) loop
+    float    kp_angle;
+    float    kp_angle_rate_cap_dps;
+
+    // Gain schedule (meaningful only when F_GAIN_SCHEDULE set)
+    float    gs_v_ref;           // reference speed (m/s)
+    float    gs_v_min;           // min speed clamp (m/s)
+    float    gs_scale_cap;       // max gain scale factor
+
+    // Rate-only setpoint (deg/s)
+    float    roll_rate_set_point;
+
+    // IMU full-scale (mirror of OutStatusQueryData)
+    uint8_t  ism6_low_g_fs_g;    // e.g. 16
+    uint16_t ism6_high_g_fs_g;   // e.g. 256
+    uint16_t ism6_gyro_fs_dps;   // e.g. 4000
+
+    // Servo trim + timing (app "Servo" settings)
+    int16_t  servo_bias_us[4];   // per-servo µs trim offset
+    int16_t  servo_hz;           // PWM frequency
+    int16_t  servo_min_us;       // min pulse width (µs)
+    int16_t  servo_max_us;       // max pulse width (µs)
+
+    // Camera (0 = none, 1 = GoPro, 2 = RunCam)
+    uint8_t  camera_type;
+
+    // Pyro channel config (both channels)
+    PyroConfigData pyro;
+
+    // Firmware identity: git short SHA, NUL-terminated ("unknown" if no git)
+    char     fw_git_sha[12];
+
+    // Active roll profile (num_waypoints == 0 → rate-only)
+    RollProfileData roll_profile;
+};
+static_assert(sizeof(FlightSettingsData) == 176, "FlightSettingsData layout check");
+
 // --- Guidance Telemetry Data (sent at ~10 Hz during coast) ---
 typedef struct __attribute__((packed))
 {
@@ -1531,6 +1611,12 @@ static constexpr size_t M_SENSOR = (M1234 > M567 ? M1234 : M567);
 
 static constexpr size_t M_SENSOR_OR_PROFILE = (M_SENSOR > P8 ? M_SENSOR : P8);
 static constexpr size_t MAX_PAYLOAD = (M_SENSOR_OR_PROFILE > P9 ? M_SENSOR_OR_PROFILE : P9);
+
+// The flight settings snapshot (#165) rides the same I2S frame path, so it
+// must also fit one payload.  Checked here since MAX_PAYLOAD is defined below
+// the struct.
+static_assert(sizeof(FlightSettingsData) <= MAX_PAYLOAD,
+              "FlightSettingsData must fit one I2S frame");
 
 // Frame: [0xAA][0x55][0xAA][0x55] + type + length + payload + CRC16
 static constexpr size_t MAX_FRAME = 4 + 1 + 1 + MAX_PAYLOAD + 2;

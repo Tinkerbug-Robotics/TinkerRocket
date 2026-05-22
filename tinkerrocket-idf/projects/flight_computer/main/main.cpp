@@ -33,6 +33,16 @@
 #include <CRC32.h>
 static const char* TAG = "FC";
 
+// Firmware revision recorded in the flight settings snapshot (#165).
+// Injected by CMake (git rev-parse / git diff); fall back when building
+// outside the IDF build (e.g. host tests) so main.cpp stays compilable.
+#ifndef FW_GIT_SHA
+#define FW_GIT_SHA "unknown"
+#endif
+#ifndef FW_GIT_DIRTY
+#define FW_GIT_DIRTY 0
+#endif
+
 // EKF timeUpdate()/measUpdate() allocate ~7.5 KB of temporary 15x15 matrices
 // on the stack.  The FreeRTOS task in app_main() is created with 16 KB.
 
@@ -304,6 +314,9 @@ static bool     reboot_recovery = false;      // true during servo settle period
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
 static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
+// Resend the flight settings snapshot (#165) on the first few INFLIGHT ticks
+// so a single dropped I2S frame at launch doesn't lose the record.
+static uint8_t  settings_emit_count = 0;
 
 static uint32_t computeSnapshotCRC(const FlightSnapshotData& snap)
 {
@@ -928,6 +941,79 @@ static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len
 
     i2s_tx_enqueue_drop++;
     return false;
+}
+
+// Build a snapshot of the active roll-control / IMU settings (#165).  Reads
+// the live PID gains from servo_control (these can be NVS- or BLE-overridden),
+// the runtime override globals, the config:: defaults for the compile-time-only
+// knobs, and the active roll profile.  Logged once at flight-start so the
+// per-flight .json records exactly what flew.
+static void buildFlightSettings(FlightSettingsData& s)
+{
+    memset(&s, 0, sizeof(s));
+    s.time_us = micros();
+    s.version = FlightSettingsData::VERSION;
+
+    uint8_t flags = 0;
+    if (use_angle_control)  flags |= (uint8_t)(1u << FlightSettingsData::F_USE_ANGLE_CONTROL);
+    if (gain_sched_enabled) flags |= (uint8_t)(1u << FlightSettingsData::F_GAIN_SCHEDULE);
+    if (guidance_enabled)   flags |= (uint8_t)(1u << FlightSettingsData::F_GUIDANCE);
+    if (servo_enabled)      flags |= (uint8_t)(1u << FlightSettingsData::F_SERVO_ENABLED);
+    if (FW_GIT_DIRTY)       flags |= (uint8_t)(1u << FlightSettingsData::F_FW_DIRTY);
+    if (enable_sounds)      flags |= (uint8_t)(1u << FlightSettingsData::F_SOUNDS);
+    s.flags = flags;
+    s.roll_delay_ms = roll_delay_ms;
+
+    // Inner rate PID — live base gains (NVS/BLE-overridable, so read from
+    // servo_control rather than config:: which is only the boot default).
+    s.kp          = servo_control.getKp();
+    s.ki          = servo_control.getKi();
+    s.kd          = servo_control.getKd();
+    s.d_lpf_hz    = config::D_FILTER_CUTOFF_HZ;
+    s.min_cmd_deg = servo_control.getMinCmd();
+    s.max_cmd_deg = servo_control.getMaxCmd();
+
+    // Outer (cascaded angle) loop.  kp_angle is compile-time only.
+    s.kp_angle              = config::KP_ANGLE;
+    s.kp_angle_rate_cap_dps = kp_angle_rate_cap_dps;
+
+    // Gain schedule.  v_ref/v_min are compile-time only; the cap is owned by
+    // TR_ServoControl.
+    s.gs_v_ref     = config::GAIN_SCHEDULE_V_REF;
+    s.gs_v_min     = config::GAIN_SCHEDULE_V_MIN;
+    s.gs_scale_cap = TR_ServoControl::GAIN_SCHEDULE_SCALE_CAP;
+
+    s.roll_rate_set_point = config::ROLL_RATE_SET_POINT;
+
+    s.ism6_low_g_fs_g  = config::ISM6_LOW_G_FS_G;
+    s.ism6_high_g_fs_g = config::ISM6_HIGH_G_FS_G;
+    s.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
+
+    // Servo trim + timing (live values from servo_control).
+    for (int i = 0; i < 4; ++i) {
+        s.servo_bias_us[i] = (int16_t)servo_control.getServoBiasUs(i);
+    }
+    s.servo_hz     = (int16_t)servo_control.getServoHz();
+    s.servo_min_us = (int16_t)servo_control.getServoMinUs();
+    s.servo_max_us = (int16_t)servo_control.getServoMaxUs();
+
+    s.camera_type = runtime_camera_type;
+    s.pyro        = pyro_config;
+
+    // fw_git_sha buffer was zeroed by memset above, so strncpy of at most
+    // size-1 chars leaves it NUL-terminated.
+    strncpy(s.fw_git_sha, FW_GIT_SHA, sizeof(s.fw_git_sha) - 1);
+
+    s.roll_profile = roll_profile;
+}
+
+static void sendFlightSettings()
+{
+    FlightSettingsData s;
+    buildFlightSettings(s);
+    (void)enqueueI2STx(FLIGHT_SETTINGS_MSG,
+                       reinterpret_cast<const uint8_t*>(&s),
+                       sizeof(s));
 }
 
 static SemaphoreHandle_t i2c_bus_mutex = nullptr;
@@ -3735,6 +3821,15 @@ static void loop_fc()
                 if (now_ms - last_snapshot_ms >= 100U) {
                     last_snapshot_ms = now_ms;
                     saveFlightSnapshot(now_ms);
+
+                    // Emit the flight settings snapshot (#165) on the first
+                    // few ticks after launch.  Resent for redundancy against a
+                    // dropped frame; values are stable in flight so all copies
+                    // are identical and the app reads the first one.
+                    if (settings_emit_count < 3) {
+                        sendFlightSettings();
+                        settings_emit_count++;
+                    }
                 }
 
                 // Servo settling after reboot recovery — hold neutral until EKF stabilizes

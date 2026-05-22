@@ -243,7 +243,7 @@ void TR_ServoControl::controlWithGainSchedule(float roll_rate, float velocity_ms
         float v_ratio = gain_schedule_v_ref / v;
         float scale = v_ratio * v_ratio;
         // Cap the scale factor so servo saturates at ~50 deg/s error, not gyro noise
-        scale = std::min(scale, 3.0f);
+        scale = std::min(scale, GAIN_SCHEDULE_SCALE_CAP);
 
         // Reset I-term when gain scale changes significantly to prevent
         // accumulated integral from spiking the output after a step change in Ki.
