@@ -3,6 +3,13 @@
 Replays the flight through `sim_kinematic_checks.KinematicChecks` (the Python
 port of TR_KinematicChecks) and compares when each flag fires vs when the
 firmware fired it (logged in NonSensor).
+
+Also renders two voting-timeline figures (when data permits):
+  * Apogee: which sub-detector (vel / baro / gps / pitch) was passing at each
+    tick + when each crossed its hysteresis threshold to fire.
+  * Landing: when each landing sub-detector latched (impact / baro_stable /
+    gyro_quiet / gps_stationary / accel_1g). Older flights predate the
+    landing voting system; the figure is skipped if nothing fired.
 """
 
 from __future__ import annotations
@@ -10,6 +17,9 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 
 _PARENT = Path(__file__).resolve().parent.parent.parent
 if str(_PARENT) not in sys.path:
@@ -37,25 +47,49 @@ from ..flight import Flight
 from ..registry import AnalysisResult
 
 
-_FLAGS_TO_CAPTURE = (
+_APOGEE_FLAGS = (
     "launch_flag", "vel_u_apogee_flag", "alt_apogee_flag",
     "gps_apogee_flag", "pitch_apogee_flag", "apogee_flag", "alt_landed_flag",
 )
+_LANDING_SUBFLAGS = (
+    "impact_flag", "baro_stable_flag", "gyro_quiet_flag",
+    "gps_stationary_flag", "accel_1g_flag",
+)
+
+
+def _periods(times, states):
+    """Collapse a per-tick bool sequence into list of (t_start, t_end) runs."""
+    out = []
+    in_run = False
+    run_start = 0.0
+    prev_t = 0.0
+    for t, s in zip(times, states):
+        if s and not in_run:
+            in_run = True
+            run_start = t
+        elif not s and in_run:
+            in_run = False
+            out.append((run_start, prev_t))
+        prev_t = t
+    if in_run:
+        out.append((run_start, prev_t))
+    return out
 
 
 def _replay(records):
-    """Drive KinematicChecks through merged event stream.
+    """Drive KinematicChecks through the merged event stream.
 
-    Mirrors the inner loop of `replay_kinematic_checks.replay`. Returns dict
-    {flag_name: fire_time_s_relative_to_t0}.
+    Returns a dict with all the data the voting plots need. Mirrors the
+    capture pattern in `replay_kinematic_checks.replay`.
     """
     if not records["ISM6HG256"]:
-        return {}
+        return None
 
     t0_us = records["ISM6HG256"][0]["time_us"]
     ground_pa = estimate_ground_pressure(records["BMP585"], records["NonSensor"])
 
     kc = KinematicChecks()
+
     latest_palt = 0.0
     latest_acc_mag = 0.0
     latest_pos = (0.0, 0.0, 0.0)
@@ -69,16 +103,32 @@ def _replay(records):
     new_gps = False
 
     sim_fires: dict[str, float] = {}
+    raw_palt_t: list[float] = []
+    raw_palt_v: list[float] = []
+    sim_alt_t: list[float] = []
+    sim_alt_v: list[float] = []
+    pass_t: list[float] = []
+    pass_vel: list[bool] = []
+    pass_baro: list[bool] = []
+    pass_pitch: list[bool] = []
+    gps_pass_t: list[float] = []
+    gps_pass_v: list[bool] = []
+    baro_reject_t: list[float] = []
 
     for t_us, kind, r in build_events(records):
         now_ms = (t_us - t0_us) // 1000
+        now_s = now_ms / 1000.0
+
         if kind == "baro":
             latest_palt = pressure_to_altitude_firmware(r["pressure_pa"], ground_pa)
+            raw_palt_t.append((t_us - t0_us) / 1e6)
+            raw_palt_v.append(latest_palt)
             new_baro = True
             continue
         if kind == "gnss":
             latest_gps_alt = float(r["alt_m"])
             new_gps = True
+            gps_pass_t.append((t_us - t0_us) / 1e6)
             continue
         if kind == "ns":
             latest_pos = (r["e_pos"], r["n_pos"], r["u_pos"])
@@ -92,12 +142,13 @@ def _replay(records):
                 mach_locked_out = False
             continue
 
-        # imu tick
+        # imu tick — drives kc.kinematic_checks()
         low = (r["low_acc_x"], r["low_acc_y"], r["low_acc_z"])
         high = (r["high_acc_x"], r["high_acc_y"], r["high_acc_z"])
         latest_acc_mag = accel_norm_firmware(low, high)
         latest_roll_rate = r["gyro_x"]
 
+        prev_rejects = kc._consec_baro_rejects
         kc.kinematic_checks(
             pressure_altitude=latest_palt,
             acc_mag=latest_acc_mag,
@@ -112,17 +163,49 @@ def _replay(records):
             baro_locked_out=mach_locked_out,
             now_ms=now_ms,
         )
+        if kc._consec_baro_rejects > prev_rejects:
+            baro_reject_t.append(now_s)
+        new_baro_was = new_baro
+        new_gps_was = new_gps
         new_baro = False
         new_gps = False
 
-        now_s = now_ms / 1000.0
-        for name in _FLAGS_TO_CAPTURE:
+        # ── Capture per-tick state ────────────────────────────────────────
+        sim_alt_t.append(now_s)
+        sim_alt_v.append(float(kc.alt_est))
+        pass_t.append(now_s)
+        pass_vel.append(bool(kc.last_vel_pass))
+        pass_baro.append(bool(kc.last_baro_pass))
+        pass_pitch.append(bool(kc.last_pitch_pass))
+        # GPS pass is only meaningful on new_gps ticks (one entry per gnss).
+        if new_gps_was and len(gps_pass_t) > len(gps_pass_v):
+            gps_pass_v.append(bool(kc.last_gps_pass))
+
+        # First-fire snapshots
+        for name in _APOGEE_FLAGS:
             if getattr(kc, name) and name not in sim_fires:
                 sim_fires[name] = now_s
+        for name in _LANDING_SUBFLAGS:
+            if getattr(kc, name, False) and name not in sim_fires:
+                sim_fires[name] = now_s
 
-    sim_fires["max_altitude_sim_m"] = round(float(kc.max_altitude), 2)
-    sim_fires["max_speed_sim_mps"] = round(float(kc.max_speed), 2)
-    return sim_fires
+    # Align gps_pass arrays in case the final IMU tick happened before a
+    # final GNSS sample's pass value got captured.
+    if len(gps_pass_v) < len(gps_pass_t):
+        gps_pass_t = gps_pass_t[: len(gps_pass_v)]
+
+    return {
+        "sim_fires":   sim_fires,
+        "raw_palt":    (raw_palt_t, raw_palt_v),
+        "sim_alt":     (sim_alt_t, sim_alt_v),
+        "baro_reject_t": baro_reject_t,
+        "vel_periods":   _periods(pass_t, pass_vel),
+        "baro_periods":  _periods(pass_t, pass_baro),
+        "pitch_periods": _periods(pass_t, pass_pitch),
+        "gps_periods":   _periods(gps_pass_t, gps_pass_v),
+        "max_altitude":  float(kc.max_altitude),
+        "max_speed":     float(kc.max_speed),
+    }
 
 
 # Map sim flag name -> logged flag name produced by logged_flag_times()
@@ -136,6 +219,182 @@ _FLAG_PAIRS = (
     ("alt_landed_flag",   "alt_landed"),
 )
 
+
+# ── Figures ──────────────────────────────────────────────────────────────────
+
+_DET_STYLE = {
+    "vel":   ("Vel",   "tab:blue"),
+    "baro":  ("Baro",  "tab:green"),
+    "gps":   ("GPS",   "tab:orange"),
+    "pitch": ("Pitch", "tab:purple"),
+}
+_DET_FIRE_FLAG = {
+    "vel":   "vel_u_apogee_flag",
+    "baro":  "alt_apogee_flag",
+    "gps":   "gps_apogee_flag",
+    "pitch": "pitch_apogee_flag",
+}
+
+
+def _plot_apogee_voting(res, title_suffix=""):
+    t_raw, v_raw = res["raw_palt"]
+    t_sim, v_sim = res["sim_alt"]
+    if not t_sim:
+        return None
+
+    fig = plt.figure(figsize=(12, 6), constrained_layout=True)
+    gs = GridSpec(2, 1, figure=fig, height_ratios=[3, 1])
+    ax_alt = fig.add_subplot(gs[0])
+    ax_pass = fig.add_subplot(gs[1], sharex=ax_alt)
+
+    # Altitude pane
+    if t_raw:
+        ax_alt.plot(t_raw, v_raw, color="lightgray", lw=0.7, label="raw palt")
+    ax_alt.plot(t_sim, v_sim, color="black", lw=0.9, label="KF alt_est")
+
+    # True apogee = peak of raw palt
+    if v_raw:
+        peak_idx = max(range(len(v_raw)), key=lambda i: v_raw[i])
+        ax_alt.axvline(t_raw[peak_idx], color="dimgray", ls=":", lw=0.8,
+                       label=f"true apogee {t_raw[peak_idx]:.2f}s")
+
+    # Sub-detector fire markers
+    fire_marker = {"vel": "s", "baro": "^", "gps": "o", "pitch": "*"}
+    for det_key, flag_name in _DET_FIRE_FLAG.items():
+        t = res["sim_fires"].get(flag_name)
+        if t is None:
+            continue
+        # Place marker at the kf-estimated altitude at that time
+        i = min(range(len(t_sim)), key=lambda j: abs(t_sim[j] - t))
+        y = v_sim[i]
+        label, color = _DET_STYLE[det_key]
+        ax_alt.scatter([t], [y], color=color, marker=fire_marker[det_key],
+                       s=70, zorder=5, edgecolor="black", linewidth=0.6,
+                       label=f"{label} fire {t:.2f}s")
+
+    # Master apogee fire
+    t_master = res["sim_fires"].get("apogee_flag")
+    if t_master is not None:
+        ax_alt.axvline(t_master, color="red", lw=1.4, alpha=0.7,
+                       label=f"master {t_master:.2f}s")
+
+    # Baro rejects
+    if res["baro_reject_t"]:
+        alt_floor = min(v_sim + v_raw) - 5 if v_raw else min(v_sim) - 5
+        ax_alt.scatter(res["baro_reject_t"],
+                       [alt_floor] * len(res["baro_reject_t"]),
+                       color="red", marker="x", s=14, alpha=0.5,
+                       label=f"baro reject (n={len(res['baro_reject_t'])})")
+
+    ax_alt.set_ylabel("Altitude (m)")
+    ax_alt.set_title(f"Apogee sub-detector voting{title_suffix}")
+    ax_alt.grid(True, alpha=0.3)
+    ax_alt.legend(loc="lower right", fontsize=7, ncol=2)
+    plt.setp(ax_alt.get_xticklabels(), visible=False)
+
+    # Pass-state pane (condition-true bands)
+    det_rows = (
+        ("vel",   res["vel_periods"]),
+        ("baro",  res["baro_periods"]),
+        ("gps",   res["gps_periods"]),
+        ("pitch", res["pitch_periods"]),
+    )
+    for y_idx, (det_key, periods) in enumerate(det_rows):
+        label, color = _DET_STYLE[det_key]
+        y = len(det_rows) - 1 - y_idx
+        for (t0, t1) in periods:
+            ax_pass.hlines(y, t0, max(t1, t0 + 0.005), color=color,
+                           lw=7, alpha=0.7)
+        ax_pass.text(-0.01, y, label, transform=ax_pass.get_yaxis_transform(),
+                     ha="right", va="center", fontsize=8, color=color)
+    ax_pass.set_yticks([])
+    ax_pass.set_ylim(-0.7, len(det_rows) - 0.3)
+    ax_pass.set_xlabel("t (s)")
+    ax_pass.set_ylabel("condition\ntrue", fontsize=8)
+    ax_pass.grid(True, axis="x", alpha=0.3)
+
+    # Zoom around the master apogee fire if we have one
+    if t_master is not None and t_raw:
+        ax_alt.set_xlim(max(0.0, t_master - 8.0), min(t_master + 5.0, t_raw[-1]))
+
+    return fig
+
+
+_LANDING_STYLE = {
+    "impact_flag":         ("Impact (high-G)",   "tab:red"),
+    "baro_stable_flag":    ("Baro stable",       "tab:green"),
+    "gyro_quiet_flag":     ("Gyro quiet",        "tab:purple"),
+    "gps_stationary_flag": ("GPS stationary",    "tab:orange"),
+    "accel_1g_flag":       ("Accel ≈ 1g",        "tab:blue"),
+}
+
+
+def _plot_landing_voting(res):
+    fires = res["sim_fires"]
+    sublatches = [(name, fires[name]) for name in _LANDING_STYLE if name in fires]
+    master_t = fires.get("alt_landed_flag")
+    if not sublatches and master_t is None:
+        return None
+
+    t_raw, v_raw = res["raw_palt"]
+    t_sim, v_sim = res["sim_alt"]
+    if not t_sim:
+        return None
+
+    fig = plt.figure(figsize=(12, 6), constrained_layout=True)
+    gs = GridSpec(2, 1, figure=fig, height_ratios=[3, 1])
+    ax_alt = fig.add_subplot(gs[0])
+    ax_pass = fig.add_subplot(gs[1], sharex=ax_alt)
+
+    if t_raw:
+        ax_alt.plot(t_raw, v_raw, color="lightgray", lw=0.7, label="raw palt")
+    ax_alt.plot(t_sim, v_sim, color="black", lw=0.9, label="KF alt_est")
+
+    # Sub-flag latch markers
+    fire_marker = {"impact_flag": "X", "baro_stable_flag": "^",
+                   "gyro_quiet_flag": "o", "gps_stationary_flag": "s",
+                   "accel_1g_flag": "D"}
+    for name, t in sublatches:
+        i = min(range(len(t_sim)), key=lambda j: abs(t_sim[j] - t))
+        y = v_sim[i]
+        label, color = _LANDING_STYLE[name]
+        ax_alt.scatter([t], [y], color=color, marker=fire_marker[name],
+                       s=70, zorder=5, edgecolor="black", linewidth=0.6,
+                       label=f"{label} {t:.2f}s")
+
+    if master_t is not None:
+        ax_alt.axvline(master_t, color="red", lw=1.4, alpha=0.7,
+                       label=f"alt_landed {master_t:.2f}s")
+
+    ax_alt.set_ylabel("Altitude (m)")
+    ax_alt.set_title("Landing sub-detector voting")
+    ax_alt.grid(True, alpha=0.3)
+    ax_alt.legend(loc="upper right", fontsize=7, ncol=2)
+    plt.setp(ax_alt.get_xticklabels(), visible=False)
+
+    # Latched-state bands: each sub-flag is on from latch time to end
+    end_t = t_sim[-1]
+    rows = list(_LANDING_STYLE.items())
+    for y_idx, (name, (label, color)) in enumerate(rows):
+        y = len(rows) - 1 - y_idx
+        if name in fires:
+            ax_pass.hlines(y, fires[name], end_t, color=color, lw=7, alpha=0.7)
+        ax_pass.text(-0.01, y, label, transform=ax_pass.get_yaxis_transform(),
+                     ha="right", va="center", fontsize=8, color=color)
+    ax_pass.set_yticks([])
+    ax_pass.set_ylim(-0.7, len(rows) - 0.3)
+    ax_pass.set_xlabel("t (s)")
+    ax_pass.set_ylabel("latched", fontsize=8)
+    ax_pass.grid(True, axis="x", alpha=0.3)
+
+    # Zoom around landing if we have it
+    if master_t is not None:
+        ax_alt.set_xlim(max(0.0, master_t - 20.0), min(master_t + 5.0, end_t))
+
+    return fig
+
+
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="kinematic_checks", title="Kinematic Checks Replay")
@@ -153,13 +412,17 @@ def analyze(flight: Flight) -> AnalysisResult:
         return result
 
     try:
-        sim = _replay(recs)
+        res = _replay(recs)
     except Exception as e:  # noqa: BLE001
         result.warnings.append(f"Replay failed: {type(e).__name__}: {e}")
+        return result
+    if res is None:
+        result.warnings.append("Replay returned no data.")
         return result
 
     t0_us = recs["ISM6HG256"][0]["time_us"]
     logged = logged_flag_times(recs["NonSensor"], t0_us)
+    sim = res["sim_fires"]
 
     metrics: dict[str, object] = {}
     for sim_name, log_name in _FLAG_PAIRS:
@@ -177,7 +440,24 @@ def analyze(flight: Flight) -> AnalysisResult:
         else:
             metrics[f"{log_name}_replay-logged_s"] = "—"
 
-    metrics["max_altitude_sim_m"] = sim.get("max_altitude_sim_m", "—")
-    metrics["max_speed_sim_mps"] = sim.get("max_speed_sim_mps", "—")
+    # Landing sub-flag latches (firmware does NOT log these for pre-#166
+    # flights; the times here are the new sim's verdict on what *would* have
+    # latched.)
+    for name in _LANDING_SUBFLAGS:
+        t = sim.get(name)
+        metrics[f"sim_{name}_s"] = round(t, 3) if t is not None else "—"
+
+    metrics["max_altitude_sim_m"] = round(res["max_altitude"], 2)
+    metrics["max_speed_sim_mps"] = round(res["max_speed"], 2)
+    metrics["baro_rejects"] = len(res["baro_reject_t"])
     result.metrics = metrics
+
+    # ── Figures ─────────────────────────────────────────────────────────────
+    fig = _plot_apogee_voting(res)
+    if fig is not None:
+        result.figures.append(fig)
+    fig = _plot_landing_voting(res)
+    if fig is not None:
+        result.figures.append(fig)
+
     return result
