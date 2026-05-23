@@ -1,3 +1,13 @@
+# Pick the real TR_GuidancePN submodule when it's checked out, otherwise
+# the local no-op stub. Project CMakeLists.txt does the matching
+# EXCLUDE_COMPONENTS dance so only one of the two is actually in the
+# build. Both expose `TR_GuidancePN.h`, so main.cpp compiles unchanged.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../../../components/TR_GuidancePN/TR_GuidancePN.cpp")
+    set(_guidance_req "TR_GuidancePN")
+else()
+    set(_guidance_req "TR_GuidancePN_Stub")
+endif()
+
 idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
@@ -14,7 +24,7 @@ idf_component_register(
         TR_KinematicChecks
         TR_MagCalibrator
         TR_ServoControl_ledc_mult
-        TR_GuidancePN
+        ${_guidance_req}
         TR_ControlMixer
         TR_GNSSReceiverUBlox_Serial
         TR_IMU_Int_V2

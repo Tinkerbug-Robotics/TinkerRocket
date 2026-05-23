@@ -1,8 +1,4 @@
-CONFIG_IDF_TARGET="esp32s3"
-
-# Arduino-as-component
-CONFIG_AUTOSTART_ARDUINO=y
-CONFIG_ARDUINO_LOOP_STACK_SIZE=16384
+CONFIG_IDF_TARGET="esp32p4"
 
 # No power management — runs at full speed
 CONFIG_PM_ENABLE=n
@@ -23,5 +19,3 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-
-# Prevent Arduino min/max macros from conflicting with std::min/std::max
