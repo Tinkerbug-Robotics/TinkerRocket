@@ -704,6 +704,10 @@ nonisolated struct NonSensorDataSI {
     let alt_apogee_flag: Bool
     let vel_u_apogee_flag: Bool
     let launch_flag: Bool
+    // Firmware-set burnout flag (NSF_BURNOUT, bit 4). Source of truth for
+    // burnout_time_s in the .json sidecar (#196). Pre-existing logs that
+    // predate the firmware setting this bit decode as false.
+    let burnout_flag: Bool
 
     // Per #142/#143: full apogee detector set + master voted result.
     // Decoded from NonSensorData.apogee_flags; legacy 43-byte logs decode all

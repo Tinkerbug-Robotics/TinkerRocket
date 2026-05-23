@@ -345,7 +345,10 @@ nonisolated class SensorConverter {
             alt_apogee_flag: raw.alt_apogee_flag,
             vel_u_apogee_flag: raw.vel_u_apogee_flag,
             launch_flag: raw.launch_flag,
-            // Legacy wire format never carried the extra apogee detectors.
+            // Legacy wire format never carried NSF_BURNOUT or the extra
+            // apogee detectors. Sidecar burnout_time_s will be null on
+            // these flights (#196).
+            burnout_flag: false,
             gps_apogee_flag: false,
             pitch_apogee_flag: false,
             apogee_flag: false,
@@ -383,16 +386,19 @@ nonisolated class SensorConverter {
         let n_vel = Double(raw.n_vel) * 0.01
         let u_vel = Double(raw.u_vel) * 0.01
 
-        // Extract flags (bitfield)
+        // Extract flags (bitfield).  Mirror the C++ NSF_* masks in
+        // tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h.
         let NSF_ALT_LANDED: UInt8   = (1 << 0)
         let NSF_ALT_APOGEE: UInt8   = (1 << 1)
         let NSF_VEL_APOGEE: UInt8   = (1 << 2)
         let NSF_LAUNCH: UInt8       = (1 << 3)
+        let NSF_BURNOUT: UInt8      = (1 << 4)   // #196: source of truth for burnout_time_s
 
         let alt_landed_flag = (raw.flags & NSF_ALT_LANDED) != 0
         let alt_apogee_flag = (raw.flags & NSF_ALT_APOGEE) != 0
         let vel_u_apogee_flag = (raw.flags & NSF_VEL_APOGEE) != 0
         let launch_flag = (raw.flags & NSF_LAUNCH) != 0
+        let burnout_flag = (raw.flags & NSF_BURNOUT) != 0
 
         // Apogee detector outputs + master vote (appended in #142/#143).
         let NSF2_GPS_APOGEE: UInt8    = (1 << 0)
@@ -432,6 +438,7 @@ nonisolated class SensorConverter {
             alt_apogee_flag: alt_apogee_flag,
             vel_u_apogee_flag: vel_u_apogee_flag,
             launch_flag: launch_flag,
+            burnout_flag: burnout_flag,
             gps_apogee_flag: gps_apogee_flag,
             pitch_apogee_flag: pitch_apogee_flag,
             apogee_flag: apogee_flag,

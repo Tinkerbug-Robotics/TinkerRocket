@@ -213,8 +213,8 @@ nonisolated class CSVGenerator {
         // Track flight summary stats
         var maxPressureAlt: Double?
         var maxSpeed: Double?
-        var maxSpeedTime_us: UInt32?
         var launchTime_us: UInt32?
+        var burnoutTime_us: UInt32?  // first NSF_BURNOUT flag latch (#196)
         var apogeeTime_us: UInt32?
 
         // Running indices for forward-fill (O(n+m) total)
@@ -287,9 +287,9 @@ nonisolated class CSVGenerator {
                 }
             }
 
-            // Track max 3D speed from EKF velocity (peak = burnout)
-            // Only update before apogee — IMU integration drifts after apogee
-            // so post-apogee speeds are unreliable.
+            // Track max 3D speed from EKF velocity for the max_speed_mps
+            // metric. Only update before apogee — IMU integration drifts
+            // after apogee so post-apogee speeds are unreliable.
             //
             // Gate on the master voted apogee_flag — a single per-detector
             // false positive (#142) previously gated off max-speed tracking
@@ -303,12 +303,26 @@ nonisolated class CSVGenerator {
                     let speed = sqrt(ns.e_vel * ns.e_vel + ns.n_vel * ns.n_vel + ns.u_vel * ns.u_vel)
                     if maxSpeed == nil || speed > maxSpeed! {
                         maxSpeed = speed
-                        maxSpeedTime_us = t
                     }
                 }
 
                 if ns.launch_flag && launchTime_us == nil {
                     launchTime_us = t
+                }
+
+                // burnout_time_s is the first NSF_BURNOUT flag latch (#196).
+                // Previously the sidecar used peak-velocity time as a
+                // burnout proxy ("peak = burnout"), but that diverges from
+                // the firmware's own decision by multiple seconds on flights
+                // where peak |v| comes later than motor cutoff (RIM-66 5/17
+                // had FW burnout at T+2.13s vs peak |v| at T+9.30s).
+                // Read the flag directly so the sidecar timing agrees with
+                // pyro / kinematic_checks / every other consumer of the bin.
+                // Legacy logs predating the burnout bit set in firmware
+                // decode as false → burnoutTime_us stays nil → JSON emits
+                // null rather than a wrong proxy value.
+                if ns.burnout_flag && burnoutTime_us == nil {
+                    burnoutTime_us = t
                 }
 
                 // Source apogee timestamp from the master voted flag — not
@@ -341,7 +355,7 @@ nonisolated class CSVGenerator {
 
         // Compute event times relative to launch (seconds)
         let burnoutTime: Double? = {
-            guard let launch = launchTime_us, let burnout = maxSpeedTime_us,
+            guard let launch = launchTime_us, let burnout = burnoutTime_us,
                   burnout > launch else { return nil }
             return Double(burnout - launch) / 1_000_000.0
         }()

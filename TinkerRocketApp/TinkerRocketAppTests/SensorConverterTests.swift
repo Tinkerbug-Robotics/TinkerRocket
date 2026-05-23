@@ -60,6 +60,25 @@ private func makeGNSS(
     return try GNSSData(from: d)
 }
 
+private func makeNonSensor(
+    timeUs: UInt32 = 0,
+    flags: UInt8 = 0,
+    rocketState: UInt8 = 0,
+    pyroStatus: UInt8 = 0,
+    apogeeFlags: UInt8 = 0
+) throws -> NonSensorData {
+    var d = Data()
+    d.appendLE(timeUs)
+    // q0..q3 + roll_cmd (5 × Int16 = 10 bytes)
+    for _ in 0..<5 { d.appendLE(Int16(0)) }
+    // e/n/u_pos + e/n/u_vel (6 × Int32 = 24 bytes)
+    for _ in 0..<6 { d.appendLE(Int32(0)) }
+    d.append(contentsOf: [flags, rocketState])
+    d.appendLE(Int16(0))           // baro_alt_rate_dmps
+    d.append(contentsOf: [pyroStatus, apogeeFlags])
+    return try NonSensorData(from: d)
+}
+
 final class SensorConverterTests: XCTestCase {
 
     let converter = SensorConverter()
@@ -127,5 +146,37 @@ final class SensorConverterTests: XCTestCase {
         XCTAssertEqual(si.mag_x, 0.0, accuracy: 0.01)
         XCTAssertEqual(si.mag_y, 0.0, accuracy: 0.01)
         XCTAssertEqual(si.mag_z, 0.0, accuracy: 0.01)
+    }
+
+    // MARK: - NonSensor flag extraction (#196)
+
+    func testNonSensor_BurnoutFlag_FalseWhenBitClear() throws {
+        // No NSF_BURNOUT bit set
+        let raw = try makeNonSensor(flags: 0b0000_0000)
+        let si = converter.convertNonSensor(raw)
+        XCTAssertFalse(si.burnout_flag,
+                       "burnout_flag should be false when NSF_BURNOUT bit is clear")
+    }
+
+    func testNonSensor_BurnoutFlag_TrueWhenBitSet() throws {
+        // NSF_BURNOUT is bit 4 (1 << 4 = 0x10)
+        let raw = try makeNonSensor(flags: 1 << 4)
+        let si = converter.convertNonSensor(raw)
+        XCTAssertTrue(si.burnout_flag,
+                      "burnout_flag should be true when NSF_BURNOUT bit is set")
+    }
+
+    func testNonSensor_BurnoutFlag_IndependentOfOtherFlags() throws {
+        // All other NSF_* bits set, NSF_BURNOUT clear
+        let otherBits: UInt8 = (1<<0) | (1<<1) | (1<<2) | (1<<3) | (1<<5) | (1<<6) | (1<<7)
+        let raw = try makeNonSensor(flags: otherBits)
+        let si = converter.convertNonSensor(raw)
+        XCTAssertFalse(si.burnout_flag,
+                       "burnout_flag must not be set by neighboring flag bits")
+        // Sanity: the bits we DID set should be reflected.
+        XCTAssertTrue(si.alt_landed_flag)
+        XCTAssertTrue(si.alt_apogee_flag)
+        XCTAssertTrue(si.vel_u_apogee_flag)
+        XCTAssertTrue(si.launch_flag)
     }
 }
