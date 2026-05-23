@@ -37,6 +37,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn]]:
         gnss_staleness,
         kinematic_checks,
         roll_pid,
+        lora,
         timestamps,
     )
 
@@ -50,6 +51,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn]]:
         ("gnss_staleness",    gnss_staleness.analyze),
         ("kinematic_checks",  kinematic_checks.analyze),
         ("roll_pid",          roll_pid.analyze),
+        ("lora",              lora.analyze),
     ]
 
 

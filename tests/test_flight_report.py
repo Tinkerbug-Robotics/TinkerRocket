@@ -26,6 +26,7 @@ REQUIRED_SECTIONS = [
     'id="gnss_staleness"',
     'id="kinematic_checks"',
     'id="roll_pid"',
+    'id="lora"',
     'id="settings"',
     'id="parser"',
 ]
