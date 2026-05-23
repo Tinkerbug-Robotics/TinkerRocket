@@ -318,3 +318,65 @@ TEST_F(KinematicChecksTest, Landing_FastPath_BriefSpike_CounterResets) {
     }
     EXPECT_FALSE(kc.alt_landed_flag);
 }
+
+// ── Test for issue #192: landing sub-flag counters reset on apogee rising edge ──
+TEST_F(KinematicChecksTest, Landing_SubflagsResetOnApogeeRisingEdge) {
+    // The 1 Hz landing sub-detectors (gyro_quiet, gps_stationary, accel_1g,
+    // baro_stable) tick regardless of flight state, so a rocket flying
+    // straight pre-apogee (low roll rate, ~1g coast) can latch their flags
+    // before apogee. The apogee-rising-edge code in kinematicChecks() must
+    // zero those counters + flags so post-apogee voting sees only post-
+    // apogee evidence. Verifies the observable: pre-latched flags reset
+    // when apogee_flag transitions False → True inside the function.
+
+    // Bypass launch detection (already covered by other tests) and force
+    // max_altitude so baro_stable's > 15 m gate is satisfied.
+    kc.launch_flag = true;
+    kc.max_altitude = 50.0f;
+
+    // Seed the KF at 30 m so alt_est tracks above 15 m (needed later for
+    // baro/vel apogee tests). 80 calls @ 2 ms = ~160 ms, plenty for the KF
+    // to converge.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(i * 2);
+        callFlight(30.0f, 9.81f, 0.0f, 0.1f);  // hold at 30 m, ~1g, quiet
+    }
+
+    // Drive 6 s of "quiet coast" (low gyro, ~1g, vel=0). With the 1 Hz
+    // sub-detector gate, gyro_quiet_count_ rises one tick/second; flag
+    // latches at count >= 4 (~T+4 s into quiet).
+    for (int second = 0; second < 6; second++) {
+        uint32_t base = 200 + second * 1000;
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(base + i * 2);
+            callFlight(30.0f, 9.81f, 0.0f, 0.1f);  // quiet
+        }
+    }
+
+    ASSERT_TRUE(kc.gyro_quiet_flag) << "Quiet inputs should latch gyro_quiet_flag pre-apogee";
+    ASSERT_TRUE(kc.accel_1g_flag)  << "Quiet inputs should latch accel_1g_flag pre-apogee";
+    ASSERT_FALSE(kc.apogee_flag)   << "apogee_flag should still be false";
+
+    // Now drive apogee-triggering inputs to flip apogee_flag inside the
+    // function (this is the rising edge the reset hooks on).
+    //   vel_pass:   alt > 15 (pos[2]) && velocity[2] < 0
+    //   baro_pass:  alt_est > 15 && alt_est < max_altitude - 5 && d_alt_est < 20
+    //   pitch_pass: pitch_rad < -0.087  (5° below horizontal)
+    // APOGEE_COUNT_HI = 6 so 6+ consecutive passing calls latches each
+    // sub-flag; one more call after that fires the master vote.
+    for (int i = 0; i < 20; i++) {
+        setMockMillis(6500 + i * 2);
+        float alt = 30.0f - i * 0.5f;  // descending from 30 m
+        callFlight(alt, 5.0f, -10.0f, 0.1f,
+                   /*gps_alt=*/0.0f, /*new_gps=*/false,
+                   /*pitch_rad=*/-0.5f, /*burnout=*/true, /*baro_lockout=*/false);
+    }
+
+    EXPECT_TRUE(kc.apogee_flag)        << "apogee_flag should have transitioned to true";
+    EXPECT_FALSE(kc.gyro_quiet_flag)   << "gyro_quiet_flag should reset on apogee rising edge";
+    EXPECT_FALSE(kc.accel_1g_flag)     << "accel_1g_flag should reset on apogee rising edge";
+    EXPECT_FALSE(kc.gps_stationary_flag)
+        << "gps_stationary_flag should reset on apogee rising edge";
+    EXPECT_FALSE(kc.baro_stable_flag)
+        << "baro_stable_flag should reset on apogee rising edge";
+}
