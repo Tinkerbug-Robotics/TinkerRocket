@@ -162,6 +162,9 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  burnout_detected,
                                          bool  baro_locked_out)
 {
+    // Snapshot apogee_flag so the rising-edge reset below sees the
+    // state *before* this tick's apogee voting fires (#192).
+    const bool apogee_was_set = apogee_flag;
 
     // ### Baro rate-gate (#166) ###
     // Reject obvious spikes (ejection charges, sensor glitches) before they
@@ -470,6 +473,27 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             }
         }
     } // end burnout gate
+
+    // ### Apogee rising edge: reset landing sub-flag counters (#192) ###
+    // The 1 Hz sub-detectors above accumulate evidence regardless of
+    // flight state, so a rocket flying straight pre-apogee (low roll
+    // rate, ~0 m/s in EKF frame, ~1g during coast) latches gyro_quiet /
+    // gps_stationary / accel_1g before apogee.  The apogee gate on the
+    // master vote prevents a false LANDED, but the latched sub-flags
+    // would carry pre-apogee history into the post-apogee vote and erode
+    // the 3-of-4 margin.  Zero counters + flags at the transition so
+    // post-apogee voting reflects only post-apogee evidence.
+    if (apogee_flag && !apogee_was_set)
+    {
+        baro_stable_count_    = 0;
+        gyro_quiet_count_     = 0;
+        gps_stationary_count_ = 0;
+        accel_1g_count_       = 0;
+        baro_stable_flag    = false;
+        gyro_quiet_flag     = false;
+        gps_stationary_flag = false;
+        accel_1g_flag       = false;
+    }
 
     // ### Pre-Apogee Max Speed ###
     float speed = sqrt(velocity[0]*velocity[0]+

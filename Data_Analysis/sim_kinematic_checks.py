@@ -216,6 +216,10 @@ class KinematicChecks:
     ) -> None:
         self._now_ms = now_ms
 
+        # Snapshot apogee_flag so the rising-edge reset below sees the
+        # state *before* this tick's apogee voting fires (#192).
+        apogee_was_set = self.apogee_flag
+
         # ── CHANGED (1): Baro rate-gate at ingestion ──────────────────
         # Only the new_baro sample is judged. Once accepted (or substituted
         # with the last good value) all downstream paths — KF update,
@@ -456,6 +460,26 @@ class KinematicChecks:
 
                 if available >= 2 and passed >= 2 and passed >= (available - 1):
                     self.apogee_flag = True
+
+        # ── Apogee rising edge: reset landing sub-flag counters (#192) ──
+        # The 1 Hz sub-detectors above accumulate evidence regardless of
+        # flight state, so a rocket flying straight pre-apogee (low roll
+        # rate, ~0 m/s in EKF frame at burnout, ~1g during coast) latches
+        # gyro_quiet / gps_stationary / accel_1g before apogee. The
+        # master-vote apogee gate ([landing voting block above]) prevents
+        # a false LANDED, but the latched sub-flags carry pre-apogee
+        # history into the post-apogee vote — eroding the 3-of-4 margin.
+        # Zero the counters + flags at the transition so post-apogee
+        # voting reflects only post-apogee evidence.
+        if self.apogee_flag and not apogee_was_set:
+            self.baro_stable_count_ = 0
+            self.gyro_quiet_count_ = 0
+            self.gps_stationary_count_ = 0
+            self.accel_1g_count_ = 0
+            self.baro_stable_flag = False
+            self.gyro_quiet_flag = False
+            self.gps_stationary_flag = False
+            self.accel_1g_flag = False
 
         # TRKC.cpp:302 ─ Pre-apogee max speed
         speed = math.sqrt(velocity[0]**2 + velocity[1]**2 + velocity[2]**2)
