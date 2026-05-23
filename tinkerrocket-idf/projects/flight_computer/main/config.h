@@ -233,6 +233,15 @@ struct config
     // Delay after burnout before engaging guidance (ms)
     static constexpr uint16_t PN_COAST_DELAY_MS = 0;
 
+    // ### Burnout Detection ###
+    // Consecutive samples of negative body-X accel required to latch
+    // burnout_detected. The IMU runs at ~1 kHz so 50 samples ≈ 50 ms of
+    // sustained deceleration — long enough to filter vibration / sensor
+    // noise / wind gusts that briefly drop body_ax below zero during
+    // boost, short enough to catch real motor cutoff within one PN coast
+    // delay tick. See issue #197.
+    static constexpr uint16_t BURNOUT_NEG_HYSTERESIS = 50;
+
     // ### Ground Test ###
     // Attitude-hold gain: virtual accel command per unit tilt (m/s² per rad)
     // Higher = more aggressive correction.  Only affects direction test on ground.

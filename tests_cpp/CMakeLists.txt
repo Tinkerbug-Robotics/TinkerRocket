@@ -216,6 +216,14 @@ target_include_directories(test_bs_log_policy PRIVATE
 target_link_libraries(test_bs_log_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_log_policy)
 
+# ---------- test_burnout_detector (#197) ----------
+# Hysteresis-based burnout detector lives inline in
+# flight_computer/main/main.cpp; test reimplements the small state
+# machine and asserts behavior matches spec. See test file header.
+add_executable(test_burnout_detector test_burnout_detector.cpp)
+target_link_libraries(test_burnout_detector GTest::gtest_main)
+gtest_discover_tests(test_burnout_detector)
+
 # ---------- test_tr_flightlog_wire_format ----------
 # Golden-file regression guard on the BLE wire formats iOS depends on.
 # Fixtures under tests_cpp/fixtures/ble_wire_format/ are the source of truth.
