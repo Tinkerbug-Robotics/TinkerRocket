@@ -257,6 +257,10 @@ static TR_PID roll_rate_pid_standalone(config::KP, config::KI, config::KD,
 static bool guidance_enabled = config::GUIDANCE_ENABLED;
 static bool burnout_detected = false;
 static uint32_t burnout_time_ms = 0;
+// Consecutive-sample hysteresis for burnout detection (#197). Prevents
+// single-sample noise / vibration / wind dips from latching the flag
+// prematurely; require N consecutive negative body_ax samples first.
+static uint16_t burnout_neg_count = 0;
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool guidance_active = false;
@@ -3793,6 +3797,7 @@ static void loop_fc()
                     roll_rate_pid_standalone.reset();
                     burnout_detected = false;
                     burnout_time_ms = 0;
+                    burnout_neg_count = 0;
                     guidance_active = false;
                     // Reset and arm pyro channels on launch
                     pyro_apogee_detected = false;
@@ -3857,15 +3862,24 @@ static void loop_fc()
                         // Body-X accel (forward axis in FRD) goes negative when
                         // decelerating after motor burnout.  Wait at least 200ms
                         // after launch to avoid false triggers from vibration.
+                        // Require N consecutive negative samples (#197) so a
+                        // single vibration cycle or wind gust can't trip it.
                         if (!burnout_detected && t_since_launch_ms > 200)
                         {
                             float body_ax = ism6_latest_si.low_g_acc_x;
                             if (body_ax < 0.0f)
                             {
-                                burnout_detected = true;
-                                burnout_time_ms = now_ms;
-                                ESP_LOGI(TAG, "[GUID] Burnout detected at T+%lu ms",
-                                              (unsigned long)t_since_launch_ms);
+                                if (++burnout_neg_count >= config::BURNOUT_NEG_HYSTERESIS)
+                                {
+                                    burnout_detected = true;
+                                    burnout_time_ms = now_ms;
+                                    ESP_LOGI(TAG, "[GUID] Burnout detected at T+%lu ms",
+                                                  (unsigned long)t_since_launch_ms);
+                                }
+                            }
+                            else
+                            {
+                                burnout_neg_count = 0;
                             }
                         }
 
@@ -4123,6 +4137,7 @@ static void loop_fc()
                 roll_rate_pid_standalone.reset();
                 burnout_detected = false;
                 burnout_time_ms = 0;
+                burnout_neg_count = 0;
                 guidance_active = false;
                 reboot_recovery = false;
                 reboot_recovery_telem = false;
