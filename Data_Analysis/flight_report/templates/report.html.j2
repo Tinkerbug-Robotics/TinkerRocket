@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Flight Report — {{ flight.name }}</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 1100px; margin: 24px auto; padding: 0 16px;
+    color: #222; line-height: 1.4;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 4px; }
+  h2 { font-size: 1.2rem; border-bottom: 1px solid #ddd; padding-bottom: 4px; margin-top: 32px; }
+  h3 { font-size: 1.0rem; color: #444; }
+  .meta { color: #666; font-size: 0.9rem; margin-bottom: 16px; }
+  .toc { background: #f5f5f7; padding: 8px 16px; border-radius: 6px; margin-bottom: 24px; }
+  .toc ul { margin: 4px 0; padding-left: 20px; }
+  table.metrics { border-collapse: collapse; margin: 8px 0; font-size: 0.9rem; }
+  table.metrics td, table.metrics th { padding: 4px 12px; border: 1px solid #e0e0e0; text-align: left; }
+  table.metrics th { background: #f5f5f7; font-weight: 600; }
+  table.metrics td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  pre { background: #f8f8f8; padding: 8px 12px; border-radius: 4px; overflow-x: auto;
+        font-size: 0.82rem; line-height: 1.35; }
+  .warn { background: #fff8e1; border-left: 3px solid #f9a825; padding: 6px 12px; margin: 8px 0; }
+  .err  { background: #ffebee; border-left: 3px solid #c62828; padding: 6px 12px; margin: 8px 0;
+          font-family: ui-monospace, "SF Mono", monospace; font-size: 0.85rem; white-space: pre-wrap; }
+  .figure { margin: 12px 0; text-align: center; }
+  .figure img { max-width: 100%; border: 1px solid #eee; border-radius: 4px; }
+  .summary-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px; margin: 8px 0;
+  }
+  .summary-grid .cell {
+    background: #f5f5f7; padding: 8px 12px; border-radius: 4px;
+  }
+  .summary-grid .cell .label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
+  .summary-grid .cell .value { font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<h1>{{ flight.rocket_name }}</h1>
+<div class="meta">
+  <code>{{ flight.bin_path }}</code><br>
+  Flight: {{ date_str }}{% if duration_s %} &middot; Duration: {{ "%.1f"|format(duration_s) }} s{% endif %}
+</div>
+
+<div class="summary-grid">
+  {% if sidecar.get('apogee_time_s') is not none %}
+  <div class="cell">
+    <div class="label">Apogee</div>
+    <div class="value">{{ "%.2f"|format(sidecar['apogee_time_s']) }} s</div>
+  </div>
+  {% endif %}
+  {% if sidecar.get('burnout_time_s') is not none %}
+  <div class="cell">
+    <div class="label">Burnout</div>
+    <div class="value">{{ "%.2f"|format(sidecar['burnout_time_s']) }} s</div>
+  </div>
+  {% endif %}
+  {% if sidecar.get('max_altitude_m') is not none %}
+  <div class="cell">
+    <div class="label">Max Altitude</div>
+    <div class="value">{{ "%.1f"|format(sidecar['max_altitude_m']) }} m</div>
+  </div>
+  {% endif %}
+  {% if sidecar.get('max_speed_mps') is not none %}
+  <div class="cell">
+    <div class="label">Max Speed</div>
+    <div class="value">{{ "%.1f"|format(sidecar['max_speed_mps']) }} m/s</div>
+  </div>
+  {% endif %}
+  {% if stats.get('total_frames') is not none %}
+  <div class="cell">
+    <div class="label">Frames</div>
+    <div class="value">{{ "{:,}".format(stats['total_frames']) }}</div>
+  </div>
+  {% endif %}
+  {% if stats.get('total_frames') and stats['total_frames'] > 0 %}
+  <div class="cell">
+    <div class="label">CRC Pass</div>
+    <div class="value">{{ "%.1f"|format(100.0 * stats['good_crc'] / stats['total_frames']) }}%</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="toc">
+  <strong>Sections</strong>
+  <ul>
+    <li><a href="#settings">Settings snapshot</a></li>
+    {% for s in sections %}
+    <li><a href="#{{ s.name }}">{{ s.title }}</a>
+        {%- if s.warnings %} <span style="color:#f9a825">({{ s.warnings|length }} warning{{ "s" if s.warnings|length != 1 else "" }})</span>{% endif %}
+        {%- if s.error %} <span style="color:#c62828">(error)</span>{% endif %}
+    </li>
+    {% endfor %}
+    <li><a href="#parser">Parser stats</a></li>
+  </ul>
+</div>
+
+<h2 id="settings">Settings snapshot</h2>
+{% if sidecar %}
+<details open>
+  <summary style="cursor: pointer; color: #666; font-size: 0.9rem; margin-bottom: 6px;">
+    {{ sidecar|length }} field{{ "s" if sidecar|length != 1 else "" }} (click to collapse)
+  </summary>
+  <pre>{{ sidecar | tojson(indent=2) }}</pre>
+</details>
+{% else %}
+<p>No .json sidecar found.</p>
+{% endif %}
+
+{% for s in sections %}
+<h2 id="{{ s.name }}">{{ s.title }}</h2>
+
+{% if s.error %}
+<div class="err">{{ s.error }}</div>
+{% else %}
+
+{% for w in s.warnings %}
+<div class="warn">{{ w }}</div>
+{% endfor %}
+
+{% if s.metrics %}
+<table class="metrics">
+  <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+  <tbody>
+  {% for k, v in s.metrics.items() %}
+    <tr>
+      <td>{{ k }}</td>
+      <td class="num">{% if v is number %}{{ "%g"|format(v) }}{% else %}{{ v }}{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if s.text %}
+<pre>{{ s.text }}</pre>
+{% endif %}
+
+{% for fig in s.figures %}
+<div class="figure"><img src="{{ fig }}" /></div>
+{% endfor %}
+
+{% endif %}
+{% endfor %}
+
+<h2 id="parser">Parser stats</h2>
+<table class="metrics">
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>File size</td><td class="num">{{ "{:,}".format(stats.get('file_size', 0)) }} bytes</td></tr>
+    <tr><td>Total frames</td><td class="num">{{ "{:,}".format(stats.get('total_frames', 0)) }}</td></tr>
+    <tr><td>Good CRC</td><td class="num">{{ "{:,}".format(stats.get('good_crc', 0)) }}</td></tr>
+    <tr><td>Bad CRC</td><td class="num">{{ "{:,}".format(stats.get('bad_crc', 0)) }}</td></tr>
+  </tbody>
+</table>
+
+<h3>Message counts</h3>
+<table class="metrics">
+  <tbody>
+  {% for name, count in stats.get('type_counts', {}).items() | sort(attribute=1, reverse=True) %}
+    <tr><td>{{ name }}</td><td class="num">{{ "{:,}".format(count) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>Sensor configuration</h3>
+<pre>{{ config | tojson(indent=2) }}</pre>
+
+</body>
+</html>

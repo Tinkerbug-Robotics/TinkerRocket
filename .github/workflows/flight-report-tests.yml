@@ -1,0 +1,32 @@
+name: Flight Report (Python)
+
+on:
+  push:
+    paths:
+      - 'Data_Analysis/**'
+      - 'tests/test_flight_report.py'
+      - 'tests/test_data/flight_*.bin'
+      - '.github/workflows/flight-report-tests.yml'
+  pull_request:
+    paths:
+      - 'Data_Analysis/**'
+      - 'tests/test_flight_report.py'
+      - 'tests/test_data/flight_*.bin'
+      - '.github/workflows/flight-report-tests.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install numpy matplotlib jinja2 pandas pytest
+
+      - name: Run flight_report smoke test
+        run: python -m pytest tests/test_flight_report.py -v --tb=short
