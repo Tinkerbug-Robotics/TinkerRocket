@@ -205,7 +205,16 @@ extension BLEFleet: CBCentralManagerDelegate {
                        didDiscover peripheral: CBPeripheral,
                        advertisementData: [String: Any],
                        rssi RSSI: NSNumber) {
-        let name = peripheral.name ?? "Unknown"
+        // peripheral.name is iOS-cached and is nil on a fresh-scan discovery
+        // until iOS has connected at least once or otherwise persisted the
+        // name (e.g. an active pair). After a firmware re-flash that wipes
+        // bond state, the cache is invalidated and peripheral.name comes
+        // back nil even though the device is advertising correctly — the
+        // name lives in the scan-response payload, surfaced through
+        // advertisementData[CBAdvertisementDataLocalNameKey]. Prefer that
+        // when present so the prefix filter works on first discovery.
+        let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+        let name = advertisedName ?? peripheral.name ?? "Unknown"
         print("Discovered: \(name) RSSI: \(RSSI)")
 
         // Only list Tinker devices (legacy "TinkerRocket"/"TinkerBaseStation" + new "TR-R-"/"TR-B-")
