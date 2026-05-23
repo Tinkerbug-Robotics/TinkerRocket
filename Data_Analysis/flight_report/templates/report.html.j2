@@ -87,16 +87,28 @@
 <div class="toc">
   <strong>Sections</strong>
   <ul>
+    <li><a href="#settings">Settings snapshot</a></li>
     {% for s in sections %}
     <li><a href="#{{ s.name }}">{{ s.title }}</a>
         {%- if s.warnings %} <span style="color:#f9a825">({{ s.warnings|length }} warning{{ "s" if s.warnings|length != 1 else "" }})</span>{% endif %}
         {%- if s.error %} <span style="color:#c62828">(error)</span>{% endif %}
     </li>
     {% endfor %}
-    <li><a href="#settings">Settings snapshot</a></li>
     <li><a href="#parser">Parser stats</a></li>
   </ul>
 </div>
+
+<h2 id="settings">Settings snapshot</h2>
+{% if sidecar %}
+<details open>
+  <summary style="cursor: pointer; color: #666; font-size: 0.9rem; margin-bottom: 6px;">
+    {{ sidecar|length }} field{{ "s" if sidecar|length != 1 else "" }} (click to collapse)
+  </summary>
+  <pre>{{ sidecar | tojson(indent=2) }}</pre>
+</details>
+{% else %}
+<p>No .json sidecar found.</p>
+{% endif %}
 
 {% for s in sections %}
 <h2 id="{{ s.name }}">{{ s.title }}</h2>
@@ -133,13 +145,6 @@
 
 {% endif %}
 {% endfor %}
-
-<h2 id="settings">Settings snapshot</h2>
-{% if sidecar %}
-<pre>{{ sidecar | tojson(indent=2) }}</pre>
-{% else %}
-<p>No .json sidecar found.</p>
-{% endif %}
 
 <h2 id="parser">Parser stats</h2>
 <table class="metrics">
