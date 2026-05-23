@@ -6,11 +6,13 @@ on:
       - 'tinkerrocket-idf/components/**'
       - 'tests_cpp/**'
       - 'tests/integration/**'
+      - 'tests/test_data/**'   # integration tests are parametrized over these fixtures
   pull_request:
     paths:
       - 'tinkerrocket-idf/components/**'
       - 'tests_cpp/**'
       - 'tests/integration/**'
+      - 'tests/test_data/**'   # integration tests are parametrized over these fixtures
 
 # TR_GuidancePN is a private submodule. When the repo secret
 # TR_GUIDANCEPN_TOKEN is set (this org, trusted branches), we recurse
