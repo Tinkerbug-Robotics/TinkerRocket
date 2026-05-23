@@ -177,6 +177,11 @@ final class RocketProfileStoreTests: XCTestCase {
         ]
         p.pyro2Enabled = true
         p.pyro2TriggerValue = 213
+        // Recovery fields (#156) — non-default to prove they survive round-trip.
+        p.drogueRateFps = 55.0
+        p.mainRateFps = 14.0
+        p.mainDeployAltAglFt = 600.0
+        p.ballisticDragK = 0.00072
         p.magCal = MagCalData(offsetX: -5, offsetY: 6, offsetZ: 7,
                               fieldR_uT: 49.5, residualUT: 1.5,
                               calibratedOnUnitID: "DEAD::BEEF",
@@ -189,6 +194,43 @@ final class RocketProfileStoreTests: XCTestCase {
         let data = try JSONEncoder().encode(p)
         let back = try JSONDecoder().decode(RocketProfile.self, from: data)
         XCTAssertEqual(p, back)
+    }
+
+    /// Pre-#156 profile JSON (no recovery fields) must still load — the
+    /// store does `try? decode(...)` and silently drops failures, so a
+    /// regression here would erase saved profiles on app upgrade.
+    func testLegacyProfileMissingRecoveryFieldsLoads() throws {
+        let legacyJSON = """
+        {
+          "id": "11111111-2222-3333-4444-555555555555",
+          "name": "Legacy",
+          "createdAt": 1700000000.0,
+          "updatedAt": 1700000000.0,
+          "notes": "from before recovery fields",
+          "soundsEnabled": false,
+          "servoControlEnabled": true,
+          "gainScheduleEnabled": true,
+          "useAngleControl": false,
+          "rollDelayMs": 0,
+          "guidanceEnabled": false,
+          "cameraType": 2,
+          "servoBias1": 85, "servoBias2": 0, "servoBias3": 0, "servoBias4": 0,
+          "servoHz": 333, "servoMinUs": 1250, "servoMaxUs": 1750,
+          "pidKp": 0.08, "pidKi": 0.005, "pidKd": 0.003,
+          "pidMinCmd": -10.0, "pidMaxCmd": 10.0,
+          "rollWaypoints": [],
+          "pyro1Enabled": false, "pyro1TriggerMode": 0, "pyro1TriggerValue": 1.0,
+          "pyro2Enabled": false, "pyro2TriggerMode": 0, "pyro2TriggerValue": 100.0
+        }
+        """
+        let data = legacyJSON.data(using: .utf8)!
+        let p = try JSONDecoder().decode(RocketProfile.self, from: data)
+        XCTAssertEqual(p.name, "Legacy")
+        // Missing keys must fall back to RocketProfile's defaults.
+        XCTAssertEqual(p.drogueRateFps, 60.0)
+        XCTAssertEqual(p.mainRateFps, 12.0)
+        XCTAssertEqual(p.mainDeployAltAglFt, 700.0)
+        XCTAssertEqual(p.ballisticDragK, 5e-4)
     }
 
     // MARK: - Migration

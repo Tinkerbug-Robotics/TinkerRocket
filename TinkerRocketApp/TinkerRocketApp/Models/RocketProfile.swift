@@ -115,6 +115,22 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var pyro2TriggerMode: UInt8 = 0
     var pyro2TriggerValue: Float = 100.0
 
+    // MARK: Recovery (issue #156) — descent profile for landing-point
+    // prediction and drift-cast.  Stored per-airframe so different rockets
+    // can have different chute setups; DriftCastView reads these (with a
+    // global @AppStorage fallback when no profile is selected).
+    /// Drogue / no-chute descent rate, fps.  Used above mainDeployAltAglFt.
+    var drogueRateFps: Double = 60.0
+    /// Main chute descent rate, fps.  Used below mainDeployAltAglFt.
+    var mainRateFps: Double = 12.0
+    /// Altitude AGL at which the main pyro fires (drogue→main transition).
+    var mainDeployAltAglFt: Double = 700.0
+    /// Quadratic drag coefficient k (1/m) for the coast-to-apogee ballistic
+    /// propagation.  Default 5e-4 ≈ terminal velocity ~140 m/s, in the
+    /// ballpark for typical 54–65 mm airframes.  Operator can refine in
+    /// the rocket-edit UI.
+    var ballisticDragK: Double = 5e-4
+
     // MARK: Calibration (per physical airframe / board)
     var magCal: MagCalData? = nil
     var sensorCal: SensorCalData? = nil
@@ -122,5 +138,67 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     /// A profile with all firmware factory defaults and the given name.
     static func makeDefault(name: String) -> RocketProfile {
         RocketProfile(name: name)
+    }
+}
+
+// MARK: - Backward-compatible decoding
+//
+// The synthesized Decodable conformance treats missing JSON keys as a hard
+// decode failure even when the property has a default — so adding any new
+// field without a custom decoder would silently drop existing saved
+// profiles in RocketProfileStore.load() (it does `try? decoder.decode(...)`
+// and skips on nil).  This extension uses decodeIfPresent ?? default for
+// every field so old profiles upgrade gracefully and future additions only
+// need a single line here.
+extension RocketProfile {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = RocketProfile(name: "")
+
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? defaults.notes
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? defaults.createdAt
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? defaults.updatedAt
+        lastUsedUnitID = try c.decodeIfPresent(String.self, forKey: .lastUsedUnitID)
+
+        soundsEnabled = try c.decodeIfPresent(Bool.self, forKey: .soundsEnabled) ?? defaults.soundsEnabled
+        servoControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .servoControlEnabled) ?? defaults.servoControlEnabled
+        gainScheduleEnabled = try c.decodeIfPresent(Bool.self, forKey: .gainScheduleEnabled) ?? defaults.gainScheduleEnabled
+        useAngleControl = try c.decodeIfPresent(Bool.self, forKey: .useAngleControl) ?? defaults.useAngleControl
+        rollDelayMs = try c.decodeIfPresent(UInt16.self, forKey: .rollDelayMs) ?? defaults.rollDelayMs
+        guidanceEnabled = try c.decodeIfPresent(Bool.self, forKey: .guidanceEnabled) ?? defaults.guidanceEnabled
+        cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
+
+        servoBias1 = try c.decodeIfPresent(Int16.self, forKey: .servoBias1) ?? defaults.servoBias1
+        servoBias2 = try c.decodeIfPresent(Int16.self, forKey: .servoBias2) ?? defaults.servoBias2
+        servoBias3 = try c.decodeIfPresent(Int16.self, forKey: .servoBias3) ?? defaults.servoBias3
+        servoBias4 = try c.decodeIfPresent(Int16.self, forKey: .servoBias4) ?? defaults.servoBias4
+        servoHz = try c.decodeIfPresent(Int16.self, forKey: .servoHz) ?? defaults.servoHz
+        servoMinUs = try c.decodeIfPresent(Int16.self, forKey: .servoMinUs) ?? defaults.servoMinUs
+        servoMaxUs = try c.decodeIfPresent(Int16.self, forKey: .servoMaxUs) ?? defaults.servoMaxUs
+
+        pidKp = try c.decodeIfPresent(Float.self, forKey: .pidKp) ?? defaults.pidKp
+        pidKi = try c.decodeIfPresent(Float.self, forKey: .pidKi) ?? defaults.pidKi
+        pidKd = try c.decodeIfPresent(Float.self, forKey: .pidKd) ?? defaults.pidKd
+        pidMinCmd = try c.decodeIfPresent(Float.self, forKey: .pidMinCmd) ?? defaults.pidMinCmd
+        pidMaxCmd = try c.decodeIfPresent(Float.self, forKey: .pidMaxCmd) ?? defaults.pidMaxCmd
+
+        rollWaypoints = try c.decodeIfPresent([RollWaypoint].self, forKey: .rollWaypoints) ?? defaults.rollWaypoints
+
+        pyro1Enabled = try c.decodeIfPresent(Bool.self, forKey: .pyro1Enabled) ?? defaults.pyro1Enabled
+        pyro1TriggerMode = try c.decodeIfPresent(UInt8.self, forKey: .pyro1TriggerMode) ?? defaults.pyro1TriggerMode
+        pyro1TriggerValue = try c.decodeIfPresent(Float.self, forKey: .pyro1TriggerValue) ?? defaults.pyro1TriggerValue
+        pyro2Enabled = try c.decodeIfPresent(Bool.self, forKey: .pyro2Enabled) ?? defaults.pyro2Enabled
+        pyro2TriggerMode = try c.decodeIfPresent(UInt8.self, forKey: .pyro2TriggerMode) ?? defaults.pyro2TriggerMode
+        pyro2TriggerValue = try c.decodeIfPresent(Float.self, forKey: .pyro2TriggerValue) ?? defaults.pyro2TriggerValue
+
+        drogueRateFps = try c.decodeIfPresent(Double.self, forKey: .drogueRateFps) ?? defaults.drogueRateFps
+        mainRateFps = try c.decodeIfPresent(Double.self, forKey: .mainRateFps) ?? defaults.mainRateFps
+        mainDeployAltAglFt = try c.decodeIfPresent(Double.self, forKey: .mainDeployAltAglFt) ?? defaults.mainDeployAltAglFt
+        ballisticDragK = try c.decodeIfPresent(Double.self, forKey: .ballisticDragK) ?? defaults.ballisticDragK
+
+        magCal = try c.decodeIfPresent(MagCalData.self, forKey: .magCal)
+        sensorCal = try c.decodeIfPresent(SensorCalData.self, forKey: .sensorCal)
     }
 }
