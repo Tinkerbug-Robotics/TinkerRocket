@@ -25,6 +25,7 @@ REQUIRED_SECTIONS = [
     'id="sensor_noise"',
     'id="gnss_staleness"',
     'id="kinematic_checks"',
+    'id="roll_pid"',
     'id="settings"',
     'id="parser"',
 ]
