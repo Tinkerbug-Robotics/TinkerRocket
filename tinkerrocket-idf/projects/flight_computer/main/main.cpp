@@ -319,10 +319,10 @@ static bool          pyro_arm_pin_state   = false;   // last value driven onto P
 static bool          pyro_apogee_detected = false;
 static uint32_t      pyro_apogee_time_ms  = 0;
 
-// PRELAUNCH-edge continuity diagnostic — momentary ARM, read all 4 CONT, disarm.
-enum class PyroPrelaunchPhase : uint8_t { Idle, Settle, Done };
-static PyroPrelaunchPhase pyro_prelaunch_phase   = PyroPrelaunchPhase::Idle;
-static uint32_t           pyro_prelaunch_next_ms = 0;
+// PRELAUNCH-edge continuity check: on the new PCB the CONT divider is fed
+// from VPP (always on) and is independent of the shared ARM rail, so we
+// just sample the four CONT pins directly — no ARM pulse, no settle delay,
+// no state machine.
 // --- Inflight reboot recovery ---
 // Snapshot of critical flight state, sent to OC over I2S at 10 Hz during
 // INFLIGHT and stored in OC's MRAM.  On unexpected reboot (brownout,
@@ -741,33 +741,17 @@ static void pyroSafeAll()
         pyro_ch[i].phase_start_ms = 0;
     }
     pyroSetArmLocked(false);
-    pyro_prelaunch_phase   = PyroPrelaunchPhase::Idle;
-    pyro_prelaunch_next_ms = 0;
     portEXIT_CRITICAL(&pyro_spinlock);
     ESP_LOGI(TAG, "[PYRO] All channels safed");
 }
 
-// PRELAUNCH continuity test: raise ARM, wait settle, read all 4 CONT, lower
-// ARM. Non-blocking — pyroPrelaunchContTest() schedules and
-// servicePyroPrelaunchDiag() advances on each main-loop tick.
-static void pyroPrelaunchContTest(uint32_t now_ms)
+// PRELAUNCH continuity check. Sample all four CONT pins directly and cache
+// the result. Synchronous — no ARM pulse, no settle delay, no state machine.
+// The new PCB feeds the CONT divider from VPP (always on), so ARM is not
+// part of the cont sense path.
+static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 {
-    if (pyro_prelaunch_phase != PyroPrelaunchPhase::Idle) return;
-    portENTER_CRITICAL(&pyro_spinlock);
-    pyroSetArmLocked(true);
-    portEXIT_CRITICAL(&pyro_spinlock);
-    pyro_prelaunch_phase   = PyroPrelaunchPhase::Settle;
-    pyro_prelaunch_next_ms = now_ms + config::PYRO_ARM_SETTLE_MS;
-    ESP_LOGI(TAG, "[PYRO] Prelaunch CONT test: ARM raised, settle %u ms",
-             (unsigned)config::PYRO_ARM_SETTLE_MS);
-}
-
-static void servicePyroPrelaunchDiag(uint32_t now_ms)
-{
-    if (pyro_prelaunch_phase != PyroPrelaunchPhase::Settle) return;
-    if ((int32_t)(now_ms - pyro_prelaunch_next_ms) < 0) return;
-
-    int raw[4];
+    int  raw[4];
     bool cont[4];
     for (int i = 0; i < 4; ++i) {
         raw[i]  = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
@@ -778,11 +762,7 @@ static void servicePyroPrelaunchDiag(uint32_t now_ms)
         pyro_ch[i].cont       = cont[i];
         pyro_ch[i].cont_known = true;
     }
-    // Drop ARM unless another consumer (fire state or a CONT-TEST request)
-    // is keeping it up; servicePyroChannels() will reassert if needed.
-    pyroSetArmLocked(false);
     portEXIT_CRITICAL(&pyro_spinlock);
-    pyro_prelaunch_phase = PyroPrelaunchPhase::Done;
     ESP_LOGI(TAG, "[PYRO] Prelaunch CONT: ch1 raw=%d cont=%d  ch2 raw=%d cont=%d  ch3 raw=%d cont=%d  ch4 raw=%d cont=%d",
              raw[0], cont[0], raw[1], cont[1], raw[2], cont[2], raw[3], cont[3]);
 }
@@ -3366,7 +3346,10 @@ static void loop_fc()
             }
             else if (out_pending_command == PYRO_CONT_TEST)
             {
-                // Momentary arm → read continuity → disarm (ground test only)
+                // Direct CONT read — no ARM pulse needed on the new PCB
+                // (CONT divider fed from VPP, independent of the ARM rail).
+                // Still rejected in flight to be conservative with the
+                // app's "ground tests are pad-only" UX guarantee.
                 if (rocket_state == INFLIGHT) {
                     ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — INFLIGHT");
                 } else {
@@ -3383,23 +3366,14 @@ static void loop_fc()
                         ESP_LOGW(TAG, "[PYRO CONT TEST] Invalid channel %u", ch);
                     } else {
                         const int idx = ch - 1;
-                        const gpio_num_t arm_pin  = (gpio_num_t)config::PYRO_ARM_PIN;
                         const gpio_num_t cont_pin = (gpio_num_t)PYRO_CONT_PINS[idx];
 
-                        // Defensive reclaim — peripheral defaults can re-grab
-                        // the ESP32-P4 IO MUX between boot and the test.
-                        esp_gpio_revoke(1ULL << arm_pin);
+                        // Defensive CONT-pad reclaim — peripheral defaults
+                        // can re-grab the ESP32-P4 IO MUX between boot and
+                        // the test. (The ARM pad was set up safely at boot
+                        // via safePyroOutputInit; we don't touch it here.)
                         esp_gpio_revoke(1ULL << cont_pin);
-                        gpio_reset_pin(arm_pin);
                         gpio_reset_pin(cont_pin);
-
-                        gpio_config_t arm_cfg = {};
-                        arm_cfg.pin_bit_mask = 1ULL << arm_pin;
-                        arm_cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
-                        arm_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-                        arm_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-                        gpio_config(&arm_cfg);
-
                         gpio_config_t cont_cfg = {};
                         cont_cfg.pin_bit_mask = 1ULL << cont_pin;
                         cont_cfg.mode         = GPIO_MODE_INPUT;
@@ -3407,18 +3381,8 @@ static void loop_fc()
                         cont_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
                         gpio_config(&cont_cfg);
 
-                        // Force GPIO matrix output to GPIO function on ARM pin
-                        esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_iomux_out(arm_pin, 1, false);
-
-                        portENTER_CRITICAL(&pyro_spinlock);
-                        pyroSetArmLocked(true);
-                        portEXIT_CRITICAL(&pyro_spinlock);
-                        delay(100);  // generous settle for ground-test path
                         int raw = gpio_get_level(cont_pin);
                         portENTER_CRITICAL(&pyro_spinlock);
-                        pyroSetArmLocked(false);
-                        // Cache the result so the live-telemetry path surfaces it
                         pyro_ch[idx].cont       = pyroContFromRaw(raw);
                         pyro_ch[idx].cont_known = true;
                         portEXIT_CRITICAL(&pyro_spinlock);
@@ -3669,11 +3633,6 @@ static void loop_fc()
         pressure_alt_rate_mps = kinematics.d_alt_est_;
         max_alt_m = kinematics.max_altitude;
         max_speed_mps = kinematics.max_speed;
-
-        // Progress the PRELAUNCH continuity diagnostic. Must run every
-        // iteration regardless of state/test path so the state machine
-        // started at READY→PRELAUNCH finishes promptly.
-        servicePyroPrelaunchDiag(now_ms);
 
         if (ground_test_active)
         {
