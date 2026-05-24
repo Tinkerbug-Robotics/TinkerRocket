@@ -682,9 +682,20 @@ static void safePyroOutputInit(gpio_num_t pin)
 
 static void initPyroPins()
 {
-    // PYRO_ARM and the four FIRE pins: safe-driven outputs at LOW. The
-    // safePyroOutputInit() helper avoids gpio_reset_pin's pull-up trap that
-    // would otherwise glitch the gate drivers at boot.
+    // ========================================================================
+    // SAFETY-CRITICAL: do NOT replace safePyroOutputInit() with
+    // gpio_reset_pin() for any of the OUTPUT pins below. The IDF's
+    // gpio_reset_pin() transiently enables the internal ~50 kΩ pull-up,
+    // which biases the DTC123J gate-driver NPN base above Vbe long enough
+    // to twitch the ARM and FIRE MOSFETs — confirmed on bench, the pyro
+    // rail flashes on every FC boot.
+    //
+    // If you add new pyro output pins, they MUST go through
+    // safePyroOutputInit(). The CONT input pads are fine on gpio_reset_pin()
+    // because they have no gate driver downstream.
+    // See project_pyro_safe_init_required.md in the agent memory and
+    // commit 421dd63 for the bench observation.
+    // ========================================================================
     const gpio_num_t output_pins[] = {
         (gpio_num_t)config::PYRO_ARM_PIN,
         (gpio_num_t)config::PYRO1_FIRE_PIN,
