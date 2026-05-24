@@ -29,7 +29,7 @@
  *   a   toggle shared ARM (latching, affects ALL channels)
  *   f   pulse FIRE 500 ms on active channel (only if armed)
  *   F   pulse FIRE 2 s    on active channel (only if armed)
- *   c   read continuity on active channel (meaningful only when ARMed)
+ *   c   read continuity on active channel
  *   C   momentary continuity test (arm 200 ms, read, disarm)
  *   r   read continuity raw on ALL channels (compare)
  *   j   jam FIRE high indefinitely on active channel (must be armed)
@@ -151,7 +151,7 @@ static void print_state()
            ch[active].name, PYRO_ARM_PIN, global_arm ? 1 : 0);
     for (auto& c : ch) {
         int raw = gpio_get_level(c.cont);
-        printf("  %s  CONT raw=%d -> cont=%d  FIRE(GPIO%d) rb=%d  (cont meaningful only when ARM=1)\n",
+        printf("  %s  CONT raw=%d -> cont=%d  FIRE(GPIO%d) rb=%d\n",
                c.name, raw, cont_from_raw(raw) ? 1 : 0,
                c.fire, gpio_get_level(c.fire));
     }
@@ -193,8 +193,8 @@ static void cmd_cont_raw()
 {
     auto& c = ch[active];
     int raw = gpio_get_level(c.cont);
-    printf("[%s] CONT raw=%d -> cont=%d  (ARM=%d — only meaningful when ARM=1)\n",
-           c.name, raw, cont_from_raw(raw) ? 1 : 0, global_arm ? 1 : 0);
+    printf("[%s] CONT raw=%d -> cont=%d\n",
+           c.name, raw, cont_from_raw(raw) ? 1 : 0);
 }
 
 static void cmd_cont_momentary()
