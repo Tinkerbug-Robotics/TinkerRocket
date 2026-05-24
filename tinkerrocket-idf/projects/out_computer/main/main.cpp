@@ -4420,10 +4420,7 @@ static void loop_oc()
                 // same time so the receiver can start its cold-start
                 // acquisition concurrently with FC boot.
                 digitalWrite(config::PWR_PIN, HIGH);
-                // BENCH-ONLY: GPS rail intentionally kept LOW so pyro can
-                // be exercised on the bench without a usable GNSS module.
-                // REVERT before merging — should be HIGH here in flight build.
-                // digitalWrite(config::GPS_PWR_PIN, HIGH);
+                digitalWrite(config::GPS_PWR_PIN, HIGH);
                 vTaskDelay(pdMS_TO_TICKS(500));  // Allow power rail to stabilize
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
