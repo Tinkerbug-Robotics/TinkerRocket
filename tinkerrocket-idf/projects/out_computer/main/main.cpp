@@ -3787,6 +3787,8 @@ static void setup_oc()
 
     pinMode(config::PWR_PIN, OUTPUT);
     digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
+    pinMode(config::GPS_PWR_PIN, OUTPUT);
+    digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
     pwr_pin_on = false;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
@@ -4413,8 +4415,12 @@ static void loop_oc()
                 // full CPU speed and no auto light-sleep during init.
                 exitLowPowerMode();
 
-                // Power on the FlightComputer + sensors
+                // Power on the FlightComputer + sensors. New PCB also gates
+                // the GNSS rail off a separate enable that comes up at the
+                // same time so the receiver can start its cold-start
+                // acquisition concurrently with FC boot.
                 digitalWrite(config::PWR_PIN, HIGH);
+                digitalWrite(config::GPS_PWR_PIN, HIGH);
                 vTaskDelay(pdMS_TO_TICKS(500));  // Allow power rail to stabilize
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
@@ -4456,6 +4462,7 @@ static void loop_oc()
                 // hardware quirk exercises the same recovery path.
                 ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
                 digitalWrite(config::PWR_PIN, LOW);
+                digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
 
                 // Drive every signal that goes from the OC to the switched-
                 // rail peripherals (LoRa, NAND, MRAM) LOW so back-feed current

@@ -13,6 +13,9 @@ struct config
 
     // --- Power rail switch ---
     static constexpr int PWR_PIN = 6;
+    // New PCB: dedicated GPS enable rail. Toggled in lockstep with PWR_PIN
+    // so the GNSS module powers up alongside the FlightComputer.
+    static constexpr int GPS_PWR_PIN = 33;
 
     // --- Power Monitoring ---
     static constexpr int PWR_SDA = 7;
