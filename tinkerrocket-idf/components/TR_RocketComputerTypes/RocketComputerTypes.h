@@ -969,24 +969,29 @@ static constexpr uint8_t NSF_VEL_APOGEE   = (1u << 2);
 static constexpr uint8_t NSF_LAUNCH       = (1u << 3);
 static constexpr uint8_t NSF_BURNOUT      = (1u << 4);
 static constexpr uint8_t NSF_GUIDANCE     = (1u << 5);
-static constexpr uint8_t NSF_PYRO1_ARMED  = (1u << 6);
-static constexpr uint8_t NSF_PYRO2_ARMED  = (1u << 7);
+// New-PCB pyro: single shared arming FET drives all four channels, so
+// only one global "armed" bit is reported. Live-mirrors the ARM pin.
+static constexpr uint8_t NSF_PYRO_ARMED   = (1u << 6);
+// bit 7 reserved
 
 // NonSensorData.apogee_flags bit masks (appended in #142/#143).
-static constexpr uint8_t NSF2_GPS_APOGEE     = (1u << 0);
-static constexpr uint8_t NSF2_PITCH_APOGEE   = (1u << 1);
-static constexpr uint8_t NSF2_MASTER_APOGEE  = (1u << 2);
+static constexpr uint8_t NSF2_GPS_APOGEE       = (1u << 0);
+static constexpr uint8_t NSF2_PITCH_APOGEE     = (1u << 1);
+static constexpr uint8_t NSF2_MASTER_APOGEE    = (1u << 2);
+// Relocated from pyro_status when that byte was reclaimed for the
+// 4-channel pyro layout.
+static constexpr uint8_t NSF2_REBOOT_RECOVERY  = (1u << 3);  // mid-flight reboot recovery occurred
+static constexpr uint8_t NSF2_GUIDANCE_ENABLED = (1u << 4);  // FC's live guidance_enabled config
 
-// Pyro status byte bit masks
+// Pyro status byte — 4 channels × (continuity, fired) = exactly 8 bits.
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
-static constexpr uint8_t PSF_CH2_CONT  = (1u << 1);
-static constexpr uint8_t PSF_CH1_FIRED = (1u << 2);
+static constexpr uint8_t PSF_CH1_FIRED = (1u << 1);
+static constexpr uint8_t PSF_CH2_CONT  = (1u << 2);
 static constexpr uint8_t PSF_CH2_FIRED = (1u << 3);
-static constexpr uint8_t PSF_REBOOT_RECOVERY = (1u << 4);  // mid-flight reboot recovery occurred
-// Reuse of this byte for a non-pyro signal: the FlightComputer's live
-// guidance_enabled config. OutComputer uses this as the source of truth
-// to avoid iOS/OUT/FC NVS caches silently diverging.
-static constexpr uint8_t PSF_GUIDANCE_ENABLED = (1u << 5);
+static constexpr uint8_t PSF_CH3_CONT  = (1u << 4);
+static constexpr uint8_t PSF_CH3_FIRED = (1u << 5);
+static constexpr uint8_t PSF_CH4_CONT  = (1u << 6);
+static constexpr uint8_t PSF_CH4_FIRED = (1u << 7);
 
 typedef struct
 {
@@ -1330,7 +1335,7 @@ enum PyroTriggerMode : uint8_t {
     PYRO_TRIGGER_ALTITUDE_ON_DESCENT  = 1,
 };
 
-// Pyro channel configuration (both channels, 12 bytes)
+// Pyro channel configuration — 4 channels × (enabled, mode, value) = 24 bytes
 typedef struct __attribute__((packed))
 {
     uint8_t  ch1_enabled;       // 0 = disabled, 1 = enabled
@@ -1339,8 +1344,14 @@ typedef struct __attribute__((packed))
     uint8_t  ch2_enabled;
     uint8_t  ch2_trigger_mode;
     float    ch2_trigger_value;
+    uint8_t  ch3_enabled;
+    uint8_t  ch3_trigger_mode;
+    float    ch3_trigger_value;
+    uint8_t  ch4_enabled;
+    uint8_t  ch4_trigger_mode;
+    float    ch4_trigger_value;
 } PyroConfigData;
-static_assert(sizeof(PyroConfigData) == 12, "PyroConfigData must be 12 bytes");
+static_assert(sizeof(PyroConfigData) == 24, "PyroConfigData must be 24 bytes");
 
 // Packed config data structures for BLE → I2C relay
 typedef struct __attribute__((packed))
@@ -1488,7 +1499,7 @@ struct __attribute__((packed)) FlightSettingsData
     // Camera (0 = none, 1 = GoPro, 2 = RunCam)
     uint8_t  camera_type;
 
-    // Pyro channel config (both channels)
+    // Pyro channel config (all four channels)
     PyroConfigData pyro;
 
     // Firmware identity: git short SHA, NUL-terminated ("unknown" if no git)
@@ -1497,7 +1508,7 @@ struct __attribute__((packed)) FlightSettingsData
     // Active roll profile (num_waypoints == 0 → rate-only)
     RollProfileData roll_profile;
 };
-static_assert(sizeof(FlightSettingsData) == 176, "FlightSettingsData layout check");
+static_assert(sizeof(FlightSettingsData) == 188, "FlightSettingsData layout check");
 
 // --- Guidance Telemetry Data (sent at ~10 Hz during coast) ---
 typedef struct __attribute__((packed))
@@ -1532,7 +1543,7 @@ static_assert(sizeof(GuidanceTelemData) == 15, "GuidanceTelemData must be 15 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 1;           // bumped from old NVS struct on format change
+    static constexpr uint8_t  VERSION = 2;           // v2: 4-channel pyro layout, no per-channel ARM
 
     // --- Header ---
     uint32_t magic;
@@ -1546,11 +1557,15 @@ struct __attribute__((packed)) FlightSnapshotData
     uint32_t burnout_elapsed_ms;
 
     // --- Pyro state (safety-critical) ---
+    // "Armed" is no longer snapshotted: with per-fire arming, the ARM
+    // pin is only HIGH momentarily, and a reboot leaves it LOW anyway.
+    // On recovery we re-fire any unfired channel whose trigger condition
+    // is still satisfied.
     uint8_t  pyro_apogee_detected;
-    uint8_t  pyro1_armed;
     uint8_t  pyro1_fired;
-    uint8_t  pyro2_armed;
     uint8_t  pyro2_fired;
+    uint8_t  pyro3_fired;
+    uint8_t  pyro4_fired;
     uint8_t  pad2[3];
 
     // --- Flight references ---

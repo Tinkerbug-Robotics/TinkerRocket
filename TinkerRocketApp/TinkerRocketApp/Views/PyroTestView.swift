@@ -60,7 +60,7 @@ struct PyroTestView: View {
     @State private var camera = SlowMoCameraManager()
 
     private var continuity: Bool {
-        channel == 1 ? device.telemetry.pyro1_cont : device.telemetry.pyro2_cont
+        device.telemetry.pyroCont(channel: channel)
     }
 
     var body: some View {

@@ -109,13 +109,22 @@ struct config
     static constexpr uint32_t RUNCAM_BAUD = 115200;
 
     // ### Pyro Channel Pins ###
-    static constexpr uint8_t PYRO1_ARM_PIN  = 14;
-    static constexpr uint8_t PYRO1_FIRE_PIN = 15;
-    static constexpr uint8_t PYRO1_CONT_PIN = 16;
-    static constexpr uint8_t PYRO2_ARM_PIN  = 22;
-    static constexpr uint8_t PYRO2_FIRE_PIN = 18;
-    static constexpr uint8_t PYRO2_CONT_PIN = 19;
-    static constexpr uint32_t PYRO_FIRE_DURATION_MS = 500;
+    // New PCB: one shared arming FET feeds all four squib drivers.
+    // ARM is raised only momentarily — for the PRELAUNCH continuity
+    // check and again during a fire pulse — never latched in flight.
+    static constexpr uint8_t PYRO_ARM_PIN   = 14;
+    static constexpr uint8_t PYRO1_CONT_PIN = 15;
+    static constexpr uint8_t PYRO1_FIRE_PIN = 16;
+    static constexpr uint8_t PYRO2_CONT_PIN = 18;
+    static constexpr uint8_t PYRO2_FIRE_PIN = 19;
+    static constexpr uint8_t PYRO3_CONT_PIN = 38;
+    static constexpr uint8_t PYRO3_FIRE_PIN = 34;
+    static constexpr uint8_t PYRO4_CONT_PIN = 51;
+    static constexpr uint8_t PYRO4_FIRE_PIN = 50;
+    static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 500;
+    // Time between raising ARM and reading CONT / pulsing FIRE, giving
+    // the upstream arming FET its turn-on settle margin.
+    static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
 
     // ### Servo Controls (placeholder pins) ###
     // Set these to valid GPIOs for your board.

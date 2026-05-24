@@ -544,13 +544,10 @@ static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
 static bool    cfg_guidance_en  = false;
 static uint8_t cfg_camera_type  = CAM_TYPE_RUNCAM;  // default: RunCam
-// Pyro config cache
-static bool    cfg_pyro1_enabled = false;
-static uint8_t cfg_pyro1_trigger_mode = 0;
-static float   cfg_pyro1_trigger_value = 0.0f;
-static bool    cfg_pyro2_enabled = false;
-static uint8_t cfg_pyro2_trigger_mode = 0;
-static float   cfg_pyro2_trigger_value = 0.0f;
+// Pyro config cache (4 channels on new PCB)
+static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
+static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
+static float   cfg_pyro_trigger_value[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 // Device identity (loaded from NVS "identity" namespace)
 static char    unit_id_hex[9] = {0};           // last 4 bytes of MAC as "a1b2c3d4"
@@ -1485,7 +1482,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // access during BLE file downloads and tripped the task watchdog
             // on CPU 1 when the I2S Parse backlog got large.
             cfg_guidance_en =
-                (latest_non_sensor.pyro_status & PSF_GUIDANCE_ENABLED) != 0;
+                (latest_non_sensor.apogee_flags & NSF2_GUIDANCE_ENABLED) != 0;
         }
     }
     else if (type == POWER_MSG)
@@ -2042,14 +2039,16 @@ static void sendCurrentConfig()
 
     delay(50);  // let BLE stack drain before next notification
 
-    // Message 2: pyro config ("config_pyro" type)
+    // Message 2: pyro config ("config_pyro" type) — 4 channels
     String p = "{\"type\":\"config_pyro\"";
-    p += ",\"p1e\":"; p += cfg_pyro1_enabled ? "true" : "false";
-    p += ",\"p1m\":"; p += itos(cfg_pyro1_trigger_mode);
-    p += ",\"p1v\":"; p += fmtf(cfg_pyro1_trigger_value, 1);
-    p += ",\"p2e\":"; p += cfg_pyro2_enabled ? "true" : "false";
-    p += ",\"p2m\":"; p += itos(cfg_pyro2_trigger_mode);
-    p += ",\"p2v\":"; p += fmtf(cfg_pyro2_trigger_value, 1);
+    static const char* PE_KEYS[4] = { "p1e", "p2e", "p3e", "p4e" };
+    static const char* PM_KEYS[4] = { "p1m", "p2m", "p3m", "p4m" };
+    static const char* PV_KEYS[4] = { "p1v", "p2v", "p3v", "p4v" };
+    for (int i = 0; i < 4; ++i) {
+        p += ",\""; p += PE_KEYS[i]; p += "\":"; p += cfg_pyro_enabled[i]      ? "true" : "false";
+        p += ",\""; p += PM_KEYS[i]; p += "\":"; p += itos(cfg_pyro_trigger_mode[i]);
+        p += ",\""; p += PV_KEYS[i]; p += "\":"; p += fmtf(cfg_pyro_trigger_value[i], 1);
+    }
     p += "}";
     ble_app.sendConfigJSON(p);
     ESP_LOGI("CFG", "Sent pyro config readback (%u bytes)", (unsigned)p.length());
@@ -3325,14 +3324,20 @@ static void printStats()
     ble_telem.alt_apogee_flag   = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
     ble_telem.alt_landed_flag   = nsFlagSet(latest_non_sensor.flags, NSF_ALT_LANDED);
     ble_telem.pwr_pin_on        = pwr_pin_on;
-    // Pyro channel status from NonSensorData
-    ble_telem.pyro1_armed = nsFlagSet(latest_non_sensor.flags, NSF_PYRO1_ARMED);
-    ble_telem.pyro2_armed = nsFlagSet(latest_non_sensor.flags, NSF_PYRO2_ARMED);
-    uint8_t ps = latest_non_sensor.pyro_status;
-    ble_telem.pyro1_cont  = (ps & PSF_CH1_CONT) != 0;
-    ble_telem.pyro2_cont  = (ps & PSF_CH2_CONT) != 0;
-    ble_telem.pyro1_fired = (ps & PSF_CH1_FIRED) != 0;
-    ble_telem.pyro2_fired = (ps & PSF_CH2_FIRED) != 0;
+    // Pyro channel status from NonSensorData (single shared armed bit
+    // mirrors the live ARM pin; 4 per-channel cont/fired bits).
+    ble_telem.pyro_armed = nsFlagSet(latest_non_sensor.flags, NSF_PYRO_ARMED);
+    {
+        const uint8_t ps = latest_non_sensor.pyro_status;
+        ble_telem.pyro_cont[0]  = (ps & PSF_CH1_CONT)  != 0;
+        ble_telem.pyro_fired[0] = (ps & PSF_CH1_FIRED) != 0;
+        ble_telem.pyro_cont[1]  = (ps & PSF_CH2_CONT)  != 0;
+        ble_telem.pyro_fired[1] = (ps & PSF_CH2_FIRED) != 0;
+        ble_telem.pyro_cont[2]  = (ps & PSF_CH3_CONT)  != 0;
+        ble_telem.pyro_fired[2] = (ps & PSF_CH3_FIRED) != 0;
+        ble_telem.pyro_cont[3]  = (ps & PSF_CH4_CONT)  != 0;
+        ble_telem.pyro_fired[3] = (ps & PSF_CH4_FIRED) != 0;
+    }
 
     static uint32_t telem_send_count = 0;
     static uint32_t telem_skip_count = 0;
@@ -3624,23 +3629,30 @@ void initPeripherals()
                  cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                  cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
 
-        // Load cached pyro config from NVS
+        // Load cached pyro config from NVS (4 channels)
         prefs.begin("pyro", true);
         size_t pyro_sz = prefs.getBytesLength("cfg");
         if (pyro_sz == sizeof(PyroConfigData)) {
             PyroConfigData pcfg;
             prefs.getBytes("cfg", &pcfg, sizeof(pcfg));
-            cfg_pyro1_enabled       = pcfg.ch1_enabled;
-            cfg_pyro1_trigger_mode  = pcfg.ch1_trigger_mode;
-            cfg_pyro1_trigger_value = pcfg.ch1_trigger_value;
-            cfg_pyro2_enabled       = pcfg.ch2_enabled;
-            cfg_pyro2_trigger_mode  = pcfg.ch2_trigger_mode;
-            cfg_pyro2_trigger_value = pcfg.ch2_trigger_value;
+            const uint8_t en[4]   = { pcfg.ch1_enabled,      pcfg.ch2_enabled,
+                                      pcfg.ch3_enabled,      pcfg.ch4_enabled };
+            const uint8_t mode[4] = { pcfg.ch1_trigger_mode, pcfg.ch2_trigger_mode,
+                                      pcfg.ch3_trigger_mode, pcfg.ch4_trigger_mode };
+            const float   val[4]  = { pcfg.ch1_trigger_value, pcfg.ch2_trigger_value,
+                                      pcfg.ch3_trigger_value, pcfg.ch4_trigger_value };
+            for (int i = 0; i < 4; ++i) {
+                cfg_pyro_enabled[i]       = en[i];
+                cfg_pyro_trigger_mode[i]  = mode[i];
+                cfg_pyro_trigger_value[i] = val[i];
+            }
         }
         prefs.end();
-        ESP_LOGI("CFG", "NVS Pyro: ch1=%u/%u/%.1f ch2=%u/%u/%.1f",
-                 cfg_pyro1_enabled, cfg_pyro1_trigger_mode, (double)cfg_pyro1_trigger_value,
-                 cfg_pyro2_enabled, cfg_pyro2_trigger_mode, (double)cfg_pyro2_trigger_value);
+        ESP_LOGI("CFG", "NVS Pyro: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+                 cfg_pyro_enabled[0], cfg_pyro_trigger_mode[0], (double)cfg_pyro_trigger_value[0],
+                 cfg_pyro_enabled[1], cfg_pyro_trigger_mode[1], (double)cfg_pyro_trigger_value[1],
+                 cfg_pyro_enabled[2], cfg_pyro_trigger_mode[2], (double)cfg_pyro_trigger_value[2],
+                 cfg_pyro_enabled[3], cfg_pyro_trigger_mode[3], (double)cfg_pyro_trigger_value[3]);
     }
 
     if (config::USE_LORA_RADIO)
@@ -4724,18 +4736,23 @@ static void loop_oc()
         }
         else if (ble_cmd == 34)
         {
-            // Pyro config: [ch1_en:1][ch1_mode:1][ch1_val:4f][ch2_en:1][ch2_mode:1][ch2_val:4f] = 12 bytes
+            // Pyro config: 4 × {enabled:1, mode:1, value:4f} = 24 bytes
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(PyroConfigData)) {
                 PyroConfigData pcfg;
                 memcpy(&pcfg, payload, sizeof(pcfg));
-                cfg_pyro1_enabled       = pcfg.ch1_enabled;
-                cfg_pyro1_trigger_mode  = pcfg.ch1_trigger_mode;
-                cfg_pyro1_trigger_value = pcfg.ch1_trigger_value;
-                cfg_pyro2_enabled       = pcfg.ch2_enabled;
-                cfg_pyro2_trigger_mode  = pcfg.ch2_trigger_mode;
-                cfg_pyro2_trigger_value = pcfg.ch2_trigger_value;
+                const uint8_t en[4]   = { pcfg.ch1_enabled,      pcfg.ch2_enabled,
+                                          pcfg.ch3_enabled,      pcfg.ch4_enabled };
+                const uint8_t mode[4] = { pcfg.ch1_trigger_mode, pcfg.ch2_trigger_mode,
+                                          pcfg.ch3_trigger_mode, pcfg.ch4_trigger_mode };
+                const float   val[4]  = { pcfg.ch1_trigger_value, pcfg.ch2_trigger_value,
+                                          pcfg.ch3_trigger_value, pcfg.ch4_trigger_value };
+                for (int i = 0; i < 4; ++i) {
+                    cfg_pyro_enabled[i]       = en[i];
+                    cfg_pyro_trigger_mode[i]  = mode[i];
+                    cfg_pyro_trigger_value[i] = val[i];
+                }
                 // Queue for FC via I2C
                 memcpy(pending_config_data, &pcfg, sizeof(pcfg));
                 pending_config_data_len = sizeof(pcfg);
@@ -4746,9 +4763,11 @@ static void loop_oc()
                 prefs.begin("pyro", false);
                 size_t written = prefs.putBytes("cfg", &pcfg, sizeof(pcfg));
                 prefs.end();
-                ESP_LOGI("BLE", "Pyro config: ch1=%u/%u/%.1f ch2=%u/%u/%.1f (NVS wrote %u bytes)",
+                ESP_LOGI("BLE", "Pyro config: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f (NVS wrote %u bytes)",
                          pcfg.ch1_enabled, pcfg.ch1_trigger_mode, (double)pcfg.ch1_trigger_value,
                          pcfg.ch2_enabled, pcfg.ch2_trigger_mode, (double)pcfg.ch2_trigger_value,
+                         pcfg.ch3_enabled, pcfg.ch3_trigger_mode, (double)pcfg.ch3_trigger_value,
+                         pcfg.ch4_enabled, pcfg.ch4_trigger_mode, (double)pcfg.ch4_trigger_value,
                          (unsigned)written);
             } else {
                 ESP_LOGW("BLE", "Pyro config: payload too short (%u < %u)",
@@ -4757,28 +4776,35 @@ static void loop_oc()
         }
         else if (ble_cmd == 35)
         {
-            // Pyro continuity test — 1 byte payload: channel (1 or 2)
+            // Pyro continuity test — 1 byte payload: channel (1..4)
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
-            // Pack channel into config data so FC knows which channel
-            pending_config_data[0] = ch;
-            pending_config_data_len = 1;
-            pending_config_msg_type = PYRO_CONT_TEST;
-            setPendingCommand(PYRO_CONT_TEST);
-            ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
+            if (ch < 1 || ch > 4) {
+                ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else {
+                pending_config_data[0] = ch;
+                pending_config_data_len = 1;
+                pending_config_msg_type = PYRO_CONT_TEST;
+                setPendingCommand(PYRO_CONT_TEST);
+                ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
+            }
         }
         else if (ble_cmd == 36)
         {
-            // Pyro test fire — 1 byte payload: channel (1 or 2)
+            // Pyro test fire — 1 byte payload: channel (1..4)
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
-            pending_config_data[0] = ch;
-            pending_config_data_len = 1;
-            pending_config_msg_type = PYRO_FIRE_TEST;
-            setPendingCommand(PYRO_FIRE_TEST);
-            ESP_LOGI("BLE", "Pyro test fire CH%u", ch);
+            if (ch < 1 || ch > 4) {
+                ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else {
+                pending_config_data[0] = ch;
+                pending_config_data_len = 1;
+                pending_config_msg_type = PYRO_FIRE_TEST;
+                setPendingCommand(PYRO_FIRE_TEST);
+                ESP_LOGI("BLE", "Pyro test fire CH%u", ch);
+            }
         }
         // ---- Device Identity Commands ----
         else if (ble_cmd == 40)

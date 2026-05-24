@@ -179,9 +179,10 @@ final class MessageParserTests: XCTestCase {
     private func leI16(_ v: Int16) -> [UInt8] { leU16(UInt16(bitPattern: v)) }
     private func leF32(_ v: Float) -> [UInt8] { leU32(v.bitPattern) }
 
-    /// Build a known 176-byte FlightSettingsData payload and verify the decode
-    /// + JSON mapping. Offsets here must match the C++ struct (locked by the
-    /// FlightSettingsData_Layout test in tests_cpp).
+    /// Build a known 188-byte FlightSettingsData payload (post 4-channel
+    /// pyro layout) and verify the decode + JSON mapping. Offsets here must
+    /// match the C++ struct (locked by the FlightSettingsData_Layout test
+    /// in tests_cpp).
     func testFlightSettingsDecode() throws {
         var p: [UInt8] = []
         p += leU32(123456)        // time_us @0
@@ -211,15 +212,17 @@ final class MessageParserTests: XCTestCase {
         p.append(2)               // camera_type @75 (runcam)
         p.append(1); p.append(0); p += leF32(1.5)   // pyro ch1 @76: enabled, time mode, 1.5 s
         p.append(1); p.append(1); p += leF32(100)    // pyro ch2 @82: enabled, altitude mode, 100 m
-        let sha = Array("abc1234".utf8)              // fw_git_sha @88 (12 bytes)
+        p.append(0); p.append(0); p += leF32(0)      // pyro ch3 @88: disabled
+        p.append(1); p.append(0); p += leF32(2.5)    // pyro ch4 @94: enabled, time mode, 2.5 s
+        let sha = Array("abc1234".utf8)              // fw_git_sha @100 (12 bytes)
         p += sha + [UInt8](repeating: 0, count: 12 - sha.count)
-        p.append(2)               // num_waypoints @100
-        p += [0, 0, 0]            // _pad @101
-        p += leF32(0.5); p += leF32(0); p.append(1)      // wp0 @104: 0.5 s, 0°, null_rate
+        p.append(2)               // num_waypoints @112
+        p += [0, 0, 0]            // _pad @113
+        p += leF32(0.5); p += leF32(0); p.append(1)      // wp0 @116: 0.5 s, 0°, null_rate
         p += leF32(1.0); p += leF32(180); p.append(0)    // wp1: 1.0 s, 180°, angle
         p += [UInt8](repeating: 0, count: 6 * 9)         // remaining 6 zero waypoint slots
 
-        XCTAssertEqual(p.count, 176)
+        XCTAssertEqual(p.count, 188)
 
         let raw = try FlightSettingsData(from: Data(p))
         XCTAssertEqual(raw.time_us, 123456)
@@ -251,12 +254,12 @@ final class MessageParserTests: XCTestCase {
         XCTAssertEqual(raw.servo_min_us, 1250)
         XCTAssertEqual(raw.servo_max_us, 1750)
         XCTAssertEqual(raw.camera_type, 2)
-        XCTAssertTrue(raw.pyro1_enabled)
-        XCTAssertEqual(raw.pyro1_trigger_mode, 0)
-        XCTAssertEqual(raw.pyro1_trigger_value, 1.5, accuracy: 1e-4)
-        XCTAssertTrue(raw.pyro2_enabled)
-        XCTAssertEqual(raw.pyro2_trigger_mode, 1)
-        XCTAssertEqual(raw.pyro2_trigger_value, 100, accuracy: 1e-4)
+        XCTAssertEqual(raw.pyro_enabled,        [true, true, false, true])
+        XCTAssertEqual(raw.pyro_trigger_mode,   [0, 1, 0, 0])
+        XCTAssertEqual(raw.pyro_trigger_value[0], 1.5, accuracy: 1e-4)
+        XCTAssertEqual(raw.pyro_trigger_value[1], 100, accuracy: 1e-4)
+        XCTAssertEqual(raw.pyro_trigger_value[2], 0,   accuracy: 1e-4)
+        XCTAssertEqual(raw.pyro_trigger_value[3], 2.5, accuracy: 1e-4)
         XCTAssertEqual(raw.fw_git_sha, "abc1234")
         XCTAssertEqual(raw.num_waypoints, 2)
         XCTAssertEqual(raw.waypoints.count, 2)
@@ -280,9 +283,12 @@ final class MessageParserTests: XCTestCase {
         XCTAssertEqual(s.pyro.ch1.trigger_mode, "time_after_apogee")
         XCTAssertEqual(s.pyro.ch1.trigger_value, 1.5, accuracy: 1e-6)
         XCTAssertEqual(s.pyro.ch2.trigger_mode, "altitude_on_descent")
+        XCTAssertFalse(s.pyro.ch3.enabled)
+        XCTAssertTrue(s.pyro.ch4.enabled)
+        XCTAssertEqual(s.pyro.ch4.trigger_value, 2.5, accuracy: 1e-6)
         XCTAssertEqual(s.imu.gyro_fs_dps, 4000)
 
         // Undersized payload is rejected.
-        XCTAssertThrowsError(try FlightSettingsData(from: Data(p.prefix(175))))
+        XCTAssertThrowsError(try FlightSettingsData(from: Data(p.prefix(187))))
     }
 }

@@ -565,17 +565,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(33, payload: Data([cameraType]))
     }
 
-    func sendPyroConfig(ch1Enabled: Bool, ch1Mode: UInt8, ch1Value: Float,
-                        ch2Enabled: Bool, ch2Mode: UInt8, ch2Value: Float) {
+    /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
+    /// Wire layout (24 bytes): 4 × {u8 enabled, u8 mode, f32 value}.
+    func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) {
+        precondition(channels.count == 4, "pyro config requires exactly 4 channels")
         var payload = Data()
-        payload.append(ch1Enabled ? 0x01 : 0x00)
-        payload.append(ch1Mode)
-        var v1 = ch1Value
-        payload.append(Data(bytes: &v1, count: 4))
-        payload.append(ch2Enabled ? 0x01 : 0x00)
-        payload.append(ch2Mode)
-        var v2 = ch2Value
-        payload.append(Data(bytes: &v2, count: 4))
+        for ch in channels {
+            payload.append(ch.enabled ? 0x01 : 0x00)
+            payload.append(ch.mode)
+            var v = ch.value
+            payload.append(Data(bytes: &v, count: 4))
+        }
         sendRawCommand(34, payload: payload)
     }
 
@@ -1093,13 +1093,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 cfg.pyro2Enabled = existing.pyro2Enabled
                 cfg.pyro2TriggerMode = existing.pyro2TriggerMode
                 cfg.pyro2TriggerValue = existing.pyro2TriggerValue
+                cfg.pyro3Enabled = existing.pyro3Enabled
+                cfg.pyro3TriggerMode = existing.pyro3TriggerMode
+                cfg.pyro3TriggerValue = existing.pyro3TriggerValue
+                cfg.pyro4Enabled = existing.pyro4Enabled
+                cfg.pyro4TriggerMode = existing.pyro4TriggerMode
+                cfg.pyro4TriggerValue = existing.pyro4TriggerValue
             }
             self.rocketConfig = cfg
             triggerAutoChannelSelectIfNeeded()
             return
         }
 
-        // Pyro config readback: "type":"config_pyro"
+        // Pyro config readback: "type":"config_pyro" (4 channels)
         if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            dict["type"] as? String == "config_pyro" {
             var cfg = self.rocketConfig ?? RocketConfig()
@@ -1109,6 +1115,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.pyro2Enabled = dict["p2e"] as? Bool ?? cfg.pyro2Enabled
             cfg.pyro2TriggerMode = UInt8(dict["p2m"] as? Int ?? Int(cfg.pyro2TriggerMode))
             cfg.pyro2TriggerValue = parseFloat(dict["p2v"]) ?? cfg.pyro2TriggerValue
+            cfg.pyro3Enabled = dict["p3e"] as? Bool ?? cfg.pyro3Enabled
+            cfg.pyro3TriggerMode = UInt8(dict["p3m"] as? Int ?? Int(cfg.pyro3TriggerMode))
+            cfg.pyro3TriggerValue = parseFloat(dict["p3v"]) ?? cfg.pyro3TriggerValue
+            cfg.pyro4Enabled = dict["p4e"] as? Bool ?? cfg.pyro4Enabled
+            cfg.pyro4TriggerMode = UInt8(dict["p4m"] as? Int ?? Int(cfg.pyro4TriggerMode))
+            cfg.pyro4TriggerValue = parseFloat(dict["p4v"]) ?? cfg.pyro4TriggerValue
             self.rocketConfig = cfg
             return
         }

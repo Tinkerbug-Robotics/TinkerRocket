@@ -107,13 +107,20 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var rollWaypoints: [RollWaypoint] = []
 
     // MARK: Pyro (per-airframe; auto-pushed on connect — arming stays a
-    // separate explicit action, never driven by the profile).
+    // separate explicit action, never driven by the profile). New PCB
+    // has 4 channels sharing a single ARM FET.
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0
     var pyro2Enabled: Bool = false
     var pyro2TriggerMode: UInt8 = 0
     var pyro2TriggerValue: Float = 100.0
+    var pyro3Enabled: Bool = false
+    var pyro3TriggerMode: UInt8 = 0
+    var pyro3TriggerValue: Float = 0.0
+    var pyro4Enabled: Bool = false
+    var pyro4TriggerMode: UInt8 = 0
+    var pyro4TriggerValue: Float = 0.0
 
     // MARK: Recovery (issue #156) — descent profile for landing-point
     // prediction and drift-cast.  Stored per-airframe so different rockets
@@ -192,6 +199,12 @@ extension RocketProfile {
         pyro2Enabled = try c.decodeIfPresent(Bool.self, forKey: .pyro2Enabled) ?? defaults.pyro2Enabled
         pyro2TriggerMode = try c.decodeIfPresent(UInt8.self, forKey: .pyro2TriggerMode) ?? defaults.pyro2TriggerMode
         pyro2TriggerValue = try c.decodeIfPresent(Float.self, forKey: .pyro2TriggerValue) ?? defaults.pyro2TriggerValue
+        pyro3Enabled = try c.decodeIfPresent(Bool.self, forKey: .pyro3Enabled) ?? defaults.pyro3Enabled
+        pyro3TriggerMode = try c.decodeIfPresent(UInt8.self, forKey: .pyro3TriggerMode) ?? defaults.pyro3TriggerMode
+        pyro3TriggerValue = try c.decodeIfPresent(Float.self, forKey: .pyro3TriggerValue) ?? defaults.pyro3TriggerValue
+        pyro4Enabled = try c.decodeIfPresent(Bool.self, forKey: .pyro4Enabled) ?? defaults.pyro4Enabled
+        pyro4TriggerMode = try c.decodeIfPresent(UInt8.self, forKey: .pyro4TriggerMode) ?? defaults.pyro4TriggerMode
+        pyro4TriggerValue = try c.decodeIfPresent(Float.self, forKey: .pyro4TriggerValue) ?? defaults.pyro4TriggerValue
 
         drogueRateFps = try c.decodeIfPresent(Double.self, forKey: .drogueRateFps) ?? defaults.drogueRateFps
         mainRateFps = try c.decodeIfPresent(Double.self, forKey: .mainRateFps) ?? defaults.mainRateFps

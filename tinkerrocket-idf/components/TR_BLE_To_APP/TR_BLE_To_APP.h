@@ -84,13 +84,12 @@ public:
         // Power rail state
         bool pwr_pin_on;        // true = FlightComputer + sensors powered on
 
-        // Pyro channel status
-        bool pyro1_armed;
-        bool pyro1_cont;        // true = continuity OK (load present)
-        bool pyro1_fired;
-        bool pyro2_armed;
-        bool pyro2_cont;
-        bool pyro2_fired;
+        // Pyro channel status — new PCB shares one ARM FET across 4
+        // channels, so "armed" is a single global bit mirroring the live
+        // ARM-pin state (HIGH only during a cont test or fire pulse).
+        bool pyro_armed;
+        bool pyro_cont[4];      // true = continuity OK (load present, closed)
+        bool pyro_fired[4];
 
         // Source rocket identity (base station only — for multi-rocket demux)
         uint8_t source_rocket_id;       // 0 = not set (direct connection)

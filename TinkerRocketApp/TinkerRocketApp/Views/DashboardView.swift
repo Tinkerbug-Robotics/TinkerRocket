@@ -1381,26 +1381,17 @@ struct PyroChannelsView: View {
             Text("Pyro Channels")
                 .font(.headline)
 
-            HStack(spacing: 10) {
-                pyroTile(
-                    channel: 1,
-                    enabled: device.rocketConfig?.pyro1Enabled ?? false,
-                    armed: device.telemetry.pyro1_armed,
-                    continuity: device.telemetry.pyro1_cont,
-                    fired: device.telemetry.pyro1_fired,
-                    mode: device.rocketConfig?.pyro1TriggerMode ?? 0,
-                    value: device.rocketConfig?.pyro1TriggerValue ?? 0
-                )
-
-                pyroTile(
-                    channel: 2,
-                    enabled: device.rocketConfig?.pyro2Enabled ?? false,
-                    armed: device.telemetry.pyro2_armed,
-                    continuity: device.telemetry.pyro2_cont,
-                    fired: device.telemetry.pyro2_fired,
-                    mode: device.rocketConfig?.pyro2TriggerMode ?? 0,
-                    value: device.rocketConfig?.pyro2TriggerValue ?? 0
-                )
+            // 2x2 grid for the 4 channels. The global "armed" bit (single
+            // shared ARM FET) drives the cont badge visibility for every tile.
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    pyroTileForChannel(1)
+                    pyroTileForChannel(2)
+                }
+                HStack(spacing: 10) {
+                    pyroTileForChannel(3)
+                    pyroTileForChannel(4)
+                }
             }
         }
         .padding()
@@ -1416,6 +1407,30 @@ struct PyroChannelsView: View {
         )) { item in
             PyroTestView(device: device, channel: item.value)
         }
+    }
+
+    /// Pull the right enabled/mode/value for the channel from rocketConfig.
+    private func pyroChannelConfig(_ ch: Int) -> (enabled: Bool, mode: UInt8, value: Float) {
+        guard let cfg = device.rocketConfig else { return (false, 0, 0) }
+        switch ch {
+        case 1: return (cfg.pyro1Enabled, cfg.pyro1TriggerMode, cfg.pyro1TriggerValue)
+        case 2: return (cfg.pyro2Enabled, cfg.pyro2TriggerMode, cfg.pyro2TriggerValue)
+        case 3: return (cfg.pyro3Enabled, cfg.pyro3TriggerMode, cfg.pyro3TriggerValue)
+        case 4: return (cfg.pyro4Enabled, cfg.pyro4TriggerMode, cfg.pyro4TriggerValue)
+        default: return (false, 0, 0)
+        }
+    }
+
+    private func pyroTileForChannel(_ ch: Int) -> some View {
+        let cfg = pyroChannelConfig(ch)
+        return pyroTile(
+            channel: ch,
+            enabled: cfg.enabled,
+            armed: device.telemetry.pyro_armed,
+            continuity: device.telemetry.pyroCont(channel: ch),
+            fired: device.telemetry.pyroFired(channel: ch),
+            mode: cfg.mode,
+            value: cfg.value)
     }
 
     func pyroTile(channel: Int, enabled: Bool, armed: Bool,
@@ -1546,14 +1561,24 @@ struct PyroConfigSheet: View {
 
     func loadCurrent() {
         guard let cfg = device.rocketConfig else { return }
-        if channel == 1 {
+        switch channel {
+        case 1:
             enabled = cfg.pyro1Enabled
             triggerMode = Int(cfg.pyro1TriggerMode)
             triggerValue = formatTriggerValue(cfg.pyro1TriggerValue, mode: triggerMode)
-        } else {
+        case 2:
             enabled = cfg.pyro2Enabled
             triggerMode = Int(cfg.pyro2TriggerMode)
             triggerValue = formatTriggerValue(cfg.pyro2TriggerValue, mode: triggerMode)
+        case 3:
+            enabled = cfg.pyro3Enabled
+            triggerMode = Int(cfg.pyro3TriggerMode)
+            triggerValue = formatTriggerValue(cfg.pyro3TriggerValue, mode: triggerMode)
+        case 4:
+            enabled = cfg.pyro4Enabled
+            triggerMode = Int(cfg.pyro4TriggerMode)
+            triggerValue = formatTriggerValue(cfg.pyro4TriggerValue, mode: triggerMode)
+        default: break
         }
     }
 
@@ -1573,20 +1598,32 @@ struct PyroConfigSheet: View {
     func saveAndSend() {
         let val = parseTriggerValue(triggerValue, mode: triggerMode)
         guard var cfg = device.rocketConfig else { return }
-        if channel == 1 {
+        switch channel {
+        case 1:
             cfg.pyro1Enabled = enabled
             cfg.pyro1TriggerMode = UInt8(triggerMode)
             cfg.pyro1TriggerValue = val
-        } else {
+        case 2:
             cfg.pyro2Enabled = enabled
             cfg.pyro2TriggerMode = UInt8(triggerMode)
             cfg.pyro2TriggerValue = val
+        case 3:
+            cfg.pyro3Enabled = enabled
+            cfg.pyro3TriggerMode = UInt8(triggerMode)
+            cfg.pyro3TriggerValue = val
+        case 4:
+            cfg.pyro4Enabled = enabled
+            cfg.pyro4TriggerMode = UInt8(triggerMode)
+            cfg.pyro4TriggerValue = val
+        default: return
         }
         device.rocketConfig = cfg
-        device.sendPyroConfig(
-            ch1Enabled: cfg.pyro1Enabled, ch1Mode: cfg.pyro1TriggerMode, ch1Value: cfg.pyro1TriggerValue,
-            ch2Enabled: cfg.pyro2Enabled, ch2Mode: cfg.pyro2TriggerMode, ch2Value: cfg.pyro2TriggerValue
-        )
+        device.sendPyroConfig(channels: [
+            (cfg.pyro1Enabled, cfg.pyro1TriggerMode, cfg.pyro1TriggerValue),
+            (cfg.pyro2Enabled, cfg.pyro2TriggerMode, cfg.pyro2TriggerValue),
+            (cfg.pyro3Enabled, cfg.pyro3TriggerMode, cfg.pyro3TriggerValue),
+            (cfg.pyro4Enabled, cfg.pyro4TriggerMode, cfg.pyro4TriggerValue),
+        ])
         // Persist pyro config to the active rocket profile too (#132) so the
         // connect-time syncer doesn't push a stale value back over this edit.
         if let id = store.activeId {
@@ -1597,6 +1634,12 @@ struct PyroConfigSheet: View {
                 $0.pyro2Enabled = cfg.pyro2Enabled
                 $0.pyro2TriggerMode = cfg.pyro2TriggerMode
                 $0.pyro2TriggerValue = cfg.pyro2TriggerValue
+                $0.pyro3Enabled = cfg.pyro3Enabled
+                $0.pyro3TriggerMode = cfg.pyro3TriggerMode
+                $0.pyro3TriggerValue = cfg.pyro3TriggerValue
+                $0.pyro4Enabled = cfg.pyro4Enabled
+                $0.pyro4TriggerMode = cfg.pyro4TriggerMode
+                $0.pyro4TriggerValue = cfg.pyro4TriggerValue
             }
         }
     }
