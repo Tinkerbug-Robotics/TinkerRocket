@@ -39,10 +39,15 @@ fi
 
 cd "$PROJECT_DIR"
 
-# Set target if not already done
+# Set target if not already done. Read the desired target from
+# sdkconfig.defaults so each project picks its own chip (OC/BS=esp32s3,
+# FC=esp32p4) without idf.py silently defaulting to esp32s3 and producing
+# a binary for the wrong target.
 if [ ! -f "sdkconfig" ]; then
-    echo "First build — setting target to esp32s3..."
-    idf.py set-target esp32s3
+    TARGET="$(grep -E '^CONFIG_IDF_TARGET=' sdkconfig.defaults 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | head -1)"
+    TARGET="${TARGET:-esp32s3}"
+    echo "First build — setting target to ${TARGET}..."
+    idf.py set-target "${TARGET}"
 fi
 
 case "$COMMAND" in

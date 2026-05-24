@@ -14,6 +14,9 @@ else()
     list(APPEND EXCLUDE_COMPONENTS TR_GuidancePN)
     add_compile_definitions(TR_GUIDANCE_AVAILABLE=0)
 endif()
+# NB: main/CMakeLists.txt runs the same EXISTS check to decide whether to
+# list TR_GuidancePN or TR_GuidancePN_Stub in its REQUIRES. Kept in sync
+# by hand — both checks must agree.
 
 # Exclude BLE and LoRa components not used by FlightComputer
 list(APPEND EXCLUDE_COMPONENTS TR_BLE_To_APP TR_LoRa_Comms TR_INA230)
