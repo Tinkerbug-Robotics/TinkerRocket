@@ -22,8 +22,10 @@
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
+#include <esp_private/gpio.h>      // gpio_func_sel
 #include <rom/gpio.h>              // esp_rom_gpio_connect_out_signal
 #include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
+#include <soc/io_mux_reg.h>        // PIN_FUNC_GPIO
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <nvs_flash.h>
@@ -644,12 +646,45 @@ static inline float pyroChValue(int ch_idx)
 // spot.)
 static inline bool pyroContFromRaw(int raw) { return raw == 0; }
 
+// Reset a pyro OUTPUT pad to a known LOW-driven state WITHOUT going through
+// gpio_reset_pin(), which briefly enables the internal pull-up (~50 kΩ) as
+// part of its `GPIO_MODE_DISABLE` config. On the new pyro PCB the gate
+// drivers are DTC123J-style pre-biased NPNs (internal 2.2 kΩ base resistor
+// + 47 kΩ B-E pull-down): a 50 kΩ pull-up on the GPIO biases the base well
+// above Vbe for the microseconds-long window between gpio_reset_pin's
+// pull-up config and our subsequent pull-up-disable config — long enough to
+// momentarily turn on the ARM / FIRE MOSFETs and twitch the squib rail at
+// boot. This sequence pre-loads GPIO_OUT to 0, detaches any peripheral
+// output signal, selects plain-GPIO function on the IO MUX, and only then
+// enables output drive — so the pad goes from high-Z directly to driving 0
+// with no pull-up window.
+static void safePyroOutputInit(gpio_num_t pin)
+{
+    // 1. Pre-load output register to 0. No-op until output is enabled.
+    gpio_set_level(pin, 0);
+    // 2. Detach any peripheral output signal routed to this pad (e.g.,
+    //    SPI2 default on pins 14-19 after spi_bus_initialize()).
+    esp_rom_gpio_connect_out_signal(pin, SIG_GPIO_OUT_IDX, false, false);
+    // 3. Force IO MUX function back to plain GPIO.
+    gpio_func_sel(pin, PIN_FUNC_GPIO);
+    // 4. Now enable output drive with no pulls. Pad transitions from high-Z
+    //    straight to driving 0 (because step 1 staged a 0 in GPIO_OUT).
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = 1ULL << pin;
+    cfg.mode         = GPIO_MODE_OUTPUT;
+    cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&cfg);
+    // Belt + suspenders.
+    gpio_set_level(pin, 0);
+}
+
 static void initPyroPins()
 {
-    // Drive PYRO_ARM and the four FIRE pins as outputs, start LOW (safe).
-    // gpio_reset_pin() reclaims the IO MUX from any peripheral default —
-    // mandatory on ESP32-P4 because several of these pins (14-19) default
-    // to SPI2/SPI3 IO MUX. CONT inputs get the same reset for parity.
+    // PYRO_ARM and the four FIRE pins: safe-driven outputs at LOW. The
+    // safePyroOutputInit() helper avoids gpio_reset_pin's pull-up trap that
+    // would otherwise glitch the gate drivers at boot.
     const gpio_num_t output_pins[] = {
         (gpio_num_t)config::PYRO_ARM_PIN,
         (gpio_num_t)config::PYRO1_FIRE_PIN,
@@ -658,18 +693,14 @@ static void initPyroPins()
         (gpio_num_t)config::PYRO4_FIRE_PIN,
     };
     for (gpio_num_t pin : output_pins) {
-        gpio_reset_pin(pin);
-        gpio_config_t cfg = {};
-        cfg.pin_bit_mask = 1ULL << pin;
-        cfg.mode         = GPIO_MODE_OUTPUT;
-        cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-        cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        gpio_config(&cfg);
-        gpio_set_level(pin, 0);
+        safePyroOutputInit(pin);
     }
     pyro_arm_pin_state = false;
 
-    // CONTINUITY pins: input (external pull-up on PCB).
+    // CONTINUITY pins: input (external pull on PCB). gpio_reset_pin() is
+    // safe here — the input pad has no gate driver downstream, just the
+    // CONT divider, so a brief internal pull-up doesn't drive anything
+    // dangerous. The subsequent gpio_config() clears it.
     for (uint8_t pin : PYRO_CONT_PINS) {
         gpio_reset_pin((gpio_num_t)pin);
         gpio_config_t cfg = {};
