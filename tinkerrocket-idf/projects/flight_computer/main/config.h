@@ -13,8 +13,14 @@ struct config
     static constexpr uint32_t SPI_SPEED = 10'000'000; // 10 MHz
 
     // ### GNSS Serial Pins ###
-    static constexpr uint8_t GNSS_RX = 3;  // 3
-    static constexpr uint8_t GNSS_TX = 4;
+    // New PCB has the schematic-labeled RX/TX swapped at the GPS module.
+    // Driver auto-detects the swap as a fallback, but starting with the
+    // wrong orientation costs ~30 s of baud-cycling on every boot.
+    // Pre-swap here so the first probe matches the wiring.
+    //   FC GPIO 4 -> GPS module TX (FC receives)
+    //   FC GPIO 3 -> GPS module RX (FC transmits)
+    static constexpr uint8_t GNSS_RX = 4;
+    static constexpr uint8_t GNSS_TX = 3;
     // Optional GNSS control pins. Set to -1 if not wired.
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
