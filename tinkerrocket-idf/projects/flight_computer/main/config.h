@@ -37,11 +37,7 @@ struct config
     // ### Sensors to use ###
     static constexpr bool USE_BMP585 = true;
     static constexpr bool USE_MMC5983MA = true;
-    // BENCH-ONLY: GNSS bootstrap blocks the init thread cycling through
-    // baud rates when the receiver is unpowered/unresponsive — preventing
-    // the FC from ever reaching READY. Flip to true before merging — the
-    // flight build needs GNSS.
-    static constexpr bool USE_GNSS = false;
+    static constexpr bool USE_GNSS = true;
     static constexpr bool USE_ISM6HG256 = true;
     // When USE_MMC5983MA is true, the magnetometer slot first probes for
     // an IIS2MDC over I2C; if not detected, the MMC5983MA SPI path runs.

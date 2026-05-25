@@ -3755,15 +3755,10 @@ static void loop_fc()
             }
             case READY:
             {
-                // BENCH-ONLY: GNSS-fix requirement bypassed so pyro can be
-                // tested on the bench without a working GPS module. REVERT
-                // before merging — `gnss_ready` must gate this transition
-                // in any flight build.
-                const bool gnss_ready = true;
-                // const bool gnss_ready = gnss_started &&
-                //                         (now_ms > valid_gnss_start_millis + 3000U) &&
-                //                         have_gnss_si &&
-                //                         (gnss_latest_si.num_sats >= 4U);
+                const bool gnss_ready = gnss_started &&
+                                        (now_ms > valid_gnss_start_millis + 3000U) &&
+                                        have_gnss_si &&
+                                        (gnss_latest_si.num_sats >= 4U);
                 if (out_ready && gnss_ready)
                 {
                     rocket_state = PRELAUNCH;
