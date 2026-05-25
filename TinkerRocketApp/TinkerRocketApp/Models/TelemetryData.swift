@@ -110,14 +110,29 @@ struct TelemetryData: Codable {
     var data_status: DataStatus = .live
     var data_age_ms: UInt32 = 0      // only meaningful when .stale
 
-    // Pyro channel status (packed bitfield from "ps" JSON key, decoded in init)
+    // Pyro channel status (packed bitfield from "ps" JSON key, decoded in init).
+    // New PCB: bit 0 = global armed (single shared ARM FET), then per-channel
+    // (cont, fired) pairs for channels 1..4. 9 bits total.
     var pyro_status_bits: Int = 0
-    var pyro1_armed: Bool { (pyro_status_bits & 0x01) != 0 }
-    var pyro1_cont: Bool  { (pyro_status_bits & 0x02) != 0 }
-    var pyro1_fired: Bool { (pyro_status_bits & 0x04) != 0 }
-    var pyro2_armed: Bool { (pyro_status_bits & 0x08) != 0 }
-    var pyro2_cont: Bool  { (pyro_status_bits & 0x10) != 0 }
-    var pyro2_fired: Bool { (pyro_status_bits & 0x20) != 0 }
+    var pyro_armed: Bool { (pyro_status_bits & 0x001) != 0 }
+    var pyro1_cont:  Bool { (pyro_status_bits & 0x002) != 0 }
+    var pyro1_fired: Bool { (pyro_status_bits & 0x004) != 0 }
+    var pyro2_cont:  Bool { (pyro_status_bits & 0x008) != 0 }
+    var pyro2_fired: Bool { (pyro_status_bits & 0x010) != 0 }
+    var pyro3_cont:  Bool { (pyro_status_bits & 0x020) != 0 }
+    var pyro3_fired: Bool { (pyro_status_bits & 0x040) != 0 }
+    var pyro4_cont:  Bool { (pyro_status_bits & 0x080) != 0 }
+    var pyro4_fired: Bool { (pyro_status_bits & 0x100) != 0 }
+    func pyroCont(channel: Int) -> Bool {
+        switch channel { case 1: return pyro1_cont; case 2: return pyro2_cont
+                          case 3: return pyro3_cont; case 4: return pyro4_cont
+                          default: return false }
+    }
+    func pyroFired(channel: Int) -> Bool {
+        switch channel { case 1: return pyro1_fired; case 2: return pyro2_fired
+                          case 3: return pyro3_fired; case 4: return pyro4_fired
+                          default: return false }
+    }
 
     // Short JSON keys → Swift property names (saves ~150 bytes in BLE payload)
     enum CodingKeys: String, CodingKey {
@@ -157,7 +172,7 @@ struct TelemetryData: Codable {
         // Packed flight-status bitfield (replaces lnch/vapo/aapo/land/pwr/
         // cam/log/bslog).  Bit layout mirrors TR_BLE_To_APP.cpp.
         case flight_status_bits = "fs"
-        case pyro_status_bits = "ps"  // packed bitfield: b0=ch1_armed, b1=ch1_cont, b2=ch1_fired, b3=ch2_armed, b4=ch2_cont, b5=ch2_fired
+        case pyro_status_bits = "ps"  // packed bitfield: b0=armed (global), then (cont,fired) per channel 1..4
         case source_rocket_id = "rid"
         case source_unit_name = "run"
         case data_status = "ds"        // #95

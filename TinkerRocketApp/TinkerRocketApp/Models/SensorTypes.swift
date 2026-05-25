@@ -119,12 +119,10 @@ nonisolated struct FlightSettingsData {
 
     let camera_type: UInt8
 
-    let pyro1_enabled: Bool
-    let pyro1_trigger_mode: UInt8   // 0 = time-after-apogee, 1 = altitude-on-descent
-    let pyro1_trigger_value: Float
-    let pyro2_enabled: Bool
-    let pyro2_trigger_mode: UInt8
-    let pyro2_trigger_value: Float
+    // 4 pyro channels (new PCB). Arrays indexed 0..3 → channels 1..4.
+    let pyro_enabled: [Bool]
+    let pyro_trigger_mode: [UInt8]   // 0 = time-after-apogee, 1 = altitude-on-descent
+    let pyro_trigger_value: [Float]
 
     let fw_git_sha: String
     let num_waypoints: UInt8
@@ -138,8 +136,8 @@ nonisolated struct FlightSettingsData {
     var soundsEnabled: Bool { flags & (1 << FlightSettingsData.fSounds) != 0 }
 
     init(from data: Data) throws {
-        guard data.count >= 176 else {
-            throw ParseError.invalidSize(expected: 176, got: data.count)
+        guard data.count >= 188 else {
+            throw ParseError.invalidSize(expected: 188, got: data.count)
         }
 
         var offset = 0
@@ -181,27 +179,33 @@ nonisolated struct FlightSettingsData {
 
         camera_type = data.readUInt8(at: &offset)   // offset 75
 
-        // PyroConfigData (offset 76, 12 bytes)
-        pyro1_enabled = data.readUInt8(at: &offset) != 0
-        pyro1_trigger_mode = data.readUInt8(at: &offset)
-        pyro1_trigger_value = data.readFloat32LE(at: &offset)
-        pyro2_enabled = data.readUInt8(at: &offset) != 0
-        pyro2_trigger_mode = data.readUInt8(at: &offset)
-        pyro2_trigger_value = data.readFloat32LE(at: &offset)
+        // PyroConfigData (offset 76, 24 bytes — 4 channels)
+        var en: [Bool]   = []
+        var mode: [UInt8] = []
+        var val: [Float]  = []
+        en.reserveCapacity(4); mode.reserveCapacity(4); val.reserveCapacity(4)
+        for _ in 0..<4 {
+            en.append(data.readUInt8(at: &offset) != 0)
+            mode.append(data.readUInt8(at: &offset))
+            val.append(data.readFloat32LE(at: &offset))
+        }
+        pyro_enabled = en
+        pyro_trigger_mode = mode
+        pyro_trigger_value = val
 
-        // fw_git_sha: 12-byte NUL-terminated char array (offset 88..99)
+        // fw_git_sha: 12-byte NUL-terminated char array (offset 100..111)
         let shaBytes = data.subdata(in: offset..<(offset + 12))
         fw_git_sha = String(bytes: shaBytes.prefix(while: { $0 != 0 }), encoding: .utf8) ?? ""
         offset += 12
 
-        // roll_profile: RollProfileData @ offset 100
-        let nRaw = data.readUInt8(at: &offset)      // num_waypoints (offset 100)
+        // roll_profile: RollProfileData @ offset 112
+        let nRaw = data.readUInt8(at: &offset)      // num_waypoints (offset 112)
         offset += 3                                  // _pad[3]
         let n = min(Int(nRaw), 8)
         num_waypoints = UInt8(n)
         var wps: [RollWaypointRaw] = []
         wps.reserveCapacity(n)
-        for _ in 0..<n {                             // waypoints @ offset 104, 9 bytes each
+        for _ in 0..<n {                             // waypoints @ offset 116, 9 bytes each
             let t = data.readFloat32LE(at: &offset)
             let a = data.readFloat32LE(at: &offset)
             let m = data.readUInt8(at: &offset)
@@ -409,19 +413,23 @@ nonisolated struct NonSensorData {
     // KF-filtered barometric altitude rate (dm/s = 0.1 m/s)
     let baro_alt_rate_dmps: Int16
 
-    // Pyro channel status bitfield (appended in #34):
-    //   bit 0 PSF_CH1_CONT  — ch1 continuity
-    //   bit 1 PSF_CH2_CONT
-    //   bit 2 PSF_CH1_FIRED
+    // Pyro channel status bitfield — reclaimed for 4 channels (new PCB):
+    //   bit 0 PSF_CH1_CONT
+    //   bit 1 PSF_CH1_FIRED
+    //   bit 2 PSF_CH2_CONT
     //   bit 3 PSF_CH2_FIRED
-    //   bit 4 PSF_REBOOT_RECOVERY  — mid-flight reboot recovery occurred
-    //   bit 5 PSF_GUIDANCE_ENABLED — FC's live guidance_enabled config
+    //   bit 4 PSF_CH3_CONT
+    //   bit 5 PSF_CH3_FIRED
+    //   bit 6 PSF_CH4_CONT
+    //   bit 7 PSF_CH4_FIRED
     let pyro_status: UInt8
 
-    // Apogee detector outputs + master vote (appended in #142/#143):
+    // Apogee detector outputs + master vote + relocated reboot/guidance bits:
     //   bit 0 NSF2_GPS_APOGEE
     //   bit 1 NSF2_PITCH_APOGEE
     //   bit 2 NSF2_MASTER_APOGEE  — voted result driving pyro logic
+    //   bit 3 NSF2_REBOOT_RECOVERY  — moved from pyro_status bit 4
+    //   bit 4 NSF2_GUIDANCE_ENABLED — moved from pyro_status bit 5
     // Older logs (43-byte struct) decode this field as 0.
     let apogee_flags: UInt8
 
@@ -718,12 +726,16 @@ nonisolated struct NonSensorDataSI {
 
     let rocket_state: RocketState
 
-    // Derived from NonSensorData.pyro_status (raw byte is kept here so
-    // downstream consumers can inspect individual bits as needed).
+    // Derived from NonSensorData.pyro_status (4 channels, new PCB).
+    // reboot_recovery and guidance_enabled were relocated to apogee_flags.
     let pyro1_continuity: Bool
     let pyro2_continuity: Bool
+    let pyro3_continuity: Bool
+    let pyro4_continuity: Bool
     let pyro1_fired: Bool
     let pyro2_fired: Bool
+    let pyro3_fired: Bool
+    let pyro4_fired: Bool
     let reboot_recovery: Bool
     let guidance_enabled: Bool
 }

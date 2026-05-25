@@ -112,4 +112,10 @@ struct RocketConfig {
     var pyro2Enabled: Bool = false
     var pyro2TriggerMode: UInt8 = 0
     var pyro2TriggerValue: Float = 100.0
+    var pyro3Enabled: Bool = false
+    var pyro3TriggerMode: UInt8 = 0
+    var pyro3TriggerValue: Float = 0.0
+    var pyro4Enabled: Bool = false
+    var pyro4TriggerMode: UInt8 = 0
+    var pyro4TriggerValue: Float = 0.0
 }

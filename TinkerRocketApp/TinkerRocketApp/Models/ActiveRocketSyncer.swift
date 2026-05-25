@@ -161,11 +161,12 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendGuidanceConfig(enabled: profile.guidanceEnabled)
         device.sendCameraConfig(cameraType: profile.cameraType)
         device.sendSoundConfig(enabled: profile.soundsEnabled)
-        device.sendPyroConfig(
-            ch1Enabled: profile.pyro1Enabled, ch1Mode: profile.pyro1TriggerMode,
-            ch1Value: profile.pyro1TriggerValue,
-            ch2Enabled: profile.pyro2Enabled, ch2Mode: profile.pyro2TriggerMode,
-            ch2Value: profile.pyro2TriggerValue)
+        device.sendPyroConfig(channels: [
+            (profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
+            (profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
+            (profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
+            (profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
+        ])
 
         syncMagCal(profile: profile, device: device)
         syncSensorCal(profile: profile, device: device)

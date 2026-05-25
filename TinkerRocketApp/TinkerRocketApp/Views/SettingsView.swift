@@ -46,8 +46,7 @@ struct SettingsView: View {
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
 
     // Pyro trigger values edited as strings (seconds or meters by mode).
-    @State private var sPyro1Value = ""
-    @State private var sPyro2Value = ""
+    @State private var sPyroValue: [String] = ["", "", "", ""]
 
     // "Sent" feedback in section headers.
     @State private var servoApplied = false
@@ -106,7 +105,7 @@ struct SettingsView: View {
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
         case wpTime(Int), wpAngle(Int)
-        case pyro1Value, pyro2Value
+        case pyroValue(Int)   // ch index 0..3
     }
 
     private enum EditGroup { case servo, pid, rollControl, rollWaypoints, pyro }
@@ -117,7 +116,7 @@ struct SettingsView: View {
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay: return .rollControl
         case .wpTime, .wpAngle: return .rollWaypoints
-        case .pyro1Value, .pyro2Value: return .pyro
+        case .pyroValue: return .pyro
         case nil: return nil
         }
     }
@@ -344,15 +343,18 @@ struct SettingsView: View {
     private var pyroSections: some View {
         pyroChannelSection(1)
         pyroChannelSection(2)
+        pyroChannelSection(3)
+        pyroChannelSection(4)
         Section {
-            Text("Channels arm automatically at launch. Test continuity and test-fire from the rocket dashboard before flight.")
+            Text("Single shared arm FET arms momentarily for each fire pulse. Test continuity and test-fire from the rocket dashboard before flight.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
 
     private func pyroChannelSection(_ ch: Int) -> some View {
-        let enabled = (ch == 1) ? profile.pyro1Enabled : profile.pyro2Enabled
-        let mode = Int((ch == 1) ? profile.pyro1TriggerMode : profile.pyro2TriggerMode)
+        let enabled = pyroChannelEnabled(ch)
+        let mode = Int(pyroChannelTriggerMode(ch))
+        let idx = ch - 1
         return Section(header: configHeader("Pyro Channel \(ch)", applied: pyroApplied)) {
             Toggle("Enabled", isOn: pyroEnabledBinding(ch))
             if enabled {
@@ -364,12 +366,11 @@ struct SettingsView: View {
                 HStack {
                     Text(mode == 0 ? "Delay" : "Altitude")
                     Spacer()
-                    TextField(mode == 0 ? "0.0" : "0",
-                              text: (ch == 1) ? $sPyro1Value : $sPyro2Value)
+                    TextField(mode == 0 ? "0.0" : "0", text: $sPyroValue[idx])
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
-                        .focused($focusedField, equals: (ch == 1) ? .pyro1Value : .pyro2Value)
+                        .focused($focusedField, equals: .pyroValue(idx))
                     Text(mode == 0 ? "s after apogee" : "\(UnitFormatter.altitudeUnit(unitSystem)) on descent")
                         .foregroundColor(.secondary)
                 }
@@ -378,6 +379,68 @@ struct SettingsView: View {
                     : "Fires when the rocket descends through this altitude (AGL).")
                     .font(.caption).foregroundColor(.secondary)
             }
+        }
+    }
+
+    // MARK: - Per-channel profile accessors (centralise the 4-channel switch)
+
+    private func pyroChannelEnabled(_ ch: Int) -> Bool {
+        switch ch {
+        case 1: return profile.pyro1Enabled
+        case 2: return profile.pyro2Enabled
+        case 3: return profile.pyro3Enabled
+        case 4: return profile.pyro4Enabled
+        default: return false
+        }
+    }
+
+    private func pyroChannelTriggerMode(_ ch: Int) -> UInt8 {
+        switch ch {
+        case 1: return profile.pyro1TriggerMode
+        case 2: return profile.pyro2TriggerMode
+        case 3: return profile.pyro3TriggerMode
+        case 4: return profile.pyro4TriggerMode
+        default: return 0
+        }
+    }
+
+    private func pyroChannelTriggerValue(_ ch: Int) -> Float {
+        switch ch {
+        case 1: return profile.pyro1TriggerValue
+        case 2: return profile.pyro2TriggerValue
+        case 3: return profile.pyro3TriggerValue
+        case 4: return profile.pyro4TriggerValue
+        default: return 0
+        }
+    }
+
+    private func setPyroEnabled(_ ch: Int, in p: inout RocketProfile, _ value: Bool) {
+        switch ch {
+        case 1: p.pyro1Enabled = value
+        case 2: p.pyro2Enabled = value
+        case 3: p.pyro3Enabled = value
+        case 4: p.pyro4Enabled = value
+        default: break
+        }
+    }
+
+    private func setPyroMode(_ ch: Int, in p: inout RocketProfile, _ value: UInt8) {
+        switch ch {
+        case 1: p.pyro1TriggerMode = value
+        case 2: p.pyro2TriggerMode = value
+        case 3: p.pyro3TriggerMode = value
+        case 4: p.pyro4TriggerMode = value
+        default: break
+        }
+    }
+
+    private func setPyroValue(_ ch: Int, in p: inout RocketProfile, _ value: Float) {
+        switch ch {
+        case 1: p.pyro1TriggerValue = value
+        case 2: p.pyro2TriggerValue = value
+        case 3: p.pyro3TriggerValue = value
+        case 4: p.pyro4TriggerValue = value
+        default: break
         }
     }
 
@@ -571,23 +634,18 @@ struct SettingsView: View {
     // commits on focus loss via the .pyro EditGroup.
     private func pyroEnabledBinding(_ ch: Int) -> Binding<Bool> {
         Binding(
-            get: { (ch == 1) ? profile.pyro1Enabled : profile.pyro2Enabled },
+            get: { pyroChannelEnabled(ch) },
             set: { newValue in
-                updateProfile {
-                    if ch == 1 { $0.pyro1Enabled = newValue } else { $0.pyro2Enabled = newValue }
-                }
+                updateProfile { setPyroEnabled(ch, in: &$0, newValue) }
                 applyPyroConfig()
             })
     }
 
     private func pyroModeBinding(_ ch: Int) -> Binding<Int> {
         Binding(
-            get: { Int((ch == 1) ? profile.pyro1TriggerMode : profile.pyro2TriggerMode) },
+            get: { Int(pyroChannelTriggerMode(ch)) },
             set: { newValue in
-                updateProfile {
-                    if ch == 1 { $0.pyro1TriggerMode = UInt8(newValue) }
-                    else { $0.pyro2TriggerMode = UInt8(newValue) }
-                }
+                updateProfile { setPyroMode(ch, in: &$0, UInt8(newValue)) }
                 reloadPyroValueStrings()   // reformat for the new unit (s vs m)
                 applyPyroConfig()
             })
@@ -617,9 +675,10 @@ struct SettingsView: View {
     }
 
     private func reloadPyroValueStrings() {
-        let p = profile
-        sPyro1Value = formatPyro(p.pyro1TriggerValue, mode: p.pyro1TriggerMode)
-        sPyro2Value = formatPyro(p.pyro2TriggerValue, mode: p.pyro2TriggerMode)
+        for ch in 1...4 {
+            sPyroValue[ch - 1] = formatPyro(pyroChannelTriggerValue(ch),
+                                             mode: pyroChannelTriggerMode(ch))
+        }
     }
 
     /// Time-after-apogee shows one decimal (seconds); altitude is stored in
@@ -722,17 +781,25 @@ struct SettingsView: View {
     }
 
     private func applyPyroConfig() {
-        let v1 = parsePyroValue(sPyro1Value, mode: profile.pyro1TriggerMode, fallback: profile.pyro1TriggerValue)
-        let v2 = parsePyroValue(sPyro2Value, mode: profile.pyro2TriggerMode, fallback: profile.pyro2TriggerValue)
+        // Parse all four text fields back to canonical units, then push.
+        var parsed: [Float] = [0, 0, 0, 0]
+        for ch in 1...4 {
+            parsed[ch - 1] = parsePyroValue(
+                sPyroValue[ch - 1],
+                mode: pyroChannelTriggerMode(ch),
+                fallback: pyroChannelTriggerValue(ch))
+        }
         updateProfile {
-            $0.pyro1TriggerValue = v1
-            $0.pyro2TriggerValue = v2
+            for ch in 1...4 { setPyroValue(ch, in: &$0, parsed[ch - 1]) }
         }
         let p = profile
         if device.isConnected {
-            device.sendPyroConfig(
-                ch1Enabled: p.pyro1Enabled, ch1Mode: p.pyro1TriggerMode, ch1Value: p.pyro1TriggerValue,
-                ch2Enabled: p.pyro2Enabled, ch2Mode: p.pyro2TriggerMode, ch2Value: p.pyro2TriggerValue)
+            device.sendPyroConfig(channels: [
+                (p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue),
+                (p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue),
+                (p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
+                (p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
+            ])
             // Mirror into rocketConfig so the dashboard pyro tiles update live.
             if var cfg = device.rocketConfig {
                 cfg.pyro1Enabled = p.pyro1Enabled
@@ -741,6 +808,12 @@ struct SettingsView: View {
                 cfg.pyro2Enabled = p.pyro2Enabled
                 cfg.pyro2TriggerMode = p.pyro2TriggerMode
                 cfg.pyro2TriggerValue = p.pyro2TriggerValue
+                cfg.pyro3Enabled = p.pyro3Enabled
+                cfg.pyro3TriggerMode = p.pyro3TriggerMode
+                cfg.pyro3TriggerValue = p.pyro3TriggerValue
+                cfg.pyro4Enabled = p.pyro4Enabled
+                cfg.pyro4TriggerMode = p.pyro4TriggerMode
+                cfg.pyro4TriggerValue = p.pyro4TriggerValue
                 device.rocketConfig = cfg
             }
         }

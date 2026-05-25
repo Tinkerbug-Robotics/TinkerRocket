@@ -1147,15 +1147,20 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
         addInt("fs", fs);
     }
 
-    // Pyro channel status — packed into single byte to minimize JSON size
+    // Pyro channel status — 9 bits packed into one JSON int. New-PCB
+    // layout: bit 0 = global armed (single ARM FET), then per-channel
+    // (cont, fired) pairs for channels 1..4. Omitted when all zero.
     {
-        uint8_t ps = (data.pyro1_armed ? 0x01 : 0)
-                   | (data.pyro1_cont  ? 0x02 : 0)
-                   | (data.pyro1_fired ? 0x04 : 0)
-                   | (data.pyro2_armed ? 0x08 : 0)
-                   | (data.pyro2_cont  ? 0x10 : 0)
-                   | (data.pyro2_fired ? 0x20 : 0);
-        if (ps != 0) { addInt("ps", ps); }
+        uint32_t ps = data.pyro_armed ? 0x001u : 0u;
+        if (data.pyro_cont[0])  ps |= 0x002u;
+        if (data.pyro_fired[0]) ps |= 0x004u;
+        if (data.pyro_cont[1])  ps |= 0x008u;
+        if (data.pyro_fired[1]) ps |= 0x010u;
+        if (data.pyro_cont[2])  ps |= 0x020u;
+        if (data.pyro_fired[2]) ps |= 0x040u;
+        if (data.pyro_cont[3])  ps |= 0x080u;
+        if (data.pyro_fired[3]) ps |= 0x100u;
+        if (ps != 0) { addInt("ps", (int)ps); }
     }
 
     // Source rocket identity (base station relay only)

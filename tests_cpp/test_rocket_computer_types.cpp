@@ -31,34 +31,55 @@ TEST(RocketComputerTypes, KnownSizes) {
 }
 
 TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
-    // All NonSensorData flag bits must be distinct
+    // bits 0-6 used; bit 7 reserved post per-fire-arming refactor.
     uint8_t all = NSF_ALT_LANDED | NSF_ALT_APOGEE | NSF_VEL_APOGEE |
                   NSF_LAUNCH | NSF_BURNOUT | NSF_GUIDANCE |
-                  NSF_PYRO1_ARMED | NSF_PYRO2_ARMED;
-    EXPECT_EQ(all, 0xFF); // all 8 bits used, none overlapping
+                  NSF_PYRO_ARMED;
+    EXPECT_EQ(all, 0x7F);
+    EXPECT_EQ(__builtin_popcount(NSF_PYRO_ARMED), 1);
+    EXPECT_EQ(NSF_PYRO_ARMED, 1u << 6);
 }
 
 TEST(RocketComputerTypes, NSF2_ApogeeFlagBits_NoOverlap) {
-    // apogee_flags byte (#142/#143) — three bits in use today.
-    uint8_t all = NSF2_GPS_APOGEE | NSF2_PITCH_APOGEE | NSF2_MASTER_APOGEE;
-    EXPECT_EQ(all, 0x07);
-    EXPECT_EQ(__builtin_popcount(NSF2_GPS_APOGEE),    1);
-    EXPECT_EQ(__builtin_popcount(NSF2_PITCH_APOGEE),  1);
-    EXPECT_EQ(__builtin_popcount(NSF2_MASTER_APOGEE), 1);
+    // apogee_flags byte: 3 apogee detector bits + 2 relocated signals
+    // (reboot_recovery, guidance_enabled) that used to live in pyro_status.
+    uint8_t all = NSF2_GPS_APOGEE | NSF2_PITCH_APOGEE | NSF2_MASTER_APOGEE |
+                  NSF2_REBOOT_RECOVERY | NSF2_GUIDANCE_ENABLED;
+    EXPECT_EQ(all, 0x1F);  // bits 0-4 used
+    EXPECT_EQ(__builtin_popcount(NSF2_GPS_APOGEE),       1);
+    EXPECT_EQ(__builtin_popcount(NSF2_PITCH_APOGEE),     1);
+    EXPECT_EQ(__builtin_popcount(NSF2_MASTER_APOGEE),    1);
+    EXPECT_EQ(__builtin_popcount(NSF2_REBOOT_RECOVERY),  1);
+    EXPECT_EQ(__builtin_popcount(NSF2_GUIDANCE_ENABLED), 1);
 }
 
 TEST(RocketComputerTypes, PSF_FlagBits_NoOverlap) {
-    uint8_t all = PSF_CH1_CONT | PSF_CH2_CONT | PSF_CH1_FIRED | PSF_CH2_FIRED |
-                  PSF_REBOOT_RECOVERY | PSF_GUIDANCE_ENABLED;
-    // Bits 0-5 used, no overlap
-    EXPECT_EQ(all, 0x3F);
-    // Each is a single bit
-    EXPECT_EQ(__builtin_popcount(PSF_CH1_CONT),         1);
-    EXPECT_EQ(__builtin_popcount(PSF_CH2_CONT),         1);
-    EXPECT_EQ(__builtin_popcount(PSF_CH1_FIRED),        1);
-    EXPECT_EQ(__builtin_popcount(PSF_CH2_FIRED),        1);
-    EXPECT_EQ(__builtin_popcount(PSF_REBOOT_RECOVERY),  1);
-    EXPECT_EQ(__builtin_popcount(PSF_GUIDANCE_ENABLED), 1);
+    // pyro_status is now exclusively pyro: 4 channels × (cont, fired).
+    uint8_t all = PSF_CH1_CONT | PSF_CH1_FIRED |
+                  PSF_CH2_CONT | PSF_CH2_FIRED |
+                  PSF_CH3_CONT | PSF_CH3_FIRED |
+                  PSF_CH4_CONT | PSF_CH4_FIRED;
+    EXPECT_EQ(all, 0xFF);  // all 8 bits used, none overlapping
+    EXPECT_EQ(__builtin_popcount(PSF_CH1_CONT),  1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH1_FIRED), 1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH2_CONT),  1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH2_FIRED), 1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH3_CONT),  1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH3_FIRED), 1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH4_CONT),  1);
+    EXPECT_EQ(__builtin_popcount(PSF_CH4_FIRED), 1);
+}
+
+TEST(RocketComputerTypes, PyroConfigData_FourChannelLayout) {
+    // 4 channels × (1 enabled + 1 mode + 4 value) = 24 bytes.
+    EXPECT_EQ(sizeof(PyroConfigData), 24u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch1_enabled),       0u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch1_trigger_mode),  1u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch1_trigger_value), 2u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch2_enabled),       6u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch3_enabled),       12u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch4_enabled),       18u);
+    EXPECT_EQ(offsetof(PyroConfigData, ch4_trigger_value), 20u);
 }
 
 TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {
@@ -768,7 +789,7 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
 // here so a struct edit can't silently desync the cross-language decode.
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
-    EXPECT_EQ(sizeof(FlightSettingsData), 176u);
+    EXPECT_EQ(sizeof(FlightSettingsData), 188u);  // +12 vs pre-4ch pyro
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
@@ -789,16 +810,19 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     EXPECT_EQ(offsetof(FlightSettingsData, servo_max_us),       73u);
     EXPECT_EQ(offsetof(FlightSettingsData, camera_type),        75u);
     EXPECT_EQ(offsetof(FlightSettingsData, pyro),               76u);
-    EXPECT_EQ(offsetof(FlightSettingsData, fw_git_sha),         88u);
-    EXPECT_EQ(offsetof(FlightSettingsData, roll_profile),       100u);
+    EXPECT_EQ(offsetof(FlightSettingsData, fw_git_sha),         100u);  // 76 + 24
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_profile),       112u);
 
     // Embedded PyroConfigData reaches the right absolute offsets.
     EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch1_trigger_value), 78u);
     EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch2_enabled),       82u);
     EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch2_trigger_value), 84u);
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch3_enabled),       88u);
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch4_enabled),       94u);
+    EXPECT_EQ(offsetof(FlightSettingsData, pyro) + offsetof(PyroConfigData, ch4_trigger_value), 96u);
 
-    // Roll profile waypoints start (RollProfileData @ 100, after num+pad).
-    EXPECT_EQ(offsetof(FlightSettingsData, roll_profile) + offsetof(RollProfileData, waypoints), 104u);
+    // Roll profile waypoints start (RollProfileData @ 112, after num+pad).
+    EXPECT_EQ(offsetof(FlightSettingsData, roll_profile) + offsetof(RollProfileData, waypoints), 116u);
 }
 
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {

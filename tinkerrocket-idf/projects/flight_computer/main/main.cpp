@@ -22,8 +22,10 @@
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
+#include <esp_private/gpio.h>      // gpio_func_sel
 #include <rom/gpio.h>              // esp_rom_gpio_connect_out_signal
 #include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
+#include <soc/io_mux_reg.h>        // PIN_FUNC_GPIO
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <nvs_flash.h>
@@ -290,18 +292,37 @@ static bool blue_led_flash_active = false;
 static uint32_t blue_led_flash_end_ms = 0;
 
 // --- Pyro channel state ---
-// Spinlock protects all pyro state flags and GPIO operations.
-// Must be held when reading or writing armed/fired flags or toggling ARM/FIRE pins.
+// New PCB: single PYRO_ARM_PIN drives all four channels' upstream FET.
+// Per-channel fire is a [ArmSettle → Firing → Done] state machine —
+// ARM goes HIGH only while at least one channel sits in ArmSettle or
+// Firing (or a CONT-TEST is running), then drops LOW once everyone is
+// back to Idle/Done. Spinlock protects all pyro state and GPIO ops.
 static portMUX_TYPE pyro_spinlock = portMUX_INITIALIZER_UNLOCKED;
-static PyroConfigData pyro_config = {};  // zeroed = both disabled
-static bool pyro1_armed = false;
-static bool pyro1_fired = false;
-static uint32_t pyro1_fire_start_ms = 0;
-static bool pyro2_armed = false;
-static bool pyro2_fired = false;
-static uint32_t pyro2_fire_start_ms = 0;
-static bool pyro_apogee_detected = false;
-static uint32_t pyro_apogee_time_ms = 0;
+static PyroConfigData pyro_config = {};  // zeroed = all four disabled
+
+enum class PyroChState : uint8_t {
+    Idle,       // no fire requested
+    ArmSettle,  // ARM raised by this channel; waiting PYRO_ARM_SETTLE_MS
+    Firing,     // FIRE pin HIGH; waiting PYRO_FIRE_DURATION_MS
+    Done,       // fired; latched, prevents re-fire this flight
+};
+
+struct PyroChRuntime {
+    PyroChState state          = PyroChState::Idle;
+    uint32_t    phase_start_ms = 0;     // millis when current state began
+    bool        cont_known     = false; // true after first cont read post-power-on
+    bool        cont           = false; // last reading: true = closed (load present)
+};
+
+static PyroChRuntime pyro_ch[4] = {};
+static bool          pyro_arm_pin_state   = false;   // last value driven onto PYRO_ARM_PIN
+static bool          pyro_apogee_detected = false;
+static uint32_t      pyro_apogee_time_ms  = 0;
+
+// PRELAUNCH-edge continuity check: on the new PCB the CONT divider is fed
+// from VPP (always on) and is independent of the shared ARM rail, so we
+// just sample the four CONT pins directly — no ARM pulse, no settle delay,
+// no state machine.
 // --- Inflight reboot recovery ---
 // Snapshot of critical flight state, sent to OC over I2S at 10 Hz during
 // INFLIGHT and stored in OC's MRAM.  On unexpected reboot (brownout,
@@ -347,10 +368,10 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
 
     portENTER_CRITICAL(&pyro_spinlock);
     snap.pyro_apogee_detected = pyro_apogee_detected ? 1 : 0;
-    snap.pyro1_armed          = pyro1_armed          ? 1 : 0;
-    snap.pyro1_fired          = pyro1_fired          ? 1 : 0;
-    snap.pyro2_armed          = pyro2_armed          ? 1 : 0;
-    snap.pyro2_fired          = pyro2_fired          ? 1 : 0;
+    snap.pyro1_fired = (pyro_ch[0].state == PyroChState::Done) ? 1 : 0;
+    snap.pyro2_fired = (pyro_ch[1].state == PyroChState::Done) ? 1 : 0;
+    snap.pyro3_fired = (pyro_ch[2].state == PyroChState::Done) ? 1 : 0;
+    snap.pyro4_fired = (pyro_ch[3].state == PyroChState::Done) ? 1 : 0;
     portEXIT_CRITICAL(&pyro_spinlock);
 
     snap.ground_pressure_pa = ground_pressure_pa;
@@ -575,29 +596,124 @@ static bool readConfigFrame(uint8_t expected_type,
 
 // ── Pyro channel helpers ─────────────────────────────────────────────────────
 
+// Per-channel pin lookups (indexed 0..3).
+static const uint8_t PYRO_FIRE_PINS[4] = {
+    config::PYRO1_FIRE_PIN, config::PYRO2_FIRE_PIN,
+    config::PYRO3_FIRE_PIN, config::PYRO4_FIRE_PIN,
+};
+static const uint8_t PYRO_CONT_PINS[4] = {
+    config::PYRO1_CONT_PIN, config::PYRO2_CONT_PIN,
+    config::PYRO3_CONT_PIN, config::PYRO4_CONT_PIN,
+};
+
+// Per-channel config accessors so the loop body stays uniform.
+static inline bool pyroChEnabled(int ch_idx)
+{
+    switch (ch_idx) {
+        case 0: return pyro_config.ch1_enabled;
+        case 1: return pyro_config.ch2_enabled;
+        case 2: return pyro_config.ch3_enabled;
+        case 3: return pyro_config.ch4_enabled;
+    }
+    return false;
+}
+static inline uint8_t pyroChMode(int ch_idx)
+{
+    switch (ch_idx) {
+        case 0: return pyro_config.ch1_trigger_mode;
+        case 1: return pyro_config.ch2_trigger_mode;
+        case 2: return pyro_config.ch3_trigger_mode;
+        case 3: return pyro_config.ch4_trigger_mode;
+    }
+    return 0;
+}
+static inline float pyroChValue(int ch_idx)
+{
+    switch (ch_idx) {
+        case 0: return pyro_config.ch1_trigger_value;
+        case 1: return pyro_config.ch2_trigger_value;
+        case 2: return pyro_config.ch3_trigger_value;
+        case 3: return pyro_config.ch4_trigger_value;
+    }
+    return 0.0f;
+}
+
+// New PCB inverts continuity sense vs the old board: with the shared
+// arming FET enabled, the channel's CONT line idles HIGH when the squib
+// loop is OPEN and gets pulled LOW when a load (closed circuit) is
+// present. Old PCB had the opposite polarity. (TODO: verify on bench
+// once a populated rev-A board is in hand — if wrong, flip this one
+// spot.)
+static inline bool pyroContFromRaw(int raw) { return raw == 0; }
+
+// Reset a pyro OUTPUT pad to a known LOW-driven state WITHOUT going through
+// gpio_reset_pin(), which briefly enables the internal pull-up (~50 kΩ) as
+// part of its `GPIO_MODE_DISABLE` config. On the new pyro PCB the gate
+// drivers are DTC123J-style pre-biased NPNs (internal 2.2 kΩ base resistor
+// + 47 kΩ B-E pull-down): a 50 kΩ pull-up on the GPIO biases the base well
+// above Vbe for the microseconds-long window between gpio_reset_pin's
+// pull-up config and our subsequent pull-up-disable config — long enough to
+// momentarily turn on the ARM / FIRE MOSFETs and twitch the squib rail at
+// boot. This sequence pre-loads GPIO_OUT to 0, detaches any peripheral
+// output signal, selects plain-GPIO function on the IO MUX, and only then
+// enables output drive — so the pad goes from high-Z directly to driving 0
+// with no pull-up window.
+static void safePyroOutputInit(gpio_num_t pin)
+{
+    // 1. Pre-load output register to 0. No-op until output is enabled.
+    gpio_set_level(pin, 0);
+    // 2. Detach any peripheral output signal routed to this pad (e.g.,
+    //    SPI2 default on pins 14-19 after spi_bus_initialize()).
+    esp_rom_gpio_connect_out_signal(pin, SIG_GPIO_OUT_IDX, false, false);
+    // 3. Force IO MUX function back to plain GPIO.
+    gpio_func_sel(pin, PIN_FUNC_GPIO);
+    // 4. Now enable output drive with no pulls. Pad transitions from high-Z
+    //    straight to driving 0 (because step 1 staged a 0 in GPIO_OUT).
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = 1ULL << pin;
+    cfg.mode         = GPIO_MODE_OUTPUT;
+    cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&cfg);
+    // Belt + suspenders.
+    gpio_set_level(pin, 0);
+}
+
 static void initPyroPins()
 {
-    // ARM and FIRE pins: output, start LOW (safe)
-    // gpio_reset_pin() forces IO MUX back to GPIO function — required on
-    // ESP32-P4 because SPI2 default pins (14-16) overlap with pyro pins,
-    // and spi_bus_initialize() may claim them at the IO MUX level.
-    for (auto pin : {(gpio_num_t)config::PYRO1_ARM_PIN,
-                     (gpio_num_t)config::PYRO1_FIRE_PIN,
-                     (gpio_num_t)config::PYRO2_ARM_PIN,
-                     (gpio_num_t)config::PYRO2_FIRE_PIN}) {
-        gpio_reset_pin(pin);
-        gpio_config_t cfg = {};
-        cfg.pin_bit_mask = 1ULL << pin;
-        cfg.mode         = GPIO_MODE_OUTPUT;
-        cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-        cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        gpio_config(&cfg);
-        gpio_set_level(pin, 0);
+    // ========================================================================
+    // SAFETY-CRITICAL: do NOT replace safePyroOutputInit() with
+    // gpio_reset_pin() for any of the OUTPUT pins below. The IDF's
+    // gpio_reset_pin() transiently enables the internal ~50 kΩ pull-up,
+    // which biases the DTC123J gate-driver NPN base above Vbe long enough
+    // to twitch the ARM and FIRE MOSFETs — confirmed on bench, the pyro
+    // rail flashes on every FC boot.
+    //
+    // If you add new pyro output pins, they MUST go through
+    // safePyroOutputInit(). The CONT input pads are fine on gpio_reset_pin()
+    // because they have no gate driver downstream.
+    // See project_pyro_safe_init_required.md in the agent memory and
+    // commit 421dd63 for the bench observation.
+    // ========================================================================
+    const gpio_num_t output_pins[] = {
+        (gpio_num_t)config::PYRO_ARM_PIN,
+        (gpio_num_t)config::PYRO1_FIRE_PIN,
+        (gpio_num_t)config::PYRO2_FIRE_PIN,
+        (gpio_num_t)config::PYRO3_FIRE_PIN,
+        (gpio_num_t)config::PYRO4_FIRE_PIN,
+    };
+    for (gpio_num_t pin : output_pins) {
+        safePyroOutputInit(pin);
     }
-    // CONTINUITY pins: input (external 10k pullup on PCB)
-    for (auto pin : {(gpio_num_t)config::PYRO1_CONT_PIN,
-                     (gpio_num_t)config::PYRO2_CONT_PIN}) {
-        gpio_reset_pin(pin);
+    pyro_arm_pin_state = false;
+
+    // CONTINUITY pins: input (external pull on PCB). gpio_reset_pin() is
+    // safe here — the input pad has no gate driver downstream, just the
+    // CONT divider, so a brief internal pull-up doesn't drive anything
+    // dangerous. The subsequent gpio_config() clears it.
+    for (uint8_t pin : PYRO_CONT_PINS) {
+        gpio_reset_pin((gpio_num_t)pin);
         gpio_config_t cfg = {};
         cfg.pin_bit_mask = 1ULL << pin;
         cfg.mode         = GPIO_MODE_INPUT;
@@ -605,146 +721,62 @@ static void initPyroPins()
         cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
         gpio_config(&cfg);
     }
-    ESP_LOGI(TAG, "[PYRO] Pins initialized (safe)");
+    ESP_LOGI(TAG, "[PYRO] Pins initialized (safe, 4 channels, single ARM)");
+}
+
+// Caller MUST hold pyro_spinlock.
+static void pyroSetArmLocked(bool want_high)
+{
+    if (pyro_arm_pin_state == want_high) return;
+    gpio_set_level((gpio_num_t)config::PYRO_ARM_PIN, want_high ? 1 : 0);
+    pyro_arm_pin_state = want_high;
 }
 
 static void pyroSafeAll()
 {
     portENTER_CRITICAL(&pyro_spinlock);
-    gpio_set_level((gpio_num_t)config::PYRO1_FIRE_PIN, 0);
-    gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 0);
-    gpio_set_level((gpio_num_t)config::PYRO2_FIRE_PIN, 0);
-    gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 0);
-    pyro1_armed = false;
-    pyro2_armed = false;
+    for (int i = 0; i < 4; ++i) {
+        gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 0);
+        pyro_ch[i].state          = PyroChState::Idle;
+        pyro_ch[i].phase_start_ms = 0;
+    }
+    pyroSetArmLocked(false);
     portEXIT_CRITICAL(&pyro_spinlock);
     ESP_LOGI(TAG, "[PYRO] All channels safed");
 }
 
-// Non-blocking pyro arming + continuity diagnostic.
-//
-// The original pyroArmEnabled() called delay(10) six times on CH1 (1 settle
-// + 5 readback re-reads) plus delayMicroseconds(500) on CH2, blocking the FC
-// main loop for ~60 ms inside the PRELAUNCH→INFLIGHT transition. That stall
-// opened a ~62 ms gap in the sensor stream right at boost ignition.
-//
-// Two entry points share the same state machine:
-//   pyroPrelaunchContTest() — READY→PRELAUNCH: momentary arm + full
-//     diagnostic readback + disarm. Verifies wiring on the pad without
-//     leaving the squib hot during the launch wait.
-//   pyroArmEnabled()        — PRELAUNCH→INFLIGHT: latch ARM=1, mark armed,
-//     do one deferred readback ~10 ms later for sanity. Re-read loop is
-//     skipped — that already ran on the pad.
-//
-// servicePyroArmDiag() advances the state machine each main-loop iteration.
-enum class PyroArmDiagPhase : uint8_t {
-    Idle,
-    Ch1Settle,      // ARM=1 set, waiting 10 ms for VN5E160 settle
-    Ch1ReadRepeat,  // PRELAUNCH only: 5 additional CONT re-reads at 10 ms intervals
-    Ch2Settle,      // ARM=1 set, waiting 10 ms for VN5E160 settle
-};
-static PyroArmDiagPhase  pyro_diag_phase     = PyroArmDiagPhase::Idle;
-static bool              pyro_diag_prelaunch = false;
-static uint8_t           pyro_diag_ch1_reads = 0;
-static constexpr uint8_t PYRO_DIAG_CH1_TOTAL_READS = 6;  // 1 initial + 5 re-reads (preserved)
-static uint32_t          pyro_diag_next_ms   = 0;
-
-static void pyroDiagAdvanceToCh2OrFinish(uint32_t now_ms)
+// PRELAUNCH continuity check. Sample all four CONT pins directly and cache
+// the result. Synchronous — no ARM pulse, no settle delay, no state machine.
+// The new PCB feeds the CONT divider from VPP (always on), so ARM is not
+// part of the cont sense path.
+static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 {
-    if (pyro_config.ch2_enabled) {
-        portENTER_CRITICAL(&pyro_spinlock);
-        gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 1);
-        if (!pyro_diag_prelaunch) pyro2_armed = true;
-        portEXIT_CRITICAL(&pyro_spinlock);
-        pyro_diag_phase   = PyroArmDiagPhase::Ch2Settle;
-        pyro_diag_next_ms = now_ms + 10;
-    } else {
-        pyro_diag_phase = PyroArmDiagPhase::Idle;
+    int  raw[4];
+    bool cont[4];
+    for (int i = 0; i < 4; ++i) {
+        raw[i]  = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
+        cont[i] = pyroContFromRaw(raw[i]);
     }
+    portENTER_CRITICAL(&pyro_spinlock);
+    for (int i = 0; i < 4; ++i) {
+        pyro_ch[i].cont       = cont[i];
+        pyro_ch[i].cont_known = true;
+    }
+    portEXIT_CRITICAL(&pyro_spinlock);
+    ESP_LOGI(TAG, "[PYRO] Prelaunch CONT: ch1 raw=%d cont=%d  ch2 raw=%d cont=%d  ch3 raw=%d cont=%d  ch4 raw=%d cont=%d",
+             raw[0], cont[0], raw[1], cont[1], raw[2], cont[2], raw[3], cont[3]);
 }
 
-static void pyroDiagStart(uint32_t now_ms, bool is_prelaunch)
-{
-    if (pyro_diag_phase != PyroArmDiagPhase::Idle) return;
-    pyro_diag_prelaunch = is_prelaunch;
-    pyro_diag_ch1_reads = 0;
-    if (pyro_config.ch1_enabled) {
-        portENTER_CRITICAL(&pyro_spinlock);
-        gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
-        if (!is_prelaunch) pyro1_armed = true;
-        portEXIT_CRITICAL(&pyro_spinlock);
-        pyro_diag_phase   = PyroArmDiagPhase::Ch1Settle;
-        pyro_diag_next_ms = now_ms + 10;
-    } else {
-        pyroDiagAdvanceToCh2OrFinish(now_ms);
-    }
-}
-
-static void pyroPrelaunchContTest(uint32_t now_ms) { pyroDiagStart(now_ms, /*is_prelaunch=*/true);  }
-static void pyroArmEnabled       (uint32_t now_ms) { pyroDiagStart(now_ms, /*is_prelaunch=*/false); }
-
-static void servicePyroArmDiag(uint32_t now_ms)
-{
-    if (pyro_diag_phase == PyroArmDiagPhase::Idle) return;
-    if ((int32_t)(now_ms - pyro_diag_next_ms) < 0) return;
-
-    switch (pyro_diag_phase) {
-        case PyroArmDiagPhase::Ch1Settle: {
-            int arm_rb   = gpio_get_level((gpio_num_t)config::PYRO1_ARM_PIN);
-            int cont_raw = gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN);
-            ESP_LOGI(TAG, "[PYRO] CH1 %s: ARM_PIN=%d rb=%d  CONT_PIN=%d raw=%d  mode=%u val=%.1f",
-                     pyro_diag_prelaunch ? "cont-test" : "armed",
-                     config::PYRO1_ARM_PIN, arm_rb,
-                     config::PYRO1_CONT_PIN, cont_raw,
-                     pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value);
-            pyro_diag_ch1_reads = 1;
-            if (pyro_diag_prelaunch) {
-                pyro_diag_phase   = PyroArmDiagPhase::Ch1ReadRepeat;
-                pyro_diag_next_ms = now_ms + 10;
-            } else {
-                pyroDiagAdvanceToCh2OrFinish(now_ms);
-            }
-            break;
-        }
-        case PyroArmDiagPhase::Ch1ReadRepeat: {
-            int cont_raw = gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN);
-            ESP_LOGI(TAG, "[PYRO] CH1 CONT re-read[%u]: %d",
-                     (unsigned)(pyro_diag_ch1_reads - 1), cont_raw);
-            pyro_diag_ch1_reads++;
-            if (pyro_diag_ch1_reads >= PYRO_DIAG_CH1_TOTAL_READS) {
-                portENTER_CRITICAL(&pyro_spinlock);
-                gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 0);
-                portEXIT_CRITICAL(&pyro_spinlock);
-                pyroDiagAdvanceToCh2OrFinish(now_ms);
-            } else {
-                pyro_diag_next_ms = now_ms + 10;
-            }
-            break;
-        }
-        case PyroArmDiagPhase::Ch2Settle: {
-            int cont_raw = gpio_get_level((gpio_num_t)config::PYRO2_CONT_PIN);
-            ESP_LOGI(TAG, "[PYRO] CH2 %s (mode=%u val=%.1f) CONT_PIN=%d raw=%d",
-                     pyro_diag_prelaunch ? "cont-test" : "armed",
-                     pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
-                     config::PYRO2_CONT_PIN, cont_raw);
-            if (pyro_diag_prelaunch) {
-                portENTER_CRITICAL(&pyro_spinlock);
-                gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 0);
-                portEXIT_CRITICAL(&pyro_spinlock);
-            }
-            pyro_diag_phase = PyroArmDiagPhase::Idle;
-            break;
-        }
-        default: break;
-    }
-}
-
+// Called each main-loop tick during INFLIGHT (and benign elsewhere — no
+// channel will leave Idle until an enabled trigger fires). Drives the
+// per-channel ArmSettle → Firing → Done state machine and computes the
+// global ARM-pin level from the union of all channel demands.
 static void servicePyroChannels(uint32_t now_ms)
 {
     // Detect apogee (N-1 of N voting in TR_KinematicChecks)
     if (!pyro_apogee_detected && kinematics.apogee_flag) {
         pyro_apogee_detected = true;
-        pyro_apogee_time_ms = now_ms;
+        pyro_apogee_time_ms  = now_ms;
         ESP_LOGI(TAG, "[PYRO] Apogee detected at t=%lu ms (vel=%d baro=%d gps=%d pitch=%d)",
                  (unsigned long)now_ms,
                  kinematics.vel_u_apogee_flag,
@@ -753,73 +785,82 @@ static void servicePyroChannels(uint32_t now_ms)
                  kinematics.pitch_apogee_flag);
     }
 
+    bool just_fired[4]  = { false, false, false, false };
+    bool pulse_done[4]  = { false, false, false, false };
+
     portENTER_CRITICAL(&pyro_spinlock);
 
-    // --- Channel 1 fire logic ---
-    if (pyro1_armed && !pyro1_fired && pyro_config.ch1_enabled) {
-        bool should_fire = false;
-        if (pyro_config.ch1_trigger_mode == PYRO_TRIGGER_TIME_AFTER_APOGEE
-            && pyro_apogee_detected) {
-            float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
-            if (elapsed_s >= pyro_config.ch1_trigger_value) should_fire = true;
-        } else if (pyro_config.ch1_trigger_mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT
-                   && pyro_apogee_detected) {
-            if (pressure_alt_m <= pyro_config.ch1_trigger_value
-                && pressure_alt_rate_mps < 0.0f) should_fire = true;
+    for (int i = 0; i < 4; ++i) {
+        PyroChRuntime& ch = pyro_ch[i];
+
+        // Idle → ArmSettle when trigger satisfied
+        if (ch.state == PyroChState::Idle && pyroChEnabled(i)) {
+            bool should_fire = false;
+            const uint8_t mode = pyroChMode(i);
+            const float   val  = pyroChValue(i);
+            if (pyro_apogee_detected && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
+                const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
+                if (elapsed_s >= val) should_fire = true;
+            } else if (pyro_apogee_detected && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
+                if (pressure_alt_m <= val && pressure_alt_rate_mps < 0.0f) should_fire = true;
+            }
+            if (should_fire) {
+                ch.state          = PyroChState::ArmSettle;
+                ch.phase_start_ms = now_ms;
+            }
         }
-        if (should_fire) {
-            gpio_set_level((gpio_num_t)config::PYRO1_FIRE_PIN, 1);
-            pyro1_fire_start_ms = now_ms;
-            pyro1_fired = true;
+
+        // ArmSettle → Firing once the settle elapses
+        if (ch.state == PyroChState::ArmSettle &&
+            (now_ms - ch.phase_start_ms) >= config::PYRO_ARM_SETTLE_MS) {
+            gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 1);
+            ch.state          = PyroChState::Firing;
+            ch.phase_start_ms = now_ms;
+            just_fired[i]     = true;
         }
-    }
-    // Channel 1 fire pulse timeout
-    bool ch1_pulse_done = false;
-    if (pyro1_fired && pyro1_fire_start_ms > 0 &&
-        (now_ms - pyro1_fire_start_ms) >= config::PYRO_FIRE_DURATION_MS) {
-        gpio_set_level((gpio_num_t)config::PYRO1_FIRE_PIN, 0);
-        pyro1_fire_start_ms = 0;
-        ch1_pulse_done = true;
+
+        // Firing → Done after pulse width
+        if (ch.state == PyroChState::Firing &&
+            (now_ms - ch.phase_start_ms) >= config::PYRO_FIRE_DURATION_MS) {
+            gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 0);
+            ch.state          = PyroChState::Done;
+            ch.phase_start_ms = 0;
+            pulse_done[i]     = true;
+        }
     }
 
-    // --- Channel 2 fire logic ---
-    if (pyro2_armed && !pyro2_fired && pyro_config.ch2_enabled) {
-        bool should_fire = false;
-        if (pyro_config.ch2_trigger_mode == PYRO_TRIGGER_TIME_AFTER_APOGEE
-            && pyro_apogee_detected) {
-            float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
-            if (elapsed_s >= pyro_config.ch2_trigger_value) should_fire = true;
-        } else if (pyro_config.ch2_trigger_mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT
-                   && pyro_apogee_detected) {
-            if (pressure_alt_m <= pyro_config.ch2_trigger_value
-                && pressure_alt_rate_mps < 0.0f) should_fire = true;
+    // While ARM is HIGH (only during a channel's fire window in flight),
+    // refresh its CONT bit. ARM=LOW leaves CONT floating, so the cached
+    // value from the last test stands.
+    if (pyro_arm_pin_state) {
+        for (int i = 0; i < 4; ++i) {
+            if (pyro_ch[i].state == PyroChState::ArmSettle ||
+                pyro_ch[i].state == PyroChState::Firing) {
+                pyro_ch[i].cont       = pyroContFromRaw(
+                                          gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]));
+                pyro_ch[i].cont_known = true;
+            }
         }
-        if (should_fire) {
-            gpio_set_level((gpio_num_t)config::PYRO2_FIRE_PIN, 1);
-            pyro2_fire_start_ms = now_ms;
-            pyro2_fired = true;
-        }
-    }
-    // Channel 2 fire pulse timeout
-    bool ch2_pulse_done = false;
-    if (pyro2_fired && pyro2_fire_start_ms > 0 &&
-        (now_ms - pyro2_fire_start_ms) >= config::PYRO_FIRE_DURATION_MS) {
-        gpio_set_level((gpio_num_t)config::PYRO2_FIRE_PIN, 0);
-        pyro2_fire_start_ms = 0;
-        ch2_pulse_done = true;
     }
 
-    // Snapshot fire events for logging outside critical section
-    bool ch1_just_fired = pyro1_fired && pyro1_fire_start_ms == now_ms;
-    bool ch2_just_fired = pyro2_fired && pyro2_fire_start_ms == now_ms;
+    // Compute ARM demand: any channel mid-fire keeps the pin HIGH.
+    bool any_demand = false;
+    for (int i = 0; i < 4; ++i) {
+        if (pyro_ch[i].state == PyroChState::ArmSettle ||
+            pyro_ch[i].state == PyroChState::Firing) {
+            any_demand = true;
+            break;
+        }
+    }
+    pyroSetArmLocked(any_demand);
 
     portEXIT_CRITICAL(&pyro_spinlock);
 
-    // Log outside critical section (ESP_LOG can block)
-    if (ch1_just_fired) ESP_LOGW(TAG, "[PYRO] CH1 FIRED at alt=%.1f m", (double)pressure_alt_m);
-    if (ch2_just_fired) ESP_LOGW(TAG, "[PYRO] CH2 FIRED at alt=%.1f m", (double)pressure_alt_m);
-    if (ch1_pulse_done) ESP_LOGI(TAG, "[PYRO] CH1 fire pulse complete");
-    if (ch2_pulse_done) ESP_LOGI(TAG, "[PYRO] CH2 fire pulse complete");
+    for (int i = 0; i < 4; ++i) {
+        if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d FIRED at alt=%.1f m",
+                                    i + 1, (double)pressure_alt_m);
+        if (pulse_done[i]) ESP_LOGI(TAG, "[PYRO] CH%d fire pulse complete", i + 1);
+    }
 }
 
 // ── Roll profile interpolation ────────────────────────────────────────────────
@@ -1836,13 +1877,14 @@ static void setup_fc()
     size_t pyro_cfg_sz = prefs.getBytesLength("cfg");
     if (pyro_cfg_sz == sizeof(PyroConfigData)) {
         prefs.getBytes("cfg", &pyro_config, sizeof(pyro_config));
-        ESP_LOGI(TAG, "NVS pyro: ch1_en=%u mode=%u val=%.1f  ch2_en=%u mode=%u val=%.1f",
-                 pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode,
-                 (double)pyro_config.ch1_trigger_value,
-                 pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode,
-                 (double)pyro_config.ch2_trigger_value);
+        ESP_LOGI(TAG, "NVS pyro: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+                 pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value,
+                 pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
+                 pyro_config.ch3_enabled, pyro_config.ch3_trigger_mode, (double)pyro_config.ch3_trigger_value,
+                 pyro_config.ch4_enabled, pyro_config.ch4_trigger_mode, (double)pyro_config.ch4_trigger_value);
     } else {
-        ESP_LOGI(TAG, "NVS pyro: none (both disabled)");
+        ESP_LOGI(TAG, "NVS pyro: none (all four disabled) — stored=%u bytes, expected=%u",
+                 (unsigned)pyro_cfg_sz, (unsigned)sizeof(PyroConfigData));
     }
     prefs.end();
 
@@ -2098,32 +2140,24 @@ static void setup_fc()
                 burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
             }
 
-            // Restore pyro state (safety-critical: no double-fire, no missed fire)
+            // Restore pyro state (safety-critical: no double-fire, no missed fire).
+            // With per-fire arming, ARM is never persistent — any channel
+            // whose trigger condition is still met will re-arm and fire via
+            // servicePyroChannels(). We only need to lock in fired channels
+            // so they aren't re-fired.
             portENTER_CRITICAL(&pyro_spinlock);
-            pyro1_fired = snap.pyro1_fired;
-            pyro2_fired = snap.pyro2_fired;
-            pyro1_fire_start_ms = 0;
-            pyro2_fire_start_ms = 0;
+            const uint8_t fired_snap[4] = { snap.pyro1_fired, snap.pyro2_fired,
+                                            snap.pyro3_fired, snap.pyro4_fired };
+            for (int i = 0; i < 4; ++i) {
+                pyro_ch[i].state          = fired_snap[i] ? PyroChState::Done : PyroChState::Idle;
+                pyro_ch[i].phase_start_ms = 0;
+            }
             portEXIT_CRITICAL(&pyro_spinlock);
 
-            // Re-arm unfired pyro channels (GPIO ARM pins reset on reboot)
-            if (snap.pyro1_armed && !snap.pyro1_fired && pyro_config.ch1_enabled) {
-                portENTER_CRITICAL(&pyro_spinlock);
-                gpio_set_level((gpio_num_t)config::PYRO1_ARM_PIN, 1);
-                pyro1_armed = true;
-                portEXIT_CRITICAL(&pyro_spinlock);
-                ESP_LOGW(TAG, "[RECOVERY] CH1 re-armed");
-            }
-            if (snap.pyro2_armed && !snap.pyro2_fired && pyro_config.ch2_enabled) {
-                portENTER_CRITICAL(&pyro_spinlock);
-                gpio_set_level((gpio_num_t)config::PYRO2_ARM_PIN, 1);
-                pyro2_armed = true;
-                portEXIT_CRITICAL(&pyro_spinlock);
-                ESP_LOGW(TAG, "[RECOVERY] CH2 re-armed");
-            }
-
-            ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d ch1_armed=%d ch1_fired=%d ch2_armed=%d ch2_fired=%d",
-                     pyro_apogee_detected, pyro1_armed, pyro1_fired, pyro2_armed, pyro2_fired);
+            ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d fired=[%d,%d,%d,%d]",
+                     pyro_apogee_detected,
+                     snap.pyro1_fired, snap.pyro2_fired,
+                     snap.pyro3_fired, snap.pyro4_fired);
 
             // Restore flight references
             ground_pressure_pa = snap.ground_pressure_pa;
@@ -3293,7 +3327,7 @@ static void loop_fc()
             else if (out_pending_command == PYRO_CONFIG_PENDING)
             {
                 delay(1);
-                uint8_t cfg_payload[12];
+                uint8_t cfg_payload[sizeof(PyroConfigData)];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(PYRO_CONFIG_MSG, sizeof(PyroConfigData),
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
@@ -3303,16 +3337,19 @@ static void loop_fc()
                     prefs.begin("pyro", false);
                     prefs.putBytes("cfg", &pyro_config, sizeof(pyro_config));
                     prefs.end();
-                    ESP_LOGI(TAG, "[PYRO CFG] ch1: en=%u mode=%u val=%.1f  ch2: en=%u mode=%u val=%.1f",
-                             pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode,
-                             (double)pyro_config.ch1_trigger_value,
-                             pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode,
-                             (double)pyro_config.ch2_trigger_value);
+                    ESP_LOGI(TAG, "[PYRO CFG] ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+                             pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value,
+                             pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
+                             pyro_config.ch3_enabled, pyro_config.ch3_trigger_mode, (double)pyro_config.ch3_trigger_value,
+                             pyro_config.ch4_enabled, pyro_config.ch4_trigger_mode, (double)pyro_config.ch4_trigger_value);
                 }
             }
             else if (out_pending_command == PYRO_CONT_TEST)
             {
-                // Momentary arm → read continuity → disarm (ground test only)
+                // Direct CONT read — no ARM pulse needed on the new PCB
+                // (CONT divider fed from VPP, independent of the ARM rail).
+                // Still rejected in flight to be conservative with the
+                // app's "ground tests are pad-only" UX guarantee.
                 if (rocket_state == INFLIGHT) {
                     ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — INFLIGHT");
                 } else {
@@ -3325,53 +3362,33 @@ static void loop_fc()
                         && cfg_len >= 1) {
                         ch = cfg_payload[0];
                     }
-                    gpio_num_t arm_pin  = (ch == 2) ? (gpio_num_t)config::PYRO2_ARM_PIN
-                                                    : (gpio_num_t)config::PYRO1_ARM_PIN;
-                    gpio_num_t cont_pin = (ch == 2) ? (gpio_num_t)config::PYRO2_CONT_PIN
-                                                    : (gpio_num_t)config::PYRO1_CONT_PIN;
-                    uint8_t cont_bit    = (ch == 2) ? PSF_CH2_CONT : PSF_CH1_CONT;
+                    if (ch < 1 || ch > 4) {
+                        ESP_LOGW(TAG, "[PYRO CONT TEST] Invalid channel %u", ch);
+                    } else {
+                        const int idx = ch - 1;
+                        const gpio_num_t cont_pin = (gpio_num_t)PYRO_CONT_PINS[idx];
 
-                    // Reclaim pins from SPI2 (ESP32-P4 default SPI2 pins
-                    // overlap with pyro pins 14-16).
-                    esp_gpio_revoke(1ULL << arm_pin);
-                    esp_gpio_revoke(1ULL << cont_pin);
-                    gpio_reset_pin(arm_pin);
-                    gpio_reset_pin(cont_pin);
+                        // Defensive CONT-pad reclaim — peripheral defaults
+                        // can re-grab the ESP32-P4 IO MUX between boot and
+                        // the test. (The ARM pad was set up safely at boot
+                        // via safePyroOutputInit; we don't touch it here.)
+                        esp_gpio_revoke(1ULL << cont_pin);
+                        gpio_reset_pin(cont_pin);
+                        gpio_config_t cont_cfg = {};
+                        cont_cfg.pin_bit_mask = 1ULL << cont_pin;
+                        cont_cfg.mode         = GPIO_MODE_INPUT;
+                        cont_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+                        cont_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+                        gpio_config(&cont_cfg);
 
-                    gpio_config_t arm_cfg = {};
-                    arm_cfg.pin_bit_mask = 1ULL << arm_pin;
-                    arm_cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
-                    arm_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-                    arm_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-                    gpio_config(&arm_cfg);
-
-                    gpio_config_t cont_cfg = {};
-                    cont_cfg.pin_bit_mask = 1ULL << cont_pin;
-                    cont_cfg.mode         = GPIO_MODE_INPUT;
-                    cont_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-                    cont_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-                    gpio_config(&cont_cfg);
-
-                    // Force GPIO matrix output to simple GPIO signal,
-                    // overriding SPI2 peripheral signal on this pin.
-                    esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
-                    gpio_iomux_out(arm_pin, 1, false);
-
-                    // Arm, settle, read continuity, disarm (under spinlock for GPIO safety)
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    gpio_set_level(arm_pin, 1);
-                    portEXIT_CRITICAL(&pyro_spinlock);
-                    delay(100);
-                    int raw = gpio_get_level(cont_pin);
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    gpio_set_level(arm_pin, 0);
-                    portEXIT_CRITICAL(&pyro_spinlock);
-
-                    // Continuity: 1 = load connected, 0 = open (verified with Arduino test)
-                    non_sensor_data.pyro_status &= ~cont_bit;
-                    if (raw == 1) non_sensor_data.pyro_status |= cont_bit;
-                    ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d status=0x%02X",
-                             ch, raw, non_sensor_data.pyro_status);
+                        int raw = gpio_get_level(cont_pin);
+                        portENTER_CRITICAL(&pyro_spinlock);
+                        pyro_ch[idx].cont       = pyroContFromRaw(raw);
+                        pyro_ch[idx].cont_known = true;
+                        portEXIT_CRITICAL(&pyro_spinlock);
+                        ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d",
+                                 ch, raw, pyroContFromRaw(raw) ? 1 : 0);
+                    }
                 }
             }
             else if (out_pending_command == PYRO_FIRE_TEST)
@@ -3389,46 +3406,52 @@ static void loop_fc()
                         && cfg_len >= 1) {
                         ch = cfg_payload[0];
                     }
-                    gpio_num_t arm_pin  = (ch == 2) ? (gpio_num_t)config::PYRO2_ARM_PIN
-                                                    : (gpio_num_t)config::PYRO1_ARM_PIN;
-                    gpio_num_t fire_pin = (ch == 2) ? (gpio_num_t)config::PYRO2_FIRE_PIN
-                                                    : (gpio_num_t)config::PYRO1_FIRE_PIN;
-                    uint8_t fired_bit   = (ch == 2) ? PSF_CH2_FIRED : PSF_CH1_FIRED;
+                    if (ch < 1 || ch > 4) {
+                        ESP_LOGW(TAG, "[PYRO FIRE TEST] Invalid channel %u", ch);
+                    } else {
+                        const int idx = ch - 1;
+                        const gpio_num_t arm_pin  = (gpio_num_t)config::PYRO_ARM_PIN;
+                        const gpio_num_t fire_pin = (gpio_num_t)PYRO_FIRE_PINS[idx];
 
-                    // Reclaim pins from SPI2
-                    esp_gpio_revoke(1ULL << arm_pin);
-                    esp_gpio_revoke(1ULL << fire_pin);
-                    gpio_reset_pin(arm_pin);
-                    gpio_reset_pin(fire_pin);
+                        esp_gpio_revoke(1ULL << arm_pin);
+                        esp_gpio_revoke(1ULL << fire_pin);
+                        gpio_reset_pin(arm_pin);
+                        gpio_reset_pin(fire_pin);
 
-                    gpio_config_t pin_cfg = {};
-                    pin_cfg.pin_bit_mask = (1ULL << arm_pin) | (1ULL << fire_pin);
-                    pin_cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
-                    pin_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-                    pin_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-                    gpio_config(&pin_cfg);
+                        gpio_config_t pin_cfg = {};
+                        pin_cfg.pin_bit_mask = (1ULL << arm_pin) | (1ULL << fire_pin);
+                        pin_cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
+                        pin_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+                        pin_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+                        gpio_config(&pin_cfg);
 
-                    esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
-                    gpio_iomux_out(arm_pin, 1, false);
-                    esp_rom_gpio_connect_out_signal(fire_pin, SIG_GPIO_OUT_IDX, false, false);
-                    gpio_iomux_out(fire_pin, 1, false);
+                        esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
+                        gpio_iomux_out(arm_pin, 1, false);
+                        esp_rom_gpio_connect_out_signal(fire_pin, SIG_GPIO_OUT_IDX, false, false);
+                        gpio_iomux_out(fire_pin, 1, false);
 
-                    // Arm → fire pulse → disarm
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    gpio_set_level(arm_pin, 1);
-                    gpio_set_level(fire_pin, 1);
-                    portEXIT_CRITICAL(&pyro_spinlock);
+                        // ARM → settle → FIRE pulse → disarm (synchronous; ground only)
+                        portENTER_CRITICAL(&pyro_spinlock);
+                        pyroSetArmLocked(true);
+                        portEXIT_CRITICAL(&pyro_spinlock);
+                        delay(config::PYRO_ARM_SETTLE_MS);
+                        portENTER_CRITICAL(&pyro_spinlock);
+                        gpio_set_level(fire_pin, 1);
+                        portEXIT_CRITICAL(&pyro_spinlock);
 
-                    delay(config::PYRO_FIRE_DURATION_MS);
+                        delay(config::PYRO_FIRE_DURATION_MS);
 
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    gpio_set_level(fire_pin, 0);
-                    gpio_set_level(arm_pin, 0);
-                    portEXIT_CRITICAL(&pyro_spinlock);
+                        portENTER_CRITICAL(&pyro_spinlock);
+                        gpio_set_level(fire_pin, 0);
+                        pyroSetArmLocked(false);
+                        // Mark the channel as Done so telemetry shows fired
+                        pyro_ch[idx].state          = PyroChState::Done;
+                        pyro_ch[idx].phase_start_ms = 0;
+                        portEXIT_CRITICAL(&pyro_spinlock);
 
-                    non_sensor_data.pyro_status |= fired_bit;
-                    ESP_LOGI(TAG, "[PYRO FIRE TEST] CH%u fired for %u ms",
-                             ch, (unsigned)config::PYRO_FIRE_DURATION_MS);
+                        ESP_LOGI(TAG, "[PYRO FIRE TEST] CH%u fired for %u ms",
+                                 ch, (unsigned)config::PYRO_FIRE_DURATION_MS);
+                    }
                 }
             }
             else if (out_pending_command == SERVO_TEST_PENDING)
@@ -3610,11 +3633,6 @@ static void loop_fc()
         pressure_alt_rate_mps = kinematics.d_alt_est_;
         max_alt_m = kinematics.max_altitude;
         max_speed_mps = kinematics.max_speed;
-
-        // Progress any in-flight pyro arming/continuity diagnostic. Must run
-        // every iteration regardless of state/test path so the state machine
-        // started at READY→PRELAUNCH or PRELAUNCH→INFLIGHT finishes promptly.
-        servicePyroArmDiag(now_ms);
 
         if (ground_test_active)
         {
@@ -3799,16 +3817,16 @@ static void loop_fc()
                     burnout_time_ms = 0;
                     burnout_neg_count = 0;
                     guidance_active = false;
-                    // Reset and arm pyro channels on launch
+                    // Reset pyro channels on launch. ARM stays LOW until a
+                    // channel's trigger fires (per-fire arming on new PCB).
                     pyro_apogee_detected = false;
-                    pyro_apogee_time_ms = 0;
+                    pyro_apogee_time_ms  = 0;
                     portENTER_CRITICAL(&pyro_spinlock);
-                    pyro1_fired = false;
-                    pyro2_fired = false;
-                    pyro1_fire_start_ms = 0;
-                    pyro2_fire_start_ms = 0;
+                    for (int i = 0; i < 4; ++i) {
+                        pyro_ch[i].state          = PyroChState::Idle;
+                        pyro_ch[i].phase_start_ms = 0;
+                    }
                     portEXIT_CRITICAL(&pyro_spinlock);
-                    pyroArmEnabled(now_ms);
                     ESP_LOGI(TAG, "[STATE] PRELAUNCH -> INFLIGHT (ground_p=%.0f)",
                                   (double)ground_pressure_pa);
                 }
@@ -4207,46 +4225,43 @@ static void loop_fc()
         if (kinematics.launch_flag || (rocket_state == INFLIGHT)) non_sensor_data.flags |= NSF_LAUNCH;
         if (burnout_detected) non_sensor_data.flags |= NSF_BURNOUT;
         if (guidance_active)  non_sensor_data.flags |= NSF_GUIDANCE;
-        // Apogee detector outputs + master vote (#142/#143).
+        // Apogee detector outputs + master vote (#142/#143) plus relocated
+        // reboot-recovery and guidance-enabled bits (formerly in pyro_status,
+        // moved when pyro_status was reclaimed for 4-channel state).
         non_sensor_data.apogee_flags = 0;
         if (kinematics.gps_apogee_flag)   non_sensor_data.apogee_flags |= NSF2_GPS_APOGEE;
         if (kinematics.pitch_apogee_flag) non_sensor_data.apogee_flags |= NSF2_PITCH_APOGEE;
         if (kinematics.apogee_flag)       non_sensor_data.apogee_flags |= NSF2_MASTER_APOGEE;
-        // Snapshot pyro state under spinlock for telemetry
+        if (reboot_recovery_telem)        non_sensor_data.apogee_flags |= NSF2_REBOOT_RECOVERY;
+        if (guidance_enabled)             non_sensor_data.apogee_flags |= NSF2_GUIDANCE_ENABLED;
+        // Snapshot pyro state under spinlock for telemetry. With per-fire
+        // arming the global "armed" bit just mirrors the live PYRO_ARM pin.
+        bool arm_now;
+        bool cont_known[4], cont_state[4], fired[4];
         portENTER_CRITICAL(&pyro_spinlock);
-        bool p1_armed = pyro1_armed;
-        bool p2_armed = pyro2_armed;
-        bool p1_fired = pyro1_fired;
-        bool p2_fired = pyro2_fired;
+        arm_now = pyro_arm_pin_state;
+        for (int i = 0; i < 4; ++i) {
+            cont_known[i] = pyro_ch[i].cont_known;
+            cont_state[i] = pyro_ch[i].cont;
+            fired[i]      = (pyro_ch[i].state == PyroChState::Done);
+        }
         portEXIT_CRITICAL(&pyro_spinlock);
-        if (p1_armed) non_sensor_data.flags |= NSF_PYRO1_ARMED;
-        if (p2_armed) non_sensor_data.flags |= NSF_PYRO2_ARMED;
+        if (arm_now) non_sensor_data.flags |= NSF_PYRO_ARMED;
         non_sensor_data.rocket_state = (uint8_t)rocket_state;
-        // Pyro continuity: when armed (INFLIGHT), read live from GPIO.
-        // When not armed, preserve bits set by PYRO_CONT_TEST command.
-        // Continuity: GPIO 1 = load connected, 0 = open (verified with Arduino test).
+        // 4-channel pyro status byte: bit pairs (cont, fired) per channel.
+        // CONT bits reflect the last known reading (set during a CONT test
+        // or while ARM is asserted mid-fire). Channels never measured stay
+        // 0 — iOS UI surfaces "unknown" until the prelaunch test runs.
         {
-            uint8_t ps = non_sensor_data.pyro_status;
-            // Clear armed-channel cont bits, then re-read live
-            if (p1_armed) {
-                ps &= ~PSF_CH1_CONT;
-                if (gpio_get_level((gpio_num_t)config::PYRO1_CONT_PIN) == 1)
-                    ps |= PSF_CH1_CONT;
+            uint8_t ps = 0;
+            static constexpr uint8_t CONT_BITS[4]  = {
+                PSF_CH1_CONT, PSF_CH2_CONT, PSF_CH3_CONT, PSF_CH4_CONT };
+            static constexpr uint8_t FIRED_BITS[4] = {
+                PSF_CH1_FIRED, PSF_CH2_FIRED, PSF_CH3_FIRED, PSF_CH4_FIRED };
+            for (int i = 0; i < 4; ++i) {
+                if (cont_known[i] && cont_state[i]) ps |= CONT_BITS[i];
+                if (fired[i])                       ps |= FIRED_BITS[i];
             }
-            if (p2_armed) {
-                ps &= ~PSF_CH2_CONT;
-                if (gpio_get_level((gpio_num_t)config::PYRO2_CONT_PIN) == 1)
-                    ps |= PSF_CH2_CONT;
-            }
-            // Update fired bits
-            if (p1_fired) ps |= PSF_CH1_FIRED;
-            if (p2_fired) ps |= PSF_CH2_FIRED;
-            if (reboot_recovery_telem) ps |= PSF_REBOOT_RECOVERY;
-            // Always report the live guidance_enabled config so the
-            // OutComputer can use it as the authoritative source of truth
-            // (prevents iOS/OUT/FC NVS caches from silently diverging).
-            ps &= ~PSF_GUIDANCE_ENABLED;
-            if (guidance_enabled) ps |= PSF_GUIDANCE_ENABLED;
             non_sensor_data.pyro_status = ps;
         }
 

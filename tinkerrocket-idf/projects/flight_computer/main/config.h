@@ -13,7 +13,10 @@ struct config
     static constexpr uint32_t SPI_SPEED = 10'000'000; // 10 MHz
 
     // ### GNSS Serial Pins ###
-    static constexpr uint8_t GNSS_RX = 3;  // 3
+    // Schematic-labeled wiring. The driver auto-detects the RX/TX swap on
+    // boards where the labeling is reversed (current rocket-computer rev
+    // has them swapped) via a fast 9600-baud activity probe at boot.
+    static constexpr uint8_t GNSS_RX = 3;
     static constexpr uint8_t GNSS_TX = 4;
     // Optional GNSS control pins. Set to -1 if not wired.
     static constexpr int8_t GNSS_RESET_N = -1;
@@ -109,13 +112,22 @@ struct config
     static constexpr uint32_t RUNCAM_BAUD = 115200;
 
     // ### Pyro Channel Pins ###
-    static constexpr uint8_t PYRO1_ARM_PIN  = 14;
-    static constexpr uint8_t PYRO1_FIRE_PIN = 15;
-    static constexpr uint8_t PYRO1_CONT_PIN = 16;
-    static constexpr uint8_t PYRO2_ARM_PIN  = 22;
-    static constexpr uint8_t PYRO2_FIRE_PIN = 18;
-    static constexpr uint8_t PYRO2_CONT_PIN = 19;
-    static constexpr uint32_t PYRO_FIRE_DURATION_MS = 500;
+    // New PCB: one shared arming FET feeds all four squib drivers.
+    // ARM is raised only momentarily — for the PRELAUNCH continuity
+    // check and again during a fire pulse — never latched in flight.
+    static constexpr uint8_t PYRO_ARM_PIN   = 14;
+    static constexpr uint8_t PYRO1_CONT_PIN = 15;
+    static constexpr uint8_t PYRO1_FIRE_PIN = 16;
+    static constexpr uint8_t PYRO2_CONT_PIN = 18;
+    static constexpr uint8_t PYRO2_FIRE_PIN = 19;
+    static constexpr uint8_t PYRO3_CONT_PIN = 38;
+    static constexpr uint8_t PYRO3_FIRE_PIN = 34;
+    static constexpr uint8_t PYRO4_CONT_PIN = 51;
+    static constexpr uint8_t PYRO4_FIRE_PIN = 50;
+    static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 500;
+    // Time between raising ARM and reading CONT / pulsing FIRE, giving
+    // the upstream arming FET its turn-on settle margin.
+    static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
 
     // ### Servo Controls (placeholder pins) ###
     // Set these to valid GPIOs for your board.

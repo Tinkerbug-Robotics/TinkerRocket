@@ -175,7 +175,8 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         return false;
     };
 
-    // Bootstrap from preferred UART rate first, then fall back as needed.
+    // Bootstrap from preferred UART rate first (warm-boot fast path: module
+    // already configured at preferred_baud from a previous run).
     ESP_LOGI(TAG, "Bootstrap try %lu baud", (unsigned long)bootstrap_baud);
     uartBegin(bootstrap_baud, GNSS_RX, GNSS_TX);
     delay(80);
@@ -186,7 +187,50 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         active_tx = GNSS_TX;
     }
 
-    // Keep trying until we can talk UBX at some baud.
+    // Fast cold-boot orientation probe: u-blox modules power up at 9600 baud
+    // (factory default). A ~650 ms listen at 9600 on each orientation finds
+    // which way the RX/TX is wired and short-circuits the slow ~30 s
+    // baud-cycle scan on the wrong orientation. Works for both schematic-
+    // labeled boards (default orientation) and rev's where RX/TX are swapped.
+    if (connected_baud == 0U)
+    {
+        uint8_t probe_rx = GNSS_RX;
+        uint8_t probe_tx = GNSS_TX;
+        bool    detected = false;
+        bool    swapped  = false;
+
+        if (hasSerialActivity(GNSS_RX, GNSS_TX, 9600U))
+        {
+            detected = true;
+        }
+        else if ((GNSS_RX != GNSS_TX) && hasSerialActivity(GNSS_TX, GNSS_RX, 9600U))
+        {
+            detected = true;
+            swapped  = true;
+            probe_rx = GNSS_TX;
+            probe_tx = GNSS_RX;
+        }
+
+        if (detected)
+        {
+            if (swapped)
+            {
+                ESP_LOGW(TAG, "Quick probe: activity at 9600 on swapped RX/TX "
+                              "(RX=%d TX=%d)", probe_rx, probe_tx);
+            }
+            uint32_t probe_found = 0U;
+            if (scanAndConnectPins(probe_rx, probe_tx, probe_found))
+            {
+                connected_baud = probe_found;
+                // active_rx/tx set inside scanAndConnectPins
+            }
+        }
+    }
+
+    // Fall-back full-scan loop. Stays as a safety net for the case where
+    // the quick orientation probe fails (e.g. module powered on at a
+    // non-default baud and the activity probe at 9600 saw nothing, or the
+    // initial UBX handshake never completes despite serial activity).
     uint8_t scan_attempt = 0;
     while ((connected_baud == 0U) && !scanAndConnect(connected_baud))
     {

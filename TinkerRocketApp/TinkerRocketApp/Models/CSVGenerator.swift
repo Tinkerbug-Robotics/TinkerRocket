@@ -529,11 +529,15 @@ nonisolated class CSVGenerator {
         columns.append("Apogee Flag (Master)")
         columns.append("Launch Flag")
 
-        // Pyro status bits (appended in #34 wire format; legacy files emit 0s)
+        // Pyro status bits — 4 channels (legacy files emit 0s for ch3/4)
         columns.append("Pyro 1 Continuity")
         columns.append("Pyro 2 Continuity")
+        columns.append("Pyro 3 Continuity")
+        columns.append("Pyro 4 Continuity")
         columns.append("Pyro 1 Fired")
         columns.append("Pyro 2 Fired")
+        columns.append("Pyro 3 Fired")
+        columns.append("Pyro 4 Fired")
         columns.append("Reboot Recovery")
         columns.append("FC Guidance Enabled")
 
@@ -623,11 +627,15 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.launch_flag ? "1" : "0" } ?? "")
 
-        // Pyro status bits
+        // Pyro status bits (4 channels)
         values.append(nonSensor.map { $0.pyro1_continuity ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.pyro2_continuity ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro3_continuity ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro4_continuity ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.pyro1_fired ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.pyro2_fired ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro3_fired ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.pyro4_fired ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.reboot_recovery ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.guidance_enabled ? "1" : "0" } ?? "")
 
@@ -791,16 +799,22 @@ nonisolated struct CameraSettings: Codable, Sendable {
 nonisolated struct PyroSettings: Codable, Sendable {
     let ch1: PyroChannelSettings
     let ch2: PyroChannelSettings
+    let ch3: PyroChannelSettings
+    let ch4: PyroChannelSettings
 
     init(from raw: FlightSettingsData) {
-        ch1 = PyroChannelSettings(
-            enabled: raw.pyro1_enabled,
-            mode: raw.pyro1_trigger_mode,
-            value: raw.pyro1_trigger_value)
-        ch2 = PyroChannelSettings(
-            enabled: raw.pyro2_enabled,
-            mode: raw.pyro2_trigger_mode,
-            value: raw.pyro2_trigger_value)
+        ch1 = PyroChannelSettings(enabled: raw.pyro_enabled[0],
+                                  mode: raw.pyro_trigger_mode[0],
+                                  value: raw.pyro_trigger_value[0])
+        ch2 = PyroChannelSettings(enabled: raw.pyro_enabled[1],
+                                  mode: raw.pyro_trigger_mode[1],
+                                  value: raw.pyro_trigger_value[1])
+        ch3 = PyroChannelSettings(enabled: raw.pyro_enabled[2],
+                                  mode: raw.pyro_trigger_mode[2],
+                                  value: raw.pyro_trigger_value[2])
+        ch4 = PyroChannelSettings(enabled: raw.pyro_enabled[3],
+                                  mode: raw.pyro_trigger_mode[3],
+                                  value: raw.pyro_trigger_value[3])
     }
 }
 

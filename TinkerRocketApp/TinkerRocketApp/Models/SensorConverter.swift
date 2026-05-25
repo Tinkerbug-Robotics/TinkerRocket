@@ -356,8 +356,12 @@ nonisolated class SensorConverter {
             // Legacy wire format never carried pyro_status — leave unset.
             pyro1_continuity: false,
             pyro2_continuity: false,
+            pyro3_continuity: false,
+            pyro4_continuity: false,
             pyro1_fired: false,
             pyro2_fired: false,
+            pyro3_fired: false,
+            pyro4_fired: false,
             reboot_recovery: false,
             guidance_enabled: false
         )
@@ -400,26 +404,32 @@ nonisolated class SensorConverter {
         let launch_flag = (raw.flags & NSF_LAUNCH) != 0
         let burnout_flag = (raw.flags & NSF_BURNOUT) != 0
 
-        // Apogee detector outputs + master vote (appended in #142/#143).
-        let NSF2_GPS_APOGEE: UInt8    = (1 << 0)
-        let NSF2_PITCH_APOGEE: UInt8  = (1 << 1)
-        let NSF2_MASTER_APOGEE: UInt8 = (1 << 2)
+        // Apogee detector outputs + master vote + relocated reboot/guidance bits.
+        let NSF2_GPS_APOGEE: UInt8       = (1 << 0)
+        let NSF2_PITCH_APOGEE: UInt8     = (1 << 1)
+        let NSF2_MASTER_APOGEE: UInt8    = (1 << 2)
+        let NSF2_REBOOT_RECOVERY: UInt8  = (1 << 3)
+        let NSF2_GUIDANCE_ENABLED: UInt8 = (1 << 4)
         let gps_apogee_flag   = (raw.apogee_flags & NSF2_GPS_APOGEE) != 0
         let pitch_apogee_flag = (raw.apogee_flags & NSF2_PITCH_APOGEE) != 0
         let apogee_flag       = (raw.apogee_flags & NSF2_MASTER_APOGEE) != 0
+        let reboot_recovery   = (raw.apogee_flags & NSF2_REBOOT_RECOVERY) != 0
+        let guidance_enabled  = (raw.apogee_flags & NSF2_GUIDANCE_ENABLED) != 0
 
         let rocket_state = RocketState(rawValue: raw.rocket_state) ?? .initialization
 
         // dm/s -> m/s
         let altitude_rate = Double(raw.baro_alt_rate_dmps) * 0.1
 
-        // Pyro status byte — mirror the C++ PSF_ masks in RocketComputerTypes.h
-        let PSF_CH1_CONT: UInt8         = (1 << 0)
-        let PSF_CH2_CONT: UInt8         = (1 << 1)
-        let PSF_CH1_FIRED: UInt8        = (1 << 2)
-        let PSF_CH2_FIRED: UInt8        = (1 << 3)
-        let PSF_REBOOT_RECOVERY: UInt8  = (1 << 4)
-        let PSF_GUIDANCE_ENABLED: UInt8 = (1 << 5)
+        // Pyro status byte — 4 channels × (cont, fired). Mirror C++ PSF_* masks.
+        let PSF_CH1_CONT: UInt8  = (1 << 0)
+        let PSF_CH1_FIRED: UInt8 = (1 << 1)
+        let PSF_CH2_CONT: UInt8  = (1 << 2)
+        let PSF_CH2_FIRED: UInt8 = (1 << 3)
+        let PSF_CH3_CONT: UInt8  = (1 << 4)
+        let PSF_CH3_FIRED: UInt8 = (1 << 5)
+        let PSF_CH4_CONT: UInt8  = (1 << 6)
+        let PSF_CH4_FIRED: UInt8 = (1 << 7)
 
         return NonSensorDataSI(
             time_us: raw.time_us,
@@ -445,10 +455,14 @@ nonisolated class SensorConverter {
             rocket_state: rocket_state,
             pyro1_continuity: (raw.pyro_status & PSF_CH1_CONT) != 0,
             pyro2_continuity: (raw.pyro_status & PSF_CH2_CONT) != 0,
+            pyro3_continuity: (raw.pyro_status & PSF_CH3_CONT) != 0,
+            pyro4_continuity: (raw.pyro_status & PSF_CH4_CONT) != 0,
             pyro1_fired:      (raw.pyro_status & PSF_CH1_FIRED) != 0,
             pyro2_fired:      (raw.pyro_status & PSF_CH2_FIRED) != 0,
-            reboot_recovery:  (raw.pyro_status & PSF_REBOOT_RECOVERY) != 0,
-            guidance_enabled: (raw.pyro_status & PSF_GUIDANCE_ENABLED) != 0
+            pyro3_fired:      (raw.pyro_status & PSF_CH3_FIRED) != 0,
+            pyro4_fired:      (raw.pyro_status & PSF_CH4_FIRED) != 0,
+            reboot_recovery:  reboot_recovery,
+            guidance_enabled: guidance_enabled
         )
     }
 }
