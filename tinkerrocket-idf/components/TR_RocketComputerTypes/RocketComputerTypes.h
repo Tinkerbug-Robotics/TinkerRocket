@@ -1315,6 +1315,14 @@ static constexpr uint8_t SENSOR_CAL_STATUS_MSG    = 0xE0;  // FC→OC: SensorCal
 // (and the .json the app derives from it) records what actually flew (#165).
 static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
 
+// OC→self, emitted into the log once per stats interval (~1 Hz) while a
+// session is open.  Carries the runtime ring-buffer capacity and peak-fill
+// metrics so post-flight analysis can judge how much MRAM the flight
+// actually used and whether a smaller / cheaper chip would have fit
+// (the MR25H10 is 128 KB; payload here lets us compare against the real
+// high-water mark per flight).  See LogBufferStatsData.
+static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;
+
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types
@@ -1509,6 +1517,30 @@ struct __attribute__((packed)) FlightSettingsData
     RollProfileData roll_profile;
 };
 static_assert(sizeof(FlightSettingsData) == 188, "FlightSettingsData layout check");
+
+// --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
+// Snapshot of the OC's ring-buffer health written into the flight log so the
+// per-flight .bin records exactly how much MRAM the session actually used.
+// This is the data point we need to decide if the current 1 Mbit MR25H10
+// (128 KB) is over-provisioned and we can drop to a smaller / cheaper part.
+//
+// All counters are cumulative since boot (the OC doesn't reset between
+// sessions in normal operation); analysis tooling pulls the *last* sample
+// before close to get the per-flight peak.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;                  // micros() at emit
+    uint32_t ring_size;                // ring capacity in bytes
+                                       //   (MRAM region size when MRAM is wired,
+                                       //    else RAM fallback ring size)
+    uint32_t ring_fill;                // current bytes resident in ring at emit
+    uint32_t ring_highwater;           // peak ring fill since boot
+    uint32_t ring_overruns;            // count of overrun events since boot
+    uint32_t ring_drop_oldest_bytes;   // cumulative bytes dropped from tail since boot
+    uint32_t ring_bad_sof_clears;      // ring-clear events from corrupt-tail recovery
+} LogBufferStatsData;
+static_assert(sizeof(LogBufferStatsData) == 28,
+              "LogBufferStatsData must be 28 bytes");
 
 // --- Guidance Telemetry Data (sent at ~10 Hz during coast) ---
 typedef struct __attribute__((packed))

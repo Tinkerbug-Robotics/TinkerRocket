@@ -3070,8 +3070,38 @@ static void printStats()
     prev_msg_count_end_flight = msg_count_end_flight;
     prev_msg_count_unknown = msg_count_unknown;
 
+    // Persist a LogBufferStats snapshot once per stats interval (~1 Hz) into
+    // the flight log so post-flight tooling can read the per-flight peak
+    // without needing VERBOSE_DEBUG serial captures.  Cheap (28 B payload +
+    // 8 B frame overhead = 36 B/s) and enqueueFrame() internally drops the
+    // frame when no session/file is open, so off-session traffic is zero.
+    {
+        LogBufferStatsData lbs = {};
+        lbs.time_us = (uint32_t)esp_timer_get_time();
+        lbs.ring_size = s.ring_size;
+        lbs.ring_fill = s.ring_fill;
+        lbs.ring_highwater = s.ring_highwater;
+        lbs.ring_overruns = s.ring_overruns;
+        lbs.ring_drop_oldest_bytes = s.ring_drop_oldest_bytes;
+        lbs.ring_bad_sof_clears = s.ring_bad_sof_clears;
+
+        uint8_t lbs_frame[MAX_FRAME];
+        size_t  lbs_frame_len = 0;
+        if (TR_I2C_Interface::packMessage(LOG_BUFFER_STATS_MSG,
+                                           (const uint8_t*)&lbs,
+                                           sizeof(lbs),
+                                           lbs_frame, sizeof(lbs_frame),
+                                           lbs_frame_len))
+        {
+            (void)logger.enqueueFrame(lbs_frame, lbs_frame_len);
+        }
+    }
+
     if (config::VERBOSE_DEBUG)
     {
+    // Denominator is s.ring_size (the runtime ring capacity) — used to show
+    // 64 KB when the RAM-only fallback ring is in use even with MRAM wired,
+    // which obscured the real headroom on the 128 KB MR25H10.
     ESP_LOGI("OC", "RX %.1f KB/s | WR %.1f KB/s | frames rx/drop/bad=%lu/%lu/%lu | RING=%lu/%lu (hi=%lu)",
                   (double)rx_kbs,
                   (double)wr_kbs,
@@ -3079,7 +3109,7 @@ static void printStats()
                   (unsigned long)s.frames_dropped,
                   (unsigned long)frames_bad_crc,
                   (unsigned long)s.ring_fill,
-                  (unsigned long)config::RAM_RING_SIZE,
+                  (unsigned long)s.ring_size,
                   (unsigned long)s.ring_highwater);
     ESP_LOGI("OC", "RING interval peak/overrun/drop_oldest_bytes/bad_sof=%lu/%lu/%lu/%lu (bad_sof_total=%lu)",
                   (unsigned long)interval_ring_fill_peak,
