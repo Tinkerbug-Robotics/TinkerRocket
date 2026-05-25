@@ -55,6 +55,11 @@ struct TR_LogToFlashConfig
 
 struct TR_LogToFlashStats
 {
+    // Ring capacity in bytes (MRAM region when MRAM is wired, else RAM ring).
+    // Reported alongside ring_fill / ring_highwater so callers can derive the
+    // actual utilization without knowing which backing is active — useful for
+    // deciding whether the current 1 Mbit MRAM is over-provisioned.
+    uint32_t ring_size = 0;
     uint32_t ring_fill = 0;
     uint32_t ring_highwater = 0;
     uint32_t ring_overruns = 0;

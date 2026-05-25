@@ -327,6 +327,7 @@ void TR_LogToFlash::service()
 
 void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
 {
+    out.ring_size = ring_size_;
     out.ring_fill = rb_count;
     out.ring_highwater = rb_highwater;
     out.ring_overruns = rb_overruns;

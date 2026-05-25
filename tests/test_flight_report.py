@@ -27,6 +27,7 @@ REQUIRED_SECTIONS = [
     'id="kinematic_checks"',
     'id="roll_pid"',
     'id="lora"',
+    'id="log_buffer"',
     'id="settings"',
     'id="parser"',
 ]
