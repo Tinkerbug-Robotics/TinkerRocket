@@ -60,16 +60,17 @@ MMC_UT_PER_COUNT = (8.0 * 100.0) / 131072.0  # ≈ 0.006104
 # ------------------------------------
 
 # ---------- Message type IDs (Mini) ----------
-MSG_OUT_STATUS_QUERY = 0xA0
-MSG_GNSS             = 0xA1
-MSG_ISM6HG256        = 0xA2
-MSG_BMP585           = 0xA3
-MSG_MMC5983MA        = 0xA4
-MSG_NON_SENSOR       = 0xA5
-MSG_POWER            = 0xA6
-MSG_START_LOGGING    = 0xA7
-MSG_END_FLIGHT       = 0xA8
-MSG_LORA             = 0xF1
+MSG_OUT_STATUS_QUERY  = 0xA0
+MSG_GNSS              = 0xA1
+MSG_ISM6HG256         = 0xA2
+MSG_BMP585            = 0xA3
+MSG_MMC5983MA         = 0xA4
+MSG_NON_SENSOR        = 0xA5
+MSG_POWER             = 0xA6
+MSG_START_LOGGING     = 0xA7
+MSG_END_FLIGHT        = 0xA8
+MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
+MSG_LORA              = 0xF1
 
 MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
@@ -81,21 +82,23 @@ MSG_NAMES = {
     MSG_POWER:            "POWER",
     MSG_START_LOGGING:    "StartLogging",
     MSG_END_FLIGHT:       "EndFlight",
+    MSG_LOG_BUFFER_STATS: "LogBufferStats",
     MSG_LORA:             "LoRa",
 }
 
 # Expected payload sizes for validation
 MSG_EXPECTED_LEN = {
-    MSG_OUT_STATUS_QUERY: 16,   # OutStatusQueryData
-    MSG_GNSS:             42,
-    MSG_ISM6HG256:        22,
-    MSG_BMP585:           12,
-    MSG_MMC5983MA:        16,
-    MSG_NON_SENSOR:       None,  # 42 (legacy) or 43 (with pyro_status byte)
-    MSG_POWER:            10,
-    MSG_START_LOGGING:    None,  # variable / no payload
-    MSG_END_FLIGHT:       None,
-    MSG_LORA:             49,
+    MSG_OUT_STATUS_QUERY:  16,   # OutStatusQueryData
+    MSG_GNSS:              42,
+    MSG_ISM6HG256:         22,
+    MSG_BMP585:            12,
+    MSG_MMC5983MA:         16,
+    MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
+    MSG_POWER:             10,
+    MSG_START_LOGGING:     None,  # variable / no payload
+    MSG_END_FLIGHT:        None,
+    MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
+    MSG_LORA:              49,
 }
 
 # Struct formats (little-endian, packed)
@@ -115,6 +118,8 @@ FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
 # OutStatusQueryData: 16 bytes
 FMT_STATUS_QUERY = '<B H H hh B hhh'
+# LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
+FMT_LOG_BUFFER_STATS = '<I IIIIII'
 
 SYNC = b'\xAA\x55\xAA\x55'
 
@@ -223,12 +228,13 @@ def parse_binary_file(filepath):
 
     file_size = len(data)
     records = {
-        "GNSS":       [],
-        "ISM6HG256":  [],
-        "BMP585":     [],
-        "MMC5983MA":  [],
-        "NonSensor":  [],
-        "POWER":      [],
+        "GNSS":           [],
+        "ISM6HG256":      [],
+        "BMP585":         [],
+        "MMC5983MA":      [],
+        "NonSensor":      [],
+        "POWER":          [],
+        "LogBufferStats": [],
     }
 
     config = {
@@ -436,6 +442,20 @@ def parse_binary_file(filepath):
                         "current":  decode_current(fields[2]),
                         "soc":      decode_soc(fields[3]),
                     })
+
+            elif msg_type == MSG_LOG_BUFFER_STATS:
+                # OC self-emitted ring snapshot, ~1 Hz while logging.
+                # See LogBufferStatsData in RocketComputerTypes.h.
+                fields = struct.unpack(FMT_LOG_BUFFER_STATS, payload)
+                records["LogBufferStats"].append({
+                    "time_us":                fields[0],
+                    "ring_size":              fields[1],
+                    "ring_fill":              fields[2],
+                    "ring_highwater":         fields[3],
+                    "ring_overruns":          fields[4],
+                    "ring_drop_oldest_bytes": fields[5],
+                    "ring_bad_sof_clears":    fields[6],
+                })
 
         except struct.error:
             pass
