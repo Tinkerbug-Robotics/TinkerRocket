@@ -24,6 +24,7 @@ enum MessageType: UInt8 {
     case cameraStart = 0xAA
     case cameraStop = 0xAB
     case flightSettings = 0xE1  // FlightSettingsData (149B) — runtime settings snapshot at launch (#165)
+    case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
 
@@ -380,6 +381,28 @@ nonisolated struct MMC5983MAData {
         mag_x = data.readUInt32LE(at: &offset)
         mag_y = data.readUInt32LE(at: &offset)
         mag_z = data.readUInt32LE(at: &offset)
+    }
+}
+
+// IIS2MDC Magnetometer Data (10 bytes) — new Mini PCB rev, replaces MMC5983MA.
+// Raw int16 per axis at 0.15 µT/LSB (datasheet 9.13).
+nonisolated struct IIS2MDCData {
+    let time_us: UInt32
+    let mag_x: Int16  // Raw counts (signed)
+    let mag_y: Int16
+    let mag_z: Int16
+
+    init(from data: Data) throws {
+        guard data.count >= 10 else {
+            throw ParseError.invalidSize(expected: 10, got: data.count)
+        }
+
+        var offset = 0
+
+        time_us = data.readUInt32LE(at: &offset)
+        mag_x = data.readInt16LE(at: &offset)
+        mag_y = data.readInt16LE(at: &offset)
+        mag_z = data.readInt16LE(at: &offset)
     }
 }
 

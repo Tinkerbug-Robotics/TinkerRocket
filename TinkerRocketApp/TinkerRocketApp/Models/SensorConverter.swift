@@ -191,6 +191,36 @@ nonisolated class SensorConverter {
         )
     }
 
+    // MARK: - IIS2MDC Conversion (new Mini PCB rev)
+
+    /// Convert IIS2MDC raw counts to MMC5983MADataSI (µT) so CSV writer
+    /// stays unified between MMC and IIS2MDC boards.  IIS2MDC sensitivity
+    /// is 0.15 µT/LSB (datasheet 9.13).  Frame rotation reuses
+    /// mmc_rot_z_rad — only one mag rotation comes back in the status
+    /// query (mmc_rot_z_cdeg), applied to whichever mag chip is present.
+    func convertIIS2MDC(_ raw: IIS2MDCData) -> MMC5983MADataSI {
+        let UT_PER_LSB = 0.15
+
+        let mx = Double(raw.mag_x) * UT_PER_LSB
+        let my = Double(raw.mag_y) * UT_PER_LSB
+        let mz = Double(raw.mag_z) * UT_PER_LSB
+
+        let c = cos(mmc_rot_z_rad)
+        let s = sin(mmc_rot_z_rad)
+
+        // Sensor frame -> board frame, rotation about +Z.
+        let mag_x = (mx * c) - (my * s)
+        let mag_y = (mx * s) + (my * c)
+        let mag_z = mz
+
+        return MMC5983MADataSI(
+            time_us: raw.time_us,
+            mag_x: mag_x,
+            mag_y: mag_y,
+            mag_z: mag_z
+        )
+    }
+
     // MARK: - Legacy Sensor Conversions
     // Legacy uses different sensors (ICM45686, H3LIS331, MS5611, LIS3MDL).
     // All converters output the same SI types as Mini so CSVGenerator stays unified.

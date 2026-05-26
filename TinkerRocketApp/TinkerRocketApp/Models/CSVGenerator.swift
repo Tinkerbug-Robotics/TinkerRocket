@@ -114,6 +114,16 @@ nonisolated class CSVGenerator {
                         magData.append((raw.time_us, si))
                     }
 
+                case .iis2mdc:
+                    // New Mini PCB rev: IIS2MDC replaces MMC5983MA.
+                    // Converter output type is MMC5983MADataSI so the
+                    // downstream Magnetic Field X/Y/Z (µT) columns
+                    // emit the same way regardless of which mag chip
+                    // is fitted.
+                    let raw = try IIS2MDCData(from: frame.payload)
+                    let si = converter.convertIIS2MDC(raw)
+                    magData.append((raw.time_us, si))
+
                 case .power:
                     // Power encoding is the same for both devices
                     let raw = try POWERData(from: frame.payload)
