@@ -49,6 +49,11 @@ bool TR_ISM6HG256::ensureSpiDevice_()
 {
     if (spi_dev_) return true;
 
+    // Configure CS as a GPIO output and idle HIGH first — the SPI master
+    // does not own this pin (spics_io_num=-1) so we drive it ourselves.
+    // Idempotent across the lazy-init path triggered by ReadWhoAmI().
+    configureCsPin_();
+
     spi_device_interface_config_t devcfg = {};
     devcfg.clock_speed_hz = clock_hz_;
     devcfg.mode           = 0;          // SPI_MODE0 (ST convention)
@@ -71,8 +76,9 @@ TR_ISM6HG256Status TR_ISM6HG256::begin()
 {
     uint8_t whoami = 0U;
 
-    configureCsPin_();
-
+    // CS + SPI device are configured here on the cold path (no prior
+    // ReadWhoAmI), or skipped (idempotent) if SensorCollector probed
+    // already.
     if (!ensureSpiDevice_()) return TR_ISM6HG256_ERROR;
 
     if (ReadWhoAmI(&whoami) != TR_ISM6HG256_OK) return TR_ISM6HG256_ERROR;
@@ -364,7 +370,10 @@ TR_ISM6HG256Status TR_ISM6HG256::Set_G_OutputDataRate_When_Disabled(float Odr)
 
 uint8_t TR_ISM6HG256::IO_Read(uint8_t *pBuffer, uint8_t RegisterAddr, uint16_t NumByteToRead)
 {
-    if (!spi_dev_ || !pBuffer || NumByteToRead == 0) return 1;
+    if (!pBuffer || NumByteToRead == 0) return 1;
+    // SensorCollector calls ReadWhoAmI() before begin() to fail-fast on a
+    // missing chip — initialise the SPI device lazily so that path works.
+    if (!ensureSpiDevice_()) return 1;
 
     spi_transaction_t t = {};
     t.cmd       = static_cast<uint16_t>(RegisterAddr | 0x80);  // ST: bit7=1 for read, auto-increment via IF_INC
@@ -380,7 +389,8 @@ uint8_t TR_ISM6HG256::IO_Read(uint8_t *pBuffer, uint8_t RegisterAddr, uint16_t N
 
 uint8_t TR_ISM6HG256::IO_Write(uint8_t *pBuffer, uint8_t RegisterAddr, uint16_t NumByteToWrite)
 {
-    if (!spi_dev_ || !pBuffer || NumByteToWrite == 0) return 1;
+    if (!pBuffer || NumByteToWrite == 0) return 1;
+    if (!ensureSpiDevice_()) return 1;
 
     spi_transaction_t t = {};
     t.cmd       = static_cast<uint16_t>(RegisterAddr & 0x7F);  // ST: bit7=0 for write
