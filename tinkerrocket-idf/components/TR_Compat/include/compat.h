@@ -92,46 +92,18 @@ static inline int digitalRead(uint8_t pin)
 }
 
 /* ── Interrupts ─────────────────────────────────────────── */
-
-#ifndef RISING
-#define RISING  GPIO_INTR_POSEDGE
-#endif
-#ifndef FALLING
-#define FALLING GPIO_INTR_NEGEDGE
-#endif
-#ifndef CHANGE
-#define CHANGE  GPIO_INTR_ANYEDGE
-#endif
-
-/* Arduino attachInterrupt takes void(*)(void), but ESP-IDF gpio_isr_handler
-   expects void(*)(void*).  We store the user's void(void) function pointer
-   in the arg field and use a thin wrapper to call it. */
-static void IRAM_ATTR _compat_isr_wrapper(void *arg)
-{
-    void (*fn)(void) = (void(*)(void))arg;
-    fn();
-}
-
-static inline void attachInterrupt(uint8_t pin, void (*isr)(void), int mode)
-{
-    gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)mode);
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add((gpio_num_t)pin, _compat_isr_wrapper, (void*)isr);
-    gpio_intr_enable((gpio_num_t)pin);
-}
-
-static inline void detachInterrupt(uint8_t pin)
-{
-    gpio_isr_handler_remove((gpio_num_t)pin);
-    gpio_intr_disable((gpio_num_t)pin);
-}
-
-static inline void noInterrupts(void) { portDISABLE_INTERRUPTS(); }
-static inline void interrupts(void)   { portENABLE_INTERRUPTS(); }
+/* attachInterrupt / detachInterrupt / noInterrupts / interrupts and the
+   RISING / FALLING / CHANGE macros all had zero external users after the
+   #21 cleanup landed (gpio_isr_handler_add is the IDF idiom; see
+   TR_Sensor_Collector.cpp).  Removed.  If a future consumer needs the
+   Arduino spellings, prefer the native IDF calls — they're not much
+   longer. */
 
 /* ── Arduino type aliases ───────────────────────────────── */
+/* `boolean` had no users; only `byte` remains.  Kept because TR_LogToFlash,
+   CRC, TR_BLE_To_APP, and a handful of others still use it as a uint8_t
+   alias in their public APIs. */
 
-typedef bool     boolean;
 typedef uint8_t  byte;
 
 /* ── Misc Arduino macros ────────────────────────────────── */
@@ -168,18 +140,13 @@ typedef uint8_t  byte;
 
 #include <driver/spi_master.h>
 
-/* Arduino-style SPI mode / bit-order constants */
+/* Arduino-style SPI mode / bit-order constants.  Only SPI_MODE0 and
+   MSBFIRST are still referenced externally (TR_LogToFlash, RadioLib's
+   BuildOpt.h default settings).  SPI_MODE1/2/3 had zero external uses
+   after the #21 cleanup, removed.  LSBFIRST kept because the SPIClass
+   shim below references it internally to set SPI_DEVICE_BIT_LSBFIRST. */
 #ifndef SPI_MODE0
 #define SPI_MODE0 0
-#endif
-#ifndef SPI_MODE1
-#define SPI_MODE1 1
-#endif
-#ifndef SPI_MODE2
-#define SPI_MODE2 2
-#endif
-#ifndef SPI_MODE3
-#define SPI_MODE3 3
 #endif
 #ifndef MSBFIRST
 #define MSBFIRST 1
