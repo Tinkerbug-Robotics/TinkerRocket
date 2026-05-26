@@ -17,11 +17,17 @@
 import Foundation
 
 enum MagCalSubType: UInt8 {
-    case idle     = 0
-    case sampling = 1
-    case review   = 2
-    case applied  = 3
-    case aborted  = 4
+    case idle      = 0
+    case sampling  = 1
+    case review    = 2
+    case applied   = 3
+    case aborted   = 4
+    // #206 — between Accept and final NVS persist.  The chip's OFFSET
+    // regs are already programmed with the new fit and the FC is
+    // sampling for ~5 s while the user rotates the rocket, to verify
+    // the corrected |B| stays in a tight band.  iOS shows a
+    // "Verifying… rotate slowly" screen with the live |B|.
+    case verifying = 5
 }
 
 enum MagCalRejectCode: UInt8 {
@@ -30,6 +36,11 @@ enum MagCalRejectCode: UInt8 {
     case rTooHigh         = 2   // fitted R > 80 µT
     case highResidual     = 3   // RMS residual above threshold (poor sphere fit)
     case lowCoverage      = 4   // < min populated wedges (insufficient tumble coverage)
+    // #206 — post-accept verify pass saw the corrected |B| wander
+    // outside the [20, 70] µT band, spread by more than 25 µT across
+    // the rotation, or didn't gather enough samples / rotation.  The
+    // frame's instantaneousFieldUT carries the worst observed |B|.
+    case verifyFailed     = 5
 }
 
 struct MagCalStatus: Equatable {
@@ -90,11 +101,16 @@ struct MagCalStatus: Equatable {
     /// Convenience: human-readable explanation for a non-zero rejectCode.
     var rejectMessage: String {
         switch rejectCode {
-        case .ok:           return "Looks good"
-        case .rTooLow:      return "Field magnitude too low — interference?"
-        case .rTooHigh:     return "Field magnitude too high — magnet nearby?"
-        case .highResidual: return "Sphere fit poor — likely soft-iron distortion"
-        case .lowCoverage:  return "Insufficient orientation coverage — keep tumbling"
+        case .ok:            return "Looks good"
+        case .rTooLow:       return "Field magnitude too low — interference?"
+        case .rTooHigh:      return "Field magnitude too high — magnet nearby?"
+        case .highResidual:  return "Sphere fit poor — likely soft-iron distortion"
+        case .lowCoverage:   return "Insufficient orientation coverage — keep tumbling"
+        case .verifyFailed:
+            // The frame stamps the worst observed |B| into instantaneousFieldUT
+            // so we can show the user the actual number that tripped the gate.
+            return String(format: "Verify failed — corrected |B| reached %.1f µT (need 20–70 µT, tight spread)",
+                          instantaneousFieldUT)
         }
     }
 

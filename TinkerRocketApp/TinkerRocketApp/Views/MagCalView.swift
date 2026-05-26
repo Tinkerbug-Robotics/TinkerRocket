@@ -45,6 +45,9 @@ struct MagCalView: View {
             case .sampling:           samplingSection
             case .review:             reviewSection
             case .applied:            appliedSection
+            // #206: between Accept and final NVS persist.  FC is sampling
+            // the corrected stream to confirm |B| stays in band.
+            case .verifying:          verifyingSection
             }
         }
         .navigationTitle("Mag Calibration")
@@ -59,7 +62,8 @@ struct MagCalView: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                if status?.subType == .sampling || status?.subType == .review {
+                if status?.subType == .sampling || status?.subType == .review ||
+                   status?.subType == .verifying {
                     // Belt-and-suspenders abort: if the user tries to
                     // back out mid-cal, send abort so the FC drops back
                     // to READY rather than staying in MAG_CALIBRATION.
@@ -310,6 +314,57 @@ struct MagCalView: View {
                             Text("Abort")
                             Spacer()
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /// #206 — between Accept and final NVS persist.  The FC has programmed
+    /// the new offsets but is sampling for ~5 s to verify the corrected
+    /// |B| stays in band.  Show live |B|, a tumbling-progress bar, and
+    /// the "rotate slowly" prompt.  No buttons during this window — the
+    /// FC drives the transition to APPLIED (success) or back to REVIEW
+    /// (fail with VERIFY_FAILED reject code).
+    private var verifyingSection: some View {
+        Group {
+            if let s = status {
+                Section {
+                    VStack(spacing: 14) {
+                        Image(systemName: "checkmark.shield")
+                            .font(.system(size: 40))
+                            .foregroundColor(.blue)
+                        Text("Verifying calibration")
+                            .font(.headline)
+                        Text("Rotate the rocket slowly through several orientations. The flight computer is confirming that the corrected magnetic field stays within Earth's range.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                Section(header: Text("Live")) {
+                    HStack {
+                        Text("|B|")
+                        Spacer()
+                        Text(String(format: "%.1f µT", s.instantaneousFieldUT))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Samples")
+                        Spacer()
+                        Text("\(s.sampleCount)")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Coverage")
+                        Spacer()
+                        Text("\(s.coverageBins) / 26 wedges")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.secondary)
                     }
                 }
             }
