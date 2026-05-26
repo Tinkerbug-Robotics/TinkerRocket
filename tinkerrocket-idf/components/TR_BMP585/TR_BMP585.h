@@ -1,6 +1,8 @@
 #pragma once
 
-#include <compat.h>
+#include <cstdint>
+#include <driver/spi_master.h>
+#include <driver/gpio.h>
 
 // Bosch BMP5 driver
 extern "C" {
@@ -12,10 +14,15 @@ class TR_BMP585
 {
 public:
 
-    // Constructor
-    TR_BMP585(SPIClass& spi,
-              uint8_t csPin,
-              const SPISettings& spiSettings);
+    // ESP-IDF native constructor.  The SPI bus identified by `host` must be
+    // initialised (spi_bus_initialize) before begin() is called.  CS is
+    // driven manually by the wrapper via the GPIO HAL.  SPI mode is fixed
+    // to SPI_MODE0 (Bosch BMP5 SPI convention).
+    TR_BMP585(spi_host_device_t host,
+              uint8_t cs_pin,
+              uint32_t clock_hz);
+
+    ~TR_BMP585();
 
     // Startup methods
     bool    begin();
@@ -68,7 +75,7 @@ public:
   bool setOutputDataRate(OutputDataRate odr);
 
   bool setPowerMode(PowerMode mode);
-  
+
     struct __attribute__((packed)) BmpCompFrame
     {
       uint32_t t_us;     // micros()
@@ -78,7 +85,7 @@ public:
     static_assert(sizeof(BmpCompFrame) == 12, "BmpCompFrame should be 12 bytes");
 
     bool readCompFrame(BmpCompFrame& out);
-    
+
     // Interrupts
     // Configures INT pin behavior and selects DRDY as an interrupt source.
     // latched=true   -> INT stays asserted until status is read (latched)
@@ -96,11 +103,17 @@ private:
   static BMP5_INTF_RET_TYPE spiWrite_(uint8_t reg, const uint8_t* data, uint32_t len, void* intf_ptr);
   static void delayUs_(uint32_t period, void* intf_ptr);
 
-  // SPI helpers (use spiSettings_ consistently)
-  void beginTxn_();
-  void endTxn_();
-  void csSelect_();
-  void csDeselect_();
+  // Manual CS control via the IDF GPIO HAL.  spics_io_num is set to -1 in
+  // the device config, so IDF does not drive CS — this wrapper does.
+  inline void csSelect_()   { gpio_set_level(static_cast<gpio_num_t>(cs_pin_), 0); }
+  inline void csDeselect_() { gpio_set_level(static_cast<gpio_num_t>(cs_pin_), 1); }
+
+  // Lazily add the SPI device on first begin()/forceSoftResetRaw().  Returns
+  // false on add_device failure.  Idempotent across retries.
+  bool ensureSpiDevice_();
+
+  // Configure cs_pin_ as a GPIO output, idle HIGH.
+  void configureCsPin_();
 
   // Mappers
   static uint8_t mapOsr_(Oversampling osr);
@@ -109,9 +122,10 @@ private:
   static bool nearestOdrFromHz_(float hz, OutputDataRate& out);
 
   // Members
-  SPIClass& spi_;
-  SPISettings spiSettings_;
-  uint8_t cs_;
+  spi_host_device_t   host_;
+  uint8_t             cs_pin_;
+  uint32_t            clock_hz_;
+  spi_device_handle_t spi_dev_ = nullptr;
 
   bmp5_dev dev_ {};
 
