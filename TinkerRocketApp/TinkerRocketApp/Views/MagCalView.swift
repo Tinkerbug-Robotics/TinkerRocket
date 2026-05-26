@@ -275,6 +275,29 @@ struct MagCalView: View {
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
+                    // Issue #207: surface |c| and |c|/R as a soft warning when
+                    // the fit converged on a center far from origin.  Informational
+                    // only — Accept still allowed; the firmware's reject_code is
+                    // the source of truth for hard gates.
+                    let warn = s.centerWarning
+                    HStack {
+                        Label("Offset |c|",
+                              systemImage: warn == .ok
+                                ? "checkmark.circle"
+                                : "exclamationmark.triangle.fill")
+                            .foregroundColor(centerWarningColor(warn))
+                        Spacer()
+                        Text(String(format: "%.1f µT (%.0f%% of |R|)",
+                                    s.centerMagnitudeUT,
+                                    s.centerToRRatio * 100))
+                            .foregroundColor(centerWarningColor(warn))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    if let help = warn.helpText {
+                        Text(help)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Section(header: Text("Hard-iron offset (raw counts)")) {
@@ -431,6 +454,18 @@ struct MagCalView: View {
                     .listRowBackground(Color.blue)
                 }
             }
+        }
+    }
+
+    /// Issue #207: colour for the |c|/R warning bucket.  Green when the
+    /// fitted center is small relative to Earth's field, orange when it's
+    /// non-trivial, red when it's a substantial fraction (likely cal-time
+    /// interference).
+    private func centerWarningColor(_ w: MagCalStatus.CenterWarning) -> Color {
+        switch w {
+        case .ok:      return .green
+        case .caution: return .orange
+        case .high:    return .red
         }
     }
 }

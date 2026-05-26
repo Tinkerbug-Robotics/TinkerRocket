@@ -298,6 +298,55 @@ extension MagCalStatus {
     func isAxisCovered(_ axis: MagCalAxis) -> Bool {
         return (coverageMask & (UInt32(1) << axis.wedgeBit)) != 0
     }
+
+    /// Magnitude of the fitted hard-iron offset vector, in µT.
+    /// (#207) Surfaced on the Review screen so the user can tell at a
+    /// glance whether the cal converged on a center close to the sensor
+    /// origin (good) or absorbed an external interferer (bad).
+    var centerMagnitudeUT: Float {
+        let x = Float(offsetX), y = Float(offsetY), z = Float(offsetZ)
+        // IIS2MDC: 0.15 µT/LSB.  Mirrors LSB_TO_uT in decode().
+        return 0.15 * (x*x + y*y + z*z).squareRoot()
+    }
+
+    /// |c| / R as a fraction in [0, ∞).  Ratios approaching 1 mean the
+    /// applied offset is the same magnitude as Earth's field — rotating
+    /// the rocket then sweeps |B| across roughly [R - |c|, R + |c|],
+    /// which can clip the EKF's [15, 80] µT mag input gate at the
+    /// extremes.  Zero when no fit has converged yet (R == 0).
+    var centerToRRatio: Float {
+        guard fieldR_uT > 0 else { return 0 }
+        return centerMagnitudeUT / fieldR_uT
+    }
+
+    /// UI severity bucket for the |c| / R ratio.  Thresholds picked from
+    /// 2026-05-17 field flights (Eagle Claw 0.84 → red, RIM-66 0.67 →
+    /// red; a clean post-bench cal typically lands under 0.2 → ok).
+    /// Informational only — Accept is still allowed at any level.
+    enum CenterWarning {
+        case ok       // ratio < 0.3
+        case caution  // 0.3 ≤ ratio < 0.5
+        case high     // ratio ≥ 0.5
+
+        var helpText: String? {
+            switch self {
+            case .ok:
+                return nil
+            case .caution, .high:
+                return "Large residual hard-iron — the fit absorbed a substantial offset. " +
+                       "Common cause is metal or electronics near the rocket during tumble. " +
+                       "Consider re-running on a wood/plastic surface with phones and tools " +
+                       "moved at least 30 cm away."
+            }
+        }
+    }
+
+    var centerWarning: CenterWarning {
+        let r = centerToRRatio
+        if r >= 0.5 { return .high }
+        if r >= 0.3 { return .caution }
+        return .ok
+    }
 }
 
 // Match firmware-side gates (RocketComputerTypes.h) so the UI doesn't
