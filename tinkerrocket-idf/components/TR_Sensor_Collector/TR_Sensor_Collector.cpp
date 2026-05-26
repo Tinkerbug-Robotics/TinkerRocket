@@ -5,14 +5,15 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_rom_sys.h>
+#include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 static const char* SC_TAG = "SENSORS";
 
-// IDF-native timing helpers — replace the Arduino-shim millis()/time_us()
-// and delay_ms() that came in via compat.h.  See main.cpp for the same
-// pattern; `time_*` names avoid colliding with local vars / parameters
-// named `now_ms`, `now_us` etc.
+// IDF-native timing helpers — replace the Arduino-shim millis()/micros()
+// and delay() that came in via compat.h.  See main.cpp for the same
+// pattern; the `time_*` names avoid colliding with local vars and
+// function parameters called `now_ms` / `now_us` throughout this file.
 static inline uint32_t time_ms() { return (uint32_t)(esp_timer_get_time() / 1000); }
 static inline uint32_t time_us() { return (uint32_t)esp_timer_get_time(); }
 static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
@@ -46,7 +47,6 @@ SensorCollector::SensorCollector(
                            bool use_iis2mdc,
                            bool use_gnss,
                            bool use_ism6hg256,
-                           SPIClass &spi,
                            uint32_t spi_speed)
     : ISM6HG256_CS(ISM6HG256_CS),
       ISM6HG256_INT(ISM6HG256_INT),
@@ -72,7 +72,6 @@ SensorCollector::SensorCollector(
       use_iis2mdc(use_iis2mdc),
       use_gnss(use_gnss),
       use_ism6hg256(use_ism6hg256),
-      spi(spi),
       spi_speed(spi_speed),
       bmp585(SPI2_HOST, BMP585_CS, spi_speed),
       mmc5983ma(SPI2_HOST, MMC5983MA_CS, 2000000),  // MMC5983MA supports Mode 0 and Mode 3; wrapper uses Mode 0
@@ -127,13 +126,19 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         ism6_drdy_histogram[i] = 0;
     }
     
+    // Install the per-process gpio ISR service so the per-sensor
+    // gpio_isr_handler_add() calls later in begin() can attach handlers.
+    // Returns ESP_ERR_INVALID_STATE if already installed (e.g. by
+    // TR_LoRa_Comms' EspHal); benign — ignore.
+    (void)gpio_install_isr_service(0);
+
     // Initialize and turn off SPI for all sensors
-    pinMode(ISM6HG256_CS, OUTPUT);
-    digitalWrite(ISM6HG256_CS, HIGH);
-    pinMode(BMP585_CS, OUTPUT);
-    digitalWrite(BMP585_CS, HIGH);
-    pinMode(MMC5983MA_CS, OUTPUT);
-    digitalWrite(MMC5983MA_CS, HIGH);
+    gpio_set_direction((gpio_num_t)(ISM6HG256_CS), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(ISM6HG256_CS), 1);
+    gpio_set_direction((gpio_num_t)(BMP585_CS), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(BMP585_CS), 1);
+    gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
     delay_ms(10);
     
     // Update periods calculated from frequencies
@@ -200,8 +205,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             ESP_LOGI(SC_TAG, "BMP585 soft-reset recovery %s", reset_ok ? "OK" : "pending");
 
             // Re-drive CS high between retries to avoid bus ambiguity.
-            pinMode(BMP585_CS, OUTPUT);
-            digitalWrite(BMP585_CS, HIGH);
+            gpio_set_direction((gpio_num_t)(BMP585_CS), GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t)(BMP585_CS), 1);
             delay_ms(10);
 
             if ((bmp_retry_count % 5U) == 0U)
@@ -234,8 +239,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         ESP_LOGI(SC_TAG, "BMP585 continuous mode active; throughput set by OSR/filter (ODR ignored in this mode).");
 
         bmp585_instance = this;
-        pinMode(BMP585_INT, INPUT);
-        attachInterrupt(BMP585_INT, onBMP585IntTrampoline, RISING);
+        gpio_set_direction((gpio_num_t)(BMP585_INT), GPIO_MODE_INPUT);
+        gpio_set_intr_type((gpio_num_t)(BMP585_INT), GPIO_INTR_POSEDGE);
+        gpio_isr_handler_add((gpio_num_t)(BMP585_INT), &onBMP585IntTrampoline, nullptr);
+        gpio_intr_enable((gpio_num_t)(BMP585_INT));
     }
 
     // ### Magnetometer auto-detection ###
@@ -321,8 +328,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (use_mmc5983ma && !iis2mdc_active)
     {
         // Pin 13 was potentially driven by the I2C probe above; restore CS high.
-        pinMode(MMC5983MA_CS, OUTPUT);
-        digitalWrite(MMC5983MA_CS, HIGH);
+        gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
         delay_ms(2);
 
         while (!mmc5983ma.begin())
@@ -381,8 +388,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
 
         mmc5983ma_instance = this;
-        pinMode(MMC5983MA_INT, INPUT);
-        attachInterrupt(MMC5983MA_INT, onMMC5983MAIntTrampoline, RISING);
+        gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
+        gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
+        gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
+        gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
     }
 
     ESP_LOGI(SC_TAG, "Initializing ISM6HG256...");
@@ -429,7 +438,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 
         // Route DRDY to MCU via INT1 and wake polling task from ISR.
         ism6hg256_instance = this;
-        pinMode(ISM6HG256_INT, INPUT);
+        gpio_set_direction((gpio_num_t)(ISM6HG256_INT), GPIO_MODE_INPUT);
 
         // Flush any pending DRDY by reading the data registers.
         // Without this, DRDY may already be HIGH before attachInterrupt
@@ -440,10 +449,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             ism6hg256.Get_X_AxesRaw(&dummy_axes);
             ism6hg256.Get_HG_X_AxesRaw(&dummy_axes);
             ism6hg256.Get_G_AxesRaw(&dummy_axes);
-            ESP_LOGI(SC_TAG, "ISM6 DRDY flushed (pin=%d)", digitalRead(ISM6HG256_INT));
+            ESP_LOGI(SC_TAG, "ISM6 DRDY flushed (pin=%d)", gpio_get_level((gpio_num_t)(ISM6HG256_INT)));
         }
 
-        attachInterrupt(ISM6HG256_INT, onISM6HG256Int1Trampoline, RISING);
+        gpio_set_intr_type((gpio_num_t)(ISM6HG256_INT), GPIO_INTR_POSEDGE);
+        gpio_isr_handler_add((gpio_num_t)(ISM6HG256_INT), &onISM6HG256Int1Trampoline, nullptr);
+        gpio_intr_enable((gpio_num_t)(ISM6HG256_INT));
     }
 
     ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
@@ -519,7 +530,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         // treat it as if the ISR fired.  This handles the case where the
         // initial rising edge was missed before attachInterrupt was called.
         if (self->use_ism6hg256 && !self->ism6_isr_fired &&
-            digitalRead(self->ISM6HG256_INT))
+            gpio_get_level((gpio_num_t)(self->ISM6HG256_INT)))
         {
             self->ism6_isr_fired = true;
         }
@@ -587,10 +598,10 @@ void SensorCollector::pollIMUdata(void* parameter)
         if (self->use_bmp585)
         {
             uint32_t bmp_pending = 0;
-            noInterrupts();
+            portDISABLE_INTERRUPTS();
             bmp_pending = self->bmp585_irq_pending_count;
             if (bmp_pending > 0) self->bmp585_irq_pending_count = 0;
-            interrupts();
+            portENABLE_INTERRUPTS();
 
             if (bmp_pending > 0)
             {
@@ -628,10 +639,10 @@ void SensorCollector::pollIMUdata(void* parameter)
         if (self->use_mmc5983ma && !self->iis2mdc_active)
         {
             uint32_t mmc_pending = 0;
-            noInterrupts();
+            portDISABLE_INTERRUPTS();
             mmc_pending = self->mmc5983ma_irq_pending_count;
             if (mmc_pending > 0) self->mmc5983ma_irq_pending_count = 0;
-            interrupts();
+            portENABLE_INTERRUPTS();
 
             self->mmc5983ma_loop_checks++;
 
@@ -1070,7 +1081,7 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
     }
 }
 
-void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline()
+void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline(void* /*arg*/)
 {
     if (ism6hg256_instance)
     {
@@ -1094,7 +1105,7 @@ void IRAM_ATTR SensorCollector::onISM6HG256Int1()
     }
 }
 
-void IRAM_ATTR SensorCollector::onBMP585IntTrampoline()
+void IRAM_ATTR SensorCollector::onBMP585IntTrampoline(void* /*arg*/)
 {
     if (bmp585_instance)
     {
@@ -1118,7 +1129,7 @@ void IRAM_ATTR SensorCollector::onBMP585Int()
     }
 }
 
-void IRAM_ATTR SensorCollector::onMMC5983MAIntTrampoline()
+void IRAM_ATTR SensorCollector::onMMC5983MAIntTrampoline(void* /*arg*/)
 {
     if (mmc5983ma_instance)
     {

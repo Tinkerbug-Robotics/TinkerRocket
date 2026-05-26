@@ -11,6 +11,10 @@
 
 #include "TR_Sensor_Collector_Sim.h"
 #include <cmath>
+// SensorCollector.h no longer transitively pulls in compat.h, but this
+// file still uses the Arduino-shim millis()/micros() heavily.  Pulled
+// in explicitly here until item #5 of issue #21 slims the sim too.
+#include <compat.h>
 
 // ============================================================================
 // Construction / Delegation

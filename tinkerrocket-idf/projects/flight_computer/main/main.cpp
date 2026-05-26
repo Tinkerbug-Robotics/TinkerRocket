@@ -1,4 +1,3 @@
-#include <compat.h>
 #include <TR_NVS.h>
 
 // Configuration Parameters
@@ -87,7 +86,6 @@ SensorCollector sensor_collector_hw(config::ISM6HG256_CS,
                                     config::USE_IIS2MDC,
                                     config::USE_GNSS,
                                     config::USE_ISM6HG256,
-                                    SPI,
                                     config::SPI_SPEED);
 
 // Sim wrapper: passthrough when sim inactive, replaces data when sim active
@@ -1109,7 +1107,7 @@ static void i2sSenderTask(void *)
 
 static inline void triggerBlueLedFlash(uint32_t now_ms)
 {
-    digitalWrite(config::BLUE_LED_PIN, HIGH);
+    gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 1);
     blue_led_flash_active = true;
     blue_led_flash_end_ms = now_ms + (uint32_t)config::BLUE_LED_FLASH_MS;
 }
@@ -1122,7 +1120,7 @@ static inline void serviceBlueLedFlash(uint32_t now_ms)
     }
     if ((int32_t)(now_ms - blue_led_flash_end_ms) >= 0)
     {
-        digitalWrite(config::BLUE_LED_PIN, LOW);
+        gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 0);
         blue_led_flash_active = false;
     }
 }
@@ -1240,7 +1238,7 @@ static inline void piezoStop()
     }
     if (piezo_pwm_ready)
     {
-        digitalWrite(config::PIEZO_PIN, LOW);
+        gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
     }
 }
 
@@ -1259,7 +1257,7 @@ static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms, uint32_t n
     piezo_wave_end_us = (int64_t)now_us + ((int64_t)duration_ms * 1000LL);
     piezo_pin_high = false;
     piezo_wave_active = true;
-    digitalWrite(config::PIEZO_PIN, LOW);
+    gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
     triggerBlueLedFlash((uint32_t)(now_us / 1000ULL));
 
     (void)esp_timer_stop(piezo_toggle_timer);
@@ -1274,7 +1272,7 @@ static inline void startGoProPulse(uint32_t now_ms)
 {
     if ((config::CAM_SHUTTER_PIN < 0) || !config::USE_GOPRO)
         return;
-    digitalWrite(config::CAM_SHUTTER_PIN, LOW);
+    gpio_set_level((gpio_num_t)(config::CAM_SHUTTER_PIN), 0);
     gopro_pulse_active = true;
     gopro_pulse_end_ms = now_ms + (uint32_t)config::GOPRO_PULSE_MS;
 }
@@ -1285,7 +1283,7 @@ static inline void serviceGoProPulse(uint32_t now_ms)
         return;
     if ((int32_t)(now_ms - gopro_pulse_end_ms) >= 0)
     {
-        digitalWrite(config::CAM_SHUTTER_PIN, HIGH);
+        gpio_set_level((gpio_num_t)(config::CAM_SHUTTER_PIN), 1);
         gopro_pulse_active = false;
     }
 }
@@ -1305,8 +1303,8 @@ static void initRunCam()
     // Camera is powered on only when the user presses "Start Recording".
     if (config::RUNCAM_PWR_PIN >= 0)
     {
-        pinMode(config::RUNCAM_PWR_PIN, OUTPUT);
-        digitalWrite(config::RUNCAM_PWR_PIN, LOW);  // OFF at boot
+        gpio_set_direction((gpio_num_t)(config::RUNCAM_PWR_PIN), GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);  // OFF at boot
         ESP_LOGI(TAG, "RunCam pin %d configured (camera OFF)", (int)config::RUNCAM_PWR_PIN);
     }
 
@@ -1452,7 +1450,7 @@ static void cameraStart(uint32_t now_ms)
         // auto-starts recording on power-up; the deferred GET_DEVICE_INFO
         // probe just confirms the UART link once it has booted.
         if (config::RUNCAM_PWR_PIN >= 0)
-            digitalWrite(config::RUNCAM_PWR_PIN, HIGH);
+            gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 1);
         gopro_recording = true;
         camera_start_phase = CameraStartPhase::WaitingForBoot;
         camera_start_due_ms = now_ms + 5000U;  // RunCam boot time
@@ -1517,7 +1515,7 @@ static inline void serviceCameraStop(uint32_t now_ms)
     else  // RunCamToggleSent
     {
         if (config::RUNCAM_PWR_PIN >= 0)
-            digitalWrite(config::RUNCAM_PWR_PIN, LOW);
+            gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);
         ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off");
         gopro_recording = false;
         camera_stop_phase = CameraStopPhase::Idle;
@@ -1634,20 +1632,36 @@ static void setup_fc()
     initPyroPins();
 
     ESP_LOGI(TAG, "Starting ....");
-    pinMode(config::RED_LED_PIN, OUTPUT);
-    digitalWrite(config::RED_LED_PIN, HIGH);
-    pinMode(config::BLUE_LED_PIN, OUTPUT);
-    digitalWrite(config::BLUE_LED_PIN, LOW);
+    gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
+    gpio_set_direction((gpio_num_t)(config::BLUE_LED_PIN), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 0);
 
     // Disable all SPI chip-selects before bus init to avoid MISO contention.
-    pinMode(config::MMC5983MA_CS, OUTPUT); digitalWrite(config::MMC5983MA_CS, HIGH);
-    pinMode(config::BMP585_CS, OUTPUT);    digitalWrite(config::BMP585_CS, HIGH);
-    pinMode(config::ISM6HG256_CS, OUTPUT); digitalWrite(config::ISM6HG256_CS, HIGH);
+    gpio_set_direction((gpio_num_t)(config::MMC5983MA_CS), GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)(config::MMC5983MA_CS), 1);
+    gpio_set_direction((gpio_num_t)(config::BMP585_CS), GPIO_MODE_OUTPUT);    gpio_set_level((gpio_num_t)(config::BMP585_CS), 1);
+    gpio_set_direction((gpio_num_t)(config::ISM6HG256_CS), GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)(config::ISM6HG256_CS), 1);
     delay_ms(10);
 
-    // SPI bus — compat shim wraps spi_bus_initialize(SPI2_HOST, ...)
+    // SPI bus init — native IDF.  Matches what compat's SPIClass.begin()
+    // was doing under the hood (SPI2_HOST, DMA auto, 4 KB transfer cap)
+    // but lifted out of the shim so this file no longer depends on
+    // compat.h's SPIClass.
     ESP_LOGI(TAG, "SPI init...");
-    SPI.begin(config::SPI_SCK, config::SPI_SDO, config::SPI_SDI);
+    {
+        spi_bus_config_t buscfg = {};
+        buscfg.mosi_io_num     = config::SPI_SDO;
+        buscfg.miso_io_num     = config::SPI_SDI;
+        buscfg.sclk_io_num     = config::SPI_SCK;
+        buscfg.quadwp_io_num   = -1;
+        buscfg.quadhd_io_num   = -1;
+        buscfg.max_transfer_sz = 4096;
+        esp_err_t err = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(err));
+        }
+    }
     delay_ms(10);
 
     // Re-init pyro pins AFTER spi_bus_initialize() — on ESP32-P4, SPI2
@@ -1908,8 +1922,8 @@ static void setup_fc()
     prefs.end();
 
     // Always initialise piezo hardware so it's ready if enabled at runtime
-    pinMode(config::PIEZO_PIN, OUTPUT);
-    digitalWrite(config::PIEZO_PIN, LOW);
+    gpio_set_direction((gpio_num_t)(config::PIEZO_PIN), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
     piezo_pwm_ready = initPiezoTimer();
     if (!piezo_pwm_ready)
     {
@@ -2015,13 +2029,13 @@ static void setup_fc()
     {
         if (config::CAM_PWR_PIN >= 0)
         {
-            pinMode(config::CAM_PWR_PIN, OUTPUT);
-            digitalWrite(config::CAM_PWR_PIN, HIGH);
+            gpio_set_direction((gpio_num_t)(config::CAM_PWR_PIN), GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t)(config::CAM_PWR_PIN), 1);
         }
         if (config::CAM_SHUTTER_PIN >= 0)
         {
-            pinMode(config::CAM_SHUTTER_PIN, OUTPUT);
-            digitalWrite(config::CAM_SHUTTER_PIN, HIGH);
+            gpio_set_direction((gpio_num_t)(config::CAM_SHUTTER_PIN), GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t)(config::CAM_SHUTTER_PIN), 1);
         }
     }
     else if (config::USE_RUNCAM)

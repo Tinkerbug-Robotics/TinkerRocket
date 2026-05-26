@@ -12,7 +12,6 @@ idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
     REQUIRES
-        TR_Compat
         TR_NVS
         TR_RocketComputerTypes
         TR_Sensor_Collector

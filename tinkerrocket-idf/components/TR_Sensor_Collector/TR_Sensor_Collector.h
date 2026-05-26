@@ -1,8 +1,11 @@
 #ifndef SENSORCOLLECTOR_H
 #define SENSORCOLLECTOR_H
 
-#include <compat.h>
+#include <cstdint>
 #include <driver/i2c_master.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <TR_ISM6HG256.h>
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
@@ -89,7 +92,6 @@ public:
                     bool use_iis2mdc,
                     bool use_gnss,
                     bool use_ism6hg256,
-                    SPIClass &spi,
                     uint32_t spi_speed);
 
     void begin(uint8_t imu_execution_core);
@@ -136,7 +138,6 @@ private:
 
     uint32_t start_time;
 
-    SPIClass &spi;
     uint32_t spi_speed;
 
     uint8_t ISM6HG256_CS;
@@ -249,11 +250,14 @@ private:
     void startPollingTask(uint8_t imu_execution_core);
     static void pollIMUdata(void *parameter);
     static void pollGNSSdata(void *parameter);
-    static void onISM6HG256Int1Trampoline();
+    // IDF gpio_isr_handler signature is void(*)(void*).  The arg is
+    // unused — each trampoline dispatches via its sensor-specific
+    // static *_instance pointer set in begin().
+    static void onISM6HG256Int1Trampoline(void* arg);
     void onISM6HG256Int1();
-    static void onBMP585IntTrampoline();
+    static void onBMP585IntTrampoline(void* arg);
     void onBMP585Int();
-    static void onMMC5983MAIntTrampoline();
+    static void onMMC5983MAIntTrampoline(void* arg);
     void onMMC5983MAInt();
 };
 
