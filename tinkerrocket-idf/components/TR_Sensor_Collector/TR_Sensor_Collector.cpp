@@ -65,7 +65,7 @@ SensorCollector::SensorCollector(
       bmp585(SPI2_HOST, BMP585_CS, spi_speed),
       mmc5983ma(this->spi, MMC5983MA_CS, SPISettings(2000000, MSBFIRST, SPI_MODE0)),  // MMC5983MA supports Mode 0 and Mode 3
       iis2mdc(IIS2MDC_I2C_ADDR),
-      ism6hg256(&this->spi, ISM6HG256_CS, spi_speed),
+      ism6hg256(SPI2_HOST, ISM6HG256_CS, spi_speed),
       gyro_cal_x(0), gyro_cal_y(0), gyro_cal_z(0) {}
 
 void SensorCollector::begin(uint8_t imu_execution_core) 

@@ -1,9 +1,16 @@
 #include <TR_ISM6HG256.h>
+#include <cstring>
+#include <esp_log.h>
+#include <esp_rom_sys.h>
 
-TR_ISM6HG256::TR_ISM6HG256(SPIClass *spi, int cs_pin, uint32_t spi_speed)
-    : dev_spi(spi),
-      cs_pin(cs_pin),
-      spi_speed(spi_speed),
+static const char* ISM6_TAG = "TR_ISM6HG256";
+
+// ---------------- Ctor / Dtor ----------------
+
+TR_ISM6HG256::TR_ISM6HG256(spi_host_device_t host, uint8_t cs_pin, uint32_t clock_hz)
+    : host_(host),
+      cs_pin_(cs_pin),
+      clock_hz_(clock_hz),
       acc_is_enabled(0),
       acc_hg_is_enabled(0),
       gyro_is_enabled(0),
@@ -16,12 +23,57 @@ TR_ISM6HG256::TR_ISM6HG256(SPIClass *spi, int cs_pin, uint32_t spi_speed)
     reg_ctx.handle = (void *)this;
 }
 
+TR_ISM6HG256::~TR_ISM6HG256()
+{
+    if (spi_dev_) {
+        spi_bus_remove_device(spi_dev_);
+        spi_dev_ = nullptr;
+    }
+}
+
+// ---------------- IDF setup helpers ----------------
+
+void TR_ISM6HG256::configureCsPin_()
+{
+    gpio_config_t io = {};
+    io.pin_bit_mask  = 1ULL << cs_pin_;
+    io.mode          = GPIO_MODE_OUTPUT;
+    io.pull_up_en    = GPIO_PULLUP_DISABLE;
+    io.pull_down_en  = GPIO_PULLDOWN_DISABLE;
+    io.intr_type     = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+    csDeselect_();
+}
+
+bool TR_ISM6HG256::ensureSpiDevice_()
+{
+    if (spi_dev_) return true;
+
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = clock_hz_;
+    devcfg.mode           = 0;          // SPI_MODE0 (ST convention)
+    devcfg.spics_io_num   = -1;         // CS driven manually by this wrapper
+    devcfg.queue_size     = 1;
+    devcfg.command_bits   = 8;          // reg byte goes in t.cmd
+
+    esp_err_t err = spi_bus_add_device(host_, &devcfg, &spi_dev_);
+    if (err != ESP_OK) {
+        ESP_LOGE(ISM6_TAG, "spi_bus_add_device failed: %s", esp_err_to_name(err));
+        spi_dev_ = nullptr;
+        return false;
+    }
+    return true;
+}
+
+// ---------------- Public API ----------------
+
 TR_ISM6HG256Status TR_ISM6HG256::begin()
 {
     uint8_t whoami = 0U;
 
-    pinMode(cs_pin, OUTPUT);
-    digitalWrite(cs_pin, HIGH);
+    configureCsPin_();
+
+    if (!ensureSpiDevice_()) return TR_ISM6HG256_ERROR;
 
     if (ReadWhoAmI(&whoami) != TR_ISM6HG256_OK) return TR_ISM6HG256_ERROR;
     if (whoami != ISM6HG256X_ID) return TR_ISM6HG256_ERROR;
@@ -312,29 +364,34 @@ TR_ISM6HG256Status TR_ISM6HG256::Set_G_OutputDataRate_When_Disabled(float Odr)
 
 uint8_t TR_ISM6HG256::IO_Read(uint8_t *pBuffer, uint8_t RegisterAddr, uint16_t NumByteToRead)
 {
-    dev_spi->beginTransaction(SPISettings(spi_speed, MSBFIRST, SPI_MODE0));
-    digitalWrite(cs_pin, LOW);
-    dev_spi->transfer(RegisterAddr | 0x80);
-    // Bulk transfer: fill buffer with 0x00 (MOSI) and read MISO in-place.
-    // ESP32 SPI driver can use DMA for this, much faster than byte-by-byte.
-    memset(pBuffer, 0x00, NumByteToRead);
-    dev_spi->transfer(pBuffer, NumByteToRead);
-    digitalWrite(cs_pin, HIGH);
-    dev_spi->endTransaction();
-    return 0;
+    if (!spi_dev_ || !pBuffer || NumByteToRead == 0) return 1;
+
+    spi_transaction_t t = {};
+    t.cmd       = static_cast<uint16_t>(RegisterAddr | 0x80);  // ST: bit7=1 for read, auto-increment via IF_INC
+    t.length    = NumByteToRead * 8;
+    t.rx_buffer = pBuffer;
+
+    csSelect_();
+    esp_err_t err = spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+
+    return (err == ESP_OK) ? 0 : 1;
 }
 
 uint8_t TR_ISM6HG256::IO_Write(uint8_t *pBuffer, uint8_t RegisterAddr, uint16_t NumByteToWrite)
 {
-    dev_spi->beginTransaction(SPISettings(spi_speed, MSBFIRST, SPI_MODE0));
-    digitalWrite(cs_pin, LOW);
-    dev_spi->transfer(RegisterAddr);
-    for (uint16_t i = 0; i < NumByteToWrite; i++) {
-        dev_spi->transfer(pBuffer[i]);
-    }
-    digitalWrite(cs_pin, HIGH);
-    dev_spi->endTransaction();
-    return 0;
+    if (!spi_dev_ || !pBuffer || NumByteToWrite == 0) return 1;
+
+    spi_transaction_t t = {};
+    t.cmd       = static_cast<uint16_t>(RegisterAddr & 0x7F);  // ST: bit7=0 for write
+    t.length    = NumByteToWrite * 8;
+    t.tx_buffer = pBuffer;
+
+    csSelect_();
+    esp_err_t err = spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+
+    return (err == ESP_OK) ? 0 : 1;
 }
 
 int32_t TR_ISM6HG256::io_write(void *handle, uint8_t WriteAddr, uint8_t *pBuffer, uint16_t nBytesToWrite)
