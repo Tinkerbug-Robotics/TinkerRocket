@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - 'tinkerrocket-idf/**'
+      - '.github/workflows/firmware-build.yml'
   pull_request:
     paths:
       - 'tinkerrocket-idf/**'
+      - '.github/workflows/firmware-build.yml'
 
 jobs:
   build:
