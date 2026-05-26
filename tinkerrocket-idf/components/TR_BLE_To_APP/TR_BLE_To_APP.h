@@ -9,13 +9,9 @@
  * base-station main.cpp files compile without modification.
  */
 
-#ifdef ARDUINO
-#include <Arduino.h>            // Pulls in String, millis(), etc.
-#else
 #include <string>
-#include "compat.h"             // millis(), delay(), etc. for pure-IDF builds
+#include "compat.h"             // millis(), delay(), etc.
 using String = std::string;     // API-compatible subset used by callers
-#endif
 
 #include <cstdint>
 #include <cstddef>
