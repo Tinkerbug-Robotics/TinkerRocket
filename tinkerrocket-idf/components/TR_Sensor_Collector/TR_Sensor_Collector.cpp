@@ -3,7 +3,20 @@
 
 #include <TR_Sensor_Collector.h>
 #include <esp_log.h>
+#include <esp_timer.h>
+#include <esp_rom_sys.h>
+#include <driver/gpio.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 static const char* SC_TAG = "SENSORS";
+
+// IDF-native timing helpers — replace the Arduino-shim millis()/micros()
+// and delay() that came in via compat.h.  See main.cpp for the same
+// pattern; the `time_*` names avoid colliding with local vars and
+// function parameters called `now_ms` / `now_us` throughout this file.
+static inline uint32_t time_ms() { return (uint32_t)(esp_timer_get_time() / 1000); }
+static inline uint32_t time_us() { return (uint32_t)esp_timer_get_time(); }
+static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
 SensorCollector* SensorCollector::ism6hg256_instance = nullptr;
 SensorCollector* SensorCollector::bmp585_instance = nullptr;
@@ -34,7 +47,6 @@ SensorCollector::SensorCollector(
                            bool use_iis2mdc,
                            bool use_gnss,
                            bool use_ism6hg256,
-                           SPIClass &spi,
                            uint32_t spi_speed)
     : ISM6HG256_CS(ISM6HG256_CS),
       ISM6HG256_INT(ISM6HG256_INT),
@@ -60,7 +72,6 @@ SensorCollector::SensorCollector(
       use_iis2mdc(use_iis2mdc),
       use_gnss(use_gnss),
       use_ism6hg256(use_ism6hg256),
-      spi(spi),
       spi_speed(spi_speed),
       bmp585(SPI2_HOST, BMP585_CS, spi_speed),
       mmc5983ma(SPI2_HOST, MMC5983MA_CS, 2000000),  // MMC5983MA supports Mode 0 and Mode 3; wrapper uses Mode 0
@@ -115,18 +126,24 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         ism6_drdy_histogram[i] = 0;
     }
     
+    // Install the per-process gpio ISR service so the per-sensor
+    // gpio_isr_handler_add() calls later in begin() can attach handlers.
+    // Returns ESP_ERR_INVALID_STATE if already installed (e.g. by
+    // TR_LoRa_Comms' EspHal); benign — ignore.
+    (void)gpio_install_isr_service(0);
+
     // Initialize and turn off SPI for all sensors
-    pinMode(ISM6HG256_CS, OUTPUT);
-    digitalWrite(ISM6HG256_CS, HIGH);
-    pinMode(BMP585_CS, OUTPUT);
-    digitalWrite(BMP585_CS, HIGH);
-    pinMode(MMC5983MA_CS, OUTPUT);
-    digitalWrite(MMC5983MA_CS, HIGH);
-    delay(10);
+    gpio_set_direction((gpio_num_t)(ISM6HG256_CS), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(ISM6HG256_CS), 1);
+    gpio_set_direction((gpio_num_t)(BMP585_CS), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(BMP585_CS), 1);
+    gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
+    delay_ms(10);
     
     // Update periods calculated from frequencies
     ism6hg256_update_period = (uint32_t)(1000000/ISM6HG256_UPDATE_RATE);
-    mmc_last_sample_time_us = micros();
+    mmc_last_sample_time_us = time_us();
     mmc_last_recover_time_us = 0;
     // Stall = 5 nominal periods; cooldown = 15 nominal periods. Scales with configured rate.
     mmc_stall_threshold_us  = 5U  * (1000000UL / (uint32_t)MMC5983MA_UPDATE_RATE);
@@ -136,7 +153,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (ism6hg256DataSemaphore == NULL)
     {
         ESP_LOGE(SC_TAG, "Failed to create ISM6HG256 data semaphore!");
-        while (1) delay(1000);
+        while (1) delay_ms(1000);
     }
     xSemaphoreGive(ism6hg256DataSemaphore);
 
@@ -144,7 +161,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (bmp585DataSemaphore == NULL)
     {
         ESP_LOGE(SC_TAG, "Failed to create BMP585 data semaphore!");
-        while (1) delay(1000);
+        while (1) delay_ms(1000);
     }
     xSemaphoreGive(bmp585DataSemaphore);
 
@@ -152,7 +169,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (mmc5983maDataSemaphore == NULL)
     {
         ESP_LOGE(SC_TAG, "Failed to create MMC5983MA data semaphore!");
-        while (1) delay(1000);
+        while (1) delay_ms(1000);
     }
     xSemaphoreGive(mmc5983maDataSemaphore);
 
@@ -160,7 +177,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (iis2mdcDataSemaphore == NULL)
     {
         ESP_LOGE(SC_TAG, "Failed to create IIS2MDC data semaphore!");
-        while (1) delay(1000);
+        while (1) delay_ms(1000);
     }
     xSemaphoreGive(iis2mdcDataSemaphore);
 
@@ -168,7 +185,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (gnssDataSemaphore == NULL)
     {
         ESP_LOGE(SC_TAG, "Failed to create GNSS data semaphore!");
-        while (1) delay(1000);
+        while (1) delay_ms(1000);
     }
     xSemaphoreGive(gnssDataSemaphore);
 
@@ -188,15 +205,15 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             ESP_LOGI(SC_TAG, "BMP585 soft-reset recovery %s", reset_ok ? "OK" : "pending");
 
             // Re-drive CS high between retries to avoid bus ambiguity.
-            pinMode(BMP585_CS, OUTPUT);
-            digitalWrite(BMP585_CS, HIGH);
-            delay(10);
+            gpio_set_direction((gpio_num_t)(BMP585_CS), GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t)(BMP585_CS), 1);
+            delay_ms(10);
 
             if ((bmp_retry_count % 5U) == 0U)
             {
                 ESP_LOGW(SC_TAG, "BMP585 retry count: %lu", (unsigned long)bmp_retry_count);
             }
-            delay(500);
+            delay_ms(500);
         }
 
         ESP_LOGI(SC_TAG, "BMP585 OK. chip_id = 0x%02X", bmp585.readChipId());
@@ -216,14 +233,16 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         if (!bmp_ok)
         {
             ESP_LOGE(SC_TAG, "BMP585 configuration failed, stopping.");
-            while (1) { delay(1000); }
+            while (1) { delay_ms(1000); }
         }
 
         ESP_LOGI(SC_TAG, "BMP585 continuous mode active; throughput set by OSR/filter (ODR ignored in this mode).");
 
         bmp585_instance = this;
-        pinMode(BMP585_INT, INPUT);
-        attachInterrupt(BMP585_INT, onBMP585IntTrampoline, RISING);
+        gpio_set_direction((gpio_num_t)(BMP585_INT), GPIO_MODE_INPUT);
+        gpio_set_intr_type((gpio_num_t)(BMP585_INT), GPIO_INTR_POSEDGE);
+        gpio_isr_handler_add((gpio_num_t)(BMP585_INT), &onBMP585IntTrampoline, nullptr);
+        gpio_intr_enable((gpio_num_t)(BMP585_INT));
     }
 
     // ### Magnetometer auto-detection ###
@@ -259,7 +278,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             if (iis2mdc.configure() != TR_IIS2MDC_OK)
             {
                 ESP_LOGE(SC_TAG, "IIS2MDC configuration failed, stopping.");
-                while (1) { delay(1000); }
+                while (1) { delay_ms(1000); }
             }
 
             iis2mdc_active = true;
@@ -279,7 +298,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 
             // Sanity print — read a few samples to confirm the part is alive.
             // Continuous mode at 100 Hz means a fresh sample is ready every 10 ms.
-            delay(20);  // allow the first conversion to complete
+            delay_ms(20);  // allow the first conversion to complete
             for (int s = 0; s < 5; s++)
             {
                 float x_uT = 0.0f, y_uT = 0.0f, z_uT = 0.0f;
@@ -293,7 +312,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                 {
                     ESP_LOGW(SC_TAG, "IIS2MDC sample %d read failed", s);
                 }
-                delay(15);
+                delay_ms(15);
             }
         }
         else
@@ -309,23 +328,23 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     if (use_mmc5983ma && !iis2mdc_active)
     {
         // Pin 13 was potentially driven by the I2C probe above; restore CS high.
-        pinMode(MMC5983MA_CS, OUTPUT);
-        digitalWrite(MMC5983MA_CS, HIGH);
-        delay(2);
+        gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
+        delay_ms(2);
 
         while (!mmc5983ma.begin())
         {
             ESP_LOGW(SC_TAG, "MMC5983MA did not respond. Retrying...");
-            delay(500);
+            delay_ms(500);
             (void)mmc5983ma.softReset();
-            delay(500);
+            delay_ms(500);
         }
 
         (void)mmc5983ma.softReset();
         (void)mmc5983ma.performSetOperation();
-        delay(10);
+        delay_ms(10);
         (void)mmc5983ma.performResetOperation();
-        delay(10);
+        delay_ms(10);
         (void)mmc5983ma.enableAutomaticSetReset();  // Eliminates hysteresis drift
 
         bool mmc_ok = true;
@@ -343,7 +362,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         if (!mmc_ok)
         {
             ESP_LOGE(SC_TAG, "MMC5983MA configuration failed, stopping.");
-            while (1) { delay(1000); }
+            while (1) { delay_ms(1000); }
         }
 
         ESP_LOGI(SC_TAG, "MMC5983MA found and initialized");
@@ -369,8 +388,10 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
 
         mmc5983ma_instance = this;
-        pinMode(MMC5983MA_INT, INPUT);
-        attachInterrupt(MMC5983MA_INT, onMMC5983MAIntTrampoline, RISING);
+        gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
+        gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
+        gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
+        gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
     }
 
     ESP_LOGI(SC_TAG, "Initializing ISM6HG256...");
@@ -381,12 +402,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         if (ism6hg256.ReadWhoAmI(&whoami) != TR_ISM6HG256_OK)
         {
             ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI read failed, stopping.");
-            while (1) { delay(1000); }
+            while (1) { delay_ms(1000); }
         }
         if (whoami != ISM6HG256X_ID)
         {
             ESP_LOGE(SC_TAG, "ISM6HG256 WHOAMI mismatch, got 0x%02X expected 0x%02X", whoami, ISM6HG256X_ID);
-            while (1) { delay(1000); }
+            while (1) { delay_ms(1000); }
         }
 
         // Initialize and configure ISM6HG256 (low-g + high-g + gyro)
@@ -410,14 +431,14 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         if (status != TR_ISM6HG256_OK)
         {
             ESP_LOGE(SC_TAG, "ISM6HG256 initialization/configuration failed, stopping.");
-            while (1) { delay(1000); }
+            while (1) { delay_ms(1000); }
         }
 
         ESP_LOGI(SC_TAG, "ISM6HG256 found and initialized");
 
         // Route DRDY to MCU via INT1 and wake polling task from ISR.
         ism6hg256_instance = this;
-        pinMode(ISM6HG256_INT, INPUT);
+        gpio_set_direction((gpio_num_t)(ISM6HG256_INT), GPIO_MODE_INPUT);
 
         // Flush any pending DRDY by reading the data registers.
         // Without this, DRDY may already be HIGH before attachInterrupt
@@ -428,10 +449,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             ism6hg256.Get_X_AxesRaw(&dummy_axes);
             ism6hg256.Get_HG_X_AxesRaw(&dummy_axes);
             ism6hg256.Get_G_AxesRaw(&dummy_axes);
-            ESP_LOGI(SC_TAG, "ISM6 DRDY flushed (pin=%d)", digitalRead(ISM6HG256_INT));
+            ESP_LOGI(SC_TAG, "ISM6 DRDY flushed (pin=%d)", gpio_get_level((gpio_num_t)(ISM6HG256_INT)));
         }
 
-        attachInterrupt(ISM6HG256_INT, onISM6HG256Int1Trampoline, RISING);
+        gpio_set_intr_type((gpio_num_t)(ISM6HG256_INT), GPIO_INTR_POSEDGE);
+        gpio_isr_handler_add((gpio_num_t)(ISM6HG256_INT), &onISM6HG256Int1Trampoline, nullptr);
+        gpio_intr_enable((gpio_num_t)(ISM6HG256_INT));
     }
 
     ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
@@ -444,7 +467,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                                  GNSS_SAFEBOOT_N))
         {
             ESP_LOGE(SC_TAG, "GNSS initialization failed, stopping.");
-            while (1) { delay(1000); }
+            while (1) { delay_ms(1000); }
         }
         ESP_LOGI(SC_TAG, "GNSS found and initialized");
     }
@@ -483,7 +506,7 @@ void SensorCollector::pollIMUdata(void* parameter)
     while (true)
     {
         // ### Read Sensor Data ###
-        const uint32_t iter_start_us = micros();
+        const uint32_t iter_start_us = time_us();
 
         // Block for sensor interrupt to avoid busy-spinning and WDT starvation.
         const uint32_t notify_count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
@@ -507,7 +530,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         // treat it as if the ISR fired.  This handles the case where the
         // initial rising edge was missed before attachInterrupt was called.
         if (self->use_ism6hg256 && !self->ism6_isr_fired &&
-            digitalRead(self->ISM6HG256_INT))
+            gpio_get_level((gpio_num_t)(self->ISM6HG256_INT)))
         {
             self->ism6_isr_fired = true;
         }
@@ -516,7 +539,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         {
             self->ism6_isr_fired = false;
 
-            const uint32_t ism6_t0 = micros();
+            const uint32_t ism6_t0 = time_us();
             self->ism6_drdy_triplet_hits++;
 
             TR_ISM6HG256_AxesRaw_t lg_raw = {};
@@ -528,7 +551,7 @@ void SensorCollector::pollIMUdata(void* parameter)
 
             if (xSemaphoreTake(self->ism6hg256DataSemaphore, 0) == pdTRUE)
             {
-                self->start_time = micros();
+                self->start_time = time_us();
                 self->ism6hg256_data.time_us = self->start_time;
 
                 self->ism6hg256_data.acc_low_raw.x = lg_raw.x;
@@ -564,7 +587,7 @@ void SensorCollector::pollIMUdata(void* parameter)
                 xSemaphoreGive(self->ism6hg256DataSemaphore);
             }
 
-            const uint32_t ism6_elapsed = micros() - ism6_t0;
+            const uint32_t ism6_elapsed = time_us() - ism6_t0;
             if (ism6_elapsed > self->pt_ism6_read_max_us)
             {
                 self->pt_ism6_read_max_us = ism6_elapsed;
@@ -575,14 +598,14 @@ void SensorCollector::pollIMUdata(void* parameter)
         if (self->use_bmp585)
         {
             uint32_t bmp_pending = 0;
-            noInterrupts();
+            portDISABLE_INTERRUPTS();
             bmp_pending = self->bmp585_irq_pending_count;
             if (bmp_pending > 0) self->bmp585_irq_pending_count = 0;
-            interrupts();
+            portENABLE_INTERRUPTS();
 
             if (bmp_pending > 0)
             {
-                const uint32_t bmp_t0 = micros();
+                const uint32_t bmp_t0 = time_us();
 
                 while (bmp_pending > 0)
                 {
@@ -601,7 +624,7 @@ void SensorCollector::pollIMUdata(void* parameter)
                     bmp_pending--;
                 }
 
-                const uint32_t bmp_elapsed = micros() - bmp_t0;
+                const uint32_t bmp_elapsed = time_us() - bmp_t0;
                 if (bmp_elapsed > self->pt_bmp_max_us)
                 {
                     self->pt_bmp_max_us = bmp_elapsed;
@@ -616,16 +639,16 @@ void SensorCollector::pollIMUdata(void* parameter)
         if (self->use_mmc5983ma && !self->iis2mdc_active)
         {
             uint32_t mmc_pending = 0;
-            noInterrupts();
+            portDISABLE_INTERRUPTS();
             mmc_pending = self->mmc5983ma_irq_pending_count;
             if (mmc_pending > 0) self->mmc5983ma_irq_pending_count = 0;
-            interrupts();
+            portENABLE_INTERRUPTS();
 
             self->mmc5983ma_loop_checks++;
 
             if (mmc_pending > 0)
             {
-                const uint32_t mmc_t0 = micros();
+                const uint32_t mmc_t0 = time_us();
                 self->mmc5983ma_irq_path_hits += mmc_pending;
                 self->mmc5983ma_process_hits++;
 
@@ -639,14 +662,14 @@ void SensorCollector::pollIMUdata(void* parameter)
                     self->mmc5983ma_read_ok++;
                     if (xSemaphoreTake(self->mmc5983maDataSemaphore, 0) == pdTRUE)
                     {
-                        self->mmc5983ma_data.time_us = micros();
+                        self->mmc5983ma_data.time_us = time_us();
                         self->mmc5983ma_data.mag_x = mx;
                         self->mmc5983ma_data.mag_y = my;
                         self->mmc5983ma_data.mag_z = mz;
                         self->mmc5983ma_data_ready = true;
                         xSemaphoreGive(self->mmc5983maDataSemaphore);
                     }
-                    self->mmc_last_sample_time_us = micros();
+                    self->mmc_last_sample_time_us = time_us();
                 }
                 else
                 {
@@ -663,7 +686,7 @@ void SensorCollector::pollIMUdata(void* parameter)
                     self->mmc5983ma_clear_fail++;
                 }
 
-                const uint32_t mmc_elapsed = micros() - mmc_t0;
+                const uint32_t mmc_elapsed = time_us() - mmc_t0;
                 if (mmc_elapsed > self->pt_mmc_max_us)
                 {
                     self->pt_mmc_max_us = mmc_elapsed;
@@ -671,7 +694,7 @@ void SensorCollector::pollIMUdata(void* parameter)
             }
 
             // Stall recovery — infrequent, only when no data for several periods
-            const uint32_t now_us = micros();
+            const uint32_t now_us = time_us();
             const bool mmc_stalled = ((int32_t)(now_us - self->mmc_last_sample_time_us) > (int32_t)self->mmc_stall_threshold_us);
             const bool recover_due = ((int32_t)(now_us - self->mmc_last_recover_time_us) > (int32_t)self->mmc_recover_cooldown_us);
             if (mmc_stalled && recover_due)
@@ -712,7 +735,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         // complete sample instead of tearing.
         if (self->iis2mdc_active)
         {
-            const uint32_t iis2_now_us = micros();
+            const uint32_t iis2_now_us = time_us();
             if ((int32_t)(iis2_now_us - self->iis2mdc_last_sample_us) >=
                 (int32_t)IIS2MDC_PERIOD_US)
             {
@@ -734,7 +757,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         }
 
         // Track total iteration time (excluding the notification wait)
-        const uint32_t iter_elapsed = micros() - iter_start_us;
+        const uint32_t iter_elapsed = time_us() - iter_start_us;
         if (iter_elapsed > self->pt_iter_max_us)
         {
             self->pt_iter_max_us = iter_elapsed;
@@ -760,14 +783,14 @@ void SensorCollector::pollGNSSdata(void* parameter)
 
         if (!self->use_gnss) continue;
 
-        const uint32_t gnss_t0 = micros();
+        const uint32_t gnss_t0 = time_us();
 
         // Non-blocking: parse serial bytes, return true only if a
         // brand-new NAV-PVT message was fully received.
         GNSSData gnss_sample = {};
         const bool have_new = self->gnss_receiver.pollNewPVT(gnss_sample);
 
-        const uint32_t gnss_elapsed = micros() - gnss_t0;
+        const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
         if (gnss_elapsed > self->pt_gnss_max_us)
         {
@@ -979,7 +1002,7 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
             accel_count++;
         }
 
-        delay(10);
+        delay_ms(10);
     }
 
     // --- Gyro offsets ---
@@ -1058,7 +1081,7 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
     }
 }
 
-void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline()
+void IRAM_ATTR SensorCollector::onISM6HG256Int1Trampoline(void* /*arg*/)
 {
     if (ism6hg256_instance)
     {
@@ -1082,7 +1105,7 @@ void IRAM_ATTR SensorCollector::onISM6HG256Int1()
     }
 }
 
-void IRAM_ATTR SensorCollector::onBMP585IntTrampoline()
+void IRAM_ATTR SensorCollector::onBMP585IntTrampoline(void* /*arg*/)
 {
     if (bmp585_instance)
     {
@@ -1106,7 +1129,7 @@ void IRAM_ATTR SensorCollector::onBMP585Int()
     }
 }
 
-void IRAM_ATTR SensorCollector::onMMC5983MAIntTrampoline()
+void IRAM_ATTR SensorCollector::onMMC5983MAIntTrampoline(void* /*arg*/)
 {
     if (mmc5983ma_instance)
     {
