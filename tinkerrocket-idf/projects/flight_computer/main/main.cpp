@@ -32,8 +32,22 @@
 #include <esp_log.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
+#include <esp_rom_sys.h>           // esp_rom_delay_us
 #include <CRC32.h>
 static const char* TAG = "FC";
+
+// IDF-native timing helpers — replace the Arduino-shim time_ms()/time_us()
+// that used to come in via compat.h.  Returned as uint32_t to keep
+// arithmetic width unchanged at the (many) call sites that compare
+// against a stashed timestamp.  Named with the `time_*()` prefix so
+// they don't collide with existing parameters and locals called `now_ms`
+// / `now_us` throughout this file.
+static inline uint32_t time_ms() { return (uint32_t)(esp_timer_get_time() / 1000); }
+static inline uint32_t time_us() { return (uint32_t)esp_timer_get_time(); }
+// `delay_ms(N)` (Arduino) → `delay_ms(N)` here, wraps vTaskDelay.  Keeps
+// existing single-line call-site form; pdMS_TO_TICKS handles the
+// configTICK_RATE_HZ conversion.
+static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
 // Firmware revision recorded in the flight settings snapshot (#165).
 // Injected by CMake (git rev-parse / git diff); fall back when building
@@ -424,7 +438,7 @@ static void clearFlightSnapshot()
     // restores when state==INFLIGHT, so a LANDED snapshot effectively
     // clears the recovery slot via the same I2S path as normal saves.
     FlightSnapshotData snap = {};
-    buildFlightSnapshot(snap, millis(), /* override_state = */ (uint8_t)LANDED);
+    buildFlightSnapshot(snap, time_ms(), /* override_state = */ (uint8_t)LANDED);
     (void)enqueueI2STx(SNAPSHOT_MSG,
                        reinterpret_cast<const uint8_t*>(&snap),
                        sizeof(snap));
@@ -520,7 +534,7 @@ static bool readConfigFrame(uint8_t expected_type,
             {
                 ESP_LOGE(TAG, "[CFG READ] attempt %d: i2c err=0x%X (%s)",
                               attempt, (unsigned)err, esp_err_to_name(err));
-                delay(5 * (attempt + 1));
+                delay_ms(5 * (attempt + 1));
                 continue;
             }
         }
@@ -587,7 +601,7 @@ static bool readConfigFrame(uint8_t expected_type,
 
         ESP_LOGW(TAG, "[CFG READ] attempt %d: config frame (type=0x%02X) not found in %u bytes",
                       attempt, (unsigned)expected_type, (unsigned)actual_read);
-        delay(5 * (attempt + 1));
+        delay_ms(5 * (attempt + 1));
     }
 
     payload_len_out = 0;
@@ -996,7 +1010,7 @@ static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len
 static void buildFlightSettings(FlightSettingsData& s)
 {
     memset(&s, 0, sizeof(s));
-    s.time_us = micros();
+    s.time_us = time_us();
     s.version = FlightSettingsData::VERSION;
 
     uint8_t flags = 0;
@@ -1515,7 +1529,7 @@ static inline void serviceCameraStop(uint32_t now_ms)
 // confirm the UART link and log the camera's feature set.  The probe's
 // brief blocking read (~2 ms typical, ~450 ms worst case on a dead RX)
 // is bounded and runs only on a manual start — unlike the old inline
-// delay(5000), it can't stall the flight task into a watchdog reset.
+// delay_ms(5000), it can't stall the flight task into a watchdog reset.
 static inline void serviceCameraStart(uint32_t now_ms)
 {
     if (camera_start_phase == CameraStartPhase::Idle) return;
@@ -1586,7 +1600,7 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
     }
     piezoStart(config::HEARTBEAT_BEEP_FREQ_HZ,
                config::HEARTBEAT_BEEP_DURATION_MS,
-               micros());
+               time_us());
 }
 
 static void setup_fc()
@@ -1629,12 +1643,12 @@ static void setup_fc()
     pinMode(config::MMC5983MA_CS, OUTPUT); digitalWrite(config::MMC5983MA_CS, HIGH);
     pinMode(config::BMP585_CS, OUTPUT);    digitalWrite(config::BMP585_CS, HIGH);
     pinMode(config::ISM6HG256_CS, OUTPUT); digitalWrite(config::ISM6HG256_CS, HIGH);
-    delay(10);
+    delay_ms(10);
 
     // SPI bus — compat shim wraps spi_bus_initialize(SPI2_HOST, ...)
     ESP_LOGI(TAG, "SPI init...");
     SPI.begin(config::SPI_SCK, config::SPI_SDO, config::SPI_SDI);
-    delay(10);
+    delay_ms(10);
 
     // Re-init pyro pins AFTER spi_bus_initialize() — on ESP32-P4, SPI2
     // default pins (14-16) overlap with pyro pins, and the bus init may
@@ -1651,7 +1665,7 @@ static void setup_fc()
                                   false) != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to initialize ESP I2C interface");
-        while (1) { delay(1000); }
+        while (1) { delay_ms(1000); }
     }
     ESP_LOGI(TAG, "I2C master addr=0x%02X SDA=%d SCL=%d clk=%lu",
                   (unsigned)config::ESP_I2C_ADR,
@@ -1667,19 +1681,19 @@ static void setup_fc()
                                   config::I2S_SAMPLE_RATE) != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to initialize I2S TX stream");
-        while (1) { delay(1000); }
+        while (1) { delay_ms(1000); }
     }
     i2s_tx_queue = xQueueCreate(config::I2S_TX_QUEUE_LEN, sizeof(I2STxMessage));
     if (i2s_tx_queue == nullptr)
     {
         ESP_LOGE(TAG, "Failed to create I2S TX queue");
-        while (1) { delay(1000); }
+        while (1) { delay_ms(1000); }
     }
     i2c_bus_mutex = xSemaphoreCreateMutex();
     if (i2c_bus_mutex == nullptr)
     {
         ESP_LOGE(TAG, "Failed to create I2C bus mutex");
-        while (1) { delay(1000); }
+        while (1) { delay_ms(1000); }
     }
     // I2S sender runs on the SAME core as sensor collection (Core 0).
     // Priority 2: below pollIMUdata (4) so sensor SPI reads are never
@@ -1953,7 +1967,7 @@ static void setup_fc()
     (void)i2c_interface.sendMessage(OUT_STATUS_QUERY,
                                     reinterpret_cast<const uint8_t*>(&out_status_query_data),
                                     sizeof(out_status_query_data));
-    delay(10); // let OutComputer process query and queue 96-byte response
+    delay_ms(10); // let OutComputer process query and queue 96-byte response
     {
         uint8_t init_buf[COMBINED_READ_SIZE] = {};
         esp_err_t read_err = i2c_interface.masterRead(
@@ -2080,7 +2094,7 @@ static void setup_fc()
             // response.  OC reads from MRAM (~150 us) and queues the
             // ~224-byte response into its I2C TX ringbuffer (256 B).
             if (i2c_interface.sendMessage(GET_FLIGHT_SNAPSHOT, nullptr, 0) == ESP_OK) {
-                delay(20);  // let OC service the request and queue the response
+                delay_ms(20);  // let OC service the request and queue the response
 
                 constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
                 uint8_t buf[kRespFrameLen + 16] = {};  // + slack for SOF byte loss
@@ -2129,12 +2143,12 @@ static void setup_fc()
             ESP_LOGW(TAG, "[RECOVERY] Flight elapsed: %lu ms", (unsigned long)snap.flight_elapsed_ms);
             ESP_LOGW(TAG, "========================================");
 
-            const uint32_t now_ms = millis();
+            const uint32_t now_ms = time_ms();
 
             // Restore flight state
             rocket_state = INFLIGHT;
 
-            // Rebase timestamps to new millis() epoch
+            // Rebase timestamps to new time_ms() epoch
             launch_time_millis = now_ms - snap.flight_elapsed_ms;
             if (snap.pyro_apogee_detected) {
                 pyro_apogee_detected = true;
@@ -2226,7 +2240,7 @@ static void setup_fc()
 
     ESP_LOGI(TAG, "Setup complete");
     ESP_LOGI(TAG, "Setup complete…");
-    triggerBlueLedFlash(millis());
+    triggerBlueLedFlash(time_ms());
 
 }
 
@@ -2361,14 +2375,14 @@ static void loop_fc()
     }
 
     // --- Flight logic update ---
-    const uint32_t logic_now_us = micros();
+    const uint32_t logic_now_us = time_us();
     if ((logic_now_us - last_flight_loop_update_time) >= flight_loop_period)
     {
         lt_loop_count++;
         last_flight_loop_update_time = logic_now_us;
 
         // ### Pressure altitude calculation (for kinematic checks) ###
-        const uint32_t now_ms = millis();
+        const uint32_t now_ms = time_ms();
         float pressure_altitude_m = 0.0f;
         if (have_bmp_si)
         {
@@ -2614,7 +2628,7 @@ static void loop_fc()
             }
             else if (run_ekf_this_tick)
             {
-                const uint32_t ekf_t0 = micros();
+                const uint32_t ekf_t0 = time_us();
 
                 // AHRS accel correction: enabled on pad and after apogee (descent).
                 // Disabled during thrust and coast where accel is far from 1g.
@@ -2673,7 +2687,7 @@ static void loop_fc()
                     prev_baro_valid = true;
                 }
 
-                const uint32_t ekf_us = micros() - ekf_t0;
+                const uint32_t ekf_us = time_us() - ekf_t0;
                 lt_ekf_total_us += ekf_us;
                 lt_ekf_count++;
                 if (ekf_us > lt_ekf_max_us) lt_ekf_max_us = ekf_us;
@@ -2735,7 +2749,7 @@ static void loop_fc()
 
             if (query_pending)
             {
-                const uint32_t gor_start = micros();
+                const uint32_t gor_start = time_us();
                 uint8_t combined_buf[COMBINED_READ_SIZE] = {};
                 esp_err_t read_err = i2c_interface.masterRead(
                     combined_buf, COMBINED_READ_SIZE, 10);
@@ -2764,7 +2778,7 @@ static void loop_fc()
                     }
                 }
 
-                const uint32_t gor_us = micros() - gor_start;
+                const uint32_t gor_us = time_us() - gor_start;
                 if (gor_us > i2c_gor_max_us) { i2c_gor_max_us = gor_us; }
                 if (query_ok) { i2c_query_ok++; } else { i2c_query_fail++; }
 
@@ -2818,7 +2832,7 @@ static void loop_fc()
                 // Confirmation beep so the user knows it worked
                 if (piezo_pwm_ready)
                 {
-                    piezoStart(2600, 100, micros());
+                    piezoStart(2600, 100, time_us());
                 }
             }
             else if (out_pending_command == SOUNDS_DISABLE)
@@ -2832,7 +2846,7 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_CONFIG_PENDING)
             {
-                delay(1);  // let slave TX FIFO settle
+                delay_ms(1);  // let slave TX FIFO settle
                 uint8_t cfg_payload[14];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(SERVO_CONFIG_MSG, sizeof(ServoConfigData),
@@ -2878,7 +2892,7 @@ static void loop_fc()
             }
             else if (out_pending_command == PID_CONFIG_PENDING)
             {
-                delay(1);
+                delay_ms(1);
                 uint8_t cfg_payload[20];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(PID_CONFIG_MSG, sizeof(PIDConfigData),
@@ -2932,7 +2946,7 @@ static void loop_fc()
             }
             else if (out_pending_command == SIM_CONFIG_PENDING)
             {
-                delay(5);  // let slave TX FIFO settle
+                delay_ms(5);  // let slave TX FIFO settle
                 uint8_t cfg_payload[16];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(SIM_CONFIG_MSG, sizeof(SimConfigData),
@@ -2955,7 +2969,7 @@ static void loop_fc()
                 // the start may have overwritten the config command before we read it.
                 // Try reading any pending config frame before starting the sim.
                 {
-                    delay(5);
+                    delay_ms(5);
                     uint8_t cfg_payload[16];
                     size_t  cfg_len = 0;
                     if (readConfigFrame(SIM_CONFIG_MSG, sizeof(SimConfigData),
@@ -3164,7 +3178,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    delay(1);
+                    delay_ms(1);
                     uint8_t cfg_payload[sizeof(MagCalApplyData)];
                     size_t  cfg_len = 0;
                     if (readConfigFrame(MAG_CAL_APPLY_MSG, sizeof(MagCalApplyData),
@@ -3226,7 +3240,7 @@ static void loop_fc()
                 }
                 else
                 {
-                    delay(1);
+                    delay_ms(1);
                     uint8_t cfg_payload[sizeof(SensorCalApplyData)];
                     size_t  cfg_len = 0;
                     if (readConfigFrame(SENSOR_CAL_APPLY_MSG, sizeof(SensorCalApplyData),
@@ -3309,7 +3323,7 @@ static void loop_fc()
             }
             else if (out_pending_command == CAMERA_CONFIG_PENDING)
             {
-                delay(1);
+                delay_ms(1);
                 uint8_t cfg_payload[1];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(CAMERA_CONFIG_MSG, sizeof(CameraConfigData),
@@ -3331,7 +3345,7 @@ static void loop_fc()
             }
             else if (out_pending_command == PYRO_CONFIG_PENDING)
             {
-                delay(1);
+                delay_ms(1);
                 uint8_t cfg_payload[sizeof(PyroConfigData)];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(PYRO_CONFIG_MSG, sizeof(PyroConfigData),
@@ -3358,7 +3372,7 @@ static void loop_fc()
                 if (rocket_state == INFLIGHT) {
                     ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — INFLIGHT");
                 } else {
-                    delay(1);
+                    delay_ms(1);
                     uint8_t cfg_payload[4];
                     size_t  cfg_len = 0;
                     uint8_t ch = 0;
@@ -3402,7 +3416,7 @@ static void loop_fc()
                 if (rocket_state == INFLIGHT) {
                     ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — INFLIGHT");
                 } else {
-                    delay(1);
+                    delay_ms(1);
                     uint8_t cfg_payload[4];
                     size_t  cfg_len = 0;
                     uint8_t ch = 0;
@@ -3439,12 +3453,12 @@ static void loop_fc()
                         portENTER_CRITICAL(&pyro_spinlock);
                         pyroSetArmLocked(true);
                         portEXIT_CRITICAL(&pyro_spinlock);
-                        delay(config::PYRO_ARM_SETTLE_MS);
+                        delay_ms(config::PYRO_ARM_SETTLE_MS);
                         portENTER_CRITICAL(&pyro_spinlock);
                         gpio_set_level(fire_pin, 1);
                         portEXIT_CRITICAL(&pyro_spinlock);
 
-                        delay(config::PYRO_FIRE_DURATION_MS);
+                        delay_ms(config::PYRO_FIRE_DURATION_MS);
 
                         portENTER_CRITICAL(&pyro_spinlock);
                         gpio_set_level(fire_pin, 0);
@@ -3464,7 +3478,7 @@ static void loop_fc()
                 if (rocket_state == INFLIGHT) {
                     ESP_LOGW(TAG, "[SERVO TEST] Rejected — INFLIGHT");
                 } else {
-                    delay(1);
+                    delay_ms(1);
                     uint8_t cfg_payload[8];
                     size_t  cfg_len = 0;
                     if (readConfigFrame(SERVO_TEST_MSG, sizeof(ServoTestAnglesData),
@@ -3498,7 +3512,7 @@ static void loop_fc()
             }
             else if (out_pending_command == ROLL_PROFILE_PENDING)
             {
-                delay(1);
+                delay_ms(1);
                 uint8_t cfg_payload[sizeof(RollProfileData)];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(ROLL_PROFILE_MSG, sizeof(RollProfileData),
@@ -3540,7 +3554,7 @@ static void loop_fc()
             }
             else if (out_pending_command == ROLL_CTRL_CONFIG_PENDING)
             {
-                delay(1);
+                delay_ms(1);
                 uint8_t cfg_payload[4];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(ROLL_CTRL_CONFIG_MSG, sizeof(RollControlConfigData),
@@ -3570,7 +3584,7 @@ static void loop_fc()
                 if (rocket_state == INFLIGHT) {
                     ESP_LOGW(TAG, "[SERVO REPLAY] Rejected — INFLIGHT");
                 } else {
-                    delay(1);
+                    delay_ms(1);
                     uint8_t cfg_payload[sizeof(ServoReplayData)];
                     size_t  cfg_len = 0;
                     if (readConfigFrame(SERVO_REPLAY_MSG, sizeof(ServoReplayData),
@@ -3751,7 +3765,7 @@ static void loop_fc()
                     rocket_state = READY;
                     if (!ready_chirp_played)
                     {
-                        startBootReadyChirp(now_ms, micros());
+                        startBootReadyChirp(now_ms, time_us());
                         ready_chirp_played = true;
                     }
                     ESP_LOGI(TAG, "[STATE] INITIALIZATION -> READY");
@@ -4301,8 +4315,8 @@ static void loop_fc()
         }
     }
     
-    const uint32_t now_ms_for_sound = millis();
-    serviceBootReadyChirp(now_ms_for_sound, micros());
+    const uint32_t now_ms_for_sound = time_ms();
+    serviceBootReadyChirp(now_ms_for_sound, time_us());
     serviceHeartbeatBeep(now_ms_for_sound);
     serviceBlueLedFlash(now_ms_for_sound);
     serviceGoProPulse(now_ms_for_sound);
