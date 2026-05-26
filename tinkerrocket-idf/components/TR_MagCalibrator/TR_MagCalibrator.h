@@ -42,8 +42,15 @@ public:
         IDLE      = 0,   // not running
         SAMPLING  = 1,   // accumulating samples; waiting for cap or user-stop
         REVIEW    = 2,   // sample cap hit, fit computed, awaiting user accept/retry/abort
-        APPLIED   = 3,   // user accepted; one-shot terminal so the FC can latch + transition
-        ABORTED   = 4    // user aborted or fit rejected during sampling-end → ready for IDLE
+        APPLIED   = 3,   // user accepted + post-accept verify passed; one-shot terminal
+        ABORTED   = 4,   // user aborted or fit rejected during sampling-end → ready for IDLE
+        // #206: post-accept verification pass.  Entered from REVIEW via
+        // accept() — the FC has just programmed the chip's OFFSET regs
+        // with the fit but hasn't persisted NVS yet.  Mag samples landing
+        // in this state update min/max |B| accumulators; the FC drives a
+        // ~5 s window and then calls evaluateVerify() to commit (→ APPLIED
+        // with NVS write) or reject (→ REVIEW + MAG_CAL_REJECT_VERIFY_FAILED).
+        VERIFYING = 5
     };
 
     MagCalibrator();
@@ -60,11 +67,25 @@ public:
     // samples and goes back to SAMPLING.
     void retry();
 
-    // User-accepted fit.  Returns false (and stays in REVIEW) if no fit is
-    // currently available (e.g. called before sample cap).  On success
-    // transitions to APPLIED; the caller should pull the fit via
-    // getResult() and then call clear() before the next start().
+    // User-accepted fit.  Returns false (and stays in REVIEW) if no fit
+    // is currently available (e.g. called before sample cap).  On success
+    // transitions to VERIFYING (issue #206) — the caller is expected to
+    // program the chip's OFFSET regs, feed verify samples via addSample,
+    // and after a target dwell call evaluateVerify() to commit or reject.
+    // The caller should pull the fit via getResult() before changing
+    // OFFSET regs; the offsets remain valid throughout VERIFYING.
     bool accept();
+
+    // #206: Evaluate the post-accept rotation.  Call after at least
+    // MAG_CAL_VERIFY_MIN_SAMPLES samples have flowed through addSample
+    // and (caller-driven) ≥5 s have elapsed.  Returns true on pass —
+    // state → APPLIED and the caller persists NVS.  Returns false on
+    // fail — state → REVIEW with fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED,
+    // and the caller restores the prior OFFSET regs.  No-op outside
+    // VERIFYING; returns false in that case.  Pulls the observed |B|
+    // worst-case into worst_uT for the rejected-frame telemetry so iOS
+    // can show the user what went wrong.
+    bool evaluateVerify(float& worst_uT);
 
     // Reset to IDLE.  Call after consuming an APPLIED or ABORTED state.
     void clear();
@@ -168,6 +189,20 @@ private:
     bool    fit_valid_;
 
     State state_;
+
+    // #206 post-accept verification accumulators.  Reset on entering
+    // VERIFYING via accept(); fed by addSample() while in VERIFYING.
+    // verify_min_uT_ / verify_max_uT_ are tracked in µT (post-offset
+    // chip subtract is already in raw counts, so the verify path
+    // multiplies by IIS2MDC_LSB_TO_uT once per sample).
+    // verify_coverage_mask_ is a parallel mask to coverage_mask_ that
+    // only sees post-accept rotation — required to enforce that the
+    // user actually rotated the rocket during verify and didn't just
+    // hold it still.  verify_n_samples_ counts samples that arrived
+    // while VERIFYING (not the sphere-fit buffer).
+    float    verify_min_uT_, verify_max_uT_;
+    uint16_t verify_n_samples_;
+    uint32_t verify_coverage_mask_;
 
     // Map a unit-vector direction to a wedge index 0..25.  Returns
     // 26 (= invalid) if the input is the zero vector.

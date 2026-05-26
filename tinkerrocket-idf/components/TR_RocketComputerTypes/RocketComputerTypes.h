@@ -759,11 +759,19 @@ typedef struct
 //                    iOS shows "Accept".  Non-zero codes describe why iOS
 //                    should show "Retry".
 enum MagCalSubType : uint8_t {
-    MAG_CAL_SUB_IDLE     = 0,
-    MAG_CAL_SUB_SAMPLING = 1,
-    MAG_CAL_SUB_REVIEW   = 2,
-    MAG_CAL_SUB_APPLIED  = 3,
-    MAG_CAL_SUB_ABORTED  = 4
+    MAG_CAL_SUB_IDLE      = 0,
+    MAG_CAL_SUB_SAMPLING  = 1,
+    MAG_CAL_SUB_REVIEW    = 2,
+    MAG_CAL_SUB_APPLIED   = 3,
+    MAG_CAL_SUB_ABORTED   = 4,
+    // #206 post-accept verification pass — the chip's OFFSET regs are
+    // programmed with the newly-accepted cal but NVS is not yet written.
+    // The FC samples mag for ~5 s while the user rotates the rocket, and
+    // confirms the corrected |B| stays inside a tight band before
+    // persisting.  On verify-fail the OFFSET regs are restored and the
+    // calibrator falls back to REVIEW with MAG_CAL_REJECT_VERIFY_FAILED
+    // so the user can retry.
+    MAG_CAL_SUB_VERIFYING = 5
 };
 
 enum MagCalRejectCode : uint8_t {
@@ -771,7 +779,15 @@ enum MagCalRejectCode : uint8_t {
     MAG_CAL_REJECT_R_TOO_LOW      = 1,  // fitted R < 20 µT
     MAG_CAL_REJECT_R_TOO_HIGH     = 2,  // fitted R > 80 µT
     MAG_CAL_REJECT_HIGH_RESIDUAL  = 3,  // RMS residual > threshold (poor sphere fit)
-    MAG_CAL_REJECT_LOW_COVERAGE   = 4   // < min populated wedges
+    MAG_CAL_REJECT_LOW_COVERAGE   = 4,  // < min populated wedges
+    // #206: post-accept verification pass observed a corrected |B| that
+    // wandered outside the trust band ([VERIFY_MIN_UT, VERIFY_MAX_UT]) or
+    // varied by more than VERIFY_RANGE_UT across the rotation.  On this
+    // code the FC restores the prior OFFSET regs and the iOS UI returns
+    // the user to Review with a "retry the cal in a less magnetic spot"
+    // prompt.  inst_field_uT_x10 in the same frame carries the worst
+    // observed |B| so the UI can show the user what went wrong.
+    MAG_CAL_REJECT_VERIFY_FAILED  = 5
 };
 
 typedef struct __attribute__((packed))
@@ -894,6 +910,44 @@ static constexpr uint16_t MAG_CAL_MIN_SAMPLES = 500;
 // NVS schema version for the mag_cal namespace.  Bump if the persisted
 // field set changes meaningfully so old persisted state is ignored.
 static constexpr uint8_t MAG_CAL_NVS_SCHEMA_VERSION = 1;
+
+// --- #206 post-accept verification thresholds ---
+//
+// After accept, the chip's OFFSET regs are programmed and we measure
+// |B| of the corrected stream over a short rotation.  The fit's R is
+// already inside [20, 80] µT thanks to MAG_CAL_R_MIN/MAX_UT; here we
+// insist the rotated |B| also lands inside a *tighter* band — if the
+// fitted center was wrong (good fit, wrong center) the rotation will
+// expose it by sweeping |B| outside this band even though the fit's
+// own R sat in the wider band.
+//
+// 20-70 µT is the sustainable band: WMM tops out around 67 µT, and 70
+// gives a couple µT of room.  Going below 20 means we landed in a hard
+// magnetic null — should be physically impossible at Earth's surface,
+// so it indicates the cal is over-subtracting.
+static constexpr float MAG_CAL_VERIFY_MIN_UT = 20.0f;
+static constexpr float MAG_CAL_VERIFY_MAX_UT = 70.0f;
+
+// Max acceptable |B| spread (max - min) across the verify rotation.
+// A perfectly-calibrated mag tracing Earth's field gives near-constant
+// |B| as the rocket rotates — sub-µT in theory, a few µT after sensor
+// noise and small soft-iron.  25 µT leaves headroom for tilt-coupling
+// from imperfect axis alignment without letting a 30-µT residual hard
+// iron sneak through.
+static constexpr float MAG_CAL_VERIFY_RANGE_UT = 25.0f;
+
+// Minimum accel-wedge coverage during verification.  The user should
+// rotate the rocket through enough orientations that a residual
+// hard-iron offset becomes visible — without rotation the |B|
+// trivially stays in band even with a wrong center.  Tracked via the
+// existing per-accel-wedge mechanism (see TR_MagCalibrator).
+static constexpr uint8_t MAG_CAL_VERIFY_MIN_COVERAGE_BINS = 6;
+
+// Minimum samples accumulated in VERIFYING before evaluateVerify() is
+// allowed to declare pass.  At the new-PCB IIS2MDC's ~100 Hz output rate
+// this hits in ~1 s — the FC main loop drives a longer duration target
+// (~5 s) but we cap the floor here so a slow ODR can't trip the gate.
+static constexpr uint16_t MAG_CAL_VERIFY_MIN_SAMPLES = 100;
 
 // --- Non sensor data ---
 typedef struct __attribute__((packed))

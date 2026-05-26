@@ -66,7 +66,10 @@ MagCalibrator::MagCalibrator()
       fit_valid_(false),
       accel_x_(0), accel_y_(0), accel_z_(0),
       accel_valid_(false),
-      state_(State::IDLE)
+      state_(State::IDLE),
+      verify_min_uT_(0.0f), verify_max_uT_(0.0f),
+      verify_n_samples_(0),
+      verify_coverage_mask_(0)
 {
     memset(wedge_count_, 0, sizeof(wedge_count_));
     memset(wedge_write_, 0, sizeof(wedge_write_));
@@ -108,11 +111,105 @@ void MagCalibrator::retry()
 bool MagCalibrator::accept()
 {
     if (state_ != State::REVIEW || !fit_valid_) return false;
-    state_ = State::APPLIED;
+    // #206: REVIEW → VERIFYING.  Caller programs OFFSET regs immediately
+    // after this returns, so subsequent addSample calls see post-offset
+    // |B|.  Reset the verify accumulators so prior runs (re-cal then
+    // verify-fail then re-cal) don't carry state forward.
+    verify_min_uT_ = 0.0f;
+    verify_max_uT_ = 0.0f;
+    verify_n_samples_ = 0;
+    verify_coverage_mask_ = 0;
+    state_ = State::VERIFYING;
 #ifdef ESP_PLATFORM
-    ESP_LOGI(TAG, "accept: APPLIED (cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT)",
+    ESP_LOGI(TAG, "accept: VERIFYING (cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT)",
              (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
              (double)fit_R_uT_, (double)fit_residual_uT_);
+#endif
+    return true;
+}
+
+bool MagCalibrator::evaluateVerify(float& worst_uT)
+{
+    worst_uT = 0.0f;
+    if (state_ != State::VERIFYING) return false;
+
+    const uint8_t cov_bins = (uint8_t)__builtin_popcount(verify_coverage_mask_);
+    const float range_uT = verify_max_uT_ - verify_min_uT_;
+
+    // Sample-count floor first — without enough samples min/max are
+    // meaningless and we'd flap on noise.
+    if (verify_n_samples_ < MAG_CAL_VERIFY_MIN_SAMPLES) {
+        // Treat as fail-with-rotate-more so the user gets a clear retry.
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        worst_uT = verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (insufficient samples): n=%u (need %u)",
+                 (unsigned)verify_n_samples_, (unsigned)MAG_CAL_VERIFY_MIN_SAMPLES);
+#endif
+        return false;
+    }
+
+    // Coverage check — the user must rotate the rocket through enough
+    // orientations during verify.  Without rotation a wrong cal would
+    // trivially pass the |B| gate (rocket is stationary; |B| varies only
+    // by sensor noise).  Threshold is lower than SAMPLING because the
+    // verify window is short — we just need *some* rotation diversity.
+    if (cov_bins < MAG_CAL_VERIFY_MIN_COVERAGE_BINS) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        worst_uT = verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (low coverage): bins=%u (need %u)",
+                 (unsigned)cov_bins, (unsigned)MAG_CAL_VERIFY_MIN_COVERAGE_BINS);
+#endif
+        return false;
+    }
+
+    // Magnitude band gate.
+    if (verify_max_uT_ > MAG_CAL_VERIFY_MAX_UT) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        worst_uT = verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (|B| too high): max=%.1fµT > %.1f",
+                 (double)verify_max_uT_, (double)MAG_CAL_VERIFY_MAX_UT);
+#endif
+        return false;
+    }
+    if (verify_min_uT_ < MAG_CAL_VERIFY_MIN_UT) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        worst_uT = verify_min_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (|B| too low): min=%.1fµT < %.1f",
+                 (double)verify_min_uT_, (double)MAG_CAL_VERIFY_MIN_UT);
+#endif
+        return false;
+    }
+    // Range (max-min) gate — catches a residual hard-iron that keeps
+    // |B| in the band on average but swings substantially with rotation.
+    if (range_uT > MAG_CAL_VERIFY_RANGE_UT) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        // Report whichever extreme is further from the fitted R as the
+        // "worst" — that's the more diagnostic value for the user.
+        worst_uT = ((fit_R_uT_ - verify_min_uT_) > (verify_max_uT_ - fit_R_uT_))
+                   ? verify_min_uT_ : verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (|B| range too wide): range=%.1fµT > %.1f (min=%.1f max=%.1f)",
+                 (double)range_uT, (double)MAG_CAL_VERIFY_RANGE_UT,
+                 (double)verify_min_uT_, (double)verify_max_uT_);
+#endif
+        return false;
+    }
+
+    // Pass — APPLIED is the terminal good state; FC writes NVS next.
+    state_ = State::APPLIED;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "verify PASS: |B| min=%.1f max=%.1f range=%.1f (n=%u, cov=%u/26)",
+             (double)verify_min_uT_, (double)verify_max_uT_, (double)range_uT,
+             (unsigned)verify_n_samples_, (unsigned)cov_bins);
 #endif
     return true;
 }
@@ -132,6 +229,41 @@ void MagCalibrator::setLiveAccel(int16_t ax, int16_t ay, int16_t az)
 
 bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
 {
+    // #206: during VERIFYING the chip's OFFSET regs are already
+    // programmed, so x/y/z arriving here are post-offset.  Track
+    // |B| min/max plus rotation coverage; no per-orientation
+    // bucketing (the sphere-fit buffer is frozen at the REVIEW fit).
+    if (state_ == State::VERIFYING) {
+        last_x_ = x;
+        last_y_ = y;
+        last_z_ = z;
+
+        const float fx = (float)x * IIS2MDC_LSB_TO_uT;
+        const float fy = (float)y * IIS2MDC_LSB_TO_uT;
+        const float fz = (float)z * IIS2MDC_LSB_TO_uT;
+        const float B = sqrtf(fx*fx + fy*fy + fz*fz);
+
+        if (verify_n_samples_ == 0) {
+            verify_min_uT_ = B;
+            verify_max_uT_ = B;
+        } else {
+            if (B < verify_min_uT_) verify_min_uT_ = B;
+            if (B > verify_max_uT_) verify_max_uT_ = B;
+        }
+        verify_n_samples_++;
+
+        // Coverage from accel wedge — same logic as SAMPLING.  Without
+        // a fresh accel reading we just skip the coverage update; the
+        // |B| min/max still tick so a stationary verify can still hit
+        // the sample floor and fail-on-coverage rather than silently
+        // accumulating samples in a single wedge.
+        if (accel_valid_) {
+            const uint8_t aw = directionWedge(accel_x_, accel_y_, accel_z_);
+            if (aw < NUM_ACCEL_WEDGES) verify_coverage_mask_ |= (1u << aw);
+        }
+        return false;
+    }
+
     if (state_ != State::SAMPLING) return false;
 
     // Live vector + coverage update regardless of bucket state — the
@@ -228,16 +360,27 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
 
     switch (state_)
     {
-        case State::IDLE:     out.sub_type = MAG_CAL_SUB_IDLE;     break;
-        case State::SAMPLING: out.sub_type = MAG_CAL_SUB_SAMPLING; break;
-        case State::REVIEW:   out.sub_type = MAG_CAL_SUB_REVIEW;   break;
-        case State::APPLIED:  out.sub_type = MAG_CAL_SUB_APPLIED;  break;
-        case State::ABORTED:  out.sub_type = MAG_CAL_SUB_ABORTED;  break;
+        case State::IDLE:      out.sub_type = MAG_CAL_SUB_IDLE;      break;
+        case State::SAMPLING:  out.sub_type = MAG_CAL_SUB_SAMPLING;  break;
+        case State::REVIEW:    out.sub_type = MAG_CAL_SUB_REVIEW;    break;
+        case State::APPLIED:   out.sub_type = MAG_CAL_SUB_APPLIED;   break;
+        case State::ABORTED:   out.sub_type = MAG_CAL_SUB_ABORTED;   break;
+        case State::VERIFYING: out.sub_type = MAG_CAL_SUB_VERIFYING; break;
     }
 
-    out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
-    out.coverage_mask = coverage_mask_;
-    out.sample_count  = n_samples_;
+    // During VERIFYING the coverage / sample-count fields report the
+    // verify-window progress so iOS can render a progress bar that
+    // matches what the FC is actually gating on.  Outside VERIFYING
+    // the sphere-fit's own counters are the right thing to show.
+    if (state_ == State::VERIFYING) {
+        out.coverage_bins = (uint8_t)__builtin_popcount(verify_coverage_mask_);
+        out.coverage_mask = verify_coverage_mask_;
+        out.sample_count  = verify_n_samples_;
+    } else {
+        out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
+        out.coverage_mask = coverage_mask_;
+        out.sample_count  = n_samples_;
+    }
 
     // Live raw vector for the iOS direction-feedback UI.  Raw LSB
     // matches the sphere-fit's working units so no conversion drift.
