@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - 'tinkerrocket-idf/**'
+      - '.github/workflows/firmware-build.yml'
   pull_request:
     paths:
       - 'tinkerrocket-idf/**'
+      - '.github/workflows/firmware-build.yml'
 
 jobs:
   build:
@@ -19,9 +21,7 @@ jobs:
         project:
           - out_computer
           - base_station
-          # flight_computer excluded: uses Arduino-as-component with
-          # managed_components fetched at build time (gitignored).
-          # Add once we set up component caching in CI.
+          - flight_computer
 
     steps:
       - uses: actions/checkout@v4
