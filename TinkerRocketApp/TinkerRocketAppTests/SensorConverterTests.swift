@@ -41,6 +41,13 @@ private func makeMag(timeUs: UInt32 = 0, x: UInt32, y: UInt32, z: UInt32) throws
     return try MMC5983MAData(from: d)
 }
 
+private func makeIIS2MDC(timeUs: UInt32 = 0, x: Int16, y: Int16, z: Int16) throws -> IIS2MDCData {
+    var d = Data()
+    d.appendLE(timeUs)
+    d.appendLE(x); d.appendLE(y); d.appendLE(z)
+    return try IIS2MDCData(from: d)
+}
+
 private func makeGNSS(
     timeUs: UInt32 = 0,
     latE7: Int32, lonE7: Int32, altMm: Int32,
@@ -146,6 +153,28 @@ final class SensorConverterTests: XCTestCase {
         XCTAssertEqual(si.mag_x, 0.0, accuracy: 0.01)
         XCTAssertEqual(si.mag_y, 0.0, accuracy: 0.01)
         XCTAssertEqual(si.mag_z, 0.0, accuracy: 0.01)
+    }
+
+    func testIIS2MDC_ZeroRaw() throws {
+        // Raw 0 -> 0 µT; signed-int axes so no centering needed.
+        let raw = try makeIIS2MDC(timeUs: 3000, x: 0, y: 0, z: 0)
+        let si = converter.convertIIS2MDC(raw)
+
+        XCTAssertEqual(si.time_us, 3000)
+        XCTAssertEqual(si.mag_x, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(si.mag_y, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(si.mag_z, 0.0, accuracy: 1e-9)
+    }
+
+    func testIIS2MDC_SensitivityIs0_15uTPerLSB() throws {
+        // Datasheet 9.13: 0.15 µT/LSB.  With zero rotation (default),
+        // raw 100 should map directly to 15 µT on each axis.
+        let raw = try makeIIS2MDC(x: 100, y: 200, z: -100)
+        let si = converter.convertIIS2MDC(raw)
+
+        XCTAssertEqual(si.mag_x,  15.0, accuracy: 1e-6)
+        XCTAssertEqual(si.mag_y,  30.0, accuracy: 1e-6)
+        XCTAssertEqual(si.mag_z, -15.0, accuracy: 1e-6)
     }
 
     // MARK: - NonSensor flag extraction (#196)
