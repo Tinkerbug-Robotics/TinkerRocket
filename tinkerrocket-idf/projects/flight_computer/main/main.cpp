@@ -1611,6 +1611,11 @@ static void setup_fc()
     };
     esp_task_wdt_reconfigure(&wdt_cfg);
 
+    // Quiet the IDF gpio driver — each gpio_config() (CS pins, INT pins,
+    // pyro pins) prints a multi-field INFO line that drowns the rest of
+    // boot.  Drop to WARN so genuine GPIO problems still surface.
+    esp_log_level_set("gpio", ESP_LOG_WARN);
+
     // Pyro channels: safe pins FIRST, before any other peripheral init
     initPyroPins();
 

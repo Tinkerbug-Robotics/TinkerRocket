@@ -1,7 +1,9 @@
 #ifndef TR_ISM6HG256_H
 #define TR_ISM6HG256_H
 
-#include <compat.h>
+#include <cstdint>
+#include <driver/spi_master.h>
+#include <driver/gpio.h>
 #include "ism6hg256x_reg.h"
 
 typedef enum {
@@ -18,7 +20,13 @@ typedef struct {
 class TR_ISM6HG256
 {
 public:
-    TR_ISM6HG256(SPIClass *spi, int cs_pin, uint32_t spi_speed = 2000000);
+    // ESP-IDF native constructor.  The SPI bus identified by `host` must be
+    // initialised (spi_bus_initialize) before begin() is called.  CS is
+    // driven manually by the wrapper via the GPIO HAL.  SPI mode is fixed
+    // to SPI_MODE0 (ST ISM6HG256X SPI convention).
+    TR_ISM6HG256(spi_host_device_t host, uint8_t cs_pin, uint32_t clock_hz = 2000000);
+
+    ~TR_ISM6HG256();
 
     TR_ISM6HG256Status begin();
     TR_ISM6HG256Status ReadWhoAmI(uint8_t *id);
@@ -52,9 +60,22 @@ public:
     TR_ISM6HG256Status Get_G_DRDY_Status(uint8_t *Status);
 
 private:
-    SPIClass *dev_spi;
-    int cs_pin;
-    uint32_t spi_speed;
+    // CS control (manual, IDF GPIO HAL).  spics_io_num is set to -1 in the
+    // device config, so IDF does not drive CS — this wrapper does.
+    inline void csSelect_()   { gpio_set_level(static_cast<gpio_num_t>(cs_pin_), 0); }
+    inline void csDeselect_() { gpio_set_level(static_cast<gpio_num_t>(cs_pin_), 1); }
+
+    // Lazily add the SPI device on first begin().  Returns false on
+    // add_device failure.  Idempotent.
+    bool ensureSpiDevice_();
+
+    // Configure cs_pin_ as a GPIO output, idle HIGH.
+    void configureCsPin_();
+
+    spi_host_device_t   host_;
+    uint8_t             cs_pin_;
+    uint32_t            clock_hz_;
+    spi_device_handle_t spi_dev_ = nullptr;
 
     uint8_t acc_is_enabled;
     uint8_t acc_hg_is_enabled;
