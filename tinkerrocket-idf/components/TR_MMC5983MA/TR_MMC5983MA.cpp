@@ -1,14 +1,71 @@
 #include <TR_MMC5983MA.h>
+#include <cstring>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-TR_MMC5983MA::TR_MMC5983MA(SPIClass &spi, uint8_t cs_pin, SPISettings settings)
-    : spi(spi), cs_pin(cs_pin), spi_settings(settings)
+static const char* MMC_TAG = "TR_MMC5983MA";
+
+// ---------------- Ctor / Dtor ----------------
+
+TR_MMC5983MA::TR_MMC5983MA(spi_host_device_t host, uint8_t cs_pin, uint32_t clock_hz)
+    : host_(host),
+      cs_pin_(cs_pin),
+      clock_hz_(clock_hz)
 {
 }
 
+TR_MMC5983MA::~TR_MMC5983MA()
+{
+    if (spi_dev_) {
+        spi_bus_remove_device(spi_dev_);
+        spi_dev_ = nullptr;
+    }
+}
+
+// ---------------- IDF setup helpers ----------------
+
+void TR_MMC5983MA::configureCsPin_()
+{
+    gpio_config_t io = {};
+    io.pin_bit_mask  = 1ULL << cs_pin_;
+    io.mode          = GPIO_MODE_OUTPUT;
+    io.pull_up_en    = GPIO_PULLUP_DISABLE;
+    io.pull_down_en  = GPIO_PULLDOWN_DISABLE;
+    io.intr_type     = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+    csDeselect_();
+}
+
+bool TR_MMC5983MA::ensureSpiDevice_()
+{
+    if (spi_dev_) return true;
+
+    // Configure CS as a GPIO output (idle HIGH) before the device is added.
+    // Idempotent across the cold path (begin()) and any pre-begin I/O.
+    configureCsPin_();
+
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = clock_hz_;
+    devcfg.mode           = 0;          // SPI_MODE0 (MMC5983MA supports mode 0 and mode 3; we use 0)
+    devcfg.spics_io_num   = -1;         // CS driven manually by this wrapper
+    devcfg.queue_size     = 1;
+    devcfg.command_bits   = 8;          // reg byte goes in t.cmd
+
+    esp_err_t err = spi_bus_add_device(host_, &devcfg, &spi_dev_);
+    if (err != ESP_OK) {
+        ESP_LOGE(MMC_TAG, "spi_bus_add_device failed: %s", esp_err_to_name(err));
+        spi_dev_ = nullptr;
+        return false;
+    }
+    return true;
+}
+
+// ---------------- Public API ----------------
+
 bool TR_MMC5983MA::begin()
 {
-    pinMode(cs_pin, OUTPUT);
-    digitalWrite(cs_pin, HIGH);
+    if (!ensureSpiDevice_()) return false;
     return isConnected();
 }
 
@@ -23,7 +80,7 @@ bool TR_MMC5983MA::softReset()
 {
     const bool ok = setShadowBit(INT_CTRL_1_REG, SW_RST);
     clearShadowBit(INT_CTRL_1_REG, SW_RST, false);
-    delay(15);
+    vTaskDelay(pdMS_TO_TICKS(15));
     return ok;
 }
 
@@ -31,7 +88,7 @@ bool TR_MMC5983MA::performSetOperation()
 {
     const bool ok = setShadowBit(INT_CTRL_0_REG, SET_OPERATION);
     clearShadowBit(INT_CTRL_0_REG, SET_OPERATION, false);
-    delay(1);
+    vTaskDelay(pdMS_TO_TICKS(1));
     return ok;
 }
 
@@ -39,7 +96,7 @@ bool TR_MMC5983MA::performResetOperation()
 {
     const bool ok = setShadowBit(INT_CTRL_0_REG, RESET_OPERATION);
     clearShadowBit(INT_CTRL_0_REG, RESET_OPERATION, false);
-    delay(1);
+    vTaskDelay(pdMS_TO_TICKS(1));
     return ok;
 }
 
@@ -190,36 +247,54 @@ bool TR_MMC5983MA::clearMeasDoneInterrupt(uint8_t measMask)
 bool TR_MMC5983MA::readSingleByte(uint8_t reg, uint8_t *value)
 {
     if (value == nullptr) return false;
-    spi.beginTransaction(spi_settings);
-    digitalWrite(cs_pin, LOW);
-    spi.transfer(READ_REG(reg));
-    *value = spi.transfer(0x00);
-    digitalWrite(cs_pin, HIGH);
-    spi.endTransaction();
+    if (!ensureSpiDevice_()) return false;
+
+    spi_transaction_t t = {};
+    t.cmd       = static_cast<uint16_t>(READ_REG(reg));  // bit7=1 for read
+    t.length    = 8;
+    t.flags     = SPI_TRANS_USE_RXDATA;
+
+    csSelect_();
+    esp_err_t err = spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+
+    if (err != ESP_OK) return false;
+    *value = t.rx_data[0];
     return true;
 }
 
 bool TR_MMC5983MA::writeSingleByte(uint8_t reg, uint8_t value)
 {
-    spi.beginTransaction(spi_settings);
-    digitalWrite(cs_pin, LOW);
-    spi.transfer(reg);
-    spi.transfer(value);
-    digitalWrite(cs_pin, HIGH);
-    spi.endTransaction();
-    return true;
+    if (!ensureSpiDevice_()) return false;
+
+    spi_transaction_t t = {};
+    t.cmd        = static_cast<uint16_t>(reg & 0x7F);  // bit7=0 for write
+    t.length     = 8;
+    t.flags      = SPI_TRANS_USE_TXDATA;
+    t.tx_data[0] = value;
+
+    csSelect_();
+    esp_err_t err = spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+
+    return (err == ESP_OK);
 }
 
 bool TR_MMC5983MA::readMultipleBytes(uint8_t reg, uint8_t *buffer, uint8_t len)
 {
     if (buffer == nullptr || len == 0U) return false;
-    spi.beginTransaction(spi_settings);
-    digitalWrite(cs_pin, LOW);
-    spi.transfer(READ_REG(reg));
-    spi.transfer(buffer, len);
-    digitalWrite(cs_pin, HIGH);
-    spi.endTransaction();
-    return true;
+    if (!ensureSpiDevice_()) return false;
+
+    spi_transaction_t t = {};
+    t.cmd       = static_cast<uint16_t>(READ_REG(reg));  // bit7=1 for read (auto-increment)
+    t.length    = len * 8;
+    t.rx_buffer = buffer;
+
+    csSelect_();
+    esp_err_t err = spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+
+    return (err == ESP_OK);
 }
 
 bool TR_MMC5983MA::setRegisterBit(uint8_t reg, uint8_t bitMask)
