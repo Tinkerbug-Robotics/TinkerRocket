@@ -1649,9 +1649,13 @@ static void setup_fc()
     // compat.h's SPIClass.
     ESP_LOGI(TAG, "SPI init...");
     {
+        // Pin naming follows the sensor's perspective in config.h:
+        // SDO = "Sensor Data Out" → MISO on the controller; SDI = "Sensor
+        // Data In" → MOSI on the controller.  The compat SPIClass.begin
+        // used the same mapping (its signature was sck, miso, mosi, ss).
         spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num     = config::SPI_SDO;
-        buscfg.miso_io_num     = config::SPI_SDI;
+        buscfg.miso_io_num     = config::SPI_SDO;
+        buscfg.mosi_io_num     = config::SPI_SDI;
         buscfg.sclk_io_num     = config::SPI_SCK;
         buscfg.quadwp_io_num   = -1;
         buscfg.quadhd_io_num   = -1;
