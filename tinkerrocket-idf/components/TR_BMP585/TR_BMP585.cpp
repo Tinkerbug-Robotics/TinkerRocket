@@ -1,79 +1,104 @@
 #include "TR_BMP585.h"
+#include <cmath>
+#include <cstring>
+#include <esp_log.h>
+#include <esp_rom_sys.h>
+#include <esp_timer.h>
 
-// ---------------- Ctor ----------------
+static const char* BMP_TAG = "TR_BMP585";
 
-TR_BMP585::TR_BMP585(SPIClass& spi,
-                     uint8_t csPin,
-                     const SPISettings& spiSettings)
-  : spi_(spi),
-    spiSettings_(spiSettings),
-    cs_(csPin)
+// ---------------- Ctor / Dtor ----------------
+
+TR_BMP585::TR_BMP585(spi_host_device_t host,
+                     uint8_t cs_pin,
+                     uint32_t clock_hz)
+  : host_(host),
+    cs_pin_(cs_pin),
+    clock_hz_(clock_hz)
 {
 }
 
-// ---------------- SPI helpers ----------------
-
-void TR_BMP585::beginTxn_()
+TR_BMP585::~TR_BMP585()
 {
-  spi_.beginTransaction(spiSettings_);
+    if (spi_dev_) {
+        spi_bus_remove_device(spi_dev_);
+        spi_dev_ = nullptr;
+    }
 }
 
-void TR_BMP585::endTxn_()
+// ---------------- IDF setup helpers ----------------
+
+void TR_BMP585::configureCsPin_()
 {
-  spi_.endTransaction();
+    gpio_config_t io = {};
+    io.pin_bit_mask  = 1ULL << cs_pin_;
+    io.mode          = GPIO_MODE_OUTPUT;
+    io.pull_up_en    = GPIO_PULLUP_DISABLE;
+    io.pull_down_en  = GPIO_PULLDOWN_DISABLE;
+    io.intr_type     = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+    csDeselect_();
 }
 
-void TR_BMP585::csSelect_()
+bool TR_BMP585::ensureSpiDevice_()
 {
-  digitalWrite(cs_, LOW);
-}
+    if (spi_dev_) return true;
 
-void TR_BMP585::csDeselect_()
-{
-  digitalWrite(cs_, HIGH);
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = clock_hz_;
+    devcfg.mode           = 0;          // SPI_MODE0 (Bosch convention)
+    devcfg.spics_io_num   = -1;         // CS driven manually by this wrapper
+    devcfg.queue_size     = 1;
+    devcfg.command_bits   = 8;          // reg byte goes in t.cmd
+
+    esp_err_t err = spi_bus_add_device(host_, &devcfg, &spi_dev_);
+    if (err != ESP_OK) {
+        ESP_LOGE(BMP_TAG, "spi_bus_add_device failed: %s", esp_err_to_name(err));
+        spi_dev_ = nullptr;
+        return false;
+    }
+    return true;
 }
 
 // ---------------- Bosch interface glue ----------------
 
 BMP5_INTF_RET_TYPE TR_BMP585::spiRead_(uint8_t reg, uint8_t* data, uint32_t len, void* intf_ptr)
 {
-  auto* self = reinterpret_cast<TR_BMP585*>(intf_ptr);
-  if (!self || !data || len == 0) return BMP5_E_NULL_PTR;
+    auto* self = reinterpret_cast<TR_BMP585*>(intf_ptr);
+    if (!self || !data || len == 0 || !self->spi_dev_) return BMP5_E_NULL_PTR;
 
-  self->beginTxn_();
-  self->csSelect_();
+    spi_transaction_t t = {};
+    t.cmd       = static_cast<uint16_t>(reg | 0x80);  // Bosch: bit7=1 for read
+    t.length    = len * 8;
+    t.rx_buffer = data;
 
-  // Bosch bmp5 SPI convention: bit7=1 for read
-  self->spi_.transfer(reg | 0x80);
-  self->spi_.transfer(data, len);
+    self->csSelect_();
+    esp_err_t err = spi_device_polling_transmit(self->spi_dev_, &t);
+    self->csDeselect_();
 
-  self->csDeselect_();
-  self->endTxn_();
-
-  return BMP5_OK;
+    return (err == ESP_OK) ? BMP5_OK : BMP5_E_COM_FAIL;
 }
 
 BMP5_INTF_RET_TYPE TR_BMP585::spiWrite_(uint8_t reg, const uint8_t* data, uint32_t len, void* intf_ptr)
 {
-  auto* self = reinterpret_cast<TR_BMP585*>(intf_ptr);
-  if (!self || !data || len == 0) return BMP5_E_NULL_PTR;
+    auto* self = reinterpret_cast<TR_BMP585*>(intf_ptr);
+    if (!self || !data || len == 0 || !self->spi_dev_) return BMP5_E_NULL_PTR;
 
-  self->beginTxn_();
-  self->csSelect_();
+    spi_transaction_t t = {};
+    t.cmd       = static_cast<uint16_t>(reg & 0x7F);  // Bosch: bit7=0 for write
+    t.length    = len * 8;
+    t.tx_buffer = data;
 
-  // write: bit7=0
-  self->spi_.transfer(reg & 0x7F);
-  for (uint32_t i = 0; i < len; i++) self->spi_.transfer(data[i]);
+    self->csSelect_();
+    esp_err_t err = spi_device_polling_transmit(self->spi_dev_, &t);
+    self->csDeselect_();
 
-  self->csDeselect_();
-  self->endTxn_();
-
-  return BMP5_OK;
+    return (err == ESP_OK) ? BMP5_OK : BMP5_E_COM_FAIL;
 }
 
 void TR_BMP585::delayUs_(uint32_t period, void* /*intf_ptr*/)
 {
-  delayMicroseconds(period);
+    esp_rom_delay_us(period);
 }
 
 // ---------------- Mappers ----------------
@@ -169,9 +194,10 @@ bool TR_BMP585::nearestOdrFromHz_(float hz, OutputDataRate& out)
 
 bool TR_BMP585::begin()
 {
-  pinMode(cs_, OUTPUT);
-  csDeselect_();
-  delay(5);
+  configureCsPin_();
+  esp_rom_delay_us(5000);
+
+  if (!ensureSpiDevice_()) return false;
 
   // Fill Bosch dev struct
   dev_.intf = BMP5_SPI_INTF;
@@ -179,7 +205,7 @@ bool TR_BMP585::begin()
   dev_.write = &TR_BMP585::spiWrite_;
   dev_.delay_us = &TR_BMP585::delayUs_;
   dev_.intf_ptr = this;
-    
+
   int8_t rslt = bmp5_init(&dev_);
   if (rslt != BMP5_OK) return false;
 
@@ -202,28 +228,37 @@ bool TR_BMP585::begin()
 
 bool TR_BMP585::forceSoftResetRaw()
 {
-  pinMode(cs_, OUTPUT);
-  csDeselect_();
-  delay(2);
+  configureCsPin_();
+  esp_rom_delay_us(2000);
 
-  // Raw Bosch soft reset command: write 0xB6 to CMD register 0x7E.
-  beginTxn_();
-  csSelect_();
-  spi_.transfer(BMP5_REG_CMD & 0x7F);
-  spi_.transfer(BMP5_SOFT_RESET_CMD);
-  csDeselect_();
-  endTxn_();
+  if (!ensureSpiDevice_()) return false;
 
-  delay(5);
+  // Raw Bosch soft reset: write 0xB6 to CMD register 0x7E.
+  {
+    spi_transaction_t t = {};
+    t.cmd        = BMP5_REG_CMD & 0x7F;
+    t.length     = 8;
+    t.flags      = SPI_TRANS_USE_TXDATA;
+    t.tx_data[0] = BMP5_SOFT_RESET_CMD;
+    csSelect_();
+    spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+  }
+
+  esp_rom_delay_us(5000);
 
   // Read chip-id directly to confirm SPI communication is back.
   uint8_t id = 0;
-  beginTxn_();
-  csSelect_();
-  spi_.transfer(BMP5_REG_CHIP_ID | 0x80);
-  id = spi_.transfer(0x00);
-  csDeselect_();
-  endTxn_();
+  {
+    spi_transaction_t t = {};
+    t.cmd    = BMP5_REG_CHIP_ID | 0x80;
+    t.length = 8;
+    t.flags  = SPI_TRANS_USE_RXDATA;
+    csSelect_();
+    spi_device_polling_transmit(spi_dev_, &t);
+    csDeselect_();
+    id = t.rx_data[0];
+  }
 
   chipIdCached_ = id;
   return (id == BMP5_CHIP_ID_PRIM) || (id == BMP5_CHIP_ID_SEC);
@@ -288,7 +323,7 @@ bool TR_BMP585::readCompFrame(BmpCompFrame& out)
   int8_t rslt = bmp5_get_sensor_data(&d, &osrOdr_, &dev_);
   if (rslt != BMP5_OK) return false;
 
-  out.t_us = (uint32_t)micros();
+  out.t_us = (uint32_t)(esp_timer_get_time());
 
 #if defined(BMP5_USE_FIXED_POINT)
   // In fixed-point builds, Bosch already uses integer raw formats internally.
