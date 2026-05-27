@@ -161,19 +161,18 @@ struct MagCalSphereView: UIViewRepresentable {
 
     private func applyState(view: SCNView, coverageMask: UInt32, liveAccel: SIMD3<Float>?) {
         guard let scene = view.scene else { return }
-        // Cell colors — captured = light translucent green, uncaptured =
-        // very pale grey.  Both are double-sided + low opacity so cells
-        // on the back of the sphere remain visible through the front;
-        // a captured cell on the far side reads as a slightly dimmer
-        // green wash behind anything closer to the camera.
+        // Cell colours — sphere starts as a translucent red shell; each
+        // captured cell drops to near-zero opacity so the user sees the
+        // rocket through the gap and feels the sphere "open up" as they
+        // rotate.  Front-facing red cells let the camera read back-side
+        // captured holes through them (the sphere is convex so back-
+        // side empty cells are visible through the front-side red ones).
         for cellIdx in 0..<MagCalCells.cellPolygons.count {
             guard let node = scene.rootNode.childNode(withName: "cell-\(cellIdx)", recursively: true),
                   let mat = node.geometry?.firstMaterial else { continue }
             let bit = (coverageMask >> UInt32(cellIdx)) & 1
-            mat.diffuse.contents = bit == 1
-                ? UIColor(red: 0.55, green: 0.90, blue: 0.62, alpha: 1.0) // lighter mint green
-                : UIColor(white: 0.85, alpha: 1.0)
-            mat.transparency = bit == 1 ? 0.32 : 0.14
+            mat.diffuse.contents = UIColor(red: 0.95, green: 0.35, blue: 0.35, alpha: 1.0)
+            mat.transparency = bit == 1 ? 0.0 : 0.55
         }
         // Rocket orientation — rotate ONLY the rocket node so the user
         // sees the rocket move inside a stationary sphere.  The IMU
@@ -218,20 +217,40 @@ struct MagCalSphereView: UIViewRepresentable {
     // MARK: - Cell geometry construction
 
     /// Build a fan-triangulated SCNGeometry for cell `cellIdx`.  Centre
-    /// vertex sits at the cell's centre on the sphere; edge vertices
-    /// are the cell's Voronoi boundary vertices.  Slightly lifted above
-    /// the sphere shell (radius 1.002) to avoid z-fighting.
+    /// vertex sits at the cell's centre on the sphere; edge points
+    /// subdivide each Voronoi-arc edge so the straight chord segments
+    /// approximate the great-circle arc.  Adjacent cells share the same
+    /// subdivision points (lerp endpoints are the shared Voronoi
+    /// vertices, and t = s / segmentsPerEdge is symmetric in s ↔ K−s),
+    /// so the cells tile with no gaps along the boundary.  Slightly
+    /// lifted above the sphere shell (radius 1.002) to avoid z-fighting.
+    private static let segmentsPerEdge: Int = 6
+
     private static func makeCellGeometry(cellIdx: Int, captured: Bool) -> SCNGeometry {
         let lift: Float = 1.002
         let center = MagCalCells.cellCenters[cellIdx] * lift
         let edgeIdx = MagCalCells.cellPolygons[cellIdx]
+        let nEdges = edgeIdx.count
+        let segs = segmentsPerEdge
+
         var positions: [SIMD3<Float>] = [center]
-        for vi in edgeIdx {
-            positions.append(MagCalCells.voronoiVertices[vi] * lift)
+        for i in 0..<nEdges {
+            let a = MagCalCells.voronoiVertices[edgeIdx[i]]
+            let b = MagCalCells.voronoiVertices[edgeIdx[(i + 1) % nEdges]]
+            // Subdivide a → b into `segs` chord points; append s = 0..segs-1
+            // (s = segs is the start of the next edge so it appears there).
+            // Each point is lerped then re-normalized onto the unit sphere
+            // — this matches the great-circle arc within ~(segs)⁻² of arc
+            // length, which is invisible at segs = 6.
+            for s in 0..<segs {
+                let t = Float(s) / Float(segs)
+                let p = simd_normalize(a + (b - a) * t) * lift
+                positions.append(p)
+            }
         }
-        // Fan triangulation: (center, v[i], v[i+1])  i = 0..N-1, wrap
+        // Fan triangulation: (center, p[i], p[i+1])  i = 0..N-1, wrap
         var indices: [UInt16] = []
-        let n = edgeIdx.count
+        let n = nEdges * segs    // total boundary points
         for i in 0..<n {
             indices.append(0)
             indices.append(UInt16(1 + i))
@@ -271,17 +290,15 @@ struct MagCalSphereView: UIViewRepresentable {
         )
         let geometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
         let mat = SCNMaterial()
-        // Initial colours — applyState() re-tints on every update.  Keep
+        // Initial colour — applyState() re-tints on every update.  Keep
         // these in sync with applyState's branches so the very first
         // frame after the SCNView attaches matches the live state.
-        mat.diffuse.contents = captured
-            ? UIColor(red: 0.55, green: 0.90, blue: 0.62, alpha: 1.0)
-            : UIColor(white: 0.85, alpha: 1.0)
-        mat.transparency = captured ? 0.32 : 0.14
+        mat.diffuse.contents = UIColor(red: 0.95, green: 0.35, blue: 0.35, alpha: 1.0)
+        mat.transparency = captured ? 0.0 : 0.55
         mat.isDoubleSided = true
         mat.lightingModel = .lambert
-        // Alpha-blended cells: lets the back-of-sphere captures show
-        // through as a dimmer wash behind the front-facing cells.
+        // Alpha-blended so captured (transparent) cells reveal whatever's
+        // behind them — the rocket, and any back-side captured holes.
         mat.blendMode = .alpha
         mat.writesToDepthBuffer = false
         geometry.firstMaterial = mat
