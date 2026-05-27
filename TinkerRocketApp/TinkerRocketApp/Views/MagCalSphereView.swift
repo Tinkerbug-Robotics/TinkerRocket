@@ -44,12 +44,15 @@ struct MagCalSphereView: UIViewRepresentable {
     private static let cameraZ: Float = 3.5
     /// Sphere geometry radius (cells live on this surface).
     private static let sphereR: Float = 1.0
-    /// Puck radius — small enough to fit inside a single cell at typical
-    /// cell sizes (~0.3-0.5 of sphereR across), but big enough to see.
-    private static let puckRadius: Float = 0.07
-    /// Puck sits this distance above the sphere surface so it floats
-    /// clearly without z-fighting the cells.
-    private static let puckLift: Float = 1.04
+    /// Ball radius — bigger than the old surface-puck because it's the
+    /// star of the show now (iOS-style: ball inside wireframe globe).
+    private static let ballRadius: Float = 0.12
+    /// Ball position is normalize(accel) * ballOrbit, so it lives well
+    /// INSIDE the cell sphere and is always visible through the cells'
+    /// translucent material.  Fixes the previous "puck hidden behind
+    /// the sphere" complaint — there is no front/back side at this
+    /// radius, the ball just floats at the centre region of the sphere.
+    private static let ballOrbit: Float = 0.62
 
     // MARK: - UIViewRepresentable
 
@@ -117,23 +120,33 @@ struct MagCalSphereView: UIViewRepresentable {
             sphereContainer.addChildNode(cellNode)
         }
 
-        // Gravity puck — a small bright sphere positioned at the
-        // body-frame gravity direction (normalize(accel)) on the cell
-        // sphere's surface.  This is exactly the point the firmware's
-        // directionWedge() function buckets samples into, so moving
-        // the puck into a red cell == capturing that cell.  Replaces
-        // the earlier rocket-in-sphere model, which didn't tell the
-        // user what to do next — see #148 design discussion.
-        let puck = SCNSphere(radius: CGFloat(MagCalSphereView.puckRadius))
-        puck.segmentCount = 24
-        puck.firstMaterial?.diffuse.contents = UIColor(red: 1.0, green: 0.78, blue: 0.0, alpha: 1.0)
-        puck.firstMaterial?.emission.contents = UIColor(red: 0.4, green: 0.30, blue: 0.0, alpha: 1.0)
-        puck.firstMaterial?.lightingModel = .lambert
-        let puckNode = SCNNode(geometry: puck)
-        puckNode.name = "gravityPuck"
+        // Gravity ball — bright red sphere positioned INSIDE the cell
+        // sphere at the body-frame gravity direction, scaled to
+        // ballOrbit (~0.62 of sphereR).  This is the iOS Compass-cal
+        // pattern: ball lives inside a transparent shell, always
+        // visible from any camera angle, and the user "rolls" it by
+        // tilting the device.  The ball direction matches what the
+        // firmware's directionWedge() function buckets, so rolling
+        // the ball over a red cell sector captures it.
+        let ball = SCNSphere(radius: CGFloat(MagCalSphereView.ballRadius))
+        ball.segmentCount = 32
+        // Use constant lighting + a strong emission so the ball glows
+        // on its own without depending on the scene's directional light
+        // (which might shadow it depending on orientation).  Diffuse
+        // colour is the base red; emission punches it up so it reads
+        // through the translucent cell shell from any side.
+        ball.firstMaterial?.diffuse.contents = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
+        ball.firstMaterial?.emission.contents = UIColor(red: 0.85, green: 0.10, blue: 0.10, alpha: 1.0)
+        ball.firstMaterial?.lightingModel = .constant
+        let ballNode = SCNNode(geometry: ball)
+        ballNode.name = "gravityBall"
+        // Render after the cells so the ball stays visible on top of
+        // front-facing translucent cells.  Without this, occasional
+        // sort-order quirks could let cells paint over the ball.
+        ballNode.renderingOrder = 100
         // Start hidden until we get the first valid accel reading.
-        puckNode.isHidden = true
-        scene.rootNode.addChildNode(puckNode)
+        ballNode.isHidden = true
+        scene.rootNode.addChildNode(ballNode)
 
         // Initial state
         applyState(view: view, coverageMask: coverageMask,
@@ -174,38 +187,20 @@ struct MagCalSphereView: UIViewRepresentable {
                 mat.transparency = 0.55  // untouched — full red
             }
         }
-        // Puck position — placed at the body-frame gravity direction
-        // (normalize(accel)) on the cell sphere's surface.  This is
-        // exactly what directionWedge() in the firmware buckets, so
-        // moving the puck into a red cell == capturing it.  Sphere
-        // cells live in scene-world coords with X/Y/Z == body X/Y/Z
-        // (no rotation applied), so the puck position is just the
-        // body-frame gravity unit vector scaled to the puck-lift
-        // radius.  Yaw (rotation around gravity) doesn't move the
-        // puck — which is correct: yawing the rocket while horizontal
-        // doesn't capture new cells.
-        let puckNode = scene.rootNode.childNode(withName: "gravityPuck", recursively: false)
+        // Ball position — placed INSIDE the cell sphere at radius
+        // ballOrbit, in the direction of body-frame gravity.  Because
+        // the ball is well inside the (translucent) cell shell, it's
+        // visible from any camera angle — no more "puck hidden behind
+        // the sphere" problem.  Yaw (rotation around gravity) doesn't
+        // move the ball, which is correct: yawing the rocket doesn't
+        // capture new cells either.
+        let ballNode = scene.rootNode.childNode(withName: "gravityBall", recursively: false)
         if let g = liveAccel, simd_length(g) > 0.1 {
             let bodyUp = simd_normalize(g)
-            puckNode?.simdPosition = bodyUp * MagCalSphereView.puckLift
-            puckNode?.isHidden = false
-
-            // Front/back hemisphere cueing — the camera looks at the
-            // sphere from +Z (cameraZ=3.5).  A puck at scene-world z>0
-            // is on the side closer to the viewer; z<0 is the far
-            // side, where the cells in front would otherwise hide it
-            // entirely.  Dim and shrink so the user knows it's on the
-            // back, and can rotate the rocket to bring it forward.
-            let onFront = puckNode?.simdPosition.z ?? 0 >= 0
-            puckNode?.simdScale = onFront
-                ? SIMD3<Float>(1.0, 1.0, 1.0)
-                : SIMD3<Float>(0.55, 0.55, 0.55)
-            puckNode?.opacity = onFront ? 1.0 : 0.40
+            ballNode?.simdPosition = bodyUp * MagCalSphereView.ballOrbit
+            ballNode?.isHidden = false
         } else {
-            // No accel yet → keep the puck hidden so the sphere doesn't
-            // show a misleading "you're aimed at +Y" indicator before
-            // the first telemetry frame arrives.
-            puckNode?.isHidden = true
+            ballNode?.isHidden = true
         }
     }
 

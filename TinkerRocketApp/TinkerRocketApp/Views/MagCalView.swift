@@ -124,8 +124,8 @@ struct MagCalView: View {
             Section(header: Text("How it works")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Hold the rocket clear of laptops, phones, tools, and steel surfaces.", systemImage: "1.circle.fill")
-                    Label("Tap Start — you'll see a sphere of red cells with a yellow puck. The puck shows which direction gravity is pulling through the rocket right now.", systemImage: "2.circle.fill")
-                    Label("Tilt the rocket so the puck moves into each red cell. Hold each cell for a moment to fill it. Tap Compute Fit once you've cleared most of the sphere.", systemImage: "3.circle.fill")
+                    Label("Tap Start — you'll see a translucent sphere of red cells with a red ball inside, like iOS's own compass calibration.  The ball shows the direction gravity is pulling through the rocket.", systemImage: "2.circle.fill")
+                    Label("Tilt the rocket to roll the ball into each red cell. Hold each cell for a moment to fill it. Tap Compute Fit once you've cleared most of the sphere.", systemImage: "3.circle.fill")
                 }
                 .font(.subheadline)
             }
