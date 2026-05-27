@@ -15,20 +15,24 @@ namespace {
 
 constexpr float UT_PER_LSB = 0.15f;
 
-// Convenience: drive a known good sphere-fit by feeding 26 samples per
-// canonical direction at R=50 µT (≈ 333 LSB) centered at (0,0,0).  Lights
-// up all 26 directional wedges and gives a tiny residual.  Real captures
-// give many more samples per wedge; the linear-LSQ solver only needs
-// enough non-coplanar samples for the 4×4 to be well conditioned.
+// Convenience: drive a known good sphere-fit by feeding many samples per
+// canonical direction at R=50 µT (≈ 333 LSB) centered at (0,0,0).  Across
+// the 26 hand-picked directions below we light up at least
+// MAG_CAL_MIN_COVERAGE_BINS (22 of 32 truncated-icosahedron cells) and
+// give a tiny residual.  Real captures give many more samples per wedge;
+// the linear-LSQ solver only needs enough non-coplanar samples for the
+// 4×4 to be well conditioned.
 void driveCleanFit(MagCalibrator& cal) {
     cal.start();
     // The accel-wedge bucket logic requires a fresh accel reading per
     // sample (otherwise samples drop).  We just need *some* per-wedge
     // diversity — fake it by walking a small set of accel orientations.
     struct Dir { int16_t x, y, z; };
-    // Cover 26 unit-vector directions roughly: ±X / ±Y / ±Z and the 12
-    // edge midpoints and 8 corners.  Magnitude ~1000 LSB so the wedge
-    // logic sees a clean unit-vector direction.
+    // Cover 26 unit-vector directions roughly: ±X / ±Y / ±Z, the 12
+    // edge midpoints, and the 8 corners.  Mapped through #148's
+    // truncated-icosahedron Voronoi these land in 22+ distinct cells —
+    // enough to pass MAG_CAL_MIN_COVERAGE_BINS = 22.  Magnitude ~1000
+    // LSB so the wedge logic sees a clean unit-vector direction.
     Dir dirs[] = {
         {1000, 0, 0}, {-1000, 0, 0}, {0, 1000, 0}, {0, -1000, 0},
         {0, 0, 1000}, {0, 0, -1000},
@@ -88,6 +92,50 @@ void feedVerifySamples(MagCalibrator& cal, float magnitude_uT, int n_per_dir) {
 }
 
 }  // namespace
+
+
+// --- tessellation geometry (issue #148) ---
+
+// directionWedge is private; we can't call it directly, but we can verify
+// the same cells are hit by feeding samples in known directions through
+// addSample (which routes through directionWedge internally for accel
+// bucketing).  Confirms the 32 wedges all reachable from a fresh tumble.
+TEST(MagCalibratorTessellation, AllCellsReachableFromIcosaCorners) {
+    MagCalibrator cal;
+    cal.start();
+    // Feed a sample in each of the 32 cell center directions.  Each
+    // sample should land in its own cell (Voronoi assignment), so the
+    // coverage_mask should hit all 32 bits.
+    struct V { float x, y, z; };
+    const V centers[32] = {
+        { 0.00f,-0.526f,-0.851f}, {-0.526f,-0.851f, 0.00f}, {-0.851f, 0.00f,-0.526f},
+        { 0.00f,-0.526f, 0.851f}, {-0.526f, 0.851f, 0.00f}, {-0.851f, 0.00f, 0.526f},
+        { 0.00f, 0.526f,-0.851f}, { 0.526f,-0.851f, 0.00f}, { 0.851f, 0.00f,-0.526f},
+        { 0.00f, 0.526f, 0.851f}, { 0.526f, 0.851f, 0.00f}, { 0.851f, 0.00f, 0.526f},
+        {-0.577f,-0.577f,-0.577f}, { 0.00f,-0.934f,-0.357f}, {-0.357f, 0.00f,-0.934f},
+        { 0.357f, 0.00f,-0.934f}, { 0.577f,-0.577f,-0.577f}, {-0.934f,-0.357f, 0.00f},
+        {-0.577f,-0.577f, 0.577f}, { 0.00f,-0.934f, 0.357f}, {-0.934f, 0.357f, 0.00f},
+        {-0.577f, 0.577f,-0.577f}, {-0.357f, 0.00f, 0.934f}, { 0.577f,-0.577f, 0.577f},
+        { 0.357f, 0.00f, 0.934f}, {-0.577f, 0.577f, 0.577f}, { 0.00f, 0.934f,-0.357f},
+        { 0.00f, 0.934f, 0.357f}, { 0.577f, 0.577f,-0.577f}, { 0.934f,-0.357f, 0.00f},
+        { 0.934f, 0.357f, 0.00f}, { 0.577f, 0.577f, 0.577f},
+    };
+    const int LSB = 1000;
+    for (int i = 0; i < 32; i++) {
+        const int16_t ax = (int16_t)(centers[i].x * LSB);
+        const int16_t ay = (int16_t)(centers[i].y * LSB);
+        const int16_t az = (int16_t)(centers[i].z * LSB);
+        cal.setLiveAccel(ax, ay, az);
+        cal.addSample(ax, ay, az);
+    }
+    uint16_t n; uint8_t cov; float B;
+    cal.getProgress(n, cov, B);
+    // Each cell center hits a distinct cell → all 32 bits lit.
+    EXPECT_EQ(cov, 32) << "Expected all 32 wedges populated by their own center "
+                         "directions; got " << (int)cov << " — Voronoi assignment "
+                         "may have a tie between centers or the cell-center table "
+                         "is out of sync with directionWedge's geometry.";
+}
 
 
 // --- baseline plumbing ---

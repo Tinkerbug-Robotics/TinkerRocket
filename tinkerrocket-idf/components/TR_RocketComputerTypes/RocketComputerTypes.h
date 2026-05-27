@@ -794,7 +794,7 @@ typedef struct __attribute__((packed))
 {
     uint32_t time_us;
     uint8_t  sub_type;            // MagCalSubType
-    uint8_t  coverage_bins;       // 0..26 (3³ - 1 = 26 directional wedges populated; == popcount(coverage_mask))
+    uint8_t  coverage_bins;       // 0..32 populated wedges (truncated-icosahedron tessellation, see #148; == popcount(coverage_mask))
     uint16_t sample_count;        // total samples accumulated this run
     uint16_t inst_field_uT_x10;   // |B| of the most recent sample × 10
     int16_t  offset_x;            // fitted hard-iron offset (raw LSB units), or 0 if no fit
@@ -804,12 +804,14 @@ typedef struct __attribute__((packed))
     uint16_t residual_uT_x10;     // fit RMS residual × 10
     uint8_t  reject_code;         // MagCalRejectCode (only valid in REVIEW)
     uint8_t  _pad;
-    // Bitmap of populated 3³ wedges (bit i = wedge i, see directionWedge()
-    // in TR_MagCalibrator).  Drives the iOS UI's per-direction progress
-    // grid and the gated orientation-prompt cycle (issue #96 follow-up
-    // — don't advance the prompt until the current target wedge lights
-    // up).  Bit 13 = the (0,0,0) center cell is unreachable for a unit
-    // vector so never sets; the remaining 26 bits map 1:1 to wedges.
+    // Bitmap of populated wedges (bit i = wedge i, see directionWedge()
+    // in TR_MagCalibrator).  Drives the iOS UI's 3D sphere visualization
+    // — cells fill with semi-transparent green as the rocket rotates
+    // through each orientation.  Bits 0–31 map 1:1 to the 32 cells of
+    // the truncated-icosahedron tessellation (12 pentagonal cells at
+    // icosahedron vertices, indices 0–11; 20 hexagonal cells at face
+    // centroids, indices 12–31).  See #148 for the switch from the
+    // older 3³-1 = 26 cube-aligned scheme.
     uint32_t coverage_mask;
     // Live raw mag vector (last sample), in IIS2MDC LSB units
     // (0.15 µT/LSB).  Lets iOS render real-time direction feedback so
@@ -887,10 +889,12 @@ static_assert(sizeof(MagCalMMCOffset) == 12,
 static constexpr float MAG_CAL_R_MIN_UT = 20.0f;
 static constexpr float MAG_CAL_R_MAX_UT = 80.0f;
 
-// Coverage gate — minimum populated wedges (out of 26) for the fit to be
-// considered well-conditioned.  A perfect tumble hits all 26; insisting on
-// 26 is fragile, so we accept ≥ 18 (8 octants + ~10 of the edges/faces).
-static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 18;
+// Coverage gate — minimum populated wedges (out of 32) for the fit to be
+// considered well-conditioned.  A perfect tumble hits all 32; insisting on
+// 32 is fragile, so we accept ≥ 22 (~70% — same proportion the old
+// 18/26 ≈ 69% bar used in the cube-aligned scheme).  See #148 for the
+// switch from 3³-1 = 26 cube wedges to a 32-cell truncated icosahedron.
+static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 22;
 
 // Residual gate — RMS deviation from the fitted sphere, in µT.  A clean
 // sphere on the bench should sit well under 5 µT; bigger means soft-iron
@@ -940,8 +944,11 @@ static constexpr float MAG_CAL_VERIFY_RANGE_UT = 25.0f;
 // rotate the rocket through enough orientations that a residual
 // hard-iron offset becomes visible — without rotation the |B|
 // trivially stays in band even with a wrong center.  Tracked via the
-// existing per-accel-wedge mechanism (see TR_MagCalibrator).
-static constexpr uint8_t MAG_CAL_VERIFY_MIN_COVERAGE_BINS = 6;
+// existing per-accel-wedge mechanism (see TR_MagCalibrator).  Bumped
+// from 6 (out of 26 cube wedges) to 8 (out of 32 geodesic cells) to
+// keep the proportion roughly constant after the #148 tessellation
+// switch.
+static constexpr uint8_t MAG_CAL_VERIFY_MIN_COVERAGE_BINS = 8;
 
 // Minimum samples accumulated in VERIFYING before evaluateVerify() is
 // allowed to declare pass.  At the new-PCB IIS2MDC's ~100 Hz output rate

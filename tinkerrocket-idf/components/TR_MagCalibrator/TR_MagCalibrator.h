@@ -143,14 +143,20 @@ private:
     // Per-accel-wedge sample bucketing.  The flat ring buffer (older
     // design) lost diverse samples when the user lingered in one
     // orientation — newest samples blindly overwrote everything.  Now
-    // each of the 27 (3³) accel-direction wedges has its own
-    // SAMPLES_PER_WEDGE ring buffer, so samples from one orientation
-    // can only displace other samples from the SAME orientation.
-    // Memory: 27 × 100 × 3 × int16 ≈ 16 KiB, comfortably small on the
-    // ESP32-P4.  Wedge 13 (the all-centre cell) is unreachable for a
-    // unit accel vector so its slots stay unused — kept in the array
-    // for index arithmetic simplicity.
-    static constexpr uint8_t  NUM_ACCEL_WEDGES   = 27;
+    // each of the 32 (truncated-icosahedron / soccer-ball) accel
+    // wedges has its own SAMPLES_PER_WEDGE ring buffer, so samples
+    // from one orientation can only displace other samples from the
+    // SAME orientation.  Memory: 32 × 100 × 3 × int16 ≈ 19 KiB,
+    // comfortably small on the ESP32-P4.
+    //
+    // Tessellation (#148): 12 icosahedron vertices (pentagonal cell
+    // centers) + 20 face centroids (hexagonal cell centers) on the
+    // unit sphere → 32 Voronoi cells, all within ±5% of mean area.
+    // Replaces the legacy 3³-1 = 26 cube-aligned wedges, which had
+    // face-cells ~6× smaller than corner-cells and looked uneven in
+    // the iOS sphere visualization.  See directionWedge() impl for
+    // the cell-center table.
+    static constexpr uint8_t  NUM_ACCEL_WEDGES   = 32;
     static constexpr uint8_t  SAMPLES_PER_WEDGE  = 100;
     static constexpr uint16_t MAX_TOTAL_SAMPLES  =
         (uint16_t)NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE;
