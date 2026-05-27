@@ -46,13 +46,17 @@ struct MagCalSphereView: UIViewRepresentable {
     private static let sphereR: Float = 1.0
     /// Ball radius — bigger than the old surface-puck because it's the
     /// star of the show now (iOS-style: ball inside wireframe globe).
-    private static let ballRadius: Float = 0.12
+    private static let ballRadius: Float = 0.15
     /// Ball position is normalize(accel) * ballOrbit, so it lives well
     /// INSIDE the cell sphere and is always visible through the cells'
     /// translucent material.  Fixes the previous "puck hidden behind
     /// the sphere" complaint — there is no front/back side at this
     /// radius, the ball just floats at the centre region of the sphere.
     private static let ballOrbit: Float = 0.62
+    /// Halo radius — slightly larger ring of dark colour rendered just
+    /// behind the ball to give it an outline so it pops against the
+    /// red cells regardless of which one it's currently inside.
+    private static let haloRadius: Float = 0.19
 
     // MARK: - UIViewRepresentable
 
@@ -120,23 +124,20 @@ struct MagCalSphereView: UIViewRepresentable {
             sphereContainer.addChildNode(cellNode)
         }
 
-        // Gravity ball — bright red sphere positioned INSIDE the cell
-        // sphere at the body-frame gravity direction, scaled to
+        // Gravity ball — bright YELLOW sphere positioned INSIDE the
+        // cell sphere at the body-frame gravity direction, scaled to
         // ballOrbit (~0.62 of sphereR).  This is the iOS Compass-cal
         // pattern: ball lives inside a transparent shell, always
         // visible from any camera angle, and the user "rolls" it by
-        // tilting the device.  The ball direction matches what the
-        // firmware's directionWedge() function buckets, so rolling
-        // the ball over a red cell sector captures it.
+        // tilting the device.  Yellow because the cells are red — same
+        // colour would blend in and the ball would disappear (which is
+        // exactly what happened in the first ball-inside iteration).
         let ball = SCNSphere(radius: CGFloat(MagCalSphereView.ballRadius))
         ball.segmentCount = 32
-        // Use constant lighting + a strong emission so the ball glows
-        // on its own without depending on the scene's directional light
-        // (which might shadow it depending on orientation).  Diffuse
-        // colour is the base red; emission punches it up so it reads
-        // through the translucent cell shell from any side.
-        ball.firstMaterial?.diffuse.contents = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
-        ball.firstMaterial?.emission.contents = UIColor(red: 0.85, green: 0.10, blue: 0.10, alpha: 1.0)
+        // Constant lighting + bright emission so the ball glows on its
+        // own without depending on the scene's directional light.
+        ball.firstMaterial?.diffuse.contents = UIColor(red: 1.0, green: 0.85, blue: 0.04, alpha: 1.0)
+        ball.firstMaterial?.emission.contents = UIColor(red: 1.0, green: 0.78, blue: 0.0, alpha: 1.0)
         ball.firstMaterial?.lightingModel = .constant
         let ballNode = SCNNode(geometry: ball)
         ballNode.name = "gravityBall"
@@ -147,6 +148,22 @@ struct MagCalSphereView: UIViewRepresentable {
         // Start hidden until we get the first valid accel reading.
         ballNode.isHidden = true
         scene.rootNode.addChildNode(ballNode)
+
+        // Dark halo around the ball — gives the yellow ball an outline
+        // so it reads as a distinct object even when it's inside a red
+        // cell that happens to render at the same screen depth.  Slightly
+        // larger than the ball, low rendering order so the bright ball
+        // paints on top.
+        let halo = SCNSphere(radius: CGFloat(MagCalSphereView.haloRadius))
+        halo.segmentCount = 24
+        halo.firstMaterial?.diffuse.contents = UIColor(white: 0.0, alpha: 1.0)
+        halo.firstMaterial?.emission.contents = UIColor(white: 0.0, alpha: 1.0)
+        halo.firstMaterial?.lightingModel = .constant
+        let haloNode = SCNNode(geometry: halo)
+        haloNode.name = "gravityBallHalo"
+        haloNode.renderingOrder = 99
+        haloNode.isHidden = true
+        scene.rootNode.addChildNode(haloNode)
 
         // Initial state
         applyState(view: view, coverageMask: coverageMask,
@@ -195,12 +212,17 @@ struct MagCalSphereView: UIViewRepresentable {
         // move the ball, which is correct: yawing the rocket doesn't
         // capture new cells either.
         let ballNode = scene.rootNode.childNode(withName: "gravityBall", recursively: false)
+        let haloNode = scene.rootNode.childNode(withName: "gravityBallHalo", recursively: false)
         if let g = liveAccel, simd_length(g) > 0.1 {
             let bodyUp = simd_normalize(g)
-            ballNode?.simdPosition = bodyUp * MagCalSphereView.ballOrbit
+            let pos = bodyUp * MagCalSphereView.ballOrbit
+            ballNode?.simdPosition = pos
+            haloNode?.simdPosition = pos
             ballNode?.isHidden = false
+            haloNode?.isHidden = false
         } else {
             ballNode?.isHidden = true
+            haloNode?.isHidden = true
         }
     }
 
