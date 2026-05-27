@@ -146,6 +146,16 @@ bool MagCalibrator::accept()
     return true;
 }
 
+void MagCalibrator::markApplied()
+{
+    if (!fit_valid_) return;
+    if (state_ != State::REVIEW && state_ != State::VERIFYING) return;
+    state_ = State::APPLIED;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "markApplied: forced -> APPLIED (user-override save)");
+#endif
+}
+
 void MagCalibrator::resetVerify()
 {
     if (state_ != State::VERIFYING) return;

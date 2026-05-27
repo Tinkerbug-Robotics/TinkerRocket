@@ -2461,7 +2461,13 @@ static void loop_fc()
                 mag_cal_session_active = false;
                 mag_cal_status_dirty = true;
                 rocket_state = READY;
-                mag_calibrator.clear();
+                // Don't clear() here — leave the calibrator in APPLIED so
+                // the next status frame published reports sub_type=APPLIED
+                // and iOS shows the success banner.  Otherwise clear()
+                // would flip state to IDLE before the publish loop runs,
+                // and iOS would land on the intro screen with no "Saved"
+                // feedback.  calibrator.start() on the next session
+                // resets all state cleanly.
             }
             else
             {
@@ -3243,7 +3249,9 @@ static void loop_fc()
                 mag_calibrator.abort();
                 mag_cal_status_dirty = true;
                 if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
-                mag_calibrator.clear();
+                // Calibrator is now in ABORTED — leave it there.  iOS
+                // treats .aborted and .idle the same (introSection).
+                // calibrator.start() on the next session resets cleanly.
             }
             else if (out_pending_command == MAG_CAL_RETRY)
             {
@@ -3416,7 +3424,10 @@ static void loop_fc()
                         mag_cal_verify_active = false;
                         mag_cal_status_dirty = true;
                         rocket_state = READY;
-                        mag_calibrator.clear();
+                        // Leave the calibrator in APPLIED (not IDLE) so
+                        // the next status frame shows iOS the "Saved"
+                        // banner — same reason as the verify-PASS path.
+                        mag_calibrator.markApplied();
                     }
                 }
             }

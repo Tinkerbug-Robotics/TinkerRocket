@@ -63,12 +63,14 @@ struct SettingsView: View {
 
     // Settings are grouped into tabs (one panel at a time) on phone screens
     // (#132 / #147).  Switching a tab flushes the leaving tab's pending edit.
-    @State private var tab: SettingsTab = .control
+    // General is first + the default landing tab — it's where active rocket
+    // info and calibration live, which most users want on entry.
+    @State private var tab: SettingsTab = .general
     private enum SettingsTab: String, CaseIterable {
+        case general = "General"
         case control = "Control"
         case camera = "Camera"
         case pyro = "Pyro"
-        case general = "General"
     }
 
     private var currentFreqMHz: Float { device.rocketConfig?.loraFreqMHz ?? 915.0 }
@@ -460,17 +462,23 @@ struct SettingsView: View {
         }
 
         Section("Calibration") {
+            // Magnetometer: navigates to MagCalView for the full tumble flow.
             NavigationLink {
                 MagCalView(device: device)
             } label: {
                 Label("Magnetometer Calibration", systemImage: "location.north.line")
             }
             .disabled(!canCalibrate)
+            Text("Solves for the rocket's static magnetic offset by tumbling. Saved to the active profile and re-applied on connect.")
+                .font(.caption).foregroundColor(.secondary)
+
+            // Gyro + accel: one-shot stationary cal.  OnPadCalibrationView
+            // renders as a matching list-row button when embedded=true.
             OnPadCalibrationView(device: device, embedded: true)
-            if canCalibrate {
-                Text("Mag and sensor cal are saved to this rocket's profile and re-applied on connect. Place the rocket on the pad and keep still while calibrating.")
-                    .font(.caption).foregroundColor(.secondary)
-            } else {
+            Text("Solves for gyro bias and accelerometer offsets. Place the rocket on the pad and keep still; takes ~10 seconds.")
+                .font(.caption).foregroundColor(.secondary)
+
+            if !canCalibrate {
                 Label("Power on the rocket to run calibrations.", systemImage: "bolt.slash")
                     .font(.caption).foregroundColor(.orange)
             }

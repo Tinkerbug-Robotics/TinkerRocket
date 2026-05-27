@@ -120,8 +120,7 @@ struct MagCalView: View {
                 .padding(.vertical, 4)
             }
 
-            Section(header: Text("How it works"),
-                    footer: Text("The cal absorbs everything magnetic that travels with the rocket — battery, recovery hardware, the airframe itself. For the cal to match what the flight computer sees in flight, the rocket should be in flight configuration when you start.")) {
+            Section(header: Text("How it works")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Hold the rocket clear of laptops, phones, tools, and steel surfaces.", systemImage: "1.circle.fill")
                     Label("After tapping Start, slowly rotate the rocket through every orientation. A red sphere shows on the next screen — patches fall away as each direction is captured.", systemImage: "2.circle.fill")
@@ -139,7 +138,12 @@ struct MagCalView: View {
                 }
             }
 
-            Section {
+            Section(footer: Text("For the calibration to match what the flight computer sees, ensure the rocket is in the flight configuration before calibration.")) {
+                // Start button — greyed out when the rocket isn't in a
+                // valid state (in-flight, or telemetry not connected /
+                // powered).  No explanatory text below; the visual state
+                // of the button itself is the signal.
+                let canStart = isStartAllowed
                 Button {
                     device.sendMagCalStart()
                 } label: {
@@ -149,17 +153,23 @@ struct MagCalView: View {
                             .fontWeight(.semibold)
                         Spacer()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(canStart ? .white : Color(.systemGray2))
                 }
-                .listRowBackground(Color.blue)
-            }
-
-            Section {
-                Text("Calibration can be started from any state except in-flight. Avoid sudden motions that look like a launch — the flight computer's launch detection is still armed during cal.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                .listRowBackground(canStart ? Color.blue : Color(.systemGray5))
+                .disabled(!canStart)
             }
         }
+    }
+
+    /// MAG_CAL_START is refused FC-side from INFLIGHT; we also need the
+    /// rocket connected + powered for the cal to do anything useful.
+    /// The button is enabled when all three are true.
+    private var isStartAllowed: Bool {
+        guard device.isConnected, !device.isBaseStation,
+              device.telemetry.pwr_pin_on else { return false }
+        // Telemetry state string mirrors the FC's rocket_state enum;
+        // INFLIGHT is the one truly-forbidden case.
+        return device.telemetry.state != "INFLIGHT"
     }
 
     /// Sampling: orientation-progress hero, live direction bars, Compute
@@ -413,12 +423,6 @@ struct MagCalView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
-                Section(header: Text("What this does")) {
-                    Text("The fit's offset was just programmed into the magnetometer chip. The chip is now subtracting it from every raw sample, which should leave just Earth's magnetic field (~25–65 µT depending on latitude) regardless of which way the rocket is pointed.\n\nVerification confirms that's actually happening: as you rotate, the corrected |B| should stay roughly constant and inside Earth's band. If it wanders out of band or swings widely, the cal absorbed too much (or too little) and shouldn't be saved.\n\nTap Done when you've rotated enough that the gates below are green. Retry verification clears the min/max if you want to start fresh without redoing the whole tumble. Abort restores the previously-saved cal.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 Section(header: Text("Live |B|"),
                         footer: Text("Min and max are tracked from the moment Verify started (or the last Retry). The fit passes when all rows below are green.")) {
                     HStack {
@@ -470,6 +474,12 @@ struct MagCalView: View {
                     }
                 }
                 verifyButtonsSection(allGood: allGood)
+                Section(header: Text("What this does")) {
+                    Text("The fit's offset was just programmed into the magnetometer chip. The chip is now subtracting it from every raw sample, which should leave just Earth's magnetic field (~25–65 µT depending on latitude) regardless of which way the rocket is pointed.\n\nVerification confirms that's actually happening: as you rotate, the corrected |B| should stay roughly constant and inside Earth's band. If it wanders out of band or swings widely, the cal absorbed too much (or too little) and likely shouldn't be saved.\n\nAccept and Save commits the cal to flight-computer memory; Retry verification clears the min/max if you want to start fresh without redoing the whole tumble; Re-run calibration throws the proposed fit out and goes back to sampling; Abort restores the previously-saved cal.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -545,7 +555,10 @@ struct MagCalView: View {
         }
     }
 
-    /// One-shot success: FC just persisted + applied the offset.
+    /// One-shot success: FC just persisted + applied the offset.  No
+    /// inline action button — the toolbar Done is the only exit, per
+    /// user feedback ("leave it to the user to select the done option
+    /// on the top").  Banner stays visible until the user dismisses.
     private var appliedSection: some View {
         Group {
             if let s = status {
@@ -554,30 +567,17 @@ struct MagCalView: View {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 48))
                             .foregroundColor(.green)
-                        Text("Calibration applied")
-                            .font(.headline)
-                        Text(String(format: "Earth field locked at %.1f µT, residual %.1f µT.",
+                        Text("Saved")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        Text(String(format: "Calibration written to flight-computer memory.\nEarth field locked at %.1f µT, residual %.1f µT.",
                                     s.fieldR_uT, s.residualUT))
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                }
-                Section {
-                    Button {
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text("Done")
-                                .fontWeight(.semibold)
-                            Spacer()
-                        }
-                        .foregroundColor(.white)
-                    }
-                    .listRowBackground(Color.blue)
+                    .padding(.vertical, 16)
                 }
             }
         }

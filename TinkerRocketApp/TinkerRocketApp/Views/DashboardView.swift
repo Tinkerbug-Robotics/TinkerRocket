@@ -1869,37 +1869,80 @@ struct OnPadCalibrationView: View {
     /// snapshotted into the active profile (#132) — not arbitrary frames.
     @State private var pendingCalSnapshot = false
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !embedded {
-                Text("On Pad Calibration")
-                    .font(.headline)
+    /// Shared logic for the cal action so the embedded list-row Button
+    /// and the standalone dashboard card use exactly the same path.
+    private func runCalibration() {
+        calibrating = true
+        pendingCalSnapshot = true
+        device.sendCommand(21)
+        // Calibration takes ~10 seconds (1000 samples x 10ms)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) {
+            calibrating = false
+
+            // Check gravity magnitude from low-g accelerometer
+            let lx = device.telemetry.low_g_x ?? 0
+            let ly = device.telemetry.low_g_y ?? 0
+            let lz = device.telemetry.low_g_z ?? 0
+            let mag = sqrtf(lx * lx + ly * ly + lz * lz)
+            let expected: Float = 9.80665
+            let errorPct = fabsf(mag - expected) / expected * 100.0
+
+            // Only alert if we actually have accel data (mag > 0)
+            if mag > 0.1 && errorPct > 3.0 {
+                gravityMag = mag
+                gravityError = errorPct
+                showGravityWarning = true
             }
+        }
+    }
 
-            Button(action: {
-                calibrating = true
-                pendingCalSnapshot = true
-                device.sendCommand(21)
-                // Calibration takes ~10 seconds (1000 samples x 10ms)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 12.0) {
-                    calibrating = false
+    private var calIsDisabled: Bool {
+        calibrating || !device.isConnected || !device.telemetry.pwr_pin_on
+    }
 
-                    // Check gravity magnitude from low-g accelerometer
-                    let lx = device.telemetry.low_g_x ?? 0
-                    let ly = device.telemetry.low_g_y ?? 0
-                    let lz = device.telemetry.low_g_z ?? 0
-                    let mag = sqrtf(lx * lx + ly * ly + lz * lz)
-                    let expected: Float = 9.80665
-                    let errorPct = fabsf(mag - expected) / expected * 100.0
-
-                    // Only alert if we actually have accel data (mag > 0)
-                    if mag > 0.1 && errorPct > 3.0 {
-                        gravityMag = mag
-                        gravityError = errorPct
-                        showGravityWarning = true
+    var body: some View {
+        Group {
+            if embedded {
+                // List-row form: matches the mag-cal NavigationLink style
+                // so both calibration entry points read as identical
+                // settings rows.  No background card, no chevron.
+                Button(action: runCalibration) {
+                    HStack {
+                        Label(calibrating ? "Calibrating…" : "Gyro & Accel Calibration",
+                              systemImage: "gyroscope")
+                        Spacer()
+                        if calibrating {
+                            ProgressView()
+                        }
                     }
                 }
-            }) {
+                .disabled(calIsDisabled)
+            } else {
+                standaloneCard
+            }
+        }
+        .alert("Accelerometer Warning", isPresented: $showGravityWarning) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Low-G accelerometer magnitude (\(UnitFormatter.acceleration(Double(gravityMag), system: unitSystem))) differs from expected gravity (\(UnitFormatter.acceleration(9.80665, system: unitSystem))) by \(String(format: "%.1f", gravityError))%. Consider running a bench calibration before flight.")
+        }
+        // Snapshot the freshly-run sensor cal into the active profile (#132),
+        // tagged with this board's id so the syncer re-applies it on connect.
+        .onChange(of: device.sensorCalStatus) { newStatus in
+            guard pendingCalSnapshot, let s = newStatus, s.valid,
+                  !device.unitID.isEmpty, let id = store.activeId else { return }
+            pendingCalSnapshot = false
+            store.update(id) { $0.sensorCal = SensorCalData(status: s, unitID: device.unitID) }
+        }
+    }
+
+    /// Standalone card style used on the Dashboard "On Pad" panel.
+    private var standaloneCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("On Pad Calibration")
+                .font(.headline)
+
+            Button(action: runCalibration) {
                 HStack {
                     if calibrating {
                         ProgressView()
@@ -1914,29 +1957,16 @@ struct OnPadCalibrationView: View {
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
-            .disabled(calibrating || !device.isConnected || !device.telemetry.pwr_pin_on)
+            .disabled(calIsDisabled)
 
             Text("Place rocket on pad and keep still. Calibrates gyro bias and accelerometer offsets (~10 seconds).")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding(embedded ? 0 : 16)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(embedded ? Color.clear : Color(.systemGray6))
-        .cornerRadius(embedded ? 0 : 10)
-        .alert("Accelerometer Warning", isPresented: $showGravityWarning) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Low-G accelerometer magnitude (\(UnitFormatter.acceleration(Double(gravityMag), system: unitSystem))) differs from expected gravity (\(UnitFormatter.acceleration(9.80665, system: unitSystem))) by \(String(format: "%.1f", gravityError))%. Consider running a bench calibration before flight.")
-        }
-        // Snapshot the freshly-run sensor cal into the active profile (#132),
-        // tagged with this board's id so the syncer re-applies it on connect.
-        .onChange(of: device.sensorCalStatus) { newStatus in
-            guard pendingCalSnapshot, let s = newStatus, s.valid,
-                  !device.unitID.isEmpty, let id = store.activeId else { return }
-            pendingCalSnapshot = false
-            store.update(id) { $0.sensorCal = SensorCalData(status: s, unitID: device.unitID) }
-        }
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
     }
 }
 

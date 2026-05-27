@@ -95,6 +95,14 @@ public:
     // outside VERIFYING.
     void resetVerify();
 
+    // #148: User-override save path — force the calibrator into APPLIED
+    // regardless of which transient state it was in (REVIEW or
+    // VERIFYING).  Used by the FC's MAG_CAL_FORCE_APPLY handler after
+    // it writes NVS, so the next status frame published reports
+    // sub_type=APPLIED and iOS shows the "Saved" success banner.  No-op
+    // unless we're in a session state with a valid fit.
+    void markApplied();
+
     // Reset to IDLE.  Call after consuming an APPLIED or ABORTED state.
     void clear();
 
