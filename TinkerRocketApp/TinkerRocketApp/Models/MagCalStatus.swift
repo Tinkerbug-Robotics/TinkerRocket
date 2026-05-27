@@ -304,7 +304,18 @@ extension MagCalStatus {
 // drift from the FC's accept/reject decision.  The FC is the source of
 // truth via rejectCode — these constants are just for the progress UI.
 enum MagCalConstants {
-    static let maxSamples: UInt16 = 2700   // 27 accel-wedges × 100 slots each
+    static let maxSamples: UInt16 = 3200   // 32 accel-wedges × 100 slots each (#148)
     static let minSamples: UInt16 = 500
-    static let minCoverageBins: UInt8 = 18
+    static let minCoverageBins: UInt8 = 22 // MAG_CAL_MIN_COVERAGE_BINS, #148 (22/32)
+}
+
+/// #148 auto-advance threshold — when the firmware reports this many
+/// of the 32 cells populated (and at least MagCalConstants.minSamples
+/// total samples), the iOS UI sends `mag_cal_compute_fit` automatically
+/// and transitions to the Review screen.  Same value as the firmware's
+/// MAG_CAL_MIN_COVERAGE_BINS so the user sees "all green" before
+/// auto-fit triggers; the FC then runs the same coverage gate on the
+/// fit reject_code.
+enum MagCalAutoFitThresholds {
+    static let minCoverage: UInt8 = 22
 }

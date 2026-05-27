@@ -36,6 +36,12 @@ struct MagCalView: View {
     /// starts (sample_count transitions to 0).
     @StateObject private var accelCoverage = AccelCoverageTracker()
 
+    /// #148 auto-advance latch — flipped to true when we send computeFit
+    /// automatically (or the user taps "Fit now").  Prevents repeated
+    /// sends if coverage_bins ticks past the threshold multiple times.
+    /// Reset to false on every fresh entry to .sampling.
+    @State private var didAutoFit: Bool = false
+
     var body: some View {
         Form {
             // The view is mostly status-driven: intro/start, sampling,
@@ -56,6 +62,17 @@ struct MagCalView: View {
         // tagged with this board's id so the syncer can re-apply it on connect
         // and warn if a different board is later used.
         .onChange(of: device.magCalStatus) { newStatus in
+            // #148: reset the auto-fit latch on every fresh sampling
+            // entry so retry/restart paths re-arm.  We watch for the
+            // sub-type leaving REVIEW or arriving at SAMPLING; either
+            // direction covers Start, Retry, and the post-Abort restart.
+            if let s = newStatus, s.subType == .sampling, s.sampleCount == 0 {
+                didAutoFit = false
+            }
+            // (#132) snapshot a freshly-accepted cal into the active
+            // rocket profile, tagged with this board's id so the
+            // syncer can re-apply it on connect and warn if a
+            // different board is later used.
             guard let s = newStatus, s.subType == .applied,
                   !device.unitID.isEmpty, let id = store.activeId else { return }
             store.update(id) { $0.magCal = MagCalData(status: s, unitID: device.unitID) }
@@ -145,68 +162,76 @@ struct MagCalView: View {
     private var samplingSection: some View {
         Group {
             if let s = status {
-                let ax = device.telemetry.low_g_x
-                let ay = device.telemetry.low_g_y
-                let az = device.telemetry.low_g_z
+                let ax = device.telemetry.low_g_x ?? 0
+                let ay = device.telemetry.low_g_y ?? 0
+                let az = device.telemetry.low_g_z ?? 0
+                // #148: single 3D sphere visualization replaces the old
+                // per-axis tap-grid + accel bars.  Capture is fully
+                // automatic — the user just tumbles the rocket and the
+                // cells fill in green from the firmware's coverage_mask.
+                // liveAccel = nil when we have no telemetry yet so the
+                // view skips the orientation update and stays at neutral.
                 Section {
-                    SamplingHero(status: s, ax: ax, ay: ay, az: az,
-                                 accelCoverage: accelCoverage)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                    MagCalSphereView(
+                        coverageMask: s.coverageMask,
+                        liveAccel: (device.telemetry.low_g_x != nil)
+                            ? SIMD3<Float>(ax, ay, az) : nil
+                    )
+                    .frame(height: 360)
+                    .listRowInsets(EdgeInsets())
                 }
-                Section(header: Text("Live accel (gravity)"),
-                        footer: Text("These bars show the gravity direction in the rocket's body frame. Whichever axis reads ≈ ±9.8 m/s² is the one pointing up or down. Adjust the rocket so the target axis dominates.")) {
-                    DirectionBars(ax: ax, ay: ay, az: az)
-                        .padding(.vertical, 4)
-                }
-                Section(header: Text("Progress"),
-                        footer: Text("Coverage counts gravity-direction wedges visited during this run — independent of the mag samples. The fit-quality coverage (mag wedges, post-centring) is shown on the Review screen.")) {
+                Section {
                     HStack {
                         Text("Orientation coverage")
                         Spacer()
-                        Text("\(accelCoverage.coverageCount) / 26 wedges")
+                        Text("\(s.coverageBins) / 32")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
                     HStack {
                         Text("Samples")
                         Spacer()
-                        Text("\(s.sampleCount) / \(MagCalConstants.maxSamples) (rolling)")
+                        Text("\(s.sampleCount)")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
                 }
-                // Compute Fit replaces the old auto-completion-at-buffer-fill.
-                // Disabled until min samples reached so the user can't ship a
-                // bad fit; styled as the primary action once ready.
+                // #148: auto-advance to Review at min coverage.  We send
+                // computeFit when coverage_bins clears the firmware-side
+                // MAG_CAL_MIN_COVERAGE_BINS threshold and at least the
+                // sample-count floor is also met.  Once-only: the sub_type
+                // change away from .sampling stops further sends.
+                .onChange(of: s.coverageBins) { newValue in
+                    if !didAutoFit
+                        && newValue >= MagCalAutoFitThresholds.minCoverage
+                        && s.sampleCount >= MagCalConstants.minSamples
+                    {
+                        didAutoFit = true
+                        device.sendMagCalComputeFit()
+                    }
+                }
+                // Manual override — same button as before but renamed so
+                // the user knows it's not required for normal flow.  Stays
+                // disabled until min samples reached so an over-eager tap
+                // can't ship a bad fit.
                 let canFit = s.sampleCount >= MagCalConstants.minSamples
-                Section(footer: Text(canFit
-                    ? "When you're happy with the coverage, tap Compute Fit to run the sphere fit and review the result."
-                    : "Need ≥ \(MagCalConstants.minSamples) samples before fitting. Keep tumbling…")) {
+                let coverageMet = s.coverageBins >= MagCalAutoFitThresholds.minCoverage
+                Section(footer: Text(coverageMet
+                    ? "Coverage met — fitting now."
+                    : "Keep rotating until at least \(MagCalAutoFitThresholds.minCoverage) of 32 cells are green. The fit will run automatically when ready.")) {
                     Button {
+                        didAutoFit = true
                         device.sendMagCalComputeFit()
                     } label: {
                         HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                            Text("Compute Fit")
-                                .fontWeight(.semibold)
+                            Image(systemName: "bolt.fill")
+                            Text("Fit now")
                             Spacer()
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(canFit ? .white : .gray)
                     }
-                    .listRowBackground(canFit ? Color.blue : Color.gray)
+                    .listRowBackground(canFit && !coverageMet ? Color.blue : Color(.systemGray5))
                     .disabled(!canFit)
-                }
-                Section {
-                    Button(role: .destructive) {
-                        device.sendMagCalAbort()
-                    } label: {
-                        HStack {
-                            Image(systemName: "xmark.circle")
-                            Text("Abort")
-                            Spacer()
-                        }
-                    }
                 }
             } else {
                 Section {
