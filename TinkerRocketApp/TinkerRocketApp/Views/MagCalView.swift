@@ -98,11 +98,11 @@ struct MagCalView: View {
                 .padding(.vertical, 4)
             }
 
-            Section(header: Text("How to tumble")) {
+            Section(header: Text("How it works")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Hold the rocket clear of laptops, phones, speakers.", systemImage: "1.circle.fill")
-                    Label("Slowly rotate through every orientation for ~10 s.", systemImage: "2.circle.fill")
-                    Label("Aim to point each end of the rocket up, down, and sideways.", systemImage: "3.circle.fill")
+                    Label("Hold the rocket clear of laptops, phones, tools, and steel surfaces.", systemImage: "1.circle.fill")
+                    Label("After tapping Start, slowly rotate the rocket through every orientation. A red sphere shows on the next screen — patches fall away as each direction is captured.", systemImage: "2.circle.fill")
+                    Label("Keep rotating until the sphere is mostly clear, then tap Compute Fit. The fit only runs when you say so — take as long as you need.", systemImage: "3.circle.fill")
                 }
                 .font(.subheadline)
             }
@@ -132,7 +132,7 @@ struct MagCalView: View {
             }
 
             Section {
-                Text("Calibration is only allowed when the rocket is in READY state. Launch is gated against this mode — no risk of an accidental flight detection while tumbling.")
+                Text("Calibration can be started from any state except in-flight. Avoid sudden motions that look like a launch — the flight computer's launch detection is still armed during cal.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

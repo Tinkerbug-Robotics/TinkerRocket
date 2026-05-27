@@ -110,15 +110,24 @@ static bool    mag_cal_status_dirty   = false;  // true → publish on next tick
 static int16_t pending_mag_cx = 0, pending_mag_cy = 0, pending_mag_cz = 0;
 static bool    pending_mag_apply = false;
 
-// Issue #206 post-accept verification state.  When the user taps Accept
-// from the iOS Review screen, the FC programs the chip's OFFSET regs and
-// the calibrator transitions to VERIFYING.  We then sample for
-// MAG_CAL_VERIFY_DURATION_US before calling evaluateVerify() — pass writes
-// NVS, fail restores the prior OFFSET regs (cached here) and the
-// calibrator returns to REVIEW with reject_code = MAG_CAL_REJECT_VERIFY_FAILED.
+// Mag-cal session state.
+//
+// mag_cal_session_active: true between MAG_CAL_START and either a
+// successful verify-pass (= APPLIED, NVS written) or any abort path
+// (verify-fail-then-abort, plain abort, retry-back-to-sampling, etc).
+// Drives the prior-OFFSET cache lifetime: we snapshot the currently-
+// persisted offsets at session start so any abort restores them, and
+// zero the chip during the session so SAMPLING sees raw mag values
+// (otherwise a recalibration would fit the *residual* hard-iron, then
+// overwrite the prior full cal with that partial value and immediately
+// fail verification — observed by user 2026-05-26).
+//
+// mag_cal_verify_active: true between MAG_CAL_ACCEPT and the next
+// evaluateVerify() — drives the timer-based polling block.
 static int64_t mag_cal_verify_start_us = 0;
 static int16_t mag_cal_prior_cx = 0, mag_cal_prior_cy = 0, mag_cal_prior_cz = 0;
-static bool    mag_cal_verify_active = false;
+static bool    mag_cal_session_active = false;
+static bool    mag_cal_verify_active  = false;
 // 5 seconds — enough to give the user time to rotate the rocket through
 // 6+ accel-wedges at the new-PCB IIS2MDC's ~100 Hz output rate while
 // keeping the cal flow snappy.
@@ -2446,6 +2455,7 @@ static void loop_fc()
                 ESP_LOGI(TAG, "[MAGCAL] verify PASS — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
                          (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
 
+                mag_cal_session_active = false;
                 mag_cal_status_dirty = true;
                 rocket_state = READY;
                 mag_calibrator.clear();
@@ -2453,17 +2463,16 @@ static void loop_fc()
             else
             {
                 // Calibrator already transitioned back to REVIEW with
-                // MAG_CAL_REJECT_VERIFY_FAILED set — just restore the
-                // chip OFFSET regs to what we cached at accept time.
+                // MAG_CAL_REJECT_VERIFY_FAILED set.  Zero the chip (NOT
+                // restore prior) so the user can immediately Retry into
+                // SAMPLING and see raw mag values.  If they Abort
+                // instead, the abort handler does the prior restore.
                 if (sensor_collector.isIIS2MDCActive())
                 {
-                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                        mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — restored prior OFFSET "
-                                  "(%d,%d,%d) %s; user can Retry",
-                             (double)worst_uT,
-                             (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
-                             (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
+                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
+                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — zeroed OFFSET %s; "
+                                  "user can Retry (raw sampling) or Abort (restore prior)",
+                             (double)worst_uT, ok ? "OK" : "FAIL");
                 }
                 // Stamp the worst observed |B| into the calibrator's
                 // inst_field slot via buildStatusFrame — already true
@@ -3156,40 +3165,77 @@ static void loop_fc()
                 publishSensorCalFromNVS();
             }
             // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
-            // Entry is gated to READY only.  All transitions produce one
-            // immediate status frame so the iOS UI updates without waiting
-            // for the 5 Hz cadence.
+            // Entry refused only from INFLIGHT (everything else is fair game).
+            // The current gate is wide because outdoor rockets enter PRELAUNCH
+            // quickly from GPS lock and would otherwise be locked out of cal —
+            // #216 tracks a proper CALIBRATING flight-mode that inhibits launch
+            // detection / pyro arming for the duration of an active cal session,
+            // which will let us narrow this gate back down safely.  All
+            // transitions produce one immediate status frame so the iOS UI
+            // updates without waiting for the 5 Hz cadence.
             else if (out_pending_command == MAG_CAL_START)
             {
-                if (rocket_state != READY)
+                if (rocket_state == INFLIGHT)
                 {
-                    ESP_LOGW(TAG, "[MAGCAL] start refused: state=%u (require READY)",
-                             (unsigned)rocket_state);
+                    ESP_LOGW(TAG, "[MAGCAL] start refused: INFLIGHT");
                 }
                 else
                 {
-                    ESP_LOGI(TAG, "[MAGCAL] start: entering MAG_CALIBRATION");
+                    // Cache the currently-persisted offsets so a session-level
+                    // abort (or verify-fail abort) can roll back to them.
+                    // Default to zero if no prior cal is saved.
+                    mag_cal_prior_cx = 0;
+                    mag_cal_prior_cy = 0;
+                    mag_cal_prior_cz = 0;
+                    prefs.begin("mag_cal", true);  // read-only
+                    if (prefs.isKey("ver")
+                        && prefs.getUChar("ver", 0) == MAG_CAL_NVS_SCHEMA_VERSION
+                        && prefs.getBool("done", false))
+                    {
+                        mag_cal_prior_cx = (int16_t)prefs.getShort("cx", 0);
+                        mag_cal_prior_cy = (int16_t)prefs.getShort("cy", 0);
+                        mag_cal_prior_cz = (int16_t)prefs.getShort("cz", 0);
+                    }
+                    prefs.end();
+
+                    // Zero the chip's OFFSET regs so SAMPLING sees raw mag
+                    // values.  Without this a recalibration fits the residual
+                    // hard-iron (post-prior-offset), then overwrites the prior
+                    // cal with that partial value and fails verification.
+                    if (sensor_collector.isIIS2MDCActive())
+                    {
+                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] start: zeroed IIS2MDC OFFSET %s  "
+                                      "prior=(%d,%d,%d)",
+                                 ok ? "OK" : "FAIL",
+                                 (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+                                 (int)mag_cal_prior_cz);
+                    }
+
+                    ESP_LOGI(TAG, "[MAGCAL] start: entering MAG_CALIBRATION (from state=%u)",
+                             (unsigned)rocket_state);
                     rocket_state = MAG_CALIBRATION;
                     mag_calibrator.start();
+                    mag_cal_session_active = true;
                     mag_cal_status_dirty = true;
                 }
             }
             else if (out_pending_command == MAG_CAL_ABORT)
             {
                 ESP_LOGI(TAG, "[MAGCAL] abort");
-                // #206: if the user aborts mid-VERIFYING the chip is
-                // running with offsets that never passed verification —
-                // restore the prior cal (or zero) so the EKF isn't left
-                // with an unvetted calibration after the user backs out.
-                if (mag_cal_verify_active && sensor_collector.isIIS2MDCActive())
+                // Full session ends — restore the prior NVS offsets to the
+                // chip (regardless of which sub-state we're aborting from).
+                // Same code path for "abort during sampling", "abort during
+                // review", and "abort during verifying".
+                if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
                 {
                     const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
                         mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-                    ESP_LOGI(TAG, "[MAGCAL] abort during VERIFYING — restored prior OFFSET "
-                                  "(%d,%d,%d) %s",
+                    ESP_LOGI(TAG, "[MAGCAL] abort — restored prior OFFSET (%d,%d,%d) %s",
                              (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
                              (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
                 }
+                mag_cal_session_active = false;
                 mag_cal_verify_active = false;
                 mag_calibrator.abort();
                 mag_cal_status_dirty = true;
@@ -3205,17 +3251,16 @@ static void loop_fc()
                 else
                 {
                     ESP_LOGI(TAG, "[MAGCAL] retry");
-                    // #206: same restore-prior logic as abort — Retry
-                    // from VERIFYING means the user wants to redo the
-                    // capture, not live with the unvetted cal.
+                    // Retry restarts SAMPLING within the same session, so the
+                    // chip must be at zero (not the prior NVS offsets) so the
+                    // new sphere fit sees raw mag values.  Only matters when
+                    // retrying out of VERIFYING — in REVIEW/SAMPLING the chip
+                    // is already at zero from MAG_CAL_START.
                     if (mag_cal_verify_active && sensor_collector.isIIS2MDCActive())
                     {
-                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
-                            mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
-                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — restored prior OFFSET "
-                                      "(%d,%d,%d) %s",
-                                 (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
-                                 (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
+                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — zeroed OFFSET %s",
+                                 ok ? "OK" : "FAIL");
                     }
                     mag_cal_verify_active = false;
                     mag_calibrator.retry();
@@ -3258,29 +3303,11 @@ static void loop_fc()
                     uint8_t reject;
                     mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
 
-                    // #206: cache the currently-persisted offset BEFORE
-                    // overwriting the chip so we can restore on verify
-                    // fail.  Default to zero if no prior cal is saved —
-                    // verify-fail then leaves the chip uncalibrated, same
-                    // as a fresh boot before any cal landed.
-                    mag_cal_prior_cx = 0;
-                    mag_cal_prior_cy = 0;
-                    mag_cal_prior_cz = 0;
-                    prefs.begin("mag_cal", true);  // read-only
-                    if (prefs.isKey("ver")
-                        && prefs.getUChar("ver", 0) == MAG_CAL_NVS_SCHEMA_VERSION
-                        && prefs.getBool("done", false))
-                    {
-                        mag_cal_prior_cx = (int16_t)prefs.getShort("cx", 0);
-                        mag_cal_prior_cy = (int16_t)prefs.getShort("cy", 0);
-                        mag_cal_prior_cz = (int16_t)prefs.getShort("cz", 0);
-                    }
-                    prefs.end();
-
-                    // Apply NEW offsets to the chip immediately — verify
-                    // can then evaluate the corrected stream.  NVS write
-                    // is deferred until verify-pass; on verify-fail we
-                    // restore mag_cal_prior_*.
+                    // Prior offsets were already cached at MAG_CAL_START; we
+                    // just program the proposed-new ones on the chip so the
+                    // verify window measures the corrected stream.  On verify
+                    // pass we'll persist; on fail we zero the chip and the
+                    // session abort path takes care of full prior restore.
                     if (sensor_collector.isIIS2MDCActive())
                     {
                         const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
