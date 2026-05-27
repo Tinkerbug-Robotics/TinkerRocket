@@ -112,6 +112,15 @@ struct MagCalSphereView: UIViewRepresentable {
         shell.firstMaterial?.transparency = 0.08
         shell.firstMaterial?.isDoubleSided = true
         shell.firstMaterial?.cullMode = .back
+        // CRITICAL: don't write depth.  The shell is at radius 0.995 —
+        // *closer* to the camera than the ball, which orbits at 0.62.
+        // If the shell writes depth (the default), the depth buffer
+        // ends up saying "this pixel is at depth 0.995, anything
+        // further away is occluded" — and the ball, sitting at z<0.77
+        // from the camera's view, fails the depth test and disappears.
+        // That was the "no ball visible" bug in the iter13/iter14
+        // screenshots.
+        shell.firstMaterial?.writesToDepthBuffer = false
         let shellNode = SCNNode(geometry: shell)
         shellNode.name = "sphereShell"
         sphereContainer.addChildNode(shellNode)
@@ -139,6 +148,12 @@ struct MagCalSphereView: UIViewRepresentable {
         ball.firstMaterial?.diffuse.contents = UIColor(red: 1.0, green: 0.85, blue: 0.04, alpha: 1.0)
         ball.firstMaterial?.emission.contents = UIColor(red: 1.0, green: 0.78, blue: 0.0, alpha: 1.0)
         ball.firstMaterial?.lightingModel = .constant
+        // Belt-and-suspenders: even if something else in the scene
+        // ever writes depth above the ball, ignore depth reads so the
+        // ball is guaranteed to paint (combined with renderingOrder
+        // = 100 below, it always lands on top of cells + shell).
+        ball.firstMaterial?.readsFromDepthBuffer = false
+        ball.firstMaterial?.writesToDepthBuffer = false
         let ballNode = SCNNode(geometry: ball)
         ballNode.name = "gravityBall"
         // Render after the cells so the ball stays visible on top of
@@ -159,6 +174,8 @@ struct MagCalSphereView: UIViewRepresentable {
         halo.firstMaterial?.diffuse.contents = UIColor(white: 0.0, alpha: 1.0)
         halo.firstMaterial?.emission.contents = UIColor(white: 0.0, alpha: 1.0)
         halo.firstMaterial?.lightingModel = .constant
+        halo.firstMaterial?.readsFromDepthBuffer = false
+        halo.firstMaterial?.writesToDepthBuffer = false
         let haloNode = SCNNode(geometry: halo)
         haloNode.name = "gravityBallHalo"
         haloNode.renderingOrder = 99
