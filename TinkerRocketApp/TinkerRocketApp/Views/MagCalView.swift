@@ -19,7 +19,6 @@
 
 import SwiftUI
 import Combine
-import simd
 
 struct MagCalView: View {
     @ObservedObject var device: BLEDevice
@@ -46,19 +45,6 @@ struct MagCalView: View {
     @State private var verifyMinUT: Float? = nil
     @State private var verifyMaxUT: Float? = nil
 
-    /// Live attitude quaternion from the FC's EKF, for the sphere-view
-    /// rocket orientation.  nil when the EKF hasn't initialised yet
-    /// (all four components zero) — sphere view then falls back to the
-    /// accel-only path which can recover pitch + roll but not yaw.
-    private var liveAttitudeQuat: simd_quatf? {
-        let t = device.telemetry
-        guard let w = t.q0, let x = t.q1, let y = t.q2, let z = t.q3 else { return nil }
-        // Fields default to 0 before the EKF initialises; reject the
-        // exact-zero quaternion so we don't apply an identity-ish
-        // rotation that lies about the rocket being level.
-        if w == 0 && x == 0 && y == 0 && z == 0 { return nil }
-        return simd_quatf(ix: x, iy: y, iz: z, r: w)
-    }
 
     var body: some View {
         Form {
@@ -138,8 +124,8 @@ struct MagCalView: View {
             Section(header: Text("How it works")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Hold the rocket clear of laptops, phones, tools, and steel surfaces.", systemImage: "1.circle.fill")
-                    Label("After tapping Start, slowly rotate the rocket through every orientation. A red sphere shows on the next screen — patches fall away as each direction is captured.", systemImage: "2.circle.fill")
-                    Label("Keep rotating until the sphere is mostly clear, then tap Compute Fit. The fit only runs when you say so — take as long as you need.", systemImage: "3.circle.fill")
+                    Label("Tap Start — you'll see a sphere of red cells with a yellow puck. The puck shows which direction gravity is pulling through the rocket right now.", systemImage: "2.circle.fill")
+                    Label("Tilt the rocket so the puck moves into each red cell. Hold each cell for a moment to fill it. Tap Compute Fit once you've cleared most of the sphere.", systemImage: "3.circle.fill")
                 }
                 .font(.subheadline)
             }
@@ -211,8 +197,7 @@ struct MagCalView: View {
                         coverageMask: s.coverageMask,
                         partialMask: s.partialMask,
                         liveAccel: (device.telemetry.low_g_x != nil)
-                            ? SIMD3<Float>(ax, ay, az) : nil,
-                        liveAttitude: liveAttitudeQuat
+                            ? SIMD3<Float>(ax, ay, az) : nil
                     )
                     .frame(height: 360)
                     .listRowInsets(EdgeInsets())

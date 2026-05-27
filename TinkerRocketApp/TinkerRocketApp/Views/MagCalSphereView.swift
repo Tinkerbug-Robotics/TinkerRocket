@@ -30,19 +30,12 @@ struct MagCalSphereView: UIViewRepresentable {
     let partialMask: UInt32
 
     /// Live accelerometer reading from the rocket, in m/s² body-frame.
-    /// Used purely for visualization: nose direction = -normalize(accel)
-    /// (the rocket points opposite to gravity when upright on the pad).
-    /// Pass `nil` (or zero vector) for the pre-launch / no-data case.
-    /// Used as a FALLBACK only — if liveAttitude (the EKF quaternion)
-    /// is also provided we prefer it because it includes yaw.
+    /// `normalize(liveAccel)` is the body-frame direction of gravity —
+    /// the exact direction the firmware's directionWedge() function
+    /// buckets samples into.  Drives the on-sphere puck position.
+    /// Pass `nil` (or zero vector) when no telemetry has arrived yet;
+    /// the puck stays hidden in that case.
     let liveAccel: SIMD3<Float>?
-
-    /// Live attitude quaternion from the FC's EKF, scalar-first
-    /// (w, x, y, z) — the same convention as TelemetryData.q0..q3.
-    /// Gives full attitude including yaw around gravity, which the
-    /// accel-only path can't recover.  Pass `nil` when the EKF
-    /// quaternion isn't available (pre-init, fields all zero).
-    let liveAttitude: simd_quatf?
 
     // MARK: - Tunables
 
@@ -51,10 +44,12 @@ struct MagCalSphereView: UIViewRepresentable {
     private static let cameraZ: Float = 3.5
     /// Sphere geometry radius (cells live on this surface).
     private static let sphereR: Float = 1.0
-    /// Rocket body half-length.  Picked so the rocket clearly sits inside
-    /// the sphere with a visible nose-tip pointing through.
-    private static let rocketBodyHalf: Float = 0.5
-    private static let rocketRadius: Float = 0.07
+    /// Puck radius — small enough to fit inside a single cell at typical
+    /// cell sizes (~0.3-0.5 of sphereR across), but big enough to see.
+    private static let puckRadius: Float = 0.07
+    /// Puck sits this distance above the sphere surface so it floats
+    /// clearly without z-fighting the cells.
+    private static let puckLift: Float = 1.04
 
     // MARK: - UIViewRepresentable
 
@@ -122,72 +117,39 @@ struct MagCalSphereView: UIViewRepresentable {
             sphereContainer.addChildNode(cellNode)
         }
 
-        // Rocket — simple cylinder body + cone nose.  Firmware body-frame
-        // convention (user-confirmed): +X = nose direction, +Y = out the
-        // right-hand side, +Z = up (right-handed).  SCNCylinder grows
-        // along its local +Y, so we build the parts in a model frame
-        // where +Y is nose-forward and then wrap them in a sub-node
-        // rotated -90° around Z, which maps model's +Y → outer +X.
-        // After the wrap, the rocket node's local +X is the nose
-        // direction, matching the firmware convention.  Rocket is a
-        // sibling of sphereContainer (not a child) so its rotation
-        // doesn't drag the sphere along — the user sees the rocket
-        // move freely inside a stationary sphere as they physically
-        // rotate the rocket on the bench.
-        let bodyHalf = MagCalSphereView.rocketBodyHalf
-        let bodyR = MagCalSphereView.rocketRadius
-        let body = SCNCylinder(radius: CGFloat(bodyR), height: CGFloat(bodyHalf * 2 * 0.75))
-        body.firstMaterial?.diffuse.contents = UIColor.systemGray3
-        let bodyNode = SCNNode(geometry: body)
-        bodyNode.position = SCNVector3(0, -bodyHalf * 0.25, 0)
-
-        let nose = SCNCone(topRadius: 0, bottomRadius: CGFloat(bodyR), height: CGFloat(bodyHalf * 0.5))
-        nose.firstMaterial?.diffuse.contents = UIColor.systemGray2
-        let noseNode = SCNNode(geometry: nose)
-        noseNode.position = SCNVector3(0, bodyHalf * 0.75, 0)
-
-        let fin = SCNBox(width: CGFloat(bodyR * 1.4), height: CGFloat(bodyR * 1.4), length: 0.01, chamferRadius: 0)
-        fin.firstMaterial?.diffuse.contents = UIColor.systemGray4
-
-        // Inner model node — nose along its local +Y as built above.
-        let model = SCNNode()
-        model.addChildNode(bodyNode)
-        model.addChildNode(noseNode)
-        // 3 fins around the tail at 120° intervals (in model-local frame).
-        for k in 0..<3 {
-            let f = SCNNode(geometry: fin)
-            let a = Float(k) * (2 * .pi / 3)
-            f.position = SCNVector3(cos(a) * bodyR * 1.0, -bodyHalf * 0.8, sin(a) * bodyR * 1.0)
-            f.eulerAngles = SCNVector3(0, a, 0)
-            model.addChildNode(f)
-        }
-        // Rotate -90° around Z so model's +Y (nose) → outer +X (nose).
-        model.eulerAngles = SCNVector3(0, 0, -Float.pi / 2)
-
-        let rocket = SCNNode()
-        rocket.name = "rocket"
-        rocket.addChildNode(model)
-        // Sibling of sphereContainer (not a child) — see comment above.
-        scene.rootNode.addChildNode(rocket)
+        // Gravity puck — a small bright sphere positioned at the
+        // body-frame gravity direction (normalize(accel)) on the cell
+        // sphere's surface.  This is exactly the point the firmware's
+        // directionWedge() function buckets samples into, so moving
+        // the puck into a red cell == capturing that cell.  Replaces
+        // the earlier rocket-in-sphere model, which didn't tell the
+        // user what to do next — see #148 design discussion.
+        let puck = SCNSphere(radius: CGFloat(MagCalSphereView.puckRadius))
+        puck.segmentCount = 24
+        puck.firstMaterial?.diffuse.contents = UIColor(red: 1.0, green: 0.78, blue: 0.0, alpha: 1.0)
+        puck.firstMaterial?.emission.contents = UIColor(red: 0.4, green: 0.30, blue: 0.0, alpha: 1.0)
+        puck.firstMaterial?.lightingModel = .lambert
+        let puckNode = SCNNode(geometry: puck)
+        puckNode.name = "gravityPuck"
+        // Start hidden until we get the first valid accel reading.
+        puckNode.isHidden = true
+        scene.rootNode.addChildNode(puckNode)
 
         // Initial state
         applyState(view: view, coverageMask: coverageMask,
-                   partialMask: partialMask,
-                   liveAccel: liveAccel, liveAttitude: liveAttitude)
+                   partialMask: partialMask, liveAccel: liveAccel)
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
         applyState(view: view, coverageMask: coverageMask,
-                   partialMask: partialMask,
-                   liveAccel: liveAccel, liveAttitude: liveAttitude)
+                   partialMask: partialMask, liveAccel: liveAccel)
     }
 
     // MARK: - State application
 
     private func applyState(view: SCNView, coverageMask: UInt32,
-                            partialMask: UInt32, liveAccel: SIMD3<Float>?,
-                            liveAttitude: simd_quatf?) {
+                            partialMask: UInt32, liveAccel: SIMD3<Float>?) {
         guard let scene = view.scene else { return }
         // 3-state cell colouring (#148): cells start fully opaque red
         // (untouched), drop to mid-opacity once they have at least one
@@ -212,37 +174,38 @@ struct MagCalSphereView: UIViewRepresentable {
                 mat.transparency = 0.55  // untouched — full red
             }
         }
-        // Rocket orientation.  Prefer the FC's EKF quaternion when
-        // available — it gives full attitude including yaw, which the
-        // accel-only path can't recover.  Falls back to the accel
-        // method (pitch + roll only, yaw indeterminate) when the EKF
-        // isn't publishing a valid quaternion yet.
-        let rocketNode = scene.rootNode.childNode(withName: "rocket", recursively: false)
-        if let q_body_to_world = liveAttitude {
-            // EKF publishes q as body→NED (North-East-Down — see comment
-            // on TelemetryData.q0).  SceneKit's world is right-handed
-            // with Y-up.  We pre-multiply by a fixed remap that takes
-            // NED vectors to SceneKit's world axes so the rocket
-            // appears upright on screen when physically upright on the
-            // pad.  Picked convention:
-            //   NED X (north) → SceneKit -Z (away from viewer)
-            //   NED Y (east)  → SceneKit +X (right)
-            //   NED Z (down)  → SceneKit -Y (down)
-            // Matrix has trace 0; quaternion = (w=0.5, x=0.5, y=0.5, z=-0.5).
-            // If this looks wrong (rocket inverted or mirrored) the
-            // EKF's world frame is likely a different ENU/ECEF/etc —
-            // easy to iterate by tweaking these four numbers.
-            let nedToScene = simd_quatf(ix: 0.5, iy: 0.5, iz: -0.5, r: 0.5)
-            rocketNode?.simdOrientation = nedToScene * q_body_to_world
-        } else if let g = liveAccel, simd_length(g) > 0.1 {
-            // Accel fallback — pitch + roll only.  See class-comment
-            // discussion of the yaw blind spot; spinning the rocket
-            // around gravity doesn't move it on screen because the
-            // accel-derived rotation has nothing to attach yaw to.
-            let worldUp: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+        // Puck position — placed at the body-frame gravity direction
+        // (normalize(accel)) on the cell sphere's surface.  This is
+        // exactly what directionWedge() in the firmware buckets, so
+        // moving the puck into a red cell == capturing it.  Sphere
+        // cells live in scene-world coords with X/Y/Z == body X/Y/Z
+        // (no rotation applied), so the puck position is just the
+        // body-frame gravity unit vector scaled to the puck-lift
+        // radius.  Yaw (rotation around gravity) doesn't move the
+        // puck — which is correct: yawing the rocket while horizontal
+        // doesn't capture new cells.
+        let puckNode = scene.rootNode.childNode(withName: "gravityPuck", recursively: false)
+        if let g = liveAccel, simd_length(g) > 0.1 {
             let bodyUp = simd_normalize(g)
-            let q = quaternionFromTo(bodyUp, worldUp)
-            rocketNode?.simdOrientation = q
+            puckNode?.simdPosition = bodyUp * MagCalSphereView.puckLift
+            puckNode?.isHidden = false
+
+            // Front/back hemisphere cueing — the camera looks at the
+            // sphere from +Z (cameraZ=3.5).  A puck at scene-world z>0
+            // is on the side closer to the viewer; z<0 is the far
+            // side, where the cells in front would otherwise hide it
+            // entirely.  Dim and shrink so the user knows it's on the
+            // back, and can rotate the rocket to bring it forward.
+            let onFront = puckNode?.simdPosition.z ?? 0 >= 0
+            puckNode?.simdScale = onFront
+                ? SIMD3<Float>(1.0, 1.0, 1.0)
+                : SIMD3<Float>(0.55, 0.55, 0.55)
+            puckNode?.opacity = onFront ? 1.0 : 0.40
+        } else {
+            // No accel yet → keep the puck hidden so the sphere doesn't
+            // show a misleading "you're aimed at +Y" indicator before
+            // the first telemetry frame arrives.
+            puckNode?.isHidden = true
         }
     }
 
