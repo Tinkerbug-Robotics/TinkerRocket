@@ -602,6 +602,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// auto-completion-at-buffer-fill so the user owns when the cal
     /// "finishes."
     func sendMagCalComputeFit() { sendCommand(54) }
+    /// #148 — user-driven verify completion.  Tells the FC to evaluate
+    /// the verify min/max/coverage immediately (instead of waiting for
+    /// the 60 s safety timeout).  Pass → APPLIED + NVS write; fail →
+    /// REVIEW with one of the verify reject sub-codes set.
+    func sendMagCalVerifyDone()  { sendCommand(56) }
+    /// #148 — user-driven verify retry.  Clears the verify accumulators
+    /// without leaving VERIFYING; the proposed-new cal stays programmed
+    /// on the chip so the next rotation pass measures the same stream.
+    func sendMagCalVerifyReset() { sendCommand(57) }
+    /// #148 — user-override save.  Writes NVS regardless of verify-gate
+    /// status; used when the user taps "Save anyway" on the Verifying
+    /// screen with some gates still red.
+    func sendMagCalForceApply()  { sendCommand(58) }
 
     // Issue #132 — rocket-profile auto-sync.  The app holds source-of-truth
     // for mag cal as part of the active rocket profile.  APPLY pushes the

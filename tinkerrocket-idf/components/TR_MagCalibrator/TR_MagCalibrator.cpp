@@ -58,6 +58,7 @@ static bool solve4x4(double A[4][4], double b[4], double x[4])
 MagCalibrator::MagCalibrator()
     : n_samples_(0),
       coverage_mask_(0),
+      partial_mask_(0),
       last_x_(0), last_y_(0), last_z_(0),
       fit_cx_(0), fit_cy_(0), fit_cz_(0),
       fit_R_uT_(0.0f),
@@ -66,7 +67,11 @@ MagCalibrator::MagCalibrator()
       fit_valid_(false),
       accel_x_(0), accel_y_(0), accel_z_(0),
       accel_valid_(false),
-      state_(State::IDLE)
+      state_(State::IDLE),
+      verify_min_uT_(0.0f), verify_max_uT_(0.0f),
+      verify_n_samples_(0),
+      verify_coverage_mask_(0),
+      verify_skip_remaining_(0)
 {
     memset(wedge_count_, 0, sizeof(wedge_count_));
     memset(wedge_write_, 0, sizeof(wedge_write_));
@@ -78,6 +83,7 @@ void MagCalibrator::start()
     memset(wedge_count_, 0, sizeof(wedge_count_));
     memset(wedge_write_, 0, sizeof(wedge_write_));
     coverage_mask_ = 0;
+    partial_mask_ = 0;
     last_x_ = last_y_ = last_z_ = 0;
     // accel_valid_ stays as-is: the IMU is sampling regardless of cal
     // state, so accel readings from before Start are still fresh.
@@ -108,11 +114,148 @@ void MagCalibrator::retry()
 bool MagCalibrator::accept()
 {
     if (state_ != State::REVIEW || !fit_valid_) return false;
-    state_ = State::APPLIED;
+    // #206: REVIEW → VERIFYING.  Caller programs OFFSET regs immediately
+    // after this returns, so subsequent addSample calls see post-offset
+    // |B|.  Reset the verify accumulators so prior runs (re-cal then
+    // verify-fail then re-cal) don't carry state forward.
+    verify_min_uT_ = 0.0f;
+    verify_max_uT_ = 0.0f;
+    verify_n_samples_ = 0;
+    verify_coverage_mask_ = 0;
+    // #148 — clear last_x/y/z so the first MAG_CAL_STATUS frame
+    // published after entering VERIFYING reports inst_field_uT_x10 = 0
+    // instead of carrying the pre-OFFSET-program raw |B| (~1700 µT on a
+    // fresh new-PCB IIS2MDC) from the last SAMPLING sample.
+    last_x_ = 0;
+    last_y_ = 0;
+    last_z_ = 0;
+    // #148 — discard the next few samples too: the IIS2MDC's output
+    // register may still hold a pre-OFFSET-program measurement until
+    // its next internal ODR cycle (~10 ms at 100 Hz).  Without this,
+    // the very first read after we programmed OFFSET grabs the stale
+    // pre-cal value and pollutes verify_max for the whole session.
+    // 3 samples × 10 ms = ~30 ms — plenty to guarantee the chip has
+    // refreshed at least once.
+    verify_skip_remaining_ = 3;
+    state_ = State::VERIFYING;
 #ifdef ESP_PLATFORM
-    ESP_LOGI(TAG, "accept: APPLIED (cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT)",
+    ESP_LOGI(TAG, "accept: VERIFYING (cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT)",
              (int)fit_cx_, (int)fit_cy_, (int)fit_cz_,
              (double)fit_R_uT_, (double)fit_residual_uT_);
+#endif
+    return true;
+}
+
+void MagCalibrator::markApplied()
+{
+    if (!fit_valid_) return;
+    if (state_ != State::REVIEW && state_ != State::VERIFYING) return;
+    state_ = State::APPLIED;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "markApplied: forced -> APPLIED (user-override save)");
+#endif
+}
+
+void MagCalibrator::resetVerify()
+{
+    if (state_ != State::VERIFYING) return;
+    verify_min_uT_ = 0.0f;
+    verify_max_uT_ = 0.0f;
+    verify_n_samples_ = 0;
+    verify_coverage_mask_ = 0;
+    // Same skip as accept() — Retry restarts the verify pass, so the
+    // chip's output reg might again hold a stale measurement if the
+    // user paused and the proof-mass settled differently.  Cheap.
+    verify_skip_remaining_ = 3;
+    last_x_ = 0;
+    last_y_ = 0;
+    last_z_ = 0;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "resetVerify: cleared accumulators, staying in VERIFYING");
+#endif
+}
+
+bool MagCalibrator::evaluateVerify(float& worst_uT)
+{
+    worst_uT = 0.0f;
+    if (state_ != State::VERIFYING) return false;
+
+    const uint8_t cov_bins = (uint8_t)__builtin_popcount(verify_coverage_mask_);
+    const float range_uT = verify_max_uT_ - verify_min_uT_;
+
+    // Sample-count floor first — without enough samples min/max are
+    // meaningless and we'd flap on noise.
+    if (verify_n_samples_ < MAG_CAL_VERIFY_MIN_SAMPLES) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FEW_SAMPLES;
+        worst_uT = verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (insufficient samples): n=%u (need %u)",
+                 (unsigned)verify_n_samples_, (unsigned)MAG_CAL_VERIFY_MIN_SAMPLES);
+#endif
+        return false;
+    }
+
+    // Coverage check — the user must rotate the rocket through enough
+    // orientations during verify.  Without rotation a wrong cal would
+    // trivially pass the |B| gate (rocket is stationary; |B| varies only
+    // by sensor noise).  Threshold is lower than SAMPLING because the
+    // verify window is short — we just need *some* rotation diversity.
+    if (cov_bins < MAG_CAL_VERIFY_MIN_COVERAGE_BINS) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_LOW_COVERAGE;
+        worst_uT = verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (low coverage): bins=%u (need %u)",
+                 (unsigned)cov_bins, (unsigned)MAG_CAL_VERIFY_MIN_COVERAGE_BINS);
+#endif
+        return false;
+    }
+
+    // Magnitude band gate.
+    if (verify_max_uT_ > MAG_CAL_VERIFY_MAX_UT) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_TOO_HIGH;
+        worst_uT = verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (|B| too high): max=%.1fµT > %.1f",
+                 (double)verify_max_uT_, (double)MAG_CAL_VERIFY_MAX_UT);
+#endif
+        return false;
+    }
+    if (verify_min_uT_ < MAG_CAL_VERIFY_MIN_UT) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_TOO_LOW;
+        worst_uT = verify_min_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (|B| too low): min=%.1fµT < %.1f",
+                 (double)verify_min_uT_, (double)MAG_CAL_VERIFY_MIN_UT);
+#endif
+        return false;
+    }
+    // Range (max-min) gate — catches a residual hard-iron that keeps
+    // |B| in the band on average but swings substantially with rotation.
+    if (range_uT > MAG_CAL_VERIFY_RANGE_UT) {
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_RANGE_WIDE;
+        // Report whichever extreme is further from the fitted R as the
+        // "worst" — that's the more diagnostic value for the user.
+        worst_uT = ((fit_R_uT_ - verify_min_uT_) > (verify_max_uT_ - fit_R_uT_))
+                   ? verify_min_uT_ : verify_max_uT_;
+        state_ = State::REVIEW;
+#ifdef ESP_PLATFORM
+        ESP_LOGW(TAG, "verify FAIL (|B| range too wide): range=%.1fµT > %.1f (min=%.1f max=%.1f)",
+                 (double)range_uT, (double)MAG_CAL_VERIFY_RANGE_UT,
+                 (double)verify_min_uT_, (double)verify_max_uT_);
+#endif
+        return false;
+    }
+
+    // Pass — APPLIED is the terminal good state; FC writes NVS next.
+    state_ = State::APPLIED;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "verify PASS: |B| min=%.1f max=%.1f range=%.1f (n=%u, cov=%u/26)",
+             (double)verify_min_uT_, (double)verify_max_uT_, (double)range_uT,
+             (unsigned)verify_n_samples_, (unsigned)cov_bins);
 #endif
     return true;
 }
@@ -132,6 +275,48 @@ void MagCalibrator::setLiveAccel(int16_t ax, int16_t ay, int16_t az)
 
 bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
 {
+    // #206: during VERIFYING the chip's OFFSET regs are already
+    // programmed, so x/y/z arriving here are post-offset.  Track
+    // |B| min/max plus rotation coverage; no per-orientation
+    // bucketing (the sphere-fit buffer is frozen at the REVIEW fit).
+    if (state_ == State::VERIFYING) {
+        // #148 — discard the first few samples after OFFSET program;
+        // the chip's output reg might still hold a pre-OFFSET reading
+        // that would otherwise pollute verify_max for the whole session.
+        if (verify_skip_remaining_ > 0) {
+            verify_skip_remaining_--;
+            return false;
+        }
+        last_x_ = x;
+        last_y_ = y;
+        last_z_ = z;
+
+        const float fx = (float)x * IIS2MDC_LSB_TO_uT;
+        const float fy = (float)y * IIS2MDC_LSB_TO_uT;
+        const float fz = (float)z * IIS2MDC_LSB_TO_uT;
+        const float B = sqrtf(fx*fx + fy*fy + fz*fz);
+
+        if (verify_n_samples_ == 0) {
+            verify_min_uT_ = B;
+            verify_max_uT_ = B;
+        } else {
+            if (B < verify_min_uT_) verify_min_uT_ = B;
+            if (B > verify_max_uT_) verify_max_uT_ = B;
+        }
+        verify_n_samples_++;
+
+        // Coverage from accel wedge — same logic as SAMPLING.  Without
+        // a fresh accel reading we just skip the coverage update; the
+        // |B| min/max still tick so a stationary verify can still hit
+        // the sample floor and fail-on-coverage rather than silently
+        // accumulating samples in a single wedge.
+        if (accel_valid_) {
+            const uint8_t aw = directionWedge(accel_x_, accel_y_, accel_z_);
+            if (aw < NUM_ACCEL_WEDGES) verify_coverage_mask_ |= (1u << aw);
+        }
+        return false;
+    }
+
     if (state_ != State::SAMPLING) return false;
 
     // Live vector + coverage update regardless of bucket state — the
@@ -150,11 +335,6 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
     const uint8_t accel_wedge = directionWedge(accel_x_, accel_y_, accel_z_);
     if (accel_wedge >= NUM_ACCEL_WEDGES) return false;
 
-    // Update the accel-driven coverage mask up-front so the iOS UI
-    // sees the new wedge as soon as it's been visited, even if its
-    // slot ring buffer is full and an oldest sample gets evicted.
-    coverage_mask_ |= (1u << accel_wedge);
-
     // Ring buffer inside the wedge bucket.  Up to SAMPLES_PER_WEDGE
     // samples are kept per accel-wedge; when full, newest overwrites
     // oldest WITHIN THAT WEDGE.  Samples from other orientations are
@@ -169,6 +349,19 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
     if (wedge_count_[accel_wedge] < SAMPLES_PER_WEDGE) {
         wedge_count_[accel_wedge]++;
         n_samples_++;  // saturates at NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE
+    }
+
+    // #148 — 3-state coverage based on wedge sample count.  Wedges
+    // with < MAG_CAL_MIN_SAMPLES_PER_WEDGE samples sit in partial_mask
+    // (in-progress); promote into coverage_mask once the threshold is
+    // met.  Bits are mutually exclusive — a wedge graduates from
+    // partial → coverage and clears its partial bit.
+    const uint32_t bit = (1u << accel_wedge);
+    if (wedge_count_[accel_wedge] >= MAG_CAL_MIN_SAMPLES_PER_WEDGE) {
+        coverage_mask_ |= bit;
+        partial_mask_  &= ~bit;
+    } else if (wedge_count_[accel_wedge] > 0) {
+        partial_mask_ |= bit;
     }
 
     // Sampling never "completes" — the 5 Hz status cadence in the FC
@@ -228,16 +421,29 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
 
     switch (state_)
     {
-        case State::IDLE:     out.sub_type = MAG_CAL_SUB_IDLE;     break;
-        case State::SAMPLING: out.sub_type = MAG_CAL_SUB_SAMPLING; break;
-        case State::REVIEW:   out.sub_type = MAG_CAL_SUB_REVIEW;   break;
-        case State::APPLIED:  out.sub_type = MAG_CAL_SUB_APPLIED;  break;
-        case State::ABORTED:  out.sub_type = MAG_CAL_SUB_ABORTED;  break;
+        case State::IDLE:      out.sub_type = MAG_CAL_SUB_IDLE;      break;
+        case State::SAMPLING:  out.sub_type = MAG_CAL_SUB_SAMPLING;  break;
+        case State::REVIEW:    out.sub_type = MAG_CAL_SUB_REVIEW;    break;
+        case State::APPLIED:   out.sub_type = MAG_CAL_SUB_APPLIED;   break;
+        case State::ABORTED:   out.sub_type = MAG_CAL_SUB_ABORTED;   break;
+        case State::VERIFYING: out.sub_type = MAG_CAL_SUB_VERIFYING; break;
     }
 
-    out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
-    out.coverage_mask = coverage_mask_;
-    out.sample_count  = n_samples_;
+    // During VERIFYING the coverage / sample-count fields report the
+    // verify-window progress so iOS can render a progress bar that
+    // matches what the FC is actually gating on.  Outside VERIFYING
+    // the sphere-fit's own counters are the right thing to show.
+    if (state_ == State::VERIFYING) {
+        out.coverage_bins = (uint8_t)__builtin_popcount(verify_coverage_mask_);
+        out.coverage_mask = verify_coverage_mask_;
+        out.partial_mask  = 0;  // verify uses 1-sample-per-wedge gate
+        out.sample_count  = verify_n_samples_;
+    } else {
+        out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
+        out.coverage_mask = coverage_mask_;
+        out.partial_mask  = partial_mask_;
+        out.sample_count  = n_samples_;
+    }
 
     // Live raw vector for the iOS direction-feedback UI.  Raw LSB
     // matches the sphere-fit's working units so no conversion drift.
@@ -270,6 +476,42 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
     }
 }
 
+// 32 cell centers on the unit sphere — truncated icosahedron / soccer-ball
+// tessellation.  Indices 0–11 are icosahedron vertices (pentagonal cell
+// centers); indices 12–31 are icosahedron face centroids (hexagonal cell
+// centers).  All entries are unit vectors; closest pair is separated by
+// ~37.4° on the sphere.  Voronoi cell areas are within ±5% of mean —
+// pentagons ~96% of mean, hexagons ~103% (verified via Monte Carlo).
+//
+// Generated by tools/generate_cell_centers.py (see #148 commit message
+// for the derivation).  φ = (1 + √5) / 2; icosa vertices are the cyclic
+// permutations of (0, ±1, ±φ); face centroids = normalized mean of the
+// three adjacent vertex coordinates.
+static constexpr float CELL_X[32] = {
+     0.00000000f, -0.52573111f, -0.85065081f,  0.00000000f, -0.52573111f, -0.85065081f,
+     0.00000000f,  0.52573111f,  0.85065081f,  0.00000000f,  0.52573111f,  0.85065081f,
+    -0.57735027f,  0.00000000f, -0.35682209f,  0.35682209f,  0.57735027f, -0.93417236f,
+    -0.57735027f,  0.00000000f, -0.93417236f, -0.57735027f, -0.35682209f,  0.57735027f,
+     0.35682209f, -0.57735027f,  0.00000000f,  0.00000000f,  0.57735027f,  0.93417236f,
+     0.93417236f,  0.57735027f,
+};
+static constexpr float CELL_Y[32] = {
+    -0.52573111f, -0.85065081f,  0.00000000f, -0.52573111f,  0.85065081f,  0.00000000f,
+     0.52573111f, -0.85065081f,  0.00000000f,  0.52573111f,  0.85065081f,  0.00000000f,
+    -0.57735027f, -0.93417236f,  0.00000000f,  0.00000000f, -0.57735027f, -0.35682209f,
+    -0.57735027f, -0.93417236f,  0.35682209f,  0.57735027f,  0.00000000f, -0.57735027f,
+     0.00000000f,  0.57735027f,  0.93417236f,  0.93417236f,  0.57735027f, -0.35682209f,
+     0.35682209f,  0.57735027f,
+};
+static constexpr float CELL_Z[32] = {
+    -0.85065081f,  0.00000000f, -0.52573111f,  0.85065081f,  0.00000000f,  0.52573111f,
+    -0.85065081f,  0.00000000f, -0.52573111f,  0.85065081f,  0.00000000f,  0.52573111f,
+    -0.57735027f, -0.35682209f, -0.93417236f, -0.93417236f, -0.57735027f,  0.00000000f,
+     0.57735027f,  0.35682209f,  0.00000000f, -0.57735027f,  0.93417236f,  0.57735027f,
+     0.93417236f,  0.57735027f, -0.35682209f,  0.35682209f, -0.57735027f,  0.00000000f,
+     0.00000000f,  0.57735027f,
+};
+
 uint8_t MagCalibrator::directionWedge(int16_t x, int16_t y, int16_t z)
 {
     // Reject the zero vector (sample exactly at origin — implausible from
@@ -278,25 +520,23 @@ uint8_t MagCalibrator::directionWedge(int16_t x, int16_t y, int16_t z)
     const double yy = (double)y * (double)y;
     const double zz = (double)z * (double)z;
     const double r2 = xx + yy + zz;
-    if (r2 <= 0.0) return 27;  // sentinel = invalid
+    if (r2 <= 0.0) return NUM_ACCEL_WEDGES;  // sentinel = invalid
 
     const double r = sqrt(r2);
-    const double ux = (double)x / r;
-    const double uy = (double)y / r;
-    const double uz = (double)z / r;
+    const float ux = (float)((double)x / r);
+    const float uy = (float)((double)y / r);
+    const float uz = (float)((double)z / r);
 
-    // Threshold = 0.4: a unit vector with all three |components| < 0.4
-    // would need r < sqrt(3) * 0.4 ≈ 0.69, which is impossible — so the
-    // (0,0,0) center cell never lights up and we get exactly 26 reachable
-    // wedges.
-    constexpr double T = 0.4;
-    auto bin = [](double v) -> int {
-        return (v < -T) ? 0 : (v > T) ? 2 : 1;
-    };
-    const int bx = bin(ux);
-    const int by = bin(uy);
-    const int bz = bin(uz);
-    return (uint8_t)(bx * 9 + by * 3 + bz);  // 0..26 (13 = center, never set)
+    // Voronoi assignment: pick the cell center with maximum dot product
+    // against the normalized sample direction.  32 dot products + max
+    // is ~100 cycles on ESP32-P4, easily under the per-sample budget.
+    float bestD = -2.0f;
+    uint8_t bestI = 0;
+    for (uint8_t i = 0; i < NUM_ACCEL_WEDGES; i++) {
+        const float d = ux * CELL_X[i] + uy * CELL_Y[i] + uz * CELL_Z[i];
+        if (d > bestD) { bestD = d; bestI = i; }
+    }
+    return bestI;
 }
 
 void MagCalibrator::runFit()

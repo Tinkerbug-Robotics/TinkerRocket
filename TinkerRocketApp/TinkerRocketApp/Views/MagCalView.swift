@@ -36,6 +36,16 @@ struct MagCalView: View {
     /// starts (sample_count transitions to 0).
     @StateObject private var accelCoverage = AccelCoverageTracker()
 
+    /// #148 verify-window |B| accumulators.  iOS tracks these locally
+    /// from the live status frames during VERIFYING so we can show
+    /// min/max/spread and a real-time pass/fail readout, all derived
+    /// from the same instantaneousFieldUT the firmware uses for its
+    /// own gates.  Reset on entry to .verifying and on Retry
+    /// verification.  nil means "no samples yet."
+    @State private var verifyMinUT: Float? = nil
+    @State private var verifyMaxUT: Float? = nil
+
+
     var body: some View {
         Form {
             // The view is mostly status-driven: intro/start, sampling,
@@ -45,6 +55,9 @@ struct MagCalView: View {
             case .sampling:           samplingSection
             case .review:             reviewSection
             case .applied:            appliedSection
+            // #206: between Accept and final NVS persist.  FC is sampling
+            // the corrected stream to confirm |B| stays in band.
+            case .verifying:          verifyingSection
             }
         }
         .navigationTitle("Mag Calibration")
@@ -53,13 +66,31 @@ struct MagCalView: View {
         // tagged with this board's id so the syncer can re-apply it on connect
         // and warn if a different board is later used.
         .onChange(of: device.magCalStatus) { newStatus in
+            // #148 verify-window |B| accumulators.  Update on every
+            // status frame received while VERIFYING; reset when we
+            // leave VERIFYING so the next entry starts fresh.
+            if let s = newStatus, s.subType == .verifying {
+                let b = s.instantaneousFieldUT
+                if b > 0 {  // FC sends 0 before the first verify sample
+                    verifyMinUT = min(verifyMinUT ?? b, b)
+                    verifyMaxUT = max(verifyMaxUT ?? b, b)
+                }
+            } else {
+                verifyMinUT = nil
+                verifyMaxUT = nil
+            }
+            // (#132) snapshot a freshly-accepted cal into the active
+            // rocket profile, tagged with this board's id so the
+            // syncer can re-apply it on connect and warn if a
+            // different board is later used.
             guard let s = newStatus, s.subType == .applied,
                   !device.unitID.isEmpty, let id = store.activeId else { return }
             store.update(id) { $0.magCal = MagCalData(status: s, unitID: device.unitID) }
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                if status?.subType == .sampling || status?.subType == .review {
+                if status?.subType == .sampling || status?.subType == .review ||
+                   status?.subType == .verifying {
                     // Belt-and-suspenders abort: if the user tries to
                     // back out mid-cal, send abort so the FC drops back
                     // to READY rather than staying in MAG_CALIBRATION.
@@ -90,11 +121,11 @@ struct MagCalView: View {
                 .padding(.vertical, 4)
             }
 
-            Section(header: Text("How to tumble")) {
+            Section(header: Text("How it works")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Hold the rocket clear of laptops, phones, speakers.", systemImage: "1.circle.fill")
-                    Label("Slowly rotate through every orientation for ~10 s.", systemImage: "2.circle.fill")
-                    Label("Aim to point each end of the rocket up, down, and sideways.", systemImage: "3.circle.fill")
+                    Label("Hold the rocket clear of laptops, phones, tools, and steel surfaces.", systemImage: "1.circle.fill")
+                    Label("Tap Start — you'll see a translucent sphere of red cells with a red ball inside, like iOS's own compass calibration.  The ball shows the direction gravity is pulling through the rocket.", systemImage: "2.circle.fill")
+                    Label("Tilt the rocket to roll the ball into each red cell. Hold each cell for a moment to fill it. Tap Compute Fit once you've cleared most of the sphere.", systemImage: "3.circle.fill")
                 }
                 .font(.subheadline)
             }
@@ -108,7 +139,12 @@ struct MagCalView: View {
                 }
             }
 
-            Section {
+            Section(footer: Text("For the calibration to match what the flight computer sees, ensure the rocket is in the flight configuration before calibration.")) {
+                // Start button — greyed out when the rocket isn't in a
+                // valid state (in-flight, or telemetry not connected /
+                // powered).  No explanatory text below; the visual state
+                // of the button itself is the signal.
+                let canStart = isStartAllowed
                 Button {
                     device.sendMagCalStart()
                 } label: {
@@ -118,17 +154,23 @@ struct MagCalView: View {
                             .fontWeight(.semibold)
                         Spacer()
                     }
-                    .foregroundColor(.white)
+                    .foregroundColor(canStart ? .white : Color(.systemGray2))
                 }
-                .listRowBackground(Color.blue)
-            }
-
-            Section {
-                Text("Calibration is only allowed when the rocket is in READY state. Launch is gated against this mode — no risk of an accidental flight detection while tumbling.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                .listRowBackground(canStart ? Color.blue : Color(.systemGray5))
+                .disabled(!canStart)
             }
         }
+    }
+
+    /// MAG_CAL_START is refused FC-side from INFLIGHT; we also need the
+    /// rocket connected + powered for the cal to do anything useful.
+    /// The button is enabled when all three are true.
+    private var isStartAllowed: Bool {
+        guard device.isConnected, !device.isBaseStation,
+              device.telemetry.pwr_pin_on else { return false }
+        // Telemetry state string mirrors the FC's rocket_state enum;
+        // INFLIGHT is the one truly-forbidden case.
+        return device.telemetry.state != "INFLIGHT"
     }
 
     /// Sampling: orientation-progress hero, live direction bars, Compute
@@ -141,44 +183,55 @@ struct MagCalView: View {
     private var samplingSection: some View {
         Group {
             if let s = status {
-                let ax = device.telemetry.low_g_x
-                let ay = device.telemetry.low_g_y
-                let az = device.telemetry.low_g_z
+                let ax = device.telemetry.low_g_x ?? 0
+                let ay = device.telemetry.low_g_y ?? 0
+                let az = device.telemetry.low_g_z ?? 0
+                // #148: single 3D sphere visualization replaces the old
+                // per-axis tap-grid + accel bars.  Capture is fully
+                // automatic — the user just tumbles the rocket and the
+                // cells fill in green from the firmware's coverage_mask.
+                // liveAccel = nil when we have no telemetry yet so the
+                // view skips the orientation update and stays at neutral.
                 Section {
-                    SamplingHero(status: s, ax: ax, ay: ay, az: az,
-                                 accelCoverage: accelCoverage)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                    MagCalSphereView(
+                        coverageMask: s.coverageMask,
+                        partialMask: s.partialMask,
+                        liveAccel: (device.telemetry.low_g_x != nil)
+                            ? SIMD3<Float>(ax, ay, az) : nil
+                    )
+                    .frame(height: 360)
+                    .listRowInsets(EdgeInsets())
                 }
-                Section(header: Text("Live accel (gravity)"),
-                        footer: Text("These bars show the gravity direction in the rocket's body frame. Whichever axis reads ≈ ±9.8 m/s² is the one pointing up or down. Adjust the rocket so the target axis dominates.")) {
-                    DirectionBars(ax: ax, ay: ay, az: az)
-                        .padding(.vertical, 4)
-                }
-                Section(header: Text("Progress"),
-                        footer: Text("Coverage counts gravity-direction wedges visited during this run — independent of the mag samples. The fit-quality coverage (mag wedges, post-centring) is shown on the Review screen.")) {
+                Section {
                     HStack {
                         Text("Orientation coverage")
                         Spacer()
-                        Text("\(accelCoverage.coverageCount) / 26 wedges")
+                        Text("\(s.coverageBins) / 32")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
                     HStack {
                         Text("Samples")
                         Spacer()
-                        Text("\(s.sampleCount) / \(MagCalConstants.maxSamples) (rolling)")
+                        Text("\(s.sampleCount)")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
                 }
-                // Compute Fit replaces the old auto-completion-at-buffer-fill.
-                // Disabled until min samples reached so the user can't ship a
-                // bad fit; styled as the primary action once ready.
-                let canFit = s.sampleCount >= MagCalConstants.minSamples
+                // Compute Fit is user-driven — we DON'T auto-advance even
+                // once coverage clears the threshold, so the user can
+                // keep rotating to fill remaining cells.  The button
+                // enables at the firmware-side coverage floor and turns
+                // into the primary action; below it the user knows they
+                // can keep going.
+                let hasSamples = s.sampleCount >= MagCalConstants.minSamples
+                let coverageMet = s.coverageBins >= MagCalConstants.minCoverageBins
+                let canFit = hasSamples && coverageMet
                 Section(footer: Text(canFit
-                    ? "When you're happy with the coverage, tap Compute Fit to run the sphere fit and review the result."
-                    : "Need ≥ \(MagCalConstants.minSamples) samples before fitting. Keep tumbling…")) {
+                    ? "Ready to fit. Keep rotating to cover any remaining cells, or tap Compute Fit when you're satisfied."
+                    : !hasSamples
+                        ? "Collecting samples — keep rotating. Need at least \(MagCalConstants.minSamples)."
+                        : "Need at least \(MagCalConstants.minCoverageBins) of 32 cells covered before the fit can run.")) {
                     Button {
                         device.sendMagCalComputeFit()
                     } label: {
@@ -188,21 +241,10 @@ struct MagCalView: View {
                                 .fontWeight(.semibold)
                             Spacer()
                         }
-                        .foregroundColor(.white)
+                        .foregroundColor(canFit ? .white : Color(.systemGray2))
                     }
-                    .listRowBackground(canFit ? Color.blue : Color.gray)
+                    .listRowBackground(canFit ? Color.blue : Color(.systemGray5))
                     .disabled(!canFit)
-                }
-                Section {
-                    Button(role: .destructive) {
-                        device.sendMagCalAbort()
-                    } label: {
-                        HStack {
-                            Image(systemName: "xmark.circle")
-                            Text("Abort")
-                            Spacer()
-                        }
-                    }
                 }
             } else {
                 Section {
@@ -242,9 +284,30 @@ struct MagCalView: View {
                     HStack {
                         Text("Coverage")
                         Spacer()
-                        Text("\(s.coverageBins) / 26 wedges")
+                        Text("\(s.coverageBins) / 32 wedges")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
+                    }
+                    // Issue #207 / #148: |c| measures the full PCB
+                    // hard-iron.  Almost any value < the chip's ±4915 µT
+                    // OFFSET register range subtracts cleanly, so we only
+                    // warn near that limit — at typical 1.7 mT this stays
+                    // green.  The intro screen carries the "ensure flight
+                    // configuration" tip that used to live here, since
+                    // that advice applies regardless of |c|.
+                    let chipLimitConcern = s.centerWarning != .ok
+                    HStack {
+                        Text("Offset |c|")
+                            .foregroundColor(chipLimitConcern ? .orange : .primary)
+                        Spacer()
+                        Text(String(format: "%.1f µT", s.centerMagnitudeUT))
+                            .foregroundColor(chipLimitConcern ? .orange : .secondary)
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    if chipLimitConcern {
+                        Text("Bias is approaching the chip's ±4915 µT OFFSET-register range — the chip may not be able to fully subtract this. Try re-calibrating; if it persists, the board may have unusual magnetics.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -276,19 +339,28 @@ struct MagCalView: View {
                 }
 
                 if s.rejectCode == .ok {
-                    Section {
+                    Section(footer: Text("Verify is the recommended path — it programs the offset into the chip and lets you confirm with a live |B| readout. Save and apply skips verification and writes the cal to flight-computer memory immediately.")) {
                         Button {
                             device.sendMagCalAccept()
                         } label: {
                             HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text("Accept and Save")
+                                Image(systemName: "checkmark.shield")
+                                Text("Verify")
                                     .fontWeight(.semibold)
                                 Spacer()
                             }
                             .foregroundColor(.white)
                         }
-                        .listRowBackground(Color.green)
+                        .listRowBackground(Color.blue)
+                        Button {
+                            device.sendMagCalForceApply()
+                        } label: {
+                            HStack {
+                                Image(systemName: "tray.and.arrow.down.fill")
+                                Text("Save and apply (skip verify)")
+                                Spacer()
+                            }
+                        }
                     }
                 }
                 Section {
@@ -316,7 +388,178 @@ struct MagCalView: View {
         }
     }
 
-    /// One-shot success: FC just persisted + applied the offset.
+    /// #206 — between Accept and final NVS persist.  The FC has programmed
+    /// the new offsets but is sampling for ~5 s to verify the corrected
+    /// |B| stays in band.  Show live |B|, a tumbling-progress bar, and
+    /// the "rotate slowly" prompt.  No buttons during this window — the
+    /// FC drives the transition to APPLIED (success) or back to REVIEW
+    /// (fail with VERIFY_FAILED reject code).
+    private var verifyingSection: some View {
+        Group {
+            if let s = status {
+                // Pre-compute gate evaluation so the UI can colour rows
+                // and the Done button consistently.
+                let minB = verifyMinUT
+                let maxB = verifyMaxUT
+                let spread = (minB != nil && maxB != nil) ? (maxB! - minB!) : 0
+                let inBand   = (minB ?? 0) >= MagCalConstants.verifyMinUT &&
+                               (maxB ?? 0) <= MagCalConstants.verifyMaxUT
+                let tightEnough = spread <= MagCalConstants.verifyRangeUT
+                let coverageMet = s.coverageBins >= MagCalConstants.verifyMinCoverageBins
+                let samplesMet  = s.sampleCount >= MagCalConstants.verifyMinSamples
+                let allGood = (minB != nil) && inBand && tightEnough && coverageMet && samplesMet
+
+                Section {
+                    VStack(spacing: 14) {
+                        Image(systemName: allGood ? "checkmark.shield.fill" : "checkmark.shield")
+                            .font(.system(size: 40))
+                            .foregroundColor(allGood ? .green : .blue)
+                        Text("Verifying calibration")
+                            .font(.headline)
+                        Text("Slowly rotate the rocket through every orientation — nose up, nose down, sides, and corners. Watch the live |B| stay between 20 and 70 µT with a tight spread. Tap Done when you've covered enough orientations.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                }
+                Section(header: Text("Live |B|"),
+                        footer: Text("Min and max are tracked from the moment Verify started (or the last Retry). The fit passes when all rows below are green.")) {
+                    HStack {
+                        Text("Current")
+                        Spacer()
+                        Text(String(format: "%.1f µT", s.instantaneousFieldUT))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    HStack {
+                        Text("Min observed")
+                        Spacer()
+                        Text(minB.map { String(format: "%.1f µT", $0) } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(minB == nil ? .secondary :
+                                ((minB ?? 0) >= MagCalConstants.verifyMinUT ? .green : .red))
+                    }
+                    HStack {
+                        Text("Max observed")
+                        Spacer()
+                        Text(maxB.map { String(format: "%.1f µT", $0) } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(maxB == nil ? .secondary :
+                                ((maxB ?? 0) <= MagCalConstants.verifyMaxUT ? .green : .red))
+                    }
+                    HStack {
+                        Text("Spread")
+                        Spacer()
+                        Text(minB == nil ? "—" : String(format: "%.1f µT", spread))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(minB == nil ? .secondary :
+                                (tightEnough ? .green : .red))
+                    }
+                }
+                Section(header: Text("Verify progress")) {
+                    HStack {
+                        Text("Rotation coverage")
+                        Spacer()
+                        Text("\(s.coverageBins) / 32 wedges (need ≥ \(MagCalConstants.verifyMinCoverageBins))")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(coverageMet ? .green : .secondary)
+                    }
+                    HStack {
+                        Text("Samples")
+                        Spacer()
+                        Text("\(s.sampleCount) / \(MagCalConstants.verifyMinSamples)+ needed")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(samplesMet ? .green : .secondary)
+                    }
+                }
+                verifyButtonsSection(allGood: allGood)
+                Section(header: Text("What this does")) {
+                    Text("The fit's offset was just programmed into the magnetometer chip. The chip is now subtracting it from every raw sample, which should leave just Earth's magnetic field (~25–65 µT depending on latitude) regardless of which way the rocket is pointed.\n\nVerification confirms that's actually happening: as you rotate, the corrected |B| should stay roughly constant and inside Earth's band. If it wanders out of band or swings widely, the cal absorbed too much (or too little) and likely shouldn't be saved.\n\nAccept and Save commits the cal to flight-computer memory; Retry verification clears the min/max if you want to start fresh without redoing the whole tumble; Re-run calibration throws the proposed fit out and goes back to sampling; Abort restores the previously-saved cal.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Verifying-screen action buttons.  Extracted to keep the SwiftUI
+    /// ViewBuilder in verifyingSection from blowing past the type-checker's
+    /// expression complexity budget.
+    @ViewBuilder
+    private func verifyButtonsSection(allGood: Bool) -> some View {
+        Section(footer: Text(allGood
+            ? "All checks green — tap Accept and Save to commit the cal to flight-computer memory."
+            : "Keep rotating until every row above is green. You can still Accept and Save if you want — the gate readouts are advisory, not blocking.")) {
+            // Primary action — Accept and Save.  Always tappable; copy
+            // and colour change with gate state.  iOS dispatches either
+            // VERIFY_DONE (firmware re-checks gates, with the same data
+            // so always passes when iOS sees green) or FORCE_APPLY
+            // (firmware skips gate check).
+            Button {
+                if allGood {
+                    device.sendMagCalVerifyDone()
+                } else {
+                    device.sendMagCalForceApply()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: allGood ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    Text(allGood ? "Accept and Save" : "Save anyway")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .foregroundColor(.white)
+            }
+            .listRowBackground(allGood ? Color.green : Color.orange)
+
+            // Clear iOS + FC verify accumulators; stay in VERIFYING so
+            // the proposed cal stays programmed on the chip and the
+            // user can rotate again from a clean slate.
+            Button {
+                verifyMinUT = nil
+                verifyMaxUT = nil
+                device.sendMagCalVerifyReset()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.counterclockwise")
+                    Text("Retry verification")
+                    Spacer()
+                }
+            }
+            // Throw away the proposed cal and go back to SAMPLING for
+            // a fresh tumble — useful when verify exposes a clearly-bad
+            // fit and the user wants to redo the whole thing.
+            Button {
+                verifyMinUT = nil
+                verifyMaxUT = nil
+                device.sendMagCalRetry()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                    Text("Re-run calibration")
+                    Spacer()
+                }
+            }
+            Button(role: .destructive) {
+                device.sendMagCalAbort()
+                dismiss()
+            } label: {
+                HStack {
+                    Image(systemName: "xmark.circle")
+                    Text("Abort (restore prior cal)")
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    /// One-shot success: FC just persisted + applied the offset.  No
+    /// inline action button — the toolbar Done is the only exit, per
+    /// user feedback ("leave it to the user to select the done option
+    /// on the top").  Banner stays visible until the user dismisses.
     private var appliedSection: some View {
         Group {
             if let s = status {
@@ -325,34 +568,22 @@ struct MagCalView: View {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 48))
                             .foregroundColor(.green)
-                        Text("Calibration applied")
-                            .font(.headline)
-                        Text(String(format: "Earth field locked at %.1f µT, residual %.1f µT.",
+                        Text("Saved")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        Text(String(format: "Calibration written to flight-computer memory.\nEarth field locked at %.1f µT, residual %.1f µT.",
                                     s.fieldR_uT, s.residualUT))
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                }
-                Section {
-                    Button {
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text("Done")
-                                .fontWeight(.semibold)
-                            Spacer()
-                        }
-                        .foregroundColor(.white)
-                    }
-                    .listRowBackground(Color.blue)
+                    .padding(.vertical, 16)
                 }
             }
         }
     }
+
 }
 
 // MARK: - Sampling Hero

@@ -8,6 +8,10 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#ifdef ESP_PLATFORM
+#include <esp_task_wdt.h>
+#endif
+
 static const char* SC_TAG = "SENSORS";
 
 // IDF-native timing helpers — replace the Arduino-shim millis()/micros()
@@ -1003,6 +1007,20 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
         }
 
         delay_ms(10);
+
+        // 1000 samples × 10 ms = ~10 s of sleep inside a single loop_fc()
+        // iteration.  The flight task is subscribed to the task WDT (5 s
+        // timeout, see main.cpp esp_task_wdt_reconfigure) and only feeds
+        // it at the top of loop_fc(), so without an explicit reset here
+        // the WDT trips twice during cal and dumps a CPU 1 backtrace
+        // storm — even though the cal itself completes correctly.  Guard
+        // on subscription so this is a no-op on host/sim builds where
+        // the task isn't registered with the WDT.
+#ifdef ESP_PLATFORM
+        if (esp_task_wdt_status(nullptr) == ESP_OK) {
+            esp_task_wdt_reset();
+        }
+#endif
     }
 
     // --- Gyro offsets ---

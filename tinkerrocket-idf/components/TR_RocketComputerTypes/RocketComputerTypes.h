@@ -759,11 +759,19 @@ typedef struct
 //                    iOS shows "Accept".  Non-zero codes describe why iOS
 //                    should show "Retry".
 enum MagCalSubType : uint8_t {
-    MAG_CAL_SUB_IDLE     = 0,
-    MAG_CAL_SUB_SAMPLING = 1,
-    MAG_CAL_SUB_REVIEW   = 2,
-    MAG_CAL_SUB_APPLIED  = 3,
-    MAG_CAL_SUB_ABORTED  = 4
+    MAG_CAL_SUB_IDLE      = 0,
+    MAG_CAL_SUB_SAMPLING  = 1,
+    MAG_CAL_SUB_REVIEW    = 2,
+    MAG_CAL_SUB_APPLIED   = 3,
+    MAG_CAL_SUB_ABORTED   = 4,
+    // #206 post-accept verification pass — the chip's OFFSET regs are
+    // programmed with the newly-accepted cal but NVS is not yet written.
+    // The FC samples mag for ~5 s while the user rotates the rocket, and
+    // confirms the corrected |B| stays inside a tight band before
+    // persisting.  On verify-fail the OFFSET regs are restored and the
+    // calibrator falls back to REVIEW with MAG_CAL_REJECT_VERIFY_FAILED
+    // so the user can retry.
+    MAG_CAL_SUB_VERIFYING = 5
 };
 
 enum MagCalRejectCode : uint8_t {
@@ -771,14 +779,28 @@ enum MagCalRejectCode : uint8_t {
     MAG_CAL_REJECT_R_TOO_LOW      = 1,  // fitted R < 20 µT
     MAG_CAL_REJECT_R_TOO_HIGH     = 2,  // fitted R > 80 µT
     MAG_CAL_REJECT_HIGH_RESIDUAL  = 3,  // RMS residual > threshold (poor sphere fit)
-    MAG_CAL_REJECT_LOW_COVERAGE   = 4   // < min populated wedges
+    MAG_CAL_REJECT_LOW_COVERAGE   = 4,  // < min populated wedges
+    // #206: post-accept verification pass failed.  Originally a single
+    // code; split into sub-codes so the iOS UI can show the actual gate
+    // that failed (the previous "Verify failed — corrected |B| reached
+    // X µT" message was misleading when the gate that failed was
+    // coverage or sample-count rather than |B| magnitude — observed by
+    // user 2026-05-26).  In all cases inst_field_uT_x10 in the same
+    // frame carries the worst observed |B| (most-extreme for the
+    // _TOO_HIGH/LOW/RANGE cases, last-observed for the COUNT cases).
+    MAG_CAL_REJECT_VERIFY_FAILED          = 5,  // legacy / kept for back-compat
+    MAG_CAL_REJECT_VERIFY_TOO_HIGH        = 6,  // verify |B| max > VERIFY_MAX_UT
+    MAG_CAL_REJECT_VERIFY_TOO_LOW         = 7,  // verify |B| min < VERIFY_MIN_UT
+    MAG_CAL_REJECT_VERIFY_RANGE_WIDE      = 8,  // max - min > VERIFY_RANGE_UT
+    MAG_CAL_REJECT_VERIFY_LOW_COVERAGE    = 9,  // < VERIFY_MIN_COVERAGE_BINS wedges during verify
+    MAG_CAL_REJECT_VERIFY_FEW_SAMPLES     = 10  // < VERIFY_MIN_SAMPLES samples accumulated
 };
 
 typedef struct __attribute__((packed))
 {
     uint32_t time_us;
     uint8_t  sub_type;            // MagCalSubType
-    uint8_t  coverage_bins;       // 0..26 (3³ - 1 = 26 directional wedges populated; == popcount(coverage_mask))
+    uint8_t  coverage_bins;       // 0..32 populated wedges (truncated-icosahedron tessellation, see #148; == popcount(coverage_mask))
     uint16_t sample_count;        // total samples accumulated this run
     uint16_t inst_field_uT_x10;   // |B| of the most recent sample × 10
     int16_t  offset_x;            // fitted hard-iron offset (raw LSB units), or 0 if no fit
@@ -788,12 +810,14 @@ typedef struct __attribute__((packed))
     uint16_t residual_uT_x10;     // fit RMS residual × 10
     uint8_t  reject_code;         // MagCalRejectCode (only valid in REVIEW)
     uint8_t  _pad;
-    // Bitmap of populated 3³ wedges (bit i = wedge i, see directionWedge()
-    // in TR_MagCalibrator).  Drives the iOS UI's per-direction progress
-    // grid and the gated orientation-prompt cycle (issue #96 follow-up
-    // — don't advance the prompt until the current target wedge lights
-    // up).  Bit 13 = the (0,0,0) center cell is unreachable for a unit
-    // vector so never sets; the remaining 26 bits map 1:1 to wedges.
+    // Bitmap of populated wedges (bit i = wedge i, see directionWedge()
+    // in TR_MagCalibrator).  Drives the iOS UI's 3D sphere visualization
+    // — cells fill with semi-transparent green as the rocket rotates
+    // through each orientation.  Bits 0–31 map 1:1 to the 32 cells of
+    // the truncated-icosahedron tessellation (12 pentagonal cells at
+    // icosahedron vertices, indices 0–11; 20 hexagonal cells at face
+    // centroids, indices 12–31).  See #148 for the switch from the
+    // older 3³-1 = 26 cube-aligned scheme.
     uint32_t coverage_mask;
     // Live raw mag vector (last sample), in IIS2MDC LSB units
     // (0.15 µT/LSB).  Lets iOS render real-time direction feedback so
@@ -803,9 +827,19 @@ typedef struct __attribute__((packed))
     int16_t  inst_x_lsb;
     int16_t  inst_y_lsb;
     int16_t  inst_z_lsb;
+    // #148 — partial-coverage mask.  Bit i is set when wedge i has
+    // accumulated 1..(MAG_CAL_MIN_SAMPLES_PER_WEDGE - 1) samples and
+    // NOT yet been promoted into coverage_mask.  Lets iOS render a
+    // 3-state cell: untouched / in-progress (this mask) / captured
+    // (coverage_mask).  coverage_mask and partial_mask are disjoint
+    // — a wedge graduates from partial → captured once enough samples
+    // accumulate.  Wire-format extension (frame goes 32 → 36 bytes);
+    // old iOS builds that decode the 32-byte tail still work — they
+    // just don't get the new field and stay on 2-state visualisation.
+    uint32_t partial_mask;
 } MagCalStatusData;
-static_assert(sizeof(MagCalStatusData) == 32,
-              "MagCalStatusData must be 32 bytes");
+static_assert(sizeof(MagCalStatusData) == 36,
+              "MagCalStatusData must be 36 bytes");
 
 // 14-byte payload for MAG_CAL_APPLY_MSG (issue #132).  Carries the hard-iron
 // offsets in IIS2MDC LSB units plus the R / residual diagnostics so NVS state
@@ -871,10 +905,12 @@ static_assert(sizeof(MagCalMMCOffset) == 12,
 static constexpr float MAG_CAL_R_MIN_UT = 20.0f;
 static constexpr float MAG_CAL_R_MAX_UT = 80.0f;
 
-// Coverage gate — minimum populated wedges (out of 26) for the fit to be
-// considered well-conditioned.  A perfect tumble hits all 26; insisting on
-// 26 is fragile, so we accept ≥ 18 (8 octants + ~10 of the edges/faces).
-static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 18;
+// Coverage gate — minimum populated wedges (out of 32) for the fit to be
+// considered well-conditioned.  A perfect tumble hits all 32; insisting on
+// 32 is fragile, so we accept ≥ 22 (~70% — same proportion the old
+// 18/26 ≈ 69% bar used in the cube-aligned scheme).  See #148 for the
+// switch from 3³-1 = 26 cube wedges to a 32-cell truncated icosahedron.
+static constexpr uint8_t MAG_CAL_MIN_COVERAGE_BINS = 22;
 
 // Residual gate — RMS deviation from the fitted sphere, in µT.  A clean
 // sphere on the bench should sit well under 5 µT; bigger means soft-iron
@@ -891,9 +927,65 @@ static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 2700;
 // samples (~5 s at 100 Hz)" guidance.
 static constexpr uint16_t MAG_CAL_MIN_SAMPLES = 500;
 
+// #148 — per-wedge sample threshold for a wedge to count as "captured"
+// in coverage_mask.  Before this, coverage_mask's bit was set on the
+// FIRST sample landing in a wedge, which meant the iOS sphere
+// visualisation cleared a cell after a fleeting visit — misleading
+// because the fit's linear-LSQ needs multiple samples per orientation
+// to be well-conditioned.  With this threshold, coverage_mask bits
+// only set once a wedge has accumulated enough samples to actually
+// contribute to a stable fit.  Wedges with 1..(threshold-1) samples
+// are reported in MagCalStatusData.partial_mask so iOS can render
+// an intermediate "in-progress" colour.  20 samples ≈ 200 ms at the
+// IIS2MDC's 100 Hz ODR — a brief deliberate pause, not a fleeting
+// glance, and 22 cells × 20 samples = 440 ≈ MAG_CAL_MIN_SAMPLES so
+// both gates align.
+static constexpr uint16_t MAG_CAL_MIN_SAMPLES_PER_WEDGE = 20;
+
 // NVS schema version for the mag_cal namespace.  Bump if the persisted
 // field set changes meaningfully so old persisted state is ignored.
 static constexpr uint8_t MAG_CAL_NVS_SCHEMA_VERSION = 1;
+
+// --- #206 post-accept verification thresholds ---
+//
+// After accept, the chip's OFFSET regs are programmed and we measure
+// |B| of the corrected stream over a short rotation.  The fit's R is
+// already inside [20, 80] µT thanks to MAG_CAL_R_MIN/MAX_UT; here we
+// insist the rotated |B| also lands inside a *tighter* band — if the
+// fitted center was wrong (good fit, wrong center) the rotation will
+// expose it by sweeping |B| outside this band even though the fit's
+// own R sat in the wider band.
+//
+// 20-70 µT is the sustainable band: WMM tops out around 67 µT, and 70
+// gives a couple µT of room.  Going below 20 means we landed in a hard
+// magnetic null — should be physically impossible at Earth's surface,
+// so it indicates the cal is over-subtracting.
+static constexpr float MAG_CAL_VERIFY_MIN_UT = 20.0f;
+static constexpr float MAG_CAL_VERIFY_MAX_UT = 70.0f;
+
+// Max acceptable |B| spread (max - min) across the verify rotation.
+// A perfectly-calibrated mag tracing Earth's field gives near-constant
+// |B| as the rocket rotates — sub-µT in theory, a few µT after sensor
+// noise and small soft-iron.  25 µT leaves headroom for tilt-coupling
+// from imperfect axis alignment without letting a 30-µT residual hard
+// iron sneak through.
+static constexpr float MAG_CAL_VERIFY_RANGE_UT = 25.0f;
+
+// Minimum accel-wedge coverage during verification.  The user should
+// rotate the rocket through enough orientations that a residual
+// hard-iron offset becomes visible — without rotation the |B|
+// trivially stays in band even with a wrong center.  Tracked via the
+// existing per-accel-wedge mechanism (see TR_MagCalibrator).  Bumped
+// from 6 (out of 26 cube wedges) to 8 (out of 32 geodesic cells) to
+// keep the proportion roughly constant after the #148 tessellation
+// switch.
+static constexpr uint8_t MAG_CAL_VERIFY_MIN_COVERAGE_BINS = 8;
+
+// Minimum samples accumulated in VERIFYING before evaluateVerify() is
+// allowed to declare pass.  At the new-PCB IIS2MDC's ~100 Hz output rate
+// this hits in ~1 s — the FC main loop drives a longer duration target
+// (~5 s) but we cap the floor here so a slow ODR can't trip the gate.
+static constexpr uint16_t MAG_CAL_VERIFY_MIN_SAMPLES = 100;
 
 // --- Non sensor data ---
 typedef struct __attribute__((packed))
@@ -1285,10 +1377,26 @@ static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the l
 // FC→OC status message that carries either live progress or the final fit.
 static constexpr uint8_t MAG_CAL_START        = 0xD4;  // OC→FC: enter MAG_CALIBRATION + begin sampling
 static constexpr uint8_t MAG_CAL_ABORT        = 0xD5;  // OC→FC: drop sampling, return to READY
-static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: persist current fit, apply offsets, return to READY
+static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: program new offsets, enter VERIFYING
 static constexpr uint8_t MAG_CAL_RETRY        = 0xD7;  // OC→FC: discard fit, restart sampling
 static constexpr uint8_t MAG_CAL_STATUS_MSG   = 0xD8;  // FC→OC: live progress / final result (MagCalStatusData)
 static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fit on current buffer, transition to REVIEW
+// User-driven verify (replaces the original 5 s auto-timeout) — see #148
+// for the UX rationale.  After ACCEPT puts the FC into VERIFYING, the
+// user rotates the rocket and watches a live min/max readout on iOS;
+// they tap "Done" when satisfied (sends DONE) or "Retry verification"
+// to clear the min/max accumulators and continue (sends RESET).  A 60 s
+// safety timeout is still armed on the FC in case the user just walks
+// away — without it the chip could sit with unverified offsets forever.
+static constexpr uint8_t MAG_CAL_VERIFY_DONE  = 0xDD;  // OC→FC: evaluate verify gates now; pass→APPLIED, fail→REVIEW
+static constexpr uint8_t MAG_CAL_VERIFY_RESET = 0xDE;  // OC→FC: clear verify min/max/coverage, stay in VERIFYING
+// #148 — user-override save.  The iOS Verifying screen evaluates the
+// gates locally (it has the same |B| stream as the FC).  When the user
+// taps Save, iOS sends either VERIFY_DONE (when all gates green —
+// firmware re-checks for safety) or FORCE_APPLY (when some gates red —
+// user explicitly accepts a borderline cal).  FORCE_APPLY skips the
+// gate evaluation entirely and writes NVS unconditionally.
+static constexpr uint8_t MAG_CAL_FORCE_APPLY  = 0xDF;
 
 // --- App-driven mag cal apply / read (issue #132 — rocket profiles) ---
 // The iOS app holds source-of-truth for cal as part of a rocket profile.

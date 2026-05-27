@@ -4929,6 +4929,24 @@ static void loop_oc()
             setPendingCommand(MAG_CAL_COMPUTE_FIT);
             ESP_LOGI("BLE", "Mag cal COMPUTE_FIT -> FlightComputer");
         }
+        // #148 — user-driven verify completion / reset.
+        else if (ble_cmd == 56)
+        {
+            setPendingCommand(MAG_CAL_VERIFY_DONE);
+            ESP_LOGI("BLE", "Mag cal VERIFY_DONE -> FlightComputer");
+        }
+        else if (ble_cmd == 57)
+        {
+            setPendingCommand(MAG_CAL_VERIFY_RESET);
+            ESP_LOGI("BLE", "Mag cal VERIFY_RESET -> FlightComputer");
+        }
+        // #148 — user-override save (user explicitly accepting a
+        // borderline cal where the iOS-side gates are partially red).
+        else if (ble_cmd == 58)
+        {
+            setPendingCommand(MAG_CAL_FORCE_APPLY);
+            ESP_LOGI("BLE", "Mag cal FORCE_APPLY -> FlightComputer");
+        }
         // Issue #132 — app pushes a saved cal back into FC NVS as part of the
         // rocket-profile auto-sync on connect.  14-byte payload mirrors the
         // values cmd 52 would have persisted after a fresh sphere fit.

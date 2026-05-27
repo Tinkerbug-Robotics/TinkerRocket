@@ -42,8 +42,15 @@ public:
         IDLE      = 0,   // not running
         SAMPLING  = 1,   // accumulating samples; waiting for cap or user-stop
         REVIEW    = 2,   // sample cap hit, fit computed, awaiting user accept/retry/abort
-        APPLIED   = 3,   // user accepted; one-shot terminal so the FC can latch + transition
-        ABORTED   = 4    // user aborted or fit rejected during sampling-end → ready for IDLE
+        APPLIED   = 3,   // user accepted + post-accept verify passed; one-shot terminal
+        ABORTED   = 4,   // user aborted or fit rejected during sampling-end → ready for IDLE
+        // #206: post-accept verification pass.  Entered from REVIEW via
+        // accept() — the FC has just programmed the chip's OFFSET regs
+        // with the fit but hasn't persisted NVS yet.  Mag samples landing
+        // in this state update min/max |B| accumulators; the FC drives a
+        // ~5 s window and then calls evaluateVerify() to commit (→ APPLIED
+        // with NVS write) or reject (→ REVIEW + MAG_CAL_REJECT_VERIFY_FAILED).
+        VERIFYING = 5
     };
 
     MagCalibrator();
@@ -60,11 +67,41 @@ public:
     // samples and goes back to SAMPLING.
     void retry();
 
-    // User-accepted fit.  Returns false (and stays in REVIEW) if no fit is
-    // currently available (e.g. called before sample cap).  On success
-    // transitions to APPLIED; the caller should pull the fit via
-    // getResult() and then call clear() before the next start().
+    // User-accepted fit.  Returns false (and stays in REVIEW) if no fit
+    // is currently available (e.g. called before sample cap).  On success
+    // transitions to VERIFYING (issue #206) — the caller is expected to
+    // program the chip's OFFSET regs, feed verify samples via addSample,
+    // and after a target dwell call evaluateVerify() to commit or reject.
+    // The caller should pull the fit via getResult() before changing
+    // OFFSET regs; the offsets remain valid throughout VERIFYING.
     bool accept();
+
+    // #206: Evaluate the post-accept rotation.  Call after at least
+    // MAG_CAL_VERIFY_MIN_SAMPLES samples have flowed through addSample
+    // and the user has signalled they're done rotating.  Returns true
+    // on pass — state → APPLIED and the caller persists NVS.  Returns
+    // false on fail — state → REVIEW with one of the verify reject
+    // sub-codes set, and the caller is responsible for zeroing the
+    // chip's OFFSET regs (or restoring prior on a full abort).  No-op
+    // outside VERIFYING; returns false in that case.  Pulls the
+    // observed |B| worst-case into worst_uT for the rejected-frame
+    // telemetry so iOS can show the user what went wrong.
+    bool evaluateVerify(float& worst_uT);
+
+    // #148: Clear the verify min/max/coverage accumulators without
+    // leaving VERIFYING.  Lets the user tap "Retry verification" and
+    // start a fresh rotation pass without going all the way back to
+    // SAMPLING (which would invalidate the proposed fit).  No-op
+    // outside VERIFYING.
+    void resetVerify();
+
+    // #148: User-override save path — force the calibrator into APPLIED
+    // regardless of which transient state it was in (REVIEW or
+    // VERIFYING).  Used by the FC's MAG_CAL_FORCE_APPLY handler after
+    // it writes NVS, so the next status frame published reports
+    // sub_type=APPLIED and iOS shows the "Saved" success banner.  No-op
+    // unless we're in a session state with a valid fit.
+    void markApplied();
 
     // Reset to IDLE.  Call after consuming an APPLIED or ABORTED state.
     void clear();
@@ -122,14 +159,20 @@ private:
     // Per-accel-wedge sample bucketing.  The flat ring buffer (older
     // design) lost diverse samples when the user lingered in one
     // orientation — newest samples blindly overwrote everything.  Now
-    // each of the 27 (3³) accel-direction wedges has its own
-    // SAMPLES_PER_WEDGE ring buffer, so samples from one orientation
-    // can only displace other samples from the SAME orientation.
-    // Memory: 27 × 100 × 3 × int16 ≈ 16 KiB, comfortably small on the
-    // ESP32-P4.  Wedge 13 (the all-centre cell) is unreachable for a
-    // unit accel vector so its slots stay unused — kept in the array
-    // for index arithmetic simplicity.
-    static constexpr uint8_t  NUM_ACCEL_WEDGES   = 27;
+    // each of the 32 (truncated-icosahedron / soccer-ball) accel
+    // wedges has its own SAMPLES_PER_WEDGE ring buffer, so samples
+    // from one orientation can only displace other samples from the
+    // SAME orientation.  Memory: 32 × 100 × 3 × int16 ≈ 19 KiB,
+    // comfortably small on the ESP32-P4.
+    //
+    // Tessellation (#148): 12 icosahedron vertices (pentagonal cell
+    // centers) + 20 face centroids (hexagonal cell centers) on the
+    // unit sphere → 32 Voronoi cells, all within ±5% of mean area.
+    // Replaces the legacy 3³-1 = 26 cube-aligned wedges, which had
+    // face-cells ~6× smaller than corner-cells and looked uneven in
+    // the iOS sphere visualization.  See directionWedge() impl for
+    // the cell-center table.
+    static constexpr uint8_t  NUM_ACCEL_WEDGES   = 32;
     static constexpr uint8_t  SAMPLES_PER_WEDGE  = 100;
     static constexpr uint16_t MAX_TOTAL_SAMPLES  =
         (uint16_t)NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE;
@@ -151,9 +194,15 @@ private:
     int16_t accel_x_, accel_y_, accel_z_;
     bool    accel_valid_;
 
-    // 3³ - 1 = 26 wedges (the all-center cell is unreachable for unit
-    // vectors).  Bit i set means wedge i has at least one sample.
+    // Bitmaps of the 32 truncated-icosahedron cells (#148).  A wedge
+    // is "captured" (counted by the fit's coverage gate, visually
+    // cleared on iOS) once it accumulates >= MAG_CAL_MIN_SAMPLES_PER_WEDGE
+    // samples — the linear-LSQ needs multiple samples per orientation
+    // to be well-conditioned.  Wedges with fewer samples sit in
+    // partial_mask so iOS can render them as in-progress instead of
+    // untouched.  The two masks are disjoint by construction.
     uint32_t coverage_mask_;
+    uint32_t partial_mask_;
 
     // Most recent sample (for inst_field_uT progress reporting).
     int16_t last_x_, last_y_, last_z_;
@@ -168,6 +217,30 @@ private:
     bool    fit_valid_;
 
     State state_;
+
+    // #206 post-accept verification accumulators.  Reset on entering
+    // VERIFYING via accept(); fed by addSample() while in VERIFYING.
+    // verify_min_uT_ / verify_max_uT_ are tracked in µT (post-offset
+    // chip subtract is already in raw counts, so the verify path
+    // multiplies by IIS2MDC_LSB_TO_uT once per sample).
+    // verify_coverage_mask_ is a parallel mask to coverage_mask_ that
+    // only sees post-accept rotation — required to enforce that the
+    // user actually rotated the rocket during verify and didn't just
+    // hold it still.  verify_n_samples_ counts samples that arrived
+    // while VERIFYING (not the sphere-fit buffer).
+    float    verify_min_uT_, verify_max_uT_;
+    uint16_t verify_n_samples_;
+    uint32_t verify_coverage_mask_;
+
+    // #148 — after accept() programs the chip's IIS2MDC OFFSET regs,
+    // the chip's output reg may still hold the pre-OFFSET measurement
+    // from the SAMPLING phase (the new offsets only apply to the next
+    // ODR cycle, ~10 ms later).  Without discarding those first few
+    // reads, the pre-OFFSET ~1.7 mT raw |B| leaks into the iOS
+    // verify-max accumulator and trips the TOO_HIGH / RANGE_WIDE
+    // gates.  Discard a few samples to be safely past the chip's
+    // first refresh; at 100 Hz ODR each sample is 10 ms so 3 is ~30 ms.
+    uint8_t  verify_skip_remaining_;
 
     // Map a unit-vector direction to a wedge index 0..25.  Returns
     // 26 (= invalid) if the input is the zero vector.

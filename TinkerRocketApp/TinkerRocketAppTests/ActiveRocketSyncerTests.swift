@@ -108,7 +108,7 @@ final class ActiveRocketSyncerTests: XCTestCase {
             subType: .applied, coverageBins: 26, sampleCount: 1000,
             instantaneousFieldUT: 48, offsetX: -4, offsetY: 5, offsetZ: -6,
             fieldR_uT: 49.5, residualUT: 1.2, rejectCode: .ok, coverageMask: 0,
-            liveX_uT: 0, liveY_uT: 0, liveZ_uT: 0)
+            liveX_uT: 0, liveY_uT: 0, liveZ_uT: 0, partialMask: 0)
         let data = MagCalData(status: status, unitID: "BOARD9")
         XCTAssertEqual(data.offsetX, -4)
         XCTAssertEqual(data.offsetY, 5)

@@ -240,3 +240,17 @@ target_compile_definitions(test_tr_flightlog_wire_format PRIVATE
 )
 target_link_libraries(test_tr_flightlog_wire_format GTest::gtest_main)
 gtest_discover_tests(test_tr_flightlog_wire_format)
+
+# ---------- test_mag_calibrator ----------
+# Issue #206 — exercises the post-accept verification state machine
+# (REVIEW → VERIFYING → APPLIED on pass, → REVIEW + reject_code on fail).
+add_executable(test_mag_calibrator test_mag_calibrator.cpp
+    ${LIB_DIR}/TR_MagCalibrator/TR_MagCalibrator.cpp
+)
+target_include_directories(test_mag_calibrator PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_MagCalibrator
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_mag_calibrator GTest::gtest_main)
+gtest_discover_tests(test_mag_calibrator)

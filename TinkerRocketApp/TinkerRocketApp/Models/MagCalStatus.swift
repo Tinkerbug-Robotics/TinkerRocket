@@ -17,19 +17,37 @@
 import Foundation
 
 enum MagCalSubType: UInt8 {
-    case idle     = 0
-    case sampling = 1
-    case review   = 2
-    case applied  = 3
-    case aborted  = 4
+    case idle      = 0
+    case sampling  = 1
+    case review    = 2
+    case applied   = 3
+    case aborted   = 4
+    // #206 — between Accept and final NVS persist.  The chip's OFFSET
+    // regs are already programmed with the new fit and the FC is
+    // sampling for ~5 s while the user rotates the rocket, to verify
+    // the corrected |B| stays in a tight band.  iOS shows a
+    // "Verifying… rotate slowly" screen with the live |B|.
+    case verifying = 5
 }
 
 enum MagCalRejectCode: UInt8 {
-    case ok               = 0
-    case rTooLow          = 1   // fitted R < 20 µT
-    case rTooHigh         = 2   // fitted R > 80 µT
-    case highResidual     = 3   // RMS residual above threshold (poor sphere fit)
-    case lowCoverage      = 4   // < min populated wedges (insufficient tumble coverage)
+    case ok                       = 0
+    case rTooLow                  = 1   // fitted R < 20 µT
+    case rTooHigh                 = 2   // fitted R > 80 µT
+    case highResidual             = 3   // RMS residual above threshold (poor sphere fit)
+    case lowCoverage              = 4   // < min populated wedges (insufficient tumble coverage)
+    // #206 — post-accept verification pass failed.  Originally a single
+    // verifyFailed code, but the iOS message ("corrected |B| reached
+    // X µT") was misleading when the gate that actually failed was
+    // coverage or sample-count rather than |B| magnitude.  Split into
+    // sub-codes so the UI can be specific.  In all cases the frame's
+    // instantaneousFieldUT carries the worst observed |B|.
+    case verifyFailed             = 5   // legacy / kept for back-compat
+    case verifyTooHigh            = 6
+    case verifyTooLow             = 7
+    case verifyRangeWide          = 8
+    case verifyLowCoverage        = 9
+    case verifyFewSamples         = 10
 }
 
 struct MagCalStatus: Equatable {
@@ -87,14 +105,43 @@ struct MagCalStatus: Equatable {
     let liveY_uT: Float
     let liveZ_uT: Float
 
+    /// #148 partial-coverage mask — bit i set when wedge i has 1..(N-1)
+    /// samples and is not yet promoted into coverageMask.  Disjoint from
+    /// coverageMask.  Lets the iOS sphere viz render 3-state cells:
+    /// untouched / in-progress (this mask) / captured (coverageMask).
+    /// All zero on firmware builds that don't ship the 36-byte payload —
+    /// UI then falls back to 2-state (untouched / captured).
+    let partialMask: UInt32
+
     /// Convenience: human-readable explanation for a non-zero rejectCode.
+    /// Each verify-* sub-code names the specific gate that tripped so the
+    /// user knows whether to re-tumble, re-rotate, or move away from
+    /// interference.  instantaneousFieldUT carries the worst observed |B|.
     var rejectMessage: String {
         switch rejectCode {
-        case .ok:           return "Looks good"
-        case .rTooLow:      return "Field magnitude too low — interference?"
-        case .rTooHigh:     return "Field magnitude too high — magnet nearby?"
-        case .highResidual: return "Sphere fit poor — likely soft-iron distortion"
-        case .lowCoverage:  return "Insufficient orientation coverage — keep tumbling"
+        case .ok:            return "Looks good"
+        case .rTooLow:       return "Field magnitude too low — interference?"
+        case .rTooHigh:      return "Field magnitude too high — magnet nearby?"
+        case .highResidual:  return "Sphere fit poor — likely soft-iron distortion"
+        case .lowCoverage:   return "Insufficient orientation coverage — keep tumbling"
+        case .verifyTooHigh:
+            return String(format: "Verify failed — corrected |B| reached %.1f µT (above 70 µT cap). Try moving away from interference.",
+                          instantaneousFieldUT)
+        case .verifyTooLow:
+            return String(format: "Verify failed — corrected |B| dropped to %.1f µT (below 20 µT floor). Cal may be over-subtracting.",
+                          instantaneousFieldUT)
+        case .verifyRangeWide:
+            return String(format: "Verify failed — corrected |B| swung too widely (worst %.1f µT, spread > 25 µT). Hard-iron residual remained large.",
+                          instantaneousFieldUT)
+        case .verifyLowCoverage:
+            return "Verify failed — didn't rotate the rocket through enough orientations during the verify window.  Keep rotating, then tap Done."
+        case .verifyFewSamples:
+            return "Verify failed — not enough samples accumulated.  Verify longer next time."
+        case .verifyFailed:
+            // Legacy code path — kept for back-compat with older firmware
+            // builds that haven't migrated to the specific sub-codes.
+            return String(format: "Verify failed — corrected |B| reached %.1f µT.",
+                          instantaneousFieldUT)
         }
     }
 
@@ -146,10 +193,12 @@ struct MagCalStatus: Equatable {
         // bytes[21]      = _pad
         // bytes[22..25]  = uint32 coverage_mask  (new in 26-byte payload)
         // bytes[26..31]  = int16 inst_x/y/z LSB   (new in 32-byte payload)
+        // bytes[32..35]  = uint32 partial_mask   (new in 36-byte payload, #148)
         let coverageMask: UInt32 = (bytes.count >= 26) ? u32(22) : 0
         let liveX_lsb: Int16 = (bytes.count >= 32) ? i16(26) : 0
         let liveY_lsb: Int16 = (bytes.count >= 32) ? i16(28) : 0
         let liveZ_lsb: Int16 = (bytes.count >= 32) ? i16(30) : 0
+        let partialMask: UInt32 = (bytes.count >= 36) ? u32(32) : 0
 
         // IIS2MDC sensitivity is 0.15 µT/LSB (datasheet 9.13).  Mirrors
         // the firmware-side IIS2MDC_LSB_TO_uT constant.
@@ -172,7 +221,8 @@ struct MagCalStatus: Equatable {
             coverageMask: coverageMask,
             liveX_uT: Float(liveX_lsb) * LSB_TO_uT,
             liveY_uT: Float(liveY_lsb) * LSB_TO_uT,
-            liveZ_uT: Float(liveZ_lsb) * LSB_TO_uT
+            liveZ_uT: Float(liveZ_lsb) * LSB_TO_uT,
+            partialMask: partialMask
         )
     }
 }
@@ -282,13 +332,61 @@ extension MagCalStatus {
     func isAxisCovered(_ axis: MagCalAxis) -> Bool {
         return (coverageMask & (UInt32(1) << axis.wedgeBit)) != 0
     }
+
+    /// Magnitude of the fitted hard-iron offset vector, in µT.
+    /// (#207) Surfaced on the Review screen so the user can tell at a
+    /// glance whether the cal converged on a center close to the sensor
+    /// origin (good) or absorbed an external interferer (bad).
+    var centerMagnitudeUT: Float {
+        let x = Float(offsetX), y = Float(offsetY), z = Float(offsetZ)
+        // IIS2MDC: 0.15 µT/LSB.  Mirrors LSB_TO_uT in decode().
+        return 0.15 * (x*x + y*y + z*z).squareRoot()
+    }
+
+    /// |c| / R as a fraction in [0, ∞).  Ratios approaching 1 mean the
+    /// applied offset is the same magnitude as Earth's field — rotating
+    /// the rocket then sweeps |B| across roughly [R - |c|, R + |c|],
+    /// which can clip the EKF's [15, 80] µT mag input gate at the
+    /// extremes.  Zero when no fit has converged yet (R == 0).
+    var centerToRRatio: Float {
+        guard fieldR_uT > 0 else { return 0 }
+        return centerMagnitudeUT / fieldR_uT
+    }
+
+    /// UI severity bucket for the *absolute* center magnitude |c|.
+    /// Only flags an actual problem — a "large" bias in itself isn't
+    /// bad (the cal absorbs it), the only failure mode for |c| alone is
+    /// approaching the chip's ±4915 µT OFFSET register range, beyond
+    /// which the IIS2MDC can't fully subtract the bias.  Typical fresh
+    /// new-PCB IIS2MDC sits around 1.7 mT — well under 4500 µT, so the
+    /// row stays green.
+    enum CenterWarning {
+        case ok       // |c| < 4500 µT (chip can subtract it)
+        case high     // |c| ≥ 4500 µT (approaching chip OFFSET range)
+    }
+
+    var centerWarning: CenterWarning {
+        return centerMagnitudeUT >= 4500 ? .high : .ok
+    }
 }
 
 // Match firmware-side gates (RocketComputerTypes.h) so the UI doesn't
 // drift from the FC's accept/reject decision.  The FC is the source of
 // truth via rejectCode — these constants are just for the progress UI.
 enum MagCalConstants {
-    static let maxSamples: UInt16 = 2700   // 27 accel-wedges × 100 slots each
+    static let maxSamples: UInt16 = 3200   // 32 accel-wedges × 100 slots each (#148)
     static let minSamples: UInt16 = 500
-    static let minCoverageBins: UInt8 = 18
+    static let minCoverageBins: UInt8 = 22 // MAG_CAL_MIN_COVERAGE_BINS, #148 (22/32)
+
+    // #148 — verify-window gates.  Keep in sync with
+    // MAG_CAL_VERIFY_* in RocketComputerTypes.h.  iOS uses these to
+    // show real-time pass/fail feedback while the user rotates during
+    // verify — the firmware applies the same thresholds when the user
+    // taps Done (or the 60 s safety timeout fires).
+    static let verifyMinUT: Float        = 20.0
+    static let verifyMaxUT: Float        = 70.0
+    static let verifyRangeUT: Float      = 25.0
+    static let verifyMinCoverageBins: UInt8 = 8
+    static let verifyMinSamples: UInt16  = 100
 }
+

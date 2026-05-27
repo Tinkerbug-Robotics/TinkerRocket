@@ -110,6 +110,32 @@ static bool    mag_cal_status_dirty   = false;  // true → publish on next tick
 static int16_t pending_mag_cx = 0, pending_mag_cy = 0, pending_mag_cz = 0;
 static bool    pending_mag_apply = false;
 
+// Mag-cal session state.
+//
+// mag_cal_session_active: true between MAG_CAL_START and either a
+// successful verify-pass (= APPLIED, NVS written) or any abort path
+// (verify-fail-then-abort, plain abort, retry-back-to-sampling, etc).
+// Drives the prior-OFFSET cache lifetime: we snapshot the currently-
+// persisted offsets at session start so any abort restores them, and
+// zero the chip during the session so SAMPLING sees raw mag values
+// (otherwise a recalibration would fit the *residual* hard-iron, then
+// overwrite the prior full cal with that partial value and immediately
+// fail verification — observed by user 2026-05-26).
+//
+// mag_cal_verify_active: true between MAG_CAL_ACCEPT and the next
+// evaluateVerify() — drives the timer-based polling block.
+static int64_t mag_cal_verify_start_us = 0;
+static int16_t mag_cal_prior_cx = 0, mag_cal_prior_cy = 0, mag_cal_prior_cz = 0;
+static bool    mag_cal_session_active = false;
+static bool    mag_cal_verify_active  = false;
+// Safety timeout for the verify window — was originally a 5 s auto-
+// dispatch but #148 turned verify into a user-driven step (the iOS
+// "Done verifying" button sends MAG_CAL_VERIFY_DONE).  60 s is a
+// safety only: if the user walks away without tapping anything, the
+// FC eventually evaluates so the chip isn't left with unverified
+// offsets indefinitely.
+static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 60'000'000;
+
 // Gyro zero-rate bias restored from NVS (#132).  Applied to sensor_collector
 // after begin(), alongside the mag offsets, so a stored sensor cal survives
 // reboots without the app connected.
@@ -2392,6 +2418,83 @@ static void loop_fc()
         }
     }
 
+    // #206 — post-accept verify window.  Polls the calibrator's
+    // verify accumulators once the user-tap-Accept dwell has elapsed
+    // (MAG_CAL_VERIFY_DURATION_US).  On pass we persist NVS as the
+    // old single-step accept used to; on fail we restore the prior
+    // OFFSET regs and let the calibrator's own state machine flip
+    // back to REVIEW with reject_code = MAG_CAL_REJECT_VERIFY_FAILED
+    // so iOS surfaces the right error.
+    if (mag_cal_verify_active)
+    {
+        const int64_t now = esp_timer_get_time();
+        if ((now - mag_cal_verify_start_us) >= MAG_CAL_VERIFY_DURATION_US)
+        {
+            float worst_uT = 0.0f;
+            const bool pass = mag_calibrator.evaluateVerify(worst_uT);
+            mag_cal_verify_active = false;
+
+            if (pass)
+            {
+                // Calibrator is now APPLIED; pull final fit + persist.
+                int16_t cx, cy, cz;
+                float R_uT, res_uT;
+                uint8_t reject;
+                mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
+
+                prefs.begin("mag_cal", false);
+                prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+                prefs.putBool ("done",   true);
+                prefs.putShort("cx",     cx);
+                prefs.putShort("cy",     cy);
+                prefs.putShort("cz",     cz);
+                prefs.putFloat("R_uT",   R_uT);
+                prefs.putFloat("res_uT", res_uT);
+                prefs.putInt  ("mmc_cx", 0);
+                prefs.putInt  ("mmc_cy", 0);
+                prefs.putInt  ("mmc_cz", 0);
+                prefs.end();
+
+                ESP_LOGI(TAG, "[MAGCAL] verify PASS — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
+                         (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
+
+                mag_cal_session_active = false;
+                mag_cal_status_dirty = true;
+                rocket_state = READY;
+                // Don't clear() here — leave the calibrator in APPLIED so
+                // the next status frame published reports sub_type=APPLIED
+                // and iOS shows the success banner.  Otherwise clear()
+                // would flip state to IDLE before the publish loop runs,
+                // and iOS would land on the intro screen with no "Saved"
+                // feedback.  calibrator.start() on the next session
+                // resets all state cleanly.
+            }
+            else
+            {
+                // Calibrator already transitioned back to REVIEW with
+                // MAG_CAL_REJECT_VERIFY_FAILED set.  Zero the chip (NOT
+                // restore prior) so the user can immediately Retry into
+                // SAMPLING and see raw mag values.  If they Abort
+                // instead, the abort handler does the prior restore.
+                if (sensor_collector.isIIS2MDCActive())
+                {
+                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
+                    ESP_LOGW(TAG, "[MAGCAL] verify FAIL (worst=%.1fµT) — zeroed OFFSET %s; "
+                                  "user can Retry (raw sampling) or Abort (restore prior)",
+                             (double)worst_uT, ok ? "OK" : "FAIL");
+                }
+                // Stamp the worst observed |B| into the calibrator's
+                // inst_field slot via buildStatusFrame — already true
+                // because the calibrator captured last_x/y/z from the
+                // verify samples.  iOS displays inst_field_uT_x10
+                // alongside reject_code = VERIFY_FAILED.
+                mag_cal_status_dirty = true;
+                // Stay in MAG_CALIBRATION so iOS keeps the cal screen
+                // up; the user can tap Retry or Abort from REVIEW.
+            }
+        }
+    }
+
     // --- Flight logic update ---
     const uint32_t logic_now_us = time_us();
     if ((logic_now_us - last_flight_loop_update_time) >= flight_loop_period)
@@ -3071,31 +3174,84 @@ static void loop_fc()
                 publishSensorCalFromNVS();
             }
             // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
-            // Entry is gated to READY only.  All transitions produce one
-            // immediate status frame so the iOS UI updates without waiting
-            // for the 5 Hz cadence.
+            // Entry refused only from INFLIGHT (everything else is fair game).
+            // The current gate is wide because outdoor rockets enter PRELAUNCH
+            // quickly from GPS lock and would otherwise be locked out of cal —
+            // #216 tracks a proper CALIBRATING flight-mode that inhibits launch
+            // detection / pyro arming for the duration of an active cal session,
+            // which will let us narrow this gate back down safely.  All
+            // transitions produce one immediate status frame so the iOS UI
+            // updates without waiting for the 5 Hz cadence.
             else if (out_pending_command == MAG_CAL_START)
             {
-                if (rocket_state != READY)
+                if (rocket_state == INFLIGHT)
                 {
-                    ESP_LOGW(TAG, "[MAGCAL] start refused: state=%u (require READY)",
-                             (unsigned)rocket_state);
+                    ESP_LOGW(TAG, "[MAGCAL] start refused: INFLIGHT");
                 }
                 else
                 {
-                    ESP_LOGI(TAG, "[MAGCAL] start: entering MAG_CALIBRATION");
+                    // Cache the currently-persisted offsets so a session-level
+                    // abort (or verify-fail abort) can roll back to them.
+                    // Default to zero if no prior cal is saved.
+                    mag_cal_prior_cx = 0;
+                    mag_cal_prior_cy = 0;
+                    mag_cal_prior_cz = 0;
+                    prefs.begin("mag_cal", true);  // read-only
+                    if (prefs.isKey("ver")
+                        && prefs.getUChar("ver", 0) == MAG_CAL_NVS_SCHEMA_VERSION
+                        && prefs.getBool("done", false))
+                    {
+                        mag_cal_prior_cx = (int16_t)prefs.getShort("cx", 0);
+                        mag_cal_prior_cy = (int16_t)prefs.getShort("cy", 0);
+                        mag_cal_prior_cz = (int16_t)prefs.getShort("cz", 0);
+                    }
+                    prefs.end();
+
+                    // Zero the chip's OFFSET regs so SAMPLING sees raw mag
+                    // values.  Without this a recalibration fits the residual
+                    // hard-iron (post-prior-offset), then overwrites the prior
+                    // cal with that partial value and fails verification.
+                    if (sensor_collector.isIIS2MDCActive())
+                    {
+                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] start: zeroed IIS2MDC OFFSET %s  "
+                                      "prior=(%d,%d,%d)",
+                                 ok ? "OK" : "FAIL",
+                                 (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+                                 (int)mag_cal_prior_cz);
+                    }
+
+                    ESP_LOGI(TAG, "[MAGCAL] start: entering MAG_CALIBRATION (from state=%u)",
+                             (unsigned)rocket_state);
                     rocket_state = MAG_CALIBRATION;
                     mag_calibrator.start();
+                    mag_cal_session_active = true;
                     mag_cal_status_dirty = true;
                 }
             }
             else if (out_pending_command == MAG_CAL_ABORT)
             {
                 ESP_LOGI(TAG, "[MAGCAL] abort");
+                // Full session ends — restore the prior NVS offsets to the
+                // chip (regardless of which sub-state we're aborting from).
+                // Same code path for "abort during sampling", "abort during
+                // review", and "abort during verifying".
+                if (mag_cal_session_active && sensor_collector.isIIS2MDCActive())
+                {
+                    const bool ok = sensor_collector.setIIS2MDCHardIronOffset(
+                        mag_cal_prior_cx, mag_cal_prior_cy, mag_cal_prior_cz);
+                    ESP_LOGI(TAG, "[MAGCAL] abort — restored prior OFFSET (%d,%d,%d) %s",
+                             (int)mag_cal_prior_cx, (int)mag_cal_prior_cy,
+                             (int)mag_cal_prior_cz, ok ? "OK" : "FAIL");
+                }
+                mag_cal_session_active = false;
+                mag_cal_verify_active = false;
                 mag_calibrator.abort();
                 mag_cal_status_dirty = true;
                 if (rocket_state == MAG_CALIBRATION) rocket_state = READY;
-                mag_calibrator.clear();
+                // Calibrator is now in ABORTED — leave it there.  iOS
+                // treats .aborted and .idle the same (introSection).
+                // calibrator.start() on the next session resets cleanly.
             }
             else if (out_pending_command == MAG_CAL_RETRY)
             {
@@ -3106,6 +3262,18 @@ static void loop_fc()
                 else
                 {
                     ESP_LOGI(TAG, "[MAGCAL] retry");
+                    // Retry restarts SAMPLING within the same session, so the
+                    // chip must be at zero (not the prior NVS offsets) so the
+                    // new sphere fit sees raw mag values.  Only matters when
+                    // retrying out of VERIFYING — in REVIEW/SAMPLING the chip
+                    // is already at zero from MAG_CAL_START.
+                    if (mag_cal_verify_active && sensor_collector.isIIS2MDCActive())
+                    {
+                        const bool ok = sensor_collector.setIIS2MDCHardIronOffset(0, 0, 0);
+                        ESP_LOGI(TAG, "[MAGCAL] retry during VERIFYING — zeroed OFFSET %s",
+                                 ok ? "OK" : "FAIL");
+                    }
+                    mag_cal_verify_active = false;
                     mag_calibrator.retry();
                     mag_cal_status_dirty = true;
                 }
@@ -3146,40 +3314,142 @@ static void loop_fc()
                     uint8_t reject;
                     mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
 
-                    // Apply to active mag chip immediately so the user can
-                    // verify the fix without a reboot.
+                    // Prior offsets were already cached at MAG_CAL_START; we
+                    // just program the proposed-new ones on the chip so the
+                    // verify window measures the corrected stream.  On verify
+                    // pass we'll persist; on fail we zero the chip and the
+                    // session abort path takes care of full prior restore.
                     if (sensor_collector.isIIS2MDCActive())
                     {
                         const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
-                        ESP_LOGI(TAG, "[MAGCAL] IIS2MDC OFFSET applied: (%d,%d,%d) %s",
-                                 (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
+                        ESP_LOGI(TAG, "[MAGCAL] IIS2MDC OFFSET applied (pre-verify): "
+                                      "(%d,%d,%d) %s  prior=(%d,%d,%d)",
+                                 (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL",
+                                 (int)mag_cal_prior_cx, (int)mag_cal_prior_cy, (int)mag_cal_prior_cz);
                     }
-                    // The MMC software-offset path requires int32 centered-counts;
-                    // the sphere fit was run in IIS2MDC int16 LSB units so it
-                    // doesn't apply directly.  Persist zeros for MMC; legacy
-                    // boards that need MMC cal can be added in a follow-up.
+                    // MMC path is the same regardless; clear any prior
+                    // converter-side offset (sphere fit runs against
+                    // IIS2MDC LSB units, not MMC counts).
                     sensor_converter.setMMCOffset(0, 0, 0);
 
-                    // Persist to NVS so boot reapplies the offset.
-                    prefs.begin("mag_cal", false);
-                    prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
-                    prefs.putBool ("done",   true);
-                    prefs.putShort("cx",     cx);
-                    prefs.putShort("cy",     cy);
-                    prefs.putShort("cz",     cz);
-                    prefs.putFloat("R_uT",   R_uT);
-                    prefs.putFloat("res_uT", res_uT);
-                    prefs.putInt  ("mmc_cx", 0);
-                    prefs.putInt  ("mmc_cy", 0);
-                    prefs.putInt  ("mmc_cz", 0);
-                    prefs.end();
-
-                    ESP_LOGI(TAG, "[MAGCAL] accepted + saved: cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT",
-                             (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
-
+                    // Enter verification window — the per-tick block
+                    // below polls esp_timer_get_time() and calls
+                    // evaluateVerify() after MAG_CAL_VERIFY_DURATION_US.
+                    mag_cal_verify_start_us = esp_timer_get_time();
+                    mag_cal_verify_active = true;
                     mag_cal_status_dirty = true;
-                    rocket_state = READY;
-                    mag_calibrator.clear();
+                    ESP_LOGI(TAG, "[MAGCAL] accept: VERIFYING — user-driven (Done button) "
+                                  "with %lld µs safety timeout",
+                             (long long)MAG_CAL_VERIFY_DURATION_US);
+                }
+            }
+            // #148 — user-driven verify completion.  iOS sends DONE when
+            // the user is satisfied with the verify rotation; the FC then
+            // evaluates the accumulators immediately (instead of waiting
+            // for the 60 s safety timeout to fire).  Same dispatch logic
+            // as the per-tick timer block — kept in sync by sharing the
+            // same evaluateVerify + pass/fail handling below.
+            else if (out_pending_command == MAG_CAL_VERIFY_DONE)
+            {
+                if (rocket_state != MAG_CALIBRATION || !mag_cal_verify_active)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] verify_done refused: not in VERIFYING");
+                }
+                else
+                {
+                    // Force the per-tick block below to dispatch on the
+                    // next iteration by zeroing the start timestamp —
+                    // (now - 0) is always >= MAG_CAL_VERIFY_DURATION_US.
+                    mag_cal_verify_start_us = 0;
+                    ESP_LOGI(TAG, "[MAGCAL] verify_done: user requested evaluation");
+                }
+            }
+            // #148 — user-override save.  iOS sends this from two paths:
+            //   1. Review screen "Save and apply" — skip Verify entirely.
+            //      Chip OFFSET still needs to be programmed.
+            //   2. Verifying screen "Save anyway" — gates partially red;
+            //      chip OFFSET was programmed by the prior MAG_CAL_ACCEPT.
+            // We accept from either REVIEW or VERIFYING.  The OFFSET-reg
+            // write is idempotent so we do it unconditionally — covers
+            // the "from REVIEW" path without breaking the "from VERIFYING"
+            // path (chip just rewrites the same values).
+            else if (out_pending_command == MAG_CAL_FORCE_APPLY)
+            {
+                if (rocket_state != MAG_CALIBRATION || !mag_cal_session_active)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] force_apply refused: not in MAG_CALIBRATION session");
+                }
+                else
+                {
+                    int16_t cx, cy, cz;
+                    float R_uT, res_uT;
+                    uint8_t reject;
+                    mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
+                    // R_uT == 0 means no fit has run — refuse rather than
+                    // persist garbage.
+                    if (R_uT <= 0.0f)
+                    {
+                        ESP_LOGW(TAG, "[MAGCAL] force_apply refused: no fit available");
+                    }
+                    else
+                    {
+                        // Program chip OFFSET (idempotent — same regs if
+                        // we already wrote them via MAG_CAL_ACCEPT).
+                        if (sensor_collector.isIIS2MDCActive())
+                        {
+                            const bool ok = sensor_collector.setIIS2MDCHardIronOffset(cx, cy, cz);
+                            ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY OFFSET (%d,%d,%d) %s",
+                                     (int)cx, (int)cy, (int)cz, ok ? "OK" : "FAIL");
+                        }
+                        sensor_converter.setMMCOffset(0, 0, 0);
+
+                        prefs.begin("mag_cal", false);
+                        prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+                        prefs.putBool ("done",   true);
+                        prefs.putShort("cx",     cx);
+                        prefs.putShort("cy",     cy);
+                        prefs.putShort("cz",     cz);
+                        prefs.putFloat("R_uT",   R_uT);
+                        prefs.putFloat("res_uT", res_uT);
+                        prefs.putInt  ("mmc_cx", 0);
+                        prefs.putInt  ("mmc_cy", 0);
+                        prefs.putInt  ("mmc_cz", 0);
+                        prefs.end();
+
+                        ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT "
+                                      "(user override, gates not re-checked)",
+                                 (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
+
+                        mag_cal_session_active = false;
+                        mag_cal_verify_active = false;
+                        mag_cal_status_dirty = true;
+                        rocket_state = READY;
+                        // Leave the calibrator in APPLIED (not IDLE) so
+                        // the next status frame shows iOS the "Saved"
+                        // banner — same reason as the verify-PASS path.
+                        mag_calibrator.markApplied();
+                    }
+                }
+            }
+            // #148 — user wants to redo the verify rotation without
+            // going all the way back to SAMPLING.  Clears verify
+            // min/max/coverage; the proposed-new cal stays on the chip
+            // so the next rotation pass measures the same corrected
+            // stream.
+            else if (out_pending_command == MAG_CAL_VERIFY_RESET)
+            {
+                if (rocket_state != MAG_CALIBRATION || !mag_cal_verify_active)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] verify_reset refused: not in VERIFYING");
+                }
+                else
+                {
+                    mag_calibrator.resetVerify();
+                    // Restart the safety timer so the user gets another
+                    // full window after a reset.
+                    mag_cal_verify_start_us = esp_timer_get_time();
+                    mag_cal_status_dirty = true;
+                    ESP_LOGI(TAG, "[MAGCAL] verify_reset: accumulators cleared, timer restarted");
                 }
             }
             // Issue #132 — app pushes a saved cal from the active rocket profile
