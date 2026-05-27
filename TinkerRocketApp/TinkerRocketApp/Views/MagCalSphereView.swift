@@ -71,36 +71,41 @@ struct MagCalSphereView: UIViewRepresentable {
         key.eulerAngles = SCNVector3(-0.6, 0.8, 0)
         scene.rootNode.addChildNode(key)
 
-        // Body-fixed assembly: the sphere, the cells, and the rocket all
-        // live under one parent that rotates with the live accel.
-        let assembly = SCNNode()
-        assembly.name = "assembly"
-        scene.rootNode.addChildNode(assembly)
+        // Static sphere container: shell + 32 cells, anchored to world
+        // axes.  Does NOT rotate with the rocket — the user sees the
+        // sphere as a fixed reference so they can read coverage at a
+        // glance, including back-side cells through the translucent
+        // material.
+        let sphereContainer = SCNNode()
+        sphereContainer.name = "sphereContainer"
+        scene.rootNode.addChildNode(sphereContainer)
 
-        // Translucent sphere shell so cells in the back are partially visible
+        // Translucent sphere shell — very subtle so it just hints at
+        // the surface; the cells carry the visual weight.
         let shell = SCNSphere(radius: CGFloat(MagCalSphereView.sphereR * 0.995))
         shell.segmentCount = 48
-        shell.firstMaterial?.diffuse.contents = UIColor(white: 0.0, alpha: 0.02)
-        shell.firstMaterial?.transparency = 0.10
+        shell.firstMaterial?.diffuse.contents = UIColor(white: 0.0, alpha: 0.015)
+        shell.firstMaterial?.transparency = 0.08
         shell.firstMaterial?.isDoubleSided = true
         shell.firstMaterial?.cullMode = .back
         let shellNode = SCNNode(geometry: shell)
         shellNode.name = "sphereShell"
-        assembly.addChildNode(shellNode)
+        sphereContainer.addChildNode(shellNode)
 
         // 32 cells
         for cellIdx in 0..<MagCalCells.cellPolygons.count {
             let cellNode = SCNNode(geometry: Self.makeCellGeometry(cellIdx: cellIdx,
                                                                    captured: false))
             cellNode.name = "cell-\(cellIdx)"
-            assembly.addChildNode(cellNode)
+            sphereContainer.addChildNode(cellNode)
         }
 
         // Rocket — simple cylinder body + cone nose along its local +Y
         // (SCNCylinder grows along Y by default).  Tail end at -Y, nose
-        // at +Y.  When body-frame gravity points "down" the rocket's
-        // local +Y will align with world's "up" so the rocket appears
-        // nose-up on screen at rest.
+        // at +Y.  Rocket is a SEPARATE node (sibling of sphereContainer,
+        // not a child) so its rotation doesn't drag the sphere along —
+        // the user sees the rocket move freely inside a stationary
+        // sphere as they physically rotate the rocket on the bench.
         let bodyHalf = MagCalSphereView.rocketBodyHalf
         let bodyR = MagCalSphereView.rocketRadius
         let body = SCNCylinder(radius: CGFloat(bodyR), height: CGFloat(bodyHalf * 2 * 0.75))
@@ -128,7 +133,8 @@ struct MagCalSphereView: UIViewRepresentable {
             f.eulerAngles = SCNVector3(0, a, 0)
             rocket.addChildNode(f)
         }
-        assembly.addChildNode(rocket)
+        // Sibling of sphereContainer (not a child) — see comment above.
+        scene.rootNode.addChildNode(rocket)
 
         // Initial state
         applyState(view: view, coverageMask: coverageMask, liveAccel: liveAccel)
@@ -143,27 +149,30 @@ struct MagCalSphereView: UIViewRepresentable {
 
     private func applyState(view: SCNView, coverageMask: UInt32, liveAccel: SIMD3<Float>?) {
         guard let scene = view.scene else { return }
-        // Cell colors — captured = translucent green, uncaptured = pale grey.
+        // Cell colors — captured = light translucent green, uncaptured =
+        // very pale grey.  Both are double-sided + low opacity so cells
+        // on the back of the sphere remain visible through the front;
+        // a captured cell on the far side reads as a slightly dimmer
+        // green wash behind anything closer to the camera.
         for cellIdx in 0..<MagCalCells.cellPolygons.count {
             guard let node = scene.rootNode.childNode(withName: "cell-\(cellIdx)", recursively: true),
                   let mat = node.geometry?.firstMaterial else { continue }
             let bit = (coverageMask >> UInt32(cellIdx)) & 1
             mat.diffuse.contents = bit == 1
-                ? UIColor(red: 0.20, green: 0.78, blue: 0.35, alpha: 0.45)
-                : UIColor(white: 0.78, alpha: 0.20)
-            mat.transparency = bit == 1 ? 0.55 : 0.30
+                ? UIColor(red: 0.55, green: 0.90, blue: 0.62, alpha: 1.0) // lighter mint green
+                : UIColor(white: 0.85, alpha: 1.0)
+            mat.transparency = bit == 1 ? 0.32 : 0.14
         }
-        // Assembly orientation — rotate so the rocket nose mirrors the
-        // physical pose.  Body-frame gravity = liveAccel; the rocket's
-        // local "up" axis (+Y) should align with world's "up" when
-        // gravity is along body's -Y.  i.e. we want a rotation that
-        // maps -normalize(accel) → SCN world's +Y.
+        // Rocket orientation — rotate ONLY the rocket node so the user
+        // sees the rocket move inside a stationary sphere.  Body-frame
+        // gravity = liveAccel; the rocket's local "up" axis (+Y) should
+        // align with world's "up" when gravity is along body's -Y, i.e.
+        // we want a rotation that maps -normalize(accel) → world +Y.
         if let g = liveAccel, simd_length(g) > 0.1 {
             let up: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
             let bodyUp = -simd_normalize(g)
-            // Rotation that takes bodyUp → up (in scene/world frame).
             let q = quaternionFromTo(bodyUp, up)
-            scene.rootNode.childNode(withName: "assembly", recursively: false)?
+            scene.rootNode.childNode(withName: "rocket", recursively: false)?
                 .simdOrientation = q
         }
     }
@@ -243,12 +252,19 @@ struct MagCalSphereView: UIViewRepresentable {
         )
         let geometry = SCNGeometry(sources: [vertexSource, normalSource], elements: [element])
         let mat = SCNMaterial()
+        // Initial colours — applyState() re-tints on every update.  Keep
+        // these in sync with applyState's branches so the very first
+        // frame after the SCNView attaches matches the live state.
         mat.diffuse.contents = captured
-            ? UIColor(red: 0.20, green: 0.78, blue: 0.35, alpha: 0.45)
-            : UIColor(white: 0.78, alpha: 0.20)
-        mat.transparency = captured ? 0.55 : 0.30
+            ? UIColor(red: 0.55, green: 0.90, blue: 0.62, alpha: 1.0)
+            : UIColor(white: 0.85, alpha: 1.0)
+        mat.transparency = captured ? 0.32 : 0.14
         mat.isDoubleSided = true
         mat.lightingModel = .lambert
+        // Alpha-blended cells: lets the back-of-sphere captures show
+        // through as a dimmer wash behind the front-facing cells.
+        mat.blendMode = .alpha
+        mat.writesToDepthBuffer = false
         geometry.firstMaterial = mat
         return geometry
     }
