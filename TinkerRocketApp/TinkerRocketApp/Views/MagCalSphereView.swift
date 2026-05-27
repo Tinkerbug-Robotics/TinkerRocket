@@ -33,7 +33,16 @@ struct MagCalSphereView: UIViewRepresentable {
     /// Used purely for visualization: nose direction = -normalize(accel)
     /// (the rocket points opposite to gravity when upright on the pad).
     /// Pass `nil` (or zero vector) for the pre-launch / no-data case.
+    /// Used as a FALLBACK only — if liveAttitude (the EKF quaternion)
+    /// is also provided we prefer it because it includes yaw.
     let liveAccel: SIMD3<Float>?
+
+    /// Live attitude quaternion from the FC's EKF, scalar-first
+    /// (w, x, y, z) — the same convention as TelemetryData.q0..q3.
+    /// Gives full attitude including yaw around gravity, which the
+    /// accel-only path can't recover.  Pass `nil` when the EKF
+    /// quaternion isn't available (pre-init, fields all zero).
+    let liveAttitude: simd_quatf?
 
     // MARK: - Tunables
 
@@ -163,19 +172,22 @@ struct MagCalSphereView: UIViewRepresentable {
 
         // Initial state
         applyState(view: view, coverageMask: coverageMask,
-                   partialMask: partialMask, liveAccel: liveAccel)
+                   partialMask: partialMask,
+                   liveAccel: liveAccel, liveAttitude: liveAttitude)
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
         applyState(view: view, coverageMask: coverageMask,
-                   partialMask: partialMask, liveAccel: liveAccel)
+                   partialMask: partialMask,
+                   liveAccel: liveAccel, liveAttitude: liveAttitude)
     }
 
     // MARK: - State application
 
     private func applyState(view: SCNView, coverageMask: UInt32,
-                            partialMask: UInt32, liveAccel: SIMD3<Float>?) {
+                            partialMask: UInt32, liveAccel: SIMD3<Float>?,
+                            liveAttitude: simd_quatf?) {
         guard let scene = view.scene else { return }
         // 3-state cell colouring (#148): cells start fully opaque red
         // (untouched), drop to mid-opacity once they have at least one
@@ -200,24 +212,37 @@ struct MagCalSphereView: UIViewRepresentable {
                 mat.transparency = 0.55  // untouched — full red
             }
         }
-        // Rocket orientation — rotate ONLY the rocket node so the user
-        // sees the rocket move inside a stationary sphere.  The IMU
-        // reports specific force: at rest it reads +g along whatever
-        // body axis points toward world-up (i.e. against gravity).  So
-        // normalize(accel) is the body-frame direction pointing world-up.
-        //
-        // Body frame (user-confirmed): +X = nose, +Y = right side, +Z = up.
-        // Rocket-upright-on-pad case: nose points to world-up, so
-        // accel ≈ (+g, 0, 0) → bodyUp = (1, 0, 0) = body +X = nose.  We
-        // want the on-screen rocket nose (rocket's local +X after the
-        // model wrap) to point world-up, so the rotation we apply must
-        // map normalize(accel) → world +Y (SceneKit's up).
-        if let g = liveAccel, simd_length(g) > 0.1 {
+        // Rocket orientation.  Prefer the FC's EKF quaternion when
+        // available — it gives full attitude including yaw, which the
+        // accel-only path can't recover.  Falls back to the accel
+        // method (pitch + roll only, yaw indeterminate) when the EKF
+        // isn't publishing a valid quaternion yet.
+        let rocketNode = scene.rootNode.childNode(withName: "rocket", recursively: false)
+        if let q_body_to_world = liveAttitude {
+            // EKF publishes q as body→NED (North-East-Down — see comment
+            // on TelemetryData.q0).  SceneKit's world is right-handed
+            // with Y-up.  We pre-multiply by a fixed remap that takes
+            // NED vectors to SceneKit's world axes so the rocket
+            // appears upright on screen when physically upright on the
+            // pad.  Picked convention:
+            //   NED X (north) → SceneKit -Z (away from viewer)
+            //   NED Y (east)  → SceneKit +X (right)
+            //   NED Z (down)  → SceneKit -Y (down)
+            // Matrix has trace 0; quaternion = (w=0.5, x=0.5, y=0.5, z=-0.5).
+            // If this looks wrong (rocket inverted or mirrored) the
+            // EKF's world frame is likely a different ENU/ECEF/etc —
+            // easy to iterate by tweaking these four numbers.
+            let nedToScene = simd_quatf(ix: 0.5, iy: 0.5, iz: -0.5, r: 0.5)
+            rocketNode?.simdOrientation = nedToScene * q_body_to_world
+        } else if let g = liveAccel, simd_length(g) > 0.1 {
+            // Accel fallback — pitch + roll only.  See class-comment
+            // discussion of the yaw blind spot; spinning the rocket
+            // around gravity doesn't move it on screen because the
+            // accel-derived rotation has nothing to attach yaw to.
             let worldUp: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
             let bodyUp = simd_normalize(g)
             let q = quaternionFromTo(bodyUp, worldUp)
-            scene.rootNode.childNode(withName: "rocket", recursively: false)?
-                .simdOrientation = q
+            rocketNode?.simdOrientation = q
         }
     }
 

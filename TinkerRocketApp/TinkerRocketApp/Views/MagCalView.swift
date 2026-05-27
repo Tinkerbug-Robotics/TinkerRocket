@@ -19,6 +19,7 @@
 
 import SwiftUI
 import Combine
+import simd
 
 struct MagCalView: View {
     @ObservedObject var device: BLEDevice
@@ -44,6 +45,20 @@ struct MagCalView: View {
     /// verification.  nil means "no samples yet."
     @State private var verifyMinUT: Float? = nil
     @State private var verifyMaxUT: Float? = nil
+
+    /// Live attitude quaternion from the FC's EKF, for the sphere-view
+    /// rocket orientation.  nil when the EKF hasn't initialised yet
+    /// (all four components zero) — sphere view then falls back to the
+    /// accel-only path which can recover pitch + roll but not yaw.
+    private var liveAttitudeQuat: simd_quatf? {
+        let t = device.telemetry
+        guard let w = t.q0, let x = t.q1, let y = t.q2, let z = t.q3 else { return nil }
+        // Fields default to 0 before the EKF initialises; reject the
+        // exact-zero quaternion so we don't apply an identity-ish
+        // rotation that lies about the rocket being level.
+        if w == 0 && x == 0 && y == 0 && z == 0 { return nil }
+        return simd_quatf(ix: x, iy: y, iz: z, r: w)
+    }
 
     var body: some View {
         Form {
@@ -196,7 +211,8 @@ struct MagCalView: View {
                         coverageMask: s.coverageMask,
                         partialMask: s.partialMask,
                         liveAccel: (device.telemetry.low_g_x != nil)
-                            ? SIMD3<Float>(ax, ay, az) : nil
+                            ? SIMD3<Float>(ax, ay, az) : nil,
+                        liveAttitude: liveAttitudeQuat
                     )
                     .frame(height: 360)
                     .listRowInsets(EdgeInsets())
