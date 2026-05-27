@@ -58,6 +58,7 @@ static bool solve4x4(double A[4][4], double b[4], double x[4])
 MagCalibrator::MagCalibrator()
     : n_samples_(0),
       coverage_mask_(0),
+      partial_mask_(0),
       last_x_(0), last_y_(0), last_z_(0),
       fit_cx_(0), fit_cy_(0), fit_cz_(0),
       fit_R_uT_(0.0f),
@@ -81,6 +82,7 @@ void MagCalibrator::start()
     memset(wedge_count_, 0, sizeof(wedge_count_));
     memset(wedge_write_, 0, sizeof(wedge_write_));
     coverage_mask_ = 0;
+    partial_mask_ = 0;
     last_x_ = last_y_ = last_z_ = 0;
     // accel_valid_ stays as-is: the IMU is sampling regardless of cal
     // state, so accel readings from before Start are still fresh.
@@ -293,11 +295,6 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
     const uint8_t accel_wedge = directionWedge(accel_x_, accel_y_, accel_z_);
     if (accel_wedge >= NUM_ACCEL_WEDGES) return false;
 
-    // Update the accel-driven coverage mask up-front so the iOS UI
-    // sees the new wedge as soon as it's been visited, even if its
-    // slot ring buffer is full and an oldest sample gets evicted.
-    coverage_mask_ |= (1u << accel_wedge);
-
     // Ring buffer inside the wedge bucket.  Up to SAMPLES_PER_WEDGE
     // samples are kept per accel-wedge; when full, newest overwrites
     // oldest WITHIN THAT WEDGE.  Samples from other orientations are
@@ -312,6 +309,19 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
     if (wedge_count_[accel_wedge] < SAMPLES_PER_WEDGE) {
         wedge_count_[accel_wedge]++;
         n_samples_++;  // saturates at NUM_ACCEL_WEDGES * SAMPLES_PER_WEDGE
+    }
+
+    // #148 — 3-state coverage based on wedge sample count.  Wedges
+    // with < MAG_CAL_MIN_SAMPLES_PER_WEDGE samples sit in partial_mask
+    // (in-progress); promote into coverage_mask once the threshold is
+    // met.  Bits are mutually exclusive — a wedge graduates from
+    // partial → coverage and clears its partial bit.
+    const uint32_t bit = (1u << accel_wedge);
+    if (wedge_count_[accel_wedge] >= MAG_CAL_MIN_SAMPLES_PER_WEDGE) {
+        coverage_mask_ |= bit;
+        partial_mask_  &= ~bit;
+    } else if (wedge_count_[accel_wedge] > 0) {
+        partial_mask_ |= bit;
     }
 
     // Sampling never "completes" — the 5 Hz status cadence in the FC
@@ -386,10 +396,12 @@ void MagCalibrator::buildStatusFrame(uint32_t time_us, MagCalStatusData& out) co
     if (state_ == State::VERIFYING) {
         out.coverage_bins = (uint8_t)__builtin_popcount(verify_coverage_mask_);
         out.coverage_mask = verify_coverage_mask_;
+        out.partial_mask  = 0;  // verify uses 1-sample-per-wedge gate
         out.sample_count  = verify_n_samples_;
     } else {
         out.coverage_bins = (uint8_t)__builtin_popcount(coverage_mask_);
         out.coverage_mask = coverage_mask_;
+        out.partial_mask  = partial_mask_;
         out.sample_count  = n_samples_;
     }
 

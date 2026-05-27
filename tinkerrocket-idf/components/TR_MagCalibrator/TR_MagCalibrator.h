@@ -186,9 +186,15 @@ private:
     int16_t accel_x_, accel_y_, accel_z_;
     bool    accel_valid_;
 
-    // 3³ - 1 = 26 wedges (the all-center cell is unreachable for unit
-    // vectors).  Bit i set means wedge i has at least one sample.
+    // Bitmaps of the 32 truncated-icosahedron cells (#148).  A wedge
+    // is "captured" (counted by the fit's coverage gate, visually
+    // cleared on iOS) once it accumulates >= MAG_CAL_MIN_SAMPLES_PER_WEDGE
+    // samples — the linear-LSQ needs multiple samples per orientation
+    // to be well-conditioned.  Wedges with fewer samples sit in
+    // partial_mask so iOS can render them as in-progress instead of
+    // untouched.  The two masks are disjoint by construction.
     uint32_t coverage_mask_;
+    uint32_t partial_mask_;
 
     // Most recent sample (for inst_field_uT progress reporting).
     int16_t last_x_, last_y_, last_z_;

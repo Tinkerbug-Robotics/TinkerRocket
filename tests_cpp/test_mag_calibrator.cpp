@@ -96,45 +96,87 @@ void feedVerifySamples(MagCalibrator& cal, float magnitude_uT, int n_per_dir) {
 
 // --- tessellation geometry (issue #148) ---
 
+// 32 canonical cell-centre directions used by both tessellation
+// reachability tests below.  Each direction lies inside its own
+// truncated-icosahedron Voronoi cell.
+namespace {
+struct CellCenter { float x, y, z; };
+const CellCenter MAG_CELL_CENTERS_TEST[32] = {
+    { 0.00f,-0.526f,-0.851f}, {-0.526f,-0.851f, 0.00f}, {-0.851f, 0.00f,-0.526f},
+    { 0.00f,-0.526f, 0.851f}, {-0.526f, 0.851f, 0.00f}, {-0.851f, 0.00f, 0.526f},
+    { 0.00f, 0.526f,-0.851f}, { 0.526f,-0.851f, 0.00f}, { 0.851f, 0.00f,-0.526f},
+    { 0.00f, 0.526f, 0.851f}, { 0.526f, 0.851f, 0.00f}, { 0.851f, 0.00f, 0.526f},
+    {-0.577f,-0.577f,-0.577f}, { 0.00f,-0.934f,-0.357f}, {-0.357f, 0.00f,-0.934f},
+    { 0.357f, 0.00f,-0.934f}, { 0.577f,-0.577f,-0.577f}, {-0.934f,-0.357f, 0.00f},
+    {-0.577f,-0.577f, 0.577f}, { 0.00f,-0.934f, 0.357f}, {-0.934f, 0.357f, 0.00f},
+    {-0.577f, 0.577f,-0.577f}, {-0.357f, 0.00f, 0.934f}, { 0.577f,-0.577f, 0.577f},
+    { 0.357f, 0.00f, 0.934f}, {-0.577f, 0.577f, 0.577f}, { 0.00f, 0.934f,-0.357f},
+    { 0.00f, 0.934f, 0.357f}, { 0.577f, 0.577f,-0.577f}, { 0.934f,-0.357f, 0.00f},
+    { 0.934f, 0.357f, 0.00f}, { 0.577f, 0.577f, 0.577f},
+};
+constexpr int LSB_DRIVE = 1000;
+} // anonymous namespace
+
 // directionWedge is private; we can't call it directly, but we can verify
 // the same cells are hit by feeding samples in known directions through
-// addSample (which routes through directionWedge internally for accel
-// bucketing).  Confirms the 32 wedges all reachable from a fresh tumble.
+// addSample.  Per #148, coverage_mask is now only set once a wedge
+// reaches MAG_CAL_MIN_SAMPLES_PER_WEDGE samples — so feed enough to
+// promote every cell out of partial into captured.
 TEST(MagCalibratorTessellation, AllCellsReachableFromIcosaCorners) {
     MagCalibrator cal;
     cal.start();
-    // Feed a sample in each of the 32 cell center directions.  Each
-    // sample should land in its own cell (Voronoi assignment), so the
-    // coverage_mask should hit all 32 bits.
-    struct V { float x, y, z; };
-    const V centers[32] = {
-        { 0.00f,-0.526f,-0.851f}, {-0.526f,-0.851f, 0.00f}, {-0.851f, 0.00f,-0.526f},
-        { 0.00f,-0.526f, 0.851f}, {-0.526f, 0.851f, 0.00f}, {-0.851f, 0.00f, 0.526f},
-        { 0.00f, 0.526f,-0.851f}, { 0.526f,-0.851f, 0.00f}, { 0.851f, 0.00f,-0.526f},
-        { 0.00f, 0.526f, 0.851f}, { 0.526f, 0.851f, 0.00f}, { 0.851f, 0.00f, 0.526f},
-        {-0.577f,-0.577f,-0.577f}, { 0.00f,-0.934f,-0.357f}, {-0.357f, 0.00f,-0.934f},
-        { 0.357f, 0.00f,-0.934f}, { 0.577f,-0.577f,-0.577f}, {-0.934f,-0.357f, 0.00f},
-        {-0.577f,-0.577f, 0.577f}, { 0.00f,-0.934f, 0.357f}, {-0.934f, 0.357f, 0.00f},
-        {-0.577f, 0.577f,-0.577f}, {-0.357f, 0.00f, 0.934f}, { 0.577f,-0.577f, 0.577f},
-        { 0.357f, 0.00f, 0.934f}, {-0.577f, 0.577f, 0.577f}, { 0.00f, 0.934f,-0.357f},
-        { 0.00f, 0.934f, 0.357f}, { 0.577f, 0.577f,-0.577f}, { 0.934f,-0.357f, 0.00f},
-        { 0.934f, 0.357f, 0.00f}, { 0.577f, 0.577f, 0.577f},
-    };
-    const int LSB = 1000;
-    for (int i = 0; i < 32; i++) {
-        const int16_t ax = (int16_t)(centers[i].x * LSB);
-        const int16_t ay = (int16_t)(centers[i].y * LSB);
-        const int16_t az = (int16_t)(centers[i].z * LSB);
-        cal.setLiveAccel(ax, ay, az);
-        cal.addSample(ax, ay, az);
+    for (int rep = 0; rep < (int)MAG_CAL_MIN_SAMPLES_PER_WEDGE; rep++) {
+        for (int i = 0; i < 32; i++) {
+            const int16_t ax = (int16_t)(MAG_CELL_CENTERS_TEST[i].x * LSB_DRIVE);
+            const int16_t ay = (int16_t)(MAG_CELL_CENTERS_TEST[i].y * LSB_DRIVE);
+            const int16_t az = (int16_t)(MAG_CELL_CENTERS_TEST[i].z * LSB_DRIVE);
+            cal.setLiveAccel(ax, ay, az);
+            cal.addSample(ax, ay, az);
+        }
     }
     uint16_t n; uint8_t cov; float B;
     cal.getProgress(n, cov, B);
-    // Each cell center hits a distinct cell → all 32 bits lit.
-    EXPECT_EQ(cov, 32) << "Expected all 32 wedges populated by their own center "
-                         "directions; got " << (int)cov << " — Voronoi assignment "
-                         "may have a tie between centers or the cell-center table "
-                         "is out of sync with directionWedge's geometry.";
+    EXPECT_EQ(cov, 32) << "Expected all 32 wedges captured after the per-wedge "
+                         "sample threshold; got " << (int)cov;
+}
+
+// #148: a wedge with at least 1 sample but fewer than the threshold
+// should sit in partial_mask, not coverage_mask.
+TEST(MagCalibratorTessellation, PartialBeforeThreshold) {
+    MagCalibrator cal;
+    cal.start();
+    // Feed just under threshold samples in 32 distinct cell directions.
+    const int per_cell = (int)MAG_CAL_MIN_SAMPLES_PER_WEDGE - 1;
+    for (int rep = 0; rep < per_cell; rep++) {
+        for (int i = 0; i < 32; i++) {
+            const int16_t ax = (int16_t)(MAG_CELL_CENTERS_TEST[i].x * LSB_DRIVE);
+            const int16_t ay = (int16_t)(MAG_CELL_CENTERS_TEST[i].y * LSB_DRIVE);
+            const int16_t az = (int16_t)(MAG_CELL_CENTERS_TEST[i].z * LSB_DRIVE);
+            cal.setLiveAccel(ax, ay, az);
+            cal.addSample(ax, ay, az);
+        }
+    }
+    MagCalStatusData frame;
+    cal.buildStatusFrame(0, frame);
+    EXPECT_EQ(__builtin_popcount(frame.coverage_mask), 0)
+        << "No wedges should be captured before the threshold";
+    EXPECT_EQ(__builtin_popcount(frame.partial_mask), 32)
+        << "All 32 wedges should be partial (in-progress)";
+    EXPECT_EQ(frame.coverage_mask & frame.partial_mask, 0u)
+        << "coverage_mask and partial_mask must be disjoint";
+
+    // One more sample in each wedge → all cross the threshold.
+    for (int i = 0; i < 32; i++) {
+        const int16_t ax = (int16_t)(MAG_CELL_CENTERS_TEST[i].x * LSB_DRIVE);
+        const int16_t ay = (int16_t)(MAG_CELL_CENTERS_TEST[i].y * LSB_DRIVE);
+        const int16_t az = (int16_t)(MAG_CELL_CENTERS_TEST[i].z * LSB_DRIVE);
+        cal.setLiveAccel(ax, ay, az);
+        cal.addSample(ax, ay, az);
+    }
+    cal.buildStatusFrame(0, frame);
+    EXPECT_EQ(__builtin_popcount(frame.coverage_mask), 32);
+    EXPECT_EQ(frame.partial_mask, 0u)
+        << "All wedges should now be captured; partial mask should be empty";
 }
 
 

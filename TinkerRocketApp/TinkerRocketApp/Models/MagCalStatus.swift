@@ -105,6 +105,14 @@ struct MagCalStatus: Equatable {
     let liveY_uT: Float
     let liveZ_uT: Float
 
+    /// #148 partial-coverage mask — bit i set when wedge i has 1..(N-1)
+    /// samples and is not yet promoted into coverageMask.  Disjoint from
+    /// coverageMask.  Lets the iOS sphere viz render 3-state cells:
+    /// untouched / in-progress (this mask) / captured (coverageMask).
+    /// All zero on firmware builds that don't ship the 36-byte payload —
+    /// UI then falls back to 2-state (untouched / captured).
+    let partialMask: UInt32
+
     /// Convenience: human-readable explanation for a non-zero rejectCode.
     /// Each verify-* sub-code names the specific gate that tripped so the
     /// user knows whether to re-tumble, re-rotate, or move away from
@@ -185,10 +193,12 @@ struct MagCalStatus: Equatable {
         // bytes[21]      = _pad
         // bytes[22..25]  = uint32 coverage_mask  (new in 26-byte payload)
         // bytes[26..31]  = int16 inst_x/y/z LSB   (new in 32-byte payload)
+        // bytes[32..35]  = uint32 partial_mask   (new in 36-byte payload, #148)
         let coverageMask: UInt32 = (bytes.count >= 26) ? u32(22) : 0
         let liveX_lsb: Int16 = (bytes.count >= 32) ? i16(26) : 0
         let liveY_lsb: Int16 = (bytes.count >= 32) ? i16(28) : 0
         let liveZ_lsb: Int16 = (bytes.count >= 32) ? i16(30) : 0
+        let partialMask: UInt32 = (bytes.count >= 36) ? u32(32) : 0
 
         // IIS2MDC sensitivity is 0.15 µT/LSB (datasheet 9.13).  Mirrors
         // the firmware-side IIS2MDC_LSB_TO_uT constant.
@@ -211,7 +221,8 @@ struct MagCalStatus: Equatable {
             coverageMask: coverageMask,
             liveX_uT: Float(liveX_lsb) * LSB_TO_uT,
             liveY_uT: Float(liveY_lsb) * LSB_TO_uT,
-            liveZ_uT: Float(liveZ_lsb) * LSB_TO_uT
+            liveZ_uT: Float(liveZ_lsb) * LSB_TO_uT,
+            partialMask: partialMask
         )
     }
 }

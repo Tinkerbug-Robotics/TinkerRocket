@@ -611,6 +611,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// without leaving VERIFYING; the proposed-new cal stays programmed
     /// on the chip so the next rotation pass measures the same stream.
     func sendMagCalVerifyReset() { sendCommand(57) }
+    /// #148 — user-override save.  Writes NVS regardless of verify-gate
+    /// status; used when the user taps "Save anyway" on the Verifying
+    /// screen with some gates still red.
+    func sendMagCalForceApply()  { sendCommand(58) }
 
     // Issue #132 — rocket-profile auto-sync.  The app holds source-of-truth
     // for mag cal as part of the active rocket profile.  APPLY pushes the

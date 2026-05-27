@@ -827,9 +827,19 @@ typedef struct __attribute__((packed))
     int16_t  inst_x_lsb;
     int16_t  inst_y_lsb;
     int16_t  inst_z_lsb;
+    // #148 — partial-coverage mask.  Bit i is set when wedge i has
+    // accumulated 1..(MAG_CAL_MIN_SAMPLES_PER_WEDGE - 1) samples and
+    // NOT yet been promoted into coverage_mask.  Lets iOS render a
+    // 3-state cell: untouched / in-progress (this mask) / captured
+    // (coverage_mask).  coverage_mask and partial_mask are disjoint
+    // — a wedge graduates from partial → captured once enough samples
+    // accumulate.  Wire-format extension (frame goes 32 → 36 bytes);
+    // old iOS builds that decode the 32-byte tail still work — they
+    // just don't get the new field and stay on 2-state visualisation.
+    uint32_t partial_mask;
 } MagCalStatusData;
-static_assert(sizeof(MagCalStatusData) == 32,
-              "MagCalStatusData must be 32 bytes");
+static_assert(sizeof(MagCalStatusData) == 36,
+              "MagCalStatusData must be 36 bytes");
 
 // 14-byte payload for MAG_CAL_APPLY_MSG (issue #132).  Carries the hard-iron
 // offsets in IIS2MDC LSB units plus the R / residual diagnostics so NVS state
@@ -916,6 +926,21 @@ static constexpr uint16_t MAG_CAL_MAX_SAMPLES = 2700;
 // Minimum samples before we'll attempt a fit.  Matches the issue's "≥500
 // samples (~5 s at 100 Hz)" guidance.
 static constexpr uint16_t MAG_CAL_MIN_SAMPLES = 500;
+
+// #148 — per-wedge sample threshold for a wedge to count as "captured"
+// in coverage_mask.  Before this, coverage_mask's bit was set on the
+// FIRST sample landing in a wedge, which meant the iOS sphere
+// visualisation cleared a cell after a fleeting visit — misleading
+// because the fit's linear-LSQ needs multiple samples per orientation
+// to be well-conditioned.  With this threshold, coverage_mask bits
+// only set once a wedge has accumulated enough samples to actually
+// contribute to a stable fit.  Wedges with 1..(threshold-1) samples
+// are reported in MagCalStatusData.partial_mask so iOS can render
+// an intermediate "in-progress" colour.  20 samples ≈ 200 ms at the
+// IIS2MDC's 100 Hz ODR — a brief deliberate pause, not a fleeting
+// glance, and 22 cells × 20 samples = 440 ≈ MAG_CAL_MIN_SAMPLES so
+// both gates align.
+static constexpr uint16_t MAG_CAL_MIN_SAMPLES_PER_WEDGE = 20;
 
 // NVS schema version for the mag_cal namespace.  Bump if the persisted
 // field set changes meaningfully so old persisted state is ignored.
@@ -1365,6 +1390,13 @@ static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fi
 // away — without it the chip could sit with unverified offsets forever.
 static constexpr uint8_t MAG_CAL_VERIFY_DONE  = 0xDD;  // OC→FC: evaluate verify gates now; pass→APPLIED, fail→REVIEW
 static constexpr uint8_t MAG_CAL_VERIFY_RESET = 0xDE;  // OC→FC: clear verify min/max/coverage, stay in VERIFYING
+// #148 — user-override save.  The iOS Verifying screen evaluates the
+// gates locally (it has the same |B| stream as the FC).  When the user
+// taps Save, iOS sends either VERIFY_DONE (when all gates green —
+// firmware re-checks for safety) or FORCE_APPLY (when some gates red —
+// user explicitly accepts a borderline cal).  FORCE_APPLY skips the
+// gate evaluation entirely and writes NVS unconditionally.
+static constexpr uint8_t MAG_CAL_FORCE_APPLY  = 0xDF;
 
 // --- App-driven mag cal apply / read (issue #132 — rocket profiles) ---
 // The iOS app holds source-of-truth for cal as part of a rocket profile.

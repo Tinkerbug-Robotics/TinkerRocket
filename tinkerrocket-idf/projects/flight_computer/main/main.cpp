@@ -3356,6 +3356,49 @@ static void loop_fc()
                     ESP_LOGI(TAG, "[MAGCAL] verify_done: user requested evaluation");
                 }
             }
+            // #148 — user-override save.  iOS sends this when the user
+            // taps Save with the iOS-side verify gates partially red
+            // (i.e. user explicitly accepting a borderline cal).  We
+            // skip the gate evaluation entirely and persist NVS as if
+            // verify had passed.  Same NVS layout + APPLIED transition
+            // as the verify-PASS branch in the safety-timeout block.
+            else if (out_pending_command == MAG_CAL_FORCE_APPLY)
+            {
+                if (rocket_state != MAG_CALIBRATION || !mag_cal_verify_active)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] force_apply refused: not in VERIFYING");
+                }
+                else
+                {
+                    int16_t cx, cy, cz;
+                    float R_uT, res_uT;
+                    uint8_t reject;
+                    mag_calibrator.getResult(cx, cy, cz, R_uT, res_uT, reject);
+
+                    prefs.begin("mag_cal", false);
+                    prefs.putUChar("ver",    MAG_CAL_NVS_SCHEMA_VERSION);
+                    prefs.putBool ("done",   true);
+                    prefs.putShort("cx",     cx);
+                    prefs.putShort("cy",     cy);
+                    prefs.putShort("cz",     cz);
+                    prefs.putFloat("R_uT",   R_uT);
+                    prefs.putFloat("res_uT", res_uT);
+                    prefs.putInt  ("mmc_cx", 0);
+                    prefs.putInt  ("mmc_cy", 0);
+                    prefs.putInt  ("mmc_cz", 0);
+                    prefs.end();
+
+                    ESP_LOGI(TAG, "[MAGCAL] FORCE_APPLY — saved cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT "
+                                  "(user override, gates not re-checked)",
+                             (int)cx, (int)cy, (int)cz, (double)R_uT, (double)res_uT);
+
+                    mag_cal_session_active = false;
+                    mag_cal_verify_active = false;
+                    mag_cal_status_dirty = true;
+                    rocket_state = READY;
+                    mag_calibrator.clear();
+                }
+            }
             // #148 — user wants to redo the verify rotation without
             // going all the way back to SAMPLING.  Clears verify
             // min/max/coverage; the proposed-new cal stays on the chip

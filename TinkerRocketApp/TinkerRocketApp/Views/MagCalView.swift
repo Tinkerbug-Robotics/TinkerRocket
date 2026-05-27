@@ -183,6 +183,7 @@ struct MagCalView: View {
                 Section {
                     MagCalSphereView(
                         coverageMask: s.coverageMask,
+                        partialMask: s.partialMask,
                         liveAccel: (device.telemetry.low_g_x != nil)
                             ? SIMD3<Float>(ax, ay, az) : nil
                     )
@@ -326,19 +327,19 @@ struct MagCalView: View {
                 }
 
                 if s.rejectCode == .ok {
-                    Section {
+                    Section(footer: Text("Programs the offset into the chip and lets you check it before saving.  You'll see live |B| as you rotate the rocket.")) {
                         Button {
                             device.sendMagCalAccept()
                         } label: {
                             HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text("Accept and Save")
+                                Image(systemName: "checkmark.shield")
+                                Text("Verify")
                                     .fontWeight(.semibold)
                                 Spacer()
                             }
                             .foregroundColor(.white)
                         }
-                        .listRowBackground(Color.green)
+                        .listRowBackground(Color.blue)
                     }
                 }
                 Section {
@@ -458,42 +459,77 @@ struct MagCalView: View {
                             .foregroundColor(samplesMet ? .green : .secondary)
                     }
                 }
-                Section(footer: Text(allGood
-                    ? "All checks green — tap Done to commit the cal."
-                    : "Keep rotating until every row above is green, then tap Done. If you over-shot the magnitude band you may need to step away from interference and Retry.")) {
-                    Button {
-                        device.sendMagCalVerifyDone()
-                    } label: {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                            Text("Done verifying")
-                                .fontWeight(.semibold)
-                            Spacer()
-                        }
-                        .foregroundColor(.white)
-                    }
-                    .listRowBackground(allGood ? Color.green : Color.blue)
-                    Button {
-                        verifyMinUT = nil
-                        verifyMaxUT = nil
-                        device.sendMagCalVerifyReset()
-                    } label: {
-                        HStack {
-                            Image(systemName: "arrow.counterclockwise")
-                            Text("Retry verification")
-                            Spacer()
-                        }
-                    }
-                    Button(role: .destructive) {
-                        device.sendMagCalAbort()
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Image(systemName: "xmark.circle")
-                            Text("Abort calibration")
-                            Spacer()
-                        }
-                    }
+                verifyButtonsSection(allGood: allGood)
+            }
+        }
+    }
+
+    /// Verifying-screen action buttons.  Extracted to keep the SwiftUI
+    /// ViewBuilder in verifyingSection from blowing past the type-checker's
+    /// expression complexity budget.
+    @ViewBuilder
+    private func verifyButtonsSection(allGood: Bool) -> some View {
+        Section(footer: Text(allGood
+            ? "All checks green — tap Accept and Save to commit the cal to flight-computer memory."
+            : "Keep rotating until every row above is green. You can still Accept and Save if you want — the gate readouts are advisory, not blocking.")) {
+            // Primary action — Accept and Save.  Always tappable; copy
+            // and colour change with gate state.  iOS dispatches either
+            // VERIFY_DONE (firmware re-checks gates, with the same data
+            // so always passes when iOS sees green) or FORCE_APPLY
+            // (firmware skips gate check).
+            Button {
+                if allGood {
+                    device.sendMagCalVerifyDone()
+                } else {
+                    device.sendMagCalForceApply()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: allGood ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    Text(allGood ? "Accept and Save" : "Save anyway")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .foregroundColor(.white)
+            }
+            .listRowBackground(allGood ? Color.green : Color.orange)
+
+            // Clear iOS + FC verify accumulators; stay in VERIFYING so
+            // the proposed cal stays programmed on the chip and the
+            // user can rotate again from a clean slate.
+            Button {
+                verifyMinUT = nil
+                verifyMaxUT = nil
+                device.sendMagCalVerifyReset()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.counterclockwise")
+                    Text("Retry verification")
+                    Spacer()
+                }
+            }
+            // Throw away the proposed cal and go back to SAMPLING for
+            // a fresh tumble — useful when verify exposes a clearly-bad
+            // fit and the user wants to redo the whole thing.
+            Button {
+                verifyMinUT = nil
+                verifyMaxUT = nil
+                device.sendMagCalRetry()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                    Text("Re-run calibration")
+                    Spacer()
+                }
+            }
+            Button(role: .destructive) {
+                device.sendMagCalAbort()
+                dismiss()
+            } label: {
+                HStack {
+                    Image(systemName: "xmark.circle")
+                    Text("Abort (restore prior cal)")
+                    Spacer()
                 }
             }
         }

@@ -23,7 +23,8 @@ final class MagCalStatusTests: XCTestCase {
             residualUT: 2.0,
             rejectCode: .ok,
             coverageMask: 0,
-            liveX_uT: 0, liveY_uT: 0, liveZ_uT: 0
+            liveX_uT: 0, liveY_uT: 0, liveZ_uT: 0,
+            partialMask: 0
         )
     }
 

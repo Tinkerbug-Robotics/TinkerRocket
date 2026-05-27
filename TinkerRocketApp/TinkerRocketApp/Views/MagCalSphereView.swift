@@ -19,8 +19,15 @@ import SceneKit
 import simd
 
 struct MagCalSphereView: UIViewRepresentable {
-    /// Bit i set => cell i in MagCalCells.cellPolygons is captured.
+    /// Bit i set => cell i in MagCalCells.cellPolygons is captured
+    /// (has accumulated MAG_CAL_MIN_SAMPLES_PER_WEDGE samples).
     let coverageMask: UInt32
+
+    /// Bit i set => cell i has accumulated 1..(threshold-1) samples —
+    /// in-progress, not yet captured.  Disjoint from coverageMask.
+    /// Pass 0 for older firmware that doesn't send this field; the
+    /// sphere then renders 2-state (untouched / captured) only.
+    let partialMask: UInt32
 
     /// Live accelerometer reading from the rocket, in m/s² body-frame.
     /// Used purely for visualization: nose direction = -normalize(accel)
@@ -155,30 +162,43 @@ struct MagCalSphereView: UIViewRepresentable {
         scene.rootNode.addChildNode(rocket)
 
         // Initial state
-        applyState(view: view, coverageMask: coverageMask, liveAccel: liveAccel)
+        applyState(view: view, coverageMask: coverageMask,
+                   partialMask: partialMask, liveAccel: liveAccel)
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
-        applyState(view: view, coverageMask: coverageMask, liveAccel: liveAccel)
+        applyState(view: view, coverageMask: coverageMask,
+                   partialMask: partialMask, liveAccel: liveAccel)
     }
 
     // MARK: - State application
 
-    private func applyState(view: SCNView, coverageMask: UInt32, liveAccel: SIMD3<Float>?) {
+    private func applyState(view: SCNView, coverageMask: UInt32,
+                            partialMask: UInt32, liveAccel: SIMD3<Float>?) {
         guard let scene = view.scene else { return }
-        // Cell colours — sphere starts as a translucent red shell; each
-        // captured cell drops to near-zero opacity so the user sees the
-        // rocket through the gap and feels the sphere "open up" as they
-        // rotate.  Front-facing red cells let the camera read back-side
-        // captured holes through them (the sphere is convex so back-
-        // side empty cells are visible through the front-side red ones).
+        // 3-state cell colouring (#148): cells start fully opaque red
+        // (untouched), drop to mid-opacity once they have at least one
+        // sample (in-progress / partialMask), then become transparent
+        // once they cross the per-wedge sample threshold (captured /
+        // coverageMask).  Gives the user honest feedback about how
+        // much each orientation is contributing to the fit — a section
+        // doesn't "vanish" on a fleeting visit.  Old firmware that
+        // doesn't send partialMask just shows 2-state (untouched /
+        // captured) — same as before.
         for cellIdx in 0..<MagCalCells.cellPolygons.count {
             guard let node = scene.rootNode.childNode(withName: "cell-\(cellIdx)", recursively: true),
                   let mat = node.geometry?.firstMaterial else { continue }
-            let bit = (coverageMask >> UInt32(cellIdx)) & 1
+            let capturedBit = (coverageMask >> UInt32(cellIdx)) & 1
+            let partialBit  = (partialMask  >> UInt32(cellIdx)) & 1
             mat.diffuse.contents = UIColor(red: 0.95, green: 0.35, blue: 0.35, alpha: 1.0)
-            mat.transparency = bit == 1 ? 0.0 : 0.55
+            if capturedBit == 1 {
+                mat.transparency = 0.0   // captured — clear
+            } else if partialBit == 1 {
+                mat.transparency = 0.28  // in-progress — half-faded
+            } else {
+                mat.transparency = 0.55  // untouched — full red
+            }
         }
         // Rocket orientation — rotate ONLY the rocket node so the user
         // sees the rocket move inside a stationary sphere.  The IMU

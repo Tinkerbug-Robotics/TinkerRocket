@@ -88,7 +88,8 @@ final class MagCalStatusVerifyTests: XCTestCase {
                 residualUT: 0.0,
                 rejectCode: code,
                 coverageMask: 0,
-                liveX_uT: 0, liveY_uT: 0, liveZ_uT: 0)
+                liveX_uT: 0, liveY_uT: 0, liveZ_uT: 0,
+                partialMask: 0)
             XCTAssertFalse(s.rejectMessage.isEmpty,
                            "Missing rejectMessage for \(code)")
         }
