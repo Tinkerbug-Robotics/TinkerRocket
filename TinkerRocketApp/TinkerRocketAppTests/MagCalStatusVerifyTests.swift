@@ -28,31 +28,43 @@ final class MagCalStatusVerifyTests: XCTestCase {
         XCTAssertEqual(s.rejectCode, .ok)
     }
 
-    /// On verify failure the FC publishes sub_type=REVIEW with
-    /// reject_code=verifyFailed and stamps the worst |B| into
-    /// inst_field_uT_x10 so the message can quote it.
-    func testDecodeVerifyFailedFrame() {
+    /// Verify-too-high frame: FC stamps the observed max |B| into
+    /// inst_field_uT_x10 and the message names the 70 µT cap.
+    func testDecodeVerifyTooHighFrame() {
         var bytes = [UInt8](repeating: 0, count: 32)
         bytes[4] = MagCalSubType.review.rawValue
         bytes[5] = 6
         bytes[6] = 0xC8; bytes[7] = 0x00          // sample_count = 200
         // inst_field_uT_x10 = 890 → 0x7A 0x03  (worst observed 89.0 µT — Eagle Claw)
         bytes[8] = 0x7A; bytes[9] = 0x03
-        // bytes 10..15 offset = 0 (FC restored prior cal already)
-        // bytes 16..17 field_R = 0
-        // bytes 18..19 residual = 0
-        bytes[20] = MagCalRejectCode.verifyFailed.rawValue
+        bytes[20] = MagCalRejectCode.verifyTooHigh.rawValue
 
         guard let s = MagCalStatus.decode(bytes) else {
-            return XCTFail("decode returned nil for verify-failed frame")
+            return XCTFail("decode returned nil for verify-too-high frame")
         }
         XCTAssertEqual(s.subType, .review)
-        XCTAssertEqual(s.rejectCode, .verifyFailed)
+        XCTAssertEqual(s.rejectCode, .verifyTooHigh)
         XCTAssertEqual(s.instantaneousFieldUT, 89.0, accuracy: 0.01)
         XCTAssertTrue(s.rejectMessage.contains("89.0"),
                       "rejectMessage should quote worst |B|, got: \(s.rejectMessage)")
-        XCTAssertTrue(s.rejectMessage.contains("20") && s.rejectMessage.contains("70"),
-                      "rejectMessage should call out the [20, 70] µT trust band, got: \(s.rejectMessage)")
+        XCTAssertTrue(s.rejectMessage.contains("70"),
+                      "rejectMessage should call out the 70 µT cap, got: \(s.rejectMessage)")
+    }
+
+    /// Verify-low-coverage frame: the user didn't rotate enough during
+    /// verify.  Message should explain that, not quote a |B| value.
+    func testDecodeVerifyLowCoverageFrame() {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        bytes[4] = MagCalSubType.review.rawValue
+        bytes[20] = MagCalRejectCode.verifyLowCoverage.rawValue
+
+        guard let s = MagCalStatus.decode(bytes) else {
+            return XCTFail("decode returned nil")
+        }
+        XCTAssertEqual(s.rejectCode, .verifyLowCoverage)
+        XCTAssertTrue(s.rejectMessage.lowercased().contains("rotat") ||
+                      s.rejectMessage.lowercased().contains("orientation"),
+                      "rejectMessage should tell the user to rotate more, got: \(s.rejectMessage)")
     }
 
     /// Round-trip: every defined MagCalRejectCode value has a non-empty
@@ -61,7 +73,10 @@ final class MagCalStatusVerifyTests: XCTestCase {
     func testAllRejectCodesHaveMessages() {
         let allCodes: [MagCalRejectCode] = [.ok, .rTooLow, .rTooHigh,
                                             .highResidual, .lowCoverage,
-                                            .verifyFailed]
+                                            .verifyFailed,
+                                            .verifyTooHigh, .verifyTooLow,
+                                            .verifyRangeWide,
+                                            .verifyLowCoverage, .verifyFewSamples]
         for code in allCodes {
             let s = MagCalStatus(
                 subType: .review,

@@ -47,6 +47,12 @@ struct MagCalSphereView: UIViewRepresentable {
         view.backgroundColor = .systemBackground
         view.allowsCameraControl = false
         view.antialiasingMode = .multisampling4X
+        // Continuous render — without this SCNView only redraws on
+        // animation or input, so rocket-orientation updates pushed via
+        // simdOrientation in updateUIView don't actually appear on
+        // screen between SwiftUI re-renders.  Cost is minimal at 60 Hz
+        // for this small scene.
+        view.rendersContinuously = true
 
         let scene = SCNScene()
         view.scene = scene

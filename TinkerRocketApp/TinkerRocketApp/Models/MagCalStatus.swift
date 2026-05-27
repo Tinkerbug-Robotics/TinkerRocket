@@ -31,16 +31,23 @@ enum MagCalSubType: UInt8 {
 }
 
 enum MagCalRejectCode: UInt8 {
-    case ok               = 0
-    case rTooLow          = 1   // fitted R < 20 µT
-    case rTooHigh         = 2   // fitted R > 80 µT
-    case highResidual     = 3   // RMS residual above threshold (poor sphere fit)
-    case lowCoverage      = 4   // < min populated wedges (insufficient tumble coverage)
-    // #206 — post-accept verify pass saw the corrected |B| wander
-    // outside the [20, 70] µT band, spread by more than 25 µT across
-    // the rotation, or didn't gather enough samples / rotation.  The
-    // frame's instantaneousFieldUT carries the worst observed |B|.
-    case verifyFailed     = 5
+    case ok                       = 0
+    case rTooLow                  = 1   // fitted R < 20 µT
+    case rTooHigh                 = 2   // fitted R > 80 µT
+    case highResidual             = 3   // RMS residual above threshold (poor sphere fit)
+    case lowCoverage              = 4   // < min populated wedges (insufficient tumble coverage)
+    // #206 — post-accept verification pass failed.  Originally a single
+    // verifyFailed code, but the iOS message ("corrected |B| reached
+    // X µT") was misleading when the gate that actually failed was
+    // coverage or sample-count rather than |B| magnitude.  Split into
+    // sub-codes so the UI can be specific.  In all cases the frame's
+    // instantaneousFieldUT carries the worst observed |B|.
+    case verifyFailed             = 5   // legacy / kept for back-compat
+    case verifyTooHigh            = 6
+    case verifyTooLow             = 7
+    case verifyRangeWide          = 8
+    case verifyLowCoverage        = 9
+    case verifyFewSamples         = 10
 }
 
 struct MagCalStatus: Equatable {
@@ -99,6 +106,9 @@ struct MagCalStatus: Equatable {
     let liveZ_uT: Float
 
     /// Convenience: human-readable explanation for a non-zero rejectCode.
+    /// Each verify-* sub-code names the specific gate that tripped so the
+    /// user knows whether to re-tumble, re-rotate, or move away from
+    /// interference.  instantaneousFieldUT carries the worst observed |B|.
     var rejectMessage: String {
         switch rejectCode {
         case .ok:            return "Looks good"
@@ -106,10 +116,23 @@ struct MagCalStatus: Equatable {
         case .rTooHigh:      return "Field magnitude too high — magnet nearby?"
         case .highResidual:  return "Sphere fit poor — likely soft-iron distortion"
         case .lowCoverage:   return "Insufficient orientation coverage — keep tumbling"
+        case .verifyTooHigh:
+            return String(format: "Verify failed — corrected |B| reached %.1f µT (above 70 µT cap). Try moving away from interference.",
+                          instantaneousFieldUT)
+        case .verifyTooLow:
+            return String(format: "Verify failed — corrected |B| dropped to %.1f µT (below 20 µT floor). Cal may be over-subtracting.",
+                          instantaneousFieldUT)
+        case .verifyRangeWide:
+            return String(format: "Verify failed — corrected |B| swung too widely (worst %.1f µT, spread > 25 µT). Hard-iron residual remained large.",
+                          instantaneousFieldUT)
+        case .verifyLowCoverage:
+            return "Verify failed — didn't rotate the rocket through enough orientations during the verify window.  Keep rotating, then tap Done."
+        case .verifyFewSamples:
+            return "Verify failed — not enough samples accumulated.  Verify longer next time."
         case .verifyFailed:
-            // The frame stamps the worst observed |B| into instantaneousFieldUT
-            // so we can show the user the actual number that tripped the gate.
-            return String(format: "Verify failed — corrected |B| reached %.1f µT (need 20–70 µT, tight spread)",
+            // Legacy code path — kept for back-compat with older firmware
+            // builds that haven't migrated to the specific sub-codes.
+            return String(format: "Verify failed — corrected |B| reached %.1f µT.",
                           instantaneousFieldUT)
         }
     }
@@ -319,32 +342,48 @@ extension MagCalStatus {
         return centerMagnitudeUT / fieldR_uT
     }
 
-    /// UI severity bucket for the |c| / R ratio.  Thresholds picked from
-    /// 2026-05-17 field flights (Eagle Claw 0.84 → red, RIM-66 0.67 →
-    /// red; a clean post-bench cal typically lands under 0.2 → ok).
+    /// UI severity bucket for the *absolute* center magnitude |c|.
+    /// After #148's zero-on-session-start change, |c| measures the full
+    /// PCB hard-iron (not residual-after-prior-cal), so the older |c|/R
+    /// ratio thresholds (0.3 / 0.5) were always red on a fresh new-PCB
+    /// IIS2MDC (which carries ~1.7 mT of board-level hard-iron).
+    ///
+    /// New thresholds key off absolute µT instead:
+    ///   <  2500 µT → ok (typical IIS2MDC PCB range is 1.5–2.0 mT)
+    ///   2500–4000 µT → caution (unusually high but plausible)
+    ///   ≥ 4000 µT → high (approaching the chip's ±4915 µT OFFSET reg limit)
     /// Informational only — Accept is still allowed at any level.
     enum CenterWarning {
-        case ok       // ratio < 0.3
-        case caution  // 0.3 ≤ ratio < 0.5
-        case high     // ratio ≥ 0.5
+        case ok       // |c| < 2500 µT
+        case caution  // 2500 ≤ |c| < 4000 µT
+        case high     // |c| ≥ 4000 µT
 
         var helpText: String? {
             switch self {
             case .ok:
                 return nil
             case .caution, .high:
-                return "Large residual hard-iron — the fit absorbed a substantial offset. " +
-                       "Common cause is metal or electronics near the rocket during tumble. " +
-                       "Consider re-running on a wood/plastic surface with phones and tools " +
+                // The fit's |c| measures the FULL hard-iron the PCB carries
+                // (the chip's OFFSET regs are zeroed at session start now —
+                // see #148).  A new-PCB IIS2MDC carries ~1.7 mT of board-
+                // residual hard-iron from manufacturing, so a large |c|
+                // on a first cal is expected.  This warning is mostly a
+                // tip for *re*-cals (where a sudden change in |c| or a
+                // value much larger than ~1.8 mT suggests interference).
+                return "Large hard-iron offset.  This is normal for a fresh new-PCB " +
+                       "IIS2MDC (~1.7 mT typical).  If you're re-calibrating an " +
+                       "already-good board and seeing this for the first time, " +
+                       "likely cause is metal or electronics near the rocket during " +
+                       "tumble — try a wood/plastic surface with phones and tools " +
                        "moved at least 30 cm away."
             }
         }
     }
 
     var centerWarning: CenterWarning {
-        let r = centerToRRatio
-        if r >= 0.5 { return .high }
-        if r >= 0.3 { return .caution }
+        let c = centerMagnitudeUT
+        if c >= 4000 { return .high }
+        if c >= 2500 { return .caution }
         return .ok
     }
 }
@@ -356,5 +395,16 @@ enum MagCalConstants {
     static let maxSamples: UInt16 = 3200   // 32 accel-wedges × 100 slots each (#148)
     static let minSamples: UInt16 = 500
     static let minCoverageBins: UInt8 = 22 // MAG_CAL_MIN_COVERAGE_BINS, #148 (22/32)
+
+    // #148 — verify-window gates.  Keep in sync with
+    // MAG_CAL_VERIFY_* in RocketComputerTypes.h.  iOS uses these to
+    // show real-time pass/fail feedback while the user rotates during
+    // verify — the firmware applies the same thresholds when the user
+    // taps Done (or the 60 s safety timeout fires).
+    static let verifyMinUT: Float        = 20.0
+    static let verifyMaxUT: Float        = 70.0
+    static let verifyRangeUT: Float      = 25.0
+    static let verifyMinCoverageBins: UInt8 = 8
+    static let verifyMinSamples: UInt16  = 100
 }
 

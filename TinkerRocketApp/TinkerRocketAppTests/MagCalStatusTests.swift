@@ -52,43 +52,41 @@ final class MagCalStatusTests: XCTestCase {
     /// 2026-05-17 Eagle Claw — recovered hard-iron (-17, +31, +20) µT body
     /// frame against R = 48.7 µT → ratio ~0.84 → should land in .high.
     /// Convert µT back to LSB: divide by 0.15.
-    func testEagleClawWarningHigh() {
+    /// 2026-05-17 Eagle Claw historical residual was ~41 µT — well
+    /// under the new 2500 µT "interesting" threshold.  Should land .ok
+    /// because the new metric is absolute |c|, not |c|/R; small
+    /// residuals stay quiet regardless of R.
+    func testEagleClawHistoricalResidualOk() {
         let toLsb: (Float) -> Int16 = { Int16(($0 / 0.15).rounded()) }
         let s = makeStatus(
             offsetXYZ_lsb: (toLsb(-17.2), toLsb(30.8), toLsb(20.4)),
             R_uT: 48.7)
         XCTAssertEqual(s.centerMagnitudeUT, 41.0, accuracy: 0.5)
-        XCTAssertEqual(s.centerToRRatio, 0.84, accuracy: 0.02)
-        XCTAssertEqual(s.centerWarning, .high)
-        XCTAssertNotNil(s.centerWarning.helpText)
+        XCTAssertEqual(s.centerWarning, .ok)
     }
 
-    /// 2026-05-17 RIM-66 — recovered (-9, +11, +30) µT vs R = 49.2 µT → 0.67
-    /// → should also land in .high (above the 0.5 threshold).
-    func testRIM66WarningHigh() {
-        let toLsb: (Float) -> Int16 = { Int16(($0 / 0.15).rounded()) }
-        let s = makeStatus(
-            offsetXYZ_lsb: (toLsb(-8.8), toLsb(11.2), toLsb(29.5)),
-            R_uT: 49.2)
-        XCTAssertEqual(s.centerToRRatio, 0.67, accuracy: 0.02)
-        XCTAssertEqual(s.centerWarning, .high)
+    /// Fresh new-PCB IIS2MDC fit: ~1700 µT board hard-iron.  Expected
+    /// to be normal (.ok) — this is the typical board residual that
+    /// the cal is supposed to absorb.
+    func testFreshNewPCBOk() {
+        // 1700 µT / 0.15 = 11333 LSB; pure-X for simplicity.
+        let s = makeStatus(offsetXYZ_lsb: (11333, 0, 0), R_uT: 48.0)
+        XCTAssertEqual(s.centerMagnitudeUT, 1700.0, accuracy: 1.0)
+        XCTAssertEqual(s.centerWarning, .ok)
     }
 
-    /// Threshold transitions around the 0.30 (ok→caution) and 0.50
-    /// (caution→high) boundaries.  Use R=100 µT and explicit LSB values
-    /// so the 0.15 µT/LSB quantization doesn't trip the test — at 0.15
-    /// µT/LSB the smallest representable |c| step is 0.15 µT (= 0.0015
-    /// ratio at R=100), so we pick offsets that land cleanly either side
-    /// of each threshold.
+    /// Threshold transitions around the 2500 µT (ok→caution) and 4000
+    /// µT (caution→high) boundaries.  Use explicit LSB values so the
+    /// 0.15 µT/LSB quantization doesn't trip the test.
     func testWarningThresholds() {
-        // 199 lsb × 0.15 = 29.85 µT → 0.2985 ratio → ok (under 0.30).
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (199, 0, 0), R_uT: 100.0).centerWarning, .ok)
-        // 200 lsb × 0.15 = 30.00 µT → 0.300 ratio → caution (>= 0.30).
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (200, 0, 0), R_uT: 100.0).centerWarning, .caution)
-        // 333 lsb × 0.15 = 49.95 µT → 0.4995 ratio → still caution.
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (333, 0, 0), R_uT: 100.0).centerWarning, .caution)
-        // 334 lsb × 0.15 = 50.10 µT → 0.501 ratio → high (>= 0.50).
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (334, 0, 0), R_uT: 100.0).centerWarning, .high)
+        // 16666 lsb × 0.15 = 2499.9 µT → ok (under 2500).
+        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (16666, 0, 0), R_uT: 50.0).centerWarning, .ok)
+        // 16667 lsb × 0.15 = 2500.05 µT → caution (>= 2500).
+        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (16667, 0, 0), R_uT: 50.0).centerWarning, .caution)
+        // 26666 lsb × 0.15 = 3999.9 µT → still caution.
+        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (26666, 0, 0), R_uT: 50.0).centerWarning, .caution)
+        // 26667 lsb × 0.15 = 4000.05 µT → high (>= 4000).
+        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (26667, 0, 0), R_uT: 50.0).centerWarning, .high)
     }
 
     /// .ok should have no help text; non-.ok should have non-empty help.

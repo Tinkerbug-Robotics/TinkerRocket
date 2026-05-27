@@ -191,7 +191,7 @@ TEST(MagCalibratorVerify, FailsWhenFieldTooHigh) {
 
     int16_t cx, cy, cz; float R, res; uint8_t reject;
     cal.getResult(cx, cy, cz, R, res, reject);
-    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_FAILED);
+    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_TOO_HIGH);
     EXPECT_NEAR(worst, 80.0f, 1.0f);  // worst observed |B|
 }
 
@@ -207,7 +207,7 @@ TEST(MagCalibratorVerify, FailsWhenFieldTooLow) {
     EXPECT_EQ((int)cal.getState(), (int)MagCalibrator::State::REVIEW);
     int16_t cx, cy, cz; float R, res; uint8_t reject;
     cal.getResult(cx, cy, cz, R, res, reject);
-    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_FAILED);
+    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_TOO_LOW);
     EXPECT_NEAR(worst, 15.0f, 1.0f);
 }
 
@@ -225,7 +225,7 @@ TEST(MagCalibratorVerify, FailsWhenRangeTooWide) {
     EXPECT_EQ((int)cal.getState(), (int)MagCalibrator::State::REVIEW);
     int16_t cx, cy, cz; float R, res; uint8_t reject;
     cal.getResult(cx, cy, cz, R, res, reject);
-    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_FAILED);
+    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_RANGE_WIDE);
     // Worst is whichever extreme is further from R (~50 µT) — both are
     // equidistant here, so either 35 or 65 is acceptable.  Round-trip
     // through int16 LSB drops a small fraction of a µT, so test with
@@ -247,7 +247,7 @@ TEST(MagCalibratorVerify, FailsWhenTooFewSamples) {
     EXPECT_EQ((int)cal.getState(), (int)MagCalibrator::State::REVIEW);
     int16_t cx, cy, cz; float R, res; uint8_t reject;
     cal.getResult(cx, cy, cz, R, res, reject);
-    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_FAILED);
+    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_FEW_SAMPLES);
 }
 
 TEST(MagCalibratorVerify, FailsWhenStationary) {
@@ -267,7 +267,7 @@ TEST(MagCalibratorVerify, FailsWhenStationary) {
     EXPECT_EQ((int)cal.getState(), (int)MagCalibrator::State::REVIEW);
     int16_t cx, cy, cz; float R, res; uint8_t reject;
     cal.getResult(cx, cy, cz, R, res, reject);
-    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_FAILED);
+    EXPECT_EQ(reject, MAG_CAL_REJECT_VERIFY_LOW_COVERAGE);
     // Single wedge gets one coverage bit — below MAG_CAL_VERIFY_MIN_COVERAGE_BINS.
 }
 
@@ -316,5 +316,6 @@ TEST(MagCalibratorVerify, StatusFrameOnVerifyFailReportsReviewWithRejectCode) {
     MagCalStatusData frame;
     cal.buildStatusFrame(67890, frame);
     EXPECT_EQ(frame.sub_type, MAG_CAL_SUB_REVIEW);
-    EXPECT_EQ(frame.reject_code, MAG_CAL_REJECT_VERIFY_FAILED);
+    // 80 µT verify samples trip the TOO_HIGH gate.
+    EXPECT_EQ(frame.reject_code, MAG_CAL_REJECT_VERIFY_TOO_HIGH);
 }

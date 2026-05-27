@@ -78,14 +78,22 @@ public:
 
     // #206: Evaluate the post-accept rotation.  Call after at least
     // MAG_CAL_VERIFY_MIN_SAMPLES samples have flowed through addSample
-    // and (caller-driven) ≥5 s have elapsed.  Returns true on pass —
-    // state → APPLIED and the caller persists NVS.  Returns false on
-    // fail — state → REVIEW with fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED,
-    // and the caller restores the prior OFFSET regs.  No-op outside
-    // VERIFYING; returns false in that case.  Pulls the observed |B|
-    // worst-case into worst_uT for the rejected-frame telemetry so iOS
-    // can show the user what went wrong.
+    // and the user has signalled they're done rotating.  Returns true
+    // on pass — state → APPLIED and the caller persists NVS.  Returns
+    // false on fail — state → REVIEW with one of the verify reject
+    // sub-codes set, and the caller is responsible for zeroing the
+    // chip's OFFSET regs (or restoring prior on a full abort).  No-op
+    // outside VERIFYING; returns false in that case.  Pulls the
+    // observed |B| worst-case into worst_uT for the rejected-frame
+    // telemetry so iOS can show the user what went wrong.
     bool evaluateVerify(float& worst_uT);
+
+    // #148: Clear the verify min/max/coverage accumulators without
+    // leaving VERIFYING.  Lets the user tap "Retry verification" and
+    // start a fresh rotation pass without going all the way back to
+    // SAMPLING (which would invalidate the proposed fit).  No-op
+    // outside VERIFYING.
+    void resetVerify();
 
     // Reset to IDLE.  Call after consuming an APPLIED or ABORTED state.
     void clear();

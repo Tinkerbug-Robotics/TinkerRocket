@@ -128,6 +128,18 @@ bool MagCalibrator::accept()
     return true;
 }
 
+void MagCalibrator::resetVerify()
+{
+    if (state_ != State::VERIFYING) return;
+    verify_min_uT_ = 0.0f;
+    verify_max_uT_ = 0.0f;
+    verify_n_samples_ = 0;
+    verify_coverage_mask_ = 0;
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "resetVerify: cleared accumulators, staying in VERIFYING");
+#endif
+}
+
 bool MagCalibrator::evaluateVerify(float& worst_uT)
 {
     worst_uT = 0.0f;
@@ -139,8 +151,7 @@ bool MagCalibrator::evaluateVerify(float& worst_uT)
     // Sample-count floor first — without enough samples min/max are
     // meaningless and we'd flap on noise.
     if (verify_n_samples_ < MAG_CAL_VERIFY_MIN_SAMPLES) {
-        // Treat as fail-with-rotate-more so the user gets a clear retry.
-        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FEW_SAMPLES;
         worst_uT = verify_max_uT_;
         state_ = State::REVIEW;
 #ifdef ESP_PLATFORM
@@ -156,7 +167,7 @@ bool MagCalibrator::evaluateVerify(float& worst_uT)
     // by sensor noise).  Threshold is lower than SAMPLING because the
     // verify window is short — we just need *some* rotation diversity.
     if (cov_bins < MAG_CAL_VERIFY_MIN_COVERAGE_BINS) {
-        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_LOW_COVERAGE;
         worst_uT = verify_max_uT_;
         state_ = State::REVIEW;
 #ifdef ESP_PLATFORM
@@ -168,7 +179,7 @@ bool MagCalibrator::evaluateVerify(float& worst_uT)
 
     // Magnitude band gate.
     if (verify_max_uT_ > MAG_CAL_VERIFY_MAX_UT) {
-        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_TOO_HIGH;
         worst_uT = verify_max_uT_;
         state_ = State::REVIEW;
 #ifdef ESP_PLATFORM
@@ -178,7 +189,7 @@ bool MagCalibrator::evaluateVerify(float& worst_uT)
         return false;
     }
     if (verify_min_uT_ < MAG_CAL_VERIFY_MIN_UT) {
-        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_TOO_LOW;
         worst_uT = verify_min_uT_;
         state_ = State::REVIEW;
 #ifdef ESP_PLATFORM
@@ -190,7 +201,7 @@ bool MagCalibrator::evaluateVerify(float& worst_uT)
     // Range (max-min) gate — catches a residual hard-iron that keeps
     // |B| in the band on average but swings substantially with rotation.
     if (range_uT > MAG_CAL_VERIFY_RANGE_UT) {
-        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_FAILED;
+        fit_reject_code_ = MAG_CAL_REJECT_VERIFY_RANGE_WIDE;
         // Report whichever extreme is further from the fitted R as the
         // "worst" — that's the more diagnostic value for the user.
         worst_uT = ((fit_R_uT_ - verify_min_uT_) > (verify_max_uT_ - fit_R_uT_))

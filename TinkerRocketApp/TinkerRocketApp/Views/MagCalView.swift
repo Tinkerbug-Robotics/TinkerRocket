@@ -36,6 +36,15 @@ struct MagCalView: View {
     /// starts (sample_count transitions to 0).
     @StateObject private var accelCoverage = AccelCoverageTracker()
 
+    /// #148 verify-window |B| accumulators.  iOS tracks these locally
+    /// from the live status frames during VERIFYING so we can show
+    /// min/max/spread and a real-time pass/fail readout, all derived
+    /// from the same instantaneousFieldUT the firmware uses for its
+    /// own gates.  Reset on entry to .verifying and on Retry
+    /// verification.  nil means "no samples yet."
+    @State private var verifyMinUT: Float? = nil
+    @State private var verifyMaxUT: Float? = nil
+
     var body: some View {
         Form {
             // The view is mostly status-driven: intro/start, sampling,
@@ -56,6 +65,19 @@ struct MagCalView: View {
         // tagged with this board's id so the syncer can re-apply it on connect
         // and warn if a different board is later used.
         .onChange(of: device.magCalStatus) { newStatus in
+            // #148 verify-window |B| accumulators.  Update on every
+            // status frame received while VERIFYING; reset when we
+            // leave VERIFYING so the next entry starts fresh.
+            if let s = newStatus, s.subType == .verifying {
+                let b = s.instantaneousFieldUT
+                if b > 0 {  // FC sends 0 before the first verify sample
+                    verifyMinUT = min(verifyMinUT ?? b, b)
+                    verifyMaxUT = max(verifyMaxUT ?? b, b)
+                }
+            } else {
+                verifyMinUT = nil
+                verifyMaxUT = nil
+            }
             // (#132) snapshot a freshly-accepted cal into the active
             // rocket profile, tagged with this board's id so the
             // syncer can re-apply it on connect and warn if a
@@ -249,7 +271,7 @@ struct MagCalView: View {
                     HStack {
                         Text("Coverage")
                         Spacer()
-                        Text("\(s.coverageBins) / 26 wedges")
+                        Text("\(s.coverageBins) / 32 wedges")
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
@@ -355,14 +377,26 @@ struct MagCalView: View {
     private var verifyingSection: some View {
         Group {
             if let s = status {
+                // Pre-compute gate evaluation so the UI can colour rows
+                // and the Done button consistently.
+                let minB = verifyMinUT
+                let maxB = verifyMaxUT
+                let spread = (minB != nil && maxB != nil) ? (maxB! - minB!) : 0
+                let inBand   = (minB ?? 0) >= MagCalConstants.verifyMinUT &&
+                               (maxB ?? 0) <= MagCalConstants.verifyMaxUT
+                let tightEnough = spread <= MagCalConstants.verifyRangeUT
+                let coverageMet = s.coverageBins >= MagCalConstants.verifyMinCoverageBins
+                let samplesMet  = s.sampleCount >= MagCalConstants.verifyMinSamples
+                let allGood = (minB != nil) && inBand && tightEnough && coverageMet && samplesMet
+
                 Section {
                     VStack(spacing: 14) {
-                        Image(systemName: "checkmark.shield")
+                        Image(systemName: allGood ? "checkmark.shield.fill" : "checkmark.shield")
                             .font(.system(size: 40))
-                            .foregroundColor(.blue)
+                            .foregroundColor(allGood ? .green : .blue)
                         Text("Verifying calibration")
                             .font(.headline)
-                        Text("Rotate the rocket slowly through several orientations. The flight computer is confirming that the corrected magnetic field stays within Earth's range.")
+                        Text("Slowly rotate the rocket through every orientation — nose up, nose down, sides, and corners. Watch the live |B| stay between 20 and 70 µT with a tight spread. Tap Done when you've covered enough orientations.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -370,27 +404,91 @@ struct MagCalView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                 }
-                Section(header: Text("Live")) {
+                Section(header: Text("Live |B|"),
+                        footer: Text("Min and max are tracked from the moment Verify started (or the last Retry). The fit passes when all rows below are green.")) {
                     HStack {
-                        Text("|B|")
+                        Text("Current")
                         Spacer()
                         Text(String(format: "%.1f µT", s.instantaneousFieldUT))
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
                     HStack {
-                        Text("Samples")
+                        Text("Min observed")
                         Spacer()
-                        Text("\(s.sampleCount)")
+                        Text(minB.map { String(format: "%.1f µT", $0) } ?? "—")
                             .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(minB == nil ? .secondary :
+                                ((minB ?? 0) >= MagCalConstants.verifyMinUT ? .green : .red))
                     }
                     HStack {
-                        Text("Coverage")
+                        Text("Max observed")
                         Spacer()
-                        Text("\(s.coverageBins) / 26 wedges")
+                        Text(maxB.map { String(format: "%.1f µT", $0) } ?? "—")
                             .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(maxB == nil ? .secondary :
+                                ((maxB ?? 0) <= MagCalConstants.verifyMaxUT ? .green : .red))
+                    }
+                    HStack {
+                        Text("Spread")
+                        Spacer()
+                        Text(minB == nil ? "—" : String(format: "%.1f µT", spread))
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(minB == nil ? .secondary :
+                                (tightEnough ? .green : .red))
+                    }
+                }
+                Section(header: Text("Verify progress")) {
+                    HStack {
+                        Text("Rotation coverage")
+                        Spacer()
+                        Text("\(s.coverageBins) / 32 wedges (need ≥ \(MagCalConstants.verifyMinCoverageBins))")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(coverageMet ? .green : .secondary)
+                    }
+                    HStack {
+                        Text("Samples")
+                        Spacer()
+                        Text("\(s.sampleCount) / \(MagCalConstants.verifyMinSamples)+ needed")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(samplesMet ? .green : .secondary)
+                    }
+                }
+                Section(footer: Text(allGood
+                    ? "All checks green — tap Done to commit the cal."
+                    : "Keep rotating until every row above is green, then tap Done. If you over-shot the magnitude band you may need to step away from interference and Retry.")) {
+                    Button {
+                        device.sendMagCalVerifyDone()
+                    } label: {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Done verifying")
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
+                        .foregroundColor(.white)
+                    }
+                    .listRowBackground(allGood ? Color.green : Color.blue)
+                    Button {
+                        verifyMinUT = nil
+                        verifyMaxUT = nil
+                        device.sendMagCalVerifyReset()
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text("Retry verification")
+                            Spacer()
+                        }
+                    }
+                    Button(role: .destructive) {
+                        device.sendMagCalAbort()
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Image(systemName: "xmark.circle")
+                            Text("Abort calibration")
+                            Spacer()
+                        }
                     }
                 }
             }

@@ -780,14 +780,20 @@ enum MagCalRejectCode : uint8_t {
     MAG_CAL_REJECT_R_TOO_HIGH     = 2,  // fitted R > 80 µT
     MAG_CAL_REJECT_HIGH_RESIDUAL  = 3,  // RMS residual > threshold (poor sphere fit)
     MAG_CAL_REJECT_LOW_COVERAGE   = 4,  // < min populated wedges
-    // #206: post-accept verification pass observed a corrected |B| that
-    // wandered outside the trust band ([VERIFY_MIN_UT, VERIFY_MAX_UT]) or
-    // varied by more than VERIFY_RANGE_UT across the rotation.  On this
-    // code the FC restores the prior OFFSET regs and the iOS UI returns
-    // the user to Review with a "retry the cal in a less magnetic spot"
-    // prompt.  inst_field_uT_x10 in the same frame carries the worst
-    // observed |B| so the UI can show the user what went wrong.
-    MAG_CAL_REJECT_VERIFY_FAILED  = 5
+    // #206: post-accept verification pass failed.  Originally a single
+    // code; split into sub-codes so the iOS UI can show the actual gate
+    // that failed (the previous "Verify failed — corrected |B| reached
+    // X µT" message was misleading when the gate that failed was
+    // coverage or sample-count rather than |B| magnitude — observed by
+    // user 2026-05-26).  In all cases inst_field_uT_x10 in the same
+    // frame carries the worst observed |B| (most-extreme for the
+    // _TOO_HIGH/LOW/RANGE cases, last-observed for the COUNT cases).
+    MAG_CAL_REJECT_VERIFY_FAILED          = 5,  // legacy / kept for back-compat
+    MAG_CAL_REJECT_VERIFY_TOO_HIGH        = 6,  // verify |B| max > VERIFY_MAX_UT
+    MAG_CAL_REJECT_VERIFY_TOO_LOW         = 7,  // verify |B| min < VERIFY_MIN_UT
+    MAG_CAL_REJECT_VERIFY_RANGE_WIDE      = 8,  // max - min > VERIFY_RANGE_UT
+    MAG_CAL_REJECT_VERIFY_LOW_COVERAGE    = 9,  // < VERIFY_MIN_COVERAGE_BINS wedges during verify
+    MAG_CAL_REJECT_VERIFY_FEW_SAMPLES     = 10  // < VERIFY_MIN_SAMPLES samples accumulated
 };
 
 typedef struct __attribute__((packed))
@@ -1346,10 +1352,19 @@ static constexpr uint8_t GET_FLIGHT_SNAPSHOT  = 0xD3;  // FC→OC: request the l
 // FC→OC status message that carries either live progress or the final fit.
 static constexpr uint8_t MAG_CAL_START        = 0xD4;  // OC→FC: enter MAG_CALIBRATION + begin sampling
 static constexpr uint8_t MAG_CAL_ABORT        = 0xD5;  // OC→FC: drop sampling, return to READY
-static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: persist current fit, apply offsets, return to READY
+static constexpr uint8_t MAG_CAL_ACCEPT       = 0xD6;  // OC→FC: program new offsets, enter VERIFYING
 static constexpr uint8_t MAG_CAL_RETRY        = 0xD7;  // OC→FC: discard fit, restart sampling
 static constexpr uint8_t MAG_CAL_STATUS_MSG   = 0xD8;  // FC→OC: live progress / final result (MagCalStatusData)
 static constexpr uint8_t MAG_CAL_COMPUTE_FIT  = 0xD9;  // OC→FC: run sphere fit on current buffer, transition to REVIEW
+// User-driven verify (replaces the original 5 s auto-timeout) — see #148
+// for the UX rationale.  After ACCEPT puts the FC into VERIFYING, the
+// user rotates the rocket and watches a live min/max readout on iOS;
+// they tap "Done" when satisfied (sends DONE) or "Retry verification"
+// to clear the min/max accumulators and continue (sends RESET).  A 60 s
+// safety timeout is still armed on the FC in case the user just walks
+// away — without it the chip could sit with unverified offsets forever.
+static constexpr uint8_t MAG_CAL_VERIFY_DONE  = 0xDD;  // OC→FC: evaluate verify gates now; pass→APPLIED, fail→REVIEW
+static constexpr uint8_t MAG_CAL_VERIFY_RESET = 0xDE;  // OC→FC: clear verify min/max/coverage, stay in VERIFYING
 
 // --- App-driven mag cal apply / read (issue #132 — rocket profiles) ---
 // The iOS app holds source-of-truth for cal as part of a rocket profile.

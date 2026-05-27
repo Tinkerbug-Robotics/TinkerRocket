@@ -128,10 +128,13 @@ static int64_t mag_cal_verify_start_us = 0;
 static int16_t mag_cal_prior_cx = 0, mag_cal_prior_cy = 0, mag_cal_prior_cz = 0;
 static bool    mag_cal_session_active = false;
 static bool    mag_cal_verify_active  = false;
-// 5 seconds — enough to give the user time to rotate the rocket through
-// 6+ accel-wedges at the new-PCB IIS2MDC's ~100 Hz output rate while
-// keeping the cal flow snappy.
-static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 5'000'000;
+// Safety timeout for the verify window — was originally a 5 s auto-
+// dispatch but #148 turned verify into a user-driven step (the iOS
+// "Done verifying" button sends MAG_CAL_VERIFY_DONE).  60 s is a
+// safety only: if the user walks away without tapping anything, the
+// FC eventually evaluates so the chip isn't left with unverified
+// offsets indefinitely.
+static constexpr int64_t MAG_CAL_VERIFY_DURATION_US = 60'000'000;
 
 // Gyro zero-rate bias restored from NVS (#132).  Applied to sensor_collector
 // after begin(), alongside the mag offsets, so a stored sensor cal survives
@@ -3327,9 +3330,51 @@ static void loop_fc()
                     mag_cal_verify_start_us = esp_timer_get_time();
                     mag_cal_verify_active = true;
                     mag_cal_status_dirty = true;
-                    ESP_LOGI(TAG, "[MAGCAL] accept: VERIFYING — sampling for %lld µs "
-                                  "(rotate slowly through orientations)",
+                    ESP_LOGI(TAG, "[MAGCAL] accept: VERIFYING — user-driven (Done button) "
+                                  "with %lld µs safety timeout",
                              (long long)MAG_CAL_VERIFY_DURATION_US);
+                }
+            }
+            // #148 — user-driven verify completion.  iOS sends DONE when
+            // the user is satisfied with the verify rotation; the FC then
+            // evaluates the accumulators immediately (instead of waiting
+            // for the 60 s safety timeout to fire).  Same dispatch logic
+            // as the per-tick timer block — kept in sync by sharing the
+            // same evaluateVerify + pass/fail handling below.
+            else if (out_pending_command == MAG_CAL_VERIFY_DONE)
+            {
+                if (rocket_state != MAG_CALIBRATION || !mag_cal_verify_active)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] verify_done refused: not in VERIFYING");
+                }
+                else
+                {
+                    // Force the per-tick block below to dispatch on the
+                    // next iteration by zeroing the start timestamp —
+                    // (now - 0) is always >= MAG_CAL_VERIFY_DURATION_US.
+                    mag_cal_verify_start_us = 0;
+                    ESP_LOGI(TAG, "[MAGCAL] verify_done: user requested evaluation");
+                }
+            }
+            // #148 — user wants to redo the verify rotation without
+            // going all the way back to SAMPLING.  Clears verify
+            // min/max/coverage; the proposed-new cal stays on the chip
+            // so the next rotation pass measures the same corrected
+            // stream.
+            else if (out_pending_command == MAG_CAL_VERIFY_RESET)
+            {
+                if (rocket_state != MAG_CALIBRATION || !mag_cal_verify_active)
+                {
+                    ESP_LOGW(TAG, "[MAGCAL] verify_reset refused: not in VERIFYING");
+                }
+                else
+                {
+                    mag_calibrator.resetVerify();
+                    // Restart the safety timer so the user gets another
+                    // full window after a reset.
+                    mag_cal_verify_start_us = esp_timer_get_time();
+                    mag_cal_status_dirty = true;
+                    ESP_LOGI(TAG, "[MAGCAL] verify_reset: accumulators cleared, timer restarted");
                 }
             }
             // Issue #132 — app pushes a saved cal from the active rocket profile
