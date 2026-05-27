@@ -36,12 +36,6 @@ struct MagCalView: View {
     /// starts (sample_count transitions to 0).
     @StateObject private var accelCoverage = AccelCoverageTracker()
 
-    /// #148 auto-advance latch — flipped to true when we send computeFit
-    /// automatically (or the user taps "Fit now").  Prevents repeated
-    /// sends if coverage_bins ticks past the threshold multiple times.
-    /// Reset to false on every fresh entry to .sampling.
-    @State private var didAutoFit: Bool = false
-
     var body: some View {
         Form {
             // The view is mostly status-driven: intro/start, sampling,
@@ -62,13 +56,6 @@ struct MagCalView: View {
         // tagged with this board's id so the syncer can re-apply it on connect
         // and warn if a different board is later used.
         .onChange(of: device.magCalStatus) { newStatus in
-            // #148: reset the auto-fit latch on every fresh sampling
-            // entry so retry/restart paths re-arm.  We watch for the
-            // sub-type leaving REVIEW or arriving at SAMPLING; either
-            // direction covers Start, Retry, and the post-Abort restart.
-            if let s = newStatus, s.subType == .sampling, s.sampleCount == 0 {
-                didAutoFit = false
-            }
             // (#132) snapshot a freshly-accepted cal into the active
             // rocket profile, tagged with this board's id so the
             // syncer can re-apply it on connect and warn if a
@@ -196,41 +183,32 @@ struct MagCalView: View {
                             .font(.system(.body, design: .monospaced))
                     }
                 }
-                // #148: auto-advance to Review at min coverage.  We send
-                // computeFit when coverage_bins clears the firmware-side
-                // MAG_CAL_MIN_COVERAGE_BINS threshold and at least the
-                // sample-count floor is also met.  Once-only: the sub_type
-                // change away from .sampling stops further sends.
-                .onChange(of: s.coverageBins) { newValue in
-                    if !didAutoFit
-                        && newValue >= MagCalAutoFitThresholds.minCoverage
-                        && s.sampleCount >= MagCalConstants.minSamples
-                    {
-                        didAutoFit = true
-                        device.sendMagCalComputeFit()
-                    }
-                }
-                // Manual override — same button as before but renamed so
-                // the user knows it's not required for normal flow.  Stays
-                // disabled until min samples reached so an over-eager tap
-                // can't ship a bad fit.
-                let canFit = s.sampleCount >= MagCalConstants.minSamples
-                let coverageMet = s.coverageBins >= MagCalAutoFitThresholds.minCoverage
-                Section(footer: Text(coverageMet
-                    ? "Coverage met — fitting now."
-                    : "Keep rotating until at least \(MagCalAutoFitThresholds.minCoverage) of 32 cells are green. The fit will run automatically when ready.")) {
+                // Compute Fit is user-driven — we DON'T auto-advance even
+                // once coverage clears the threshold, so the user can
+                // keep rotating to fill remaining cells.  The button
+                // enables at the firmware-side coverage floor and turns
+                // into the primary action; below it the user knows they
+                // can keep going.
+                let hasSamples = s.sampleCount >= MagCalConstants.minSamples
+                let coverageMet = s.coverageBins >= MagCalConstants.minCoverageBins
+                let canFit = hasSamples && coverageMet
+                Section(footer: Text(canFit
+                    ? "Ready to fit. Keep rotating to cover any remaining cells, or tap Compute Fit when you're satisfied."
+                    : !hasSamples
+                        ? "Collecting samples — keep rotating. Need at least \(MagCalConstants.minSamples)."
+                        : "Need at least \(MagCalConstants.minCoverageBins) of 32 cells covered before the fit can run.")) {
                     Button {
-                        didAutoFit = true
                         device.sendMagCalComputeFit()
                     } label: {
                         HStack {
-                            Image(systemName: "bolt.fill")
-                            Text("Fit now")
+                            Image(systemName: "checkmark.circle.fill")
+                            Text("Compute Fit")
+                                .fontWeight(.semibold)
                             Spacer()
                         }
-                        .foregroundColor(canFit ? .white : .gray)
+                        .foregroundColor(canFit ? .white : Color(.systemGray2))
                     }
-                    .listRowBackground(canFit && !coverageMet ? Color.blue : Color(.systemGray5))
+                    .listRowBackground(canFit ? Color.blue : Color(.systemGray5))
                     .disabled(!canFit)
                 }
             } else {

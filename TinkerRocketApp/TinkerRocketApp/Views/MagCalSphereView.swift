@@ -100,12 +100,18 @@ struct MagCalSphereView: UIViewRepresentable {
             sphereContainer.addChildNode(cellNode)
         }
 
-        // Rocket — simple cylinder body + cone nose along its local +Y
-        // (SCNCylinder grows along Y by default).  Tail end at -Y, nose
-        // at +Y.  Rocket is a SEPARATE node (sibling of sphereContainer,
-        // not a child) so its rotation doesn't drag the sphere along —
-        // the user sees the rocket move freely inside a stationary
-        // sphere as they physically rotate the rocket on the bench.
+        // Rocket — simple cylinder body + cone nose.  Firmware body-frame
+        // convention (user-confirmed): +X = nose direction, +Y = out the
+        // right-hand side, +Z = up (right-handed).  SCNCylinder grows
+        // along its local +Y, so we build the parts in a model frame
+        // where +Y is nose-forward and then wrap them in a sub-node
+        // rotated -90° around Z, which maps model's +Y → outer +X.
+        // After the wrap, the rocket node's local +X is the nose
+        // direction, matching the firmware convention.  Rocket is a
+        // sibling of sphereContainer (not a child) so its rotation
+        // doesn't drag the sphere along — the user sees the rocket
+        // move freely inside a stationary sphere as they physically
+        // rotate the rocket on the bench.
         let bodyHalf = MagCalSphereView.rocketBodyHalf
         let bodyR = MagCalSphereView.rocketRadius
         let body = SCNCylinder(radius: CGFloat(bodyR), height: CGFloat(bodyHalf * 2 * 0.75))
@@ -121,18 +127,24 @@ struct MagCalSphereView: UIViewRepresentable {
         let fin = SCNBox(width: CGFloat(bodyR * 1.4), height: CGFloat(bodyR * 1.4), length: 0.01, chamferRadius: 0)
         fin.firstMaterial?.diffuse.contents = UIColor.systemGray4
 
-        let rocket = SCNNode()
-        rocket.name = "rocket"
-        rocket.addChildNode(bodyNode)
-        rocket.addChildNode(noseNode)
-        // 3 fins around the tail at 120° intervals
+        // Inner model node — nose along its local +Y as built above.
+        let model = SCNNode()
+        model.addChildNode(bodyNode)
+        model.addChildNode(noseNode)
+        // 3 fins around the tail at 120° intervals (in model-local frame).
         for k in 0..<3 {
             let f = SCNNode(geometry: fin)
             let a = Float(k) * (2 * .pi / 3)
             f.position = SCNVector3(cos(a) * bodyR * 1.0, -bodyHalf * 0.8, sin(a) * bodyR * 1.0)
             f.eulerAngles = SCNVector3(0, a, 0)
-            rocket.addChildNode(f)
+            model.addChildNode(f)
         }
+        // Rotate -90° around Z so model's +Y (nose) → outer +X (nose).
+        model.eulerAngles = SCNVector3(0, 0, -Float.pi / 2)
+
+        let rocket = SCNNode()
+        rocket.name = "rocket"
+        rocket.addChildNode(model)
         // Sibling of sphereContainer (not a child) — see comment above.
         scene.rootNode.addChildNode(rocket)
 
@@ -164,14 +176,21 @@ struct MagCalSphereView: UIViewRepresentable {
             mat.transparency = bit == 1 ? 0.32 : 0.14
         }
         // Rocket orientation — rotate ONLY the rocket node so the user
-        // sees the rocket move inside a stationary sphere.  Body-frame
-        // gravity = liveAccel; the rocket's local "up" axis (+Y) should
-        // align with world's "up" when gravity is along body's -Y, i.e.
-        // we want a rotation that maps -normalize(accel) → world +Y.
+        // sees the rocket move inside a stationary sphere.  The IMU
+        // reports specific force: at rest it reads +g along whatever
+        // body axis points toward world-up (i.e. against gravity).  So
+        // normalize(accel) is the body-frame direction pointing world-up.
+        //
+        // Body frame (user-confirmed): +X = nose, +Y = right side, +Z = up.
+        // Rocket-upright-on-pad case: nose points to world-up, so
+        // accel ≈ (+g, 0, 0) → bodyUp = (1, 0, 0) = body +X = nose.  We
+        // want the on-screen rocket nose (rocket's local +X after the
+        // model wrap) to point world-up, so the rotation we apply must
+        // map normalize(accel) → world +Y (SceneKit's up).
         if let g = liveAccel, simd_length(g) > 0.1 {
-            let up: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
-            let bodyUp = -simd_normalize(g)
-            let q = quaternionFromTo(bodyUp, up)
+            let worldUp: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+            let bodyUp = simd_normalize(g)
+            let q = quaternionFromTo(bodyUp, worldUp)
             scene.rootNode.childNode(withName: "rocket", recursively: false)?
                 .simdOrientation = q
         }
