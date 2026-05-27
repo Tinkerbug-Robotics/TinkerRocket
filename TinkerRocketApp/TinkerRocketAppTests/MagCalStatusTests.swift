@@ -50,13 +50,8 @@ final class MagCalStatusTests: XCTestCase {
         XCTAssertEqual(s.centerWarning, .ok)
     }
 
-    /// 2026-05-17 Eagle Claw — recovered hard-iron (-17, +31, +20) µT body
-    /// frame against R = 48.7 µT → ratio ~0.84 → should land in .high.
-    /// Convert µT back to LSB: divide by 0.15.
     /// 2026-05-17 Eagle Claw historical residual was ~41 µT — well
-    /// under the new 2500 µT "interesting" threshold.  Should land .ok
-    /// because the new metric is absolute |c|, not |c|/R; small
-    /// residuals stay quiet regardless of R.
+    /// under the chip-limit warning threshold.  Should land .ok.
     func testEagleClawHistoricalResidualOk() {
         let toLsb: (Float) -> Int16 = { Int16(($0 / 0.15).rounded()) }
         let s = makeStatus(
@@ -66,9 +61,9 @@ final class MagCalStatusTests: XCTestCase {
         XCTAssertEqual(s.centerWarning, .ok)
     }
 
-    /// Fresh new-PCB IIS2MDC fit: ~1700 µT board hard-iron.  Expected
-    /// to be normal (.ok) — this is the typical board residual that
-    /// the cal is supposed to absorb.
+    /// Fresh new-PCB IIS2MDC fit: ~1700 µT board hard-iron — typical,
+    /// nowhere near the chip's ±4915 µT OFFSET register limit, so the
+    /// warning stays quiet (.ok).
     func testFreshNewPCBOk() {
         // 1700 µT / 0.15 = 11333 LSB; pure-X for simplicity.
         let s = makeStatus(offsetXYZ_lsb: (11333, 0, 0), R_uT: 48.0)
@@ -76,18 +71,15 @@ final class MagCalStatusTests: XCTestCase {
         XCTAssertEqual(s.centerWarning, .ok)
     }
 
-    /// Threshold transitions around the 2500 µT (ok→caution) and 4000
-    /// µT (caution→high) boundaries.  Use explicit LSB values so the
-    /// 0.15 µT/LSB quantization doesn't trip the test.
+    /// Threshold transition at 4500 µT — the only failure mode for
+    /// |c| alone is approaching the chip's ±4915 µT OFFSET register
+    /// range.  Below the threshold, every plausible PCB hard-iron
+    /// reading stays green.
     func testWarningThresholds() {
-        // 16666 lsb × 0.15 = 2499.9 µT → ok (under 2500).
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (16666, 0, 0), R_uT: 50.0).centerWarning, .ok)
-        // 16667 lsb × 0.15 = 2500.05 µT → caution (>= 2500).
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (16667, 0, 0), R_uT: 50.0).centerWarning, .caution)
-        // 26666 lsb × 0.15 = 3999.9 µT → still caution.
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (26666, 0, 0), R_uT: 50.0).centerWarning, .caution)
-        // 26667 lsb × 0.15 = 4000.05 µT → high (>= 4000).
-        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (26667, 0, 0), R_uT: 50.0).centerWarning, .high)
+        // 29999 lsb × 0.15 = 4499.85 µT → ok (just under).
+        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (29999, 0, 0), R_uT: 50.0).centerWarning, .ok)
+        // 30000 lsb × 0.15 = 4500.00 µT → high (== threshold).
+        XCTAssertEqual(makeStatus(offsetXYZ_lsb: (30000, 0, 0), R_uT: 50.0).centerWarning, .high)
     }
 
 }

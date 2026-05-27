@@ -120,7 +120,8 @@ struct MagCalView: View {
                 .padding(.vertical, 4)
             }
 
-            Section(header: Text("How it works")) {
+            Section(header: Text("How it works"),
+                    footer: Text("The cal absorbs everything magnetic that travels with the rocket — battery, recovery hardware, the airframe itself. For the cal to match what the flight computer sees in flight, the rocket should be in flight configuration when you start.")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Hold the rocket clear of laptops, phones, tools, and steel surfaces.", systemImage: "1.circle.fill")
                     Label("After tapping Start, slowly rotate the rocket through every orientation. A red sphere shows on the next screen — patches fall away as each direction is captured.", systemImage: "2.circle.fill")
@@ -276,24 +277,24 @@ struct MagCalView: View {
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
-                    // Issue #207: surface |c| in µT.  After #148 zeroed
-                    // the chip on session start, the fit's |c| measures
-                    // the FULL board hard-iron, which is large (~1.7 mT)
-                    // on a fresh new-PCB IIS2MDC — this is normal, not a
-                    // user error.  We just colour the row orange and show
-                    // a short reminder about flight configuration; no
-                    // multi-paragraph warning that implies anything's wrong.
-                    let isLargeOffset = s.centerWarning != .ok
+                    // Issue #207 / #148: |c| measures the full PCB
+                    // hard-iron.  Almost any value < the chip's ±4915 µT
+                    // OFFSET register range subtracts cleanly, so we only
+                    // warn near that limit — at typical 1.7 mT this stays
+                    // green.  The intro screen carries the "ensure flight
+                    // configuration" tip that used to live here, since
+                    // that advice applies regardless of |c|.
+                    let chipLimitConcern = s.centerWarning != .ok
                     HStack {
                         Text("Offset |c|")
-                            .foregroundColor(isLargeOffset ? .orange : .primary)
+                            .foregroundColor(chipLimitConcern ? .orange : .primary)
                         Spacer()
                         Text(String(format: "%.1f µT", s.centerMagnitudeUT))
-                            .foregroundColor(isLargeOffset ? .orange : .secondary)
+                            .foregroundColor(chipLimitConcern ? .orange : .secondary)
                             .font(.system(.body, design: .monospaced))
                     }
-                    if isLargeOffset {
-                        Text("Large offset detected — make sure the computer is in flight configuration (flight battery, recovery hardware, anything else that travels with the rocket) so the cal absorbs the same magnetics it'll see in flight.")
+                    if chipLimitConcern {
+                        Text("Bias is approaching the chip's ±4915 µT OFFSET-register range — the chip may not be able to fully subtract this. Try re-calibrating; if it persists, the board may have unusual magnetics.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

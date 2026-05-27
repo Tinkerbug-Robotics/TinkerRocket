@@ -354,27 +354,19 @@ extension MagCalStatus {
     }
 
     /// UI severity bucket for the *absolute* center magnitude |c|.
-    /// After #148's zero-on-session-start change, |c| measures the full
-    /// PCB hard-iron (not residual-after-prior-cal), so the older |c|/R
-    /// ratio thresholds (0.3 / 0.5) were always red on a fresh new-PCB
-    /// IIS2MDC (which carries ~1.7 mT of board-level hard-iron).
-    ///
-    /// New thresholds key off absolute µT instead:
-    ///   <  2500 µT → ok (typical IIS2MDC PCB range is 1.5–2.0 mT)
-    ///   2500–4000 µT → caution (unusually high but plausible)
-    ///   ≥ 4000 µT → high (approaching the chip's ±4915 µT OFFSET reg limit)
-    /// Informational only — Accept is still allowed at any level.
+    /// Only flags an actual problem — a "large" bias in itself isn't
+    /// bad (the cal absorbs it), the only failure mode for |c| alone is
+    /// approaching the chip's ±4915 µT OFFSET register range, beyond
+    /// which the IIS2MDC can't fully subtract the bias.  Typical fresh
+    /// new-PCB IIS2MDC sits around 1.7 mT — well under 4500 µT, so the
+    /// row stays green.
     enum CenterWarning {
-        case ok       // |c| < 2500 µT
-        case caution  // 2500 ≤ |c| < 4000 µT
-        case high     // |c| ≥ 4000 µT
+        case ok       // |c| < 4500 µT (chip can subtract it)
+        case high     // |c| ≥ 4500 µT (approaching chip OFFSET range)
     }
 
     var centerWarning: CenterWarning {
-        let c = centerMagnitudeUT
-        if c >= 4000 { return .high }
-        if c >= 2500 { return .caution }
-        return .ok
+        return centerMagnitudeUT >= 4500 ? .high : .ok
     }
 }
 
