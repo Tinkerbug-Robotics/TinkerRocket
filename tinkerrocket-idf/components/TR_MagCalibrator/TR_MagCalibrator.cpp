@@ -121,6 +121,16 @@ bool MagCalibrator::accept()
     verify_max_uT_ = 0.0f;
     verify_n_samples_ = 0;
     verify_coverage_mask_ = 0;
+    // #148 — clear last_x/y/z so the first MAG_CAL_STATUS frame
+    // published after entering VERIFYING reports inst_field_uT_x10 = 0
+    // instead of carrying the pre-OFFSET-program raw |B| (~1700 µT on a
+    // fresh new-PCB IIS2MDC) from the last SAMPLING sample.  iOS skips
+    // zero |B| values when accumulating min/max, so without this clear
+    // the stale ~1700 µT polluted verify_max and tripped the TOO_HIGH /
+    // RANGE_WIDE gates even when the corrected stream was fine.
+    last_x_ = 0;
+    last_y_ = 0;
+    last_z_ = 0;
     state_ = State::VERIFYING;
 #ifdef ESP_PLATFORM
     ESP_LOGI(TAG, "accept: VERIFYING (cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT)",
