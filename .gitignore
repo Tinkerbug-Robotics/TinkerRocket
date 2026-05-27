@@ -3,6 +3,10 @@ build/
 *.o
 *.elf
 *.bin
+
+# Xcode per-user state (snuck into 5f909fc; ignore properly going forward).
+**/xcuserdata/
+*.xcuserstate
 *.hex
 *.map
 
