@@ -224,6 +224,16 @@ private:
     uint16_t verify_n_samples_;
     uint32_t verify_coverage_mask_;
 
+    // #148 — after accept() programs the chip's IIS2MDC OFFSET regs,
+    // the chip's output reg may still hold the pre-OFFSET measurement
+    // from the SAMPLING phase (the new offsets only apply to the next
+    // ODR cycle, ~10 ms later).  Without discarding those first few
+    // reads, the pre-OFFSET ~1.7 mT raw |B| leaks into the iOS
+    // verify-max accumulator and trips the TOO_HIGH / RANGE_WIDE
+    // gates.  Discard a few samples to be safely past the chip's
+    // first refresh; at 100 Hz ODR each sample is 10 ms so 3 is ~30 ms.
+    uint8_t  verify_skip_remaining_;
+
     // Map a unit-vector direction to a wedge index 0..25.  Returns
     // 26 (= invalid) if the input is the zero vector.
     static uint8_t directionWedge(int16_t x, int16_t y, int16_t z);

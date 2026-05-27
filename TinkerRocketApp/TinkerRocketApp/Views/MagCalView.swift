@@ -328,7 +328,7 @@ struct MagCalView: View {
                 }
 
                 if s.rejectCode == .ok {
-                    Section(footer: Text("Programs the offset into the chip and lets you check it before saving.  You'll see live |B| as you rotate the rocket.")) {
+                    Section(footer: Text("Verify is the recommended path — it programs the offset into the chip and lets you confirm with a live |B| readout. Save and apply skips verification and writes the cal to flight-computer memory immediately.")) {
                         Button {
                             device.sendMagCalAccept()
                         } label: {
@@ -341,6 +341,15 @@ struct MagCalView: View {
                             .foregroundColor(.white)
                         }
                         .listRowBackground(Color.blue)
+                        Button {
+                            device.sendMagCalForceApply()
+                        } label: {
+                            HStack {
+                                Image(systemName: "tray.and.arrow.down.fill")
+                                Text("Save and apply (skip verify)")
+                                Spacer()
+                            }
+                        }
                     }
                 }
                 Section {

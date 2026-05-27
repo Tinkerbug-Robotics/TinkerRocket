@@ -70,7 +70,8 @@ MagCalibrator::MagCalibrator()
       state_(State::IDLE),
       verify_min_uT_(0.0f), verify_max_uT_(0.0f),
       verify_n_samples_(0),
-      verify_coverage_mask_(0)
+      verify_coverage_mask_(0),
+      verify_skip_remaining_(0)
 {
     memset(wedge_count_, 0, sizeof(wedge_count_));
     memset(wedge_write_, 0, sizeof(wedge_write_));
@@ -124,13 +125,18 @@ bool MagCalibrator::accept()
     // #148 — clear last_x/y/z so the first MAG_CAL_STATUS frame
     // published after entering VERIFYING reports inst_field_uT_x10 = 0
     // instead of carrying the pre-OFFSET-program raw |B| (~1700 µT on a
-    // fresh new-PCB IIS2MDC) from the last SAMPLING sample.  iOS skips
-    // zero |B| values when accumulating min/max, so without this clear
-    // the stale ~1700 µT polluted verify_max and tripped the TOO_HIGH /
-    // RANGE_WIDE gates even when the corrected stream was fine.
+    // fresh new-PCB IIS2MDC) from the last SAMPLING sample.
     last_x_ = 0;
     last_y_ = 0;
     last_z_ = 0;
+    // #148 — discard the next few samples too: the IIS2MDC's output
+    // register may still hold a pre-OFFSET-program measurement until
+    // its next internal ODR cycle (~10 ms at 100 Hz).  Without this,
+    // the very first read after we programmed OFFSET grabs the stale
+    // pre-cal value and pollutes verify_max for the whole session.
+    // 3 samples × 10 ms = ~30 ms — plenty to guarantee the chip has
+    // refreshed at least once.
+    verify_skip_remaining_ = 3;
     state_ = State::VERIFYING;
 #ifdef ESP_PLATFORM
     ESP_LOGI(TAG, "accept: VERIFYING (cx=%d cy=%d cz=%d R=%.2fµT res=%.2fµT)",
@@ -147,6 +153,13 @@ void MagCalibrator::resetVerify()
     verify_max_uT_ = 0.0f;
     verify_n_samples_ = 0;
     verify_coverage_mask_ = 0;
+    // Same skip as accept() — Retry restarts the verify pass, so the
+    // chip's output reg might again hold a stale measurement if the
+    // user paused and the proof-mass settled differently.  Cheap.
+    verify_skip_remaining_ = 3;
+    last_x_ = 0;
+    last_y_ = 0;
+    last_z_ = 0;
 #ifdef ESP_PLATFORM
     ESP_LOGI(TAG, "resetVerify: cleared accumulators, staying in VERIFYING");
 #endif
@@ -257,6 +270,13 @@ bool MagCalibrator::addSample(int16_t x, int16_t y, int16_t z)
     // |B| min/max plus rotation coverage; no per-orientation
     // bucketing (the sphere-fit buffer is frozen at the REVIEW fit).
     if (state_ == State::VERIFYING) {
+        // #148 — discard the first few samples after OFFSET program;
+        // the chip's output reg might still hold a pre-OFFSET reading
+        // that would otherwise pollute verify_max for the whole session.
+        if (verify_skip_remaining_ > 0) {
+            verify_skip_remaining_--;
+            return false;
+        }
         last_x_ = x;
         last_y_ = y;
         last_z_ = z;
