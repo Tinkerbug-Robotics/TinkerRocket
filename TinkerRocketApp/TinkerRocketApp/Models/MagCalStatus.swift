@@ -357,27 +357,6 @@ extension MagCalStatus {
         case ok       // |c| < 2500 µT
         case caution  // 2500 ≤ |c| < 4000 µT
         case high     // |c| ≥ 4000 µT
-
-        var helpText: String? {
-            switch self {
-            case .ok:
-                return nil
-            case .caution, .high:
-                // The fit's |c| measures the FULL hard-iron the PCB carries
-                // (the chip's OFFSET regs are zeroed at session start now —
-                // see #148).  A new-PCB IIS2MDC carries ~1.7 mT of board-
-                // residual hard-iron from manufacturing, so a large |c|
-                // on a first cal is expected.  This warning is mostly a
-                // tip for *re*-cals (where a sudden change in |c| or a
-                // value much larger than ~1.8 mT suggests interference).
-                return "Large hard-iron offset.  This is normal for a fresh new-PCB " +
-                       "IIS2MDC (~1.7 mT typical).  If you're re-calibrating an " +
-                       "already-good board and seeing this for the first time, " +
-                       "likely cause is metal or electronics near the rocket during " +
-                       "tumble — try a wood/plastic surface with phones and tools " +
-                       "moved at least 30 cm away."
-            }
-        }
     }
 
     var centerWarning: CenterWarning {

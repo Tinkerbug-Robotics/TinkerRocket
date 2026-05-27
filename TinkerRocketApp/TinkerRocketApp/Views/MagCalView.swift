@@ -275,26 +275,24 @@ struct MagCalView: View {
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
-                    // Issue #207: surface |c| and |c|/R as a soft warning when
-                    // the fit converged on a center far from origin.  Informational
-                    // only — Accept still allowed; the firmware's reject_code is
-                    // the source of truth for hard gates.
-                    let warn = s.centerWarning
+                    // Issue #207: surface |c| in µT.  After #148 zeroed
+                    // the chip on session start, the fit's |c| measures
+                    // the FULL board hard-iron, which is large (~1.7 mT)
+                    // on a fresh new-PCB IIS2MDC — this is normal, not a
+                    // user error.  We just colour the row orange and show
+                    // a short reminder about flight configuration; no
+                    // multi-paragraph warning that implies anything's wrong.
+                    let isLargeOffset = s.centerWarning != .ok
                     HStack {
-                        Label("Offset |c|",
-                              systemImage: warn == .ok
-                                ? "checkmark.circle"
-                                : "exclamationmark.triangle.fill")
-                            .foregroundColor(centerWarningColor(warn))
+                        Text("Offset |c|")
+                            .foregroundColor(isLargeOffset ? .orange : .primary)
                         Spacer()
-                        Text(String(format: "%.1f µT (%.0f%% of |R|)",
-                                    s.centerMagnitudeUT,
-                                    s.centerToRRatio * 100))
-                            .foregroundColor(centerWarningColor(warn))
+                        Text(String(format: "%.1f µT", s.centerMagnitudeUT))
+                            .foregroundColor(isLargeOffset ? .orange : .secondary)
                             .font(.system(.body, design: .monospaced))
                     }
-                    if let help = warn.helpText {
-                        Text(help)
+                    if isLargeOffset {
+                        Text("Large offset detected — make sure the computer is in flight configuration (flight battery, recovery hardware, anything else that travels with the rocket) so the cal absorbs the same magnetics it'll see in flight.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -403,6 +401,12 @@ struct MagCalView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
+                }
+                Section(header: Text("What this does")) {
+                    Text("The fit's offset was just programmed into the magnetometer chip. The chip is now subtracting it from every raw sample, which should leave just Earth's magnetic field (~25–65 µT depending on latitude) regardless of which way the rocket is pointed.\n\nVerification confirms that's actually happening: as you rotate, the corrected |B| should stay roughly constant and inside Earth's band. If it wanders out of band or swings widely, the cal absorbed too much (or too little) and shouldn't be saved.\n\nTap Done when you've rotated enough that the gates below are green. Retry verification clears the min/max if you want to start fresh without redoing the whole tumble. Abort restores the previously-saved cal.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Section(header: Text("Live |B|"),
                         footer: Text("Min and max are tracked from the moment Verify started (or the last Retry). The fit passes when all rows below are green.")) {
@@ -533,17 +537,6 @@ struct MagCalView: View {
         }
     }
 
-    /// Issue #207: colour for the |c|/R warning bucket.  Green when the
-    /// fitted center is small relative to Earth's field, orange when it's
-    /// non-trivial, red when it's a substantial fraction (likely cal-time
-    /// interference).
-    private func centerWarningColor(_ w: MagCalStatus.CenterWarning) -> Color {
-        switch w {
-        case .ok:      return .green
-        case .caution: return .orange
-        case .high:    return .red
-        }
-    }
 }
 
 // MARK: - Sampling Hero

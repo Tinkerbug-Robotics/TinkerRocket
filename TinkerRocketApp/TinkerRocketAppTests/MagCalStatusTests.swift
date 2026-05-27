@@ -89,10 +89,4 @@ final class MagCalStatusTests: XCTestCase {
         XCTAssertEqual(makeStatus(offsetXYZ_lsb: (26667, 0, 0), R_uT: 50.0).centerWarning, .high)
     }
 
-    /// .ok should have no help text; non-.ok should have non-empty help.
-    func testHelpTextPresence() {
-        XCTAssertNil(MagCalStatus.CenterWarning.ok.helpText)
-        XCTAssertFalse(MagCalStatus.CenterWarning.caution.helpText?.isEmpty ?? true)
-        XCTAssertFalse(MagCalStatus.CenterWarning.high.helpText?.isEmpty ?? true)
-    }
 }
