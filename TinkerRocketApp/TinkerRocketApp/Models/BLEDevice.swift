@@ -185,7 +185,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func onDisconnect() {
         isConnected = false
         stopRSSITimer()
-        drainOtaWriteQueue(error: OTAError.notConnected)
+        drainOtaReadyContinuation()
         telemetryCharacteristic = nil
         commandCharacteristic = nil
         fileOpsCharacteristic = nil
@@ -333,28 +333,49 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Maximum image-payload bytes per file-transfer write. Negotiated MTU
     /// minus 7-byte chunk header. Falls back to 170 (iOS default 185 MTU)
     /// before MTU negotiation completes.
+    ///
+    /// Uses .withoutResponse limit (which CoreBluetooth advertises separately)
+    /// — typically equal to the with-response limit for the same MTU.
     var otaMaxChunkSize: Int {
         guard let peripheral = peripheral else { return 170 }
-        let maxWrite = peripheral.maximumWriteValueLength(for: .withResponse)
+        let maxWrite = peripheral.maximumWriteValueLength(for: .withoutResponse)
         return max(20, maxWrite - 7)
     }
 
-    // FIFO of per-write continuations. iOS's CoreBluetooth queues
-    // writeValue(.withResponse) internally and fires didWriteValueFor in the
-    // same order, so we can have multiple chunks in flight at once — the
-    // OTASession sliding-window pumps the pipeline. Each entry resumes when
-    // its corresponding write callback fires.
-    private var otaWriteQueue: [CheckedContinuation<Void, Error>] = []
+    /// Resumed by peripheralIsReady(toSendWriteWithoutResponse:) when the BLE
+    /// stack's outgoing write buffer drains and we can queue more chunks.
+    /// At most one waiter at a time — the OTASession chunk pump is serial.
+    private var otaReadyContinuation: CheckedContinuation<Void, Never>?
 
-    /// Send a single OTA image chunk. Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
-    /// Awaits the BLE stack's per-write ack via didWriteValueFor. Safe to
-    /// call concurrently — multiple in-flight writes pipeline via the
-    /// otaWriteQueue FIFO.
+    /// Send a single OTA image chunk over the file-transfer characteristic.
+    /// Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
+    ///
+    /// Uses writeWithoutResponse for throughput — write-with-response forced
+    /// the BLE link into a serial req/resp cycle per chunk, giving ~2.5 KB/s.
+    /// writeWithoutResponse + canSendWriteWithoutResponse backpressure
+    /// lets iOS batch multiple writes per connection event (~10-20× faster).
+    /// No per-chunk ATT ack — relies on link-layer CRC + retransmit for
+    /// reliability and on OTA_FINISH's SHA-256 check to catch any drops.
     func sendOtaChunk(offset: UInt32, data: Data, isLast: Bool) async throws {
         guard let characteristic = fileTransferCharacteristic,
               let peripheral = peripheral else {
             throw OTAError.notConnected
         }
+
+        // Backpressure: if iOS's outgoing buffer is full, wait for it to drain
+        // before queuing another write.
+        if !peripheral.canSendWriteWithoutResponse {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                // Re-check inside the continuation body — state may have
+                // changed between the if-check above and now.
+                if peripheral.canSendWriteWithoutResponse {
+                    cont.resume()
+                    return
+                }
+                otaReadyContinuation = cont
+            }
+        }
+
         var frame = Data(capacity: 7 + data.count)
         var offLE = offset.littleEndian
         withUnsafeBytes(of: &offLE) { frame.append(contentsOf: $0) }
@@ -363,20 +384,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         frame.append(isLast ? 0x01 : 0x00)
         frame.append(data)
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            otaWriteQueue.append(cont)
-            peripheral.writeValue(frame, for: characteristic, type: .withResponse)
-        }
+        peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
     }
 
-    /// Fail all in-flight OTA chunk continuations. Called from onDisconnect
-    /// so pending sendOtaChunk awaits don't hang forever when the device
-    /// drops mid-transfer.
-    private func drainOtaWriteQueue(error: Error) {
-        let pending = otaWriteQueue
-        otaWriteQueue.removeAll()
-        for cont in pending {
-            cont.resume(throwing: error)
+    /// Wake any pending sendOtaChunk awaiter with an error when the device
+    /// drops mid-transfer (called from onDisconnect).
+    private func drainOtaReadyContinuation() {
+        if let cont = otaReadyContinuation {
+            otaReadyContinuation = nil
+            cont.resume()   // Non-throwing — sendOtaChunk will fail on the
+                            // next peripheral guard since peripheral is nil.
         }
     }
 
@@ -1152,21 +1169,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func peripheral(_ peripheral: CBPeripheral,
-                   didWriteValueFor characteristic: CBCharacteristic,
-                   error: Error?) {
-        // OTA chunk pump waits on per-write acks; the command characteristic
-        // also uses writeValue(.withResponse) but fires-and-forgets. iOS
-        // dispatches writes in order, so popping the FIFO head matches each
-        // ack to the oldest in-flight chunk.
-        if characteristic.uuid == fileTransferCharUUID,
-           !otaWriteQueue.isEmpty {
-            let cont = otaWriteQueue.removeFirst()
-            if let error = error {
-                cont.resume(throwing: OTAError.writeFailed(error.localizedDescription))
-            } else {
-                cont.resume()
-            }
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        // Wake the OTA chunk pump if it parked on a full outgoing buffer.
+        // sendOtaChunk uses writeWithoutResponse for throughput; this
+        // delegate is iOS's signal that the buffer has drained.
+        if let cont = otaReadyContinuation {
+            otaReadyContinuation = nil
+            cont.resume()
         }
     }
 

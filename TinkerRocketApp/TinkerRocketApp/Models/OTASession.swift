@@ -146,62 +146,40 @@ final class OTASession: ObservableObject {
             return
         }
 
-        // ---- 5. Chunk pump (pipelined writes-with-response) ----
-        // Serial writes hit ~1.7 KB/s on bench (#16) because each chunk
-        // waits a full iOS BLE pacing interval. iOS lets us queue multiple
-        // writeValue(.withResponse) calls in flight and fires didWriteValueFor
-        // in the same order, so we maintain a sliding window of `pipelineDepth`
-        // outstanding chunks. BLE link still serializes at the wire level,
-        // but we eliminate the per-chunk dispatch round-trip.
+        // ---- 5. Chunk pump (writeWithoutResponse, serial) ----
+        // Pipelining at the GATT API level didn't help (#16 first attempt) —
+        // CoreBluetooth still serializes write-with-response at the link
+        // layer, ~2.5 KB/s. Switching the underlying writeValue type to
+        // .withoutResponse lets iOS batch multiple chunks per BLE
+        // connection event. sendOtaChunk parks on canSendWriteWithoutResponse
+        // when iOS's outgoing buffer fills, so this serial loop won't outrun
+        // the link. No per-chunk ATT ack — the firmware's OTA_FINISH SHA
+        // check is what catches a dropped chunk.
         let chunkSize = max(64, device.otaMaxChunkSize)
-        let pipelineDepth = 8
         var offset = 0
-        var completedBytes = 0
-        var inFlight: [(offset: Int, size: Int, task: Task<Void, Error>)] = []
         state = .uploading(bytesSent: 0, totalBytes: fileData.count)
-
-        while offset < fileData.count || !inFlight.isEmpty {
-            if Task.isCancelled {
-                for entry in inFlight { entry.task.cancel() }
-                return
-            }
+        while offset < fileData.count {
+            if Task.isCancelled { return }
 
             // VerifyFailed during the pump? Surface and bail.
             if let st = lastStatusUpdate, st.state == .verifyFailed {
-                for entry in inFlight { entry.task.cancel() }
                 state = .failed(reason: "Device rejected chunk: \(st.err ?? "unknown")")
                 device.sendOtaAbort()
                 return
             }
 
-            // Fill the pipeline up to depth, as long as we have more to send.
-            while inFlight.count < pipelineDepth && offset < fileData.count {
-                let end = min(offset + chunkSize, fileData.count)
-                let chunk = fileData.subdata(in: offset..<end)
-                let isLast = (end == fileData.count)
-                let chunkOffset = offset
-                let chunkLen = chunk.count
-                let task = Task { @MainActor in
-                    try await self.device.sendOtaChunk(offset: UInt32(chunkOffset), data: chunk, isLast: isLast)
-                }
-                inFlight.append((offset: chunkOffset, size: chunkLen, task: task))
-                offset = end
+            let end = min(offset + chunkSize, fileData.count)
+            let chunk = fileData.subdata(in: offset..<end)
+            let isLast = (end == fileData.count)
+            do {
+                try await device.sendOtaChunk(offset: UInt32(offset), data: chunk, isLast: isLast)
+            } catch {
+                state = .failed(reason: "Chunk write failed at offset \(offset): \(error.localizedDescription)")
+                device.sendOtaAbort()
+                return
             }
-
-            // Drain the oldest in-flight chunk so we can refill.
-            if !inFlight.isEmpty {
-                let entry = inFlight.removeFirst()
-                do {
-                    try await entry.task.value
-                    completedBytes += entry.size
-                    state = .uploading(bytesSent: completedBytes, totalBytes: fileData.count)
-                } catch {
-                    for remaining in inFlight { remaining.task.cancel() }
-                    state = .failed(reason: "Chunk write failed at offset \(entry.offset): \(error.localizedDescription)")
-                    device.sendOtaAbort()
-                    return
-                }
-            }
+            offset = end
+            state = .uploading(bytesSent: offset, totalBytes: fileData.count)
         }
 
         // ---- 6. OTA_FINISH ----
