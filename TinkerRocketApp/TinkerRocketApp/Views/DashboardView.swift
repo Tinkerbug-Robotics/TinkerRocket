@@ -228,16 +228,22 @@ struct DashboardView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             if let device = fleet.activeDevice {
-                switch sheet {
-                case .simulator:
-                    SimulationView(device: device)
-                case .settings:
-                    SettingsView(device: device)
-                case .servoTest:
-                    ServoTestView(device: device)
-                case .driftCast:
-                    DriftCastView(device: device)
+                Group {
+                    switch sheet {
+                    case .simulator:
+                        SimulationView(device: device)
+                    case .settings:
+                        SettingsView(device: device)
+                    case .servoTest:
+                        ServoTestView(device: device)
+                    case .driftCast:
+                        DriftCastView(device: device)
+                    }
                 }
+                // SwiftUI sheets get a fresh environment by default — re-inject
+                // fleet so SettingsView's FirmwareUpdateView can resolve the
+                // OTASession off it (#15 second pass).
+                .environmentObject(fleet)
             }
         }
         .sheet(isPresented: $showProvisioning) {

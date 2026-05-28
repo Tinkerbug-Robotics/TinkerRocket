@@ -87,6 +87,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var rocketID: UInt8 = 0
     @Published var deviceType: BLEDeviceType = .unknown
 
+    /// Firmware version stamp from config_identity "fw" field (#8).
+    /// Format: `<git_short_sha>+<build_yyyymmdd-hhmm>`, optionally with
+    /// `-dirty` between the sha and `+`. Empty if the device hasn't
+    /// pushed its identity yet or is running pre-#8 firmware (no "fw" field).
+    @Published var firmwareVersion: String = ""
+
+    /// Latest OTA status frame from the device (#8 phase 2). Driven by
+    /// ota_status JSON notifications on the file-ops characteristic.
+    /// nil between sessions; OTASession observes this to advance its
+    /// state machine.
+    @Published var otaStatus: OTAStatusUpdate?
+
     /// Display name: unitName if set, otherwise connectedDeviceName
     var displayName: String {
         unitName.isEmpty ? connectedDeviceName : unitName
@@ -166,6 +178,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func onDisconnect() {
         isConnected = false
         stopRSSITimer()
+        drainOtaReadyContinuation()
         telemetryCharacteristic = nil
         commandCharacteristic = nil
         fileOpsCharacteristic = nil
@@ -272,6 +285,140 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         data.append(payload)
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
         print("Sent command \(command) with \(payload.count) bytes payload")
+    }
+
+    // MARK: - OTA helpers (#8 phase 2)
+
+    enum OTAError: Error, LocalizedError {
+        case notConnected
+        case writeInFlight
+        case writeFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected:        return "Device is not connected"
+            case .writeInFlight:       return "A chunk write is already in flight"
+            case .writeFailed(let m):  return "Chunk write failed: \(m)"
+            }
+        }
+    }
+
+    /// Send OTA_BEGIN (cmd 70). Payload: [target:1][size:4 LE][sha256:32].
+    /// targetIsFC=false → flashes this BS/OC device's own app. targetIsFC=true
+    /// is reserved for phase 4 (OC-relayed Flight Computer OTA).
+    func sendOtaBegin(targetIsFC: Bool, totalSize: UInt32, sha256: Data) {
+        precondition(sha256.count == 32, "SHA-256 must be exactly 32 bytes")
+        var payload = Data(capacity: 37)
+        payload.append(targetIsFC ? 0x01 : 0x00)
+        var sizeLE = totalSize.littleEndian
+        withUnsafeBytes(of: &sizeLE) { payload.append(contentsOf: $0) }
+        payload.append(sha256)
+        sendRawCommand(70, payload: payload)
+    }
+
+    /// Send OTA_FINISH (cmd 71). Device verifies SHA, sets boot partition,
+    /// then reboots ~500 ms later.
+    func sendOtaFinish() { sendRawCommand(71) }
+
+    /// Send OTA_ABORT (cmd 72). Always safe; clears any in-flight session.
+    func sendOtaAbort() { sendRawCommand(72) }
+
+    /// Maximum image-payload bytes per file-transfer write. Negotiated MTU
+    /// minus 7-byte chunk header. Falls back to 170 (iOS default 185 MTU)
+    /// before MTU negotiation completes.
+    ///
+    /// Uses .withoutResponse limit (which CoreBluetooth advertises separately)
+    /// — typically equal to the with-response limit for the same MTU.
+    var otaMaxChunkSize: Int {
+        guard let peripheral = peripheral else { return 170 }
+        let maxWrite = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        return max(20, maxWrite - 7)
+    }
+
+    /// Resumed by peripheralIsReady(toSendWriteWithoutResponse:) when the BLE
+    /// stack's outgoing write buffer drains and we can queue more chunks.
+    /// At most one waiter at a time — the OTASession chunk pump is serial.
+    private var otaReadyContinuation: CheckedContinuation<Void, Never>?
+
+    /// Send a single OTA image chunk over the file-transfer characteristic.
+    /// Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
+    ///
+    /// Uses writeWithoutResponse for throughput — write-with-response forced
+    /// the BLE link into a serial req/resp cycle per chunk, giving ~2.5 KB/s.
+    /// writeWithoutResponse + canSendWriteWithoutResponse backpressure
+    /// lets iOS batch multiple writes per connection event (~10-20× faster).
+    /// No per-chunk ATT ack — relies on link-layer CRC + retransmit for
+    /// reliability and on OTA_FINISH's SHA-256 check to catch any drops.
+    ///
+    /// Throws .writeFailed if canSendWriteWithoutResponse stays false for
+    /// 5 s straight — that means the characteristic isn't advertising the
+    /// WRITE_NO_RSP property (firmware-side bug) and we'd otherwise hang.
+    func sendOtaChunk(offset: UInt32, data: Data, isLast: Bool) async throws {
+        guard let characteristic = fileTransferCharacteristic,
+              let peripheral = peripheral else {
+            throw OTAError.notConnected
+        }
+
+        // Backpressure: if iOS's outgoing buffer is full, wait for it to drain
+        // before queuing another write. Bound the wait so a missing
+        // WRITE_NO_RSP property on the firmware side doesn't hang the pump
+        // forever (we hit exactly that on bench 2026-05-28).
+        if !peripheral.canSendWriteWithoutResponse {
+            let ready = await withTimeout(seconds: 5.0) {
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    if peripheral.canSendWriteWithoutResponse {
+                        cont.resume()
+                        return
+                    }
+                    self.otaReadyContinuation = cont
+                }
+            }
+            if !ready {
+                // Drain the pending continuation if it was set so the
+                // delegate doesn't try to resume a dead waiter later.
+                otaReadyContinuation = nil
+                throw OTAError.writeFailed("Timed out waiting for canSendWriteWithoutResponse — firmware may not advertise WRITE_NO_RSP on file-transfer characteristic")
+            }
+        }
+
+        var frame = Data(capacity: 7 + data.count)
+        var offLE = offset.littleEndian
+        withUnsafeBytes(of: &offLE) { frame.append(contentsOf: $0) }
+        var lenLE = UInt16(data.count).littleEndian
+        withUnsafeBytes(of: &lenLE) { frame.append(contentsOf: $0) }
+        frame.append(isLast ? 0x01 : 0x00)
+        frame.append(data)
+
+        peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
+    }
+
+    /// Run `body`; return true if it completed within `seconds`, false on
+    /// timeout. Used to bound waits on CoreBluetooth state changes.
+    private func withTimeout(seconds: TimeInterval,
+                             body: @escaping @Sendable () async -> Void) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await body()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Wake any pending sendOtaChunk awaiter with an error when the device
+    /// drops mid-transfer (called from onDisconnect).
+    private func drainOtaReadyContinuation() {
+        if let cont = otaReadyContinuation {
+            otaReadyContinuation = nil
+            cont.resume()   // Non-throwing — sendOtaChunk will fail on the
+                            // next peripheral guard since peripheral is nil.
+        }
     }
 
     /// Kick off a base-station frequency scan.  Clears any previous results
@@ -1046,6 +1193,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        // Wake the OTA chunk pump if it parked on a full outgoing buffer.
+        // sendOtaChunk uses writeWithoutResponse for throughput; this
+        // delegate is iOS's signal that the buffer has drained.
+        if let cont = otaReadyContinuation {
+            otaReadyContinuation = nil
+            cont.resume()
+        }
+    }
+
     func peripheral(_ peripheral: CBPeripheral,
                    didUpdateValueFor characteristic: CBCharacteristic,
                    error: Error?) {
@@ -1061,7 +1218,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 case 0xAA: parseScanResult(data)
                 case 0xCA: parseMagCalStatus(data)     // issue #96
                 case 0xCB: parseSensorCalStatus(data)  // issue #132
-                default:   parseFileList(data)
+                case 0x7B:                              // '{' → JSON object
+                    if let s = OTAStatusUpdate.parse(data) {
+                        otaStatus = s
+                    } else {
+                        parseFileList(data)
+                    }
+                default:   parseFileList(data)         // '[' or anything else (file list arrays)
                 }
             }
         } else if characteristic.uuid == fileTransferCharUUID {
@@ -1148,7 +1311,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let dt = dict["dt"] as? String {
                 deviceType = BLEDeviceType(rawValue: dt) ?? deviceType
             }
-            print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue)")
+            if let fw = dict["fw"] as? String { firmwareVersion = fw }
+            print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue) fw=\(firmwareVersion)")
             return
         }
 

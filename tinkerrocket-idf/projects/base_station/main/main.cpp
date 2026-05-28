@@ -2,8 +2,11 @@
 #include <TR_NVS.h>
 #include <algorithm>
 
+#include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
+#include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
+#include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include <esp_vfs_fat.h>
 #include <esp_spiffs.h>
 #include <sdmmc_cmd.h>
@@ -35,6 +38,29 @@
 #include <RocketComputerTypes.h>
 
 static const char* TAG = "BS";
+
+// OTA rollback gate (#8). True only between boot and the first successful
+// telemetry-while-connected event when we booted PENDING_VERIFY (i.e., a
+// fresh OTA image). On first hit we call esp_ota_mark_app_valid_cancel_rollback
+// once and clear the flag. If we never get there (panic, hang, BLE init
+// failure) the bootloader auto-reverts to ota_0 on next boot.
+static bool g_ota_pending_verify = false;
+
+static inline void maybeMarkOtaValid()
+{
+    if (!g_ota_pending_verify) return;
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err == ESP_OK)
+    {
+        ESP_LOGW(TAG, "OTA: new image validated, rollback cancelled");
+    }
+    else
+    {
+        ESP_LOGE(TAG, "OTA: mark_app_valid_cancel_rollback failed: %s",
+                 esp_err_to_name(err));
+    }
+    g_ota_pending_verify = false;
+}
 
 // Forward declarations
 static const char* rocketStateToString(uint8_t state);
@@ -1304,16 +1330,20 @@ static void sendCurrentConfig()
     delay(50);
 
     // Message 2: device identity ("config_identity" type)
-    char id_buf[128];
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    const char* fw_ver = (app_desc && app_desc->version[0]) ? app_desc->version : "unknown";
+    char id_buf[192];
     snprintf(id_buf, sizeof(id_buf),
              "{\"type\":\"config_identity\""
              ",\"uid\":\"%s\""
              ",\"un\":\"%s\""
              ",\"nid\":%u"
-             ",\"dt\":\"%s\"}",
+             ",\"dt\":\"%s\""
+             ",\"fw\":\"%s\"}",
              unit_id_hex, unit_name,
              (unsigned)network_id,
-             config::DEVICE_TYPE);
+             config::DEVICE_TYPE,
+             fw_ver);
     String id_json(id_buf);
     ble_app.sendConfigJSON(id_json);
     ESP_LOGI(TAG, "[CFG] Sent identity readback (%u bytes)", (unsigned)id_json.length());
@@ -2616,6 +2646,30 @@ static void setup_bs()
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
     ESP_LOGI(TAG, "======================================");
 
+    // OTA boot-state check (#8). If this image was just OTA-installed it
+    // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
+    // BLE work end-to-end (first telemetry sent while connected). If the
+    // app crashes or hangs before that, the bootloader auto-rolls back to
+    // ota_0 on the next boot.
+    {
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+        if (running && esp_ota_get_state_partition(running, &state) == ESP_OK)
+        {
+            if (state == ESP_OTA_IMG_PENDING_VERIFY)
+            {
+                ESP_LOGW(TAG, "OTA: running on PENDING_VERIFY image (partition '%s' @ 0x%08x); "
+                              "rollback armed until first telemetry round-trip",
+                         running->label, (unsigned)running->address);
+                g_ota_pending_verify = true;
+            }
+            else
+            {
+                ESP_LOGI(TAG, "OTA: running partition '%s' state=%d", running->label, (int)state);
+            }
+        }
+    }
+
     // BLE time-sync arrives as broken-down UTC; pin TZ so mktime() in the
     // log-rename helper (#168) interprets it as UTC seconds, not local.
     setenv("TZ", "UTC0", 1);
@@ -3411,6 +3465,7 @@ static void loop_bs()
                     ble_telem.source_unit_name = tracked_rockets[slot].unit_name;
                 }
                 ble_app.sendTelemetry(ble_telem);
+                maybeMarkOtaValid();
             }
         }
         else
@@ -3470,7 +3525,15 @@ static void loop_bs()
     if (millis() - last_battery_ms >= config::PWR_UPDATE_PERIOD_MS)
     {
         last_battery_ms = millis();
-        updateBattery();
+        // Skip the I2C gauge poll while an OTA is in flight (#17): the
+        // esp_ota_begin() partition erase blocks the SPI flash for ~1-2 s
+        // and the gauge transaction collides with it, logging spurious
+        // i2c_master_transmit_receive failures. The telemetry push below
+        // still runs so the app sees liveness + OTA status during the flash.
+        if (!ble_app.isOtaActive())
+        {
+            updateBattery();
+        }
 
         // Always push base station stats to BLE, even without LoRa packets,
         // so BS battery / logging state / RSSI stay live.  Tag each push
@@ -3510,6 +3573,7 @@ static void loop_bs()
                 ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
             }
             ble_app.sendTelemetry(ble_telem);
+            maybeMarkOtaValid();
         }
     }
 

@@ -28,6 +28,11 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
+# OTA rollback: new images boot as PENDING_VERIFY and auto-roll back to ota_0
+# unless app calls esp_ota_mark_app_valid_cancel_rollback() after first
+# successful telemetry round-trip. See docs/plans/08-ota-firmware-update.md §4.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
