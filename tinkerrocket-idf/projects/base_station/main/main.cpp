@@ -2,6 +2,7 @@
 #include <TR_NVS.h>
 #include <algorithm>
 
+#include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
 #include <esp_vfs_fat.h>
@@ -1304,16 +1305,20 @@ static void sendCurrentConfig()
     delay(50);
 
     // Message 2: device identity ("config_identity" type)
-    char id_buf[128];
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    const char* fw_ver = (app_desc && app_desc->version[0]) ? app_desc->version : "unknown";
+    char id_buf[192];
     snprintf(id_buf, sizeof(id_buf),
              "{\"type\":\"config_identity\""
              ",\"uid\":\"%s\""
              ",\"un\":\"%s\""
              ",\"nid\":%u"
-             ",\"dt\":\"%s\"}",
+             ",\"dt\":\"%s\""
+             ",\"fw\":\"%s\"}",
              unit_id_hex, unit_name,
              (unsigned)network_id,
-             config::DEVICE_TYPE);
+             config::DEVICE_TYPE,
+             fw_ver);
     String id_json(id_buf);
     ble_app.sendConfigJSON(id_json);
     ESP_LOGI(TAG, "[CFG] Sent identity readback (%u bytes)", (unsigned)id_json.length());

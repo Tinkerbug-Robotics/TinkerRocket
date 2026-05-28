@@ -11,7 +11,9 @@ idf_component_register(
         TR_LoRa_Comms
         TR_MAX17205G
         TR_BQ27Z746
+        app_update
         driver
+        esp_app_format
         esp_timer
         fatfs
         sdmmc
