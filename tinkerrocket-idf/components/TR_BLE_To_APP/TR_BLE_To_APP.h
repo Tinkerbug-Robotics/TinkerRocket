@@ -195,6 +195,11 @@ public:
     // Falls back to 170 if MTU not yet negotiated
     size_t getMaxChunkDataSize() const;
 
+    // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
+    // failure). main.cpp gates I2C battery-gauge polling on this so the
+    // esp_ota_begin() flash erase doesn't collide with the I2C bus (#17).
+    bool isOtaActive() const { return ota_session_active_; }
+
 private:
     static constexpr size_t MAX_DEVICE_NAME_LEN = 29;   // BLE adv name limit
     char device_name_[MAX_DEVICE_NAME_LEN + 1];          // mutable, null-terminated
@@ -242,6 +247,11 @@ private:
     // every successful chunk; we notify at most ~2 Hz so the BLE notify
     // queue isn't saturated mid-flash.
     uint32_t ota_last_writing_notify_ms_ = 0;
+    // True for the duration of an OTA session (#17). Read cross-task by
+    // main.cpp via isOtaActive() to pause I2C battery polling during the
+    // esp_ota_begin() flash erase. volatile: written on the NimBLE host
+    // task, read on the main loop task.
+    volatile bool ota_session_active_ = false;
 
     void onFileTransferWrite(const uint8_t* data, size_t length);
     void handleOtaBegin(const uint8_t* data, size_t length);

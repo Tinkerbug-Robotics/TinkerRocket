@@ -1315,6 +1315,17 @@ void TR_BLE_To_APP::otaStatusCallback(void* user, TR_OTA_Receiver::State state,
 {
     auto* self = static_cast<TR_BLE_To_APP*>(user);
     using S = TR_OTA_Receiver::State;
+
+    // Authoritative clear of the OTA-active flag (#17): any terminal,
+    // non-rebooting state means the I2C battery poll can resume. Covers
+    // begin-fail, mid-stream chunk-fail, finish-verify-fail, and abort —
+    // all of which the receiver routes through here. ReadyToBoot keeps the
+    // flag set because the device reboots within ~500 ms.
+    if (state == S::Idle || state == S::VerifyFailed)
+    {
+        self->ota_session_active_ = false;
+    }
+
     const char* state_str = nullptr;
     const char* fw_str = nullptr;
     switch (state)
@@ -1360,6 +1371,14 @@ void TR_BLE_To_APP::handleOtaBegin(const uint8_t* data, size_t length)
     ESP_LOGI(BLE_TAG, "OTA_BEGIN: size=%u bytes", (unsigned)total_size);
     ota_last_writing_notify_ms_ = 0;
     ota_pending_restart_at_ms_ = 0;
+
+    // Raise the OTA-active flag BEFORE begin(): esp_ota_begin() erases the
+    // target partition (~1-2 s of blocking SPI flash work) and the main
+    // loop's BQ27Z746 I2C poll collides with it, logging spurious
+    // i2c_master_transmit_receive failures (#17). main.cpp gates updateBattery()
+    // on isOtaActive(), so the flag has to be up before the erase starts.
+    // The status callback clears it again if begin() fails.
+    ota_session_active_ = true;
     (void)ota_receiver_.begin(total_size, data + 5);  // status pushed via callback
 }
 
@@ -1372,16 +1391,19 @@ void TR_BLE_To_APP::handleOtaFinish()
         // Defer the actual reboot by 500ms so the ready_to_boot status
         // notification can drain through the BLE stack before the radio
         // dies. loop() polls ota_pending_restart_at_ms_.
+        // Leave ota_session_active_ true — the device reboots momentarily.
         ota_pending_restart_at_ms_ = (uint32_t)millis() + 500;
         ESP_LOGW(BLE_TAG, "OTA: ready to boot, restart scheduled in 500ms");
     }
+    // On failure the receiver transitions to VerifyFailed, whose status
+    // callback clears ota_session_active_ (#17).
 }
 
 void TR_BLE_To_APP::handleOtaAbort()
 {
     ESP_LOGW(BLE_TAG, "OTA_ABORT");
     ota_pending_restart_at_ms_ = 0;
-    (void)ota_receiver_.abort();
+    (void)ota_receiver_.abort();   // -> Idle -> callback clears ota_session_active_
 }
 
 void TR_BLE_To_APP::onFileTransferWrite(const uint8_t* data, size_t length)

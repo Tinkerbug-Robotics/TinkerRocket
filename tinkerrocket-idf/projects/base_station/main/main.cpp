@@ -3525,7 +3525,15 @@ static void loop_bs()
     if (millis() - last_battery_ms >= config::PWR_UPDATE_PERIOD_MS)
     {
         last_battery_ms = millis();
-        updateBattery();
+        // Skip the I2C gauge poll while an OTA is in flight (#17): the
+        // esp_ota_begin() partition erase blocks the SPI flash for ~1-2 s
+        // and the gauge transaction collides with it, logging spurious
+        // i2c_master_transmit_receive failures. The telemetry push below
+        // still runs so the app sees liveness + OTA status during the flash.
+        if (!ble_app.isOtaActive())
+        {
+            updateBattery();
+        }
 
         // Always push base station stats to BLE, even without LoRa packets,
         // so BS battery / logging state / RSSI stay live.  Tag each push
