@@ -18,6 +18,7 @@ import Combine
 
 struct SettingsView: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView for FirmwareUpdateView → OTASession lookup
     @EnvironmentObject var store: RocketProfileStore
     @Environment(\.dismiss) var dismiss
 

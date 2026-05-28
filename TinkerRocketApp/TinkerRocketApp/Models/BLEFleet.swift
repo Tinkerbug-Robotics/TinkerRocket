@@ -32,6 +32,25 @@ class BLEFleet: NSObject, ObservableObject {
     /// the base station.  In-memory only; cleared on app kill.  #140.
     @Published var lastValidRocketFixes: [UInt8: LastValidRocketFix] = [:]
 
+    /// Per-device OTA driver (#8 phase 2, #15 second pass).  Same rationale
+    /// as lastValidRocketFixes: BLEDevice is recreated on each reconnect,
+    /// so OTASession must live above it — otherwise the "Updated successfully"
+    /// state on FirmwareUpdateView gets wiped by the post-OTA reboot's
+    /// disconnect cycle. Keyed by peripheral.identifier (stable across
+    /// reconnect for the same physical device).
+    @Published var otaSessions: [UUID: OTASession] = [:]
+
+    /// Get-or-create the OTA driver for `device`. The same OTASession
+    /// instance is returned across reconnects for the same peripheral.
+    @MainActor
+    func otaSession(for device: BLEDevice) -> OTASession {
+        let id = device.peripheral?.identifier ?? UUID()  // transient if no peripheral yet
+        if let existing = otaSessions[id] { return existing }
+        let session = OTASession(fleet: self, peripheralID: id)
+        otaSessions[id] = session
+        return session
+    }
+
     /// Convenience: the active device, or nil.
     var activeDevice: BLEDevice? {
         guard let id = activeDeviceID else { return devices.first }

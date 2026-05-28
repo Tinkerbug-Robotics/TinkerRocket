@@ -14,20 +14,26 @@ import UniformTypeIdentifiers
 
 struct FirmwareUpdateView: View {
     @ObservedObject var device: BLEDevice
+    @EnvironmentObject var fleet: BLEFleet
+
+    /// OTASession lives on BLEFleet (not BLEDevice) because BLEFleet
+    /// destroys+recreates BLEDevice on every BLE disconnect/reconnect —
+    /// including the post-OTA reboot cycle. Same pattern as #140's
+    /// lastValidRocketFixes. The fleet returns the same session instance
+    /// for this peripheral across reconnects, so the .verified result
+    /// survives the view being torn down + re-shown. See #15 second pass.
+    var body: some View {
+        FirmwareUpdateContent(device: device, session: fleet.otaSession(for: device))
+    }
+}
+
+private struct FirmwareUpdateContent: View {
+    @ObservedObject var device: BLEDevice
     @ObservedObject var session: OTASession
     @State private var showingFilePicker = false
     @State private var pickedFileURL: URL?
     @State private var pickedFileSize: Int = 0
     @State private var pickedFileName: String = ""
-
-    init(device: BLEDevice) {
-        // Pull the per-device OTA session off BLEDevice rather than spinning
-        // up a fresh one — it survives the device disconnect/reconnect that
-        // tears down this view, so the "verified" state is still visible when
-        // the user navigates back after the OTA reboot. See #15.
-        _device = ObservedObject(initialValue: device)
-        _session = ObservedObject(initialValue: device.otaSession)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

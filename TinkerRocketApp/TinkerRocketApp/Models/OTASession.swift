@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreBluetooth
 import CryptoKit
 
 /// Drives an OTA upload on a single BLEDevice end-to-end:
@@ -28,25 +29,28 @@ final class OTASession: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    // Owning BLEDevice — unowned because BLEDevice owns this object via
-    // `lazy var otaSession`, so the cycle is structural and the session
-    // can't outlive its device.
-    private unowned let device: BLEDevice
+    // Owning fleet (weak — BLEFleet owns this OTASession via
+    // `otaSessions[peripheralID]`, so the cycle would leak both objects).
+    // The current BLEDevice for our peripheral is looked up via the fleet
+    // each time we need it; the device gets destroyed+recreated on every
+    // BLE disconnect/reconnect (#140), but the session lives on.
+    private weak var fleet: BLEFleet?
+    let peripheralID: UUID
+
+    /// The current BLEDevice for our peripheral, or nil between reconnects.
+    var device: BLEDevice? {
+        fleet?.devices.first { $0.peripheral?.identifier == peripheralID }
+    }
+
     private(set) var preFlashFirmwareVersion: String = ""
     private(set) var imageSize: Int = 0
     private(set) var imageSha256Hex: String = ""
 
     private var task: Task<Void, Never>?
-    private var statusCancellable: AnyCancellable?
-    private var fwCancellable: AnyCancellable?
-    private var connCancellable: AnyCancellable?
 
-    // Reboot/reconnect plumbing — set by Combine sinks, consumed by Task.sleep loops.
-    private var lastStatusUpdate: OTAStatusUpdate?
-    private var sawDisconnect: Bool = false
-
-    init(device: BLEDevice) {
-        self.device = device
+    init(fleet: BLEFleet, peripheralID: UUID) {
+        self.fleet = fleet
+        self.peripheralID = peripheralID
     }
 
     deinit {
@@ -58,12 +62,6 @@ final class OTASession: ObservableObject {
     /// Re-callable: cancels any prior in-flight run.
     func start(fileURL: URL) {
         task?.cancel()
-        statusCancellable?.cancel()
-        fwCancellable?.cancel()
-        connCancellable?.cancel()
-        lastStatusUpdate = nil
-        sawDisconnect = false
-
         task = Task { [weak self] in
             await self?.runFlow(fileURL: fileURL)
         }
@@ -72,7 +70,7 @@ final class OTASession: ObservableObject {
     /// User-initiated cancel. Sends OTA_ABORT and tears the task down.
     func cancel() {
         task?.cancel()
-        device.sendOtaAbort()
+        device?.sendOtaAbort()
         state = .failed(reason: "Cancelled")
     }
 
@@ -81,17 +79,9 @@ final class OTASession: ObservableObject {
     /// .rollbackDetected / .failed.
     func reset() {
         task?.cancel()
-        statusCancellable?.cancel()
-        fwCancellable?.cancel()
-        connCancellable?.cancel()
-        statusCancellable = nil
-        fwCancellable = nil
-        connCancellable = nil
         preFlashFirmwareVersion = ""
         imageSize = 0
         imageSha256Hex = ""
-        lastStatusUpdate = nil
-        sawDisconnect = false
         state = .idle
     }
 
@@ -118,27 +108,16 @@ final class OTASession: ObservableObject {
         let sha = Data(SHA256.hash(data: fileData))
         imageSize = fileData.count
         imageSha256Hex = sha.map { String(format: "%02x", $0) }.joined()
-        preFlashFirmwareVersion = device.firmwareVersion
+        preFlashFirmwareVersion = device?.firmwareVersion ?? ""
 
-        // ---- 2. Subscribe to device.$otaStatus + connection edges ----
-        statusCancellable = device.$otaStatus
-            .compactMap { $0 }
-            .sink { [weak self] s in self?.lastStatusUpdate = s }
-
-        connCancellable = device.$isConnected
-            .removeDuplicates()
-            .sink { [weak self] connected in
-                if !connected { self?.sawDisconnect = true }
-            }
-
-        // ---- 3. Send OTA_BEGIN ----
-        guard device.isConnected else {
+        // ---- 2. Send OTA_BEGIN ----
+        guard let beginDevice = device, beginDevice.isConnected else {
             state = .failed(reason: "Device disconnected before OTA_BEGIN")
             return
         }
-        device.sendOtaBegin(targetIsFC: false, totalSize: UInt32(fileData.count), sha256: sha)
+        beginDevice.sendOtaBegin(targetIsFC: false, totalSize: UInt32(fileData.count), sha256: sha)
 
-        // ---- 4. Wait for status=ready ----
+        // ---- 3. Wait for status=ready ----
         do {
             try await awaitOtaState(.ready, timeout: 5.0)
         } catch {
@@ -146,7 +125,7 @@ final class OTASession: ObservableObject {
             return
         }
 
-        // ---- 5. Chunk pump (writeWithoutResponse, serial) ----
+        // ---- 4. Chunk pump (writeWithoutResponse, serial) ----
         // Pipelining at the GATT API level didn't help (#16 first attempt) —
         // CoreBluetooth still serializes write-with-response at the link
         // layer, ~2.5 KB/s. Switching the underlying writeValue type to
@@ -155,16 +134,21 @@ final class OTASession: ObservableObject {
         // when iOS's outgoing buffer fills, so this serial loop won't outrun
         // the link. No per-chunk ATT ack — the firmware's OTA_FINISH SHA
         // check is what catches a dropped chunk.
-        let chunkSize = max(64, device.otaMaxChunkSize)
+        let chunkSize = max(64, beginDevice.otaMaxChunkSize)
         var offset = 0
         state = .uploading(bytesSent: 0, totalBytes: fileData.count)
         while offset < fileData.count {
             if Task.isCancelled { return }
 
             // VerifyFailed during the pump? Surface and bail.
-            if let st = lastStatusUpdate, st.state == .verifyFailed {
+            if let st = device?.otaStatus, st.state == .verifyFailed {
                 state = .failed(reason: "Device rejected chunk: \(st.err ?? "unknown")")
-                device.sendOtaAbort()
+                device?.sendOtaAbort()
+                return
+            }
+
+            guard let pumpDevice = device, pumpDevice.isConnected else {
+                state = .failed(reason: "Device disconnected mid-upload at offset \(offset)")
                 return
             }
 
@@ -172,25 +156,25 @@ final class OTASession: ObservableObject {
             let chunk = fileData.subdata(in: offset..<end)
             let isLast = (end == fileData.count)
             do {
-                try await device.sendOtaChunk(offset: UInt32(offset), data: chunk, isLast: isLast)
+                try await pumpDevice.sendOtaChunk(offset: UInt32(offset), data: chunk, isLast: isLast)
             } catch {
                 state = .failed(reason: "Chunk write failed at offset \(offset): \(error.localizedDescription)")
-                device.sendOtaAbort()
+                device?.sendOtaAbort()
                 return
             }
             offset = end
             state = .uploading(bytesSent: offset, totalBytes: fileData.count)
         }
 
-        // ---- 6. OTA_FINISH ----
+        // ---- 5. OTA_FINISH ----
         state = .verifying
-        device.sendOtaFinish()
+        device?.sendOtaFinish()
 
-        // ---- 7. Wait for status=ready_to_boot (or verify_failed) ----
+        // ---- 6. Wait for status=ready_to_boot (or verify_failed) ----
         do {
             try await awaitOtaState(.readyToBoot, timeout: 15.0)
         } catch {
-            if let st = lastStatusUpdate, st.state == .verifyFailed {
+            if let st = device?.otaStatus, st.state == .verifyFailed {
                 state = .failed(reason: "Verify failed: \(st.err ?? "unknown")")
             } else {
                 state = .failed(reason: "Device did not finalize OTA within 15s")
@@ -198,30 +182,36 @@ final class OTASession: ObservableObject {
             return
         }
 
-        // ---- 8. Wait for disconnect (device reboots ~500ms after ready_to_boot) ----
+        // ---- 7. Wait for disconnect (device reboots ~500ms after ready_to_boot) ----
+        // BLEFleet destroys the BLEDevice on disconnect, so `device == nil`
+        // also counts as "disconnected".
         state = .rebooting
-        sawDisconnect = false
-        if !(await waitFor(timeout: 5.0, { [weak self] in self?.sawDisconnect == true || self?.device.isConnected == false })) {
-            // No disconnect seen — odd, but proceed to reconnect-await anyway.
+        _ = await waitFor(timeout: 5.0) { [weak self] in
+            self?.device == nil || self?.device?.isConnected == false
         }
 
-        // ---- 9. Wait for reconnect ----
-        if !(await waitFor(timeout: 60.0, { [weak self] in self?.device.isConnected == true })) {
+        // ---- 8. Wait for reconnect ----
+        // After BLEFleet creates a fresh BLEDevice for our peripheralID,
+        // self.device starts returning the new instance.
+        let reconnected = await waitFor(timeout: 60.0) { [weak self] in
+            self?.device?.isConnected == true
+        }
+        if !reconnected {
             state = .failed(reason: "Device did not reconnect within 60s — try power-cycling")
             return
         }
 
-        // ---- 10. Wait for the new identity push (fw field) ----
+        // ---- 9. Wait for the new identity push (fw field) ----
         // The firmware republishes config_identity on each connect; we wait
         // for any non-empty fw value that arrives AFTER reconnect.
         let preFlash = preFlashFirmwareVersion
-        if !(await waitFor(timeout: 10.0, { [weak self] in
-            guard let self else { return false }
-            return !self.device.firmwareVersion.isEmpty &&
-                   self.device.firmwareVersion != preFlash
-        })) {
-            // Either no fw push came in (old firmware?) or it matches pre-flash.
-            if device.firmwareVersion == preFlash {
+        let gotNewFw = await waitFor(timeout: 10.0) { [weak self] in
+            guard let fw = self?.device?.firmwareVersion, !fw.isEmpty else { return false }
+            return fw != preFlash
+        }
+        let postFw = device?.firmwareVersion ?? ""
+        if !gotNewFw {
+            if postFw == preFlash && !postFw.isEmpty {
                 state = .rollbackDetected(version: preFlash)
             } else {
                 state = .failed(reason: "Reconnected but device didn't publish a new firmware version within 10s")
@@ -229,19 +219,21 @@ final class OTASession: ObservableObject {
             return
         }
 
-        state = .verified(newVersion: device.firmwareVersion)
+        state = .verified(newVersion: postFw)
     }
 
     // MARK: - Wait helpers
 
-    /// Spin-wait for `lastStatusUpdate.state == expected` (or VerifyFailed,
+    /// Spin-wait for `device.otaStatus.state == expected` (or VerifyFailed,
     /// which fails fast). Polls every 50 ms up to `timeout` seconds.
+    /// Reads `device?.otaStatus` directly each iteration so a BLEDevice
+    /// reconnect (new instance) is picked up automatically.
     private func awaitOtaState(_ expected: OTAStatusUpdate.State, timeout: TimeInterval) async throws {
         struct TimedOut: Error {}
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if Task.isCancelled { throw CancellationError() }
-            if let st = lastStatusUpdate {
+            if let st = device?.otaStatus {
                 if st.state == expected { return }
                 if st.state == .verifyFailed { throw TimedOut() }
             }
