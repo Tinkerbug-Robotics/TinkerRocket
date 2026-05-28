@@ -99,6 +99,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// state machine.
     @Published var otaStatus: OTAStatusUpdate?
 
+    /// Per-device OTA driver. Lazy so it's only instantiated when the user
+    /// opens the firmware-update screen, but persists for the device's
+    /// lifetime — survives FirmwareUpdateView being torn down and re-shown
+    /// across the post-OTA disconnect/reconnect so the "Updated successfully"
+    /// state isn't lost when the view rebuilds.
+    @MainActor lazy var otaSession: OTASession = OTASession(device: self)
+
     /// Display name: unitName if set, otherwise connectedDeviceName
     var displayName: String {
         unitName.isEmpty ? connectedDeviceName : unitName

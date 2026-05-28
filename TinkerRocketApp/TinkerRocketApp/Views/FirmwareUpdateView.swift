@@ -14,15 +14,19 @@ import UniformTypeIdentifiers
 
 struct FirmwareUpdateView: View {
     @ObservedObject var device: BLEDevice
-    @StateObject private var session: OTASession
+    @ObservedObject var session: OTASession
     @State private var showingFilePicker = false
     @State private var pickedFileURL: URL?
     @State private var pickedFileSize: Int = 0
     @State private var pickedFileName: String = ""
 
     init(device: BLEDevice) {
-        self.device = device
-        _session = StateObject(wrappedValue: OTASession(device: device))
+        // Pull the per-device OTA session off BLEDevice rather than spinning
+        // up a fresh one — it survives the device disconnect/reconnect that
+        // tears down this view, so the "verified" state is still visible when
+        // the user navigates back after the OTA reboot. See #15.
+        _device = ObservedObject(initialValue: device)
+        _session = ObservedObject(initialValue: device.otaSession)
     }
 
     var body: some View {
@@ -130,6 +134,7 @@ struct FirmwareUpdateView: View {
                 }
                 LabeledRow(label: "Previous", value: session.preFlashFirmwareVersion, mono: true)
                 LabeledRow(label: "Now running", value: newVersion, mono: true)
+                flashAnotherButton
             }
 
         case .rollbackDetected(let version):
@@ -140,6 +145,7 @@ struct FirmwareUpdateView: View {
                 }
                 Text("Device reconnected but is still running the previous firmware (\(version)). The new image likely failed to boot — bootloader auto-reverted to the prior partition.")
                     .font(.subheadline).foregroundColor(.secondary)
+                flashAnotherButton
             }
 
         case .failed(let reason):
@@ -149,8 +155,27 @@ struct FirmwareUpdateView: View {
                     Text("Failed").font(.headline)
                 }
                 Text(reason).font(.subheadline).foregroundColor(.secondary)
+                flashAnotherButton
             }
         }
+    }
+
+    private var flashAnotherButton: some View {
+        Button(action: resetForNextFlash) {
+            HStack {
+                Image(systemName: "arrow.clockwise")
+                Text("Flash another firmware")
+            }
+        }
+        .buttonStyle(.bordered)
+        .padding(.top, 4)
+    }
+
+    private func resetForNextFlash() {
+        session.reset()
+        pickedFileURL = nil
+        pickedFileName = ""
+        pickedFileSize = 0
     }
 
     private var cancelButton: some View {

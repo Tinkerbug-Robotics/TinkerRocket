@@ -6,9 +6,10 @@ import CryptoKit
 /// load file → SHA-256 → OTA_BEGIN → chunk pump → OTA_FINISH →
 /// wait for reboot → wait for reconnect → compare new fw vs pre-flash fw.
 ///
-/// One-shot: instantiate, call start(fileURL:), observe `state`. Throw it
-/// away when done. Tasks created internally are cancelled on cancel() or
-/// deinit.
+/// Lifetime: owned by BLEDevice as a lazy property — survives view churn
+/// across the post-OTA disconnect/reconnect so FirmwareUpdateView can pick
+/// up the final state when the user navigates back. Call reset() to clear
+/// for the next run.
 ///
 /// Per design doc §5 (docs/plans/08-ota-firmware-update.md).
 @MainActor
@@ -27,7 +28,10 @@ final class OTASession: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    let device: BLEDevice
+    // Owning BLEDevice — unowned because BLEDevice owns this object via
+    // `lazy var otaSession`, so the cycle is structural and the session
+    // can't outlive its device.
+    private unowned let device: BLEDevice
     private(set) var preFlashFirmwareVersion: String = ""
     private(set) var imageSize: Int = 0
     private(set) var imageSha256Hex: String = ""
@@ -57,6 +61,8 @@ final class OTASession: ObservableObject {
         statusCancellable?.cancel()
         fwCancellable?.cancel()
         connCancellable?.cancel()
+        lastStatusUpdate = nil
+        sawDisconnect = false
 
         task = Task { [weak self] in
             await self?.runFlow(fileURL: fileURL)
@@ -68,6 +74,25 @@ final class OTASession: ObservableObject {
         task?.cancel()
         device.sendOtaAbort()
         state = .failed(reason: "Cancelled")
+    }
+
+    /// Reset back to .idle so the same instance can drive another OTA run.
+    /// Called by the UI's "Flash another firmware" button after .verified /
+    /// .rollbackDetected / .failed.
+    func reset() {
+        task?.cancel()
+        statusCancellable?.cancel()
+        fwCancellable?.cancel()
+        connCancellable?.cancel()
+        statusCancellable = nil
+        fwCancellable = nil
+        connCancellable = nil
+        preFlashFirmwareVersion = ""
+        imageSize = 0
+        imageSha256Hex = ""
+        lastStatusUpdate = nil
+        sawDisconnect = false
+        state = .idle
     }
 
     // MARK: - Flow
