@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(tinkerrocket_tests CXX)
+project(tinkerrocket_tests C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -200,6 +200,25 @@ target_include_directories(test_tr_flightlog_core PRIVATE
 )
 target_link_libraries(test_tr_flightlog_core GTest::gtest_main)
 gtest_discover_tests(test_tr_flightlog_core)
+
+# ---------- test_tr_ota (#8 phase 2) ----------
+# Host coverage for TR_OTA_Receiver: state machine, offset/size validation,
+# SHA-256 verification, callback fan-out. Real esp_ota_* is replaced with
+# FakeOTABackend (tests_cpp/fakes/) and mbedtls/sha256 is replaced with the
+# portable shim in host_shim/.
+add_executable(test_tr_ota
+    test_tr_ota.cpp
+    ${LIB_DIR}/TR_OTA/TR_OTA_Receiver.cpp
+    ${SHIM_DIR}/sha256_impl.c
+)
+target_include_directories(test_tr_ota PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_OTA/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/fakes
+)
+target_link_libraries(test_tr_ota GTest::gtest_main)
+gtest_discover_tests(test_tr_ota)
 
 # ---------- test_bs_log_policy ----------
 # Host-side test for the base-station LoRa CSV logging policy helpers
