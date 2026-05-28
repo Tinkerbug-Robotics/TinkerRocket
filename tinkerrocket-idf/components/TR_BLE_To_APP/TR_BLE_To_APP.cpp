@@ -427,19 +427,21 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
         pending_payload_len_ = payload_len;
         ESP_LOGI(BLE_TAG, "Time sync received");
     }
-    else if (cmd == 10)
+    else if (cmd == 70)
     {
-        // OTA_BEGIN (#8). Payload: [target:1][total_size:4 LE][sha256:32] = 37 bytes
+        // OTA_BEGIN (#8). Payload: [target:1][total_size:4 LE][sha256:32] = 37 bytes.
+        // Cmd codes 70/71/72 picked to clear the existing 1-60 range used by
+        // LoRa/servo/PID/etc. dispatch in main.cpp; see docs/plans/08-…
         handleOtaBegin(data + 1, length - 1);
         return;  // handled in-place, no main-loop dispatch
     }
-    else if (cmd == 11)
+    else if (cmd == 71)
     {
         // OTA_FINISH (#8). No payload.
         handleOtaFinish();
         return;
     }
-    else if (cmd == 12)
+    else if (cmd == 72)
     {
         // OTA_ABORT (#8). No payload.
         handleOtaAbort();

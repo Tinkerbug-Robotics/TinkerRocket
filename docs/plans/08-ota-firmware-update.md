@@ -22,7 +22,7 @@ This document is the contract that Phases 2–4 implement against.
 | # | Decision |
 |---|---|
 | 1 | Partition layout: keep 3 MB app slots, add a second 3 MB `ota_1` slot. Drop SPIFFS entirely on OC and FC (never mounted in source today). BS keeps a 2 MB SPIFFS for SD-fallback logging. |
-| 2 | BLE transport: reuse the existing File Transfer characteristic (made writable from the central) for image chunks; reuse the existing Command characteristic with three new command codes (10/11/12) for control; reuse the existing File Operations characteristic for status replies. No new GATT characteristics. |
+| 2 | BLE transport: reuse the existing File Transfer characteristic (made writable from the central) for image chunks; reuse the existing Command characteristic with three new command codes (70/71/72) for control; reuse the existing File Operations characteristic for status replies. No new GATT characteristics. |
 | 3 | Integrity: full-image SHA-256 sent in `OTA_BEGIN`, verified by firmware before `esp_ota_set_boot_partition`. |
 | 4 | Rollback: enable `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. Newly-booted firmware calls `esp_ota_mark_app_valid_cancel_rollback()` only after its first successful telemetry round-trip; anything earlier (panic, hang, BLE-stack init failure) auto-rolls back to `ota_0`. |
 | 5 | Identity: add `"fw"` field to the existing `config_identity` JSON. Format: `<git_short_sha>+<build_yyyymmdd-hhmm>`. iOS uses it for pre-flash display and post-reboot verification. |
@@ -97,9 +97,11 @@ Reuses existing characteristics defined in [TR_BLE_To_APP.h:213](../../tinkerroc
 
 | Code | Name | Payload | Firmware action |
 |------|------|---------|-----------------|
-| 10 | `OTA_BEGIN` | `[target:1][total_size:4 LE][sha256:32]` (37 bytes) | `esp_ota_begin()` on `ota_1`; reset SHA-256 state; notify `ota_status: ready` |
-| 11 | `OTA_FINISH` | none | Finalize SHA; compare to expected; if match: `esp_ota_set_boot_partition()` + schedule 500ms-deferred `esp_restart()`; if mismatch: `esp_ota_abort()`, notify `verify_failed` |
-| 12 | `OTA_ABORT` | none | `esp_ota_abort()`; clear state; notify `aborted` |
+| 70 | `OTA_BEGIN` | `[target:1][total_size:4 LE][sha256:32]` (37 bytes) | `esp_ota_begin()` on `ota_1`; reset SHA-256 state; notify `ota_status: ready` |
+| 71 | `OTA_FINISH` | none | Finalize SHA; compare to expected; if match: `esp_ota_set_boot_partition()` + schedule 500ms-deferred `esp_restart()`; if mismatch: `esp_ota_abort()`, notify `verify_failed` |
+| 72 | `OTA_ABORT` | none | `esp_ota_abort()`; clear state; notify `aborted` |
+
+(Codes 70/71/72 picked to clear the existing 1-60 range used for LoRa/servo/PID/etc. command dispatch in main.cpp. The originally-proposed 10/11/12 collided with `sendLoRaConfig` and friends; corrected before any code shipped.)
 
 `target` field in `OTA_BEGIN`:
 - `0` = app on this device (BS or OC self-update; Phase 2 and Phase 3)
@@ -263,7 +265,7 @@ New `FirmwareUpdateView` reachable from each device's settings screen.
 - **Progress UI**: mirrors the existing `FileManagerView` linear progress bar at [FileManagerView.swift:63](../../TinkerRocketApp/Views/FileManagerView.swift:63). Show % + bytes-of-bytes + estimated remaining time.
 - **Reconnect timeout**: 60 s. Beyond that, surface "Device did not reconnect — try power-cycling and re-pairing." (Recovery is via USB.)
 - **Version verification**: on reconnect, read `config_identity`. If `fw` matches the expected (computed from the firmware file's git-sha header, or asked at pick-time — TBD in Phase 2), show "Updated to <version>". If it matches the pre-flash version, show "Rollback detected — flash did not take, device is on old firmware."
-- **Cancel button**: maps to `OTA_ABORT` cmd 12. Returns to file-picker state.
+- **Cancel button**: maps to `OTA_ABORT` cmd 72. Returns to file-picker state.
 
 ### Targeting
 
