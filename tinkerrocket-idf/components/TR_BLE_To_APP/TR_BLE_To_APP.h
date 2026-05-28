@@ -16,6 +16,9 @@ using String = std::string;     // API-compatible subset used by callers
 #include <cstdint>
 #include <cstddef>
 
+#include "TR_OTA_Receiver.h"
+#include "TR_OTA_Backend_esp.h"
+
 class TR_BLE_To_APP
 {
 public:
@@ -224,6 +227,30 @@ private:
 
     // Helper to build JSON string
     String buildTelemetryJSON(const TelemetryData& data);
+
+    // ---- OTA receive state (#8) --------------------------------------------
+    // Owned here because the OTA flow lives entirely on BLE characteristics
+    // (cmd 10/11/12 on the command channel, chunks on file-transfer, status
+    // JSON on file-ops). main.cpp only needs to drive validation post-boot.
+    TR_OTA_Backend_esp ota_backend_;
+    TR_OTA_Receiver    ota_receiver_;
+    // When non-zero, loop() calls esp_restart() once millis() reaches it.
+    // Set by the OTA_FINISH handler after the ready_to_boot notification
+    // flushes so the iOS app sees the new partition selection.
+    uint32_t ota_pending_restart_at_ms_ = 0;
+    // Throttle the per-chunk "writing" status notifications. Updated on
+    // every successful chunk; we notify at most ~2 Hz so the BLE notify
+    // queue isn't saturated mid-flash.
+    uint32_t ota_last_writing_notify_ms_ = 0;
+
+    void onFileTransferWrite(const uint8_t* data, size_t length);
+    void handleOtaBegin(const uint8_t* data, size_t length);
+    void handleOtaFinish();
+    void handleOtaAbort();
+    void sendOtaStatusJSON(const char* state, const char* err,
+                           size_t bytes, const char* fw);
+    static void otaStatusCallback(void* user, TR_OTA_Receiver::State state,
+                                   TR_OTA_Receiver::Error err, size_t bytes_written);
 
 public:
     // ---- NimBLE callbacks (static, forwarded via user-data pointer) --------

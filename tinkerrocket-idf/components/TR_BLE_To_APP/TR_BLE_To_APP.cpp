@@ -4,7 +4,9 @@
 #include <cstdio>
 #include <cmath>
 
+#include <esp_app_desc.h>           // esp_app_get_description for fw version in ota_status (#8)
 #include <esp_log.h>
+#include <esp_system.h>             // esp_restart for the post-OTA reboot (#8)
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <nimble/nimble_port.h>
@@ -118,11 +120,14 @@ TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
       telemetry_val_handle_(0),
       command_val_handle_(0),
       file_ops_val_handle_(0),
-      file_transfer_val_handle_(0)
+      file_transfer_val_handle_(0),
+      ota_receiver_(ota_backend_)
 {
     // Copy initial name into the mutable buffer
     strncpy(device_name_, device_name, MAX_DEVICE_NAME_LEN);
     device_name_[MAX_DEVICE_NAME_LEN] = '\0';
+
+    ota_receiver_.setStatusCallback(&TR_BLE_To_APP::otaStatusCallback, this);
 }
 
 void TR_BLE_To_APP::setName(const char* name)
@@ -300,7 +305,6 @@ int TR_BLE_To_APP::gatt_svc_access_cb(uint16_t conn_handle,
     {
     case BLE_GATT_ACCESS_OP_WRITE_CHR:
     {
-        // Only the command characteristic accepts writes
         if (attr_handle == self->command_val_handle_)
         {
             // Flatten the mbuf chain into a contiguous buffer
@@ -314,6 +318,21 @@ int TR_BLE_To_APP::gatt_svc_access_cb(uint16_t conn_handle,
             if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
 
             self->onCommandWrite(buf, out_len);
+        }
+        else if (attr_handle == self->file_transfer_val_handle_)
+        {
+            // OTA image chunks (#8). Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
+            // Big enough for a 512 MTU minus ATT overhead.
+            uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+            if (om_len == 0) return 0;
+
+            uint8_t buf[520];
+            uint16_t copy_len = (om_len < sizeof(buf)) ? om_len : sizeof(buf);
+            uint16_t out_len = 0;
+            int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, copy_len, &out_len);
+            if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
+
+            self->onFileTransferWrite(buf, out_len);
         }
         return 0;
     }
@@ -408,6 +427,24 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
         pending_payload_len_ = payload_len;
         ESP_LOGI(BLE_TAG, "Time sync received");
     }
+    else if (cmd == 10)
+    {
+        // OTA_BEGIN (#8). Payload: [target:1][total_size:4 LE][sha256:32] = 37 bytes
+        handleOtaBegin(data + 1, length - 1);
+        return;  // handled in-place, no main-loop dispatch
+    }
+    else if (cmd == 11)
+    {
+        // OTA_FINISH (#8). No payload.
+        handleOtaFinish();
+        return;
+    }
+    else if (cmd == 12)
+    {
+        // OTA_ABORT (#8). No payload.
+        handleOtaAbort();
+        return;
+    }
     else if (length > 1)
     {
         // Generic payload handler for any other command carrying data
@@ -471,11 +508,13 @@ void TR_BLE_To_APP::registerGattServices()
     s_gatt_chrs[2].flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
     s_gatt_chrs[2].val_handle = &file_ops_val_handle_;
 
-    // 3: File Transfer (READ + NOTIFY)
+    // 3: File Transfer (READ + NOTIFY + WRITE).
+    // WRITE is for the central pushing OTA image chunks (#8); notifies still
+    // carry device→app file downloads from the existing flow.
     memset(&s_gatt_chrs[3], 0, sizeof(s_gatt_chrs[3]));
     s_gatt_chrs[3].uuid       = &s_file_transfer_uuid.u;
     s_gatt_chrs[3].access_cb  = gatt_access_cb;
-    s_gatt_chrs[3].flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
+    s_gatt_chrs[3].flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_WRITE;
     s_gatt_chrs[3].val_handle = &file_transfer_val_handle_;
 
     // 4: Terminator
@@ -631,7 +670,21 @@ bool TR_BLE_To_APP::begin()
 void TR_BLE_To_APP::loop()
 {
     // BLE stack handles events via callbacks on the NimBLE host task.
-    // Nothing to do here.
+    // Only OTA's deferred-restart watchdog needs poll-style handling here.
+    if (ota_pending_restart_at_ms_ != 0)
+    {
+        uint32_t now = (uint32_t)millis();
+        // Guard against millis() wraparound (49.7 days) by tolerating
+        // backward jumps: if 'now' is much less than the scheduled time we
+        // assume wrap and restart immediately rather than wait 49 days.
+        bool elapsed = (now >= ota_pending_restart_at_ms_) ||
+                       ((ota_pending_restart_at_ms_ - now) > 0x7FFFFFFFu);
+        if (elapsed)
+        {
+            ESP_LOGW(BLE_TAG, "OTA: rebooting now to load new partition");
+            esp_restart();
+        }
+    }
 }
 
 size_t TR_BLE_To_APP::getMaxChunkDataSize() const
@@ -1184,4 +1237,182 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     buf[pos] = '\0';
 
     return String(buf);
+}
+
+// ============================================================================
+// OTA receive (#8 phase 2) — owns the BLE-side state machine for OTAReceiver.
+// ============================================================================
+
+// Translate a TR_OTA_Receiver::Error to a short stable token the iOS app
+// can switch on without reproducing the enum. nullptr for Ok.
+static const char* ota_err_token(TR_OTA_Receiver::Error e)
+{
+    using E = TR_OTA_Receiver::Error;
+    switch (e)
+    {
+        case E::Ok:                  return nullptr;
+        case E::AlreadyActive:       return "already_active";
+        case E::SessionNotActive:    return "session_not_active";
+        case E::BeginFailed:         return "begin_failed";
+        case E::BadOffset:           return "bad_offset";
+        case E::SizeOverflow:        return "size_overflow";
+        case E::WriteFailed:         return "write_failed";
+        case E::SizeMismatch:        return "size_mismatch";
+        case E::ShaMismatch:         return "sha_mismatch";
+        case E::EndFailed:           return "end_failed";
+        case E::SetBootFailed:       return "set_boot_failed";
+    }
+    return "unknown";
+}
+
+void TR_BLE_To_APP::sendOtaStatusJSON(const char* state, const char* err,
+                                       size_t bytes, const char* fw)
+{
+    if (!device_connected_) return;
+
+    char buf[160];
+    int n = 0;
+    if (err && fw)
+    {
+        n = snprintf(buf, sizeof(buf),
+                     "{\"type\":\"ota_status\",\"state\":\"%s\",\"bytes\":%u,\"err\":\"%s\",\"fw\":\"%s\"}",
+                     state, (unsigned)bytes, err, fw);
+    }
+    else if (err)
+    {
+        n = snprintf(buf, sizeof(buf),
+                     "{\"type\":\"ota_status\",\"state\":\"%s\",\"bytes\":%u,\"err\":\"%s\"}",
+                     state, (unsigned)bytes, err);
+    }
+    else if (fw)
+    {
+        n = snprintf(buf, sizeof(buf),
+                     "{\"type\":\"ota_status\",\"state\":\"%s\",\"bytes\":%u,\"fw\":\"%s\"}",
+                     state, (unsigned)bytes, fw);
+    }
+    else
+    {
+        n = snprintf(buf, sizeof(buf),
+                     "{\"type\":\"ota_status\",\"state\":\"%s\",\"bytes\":%u}",
+                     state, (unsigned)bytes);
+    }
+    if (n < 0 || (size_t)n >= sizeof(buf)) return;
+
+    size_t max_notify = (negotiated_mtu_ > 3) ? (negotiated_mtu_ - 3) : 20;
+    if ((size_t)n > max_notify) return;  // silent skip per the project-wide MTU guard
+
+    notify_data(conn_handle_, file_ops_val_handle_, (const uint8_t*)buf, n);
+}
+
+void TR_BLE_To_APP::otaStatusCallback(void* user, TR_OTA_Receiver::State state,
+                                       TR_OTA_Receiver::Error err, size_t bytes_written)
+{
+    auto* self = static_cast<TR_BLE_To_APP*>(user);
+    using S = TR_OTA_Receiver::State;
+    const char* state_str = nullptr;
+    const char* fw_str = nullptr;
+    switch (state)
+    {
+        case S::Idle:         state_str = "idle";          break;
+        case S::Writing:      state_str = "ready";         break;
+        case S::ReadyToBoot:  state_str = "ready_to_boot"; {
+            // The "fw" in this status reflects the firmware ABOUT to boot
+            // (i.e., the freshly-flashed image). We can't read it from the
+            // staged partition cheaply, so we report the version embedded
+            // in the running image as a debug anchor; the iOS app compares
+            // its expected version against the post-reboot identity.
+            const esp_app_desc_t* d = esp_app_get_description();
+            fw_str = (d && d->version[0]) ? d->version : nullptr;
+        } break;
+        case S::VerifyFailed: state_str = "verify_failed"; break;
+    }
+    self->sendOtaStatusJSON(state_str, ota_err_token(err), bytes_written, fw_str);
+}
+
+void TR_BLE_To_APP::handleOtaBegin(const uint8_t* data, size_t length)
+{
+    // Payload: [target:1][total_size:4 LE][sha256:32] = 37 bytes
+    if (length < 37)
+    {
+        ESP_LOGW(BLE_TAG, "OTA_BEGIN payload too short (%u bytes)", (unsigned)length);
+        sendOtaStatusJSON("verify_failed", "bad_payload", 0, nullptr);
+        return;
+    }
+
+    uint8_t target = data[0];
+    uint32_t total_size = (uint32_t)data[1] | ((uint32_t)data[2] << 8) |
+                          ((uint32_t)data[3] << 16) | ((uint32_t)data[4] << 24);
+
+    if (target != 0)
+    {
+        // target==1 is FC relay (Phase 4); BS/OC only accept target==0 today.
+        ESP_LOGW(BLE_TAG, "OTA_BEGIN target=%u not supported on this device", target);
+        sendOtaStatusJSON("verify_failed", "bad_target", 0, nullptr);
+        return;
+    }
+
+    ESP_LOGI(BLE_TAG, "OTA_BEGIN: size=%u bytes", (unsigned)total_size);
+    ota_last_writing_notify_ms_ = 0;
+    ota_pending_restart_at_ms_ = 0;
+    (void)ota_receiver_.begin(total_size, data + 5);  // status pushed via callback
+}
+
+void TR_BLE_To_APP::handleOtaFinish()
+{
+    ESP_LOGI(BLE_TAG, "OTA_FINISH (bytes_written=%u)", (unsigned)ota_receiver_.bytesWritten());
+    TR_OTA_Receiver::Error e = ota_receiver_.finish();
+    if (e == TR_OTA_Receiver::Error::Ok)
+    {
+        // Defer the actual reboot by 500ms so the ready_to_boot status
+        // notification can drain through the BLE stack before the radio
+        // dies. loop() polls ota_pending_restart_at_ms_.
+        ota_pending_restart_at_ms_ = (uint32_t)millis() + 500;
+        ESP_LOGW(BLE_TAG, "OTA: ready to boot, restart scheduled in 500ms");
+    }
+}
+
+void TR_BLE_To_APP::handleOtaAbort()
+{
+    ESP_LOGW(BLE_TAG, "OTA_ABORT");
+    ota_pending_restart_at_ms_ = 0;
+    (void)ota_receiver_.abort();
+}
+
+void TR_BLE_To_APP::onFileTransferWrite(const uint8_t* data, size_t length)
+{
+    // Frame: [offset:4 LE][length:2 LE][flags:1][payload:N]
+    if (length < 7)
+    {
+        ESP_LOGW(BLE_TAG, "OTA chunk too short (%u bytes)", (unsigned)length);
+        return;
+    }
+    uint32_t offset = (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+                       ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+    uint16_t chunk_len = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+    // data[6] = flags; bit 0 = EOF. We don't act on EOF here — OTA_FINISH
+    // is the explicit close. Keeping the flag for symmetry with the
+    // download-direction wire format.
+    if ((size_t)7 + chunk_len > length)
+    {
+        ESP_LOGW(BLE_TAG, "OTA chunk truncated: declared %u, frame %u",
+                 (unsigned)chunk_len, (unsigned)length);
+        return;
+    }
+
+    TR_OTA_Receiver::Error e = ota_receiver_.writeChunk(offset, data + 7, chunk_len);
+    if (e != TR_OTA_Receiver::Error::Ok)
+    {
+        // writeChunk pushes its own status via the receiver callback on
+        // failure (state -> VerifyFailed). Nothing more to do here.
+        return;
+    }
+
+    // Rate-limit "writing" notifications to ~2 Hz so we don't drown the BLE
+    // notify queue mid-flash. The iOS app uses this only for the progress bar.
+    uint32_t now = (uint32_t)millis();
+    if ((now - ota_last_writing_notify_ms_) >= 500)
+    {
+        ota_last_writing_notify_ms_ = now;
+        sendOtaStatusJSON("writing", nullptr, ota_receiver_.bytesWritten(), nullptr);
+    }
 }
