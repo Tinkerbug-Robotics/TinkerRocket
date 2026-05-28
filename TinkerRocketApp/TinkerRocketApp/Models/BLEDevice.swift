@@ -87,6 +87,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var rocketID: UInt8 = 0
     @Published var deviceType: BLEDeviceType = .unknown
 
+    /// Firmware version stamp from config_identity "fw" field (#8).
+    /// Format: `<git_short_sha>+<build_yyyymmdd-hhmm>`, optionally with
+    /// `-dirty` between the sha and `+`. Empty if the device hasn't
+    /// pushed its identity yet or is running pre-#8 firmware (no "fw" field).
+    @Published var firmwareVersion: String = ""
+
+    /// Latest OTA status frame from the device (#8 phase 2). Driven by
+    /// ota_status JSON notifications on the file-ops characteristic.
+    /// nil between sessions; OTASession observes this to advance its
+    /// state machine.
+    @Published var otaStatus: OTAStatusUpdate?
+
     /// Display name: unitName if set, otherwise connectedDeviceName
     var displayName: String {
         unitName.isEmpty ? connectedDeviceName : unitName
@@ -272,6 +284,79 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         data.append(payload)
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
         print("Sent command \(command) with \(payload.count) bytes payload")
+    }
+
+    // MARK: - OTA helpers (#8 phase 2)
+
+    enum OTAError: Error, LocalizedError {
+        case notConnected
+        case writeInFlight
+        case writeFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected:        return "Device is not connected"
+            case .writeInFlight:       return "A chunk write is already in flight"
+            case .writeFailed(let m):  return "Chunk write failed: \(m)"
+            }
+        }
+    }
+
+    /// Send OTA_BEGIN (cmd 70). Payload: [target:1][size:4 LE][sha256:32].
+    /// targetIsFC=false → flashes this BS/OC device's own app. targetIsFC=true
+    /// is reserved for phase 4 (OC-relayed Flight Computer OTA).
+    func sendOtaBegin(targetIsFC: Bool, totalSize: UInt32, sha256: Data) {
+        precondition(sha256.count == 32, "SHA-256 must be exactly 32 bytes")
+        var payload = Data(capacity: 37)
+        payload.append(targetIsFC ? 0x01 : 0x00)
+        var sizeLE = totalSize.littleEndian
+        withUnsafeBytes(of: &sizeLE) { payload.append(contentsOf: $0) }
+        payload.append(sha256)
+        sendRawCommand(70, payload: payload)
+    }
+
+    /// Send OTA_FINISH (cmd 71). Device verifies SHA, sets boot partition,
+    /// then reboots ~500 ms later.
+    func sendOtaFinish() { sendRawCommand(71) }
+
+    /// Send OTA_ABORT (cmd 72). Always safe; clears any in-flight session.
+    func sendOtaAbort() { sendRawCommand(72) }
+
+    /// Maximum image-payload bytes per file-transfer write. Negotiated MTU
+    /// minus 7-byte chunk header. Falls back to 170 (iOS default 185 MTU)
+    /// before MTU negotiation completes.
+    var otaMaxChunkSize: Int {
+        guard let peripheral = peripheral else { return 170 }
+        let maxWrite = peripheral.maximumWriteValueLength(for: .withResponse)
+        return max(20, maxWrite - 7)
+    }
+
+    private var otaWriteContinuation: CheckedContinuation<Void, Error>?
+
+    /// Send a single OTA image chunk. Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
+    /// Awaits the BLE stack's per-write ack via didWriteValueFor — only one
+    /// write may be in flight at a time, so the OTASession pumps serially.
+    func sendOtaChunk(offset: UInt32, data: Data, isLast: Bool) async throws {
+        guard let characteristic = fileTransferCharacteristic,
+              let peripheral = peripheral else {
+            throw OTAError.notConnected
+        }
+        var frame = Data(capacity: 7 + data.count)
+        var offLE = offset.littleEndian
+        withUnsafeBytes(of: &offLE) { frame.append(contentsOf: $0) }
+        var lenLE = UInt16(data.count).littleEndian
+        withUnsafeBytes(of: &lenLE) { frame.append(contentsOf: $0) }
+        frame.append(isLast ? 0x01 : 0x00)
+        frame.append(data)
+
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            if otaWriteContinuation != nil {
+                cont.resume(throwing: OTAError.writeInFlight)
+                return
+            }
+            otaWriteContinuation = cont
+            peripheral.writeValue(frame, for: characteristic, type: .withResponse)
+        }
     }
 
     /// Kick off a base-station frequency scan.  Clears any previous results
@@ -1047,6 +1132,22 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral,
+                   didWriteValueFor characteristic: CBCharacteristic,
+                   error: Error?) {
+        // OTA chunk pump waits on per-write acks; the command characteristic
+        // also uses writeValue(.withResponse) but fires-and-forgets.
+        if characteristic.uuid == fileTransferCharUUID,
+           let cont = otaWriteContinuation {
+            otaWriteContinuation = nil
+            if let error = error {
+                cont.resume(throwing: OTAError.writeFailed(error.localizedDescription))
+            } else {
+                cont.resume()
+            }
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral,
                    didUpdateValueFor characteristic: CBCharacteristic,
                    error: Error?) {
         if characteristic.uuid == telemetryCharUUID {
@@ -1061,7 +1162,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 case 0xAA: parseScanResult(data)
                 case 0xCA: parseMagCalStatus(data)     // issue #96
                 case 0xCB: parseSensorCalStatus(data)  // issue #132
-                default:   parseFileList(data)
+                case 0x7B:                              // '{' → JSON object
+                    if let s = OTAStatusUpdate.parse(data) {
+                        otaStatus = s
+                    } else {
+                        parseFileList(data)
+                    }
+                default:   parseFileList(data)         // '[' or anything else (file list arrays)
                 }
             }
         } else if characteristic.uuid == fileTransferCharUUID {
@@ -1148,7 +1255,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let dt = dict["dt"] as? String {
                 deviceType = BLEDeviceType(rawValue: dt) ?? deviceType
             }
-            print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue)")
+            if let fw = dict["fw"] as? String { firmwareVersion = fw }
+            print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue) fw=\(firmwareVersion)")
             return
         }
 

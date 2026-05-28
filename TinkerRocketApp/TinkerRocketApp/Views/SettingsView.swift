@@ -225,6 +225,26 @@ struct SettingsView: View {
         }
 
         loRaSections
+
+        // Firmware update entry (#8 phase 2 — BS-gated; phase 3 removes the gate
+        // when the OC implementation lands).
+        Section(header: Text("Firmware")) {
+            HStack {
+                Text("Version")
+                Spacer()
+                Text(device.firmwareVersion.isEmpty ? "(pre-#8)" : device.firmwareVersion)
+                    .font(.body.monospaced())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            NavigationLink {
+                FirmwareUpdateView(device: device)
+            } label: {
+                Label("Update firmware…", systemImage: "arrow.up.circle")
+            }
+            .disabled(!device.isConnected)
+        }
     }
 
     @ViewBuilder
