@@ -15,7 +15,7 @@ This document is the contract that Phases 2–4 implement against.
 | 1 | Design doc covering all three targets | Lock the protocol, partition layout, identity contract, and FC relay strategy before any code lands. |
 | 2 | Base Station implementation | BS is the lowest-risk target — handheld, easy USB recovery, not airborne. Shake the protocol down here first. |
 | 3 | Out Computer implementation | Same protocol, ported. Mostly mechanical once Phase 2 is solid. |
-| 4 | Flight Computer (relayed via OC) | Hardest. FC has no BLE; firmware must traverse OC → I2C/UART → FC. Depends on Phase 1 schematic finding (§7). |
+| 4 | Flight Computer (relayed via OC) | Hardest. FC has no BLE; firmware must traverse OC → existing OC↔FC wires → FC. See §7 for the chosen split-bus design. |
 
 ## Resolved design decisions
 
@@ -27,7 +27,7 @@ This document is the contract that Phases 2–4 implement against.
 | 4 | Rollback: enable `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. Newly-booted firmware calls `esp_ota_mark_app_valid_cancel_rollback()` only after its first successful telemetry round-trip; anything earlier (panic, hang, BLE-stack init failure) auto-rolls back to `ota_0`. |
 | 5 | Identity: add `"fw"` field to the existing `config_identity` JSON. Format: `<git_short_sha>+<build_yyyymmdd-hhmm>`. iOS uses it for pre-flash display and post-reboot verification. |
 | 6 | iOS source for `.bin` files: native `.fileImporter` (Files / iCloud / AirDrop). No bundled-in-app firmware, no HTTPS distribution in v1. |
-| 7 | FC relay path (UART-bootloader vs. custom I2C OTA receiver): **TBD** — gated on a schematic check in Phase 1. See §7. |
+| 7 | FC relay path: cooperative FC-side OTA using the existing 5 wires — I2C (control plane) + I2S reconfigured OC→FC at high BCLK (data plane). FC pauses sensor operations during the transfer window. See §7. |
 | 8 | Out of scope: secure boot v2 (separate hardening issue); HTTPS firmware distribution; OTA over LoRa; parallel multi-device flash. |
 
 ---
@@ -180,7 +180,7 @@ At 502 B chunks and ~15 ms between write-with-response acks (BLE 4.2 typical):
 - 1.5 MB worst-case → ~45 s
 - 3 MB hypothetical → ~90 s
 
-Acceptable for a manual-trigger workflow. If Phase 4's relayed FC OTA over I2C proves too slow, revisit with L2CAP CoC.
+Acceptable for a manual-trigger workflow. Phase 4's FC relay uses a faster path (high-speed I2S between OC and FC — see §7), so the OC↔FC leg is not the bottleneck even with the BLE leg in front of it.
 
 ---
 
@@ -283,31 +283,58 @@ Tracked as a follow-up; not blocking this issue.
 
 ---
 
-## 7. Flight Computer relay strategy (Phase 4 — TBD)
+## 7. Flight Computer relay strategy (Phase 4)
 
-The FC has no BLE radio. Reaching it requires the iOS app → OC over BLE → OC → FC. Two viable paths; Phase 1 must pick one based on a schematic check.
+The FC has no BLE radio. Reaching it requires iOS → BLE → OC → wires → FC. The OC↔FC interface is 5 GPIOs split across two buses, both already in active use:
 
-### Option A — UART bootloader path
+| Wires | Bus | Today's role | Rate |
+|---|---|---|---|
+| FC 23 / 27 / 28 | **I2S** (DOUT / BCLK / WS) | FC → OC high-frequency telemetry stream | 22 050 sample/s × 4 B ≈ 88 KB/s |
+| FC 41 / 42 | **I2C** (SDA / SCL) | OC ↔ FC command/config | 400 kHz |
 
-OC pulls FC's reset + IO0 lines low+high in the right sequence, then streams the firmware binary into FC's ROM bootloader using the standard `esptool` SLIP protocol (an OC-side mini-`esptool` C implementation).
+There is **no hardware reset or IO0 line** between OC and FC, so the ESP32 ROM bootloader path (`esptool` SLIP over UART) is not on the table without a hardware change. Whatever we ship must be cooperative — the FC firmware itself receives the new image and writes it to `ota_1`.
 
-- **Pros**: Fast (~30 s for 600 KB at 460800 baud). Well-trodden upstream protocol. No FC-side firmware changes — the ROM bootloader is always available.
-- **Cons**: Requires UART + reset + IO0 lines wired between OC and FC. Existing link is I2C-only.
-- **Blocker**: schematic + PCB inspection. Must confirm OC has free UART pins and that reset/IO0 are accessible on FC.
+### Chosen design — split-bus cooperative OTA
 
-### Option B — Custom FC-side OTA receiver
+Use both buses, each for what it's best at, mirroring the BLE-side split:
 
-FC firmware runs a perpetual I2C-driven OTA receiver in a low-priority task. OC forwards chunks from the iOS app over I2C using the existing `WireFormat.h` framing (extended with new `OTA_*` message types).
+| Plane | Bus | Direction | Carries |
+|---|---|---|---|
+| **Control** | I2C (41/42) | bidirectional | `OTA_BEGIN(target=1, size, sha256)`, `OTA_FINISH`, `OTA_ABORT`, and `ota_status` reply frames. Reuses the existing `WireFormat.h` SOF/type/len/payload/CRC framing — new message types added. |
+| **Data** | I2S (23/27/28), reconfigured | OC → FC | Image chunks. OC becomes I2S master TX, FC becomes I2S slave RX (direction reversed from normal). BCLK cranked up well past the audio-rate default. |
 
-- **Pros**: Zero hardware changes. Works with current PCB.
-- **Cons**: Slow — at I2C 400 kHz with framing overhead, throughput is ~30 KB/s, so 600 KB ≈ 20 minutes. FC must explicitly cooperate (no recovery if FC firmware itself is broken).
-- **Fallback if it ever bricks**: USB reflash, same as today.
+**Why this rather than I2C-only**: I2C at 400 kHz tops out around 30 KB/s after framing overhead, so a 600 KB FC image would take ~20 minutes. I2S can run BCLK in the multi-MHz range; even a modest 2.5 MHz BCLK on 16-bit stereo slots gives 10 Mbps raw ≈ 1.25 MB/s effective. A 600 KB image transfers in under a second of wall time; flash erase + write dominates total OTA time (~5-10 s including the I2C handshake and SHA verify).
 
-### Phase 1 follow-up task
+**Why this rather than reconfiguring I2S pins to SPI**: We'd gain nothing material — I2S with DMA already drives the same physical pins at comparable rates, and we already have a working component (`TR_I2S_Stream`) that handles channel setup, DMA, and framing. SPI would mean writing a new slave-side ring buffer driver for no throughput win.
 
-Inspect the OC↔FC PCB. If UART + reset + IO0 are wired, commit to Option A. If not, commit to Option B. Update this section with the chosen path before Phase 4 begins.
+### Operating sequence
 
-(Phase 1 does not write code for either path. Just settles the choice.)
+1. iOS → BLE → OC: `OTA_BEGIN(target=1, size, sha256)` arrives.
+2. OC sends `OTA_BEGIN` to FC over I2C. FC pauses sensor reads and its I2S TX stream.
+3. Both sides tear down the I2S channel and re-init it with **OC = master TX, FC = slave RX**, at the higher OTA BCLK. The TR_I2S_Stream component grows a `beginMasterTx`/`beginSlaveRx` variant pair for this — most of the channel/DMA setup is already there.
+4. OC streams the image as raw bytes over the I2S data line; FC's `i2s_recv_cb_t` callback hands buffers to an `OTAReceiver` instance (same component as Phases 2/3) which calls `esp_ota_write` and updates the running SHA-256.
+5. OC sends `OTA_FINISH` over I2C. FC finalizes SHA, compares, calls `esp_ota_set_boot_partition(ota_1)`, replies `ready_to_boot` over I2C, then reboots.
+6. After FC reboot, the I2S channel is torn down + reverted to normal direction (FC = master TX) by both sides. Sensor stream resumes.
+7. The same `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` contract from §4 applies on the FC: the new image marks itself valid only after publishing its first I2S frame back to OC.
+
+### Rollback signal
+
+FC has no direct phone-home path. The OC observes a watchdog window after the FC reboot — if FC doesn't resume I2S TX within (say) 10 s, OC notifies the phone over BLE as `{state:"verify_failed","err":"fc_no_resume"}`. The bootloader will already have auto-rolled back to `ota_0`; the FC will then come up on its previous firmware and the I2S stream resumes shortly after. OC reports the actual `fw` it observes from the FC's next `config_identity` response (relayed up over BLE).
+
+### Pin assignment confirmed (no schematic check needed)
+
+The original §7 listed "schematic check" as a Phase 1 follow-up. That's resolved: pin map is confirmed from [flight_computer/main/config.h:287-296](../../tinkerrocket-idf/projects/flight_computer/main/config.h:287). No additional hardware reset lines exist; the cooperative design above is the path.
+
+### Phase 4 dependencies / things to settle when we get there
+
+- **Maximum I2S BCLK** achievable between OC (ESP32-S3) and FC (ESP32-P4) over the existing PCB traces — bench-measure during Phase 4 bringup, back off if signal integrity is marginal. Doc target: 2.5 MHz, allow up to 10 MHz if traces handle it.
+- **FC OTA mode entry** — how does FC firmware know to drop into OTA mode? Options:
+  - Reactive: OTA_BEGIN over I2C interrupts sensor loop on a dedicated low-priority task.
+  - Pre-armed: phone sends an "arm OTA" command earlier, FC enters a quieter mode, then OTA_BEGIN proceeds.
+  - Default to reactive unless bench testing shows I2S-driver-teardown-while-running is unsafe.
+- **Failure to enter OTA mode** — what if FC is unresponsive over I2C at OTA_BEGIN time? OC times out, phone surfaces "FC didn't acknowledge — recover via USB."
+
+These are Phase 4 specifics, not Phase 1 design decisions.
 
 ---
 
@@ -316,7 +343,6 @@ Inspect the OC↔FC PCB. If UART + reset + IO0 are wired, commit to Option A. If
 ### Phase 1 (this doc)
 
 - Read-through with maintainer. Adjust per feedback.
-- One-off schematic check on the OC↔FC link (§7); record finding here.
 
 ### Phase 2 (BS implementation)
 
