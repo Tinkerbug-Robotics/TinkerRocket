@@ -356,6 +356,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// lets iOS batch multiple writes per connection event (~10-20× faster).
     /// No per-chunk ATT ack — relies on link-layer CRC + retransmit for
     /// reliability and on OTA_FINISH's SHA-256 check to catch any drops.
+    ///
+    /// Throws .writeFailed if canSendWriteWithoutResponse stays false for
+    /// 5 s straight — that means the characteristic isn't advertising the
+    /// WRITE_NO_RSP property (firmware-side bug) and we'd otherwise hang.
     func sendOtaChunk(offset: UInt32, data: Data, isLast: Bool) async throws {
         guard let characteristic = fileTransferCharacteristic,
               let peripheral = peripheral else {
@@ -363,16 +367,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
 
         // Backpressure: if iOS's outgoing buffer is full, wait for it to drain
-        // before queuing another write.
+        // before queuing another write. Bound the wait so a missing
+        // WRITE_NO_RSP property on the firmware side doesn't hang the pump
+        // forever (we hit exactly that on bench 2026-05-28).
         if !peripheral.canSendWriteWithoutResponse {
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                // Re-check inside the continuation body — state may have
-                // changed between the if-check above and now.
-                if peripheral.canSendWriteWithoutResponse {
-                    cont.resume()
-                    return
+            let ready = await withTimeout(seconds: 5.0) {
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    if peripheral.canSendWriteWithoutResponse {
+                        cont.resume()
+                        return
+                    }
+                    self.otaReadyContinuation = cont
                 }
-                otaReadyContinuation = cont
+            }
+            if !ready {
+                // Drain the pending continuation if it was set so the
+                // delegate doesn't try to resume a dead waiter later.
+                otaReadyContinuation = nil
+                throw OTAError.writeFailed("Timed out waiting for canSendWriteWithoutResponse — firmware may not advertise WRITE_NO_RSP on file-transfer characteristic")
             }
         }
 
@@ -385,6 +397,25 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         frame.append(data)
 
         peripheral.writeValue(frame, for: characteristic, type: .withoutResponse)
+    }
+
+    /// Run `body`; return true if it completed within `seconds`, false on
+    /// timeout. Used to bound waits on CoreBluetooth state changes.
+    private func withTimeout(seconds: TimeInterval,
+                             body: @escaping @Sendable () async -> Void) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await body()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Wake any pending sendOtaChunk awaiter with an error when the device

@@ -510,13 +510,17 @@ void TR_BLE_To_APP::registerGattServices()
     s_gatt_chrs[2].flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY;
     s_gatt_chrs[2].val_handle = &file_ops_val_handle_;
 
-    // 3: File Transfer (READ + NOTIFY + WRITE).
-    // WRITE is for the central pushing OTA image chunks (#8); notifies still
-    // carry device→app file downloads from the existing flow.
+    // 3: File Transfer (READ + NOTIFY + WRITE + WRITE_NO_RSP).
+    // Both write properties are needed: WRITE_NO_RSP is what iOS picks for
+    // high-throughput OTA chunks (writeValue(.withoutResponse) — see #16),
+    // and WRITE stays advertised so older iOS builds / debug tools that
+    // expect write-with-response still work. Notifies still carry
+    // device→app file downloads from the existing flow.
     memset(&s_gatt_chrs[3], 0, sizeof(s_gatt_chrs[3]));
     s_gatt_chrs[3].uuid       = &s_file_transfer_uuid.u;
     s_gatt_chrs[3].access_cb  = gatt_access_cb;
-    s_gatt_chrs[3].flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_WRITE;
+    s_gatt_chrs[3].flags      = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY
+                              | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP;
     s_gatt_chrs[3].val_handle = &file_transfer_val_handle_;
 
     // 4: Terminator
