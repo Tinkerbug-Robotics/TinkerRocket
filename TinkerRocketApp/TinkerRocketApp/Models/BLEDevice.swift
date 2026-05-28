@@ -185,6 +185,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func onDisconnect() {
         isConnected = false
         stopRSSITimer()
+        drainOtaWriteQueue(error: OTAError.notConnected)
         telemetryCharacteristic = nil
         commandCharacteristic = nil
         fileOpsCharacteristic = nil
@@ -338,11 +339,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return max(20, maxWrite - 7)
     }
 
-    private var otaWriteContinuation: CheckedContinuation<Void, Error>?
+    // FIFO of per-write continuations. iOS's CoreBluetooth queues
+    // writeValue(.withResponse) internally and fires didWriteValueFor in the
+    // same order, so we can have multiple chunks in flight at once — the
+    // OTASession sliding-window pumps the pipeline. Each entry resumes when
+    // its corresponding write callback fires.
+    private var otaWriteQueue: [CheckedContinuation<Void, Error>] = []
 
     /// Send a single OTA image chunk. Frame: [offset:4 LE][length:2 LE][flags:1][data:N].
-    /// Awaits the BLE stack's per-write ack via didWriteValueFor — only one
-    /// write may be in flight at a time, so the OTASession pumps serially.
+    /// Awaits the BLE stack's per-write ack via didWriteValueFor. Safe to
+    /// call concurrently — multiple in-flight writes pipeline via the
+    /// otaWriteQueue FIFO.
     func sendOtaChunk(offset: UInt32, data: Data, isLast: Bool) async throws {
         guard let characteristic = fileTransferCharacteristic,
               let peripheral = peripheral else {
@@ -357,12 +364,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         frame.append(data)
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            if otaWriteContinuation != nil {
-                cont.resume(throwing: OTAError.writeInFlight)
-                return
-            }
-            otaWriteContinuation = cont
+            otaWriteQueue.append(cont)
             peripheral.writeValue(frame, for: characteristic, type: .withResponse)
+        }
+    }
+
+    /// Fail all in-flight OTA chunk continuations. Called from onDisconnect
+    /// so pending sendOtaChunk awaits don't hang forever when the device
+    /// drops mid-transfer.
+    private func drainOtaWriteQueue(error: Error) {
+        let pending = otaWriteQueue
+        otaWriteQueue.removeAll()
+        for cont in pending {
+            cont.resume(throwing: error)
         }
     }
 
@@ -1142,10 +1156,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                    didWriteValueFor characteristic: CBCharacteristic,
                    error: Error?) {
         // OTA chunk pump waits on per-write acks; the command characteristic
-        // also uses writeValue(.withResponse) but fires-and-forgets.
+        // also uses writeValue(.withResponse) but fires-and-forgets. iOS
+        // dispatches writes in order, so popping the FIFO head matches each
+        // ack to the oldest in-flight chunk.
         if characteristic.uuid == fileTransferCharUUID,
-           let cont = otaWriteContinuation {
-            otaWriteContinuation = nil
+           !otaWriteQueue.isEmpty {
+            let cont = otaWriteQueue.removeFirst()
             if let error = error {
                 cont.resume(throwing: OTAError.writeFailed(error.localizedDescription))
             } else {

@@ -146,31 +146,62 @@ final class OTASession: ObservableObject {
             return
         }
 
-        // ---- 5. Chunk pump ----
+        // ---- 5. Chunk pump (pipelined writes-with-response) ----
+        // Serial writes hit ~1.7 KB/s on bench (#16) because each chunk
+        // waits a full iOS BLE pacing interval. iOS lets us queue multiple
+        // writeValue(.withResponse) calls in flight and fires didWriteValueFor
+        // in the same order, so we maintain a sliding window of `pipelineDepth`
+        // outstanding chunks. BLE link still serializes at the wire level,
+        // but we eliminate the per-chunk dispatch round-trip.
         let chunkSize = max(64, device.otaMaxChunkSize)
+        let pipelineDepth = 8
         var offset = 0
+        var completedBytes = 0
+        var inFlight: [(offset: Int, size: Int, task: Task<Void, Error>)] = []
         state = .uploading(bytesSent: 0, totalBytes: fileData.count)
-        while offset < fileData.count {
-            if Task.isCancelled { return }
+
+        while offset < fileData.count || !inFlight.isEmpty {
+            if Task.isCancelled {
+                for entry in inFlight { entry.task.cancel() }
+                return
+            }
 
             // VerifyFailed during the pump? Surface and bail.
             if let st = lastStatusUpdate, st.state == .verifyFailed {
+                for entry in inFlight { entry.task.cancel() }
                 state = .failed(reason: "Device rejected chunk: \(st.err ?? "unknown")")
-                return
-            }
-
-            let end = min(offset + chunkSize, fileData.count)
-            let chunk = fileData.subdata(in: offset..<end)
-            let isLast = (end == fileData.count)
-            do {
-                try await device.sendOtaChunk(offset: UInt32(offset), data: chunk, isLast: isLast)
-            } catch {
-                state = .failed(reason: "Chunk write failed at offset \(offset): \(error.localizedDescription)")
                 device.sendOtaAbort()
                 return
             }
-            offset = end
-            state = .uploading(bytesSent: offset, totalBytes: fileData.count)
+
+            // Fill the pipeline up to depth, as long as we have more to send.
+            while inFlight.count < pipelineDepth && offset < fileData.count {
+                let end = min(offset + chunkSize, fileData.count)
+                let chunk = fileData.subdata(in: offset..<end)
+                let isLast = (end == fileData.count)
+                let chunkOffset = offset
+                let chunkLen = chunk.count
+                let task = Task { @MainActor in
+                    try await self.device.sendOtaChunk(offset: UInt32(chunkOffset), data: chunk, isLast: isLast)
+                }
+                inFlight.append((offset: chunkOffset, size: chunkLen, task: task))
+                offset = end
+            }
+
+            // Drain the oldest in-flight chunk so we can refill.
+            if !inFlight.isEmpty {
+                let entry = inFlight.removeFirst()
+                do {
+                    try await entry.task.value
+                    completedBytes += entry.size
+                    state = .uploading(bytesSent: completedBytes, totalBytes: fileData.count)
+                } catch {
+                    for remaining in inFlight { remaining.task.cancel() }
+                    state = .failed(reason: "Chunk write failed at offset \(entry.offset): \(error.localizedDescription)")
+                    device.sendOtaAbort()
+                    return
+                }
+            }
         }
 
         // ---- 6. OTA_FINISH ----
