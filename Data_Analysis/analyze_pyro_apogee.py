@@ -25,13 +25,24 @@ NSF_ALT_LANDED  = (1 << 0)
 NSF_ALT_APOGEE  = (1 << 1)
 NSF_VEL_APOGEE  = (1 << 2)
 NSF_LAUNCH      = (1 << 3)
-NSF_PYRO1_ARMED = (1 << 6)
-NSF_PYRO2_ARMED = (1 << 7)
+# New PCB has a single global PYRO_ARM bit (no per-channel ARM bits in flags
+# byte — per-channel state lives in pyro_status).  Keep in sync with
+# TR_RocketComputerTypes/RocketComputerTypes.h.
+NSF_PYRO_ARMED  = (1 << 6)
 
+# Pyro status byte bits — paired (CONT, FIRED) per channel.  Layout must match
+# the PSF_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.  The
+# old grouping (all CONTs then all FIREDs) was wrong on the FW side; reports
+# saw pyro1_fired as pyro2_cont and pyro1_fired stayed False even though the
+# FC had fired the channel.  Fixed.
 PSF_CH1_CONT  = (1 << 0)
-PSF_CH2_CONT  = (1 << 1)
-PSF_CH1_FIRED = (1 << 2)
+PSF_CH1_FIRED = (1 << 1)
+PSF_CH2_CONT  = (1 << 2)
 PSF_CH2_FIRED = (1 << 3)
+PSF_CH3_CONT  = (1 << 4)
+PSF_CH3_FIRED = (1 << 5)
+PSF_CH4_CONT  = (1 << 6)
+PSF_CH4_FIRED = (1 << 7)
 
 ROCKET_STATES = {0: "INIT", 1: "READY", 2: "PRELAUNCH", 3: "INFLIGHT", 4: "LANDED"}
 
@@ -117,12 +128,18 @@ def parse(filepath):
                 "vel_apogee": bool(flags & NSF_VEL_APOGEE),
                 "launch":     bool(flags & NSF_LAUNCH),
                 "landed":     bool(flags & NSF_ALT_LANDED),
-                "p1_armed":   bool(flags & NSF_PYRO1_ARMED),
-                "p2_armed":   bool(flags & NSF_PYRO2_ARMED),
+                # Single global PYRO_ARM line on new PCB — back-compat alias
+                # so existing p1/p2 print logic below keeps working.
+                "p1_armed":   bool(flags & NSF_PYRO_ARMED),
+                "p2_armed":   bool(flags & NSF_PYRO_ARMED),
                 "p1_cont":    bool(pyro_status & PSF_CH1_CONT),
-                "p2_cont":    bool(pyro_status & PSF_CH2_CONT),
                 "p1_fired":   bool(pyro_status & PSF_CH1_FIRED),
+                "p2_cont":    bool(pyro_status & PSF_CH2_CONT),
                 "p2_fired":   bool(pyro_status & PSF_CH2_FIRED),
+                "p3_cont":    bool(pyro_status & PSF_CH3_CONT),
+                "p3_fired":   bool(pyro_status & PSF_CH3_FIRED),
+                "p4_cont":    bool(pyro_status & PSF_CH4_CONT),
+                "p4_fired":   bool(pyro_status & PSF_CH4_FIRED),
             })
             stats["ns_ok"] += 1
 
