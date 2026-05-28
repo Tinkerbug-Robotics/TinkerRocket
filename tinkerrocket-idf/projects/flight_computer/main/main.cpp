@@ -221,6 +221,17 @@ static bool bmp_new_for_kf = false; // Set when new BMP sample arrives, cleared 
 
 // --- Flight logic state ---
 static RocketState rocket_state = INITIALIZATION;
+
+// Issue #216 — predicate used to gate ground-test / pyro-fire / servo-test
+// BLE commands.  We reject these from INFLIGHT (a launched rocket should
+// not be reachable from app-side test commands) AND from MAG_CALIBRATION
+// (the user is physically tumbling the rocket; an accidental Fire/Test
+// button tap during cal must not arm pyros or kick the servos).  Keeping
+// the rule in one place ensures every test-command site agrees.
+static inline bool isCommandLockoutState(RocketState s)
+{
+    return s == INFLIGHT || s == MAG_CALIBRATION;
+}
 static uint32_t launch_time_millis = 0;
 static uint32_t prelaunch_time_millis = 0;
 static uint32_t valid_gnss_start_millis = 0;
@@ -2706,9 +2717,14 @@ static void loop_fc()
                 (++ekf_decim_ctr >= config::EKF_DECIMATION);
             if (run_ekf_this_tick) ekf_decim_ctr = 0;
 
-            if (!ekf_initialized)
+            if (!ekf_initialized && rocket_state != MAG_CALIBRATION)
             {
                 // Gate 3: only init with high-quality GNSS (tight h_acc + low vel)
+                // Issue #216 — also gate against MAG_CALIBRATION so a tumble
+                // (which violates the EKF's "stationary at init" assumption,
+                // and can also set kinematics flags we'd rather not pick up)
+                // can't trigger an init.  EKF init resumes naturally after
+                // the cal session ends and rocket_state returns to READY.
                 if (have_ref_pos && gnss_gate3_init) {
                     ekf.init(ekf_imu, ekf_gnss, ekf_mag);
 
@@ -3125,8 +3141,9 @@ static void loop_fc()
             }
             else if (out_pending_command == GROUND_TEST_START)
             {
-                if (rocket_state == INFLIGHT) {
-                    ESP_LOGW(TAG, "[GROUND TEST] Rejected — INFLIGHT");
+                if (isCommandLockoutState(rocket_state)) {
+                    ESP_LOGW(TAG, "[GROUND TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
+                             (unsigned)rocket_state);
                 } else {
                     ground_test_active = true;
                     roll_rate_pid_standalone.reset();
@@ -3175,13 +3192,14 @@ static void loop_fc()
             }
             // Issue #96 — magnetometer hard-iron cal: start / abort / accept / retry.
             // Entry refused only from INFLIGHT (everything else is fair game).
-            // The current gate is wide because outdoor rockets enter PRELAUNCH
-            // quickly from GPS lock and would otherwise be locked out of cal —
-            // #216 tracks a proper CALIBRATING flight-mode that inhibits launch
-            // detection / pyro arming for the duration of an active cal session,
-            // which will let us narrow this gate back down safely.  All
-            // transitions produce one immediate status frame so the iOS UI
-            // updates without waiting for the 5 Hz cadence.
+            // The gate is wide because outdoor rockets enter PRELAUNCH quickly
+            // from GPS lock; with #216 the MAG_CALIBRATION state now inhibits
+            // launch detection, pyro arming, EKF init, servo PWM, and the BLE
+            // test commands, so the cal session is safe on the pad even with
+            // continuity-armed pyros.  See `case MAG_CALIBRATION:` below for
+            // the full list of in-state inhibitions.  All transitions produce
+            // one immediate status frame so the iOS UI updates without
+            // waiting for the 5 Hz cadence.
             else if (out_pending_command == MAG_CAL_START)
             {
                 if (rocket_state == INFLIGHT)
@@ -3227,6 +3245,29 @@ static void loop_fc()
                     mag_calibrator.start();
                     mag_cal_session_active = true;
                     mag_cal_status_dirty = true;
+
+                    // Issue #216 — entering MAG_CALIBRATION must NOT leave
+                    // any flight-time effects active.  Specifically:
+                    //   * Stow servos so a deflection commanded earlier
+                    //     (e.g. ground test, or last INFLIGHT angle that
+                    //     survived a reboot-recovery) doesn't continue to
+                    //     drive the PWM while the user tumbles the rocket.
+                    //   * Reset kinematics so the tumble can't latch
+                    //     kinematics.launch_flag = true.  Without this,
+                    //     accepting the cal and returning to READY would
+                    //     leave a stale launch_flag that the next
+                    //     PRELAUNCH tick would immediately re-promote to
+                    //     INFLIGHT (with pyro arming).  See the
+                    //     `case MAG_CALIBRATION:` block in the state
+                    //     machine below, which also skips kinematicChecks
+                    //     for the same reason.
+                    if (servo_enabled) {
+                        servo_control.stowControl();
+                        ESP_LOGI(TAG, "[MAGCAL] start: servos stowed for cal session");
+                    }
+                    kinematics.reset();
+                    burnout_detected = false;
+                    burnout_neg_count = 0;
                 }
             }
             else if (out_pending_command == MAG_CAL_ABORT)
@@ -3657,8 +3698,9 @@ static void loop_fc()
                 // (CONT divider fed from VPP, independent of the ARM rail).
                 // Still rejected in flight to be conservative with the
                 // app's "ground tests are pad-only" UX guarantee.
-                if (rocket_state == INFLIGHT) {
-                    ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — INFLIGHT");
+                if (isCommandLockoutState(rocket_state)) {
+                    ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
+                             (unsigned)rocket_state);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[4];
@@ -3701,8 +3743,9 @@ static void loop_fc()
             else if (out_pending_command == PYRO_FIRE_TEST)
             {
                 // Test-fire a pyro channel from the app (ground test only)
-                if (rocket_state == INFLIGHT) {
-                    ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — INFLIGHT");
+                if (isCommandLockoutState(rocket_state)) {
+                    ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
+                             (unsigned)rocket_state);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[4];
@@ -3763,8 +3806,9 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_TEST_PENDING)
             {
-                if (rocket_state == INFLIGHT) {
-                    ESP_LOGW(TAG, "[SERVO TEST] Rejected — INFLIGHT");
+                if (isCommandLockoutState(rocket_state)) {
+                    ESP_LOGW(TAG, "[SERVO TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
+                             (unsigned)rocket_state);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[8];
@@ -3869,8 +3913,9 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_REPLAY_PENDING)
             {
-                if (rocket_state == INFLIGHT) {
-                    ESP_LOGW(TAG, "[SERVO REPLAY] Rejected — INFLIGHT");
+                if (isCommandLockoutState(rocket_state)) {
+                    ESP_LOGW(TAG, "[SERVO REPLAY] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
+                             (unsigned)rocket_state);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[sizeof(ServoReplayData)];
@@ -3921,18 +3966,28 @@ static void loop_fc()
             xSemaphoreGive(i2c_bus_mutex);
         }
 
-        // Kinematic checks
-        kinematics.kinematicChecks(pressure_altitude_m,
-                                   accel_norm,
-                                   imu_pos,
-                                   imu_vel,
-                                   roll_rate_dps,
-                                   bmp_new_for_kf,
-                                   (float)gnss_latest_si.alt,
-                                   gps_new_for_kc,
-                                   imu_rpy[1],
-                                   burnout_detected,
-                                   mach_locked_out);
+        // Kinematic checks.  Issue #216 — skip during MAG_CALIBRATION: the
+        // user is physically tumbling the rocket on the bench, so a vigorous
+        // shake would otherwise spike `accel_norm` past the launch threshold
+        // and latch `kinematics.launch_flag = true`.  That flag survives the
+        // exit transition back to READY and would re-trigger PRELAUNCH ->
+        // INFLIGHT on the very next PRELAUNCH tick.  We also clear bmp_new
+        // and gps_new here to keep them from accumulating during cal — same
+        // semantics as if the evaluator had consumed them.
+        if (rocket_state != MAG_CALIBRATION)
+        {
+            kinematics.kinematicChecks(pressure_altitude_m,
+                                       accel_norm,
+                                       imu_pos,
+                                       imu_vel,
+                                       roll_rate_dps,
+                                       bmp_new_for_kf,
+                                       (float)gnss_latest_si.alt,
+                                       gps_new_for_kc,
+                                       imu_rpy[1],
+                                       burnout_detected,
+                                       mach_locked_out);
+        }
         bmp_new_for_kf = false;
         gps_new_for_kc = false;
 
@@ -4419,7 +4474,25 @@ static void loop_fc()
                 // BLE commands (MAG_CAL_ABORT/ACCEPT/RETRY).  The user is
                 // physically tumbling the rocket on the bench, so we
                 // explicitly do NOT promote to PRELAUNCH on motion or any
-                // other auto-detect.  Issue #96.
+                // other auto-detect.  Issue #96 / #216.
+                //
+                // #216 — additional inhibitions enforced elsewhere in the
+                // loop while we're in this state:
+                //   * `kinematicChecks(...)` is skipped above, so
+                //     `kinematics.launch_flag` cannot latch from the
+                //     tumble.  MAG_CAL_START also calls kinematics.reset().
+                //   * `ekf.init(...)` is gated against MAG_CALIBRATION so
+                //     a tumble can't violate the stationary-at-init
+                //     assumption.
+                //   * `servicePyroChannels()` only runs from `case
+                //     INFLIGHT:` below, so automatic pyro firing is
+                //     impossible while we're here.
+                //   * BLE test commands (GROUND_TEST_START, PYRO_CONT_TEST,
+                //     PYRO_FIRE_TEST, SERVO_TEST, SERVO_REPLAY_PENDING)
+                //     all gate on isCommandLockoutState() which returns
+                //     true for MAG_CALIBRATION.
+                //   * The servo PWM is stowed at MAG_CAL_START entry and
+                //     no servo-control loop runs from this case body.
                 break;
             }
             default:
