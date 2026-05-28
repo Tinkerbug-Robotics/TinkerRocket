@@ -132,26 +132,40 @@ ROCKET_STATES = {
     4: "LANDED",
 }
 
-# NonSensor flags
+# NonSensor flags — keep in sync with TR_RocketComputerTypes/RocketComputerTypes.h
+# (NSF_* constants).  Bit 7 is currently unused on the firmware side; an old
+# Python-only NSF_PYRO2_ARMED definition mapped there was stale (the new-PCB
+# wire format has a single global PYRO_ARM bit at 6 + per-channel state in
+# the pyro_status byte).
 NSF_ALT_LANDED  = (1 << 0)
 NSF_ALT_APOGEE  = (1 << 1)
 NSF_VEL_APOGEE  = (1 << 2)
 NSF_LAUNCH      = (1 << 3)
 NSF_BURNOUT     = (1 << 4)
 NSF_GUIDANCE    = (1 << 5)
-NSF_PYRO1_ARMED = (1 << 6)
-NSF_PYRO2_ARMED = (1 << 7)
+NSF_PYRO_ARMED  = (1 << 6)
 
 # apogee_flags byte (NonSensorData, #142/#143)
-NSF2_GPS_APOGEE    = (1 << 0)
-NSF2_PITCH_APOGEE  = (1 << 1)
-NSF2_MASTER_APOGEE = (1 << 2)
+NSF2_GPS_APOGEE       = (1 << 0)
+NSF2_PITCH_APOGEE     = (1 << 1)
+NSF2_MASTER_APOGEE    = (1 << 2)
+NSF2_REBOOT_RECOVERY  = (1 << 3)
+NSF2_GUIDANCE_ENABLED = (1 << 4)
 
-# Pyro status byte bits
+# Pyro status byte bits — paired (CONT, FIRED) per channel.  Layout must match
+# the PSF_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.  An
+# older Python definition grouped all CONTs and FIREDs by type (PSF_CH2_CONT
+# = 1<<1, PSF_CH1_FIRED = 1<<2, …) which is the opposite of the firmware:
+# pyro1_fired showed up as pyro2_cont in reports and pyro1_fired stayed False
+# even though the FC had fired the channel.  Fixed.
 PSF_CH1_CONT  = (1 << 0)
-PSF_CH2_CONT  = (1 << 1)
-PSF_CH1_FIRED = (1 << 2)
+PSF_CH1_FIRED = (1 << 1)
+PSF_CH2_CONT  = (1 << 2)
 PSF_CH2_FIRED = (1 << 3)
+PSF_CH3_CONT  = (1 << 4)
+PSF_CH3_FIRED = (1 << 5)
+PSF_CH4_CONT  = (1 << 6)
+PSF_CH4_FIRED = (1 << 7)
 
 
 # ---------- CRC-16 (Rob Tillaart CRC library defaults) ----------
@@ -420,17 +434,32 @@ def parse_binary_file(filepath):
                     "alt_apogee":    bool(flags & NSF_ALT_APOGEE),
                     "vel_apogee":    bool(flags & NSF_VEL_APOGEE),
                     "launch":        bool(flags & NSF_LAUNCH),
-                    "pyro1_armed":   bool(flags & NSF_PYRO1_ARMED),
-                    "pyro2_armed":   bool(flags & NSF_PYRO2_ARMED),
+                    "burnout":       bool(flags & NSF_BURNOUT),
+                    "guidance":      bool(flags & NSF_GUIDANCE),
+                    "pyro_armed":    bool(flags & NSF_PYRO_ARMED),
+                    # Per-channel CONT/FIRED bits in the pyro_status byte
+                    # (4 channels on the new PCB, 2 channels on legacy).
                     "pyro1_cont":    bool(pyro_status & PSF_CH1_CONT),
-                    "pyro2_cont":    bool(pyro_status & PSF_CH2_CONT),
                     "pyro1_fired":   bool(pyro_status & PSF_CH1_FIRED),
+                    "pyro2_cont":    bool(pyro_status & PSF_CH2_CONT),
                     "pyro2_fired":   bool(pyro_status & PSF_CH2_FIRED),
+                    "pyro3_cont":    bool(pyro_status & PSF_CH3_CONT),
+                    "pyro3_fired":   bool(pyro_status & PSF_CH3_FIRED),
+                    "pyro4_cont":    bool(pyro_status & PSF_CH4_CONT),
+                    "pyro4_fired":   bool(pyro_status & PSF_CH4_FIRED),
+                    # Back-compat aliases for any downstream code that
+                    # still reads the old NSF_PYRO[12]_ARMED keys.  These
+                    # map to the single global PYRO_ARM line on the new
+                    # PCB — both will report the same value.
+                    "pyro1_armed":   bool(flags & NSF_PYRO_ARMED),
+                    "pyro2_armed":   bool(flags & NSF_PYRO_ARMED),
                     # #142/#143: full apogee detector set + master vote.
                     # Legacy 42/43-byte logs decode all three as False.
-                    "gps_apogee":     bool(apogee_flags_b & NSF2_GPS_APOGEE),
-                    "pitch_apogee":   bool(apogee_flags_b & NSF2_PITCH_APOGEE),
-                    "apogee_flag":    bool(apogee_flags_b & NSF2_MASTER_APOGEE),
+                    "gps_apogee":         bool(apogee_flags_b & NSF2_GPS_APOGEE),
+                    "pitch_apogee":       bool(apogee_flags_b & NSF2_PITCH_APOGEE),
+                    "apogee_flag":        bool(apogee_flags_b & NSF2_MASTER_APOGEE),
+                    "reboot_recovery":    bool(apogee_flags_b & NSF2_REBOOT_RECOVERY),
+                    "guidance_enabled":   bool(apogee_flags_b & NSF2_GUIDANCE_ENABLED),
                 })
 
             elif msg_type == MSG_POWER:
