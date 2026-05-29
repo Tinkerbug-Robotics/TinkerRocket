@@ -60,10 +60,10 @@ final class OTASession: ObservableObject {
     /// Kick off the OTA flow. Reads `fileURL` (typically from `.fileImporter`)
     /// into memory, computes its SHA-256, then walks the state machine.
     /// Re-callable: cancels any prior in-flight run.
-    func start(fileURL: URL) {
+    func start(fileURL: URL, targetIsFC: Bool = false) {
         task?.cancel()
         task = Task { [weak self] in
-            await self?.runFlow(fileURL: fileURL)
+            await self?.runFlow(fileURL: fileURL, targetIsFC: targetIsFC)
         }
     }
 
@@ -87,7 +87,7 @@ final class OTASession: ObservableObject {
 
     // MARK: - Flow
 
-    private func runFlow(fileURL: URL) async {
+    private func runFlow(fileURL: URL, targetIsFC: Bool) async {
         // ---- 1. Load file + compute SHA-256 ----
         state = .loading
         let didOpen = fileURL.startAccessingSecurityScopedResource()
@@ -115,7 +115,7 @@ final class OTASession: ObservableObject {
             state = .failed(reason: "Device disconnected before OTA_BEGIN")
             return
         }
-        beginDevice.sendOtaBegin(targetIsFC: false, totalSize: UInt32(fileData.count), sha256: sha)
+        beginDevice.sendOtaBegin(targetIsFC: targetIsFC, totalSize: UInt32(fileData.count), sha256: sha)
 
         // ---- 3. Wait for status=ready ----
         do {

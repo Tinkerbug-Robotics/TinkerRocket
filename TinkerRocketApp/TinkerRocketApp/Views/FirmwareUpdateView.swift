@@ -34,6 +34,7 @@ private struct FirmwareUpdateContent: View {
     @State private var pickedFileURL: URL?
     @State private var pickedFileSize: Int = 0
     @State private var pickedFileName: String = ""
+    @State private var targetIsFC = false   // #14: relay the OTA to the Flight Computer via the OC
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -70,6 +71,21 @@ private struct FirmwareUpdateContent: View {
                 .disabled(isInProgress)
             }
 
+            // ----- Target picker (#14) -----
+            // A rocket's BLE peer is the Out Computer, which can relay an OTA
+            // over the OC↔FC link to the Flight Computer. (The Base Station has
+            // no FC, so it only ever flashes itself.)
+            if !device.isBaseStation {
+                GroupBox("Target") {
+                    Picker("Target", selection: $targetIsFC) {
+                        Text("This device").tag(false)
+                        Text("Flight Computer").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(isInProgress)
+                }
+            }
+
             // ----- Action / status block -----
             statusBlock
 
@@ -96,7 +112,7 @@ private struct FirmwareUpdateContent: View {
             Button(action: startFlash) {
                 HStack {
                     Image(systemName: "arrow.up.circle.fill")
-                    Text("Flash \(device.displayName)")
+                    Text(targetIsFC ? "Flash Flight Computer" : "Flash \(device.displayName)")
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -222,7 +238,7 @@ private struct FirmwareUpdateContent: View {
 
     private func startFlash() {
         guard let url = pickedFileURL else { return }
-        session.start(fileURL: url)
+        session.start(fileURL: url, targetIsFC: targetIsFC)
     }
 
     private func byteCountString(_ bytes: Int) -> String {

@@ -1471,6 +1471,14 @@ void TR_BLE_To_APP::relayFcOtaStatus(const char* state, const char* err,
 
 void TR_BLE_To_APP::onFileTransferWrite(const uint8_t* data, size_t length)
 {
+    // During a target==1 (FC relay) session the image bytes don't belong to
+    // this device's OTA partition — they're relayed to the FC over I2S (Phase
+    // 4 Layer 3). Until that path exists, drop chunks here so they never reach
+    // the idle local receiver (which would error and clobber the relay status).
+    if (ota_relay_active_)
+    {
+        return;
+    }
     // Frame: [offset:4 LE][length:2 LE][flags:1][payload:N]
     if (length < 7)
     {
