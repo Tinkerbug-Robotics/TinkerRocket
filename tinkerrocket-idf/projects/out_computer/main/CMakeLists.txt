@@ -16,6 +16,9 @@ idf_component_register(
         TR_Coordinates
         TR_BLE_To_APP
         TR_INA230
+        TR_OTA
+        app_update
+        esp_app_format
         nvs_flash
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narrowing)

@@ -10,6 +10,9 @@
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
+#include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
+#include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
+#include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "freertos/queue.h"
 #include "host/ble_gap.h"       // ble_gap_update_params
@@ -57,6 +60,29 @@ static inline std::string itos(int v)
 #include <NvsBitmapStore.h>
 #include <WireFormat.h>
 // FlightSimulator.h removed — sim now runs on FlightComputer via TR_Sensor_Collector_Sim
+
+// OTA rollback gate (#8). True only between boot and the first successful
+// telemetry-while-connected event when we booted PENDING_VERIFY (i.e., a
+// fresh OTA image). On first hit we call esp_ota_mark_app_valid_cancel_rollback
+// once and clear the flag. If we never get there (panic, hang, BLE init
+// failure) the bootloader auto-reverts to ota_0 on next boot.
+static bool g_ota_pending_verify = false;
+
+static inline void maybeMarkOtaValid()
+{
+    if (!g_ota_pending_verify) return;
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err == ESP_OK)
+    {
+        ESP_LOGW("OC", "OTA: new image validated, rollback cancelled");
+    }
+    else
+    {
+        ESP_LOGE("OC", "OTA: mark_app_valid_cancel_rollback failed: %s",
+                 esp_err_to_name(err));
+    }
+    g_ota_pending_verify = false;
+}
 
 static TR_I2C_Interface i2c_interface(config::I2C_ADDRESS);
 static bool i2c_slave_initialized = false;
@@ -2056,17 +2082,21 @@ static void sendCurrentConfig()
     delay(50);
 
     // Message 3: device identity ("config_identity" type)
-    char id_buf[128];
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    const char* fw_ver = (app_desc && app_desc->version[0]) ? app_desc->version : "unknown";
+    char id_buf[192];
     snprintf(id_buf, sizeof(id_buf),
              "{\"type\":\"config_identity\""
              ",\"uid\":\"%s\""
              ",\"un\":\"%s\""
              ",\"nid\":%u"
              ",\"rid\":%u"
-             ",\"dt\":\"%s\"}",
+             ",\"dt\":\"%s\""
+             ",\"fw\":\"%s\"}",
              unit_id_hex, unit_name,
              (unsigned)network_id, (unsigned)rocket_id,
-             config::DEVICE_TYPE);
+             config::DEVICE_TYPE,
+             fw_ver);
     String id_json(id_buf);
     ble_app.sendConfigJSON(id_json);
     ESP_LOGI("CFG", "Sent identity readback (%u bytes)", (unsigned)id_json.length());
@@ -2929,7 +2959,15 @@ static void printStats()
     // --- Low-power mode: send minimal BLE telemetry only ---
     if (!pwr_pin_on)
     {
-        readINA230Power();
+        // Skip the INA230 I2C poll while an OTA is in flight (#17): the
+        // esp_ota_begin() partition erase blocks SPI flash for ~1-2 s and the
+        // gauge transaction collides with it, logging spurious I2C timeouts.
+        // The telemetry push below still runs so the app sees liveness +
+        // OTA status during the flash.
+        if (!ble_app.isOtaActive())
+        {
+            readINA230Power();
+        }
 
         TR_BLE_To_APP::TelemetryData ble_telem = {};
         if (latest_power_valid)
@@ -2973,6 +3011,11 @@ static void printStats()
         ble_telem.bs_current = NAN;
         ble_telem.pwr_pin_on = false;
         ble_app.sendTelemetry(ble_telem);
+        // OC boots into low-power mode, so this is the path that runs right
+        // after a post-OTA reboot + app reconnect — the critical place to
+        // validate the new image. Gate on a live connection so we only cancel
+        // rollback once we've proven BLE works end-to-end with a client (#8).
+        if (ble_app.isConnected()) maybeMarkOtaValid();
         return;
     }
 
@@ -3376,6 +3419,7 @@ static void printStats()
     {
         ble_app.sendTelemetry(ble_telem);
         telem_send_count++;
+        maybeMarkOtaValid();   // validate a fresh OTA image once telemetry flows to a connected client (#8)
     }
     else
     {
@@ -3823,6 +3867,30 @@ static void setup_oc()
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
 
+    // OTA boot-state check (#8). If this image was just OTA-installed it
+    // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
+    // BLE work end-to-end (first telemetry sent while connected). If the
+    // app crashes or hangs before that, the bootloader auto-rolls back to
+    // ota_0 on the next boot.
+    {
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+        if (running && esp_ota_get_state_partition(running, &state) == ESP_OK)
+        {
+            if (state == ESP_OTA_IMG_PENDING_VERIFY)
+            {
+                ESP_LOGW("OC", "OTA: running on PENDING_VERIFY image (partition '%s' @ 0x%08x); "
+                              "rollback armed until first telemetry round-trip",
+                         running->label, (unsigned)running->address);
+                g_ota_pending_verify = true;
+            }
+            else
+            {
+                ESP_LOGI("OC", "OTA: running partition '%s' state=%d", running->label, (int)state);
+            }
+        }
+    }
+
     // --- Load NVS settings early so config readback to app is correct ---
     {
         prefs.begin("lora", false);
@@ -4168,6 +4236,13 @@ static void loop_oc()
         }
         ble_was_connected = ble_now;
     }
+
+    // Service the BLE library's poll-style work — currently just the OTA
+    // deferred-restart watchdog. handleOtaFinish() sets the boot partition and
+    // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
+    // Without this, an OTA completes and sets ota_1 yet the device never reboots
+    // into the new image (#8 Phase-3 OC bench finding; loop_bs always called it).
+    ble_app.loop();
 
     // Check for BLE commands
     uint8_t ble_cmd = ble_app.getCommand();
