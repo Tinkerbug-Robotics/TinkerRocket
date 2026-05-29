@@ -4237,6 +4237,13 @@ static void loop_oc()
         ble_was_connected = ble_now;
     }
 
+    // Service the BLE library's poll-style work — currently just the OTA
+    // deferred-restart watchdog. handleOtaFinish() sets the boot partition and
+    // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
+    // Without this, an OTA completes and sets ota_1 yet the device never reboots
+    // into the new image (#8 Phase-3 OC bench finding; loop_bs always called it).
+    ble_app.loop();
+
     // Check for BLE commands
     uint8_t ble_cmd = ble_app.getCommand();
     if (ble_cmd != 0)
