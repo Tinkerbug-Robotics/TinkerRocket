@@ -16,6 +16,9 @@
 #include <TR_GuidancePN.h>
 #include <TR_ControlMixer.h>
 #include <RocketComputerTypes.h>
+#include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
+#include <TR_OTA_Backend_esp.h>
+#include <esp_system.h>           // esp_restart after a verified relayed OTA
 #include <driver/spi_master.h>
 #include <esp_timer.h>
 #include <driver/gpio.h>
@@ -1035,6 +1038,23 @@ static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len
 
     i2s_tx_enqueue_drop++;
     return false;
+}
+
+// ---- OTA relay receiver (#8 Phase 4) -------------------------------------
+// The FC receives an OTA image relayed from the OC. Control (begin/finish/
+// abort) arrives over I2C as pending commands; the image bytes arrive over
+// I2S in Layer 3. Status is reported back to the OC over I2S (OTA_STATUS_MSG),
+// which the OC relays up to the app as ota_status.
+static TR_OTA_Backend_esp fc_ota_backend;
+static TR_OTA_Receiver    fc_ota_receiver(fc_ota_backend);
+
+static void sendOtaRelayStatus(uint8_t state, uint8_t err, uint32_t bytes_written)
+{
+    OtaRelayStatusData st;
+    st.state         = state;
+    st.err           = err;
+    st.bytes_written = bytes_written;
+    (void)enqueueI2STx(OTA_STATUS_MSG, (const uint8_t*)&st, sizeof(st));
 }
 
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
@@ -3611,6 +3631,77 @@ static void loop_fc()
             {
                 ESP_LOGI(TAG, "[SENSORCAL] READ -> publish status from NVS");
                 publishSensorCalFromNVS();
+            }
+            else if (out_pending_command == OTA_BEGIN_PENDING)
+            {
+                // #8 Phase 4: OTA relay from the OC. Refuse unless READY so an
+                // OTA can't start mid-flight (mirrors the cal handlers). Read
+                // the image header (size + sha256) and begin the session
+                // (erases ota_1). Image bytes arrive over I2S in Layer 3;
+                // Layer 2 exercises just this control handshake.
+                if (rocket_state != READY)
+                {
+                    ESP_LOGW(TAG, "[OTA] BEGIN refused: state=%u (require READY)",
+                             (unsigned)rocket_state);
+                    sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
+                }
+                else
+                {
+                    delay_ms(1);
+                    uint8_t hdr[36];
+                    size_t  hlen = 0;
+                    if (readConfigFrame(OTA_BEGIN_MSG, 36, hdr, sizeof(hdr), hlen)
+                        && hlen >= 36)
+                    {
+                        uint32_t total_size = 0;
+                        memcpy(&total_size, hdr, 4);
+                        ESP_LOGW(TAG, "[OTA] BEGIN size=%u — erasing ota_1", (unsigned)total_size);
+                        const TR_OTA_Receiver::Error e = fc_ota_receiver.begin(total_size, hdr + 4);
+                        if (e == TR_OTA_Receiver::Error::Ok)
+                        {
+                            ESP_LOGI(TAG, "[OTA] ready for image");
+                            sendOtaRelayStatus(OTA_RELAY_READY, 0, 0);
+                        }
+                        else
+                        {
+                            ESP_LOGE(TAG, "[OTA] begin failed: %d", (int)e);
+                            sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, (uint8_t)e, 0);
+                        }
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "[OTA] BEGIN header read failed");
+                        sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
+                    }
+                }
+            }
+            else if (out_pending_command == OTA_FINISH_CMD)
+            {
+                // Image transfer (I2S) is Layer 3 — without it the SHA won't
+                // match and finish() fails, which is the expected Layer 2
+                // result. On success (Layer 3) the FC reboots into ota_1.
+                ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u)",
+                         (unsigned)fc_ota_receiver.bytesWritten());
+                const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
+                if (e == TR_OTA_Receiver::Error::Ok)
+                {
+                    sendOtaRelayStatus(OTA_RELAY_READY_TO_BOOT, 0,
+                                       (uint32_t)fc_ota_receiver.bytesWritten());
+                    delay_ms(500);
+                    esp_restart();
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "[OTA] finish failed: %d", (int)e);
+                    sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
+                                       (uint32_t)fc_ota_receiver.bytesWritten());
+                }
+            }
+            else if (out_pending_command == OTA_ABORT_CMD)
+            {
+                ESP_LOGW(TAG, "[OTA] ABORT");
+                (void)fc_ota_receiver.abort();
+                sendOtaRelayStatus(OTA_RELAY_ABORTED, 0, 0);
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
             {

@@ -1368,9 +1368,27 @@ void TR_BLE_To_APP::handleOtaBegin(const uint8_t* data, size_t length)
     uint32_t total_size = (uint32_t)data[1] | ((uint32_t)data[2] << 8) |
                           ((uint32_t)data[3] << 16) | ((uint32_t)data[4] << 24);
 
+    if (target == 1)
+    {
+        // FC relay (#8 Phase 4). Hand off to the OC-registered delegate, which
+        // stages OTA_BEGIN to the FC over I2C. Devices without a delegate (BS)
+        // can't relay → bad_target.
+        if (ota_relay_begin_cb_)
+        {
+            ESP_LOGI(BLE_TAG, "OTA_BEGIN target=1 (FC relay): size=%u bytes", (unsigned)total_size);
+            ota_relay_active_   = true;
+            ota_session_active_ = true;  // gate the OC's periodic I2C poll, as for a local OTA
+            ota_relay_begin_cb_(ota_relay_ctx_, total_size, data + 5);
+        }
+        else
+        {
+            ESP_LOGW(BLE_TAG, "OTA_BEGIN target=1 but no relay delegate on this device");
+            sendOtaStatusJSON("verify_failed", "bad_target", 0, nullptr);
+        }
+        return;
+    }
     if (target != 0)
     {
-        // target==1 is FC relay (Phase 4); BS/OC only accept target==0 today.
         ESP_LOGW(BLE_TAG, "OTA_BEGIN target=%u not supported on this device", target);
         sendOtaStatusJSON("verify_failed", "bad_target", 0, nullptr);
         return;
@@ -1392,6 +1410,12 @@ void TR_BLE_To_APP::handleOtaBegin(const uint8_t* data, size_t length)
 
 void TR_BLE_To_APP::handleOtaFinish()
 {
+    if (ota_relay_active_)
+    {
+        ESP_LOGI(BLE_TAG, "OTA_FINISH (FC relay)");
+        if (ota_relay_finish_cb_) ota_relay_finish_cb_(ota_relay_ctx_);
+        return;  // session ends when the OC relays the FC's terminal status
+    }
     ESP_LOGI(BLE_TAG, "OTA_FINISH (bytes_written=%u)", (unsigned)ota_receiver_.bytesWritten());
     TR_OTA_Receiver::Error e = ota_receiver_.finish();
     if (e == TR_OTA_Receiver::Error::Ok)
@@ -1410,8 +1434,39 @@ void TR_BLE_To_APP::handleOtaFinish()
 void TR_BLE_To_APP::handleOtaAbort()
 {
     ESP_LOGW(BLE_TAG, "OTA_ABORT");
+    if (ota_relay_active_)
+    {
+        if (ota_relay_abort_cb_) ota_relay_abort_cb_(ota_relay_ctx_);
+        ota_relay_active_   = false;
+        ota_session_active_ = false;
+        sendOtaStatusJSON("aborted", nullptr, 0, nullptr);
+        return;
+    }
     ota_pending_restart_at_ms_ = 0;
     (void)ota_receiver_.abort();   // -> Idle -> callback clears ota_session_active_
+}
+
+void TR_BLE_To_APP::setOtaRelayDelegate(void (*begin_cb)(void*, uint32_t, const uint8_t*),
+                                        void (*finish_cb)(void*),
+                                        void (*abort_cb)(void*),
+                                        void* ctx)
+{
+    ota_relay_begin_cb_  = begin_cb;
+    ota_relay_finish_cb_ = finish_cb;
+    ota_relay_abort_cb_  = abort_cb;
+    ota_relay_ctx_       = ctx;
+}
+
+void TR_BLE_To_APP::relayFcOtaStatus(const char* state, const char* err,
+                                     uint32_t bytes_written, bool terminal)
+{
+    if (!ota_relay_active_) return;  // ignore stray FC status outside a relay session
+    sendOtaStatusJSON(state, err, bytes_written, nullptr);
+    if (terminal)
+    {
+        ota_relay_active_   = false;
+        ota_session_active_ = false;
+    }
 }
 
 void TR_BLE_To_APP::onFileTransferWrite(const uint8_t* data, size_t length)

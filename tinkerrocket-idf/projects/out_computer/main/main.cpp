@@ -1082,7 +1082,8 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
            cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
-           cmd == SENSOR_CAL_APPLY_PENDING;    // #132: app-pushed sensor cal payload
+           cmd == SENSOR_CAL_APPLY_PENDING ||  // #132: app-pushed sensor cal payload
+           cmd == OTA_BEGIN_PENDING;           // #8 Phase 4: FC OTA image header
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -1192,6 +1193,34 @@ static void queueOutStatusResponse(bool ready)
     }
 }
 
+// ---- OTA relay to the Flight Computer (#8 Phase 4) ------------------------
+// TR_BLE_To_APP invokes these when an OTA_BEGIN/FINISH/ABORT with target==1
+// arrives over BLE. We stage the matching command (+ the 36-byte image header
+// for BEGIN) for the FC to pull on its next I2C poll — identical delivery to
+// servo/sim config. The FC reports progress back over I2S (OTA_STATUS_MSG),
+// relayed to BLE by the frame processor. (Image bytes are Phase 4 Layer 3.)
+static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* sha256)
+{
+    static_assert(sizeof(pending_config_data) >= 4 + 32,
+                  "pending_config_data too small for the OTA_BEGIN_MSG payload");
+    memcpy(pending_config_data, &total_size, 4);
+    memcpy(pending_config_data + 4, sha256, 32);
+    pending_config_data_len = 36;
+    pending_config_msg_type = OTA_BEGIN_MSG;
+    setPendingCommand(OTA_BEGIN_PENDING);
+    ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)", (unsigned)total_size);
+}
+static void ocOtaRelayFinish(void* /*ctx*/)
+{
+    setPendingCommand(OTA_FINISH_CMD);
+    ESP_LOGI("OC", "OTA relay: staged OTA_FINISH for FC");
+}
+static void ocOtaRelayAbort(void* /*ctx*/)
+{
+    setPendingCommand(OTA_ABORT_CMD);
+    ESP_LOGI("OC", "OTA relay: staged OTA_ABORT for FC");
+}
+
 static const char* rocketStateToString(RocketState s)
 {
     switch (s)
@@ -1255,6 +1284,7 @@ static bool isKnownMessageType(uint8_t type)
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
+        case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
             return true;
         default:
@@ -1447,6 +1477,33 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(SensorCalStatusData))
         {
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
+        }
+    }
+    else if (type == OTA_STATUS_MSG)
+    {
+        // #8 Phase 4: FC→OC OTA relay status. Map the FC's state byte to the
+        // ota_status JSON vocabulary the app already understands for local OTA,
+        // and forward it up over BLE. relayFcOtaStatus() ends the relay session
+        // on a terminal state (ready_to_boot / verify_failed / aborted).
+        if (payload_len >= sizeof(OtaRelayStatusData))
+        {
+            OtaRelayStatusData st;
+            memcpy(&st, payload, sizeof(st));
+            const char* state = "writing";
+            const char* err   = nullptr;
+            bool terminal     = false;
+            switch (st.state)
+            {
+                case OTA_RELAY_READY:         state = "ready"; break;
+                case OTA_RELAY_WRITING:       state = "writing"; break;
+                case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
+                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = "fc_error"; terminal = true; break;
+                case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
+                default: break;
+            }
+            ESP_LOGI("OC", "OTA relay: FC status state=%u err=%u bytes=%u",
+                     (unsigned)st.state, (unsigned)st.err, (unsigned)st.bytes_written);
+            ble_app.relayFcOtaStatus(state, err, st.bytes_written, terminal);
         }
     }
     else if (type == GNSS_MSG)
@@ -4046,6 +4103,8 @@ static void setup_oc()
     {
         ESP_LOGE("BLE", "BLE app interface failed to start");
     }
+    // Relay target==1 (Flight Computer) OTA to the FC over I2C (#8 Phase 4).
+    ble_app.setOtaRelayDelegate(ocOtaRelayBegin, ocOtaRelayFinish, ocOtaRelayAbort, nullptr);
 
     // Enter low-power mode: 80 MHz, DFS to 40 MHz when idle
     enterLowPowerMode();

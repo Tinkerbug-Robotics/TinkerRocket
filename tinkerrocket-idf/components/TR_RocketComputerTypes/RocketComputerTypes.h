@@ -1445,6 +1445,32 @@ static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
 // high-water mark per flight).  See LogBufferStatsData.
 static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;
 
+// --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
+// Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
+// (with the OTA_BEGIN_MSG payload) / OTA_FINISH_CMD / OTA_ABORT_CMD as
+// pending commands, the FC pulls them on its poll. The FC reports progress
+// back over I2S via OTA_STATUS_MSG (Layer 2). The image bytes themselves
+// travel over the reconfigured I2S link (Phase 4 Layer 3), not here.
+static constexpr uint8_t OTA_BEGIN_PENDING   = 0xE3;  // OC→FC: OTA_BEGIN_MSG payload follows
+static constexpr uint8_t OTA_BEGIN_MSG       = 0xE4;  // [size:4 LE][sha256:32] = 36 bytes
+static constexpr uint8_t OTA_FINISH_CMD      = 0xE5;  // OC→FC: finalize + verify + reboot
+static constexpr uint8_t OTA_ABORT_CMD       = 0xE6;  // OC→FC: abort session
+static constexpr uint8_t OTA_STATUS_MSG      = 0xE7;  // FC→OC over I2S: OtaRelayStatusData
+
+// OtaRelayStatusData.state values (FC→OC). The OC maps these to the iOS
+// ota_status JSON strings it already sends for local (OC/BS) OTA.
+static constexpr uint8_t OTA_RELAY_READY         = 1;  // begin OK, ota_1 erased, ready for image
+static constexpr uint8_t OTA_RELAY_WRITING       = 2;  // receiving image (Layer 3)
+static constexpr uint8_t OTA_RELAY_READY_TO_BOOT = 3;  // verified, rebooting (Layer 3)
+static constexpr uint8_t OTA_RELAY_VERIFY_FAILED = 4;  // begin/verify error (see err)
+static constexpr uint8_t OTA_RELAY_ABORTED       = 5;  // session aborted
+
+struct __attribute__((packed)) OtaRelayStatusData {
+    uint8_t  state;          // OTA_RELAY_* above
+    uint8_t  err;            // 0 = none; else TR_OTA_Receiver::Error code
+    uint32_t bytes_written;  // progress / final size
+};
+
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types
