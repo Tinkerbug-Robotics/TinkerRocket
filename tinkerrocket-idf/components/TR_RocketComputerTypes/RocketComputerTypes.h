@@ -1413,9 +1413,23 @@ static constexpr uint8_t MAG_CAL_READ          = 0xDC;  // OC→FC: publish curr
 // pushes them back on connect (APPLY) or reads what's stored (READ).  The
 // low-g accelerometer is the cal reference, not itself corrected, so there is
 // nothing to store for it.
-static constexpr uint8_t SENSOR_CAL_APPLY_PENDING = 0xDD;  // OC→FC: payload follows as SENSOR_CAL_APPLY_MSG
-static constexpr uint8_t SENSOR_CAL_APPLY_MSG     = 0xDE;  // 18-byte SensorCalApplyData payload
-static constexpr uint8_t SENSOR_CAL_READ          = 0xDF;  // OC→FC: publish current NVS sensor cal
+//
+// These three OC→FC codes originally sat at 0xDD/0xDE/0xDF, which ALIAS the
+// mag-cal MAG_CAL_VERIFY_DONE/RESET/FORCE_APPLY codes above.  The FC's
+// command dispatch is a flat if/else-if chain that matched the mag-cal
+// branch first, so the SENSOR_CAL_* branches were dead code and a
+// connect-time SENSOR_CAL_READ (0xDF) was refused on the FC as
+// MAG_CAL_FORCE_APPLY ("force_apply refused: not in MAG_CALIBRATION
+// session" — bench, 2026-05-29).  Reassigned to the first free block after
+// the OTA relay codes.  NOTE the values are intentionally NOT contiguous
+// with SENSOR_CAL_STATUS_MSG (0xE0): 0xE3–0xE7 are reserved for the OTA
+// Phase 4 FC relay control codes (OTA_BEGIN_PENDING … OTA_STATUS_MSG, branch
+// ota/phase4-fc, #8), so sensor cal jumps to 0xE8.  Keep that block free
+// here to avoid re-colliding when ota/phase4-fc merges.  NVS layout is
+// unaffected — this is purely the I2C wire-code routing.
+static constexpr uint8_t SENSOR_CAL_APPLY_PENDING = 0xE8;  // OC→FC: payload follows as SENSOR_CAL_APPLY_MSG
+static constexpr uint8_t SENSOR_CAL_APPLY_MSG     = 0xE9;  // 18-byte SensorCalApplyData payload
+static constexpr uint8_t SENSOR_CAL_READ          = 0xEA;  // OC→FC: publish current NVS sensor cal
 static constexpr uint8_t SENSOR_CAL_STATUS_MSG    = 0xE0;  // FC→OC: SensorCalStatusData
 
 // FC→OC over I2S, emitted once at the PRELAUNCH→INFLIGHT transition. A
