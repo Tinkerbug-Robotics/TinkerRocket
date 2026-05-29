@@ -38,7 +38,7 @@ CONFIG_ESP_INT_WDT=y
 CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
 
 # Core dump to flash — retrieve after crash with:
-#   espcoredump.py info_corefile -t raw -c 0x310000 build/out_computer.elf
+#   espcoredump.py info_corefile -t raw -c 0x610000 build/out_computer.elf
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
@@ -46,6 +46,11 @@ CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 # Partition table
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# OTA rollback: new images boot as PENDING_VERIFY and auto-roll back to ota_0
+# unless app calls esp_ota_mark_app_valid_cancel_rollback() after first
+# successful telemetry round-trip. See docs/plans/08-ota-firmware-update.md §4.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

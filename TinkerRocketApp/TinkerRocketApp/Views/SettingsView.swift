@@ -157,6 +157,9 @@ struct SettingsView: View {
                 } else {
                     rocketSettingsSections
                 }
+                // Firmware update is device-level (not profile-level), so it
+                // sits outside the branch above and shows for BS + OC alike.
+                firmwareSection
             }
             .navigationTitle(navTitle)
             .overlay { if isInitializing { initializingOverlay } }
@@ -226,9 +229,15 @@ struct SettingsView: View {
         }
 
         loRaSections
+    }
 
-        // Firmware update entry (#8 phase 2 — BS-gated; phase 3 removes the gate
-        // when the OC implementation lands).
+    // Firmware update entry. Shown for any connected device (#8): Phase 2
+    // shipped it BS-only; Phase 3 added the Out Computer firmware side, so the
+    // entry is no longer gated on isBaseStation. (The connected device is
+    // always a BS or OC — the FC has no BLE radio. Phase 4 will add an
+    // FC-relay target picker when connected to an OC.)
+    @ViewBuilder
+    private var firmwareSection: some View {
         Section(header: Text("Firmware")) {
             HStack {
                 Text("Version")
