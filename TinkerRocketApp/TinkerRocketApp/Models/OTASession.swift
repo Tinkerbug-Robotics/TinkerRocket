@@ -118,10 +118,14 @@ final class OTASession: ObservableObject {
         beginDevice.sendOtaBegin(targetIsFC: targetIsFC, totalSize: UInt32(fileData.count), sha256: sha)
 
         // ---- 3. Wait for status=ready ----
+        // The FC relay round-trip (BLE -> OC -> I2C poll -> FC erases ota_1 ->
+        // I2S -> OC -> BLE) is far slower than a local OTA's begin, so give it
+        // a much longer window before declaring failure (#8 Phase 4).
+        let beginTimeoutS: TimeInterval = targetIsFC ? 20.0 : 5.0
         do {
-            try await awaitOtaState(.ready, timeout: 5.0)
+            try await awaitOtaState(.ready, timeout: beginTimeoutS)
         } catch {
-            state = .failed(reason: "Device did not accept OTA_BEGIN within 5s")
+            state = .failed(reason: "Device did not accept OTA_BEGIN within \(Int(beginTimeoutS))s")
             return
         }
 
