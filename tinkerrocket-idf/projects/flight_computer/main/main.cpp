@@ -3639,9 +3639,14 @@ static void loop_fc()
                 // the image header (size + sha256) and begin the session
                 // (erases ota_1). Image bytes arrive over I2S in Layer 3;
                 // Layer 2 exercises just this control handshake.
-                if (rocket_state != READY)
+                if (isCommandLockoutState(rocket_state))
                 {
-                    ESP_LOGW(TAG, "[OTA] BEGIN refused: state=%u (require READY)",
+                    // Block OTA only in the genuinely-unsafe states (INFLIGHT,
+                    // MAG_CALIBRATION) — same lockout as the test commands (#218).
+                    // READY/PRELAUNCH/LANDED are all fine: a GPS lock on the
+                    // bench puts us in PRELAUNCH, and the OTA reboot lands in a
+                    // safe state anyway.
+                    ESP_LOGW(TAG, "[OTA] BEGIN refused: state=%u (no OTA while INFLIGHT or in MAG_CALIBRATION)",
                              (unsigned)rocket_state);
                     sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, 0, 0);
                 }
