@@ -1,0 +1,37 @@
+name: Wire-Code Guards
+
+# Guards the hand-assigned BLE command-number spaces (app<->OC and app<->BS)
+# against silent duplicate assignment.  Both firmware dispatches are flat
+# `if (ble_cmd == N)` chains that take the first match, so a duplicate value
+# turns the later branch into dead code with no compiler/test error (#132/#148
+# shipped exactly that).  The OC<->FC I2C message-type space is guarded
+# separately by the host gtest in tests_cpp (RocketComputerTypes,
+# MessageTypeCodes_AllUnique), which runs under the "C++ Unit Tests" workflow.
+
+on:
+  push:
+    paths:
+      - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
+      - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
+      - 'TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift'
+      - 'tools/check_ble_command_ids.py'
+      - '.github/workflows/wire-codes.yml'
+  pull_request:
+    paths:
+      - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
+      - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
+      - 'TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift'
+      - 'tools/check_ble_command_ids.py'
+      - '.github/workflows/wire-codes.yml'
+
+jobs:
+  ble-command-ids:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pure stdlib (re, pathlib); ubuntu-latest ships python3, no deps needed.
+      - name: Check BLE command-number uniqueness (app<->OC / app<->BS)
+        run: python3 tools/check_ble_command_ids.py
