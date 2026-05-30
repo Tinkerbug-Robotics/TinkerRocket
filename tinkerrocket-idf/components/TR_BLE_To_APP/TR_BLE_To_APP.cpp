@@ -109,6 +109,7 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
     : device_connected_(false),
       negotiated_mtu_(0),
+      telem_notify_subscribed_(false),
       conn_handle_(0),
       pending_command_(0),
       pending_file_list_page_(0),
@@ -222,6 +223,11 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
     case BLE_GAP_EVENT_SUBSCRIBE:
         ESP_LOGI(BLE_TAG, "Subscribe event: attr_handle=%u, cur_notify=%d",
                  event->subscribe.attr_handle, event->subscribe.cur_notify);
+        // Track notify-enable on the telemetry/config characteristic so the
+        // connect-time config push can wait until the app can actually receive
+        // it (#224).
+        if (event->subscribe.attr_handle == self->telemetry_val_handle_)
+            self->telem_notify_subscribed_ = event->subscribe.cur_notify;
         break;
 
     default:
@@ -241,6 +247,7 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     device_connected_ = true;
     conn_handle_ = conn_handle;
     negotiated_mtu_ = 0;  // Reset until MTU exchange completes
+    telem_notify_subscribed_ = false;
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
 
@@ -268,6 +275,7 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
 {
     device_connected_ = false;
     negotiated_mtu_ = 0;
+    telem_notify_subscribed_ = false;
     conn_handle_ = 0;
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
 

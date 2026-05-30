@@ -4233,17 +4233,25 @@ static void loop_oc()
 
     }
 
-    // Auto-send config on BLE connect (rising edge)
+    // Auto-send config once the BLE connection is fully ready — MTU negotiated
+    // AND the app has enabled notifications on the telemetry/config char.
+    // Edge-armed on connect, then deferred (no blocking delay) until ready.
+    // Pushing earlier dropped the config notifies (#224): the faster idle loop
+    // (#221) made the old fixed delay(500) race the MTU exchange + CCCD
+    // subscribe, so the pushes were skipped (recovered only by the app's later
+    // config re-request).  ble_app.isReadyForNotify() is the deterministic gate.
     {
         static bool ble_was_connected = false;
+        static bool config_push_pending = false;
         bool ble_now = ble_app.isConnected();
-        if (ble_now && !ble_was_connected) {
-            delay(500); // Let app subscribe to notifications
+        if (ble_now && !ble_was_connected) config_push_pending = true;    // arm on connect
+        if (!ble_now)                      config_push_pending = false;   // disarm on disconnect
+        if (config_push_pending && ble_app.isReadyForNotify()) {
+            config_push_pending = false;
             sendCurrentConfig();
-            // In low-power mode, override the fast params set by onConnect
-            // with slow params to save power.  The library's onConnect always
-            // requests fast params (needed for file transfer when powered on),
-            // so we correct it here after a short delay.
+            // In low-power mode, override the fast params set by onConnect with
+            // slow params to save power (onConnect always requests fast params,
+            // needed for file transfer when powered on).
             if (!pwr_pin_on) {
                 requestSlowBLEParams(0);
             }

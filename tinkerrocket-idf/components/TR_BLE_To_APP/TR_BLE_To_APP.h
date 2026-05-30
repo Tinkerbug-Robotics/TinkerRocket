@@ -191,6 +191,15 @@ public:
     // Returns 0 if not yet negotiated
     uint16_t getNegotiatedMTU() const { return negotiated_mtu_; }
 
+    // True once the central is ready to receive a notify-based push: it has
+    // negotiated a larger MTU AND enabled notifications (CCCD) on the
+    // telemetry/config characteristic.  loop_oc gates the connect-time config
+    // auto-push on this so the notifies aren't dropped (#224 — the faster idle
+    // loop from #221 made the old fixed delay(500) race the MTU + subscribe).
+    bool isReadyForNotify() const {
+        return device_connected_ && negotiated_mtu_ > 0 && telem_notify_subscribed_;
+    }
+
     // Get max data bytes per BLE chunk (MTU - ATT overhead - our header)
     // Falls back to 170 if MTU not yet negotiated
     size_t getMaxChunkDataSize() const;
@@ -206,6 +215,7 @@ private:
 
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;
+    volatile bool telem_notify_subscribed_;  // central enabled notifications on telemetry/config char
     volatile uint16_t conn_handle_;          // NimBLE connection handle
     volatile uint8_t pending_command_;
     volatile uint8_t pending_file_list_page_;
