@@ -5043,14 +5043,22 @@ static void loop_oc()
                               (unsigned)plen, (unsigned)sizeof(MagCalApplyData));
             }
         }
-        else if (ble_cmd == 56)
+        // #132 profile-cal READ + sensor APPLY/READ.  Renumbered from
+        // 56/57/58 to 61/62/63: the #148 mag-cal verify commands
+        // (VERIFY_DONE/RESET/FORCE_APPLY) own 56/57/58 and are matched first
+        // in this if/else-if chain, so at 56/57/58 these three branches were
+        // dead and the app's connect-time profile reads mis-fired as
+        // mag-verify commands.  Must stay in sync with BLEDevice.swift
+        // (sendMagCalRead / sendSensorCalApply / sendSensorCalRead).
+        else if (ble_cmd == 61)
         {
             setPendingCommand(MAG_CAL_READ);
             ESP_LOGI("BLE", "Mag cal READ -> FlightComputer");
         }
         // Issue #132 — app pushes a saved sensor cal (gyro + high-g) back into
         // FC NVS as part of the rocket-profile auto-sync on connect.
-        else if (ble_cmd == 57)
+        // (Renumbered 57 -> 62, see note on the MAG_CAL_READ case above.)
+        else if (ble_cmd == 62)
         {
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
@@ -5068,7 +5076,8 @@ static void loop_oc()
                               (unsigned)plen, (unsigned)sizeof(SensorCalApplyData));
             }
         }
-        else if (ble_cmd == 58)
+        // (Renumbered 58 -> 63, see note on the MAG_CAL_READ case above.)
+        else if (ble_cmd == 63)
         {
             setPendingCommand(SENSOR_CAL_READ);
             ESP_LOGI("BLE", "Sensor cal READ -> FlightComputer");

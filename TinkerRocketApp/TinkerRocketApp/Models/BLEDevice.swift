@@ -787,7 +787,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Ask the FC to publish a status frame built from current NVS values.
     /// The reply lands on `magCalStatus` like any other cal status frame
     /// (subType=APPLIED if cal is present, IDLE otherwise).
-    func sendMagCalRead() { sendCommand(56) }
+    // NOTE: the #132 profile-cal commands use 61/62/63, NOT the 56/57/58 that
+    // would naturally follow the cal block — 56/57/58 are the #148 mag-cal
+    // verify commands above (sendMagCalVerifyDone/Reset/ForceApply).  The OC
+    // dispatch matches those first, so re-using them here made these reads
+    // mis-fire as mag-verify commands (e.g. a connect-time sensor-cal read was
+    // refused as "force_apply").  Keep in sync with the OC firmware
+    // (out_computer/main/main.cpp ble_cmd dispatch).
+    func sendMagCalRead() { sendCommand(61) }
 
     /// Push a saved sensor cal (gyro zero-rate bias + high-g accel bias) into
     /// the rocket's NVS (#132).  Wire format mirrors `SensorCalApplyData`:
@@ -801,12 +808,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         var hx = hgX;   payload.append(Data(bytes: &hx, count: 4))
         var hy = hgY;   payload.append(Data(bytes: &hy, count: 4))
         var hz = hgZ;   payload.append(Data(bytes: &hz, count: 4))
-        sendRawCommand(57, payload: payload)
+        sendRawCommand(62, payload: payload)
     }
 
     /// Ask the FC to publish its stored sensor cal; the reply lands on
     /// `sensorCalStatus` (valid=false when the rocket has none).
-    func sendSensorCalRead() { sendCommand(58) }
+    func sendSensorCalRead() { sendCommand(63) }
 
     func sendToggleLogging() {
         sendCommand(23)
