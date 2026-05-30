@@ -13,10 +13,12 @@ SYNC = b'\xAA\x55\xAA\x55'
 MSG_BMP585     = 0xA3
 MSG_NON_SENSOR = 0xA5
 
-# NonSensor format: 43 bytes (was 42, added pyro_status byte)
-# <I hhhhh iii iii BB h B
+# NonSensor format: 44 bytes (current).  History: 42 → 43 (added pyro_status) →
+# 44 (added apogee_flags byte, #142/#143).  Keep all three so older logs parse.
+# <I hhhhh iii iii BB h B B
 #  time_us(4), q0-q3+roll_cmd(5*2=10), e/n/u_pos(3*4=12), e/n/u_vel(3*4=12),
-#  flags(1), rocket_state(1), baro_alt_rate_dmps(2), pyro_status(1) = 43
+#  flags(1), rocket_state(1), baro_alt_rate_dmps(2), pyro_status(1), apogee_flags(1) = 44
+FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'
 FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'
 FMT_BMP585 = '<I i I'
@@ -29,6 +31,13 @@ NSF_LAUNCH      = (1 << 3)
 # byte — per-channel state lives in pyro_status).  Keep in sync with
 # TR_RocketComputerTypes/RocketComputerTypes.h.
 NSF_PYRO_ARMED  = (1 << 6)
+
+# apogee_flags byte (NonSensorData, appended #142/#143): per-detector apogee
+# votes + the master voted result that actually gates pyro.  Keep in sync with
+# the NSF2_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.
+NSF2_GPS_APOGEE    = (1 << 0)
+NSF2_PITCH_APOGEE  = (1 << 1)
+NSF2_MASTER_APOGEE = (1 << 2)
 
 # Pyro status byte bits — paired (CONT, FIRED) per channel.  Layout must match
 # the PSF_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.  The
@@ -105,12 +114,18 @@ def parse(filepath):
         stats["frames"] += 1
 
         if msg_type == MSG_NON_SENSOR:
-            if msg_len == 43:
+            if msg_len == 44:
+                fields = struct.unpack(FMT_NONSENSOR_44, payload)
+                pyro_status = fields[15]
+                apogee_flags = fields[16]
+            elif msg_len == 43:
                 fields = struct.unpack(FMT_NONSENSOR_43, payload)
                 pyro_status = fields[15]
+                apogee_flags = 0
             elif msg_len == 42:
                 fields = struct.unpack(FMT_NONSENSOR_42, payload)
                 pyro_status = 0
+                apogee_flags = 0
             else:
                 stats["ns_skip"] += 1
                 continue
@@ -140,6 +155,9 @@ def parse(filepath):
                 "p3_fired":   bool(pyro_status & PSF_CH3_FIRED),
                 "p4_cont":    bool(pyro_status & PSF_CH4_CONT),
                 "p4_fired":   bool(pyro_status & PSF_CH4_FIRED),
+                "gps_apogee":    bool(apogee_flags & NSF2_GPS_APOGEE),
+                "pitch_apogee":  bool(apogee_flags & NSF2_PITCH_APOGEE),
+                "master_apogee": bool(apogee_flags & NSF2_MASTER_APOGEE),
             })
             stats["ns_ok"] += 1
 
@@ -205,12 +223,18 @@ def main():
             print(f"  t={t_s:+8.3f}s  alt_apogee_flag SET")
             break
 
-    # Both flags set (current pyro trigger)
-    for r in ns:
-        if r["vel_apogee"] and r["alt_apogee"]:
-            t_s = (r["time_us"] - t0) / 1e6
-            print(f"  t={t_s:+8.3f}s  BOTH apogee flags SET (pyro trigger point)")
-            break
+    # Per-detector apogee votes + the master voted result (apogee_flags byte).
+    # The master vote is the actual pyro trigger; the old "both vel+alt"
+    # heuristic predated the multi-detector vote (#142/#143).  Pitch typically
+    # never fires on simulated logs (sim attitude isn't realistic).
+    for key, label in (("gps_apogee",    "GPS apogee flag"),
+                       ("pitch_apogee",  "pitch apogee flag"),
+                       ("master_apogee", "MASTER apogee flag (pyro trigger point)")):
+        hit = next((r for r in ns if r[key]), None)
+        if hit:
+            print(f"  t={(hit['time_us'] - t0) / 1e6:+8.3f}s  {label} SET")
+        else:
+            print(f"  {'(never)':>9s}  {label} NOT SET")
 
     # Pyro armed
     for r in ns:
