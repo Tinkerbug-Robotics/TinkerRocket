@@ -1057,6 +1057,38 @@ static void sendOtaRelayStatus(uint8_t state, uint8_t err, uint32_t bytes_writte
     (void)enqueueI2STx(OTA_STATUS_MSG, (const uint8_t*)&st, sizeof(st));
 }
 
+// Resend an OTA status several times, spread over ~1.4 s.  A long flash op on
+// the FC (the ota_1 erase in begin(), or the verify/finalize in finish())
+// runs with the cache disabled, which suspends i2sSenderTask — it executes
+// from flash, not IRAM.  With nothing feeding the I2S DMA, the continuously-
+// running clock replays whatever was in the DMA buffers, so the OC sees a
+// burst of stale/duplicate frames for the whole op (the "dedup storm", per
+// the i2sSenderTask idle-fill comment).  A single OTA_STATUS_MSG sent the
+// instant the op finishes lands in that window: the OC's rx_ring is still
+// draining the storm backlog (drop-oldest overflow) and the first real frame
+// can be corrupted by the stale->fresh DMA transition (CRC drop).  Either way
+// the one-shot status is lost and the app strands at "OTA_BEGIN not accepted".
+// Spreading copies over ~1.4 s guarantees at least one lands after the OC has
+// drained the backlog and the stream is back to clean idle-fill.  This mirrors
+// the #165 flight-settings resend (one-shot frame re-emitted on the first few
+// INFLIGHT ticks so a dropped launch frame doesn't lose the record).  Status
+// frames are idempotent — the OC just re-relays the same ota_status and the
+// app keys off the first matching state — so duplicates are harmless.  Safe to
+// block: OTA is refused in flight, and the erase/finish that precedes this
+// already blocked the caller for seconds.  delay_ms() is vTaskDelay-based, so
+// IDLE still pets the task watchdog between sends.
+static void sendOtaRelayStatusRobust(uint8_t state, uint8_t err, uint32_t bytes_written)
+{
+    static constexpr int      kOtaStatusResends = 7;    // + the immediate send = 8 total
+    static constexpr uint32_t kOtaStatusGapMs   = 200;  // 7 * 200 ms ~= 1.4 s span
+    sendOtaRelayStatus(state, err, bytes_written);
+    for (int i = 0; i < kOtaStatusResends; ++i)
+    {
+        delay_ms(kOtaStatusGapMs);
+        sendOtaRelayStatus(state, err, bytes_written);
+    }
+}
+
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
 // the live PID gains from servo_control (these can be NVS- or BLE-overridden),
 // the runtime override globals, the config:: defaults for the compile-time-only
@@ -3665,12 +3697,12 @@ static void loop_fc()
                         if (e == TR_OTA_Receiver::Error::Ok)
                         {
                             ESP_LOGI(TAG, "[OTA] ready for image");
-                            sendOtaRelayStatus(OTA_RELAY_READY, 0, 0);
+                            sendOtaRelayStatusRobust(OTA_RELAY_READY, 0, 0);
                         }
                         else
                         {
                             ESP_LOGE(TAG, "[OTA] begin failed: %d", (int)e);
-                            sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, (uint8_t)e, 0);
+                            sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e, 0);
                         }
                     }
                     else
@@ -3690,23 +3722,25 @@ static void loop_fc()
                 const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
                 if (e == TR_OTA_Receiver::Error::Ok)
                 {
-                    sendOtaRelayStatus(OTA_RELAY_READY_TO_BOOT, 0,
-                                       (uint32_t)fc_ota_receiver.bytesWritten());
-                    delay_ms(500);
+                    // Robust resend spans ~1.4 s, which also gives the app
+                    // time to catch ready_to_boot before the I2S link drops at
+                    // reboot (replaces the old fixed 500 ms pre-restart delay).
+                    sendOtaRelayStatusRobust(OTA_RELAY_READY_TO_BOOT, 0,
+                                             (uint32_t)fc_ota_receiver.bytesWritten());
                     esp_restart();
                 }
                 else
                 {
                     ESP_LOGE(TAG, "[OTA] finish failed: %d", (int)e);
-                    sendOtaRelayStatus(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
-                                       (uint32_t)fc_ota_receiver.bytesWritten());
+                    sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
+                                             (uint32_t)fc_ota_receiver.bytesWritten());
                 }
             }
             else if (out_pending_command == OTA_ABORT_CMD)
             {
                 ESP_LOGW(TAG, "[OTA] ABORT");
                 (void)fc_ota_receiver.abort();
-                sendOtaRelayStatus(OTA_RELAY_ABORTED, 0, 0);
+                sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
             }
             else if (out_pending_command == GAIN_SCHED_ENABLE)
             {
