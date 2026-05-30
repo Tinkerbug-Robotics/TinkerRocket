@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cstring>
+#include <map>
 #include "RocketComputerTypes.h"
 
 // Verify packed struct sizes match the SIZE_OF_* constants.
@@ -833,4 +834,93 @@ TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
                             (1u << FlightSettingsData::F_FW_DIRTY) |
                             (1u << FlightSettingsData::F_SOUNDS));
     EXPECT_EQ(all, 0x3Fu);  // bits 0-5, no overlap
+}
+
+// ============================================================================
+// Wire-code uniqueness guard: OC<->FC I2C message types (#132 / #148)
+// ============================================================================
+// The "### Message Types from In ESP32 ###" block in RocketComputerTypes.h is
+// a hand-assigned 8-bit code space (~0xA0-0xF1).  Both the OC and the FC
+// dispatch on these with flat if/else-if chains that take the FIRST matching
+// branch, so two constants sharing a value silently turn the later handler
+// into dead code -- no compiler error, no link error, no test failure.
+//
+// That is exactly how #132 (rocket-profile sensor-cal sync) and #148 (mag-cal
+// user-verify) collided: SENSOR_CAL_APPLY_PENDING/MSG/READ were assigned
+// 0xDD/0xDE/0xDF, aliasing MAG_CAL_VERIFY_DONE/RESET/FORCE_APPLY, and a
+// connect-time SENSOR_CAL_READ was silently handled as MAG_CAL_FORCE_APPLY
+// ("force_apply refused: not in MAG_CALIBRATION session" -- bench 2026-05-29).
+//
+// This test makes that class of bug a hard failure: every message-type
+// constant is listed once below and the values must be pairwise distinct.
+// The list IS the registry -- when you add a message type to that header
+// block, add it here too (and bump the count tripwire at the end).
+//
+// NOTE on scope: the REG_* read addresses (0x00-0x08) and the LoRa-namespace
+// constants (LORA_BEACON_SYNC=0xBE, LORA_CMD_*, ...) are SEPARATE code spaces
+// and are intentionally NOT included -- e.g. LORA_BEACON_SYNC=0xBE deliberately
+// coincides with SERVO_TEST_MSG=0xBE and that overlap is harmless.  Only the
+// OC<->FC message-type block must be internally unique.
+TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
+    struct MsgType { uint8_t value; const char* name; };
+#define MT(c) MsgType{ (c), #c }
+    const MsgType codes[] = {
+        MT(OUT_STATUS_QUERY),         MT(GNSS_MSG),
+        MT(ISM6HG256_MSG),            MT(BMP585_MSG),
+        MT(MMC5983MA_MSG),            MT(NON_SENSOR_MSG),
+        MT(POWER_MSG),                MT(START_LOGGING),
+        MT(END_FLIGHT),               MT(OUT_STATUS_RESPONSE),
+        MT(CAMERA_START),             MT(CAMERA_STOP),
+        MT(SOUNDS_ENABLE),            MT(SOUNDS_DISABLE),
+        MT(SERVO_CONFIG_PENDING),     MT(PID_CONFIG_PENDING),
+        MT(SERVO_CONFIG_MSG),         MT(PID_CONFIG_MSG),
+        MT(SERVO_CTRL_ENABLE),        MT(SERVO_CTRL_DISABLE),
+        MT(SIM_CONFIG_PENDING),       MT(SIM_CONFIG_MSG),
+        MT(SIM_START_CMD),            MT(SIM_STOP_CMD),
+        MT(GROUND_TEST_START),        MT(GROUND_TEST_STOP),
+        MT(GYRO_CAL_CMD),             MT(GAIN_SCHED_ENABLE),
+        MT(GAIN_SCHED_DISABLE),       MT(SERVO_TEST_PENDING),
+        MT(SERVO_TEST_MSG),           MT(SERVO_TEST_STOP),
+        MT(ROLL_PROFILE_PENDING),     MT(ROLL_PROFILE_MSG),
+        MT(ROLL_PROFILE_CLEAR),       MT(SERVO_REPLAY_PENDING),
+        MT(SERVO_REPLAY_MSG),         MT(SERVO_REPLAY_STOP),
+        MT(ROLL_CTRL_CONFIG_PENDING), MT(ROLL_CTRL_CONFIG_MSG),
+        MT(GUIDANCE_ENABLE),          MT(GUIDANCE_DISABLE),
+        MT(GUIDANCE_TELEM_MSG),       MT(CAMERA_CONFIG_PENDING),
+        MT(CAMERA_CONFIG_MSG),        MT(PYRO_CONFIG_PENDING),
+        MT(PYRO_CONFIG_MSG),          MT(PYRO_CONT_TEST),
+        MT(PYRO_FIRE_TEST),           MT(IIS2MDC_MSG),
+        MT(SNAPSHOT_MSG),             MT(GET_FLIGHT_SNAPSHOT),
+        MT(MAG_CAL_START),            MT(MAG_CAL_ABORT),
+        MT(MAG_CAL_ACCEPT),           MT(MAG_CAL_RETRY),
+        MT(MAG_CAL_STATUS_MSG),       MT(MAG_CAL_COMPUTE_FIT),
+        MT(MAG_CAL_VERIFY_DONE),      MT(MAG_CAL_VERIFY_RESET),
+        MT(MAG_CAL_FORCE_APPLY),      MT(MAG_CAL_APPLY_PENDING),
+        MT(MAG_CAL_APPLY_MSG),        MT(MAG_CAL_READ),
+        MT(SENSOR_CAL_APPLY_PENDING), MT(SENSOR_CAL_APPLY_MSG),
+        MT(SENSOR_CAL_READ),          MT(SENSOR_CAL_STATUS_MSG),
+        MT(FLIGHT_SETTINGS_MSG),      MT(LOG_BUFFER_STATS_MSG),
+        MT(LORA_MSG),
+    };
+#undef MT
+
+    std::map<uint8_t, const char*> seen;
+    for (const auto& c : codes) {
+        auto result = seen.emplace(c.value, c.name);
+        const bool inserted = result.second;
+        const char* first   = result.first->second;
+        EXPECT_TRUE(inserted)
+            << "Duplicate OC<->FC message-type code 0x" << std::hex
+            << std::uppercase << (int)c.value << std::dec << ": " << c.name
+            << " collides with " << first << ". Flat if/else-if dispatch on "
+               "both ends takes the first match, so one of these handlers is "
+               "silently dead. Reassign one to a free value.";
+    }
+
+    // Tripwire: keep the registry above exhaustive.  If you add or remove a
+    // message type in RocketComputerTypes.h, update this list AND this count
+    // -- the uniqueness check is only as strong as the list it walks.
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 71u)
+        << "Message-type count changed: update the registry in this test to "
+           "match the '### Message Types from In ESP32 ###' header block.";
 }
