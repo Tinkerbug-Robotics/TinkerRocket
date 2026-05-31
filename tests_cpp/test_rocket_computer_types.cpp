@@ -900,6 +900,13 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(SENSOR_CAL_APPLY_PENDING), MT(SENSOR_CAL_APPLY_MSG),
         MT(SENSOR_CAL_READ),          MT(SENSOR_CAL_STATUS_MSG),
         MT(FLIGHT_SETTINGS_MSG),      MT(LOG_BUFFER_STATS_MSG),
+        // OTA relay control block (#8 Phase 4): OC->FC control over I2C
+        // (0xE3-0xE6), FC->OC status over I2S (OTA_STATUS_MSG=0xE7).  The
+        // sensor-cal block was deliberately moved to 0xE8+ to keep 0xE3-0xE7
+        // free for these (see RocketComputerTypes.h).
+        MT(OTA_BEGIN_PENDING),        MT(OTA_BEGIN_MSG),
+        MT(OTA_FINISH_CMD),           MT(OTA_ABORT_CMD),
+        MT(OTA_STATUS_MSG),
         MT(LORA_MSG),
     };
 #undef MT
@@ -920,7 +927,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // Tripwire: keep the registry above exhaustive.  If you add or remove a
     // message type in RocketComputerTypes.h, update this list AND this count
     // -- the uniqueness check is only as strong as the list it walks.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 71u)
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 76u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
