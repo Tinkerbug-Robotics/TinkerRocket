@@ -1199,10 +1199,26 @@ static void queueOutStatusResponse(bool ready)
 // for BEGIN) for the FC to pull on its next I2C poll — identical delivery to
 // servo/sim config. The FC reports progress back over I2S (OTA_STATUS_MSG),
 // relayed to BLE by the frame processor. (Image bytes are Phase 4 Layer 3.)
+// OTA relay status dedupe (#8 Phase 4): the FC resends each OTA status ~8x over
+// ~1.4s to survive the I2S dedup storm during its flash erase
+// (sendOtaRelayStatusRobust on the FC). That FC->OC (I2S) hop is lossy so the
+// resend is needed there, but the OC->app (BLE/GATT) hop is reliable — relaying
+// every copy just spams the app with identical notifications. Track the last
+// relayed status and collapse identical (state,err,bytes) runs into a single
+// notify; WRITING progress (Layer 3) still flows because bytes_written advances
+// each tick. Reset at session start so a new session's first status always
+// relays even if it matches the prior session's terminal status.
+static uint8_t  last_relay_state_ = 0xFF;
+static uint8_t  last_relay_err_   = 0xFF;
+static uint32_t last_relay_bytes_ = 0xFFFFFFFFu;
+
 static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* sha256)
 {
     static_assert(sizeof(pending_config_data) >= 4 + 32,
                   "pending_config_data too small for the OTA_BEGIN_MSG payload");
+    last_relay_state_ = 0xFF;
+    last_relay_err_   = 0xFF;
+    last_relay_bytes_ = 0xFFFFFFFFu;
     memcpy(pending_config_data, &total_size, 4);
     memcpy(pending_config_data + 4, sha256, 32);
     pending_config_data_len = 36;
@@ -1501,9 +1517,22 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
                 default: break;
             }
-            ESP_LOGI("OC", "OTA relay: FC status state=%u err=%u bytes=%u",
-                     (unsigned)st.state, (unsigned)st.err, (unsigned)st.bytes_written);
-            ble_app.relayFcOtaStatus(state, err, st.bytes_written, terminal);
+            // Dedupe identical consecutive FC resends (see last_relay_* above):
+            // keep the per-frame serial log (confirms the resends arrived over
+            // I2S) but only re-notify the app when the status actually changes.
+            const bool dup = (st.state == last_relay_state_ &&
+                              st.err   == last_relay_err_ &&
+                              st.bytes_written == last_relay_bytes_);
+            ESP_LOGI("OC", "OTA relay: FC status state=%u err=%u bytes=%u%s",
+                     (unsigned)st.state, (unsigned)st.err, (unsigned)st.bytes_written,
+                     dup ? " (dup, not relayed)" : "");
+            if (!dup)
+            {
+                last_relay_state_ = st.state;
+                last_relay_err_   = st.err;
+                last_relay_bytes_ = st.bytes_written;
+                ble_app.relayFcOtaStatus(state, err, st.bytes_written, terminal);
+            }
         }
     }
     else if (type == GNSS_MSG)
