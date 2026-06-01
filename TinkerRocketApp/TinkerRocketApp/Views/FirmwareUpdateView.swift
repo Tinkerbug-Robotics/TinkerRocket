@@ -109,15 +109,7 @@ private struct FirmwareUpdateContent: View {
     private var statusBlock: some View {
         switch session.state {
         case .idle:
-            Button(action: startFlash) {
-                HStack {
-                    Image(systemName: "arrow.up.circle.fill")
-                    Text(targetIsFC ? "Flash Flight Computer" : "Flash \(device.displayName)")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(pickedFileURL == nil || !device.isConnected)
+            flashButton
 
         case .loading:
             ProgressView("Reading file + computing SHA…")
@@ -156,7 +148,7 @@ private struct FirmwareUpdateContent: View {
                 }
                 LabeledRow(label: "Previous", value: session.preFlashFirmwareVersion, mono: true)
                 LabeledRow(label: "Now running", value: newVersion, mono: true)
-                flashAnotherButton
+                flashButton
             }
 
         case .rollbackDetected(let version):
@@ -167,7 +159,7 @@ private struct FirmwareUpdateContent: View {
                 }
                 Text("Device reconnected but is still running the previous firmware (\(version)). The new image likely failed to boot — bootloader auto-reverted to the prior partition.")
                     .font(.subheadline).foregroundColor(.secondary)
-                flashAnotherButton
+                flashButton
             }
 
         case .failed(let reason):
@@ -177,27 +169,32 @@ private struct FirmwareUpdateContent: View {
                     Text("Failed").font(.headline)
                 }
                 Text(reason).font(.subheadline).foregroundColor(.secondary)
-                flashAnotherButton
+                flashButton
             }
         }
     }
 
-    private var flashAnotherButton: some View {
-        Button(action: resetForNextFlash) {
+    // The Flash action, shown in .idle and (greyed) in the terminal states.
+    // After a result it's disabled — choosing a file (which re-arms the
+    // session, see handleFileImport) is the explicit way to start the next
+    // flash, so there's no separate "flash another firmware" reset button.
+    private var flashButton: some View {
+        Button(action: startFlash) {
             HStack {
-                Image(systemName: "arrow.clockwise")
-                Text("Flash another firmware")
+                Image(systemName: "arrow.up.circle.fill")
+                Text(targetIsFC ? "Flash Flight Computer" : "Flash \(device.displayName)")
             }
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
-        .padding(.top, 4)
+        .buttonStyle(.borderedProminent)
+        .disabled(pickedFileURL == nil || !device.isConnected || isTerminalState)
     }
 
-    private func resetForNextFlash() {
-        session.reset()
-        pickedFileURL = nil
-        pickedFileName = ""
-        pickedFileSize = 0
+    private var isTerminalState: Bool {
+        switch session.state {
+        case .verified, .rollbackDetected, .failed: return true
+        default: return false
+        }
     }
 
     private var cancelButton: some View {
@@ -231,6 +228,9 @@ private struct FirmwareUpdateContent: View {
             } else {
                 pickedFileSize = 0
             }
+            // Re-arm after a completed/failed run: clearing the terminal state
+            // back to .idle re-enables the Flash button for this new file.
+            if isTerminalState { session.reset() }
         case .failure(let error):
             print("File picker error: \(error)")
         }
