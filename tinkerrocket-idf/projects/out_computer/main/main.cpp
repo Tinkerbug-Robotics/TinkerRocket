@@ -1313,16 +1313,28 @@ static void ocOtaRelayData(void* /*ctx*/, uint32_t offset, const uint8_t* data, 
         memcpy(f.payload, &off, 4);
         memcpy(f.payload + 4, data + sent, n);
         f.len = (uint16_t)(4 + n);
-        // Block (back-pressure BLE) if the feeder is briefly behind; it drains far
-        // faster than BLE delivers, so this should not actually wait. The long
-        // timeout is only a safety valve against a permanent BLE-host-task hang.
-        if (xQueueSend(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1000)) != pdTRUE)
+        // The very first frame (offset 0) is reliably lost to the I2S master-TX
+        // startup transient on the FC's slave RX: bench 2026-06-01 showed the
+        // whole 578 KB image streaming in order EXCEPT offset 0, so writeChunk
+        // never started and every later frame was rejected as "ahead of have=0".
+        // Resend offset 0 a few times back-to-back; the FC writes whichever copy
+        // lands first and skips the rest (offset < bytesWritten -> benign gap).
+        // Mirrors the #165 critical-one-shot-frame resend. The image streams
+        // cleanly after the first frame, so only offset 0 needs this.
+        const int copies = (off == 0) ? 5 : 1;
+        for (int c = 0; c < copies; ++c)
         {
-            ESP_LOGW("OC", "OTA relay: TX queue full, dropped frame @%u", (unsigned)off);
-            return;
+            // Block (back-pressure BLE) if the feeder is briefly behind; it drains
+            // far faster than BLE delivers, so this should not actually wait. The
+            // long timeout is only a safety valve against a BLE-host-task hang.
+            if (xQueueSend(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1000)) != pdTRUE)
+            {
+                ESP_LOGW("OC", "OTA relay: TX queue full, dropped frame @%u", (unsigned)off);
+                return;
+            }
+            oc_ota_frames_pumped++;
         }
         sent += n;
-        oc_ota_frames_pumped++;
     }
 }
 
