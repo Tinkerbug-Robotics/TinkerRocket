@@ -2554,7 +2554,24 @@ static void setup_fc()
 
 // Loop is responsible for reading sensor data
 static void loop_fc()
-{ 
+{
+    // ── OTA image pump: yield the core to the OTA RX parser ──
+    // During an FC OTA the board is grounded and its I2S is flipped to slave RX.
+    // This flight task runs at the top priority (configMAX_PRIORITIES-1) on the
+    // SAME core as fcOtaParserTask (prio 3), so without backing off it starves
+    // the parser — the 8 KB RX ring then overflows the moment flash writes + the
+    // EKF land, and the forward-only image stalls (bench 2026-06-01 stuck at 714,
+    // sawtooth gaps = drop-oldest eviction). Nothing on the FC needs to run during
+    // the transfer except the I2C control poll (to catch OTA_FINISH/ABORT); the
+    // GUI is fed by the OC, not us. So sleep most of each iteration: the parser
+    // (now the top READY task on this core) drains the ring, and we still fall
+    // through to service I2C. fcRevertToTx() clears the flag and full-rate flight
+    // resumes. The EKF is additionally skipped below for the brief awake windows.
+    if (fc_ota_data_mode)
+    {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+
     // ### Read and Send Sensor Data ###
     // Poll as fast as possible so high-rate sensor frames are not dropped by
     // loop-period gating.
@@ -2967,7 +2984,7 @@ static void loop_fc()
             // (tPrev_us_) automatically accounts for the longer interval.
             static uint8_t ekf_decim_ctr = 0;
             const bool run_ekf_this_tick =
-                (++ekf_decim_ctr >= config::EKF_DECIMATION);
+                (++ekf_decim_ctr >= config::EKF_DECIMATION) && !fc_ota_data_mode;
             if (run_ekf_this_tick) ekf_decim_ctr = 0;
 
             if (!ekf_initialized && rocket_state != MAG_CALIBRATION)
