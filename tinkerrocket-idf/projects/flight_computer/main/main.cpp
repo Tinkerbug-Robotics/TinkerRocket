@@ -1110,6 +1110,14 @@ static volatile size_t   fc_ota_head = 0;
 static volatile size_t   fc_ota_tail = 0;
 static volatile uint32_t fc_ota_ring_ovf = 0;
 static TaskHandle_t fc_ota_parser_task = nullptr;
+// OTA RX diagnostics (#8 Phase 4, bench) — counted in fcOtaParseRing, summarized
+// at FINISH. Distinguish a frame-loss stall (gaps climb, write_fail=0) from a
+// flash-write stall (write_fail>0) from an I2S signal-integrity problem
+// (crc_fail climbs).
+static uint32_t fc_ota_crc_fail   = 0;   // frames that failed CRC (resync drops)
+static uint32_t fc_ota_gap        = 0;   // valid frames ahead of bytesWritten (skipped)
+static uint32_t fc_ota_write_fail = 0;   // writeChunk() errors
+static uint32_t fc_ota_written_frames = 0;  // frames accepted in order
 
 static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
 {
@@ -1161,6 +1169,7 @@ static void fcOtaParseRing()
         if (!TR_I2C_Interface::unpackMessage(frame, frame_len, type,
                                              payload, sizeof(payload), out_len, true))
         {
+            fc_ota_crc_fail++;
             fcOtaRingPop();          // bad CRC — resync one byte
             continue;
         }
@@ -1176,11 +1185,19 @@ static void fcOtaParseRing()
             {
                 const TR_OTA_Receiver::Error e = fc_ota_receiver.writeChunk(off, img, img_len);
                 if (e != TR_OTA_Receiver::Error::Ok)
+                {
+                    fc_ota_write_fail++;
                     ESP_LOGE(TAG, "[OTA] writeChunk @%u (%uB) failed: %d",
                              (unsigned)off, (unsigned)img_len, (int)e);
+                }
+                else
+                {
+                    fc_ota_written_frames++;
+                }
             }
             else if (off > have)
             {
+                fc_ota_gap++;
                 ESP_LOGW(TAG, "[OTA] gap: chunk @%u but have %u", (unsigned)off, (unsigned)have);
             }
             // off < have: stale-repeat from an I2S underrun — skip silently.
@@ -1207,6 +1224,11 @@ static void fcFlipToRx()
     delay_ms(50);                       // settle: last frame leaves the DMA
     fc_ota_head = 0;                    // clear any stale ring contents
     fc_ota_tail = 0;
+    fc_ota_ring_ovf = 0;                // reset RX diagnostics for this session
+    fc_ota_crc_fail = 0;
+    fc_ota_gap = 0;
+    fc_ota_write_fail = 0;
+    fc_ota_written_frames = 0;
     fc_ota_data_mode = true;            // i2sSenderTask idles from here on
     if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
     i2s_stream.end();
@@ -3914,6 +3936,14 @@ static void loop_fc()
                 ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
                          (unsigned)fc_ota_receiver.bytesWritten(),
                          (unsigned)fc_ota_total_size);
+                // RX diagnostics summary (bench): which failure mode stalled it?
+                //   write_fail>0  -> flash-write error (not a transport issue)
+                //   gap>0, crc_fail~0 -> frames lost/reordered (forward-only pump)
+                //   crc_fail high -> I2S signal integrity (back off BCLK)
+                ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
+                         (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
+                         (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
+                         (unsigned)fc_ota_ring_ovf);
                 const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
                 if (e == TR_OTA_Receiver::Error::Ok)
                 {
