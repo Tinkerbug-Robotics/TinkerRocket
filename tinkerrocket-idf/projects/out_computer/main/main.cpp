@@ -1225,7 +1225,9 @@ static volatile bool oc_ota_tx_mode = false;                // flipped to master
 static volatile bool oc_ota_await_flip = false;             // READY seen; waiting for the FC to go quiet
 static volatile bool oc_ota_relay_ready_pending = false;    // relay "ready" to app once flipped to TX
 static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABORT staged
-static uint32_t oc_ota_frames_pumped = 0;                   // diag
+static uint32_t oc_ota_frames_pumped = 0;                   // diag: frames enqueued by relay cb
+static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the feeder wrote to I2S
+static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
 static uint32_t oc_ota_silence_ref_count = 0;               // dma_cb_count snapshot for silence detect
 static uint32_t oc_ota_silence_since_ms  = 0;               // when RX last went quiet
 static uint32_t oc_ota_total_size = 0;                      // image size (diag)
@@ -1362,10 +1364,25 @@ static void ocOtaTxFeederTask(void *)
         }
         if (oc_ota_tx_queue != nullptr &&
             xQueueReceive(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1)) == pdTRUE)
+        {
             (void)i2s_stream.writeFrame(OTA_DATA_CHUNK, f.payload, f.len);
+            oc_ota_feed_sent++;
+        }
         else
+        {
             (void)i2s_stream.writeIdleFill(64, 1);   // keep BCLK fed; no stale replay
+            oc_ota_feed_idle++;
+        }
         xSemaphoreGive(oc_i2s_mutex);
+        // Diag (~every 512 writes): is the app actually feeding image frames, or are
+        // we only emitting idle-fill?  enq==0/sent==0 -> the app's BLE data never
+        // reached ocOtaRelayData (routing/app). sent>0 while the FC sees nothing ->
+        // loss on the I2S link / FC RX. This is the step neither log showed before.
+        if (((oc_ota_feed_sent + oc_ota_feed_idle) & 0x1FFu) == 0u)
+            ESP_LOGW("OC", "[OTA feed] enq=%u sent=%u idle=%u qdepth=%u",
+                     (unsigned)oc_ota_frames_pumped, (unsigned)oc_ota_feed_sent,
+                     (unsigned)oc_ota_feed_idle,
+                     (unsigned)(oc_ota_tx_queue ? uxQueueMessagesWaiting(oc_ota_tx_queue) : 0u));
     }
 }
 
@@ -1377,6 +1394,8 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     last_relay_err_   = 0xFF;
     last_relay_bytes_ = 0xFFFFFFFFu;
     oc_ota_frames_pumped          = 0;
+    oc_ota_feed_sent              = 0;
+    oc_ota_feed_idle              = 0;
     oc_ota_await_flip             = false;
     oc_ota_relay_ready_pending    = false;
     oc_ota_revert_to_rx_requested = false;
