@@ -1223,6 +1223,7 @@ static uint32_t last_relay_bytes_ = 0xFFFFFFFFu;
 static SemaphoreHandle_t oc_i2s_mutex = nullptr;
 static volatile bool oc_ota_tx_mode = false;                // flipped to master TX
 static volatile bool oc_ota_await_flip = false;             // READY seen; waiting for the FC to go quiet
+static volatile bool oc_ota_relay_ready_pending = false;    // relay "ready" to app once flipped to TX
 static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABORT staged
 static uint32_t oc_ota_frames_pumped = 0;                   // diag
 static uint32_t oc_ota_silence_ref_count = 0;               // dma_cb_count snapshot for silence detect
@@ -1317,6 +1318,7 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     last_relay_bytes_ = 0xFFFFFFFFu;
     oc_ota_frames_pumped          = 0;
     oc_ota_await_flip             = false;
+    oc_ota_relay_ready_pending    = false;
     oc_ota_revert_to_rx_requested = false;
     oc_ota_total_size             = total_size;
     memcpy(pending_config_data, &total_size, 4);
@@ -1618,10 +1620,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     // FC has erased ota_1 and (after its READY resends) will flip
                     // to slave-RX. Arm the flip: loop_oc watches for the I2S link
                     // to go quiet (FC released BCLK) before flipping us to
-                    // master-TX to pump the image (Phase 4 Layer 3).
-                    oc_ota_await_flip       = true;
-                    oc_ota_silence_ref_count = dma_cb_count;
-                    oc_ota_silence_since_ms  = (uint32_t)(esp_timer_get_time() / 1000);
+                    // master-TX to pump the image (Phase 4 Layer 3). CRITICAL:
+                    // do NOT relay "ready" to the app yet. If the app starts
+                    // pumping chunks before we're in TX mode, the early chunks
+                    // (including offset 0) are dropped and the FC stalls forever
+                    // at bytesWritten=0 (every later chunk is a "gap"). loop_oc
+                    // relays "ready" only after the flip to TX completes.
+                    if (!oc_ota_tx_mode)
+                    {
+                        oc_ota_await_flip          = true;
+                        oc_ota_relay_ready_pending = true;
+                        oc_ota_silence_ref_count   = dma_cb_count;
+                        oc_ota_silence_since_ms    = (uint32_t)(esp_timer_get_time() / 1000);
+                    }
                     break;
                 case OTA_RELAY_WRITING:       state = "writing"; break;
                 case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
@@ -1635,10 +1646,14 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             const bool dup = (st.state == last_relay_state_ &&
                               st.err   == last_relay_err_ &&
                               st.bytes_written == last_relay_bytes_);
+            // READY is held until the OC has flipped to master TX (relayed from
+            // loop_oc post-flip), so the app can't start pumping into a link
+            // that isn't receiving yet.
+            const bool defer_ready = (st.state == OTA_RELAY_READY);
             ESP_LOGI("OC", "OTA relay: FC status state=%u err=%u bytes=%u%s",
                      (unsigned)st.state, (unsigned)st.err, (unsigned)st.bytes_written,
-                     dup ? " (dup, not relayed)" : "");
-            if (!dup)
+                     dup ? " (dup, not relayed)" : (defer_ready ? " (ready held for TX flip)" : ""));
+            if (!dup && !defer_ready)
             {
                 last_relay_state_ = st.state;
                 last_relay_err_   = st.err;
@@ -4318,6 +4333,14 @@ static void loop_oc()
             {
                 oc_ota_await_flip = false;
                 ocFlipToTx();                              // FC is quiet → safe to drive
+                // Only now — once we're actually in TX and able to receive —
+                // tell the app it may start pumping. (Held since READY so the
+                // app can't drop offset 0 into a not-yet-flipped link.)
+                if (oc_ota_tx_mode && oc_ota_relay_ready_pending)
+                {
+                    oc_ota_relay_ready_pending = false;
+                    ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
+                }
             }
         }
         if (oc_ota_revert_to_rx_requested)
