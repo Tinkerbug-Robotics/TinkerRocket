@@ -1351,7 +1351,14 @@ static void ocOtaTxFeederTask(void *)
     OcOtaTxFrame f;
     for (;;)
     {
-        if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr)
+        // Back off the bus the instant a revert is requested. ocRevertToRx() runs
+        // in loop_oc at LOWER priority than this feeder and must take oc_i2s_mutex
+        // to tear down the TX channel; while we keep re-grabbing that mutex at the
+        // higher priority, the revert can never win the race. Bench 2026-06-01
+        // deadlocked exactly here after FINISH — loop_oc wedged in ocRevertToRx and
+        // we idle-filled forever. Stop touching the bus so the revert proceeds; the
+        // flag stays set until ocRevertToRx() completes (see loop_oc).
+        if (!oc_ota_tx_mode || oc_ota_revert_to_rx_requested || oc_i2s_mutex == nullptr)
         {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
@@ -4437,8 +4444,14 @@ static void loop_oc()
         }
         if (oc_ota_revert_to_rx_requested)
         {
-            oc_ota_revert_to_rx_requested = false;
+            // Clear AFTER the revert completes, not before. The feeder watches this
+            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
+            // feeder's comment). Clearing first would let the higher-priority feeder
+            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
+            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
+            // regardless once it returns.
             ocRevertToRx();
+            oc_ota_revert_to_rx_requested = false;
         }
 
         // Deferred I2C slave init: wait for I2S DMA activity confirming
