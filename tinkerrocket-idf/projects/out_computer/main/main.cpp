@@ -1229,6 +1229,17 @@ static uint32_t oc_ota_frames_pumped = 0;                   // diag
 static uint32_t oc_ota_silence_ref_count = 0;               // dma_cb_count snapshot for silence detect
 static uint32_t oc_ota_silence_since_ms  = 0;               // when RX last went quiet
 static uint32_t oc_ota_total_size = 0;                      // image size (diag)
+// OC->FC image pump. The BLE callback enqueues image frames here; a dedicated
+// feeder task (ocOtaTxFeederTask) is the SOLE I2S writer while flipped to master
+// TX, writing idle-fill in the gaps between BLE chunks. This is essential: I2S
+// master clocks continuously, so any gap in writes makes the DMA replay its last
+// buffer — the FC then sees a relentless stream of duplicate frames, its RX ring
+// overflows (bench 2026-06-01: ring_ovf=1.37M, transfer stalled at 714 B), and
+// that corruption shreds the real in-order frames too. This mirrors the FC's own
+// i2sSenderTask, whose comment already documents exactly this replay hazard.
+struct OcOtaTxFrame { uint8_t payload[MAX_PAYLOAD]; uint16_t len; };
+static QueueHandle_t oc_ota_tx_queue    = nullptr;
+static TaskHandle_t  oc_ota_feeder_task = nullptr;
 // We must not drive BCLK as master until the FC has released it (flipped to its
 // own slave RX). The FC keeps the link active (idle-fill) right up until it
 // flips, so "I2S RX has gone quiet for this long" is a robust signal that the
@@ -1287,26 +1298,63 @@ static void ocRevertToRx()
 // oc_i2s_mutex serializes vs the loop_oc flip/revert.
 static void ocOtaRelayData(void* /*ctx*/, uint32_t offset, const uint8_t* data, size_t len)
 {
-    if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr)
+    if (!oc_ota_tx_mode || oc_ota_tx_queue == nullptr)
     {
         ESP_LOGW("OC", "OTA relay: chunk @%u dropped — I2S not in TX mode", (unsigned)offset);
         return;
     }
     static constexpr size_t kMaxImg = MAX_PAYLOAD - 4;   // 4-byte offset header
-    uint8_t fp[MAX_PAYLOAD];
-    xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
     size_t sent = 0;
-    while (sent < len && oc_ota_tx_mode)
+    while (sent < len)
     {
+        OcOtaTxFrame f;
         const size_t n = (len - sent > kMaxImg) ? kMaxImg : (len - sent);
         const uint32_t off = offset + (uint32_t)sent;
-        memcpy(fp, &off, 4);
-        memcpy(fp + 4, data + sent, n);
-        (void)i2s_stream.writeFrame(OTA_DATA_CHUNK, fp, 4 + n);
+        memcpy(f.payload, &off, 4);
+        memcpy(f.payload + 4, data + sent, n);
+        f.len = (uint16_t)(4 + n);
+        // Block (back-pressure BLE) if the feeder is briefly behind; it drains far
+        // faster than BLE delivers, so this should not actually wait. The long
+        // timeout is only a safety valve against a permanent BLE-host-task hang.
+        if (xQueueSend(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1000)) != pdTRUE)
+        {
+            ESP_LOGW("OC", "OTA relay: TX queue full, dropped frame @%u", (unsigned)off);
+            return;
+        }
         sent += n;
         oc_ota_frames_pumped++;
     }
-    xSemaphoreGive(oc_i2s_mutex);
+}
+
+// Sole I2S writer while flipped to master TX. Drains the image-frame queue and
+// writes idle-fill zeros in the gaps so the I2S DMA never replays a stale buffer
+// (see OcOtaTxFrame comment). Idles harmlessly outside TX mode. Mirrors the FC's
+// i2sSenderTask. The per-iteration mutex serialises against ocFlipToTx /
+// ocRevertToRx (which recreate the channel) — the double-checked oc_ota_tx_mode
+// guarantees we never writeFrame into a torn-down channel.
+static void ocOtaTxFeederTask(void *)
+{
+    OcOtaTxFrame f;
+    for (;;)
+    {
+        if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr)
+        {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
+        xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+        if (!oc_ota_tx_mode)            // flipped back to RX while we waited for the mutex
+        {
+            xSemaphoreGive(oc_i2s_mutex);
+            continue;
+        }
+        if (oc_ota_tx_queue != nullptr &&
+            xQueueReceive(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1)) == pdTRUE)
+            (void)i2s_stream.writeFrame(OTA_DATA_CHUNK, f.payload, f.len);
+        else
+            (void)i2s_stream.writeIdleFill(64, 1);   // keep BCLK fed; no stale replay
+        xSemaphoreGive(oc_i2s_mutex);
+    }
 }
 
 static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* sha256)
@@ -3981,6 +4029,10 @@ void initPeripherals()
     // channel so it's ready if an OTA starts immediately after power-on.
     if (oc_i2s_mutex == nullptr)
         oc_i2s_mutex = xSemaphoreCreateMutex();
+    // Image-pump frame queue + feeder task (Phase 4 Layer 3). 16 frames (~4 KB)
+    // is several BLE chunks deep; the feeder drains far faster than BLE fills.
+    if (oc_ota_tx_queue == nullptr)
+        oc_ota_tx_queue = xQueueCreate(16, sizeof(OcOtaTxFrame));
 
     // I2S telemetry stream from FlightComputer (DMA-based slave RX)
     // Small DMA buffers (4 × 256 bytes = 1 KB) minimize latency.
@@ -4020,6 +4072,15 @@ void initPeripherals()
         // rx_ring to fill until drop_oldest evicted bytes (#104).
         xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 4096,
                                 nullptr, 6, &i2s_rx_task_handle, 1);
+
+        // OTA image-pump feeder (Phase 4 Layer 3). Sole I2S writer during an FC
+        // OTA, keeping the master TX DMA continuously fed (frame-or-idle-fill)
+        // so it never replays stale buffers. Idles when not in TX mode. Core 1 /
+        // prio 6 like the parser; during OTA the RX parser is blocked (link is
+        // flipped to TX), so the feeder gets the core to itself.
+        if (oc_ota_feeder_task == nullptr)
+            xTaskCreatePinnedToCore(ocOtaTxFeederTask, "OTA Feed", 4096,
+                                    nullptr, 6, &oc_ota_feeder_task, 1);
     }
 
     // NOTE: do NOT pre-queue a status response here.  With the new
