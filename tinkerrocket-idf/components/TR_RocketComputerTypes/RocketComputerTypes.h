@@ -1464,12 +1464,18 @@ static constexpr uint8_t OTA_STATUS_MSG      = 0xE7;  // FC→OC: OtaRelayStatus
 // that replays a DMA buffer can't corrupt the image. 0xE8-0xEA are sensor cal.
 static constexpr uint8_t OTA_DATA_CHUNK      = 0xEB;
 
-// I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit
-// stereo), so this targets ~2.5 MHz BCLK per the design doc §7.  Bench-tunable
-// (#15): back off if PCB-trace signal integrity is marginal, raise toward
-// 10 MHz if the traces handle it.  Both OC and FC read this one constant when
-// they re-init the flipped link, so the master/slave clock can't drift.
-static constexpr uint32_t OTA_I2S_SAMPLE_RATE_HZ = 78125;  // ~2.5 MHz BCLK
+// I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
+// Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
+// real bottleneck, and the FC writes each received frame to flash (~2-3 ms/frame)
+// with its I2S RX effectively blind during that write.  At a fast BCLK the OC's
+// per-chunk burst outruns the FC: the frames after the first arrive while it's
+// mid-flash-write and are dropped, and the forward-only pump can't resend them
+// (bench 2026-05-31: stuck at bytes_written=212, every later frame logged as a
+// "gap").  ~50 KB/s spaces frames ~4 ms apart — longer than one flash write — so
+// the FC catches every frame, while still far exceeding the BLE feed rate.  Both
+// OC and FC read this one constant so the master/slave clock can't drift.
+// Bench-tunable (#15); the doc's 2.5 MHz target assumed I2S was the bottleneck.
+static constexpr uint32_t OTA_I2S_SAMPLE_RATE_HZ = 12500;  // ~50 KB/s, ~400 kHz BCLK
 
 // OtaRelayStatusData.state values (FC→OC). The OC maps these to the iOS
 // ota_status JSON strings it already sends for local (OC/BS) OTA.
