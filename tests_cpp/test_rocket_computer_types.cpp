@@ -906,7 +906,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // free for these (see RocketComputerTypes.h).
         MT(OTA_BEGIN_PENDING),        MT(OTA_BEGIN_MSG),
         MT(OTA_FINISH_CMD),           MT(OTA_ABORT_CMD),
-        MT(OTA_STATUS_MSG),
+        MT(OTA_STATUS_MSG),           MT(OTA_DATA_CHUNK),
         MT(LORA_MSG),
     };
 #undef MT
@@ -927,7 +927,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // Tripwire: keep the registry above exhaustive.  If you add or remove a
     // message type in RocketComputerTypes.h, update this list AND this count
     // -- the uniqueness check is only as strong as the list it walks.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 76u)
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 77u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

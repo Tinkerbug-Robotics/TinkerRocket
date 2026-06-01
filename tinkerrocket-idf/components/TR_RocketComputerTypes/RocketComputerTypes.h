@@ -1455,7 +1455,21 @@ static constexpr uint8_t OTA_BEGIN_PENDING   = 0xE3;  // OC→FC: OTA_BEGIN_MSG 
 static constexpr uint8_t OTA_BEGIN_MSG       = 0xE4;  // [size:4 LE][sha256:32] = 36 bytes
 static constexpr uint8_t OTA_FINISH_CMD      = 0xE5;  // OC→FC: finalize + verify + reboot
 static constexpr uint8_t OTA_ABORT_CMD       = 0xE6;  // OC→FC: abort session
-static constexpr uint8_t OTA_STATUS_MSG      = 0xE7;  // FC→OC over I2S: OtaRelayStatusData
+static constexpr uint8_t OTA_STATUS_MSG      = 0xE7;  // FC→OC: OtaRelayStatusData. Rides I2S in
+                                                      // Layer 2; once the link flips for the image
+                                                      // pump it rides I2C instead (FC master write).
+// Image-pump frame (Layer 3): OC→FC over the *flipped* I2S link (OC master TX,
+// FC slave RX). Payload = [offset:4 LE][image bytes:N]; the FC writes each by
+// offset, ignoring stale-repeat offsets (< bytes_written) so an I2S underrun
+// that replays a DMA buffer can't corrupt the image. 0xE8-0xEA are sensor cal.
+static constexpr uint8_t OTA_DATA_CHUNK      = 0xEB;
+
+// I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit
+// stereo), so this targets ~2.5 MHz BCLK per the design doc §7.  Bench-tunable
+// (#15): back off if PCB-trace signal integrity is marginal, raise toward
+// 10 MHz if the traces handle it.  Both OC and FC read this one constant when
+// they re-init the flipped link, so the master/slave clock can't drift.
+static constexpr uint32_t OTA_I2S_SAMPLE_RATE_HZ = 78125;  // ~2.5 MHz BCLK
 
 // OtaRelayStatusData.state values (FC→OC). The OC maps these to the iOS
 // ota_status JSON strings it already sends for local (OC/BS) OTA.
@@ -1464,6 +1478,8 @@ static constexpr uint8_t OTA_RELAY_WRITING       = 2;  // receiving image (Layer
 static constexpr uint8_t OTA_RELAY_READY_TO_BOOT = 3;  // verified, rebooting (Layer 3)
 static constexpr uint8_t OTA_RELAY_VERIFY_FAILED = 4;  // begin/verify error (see err)
 static constexpr uint8_t OTA_RELAY_ABORTED       = 5;  // session aborted
+static constexpr uint8_t OTA_RELAY_DATA_READY    = 6;  // FC flipped to I2S slave-RX; OC may start
+                                                       // the image pump (Layer 3 flip handshake)
 
 struct __attribute__((packed)) OtaRelayStatusData {
     uint8_t  state;          // OTA_RELAY_* above
