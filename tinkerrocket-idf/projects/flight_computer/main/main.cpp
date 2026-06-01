@@ -1089,6 +1089,155 @@ static void sendOtaRelayStatusRobust(uint8_t state, uint8_t err, uint32_t bytes_
     }
 }
 
+// --- Phase 4 Layer 3: FC side of the I2S image pump --------------------------
+// On OTA_BEGIN (after erasing ota_1 and sending READY over the normal-direction
+// I2S) the FC flips its I2S master-TX link to slave-RX, receives the image as
+// OTA_DATA_CHUNK frames (each prefixed with its absolute offset), and on
+// FINISH/ABORT reverts to master-TX so its terminal status rides the normal I2S
+// path back to the OC. i2s_stream is touched by i2sSenderTask (normal TX) and
+// the flip (command-handler task), so fc_i2s_mutex serializes them; the sender
+// idles while fc_ota_data_mode is set.
+static SemaphoreHandle_t fc_i2s_mutex = nullptr;
+static volatile bool fc_ota_data_mode = false;   // flipped to slave RX for the image
+static uint32_t fc_ota_total_size = 0;            // expected image size (from BEGIN)
+
+// Image RX ring: filled by the I2S recv callback (ISR), drained by
+// fcOtaParserTask. Sized to absorb a chunk burst while a flash write (which
+// suspends the parser task with the cache off) completes.
+static constexpr size_t FC_OTA_RING = 8192;
+static uint8_t  fc_ota_ring[FC_OTA_RING];
+static volatile size_t   fc_ota_head = 0;
+static volatile size_t   fc_ota_tail = 0;
+static volatile uint32_t fc_ota_ring_ovf = 0;
+static TaskHandle_t fc_ota_parser_task = nullptr;
+
+static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
+{
+    fc_ota_ring[fc_ota_head] = b;
+    fc_ota_head = (fc_ota_head + 1) % FC_OTA_RING;
+    if (fc_ota_head == fc_ota_tail)
+    {
+        fc_ota_ring_ovf = fc_ota_ring_ovf + 1;           // (-Wvolatile: avoid ++)
+        fc_ota_tail = (fc_ota_tail + 1) % FC_OTA_RING;   // drop oldest
+    }
+}
+static inline size_t  fcOtaRingLen()         { return (fc_ota_head + FC_OTA_RING - fc_ota_tail) % FC_OTA_RING; }
+static inline uint8_t fcOtaRingPeek(size_t i){ return fc_ota_ring[(fc_ota_tail + i) % FC_OTA_RING]; }
+static inline void    fcOtaRingPop()         { fc_ota_tail = (fc_ota_tail + 1) % FC_OTA_RING; }
+
+// I2S recv callback (ISR): push image bytes into the ring + wake the parser.
+static IRAM_ATTR bool fcOtaRecvCallback(const uint8_t* buf, size_t len, void* /*ctx*/)
+{
+    if (!fc_ota_data_mode) return false;
+    for (size_t i = 0; i < len; i++) fcOtaRingPush(buf[i]);
+    BaseType_t woken = pdFALSE;
+    if (fc_ota_parser_task) vTaskNotifyGiveFromISR(fc_ota_parser_task, &woken);
+    return woken == pdTRUE;
+}
+
+// Extract OTA_DATA_CHUNK frames from the ring and write each by offset. Stale
+// repeats (offset < bytesWritten, from an I2S underrun replaying a DMA buffer)
+// are skipped; an offset ahead of bytesWritten is a gap (logged).
+static void fcOtaParseRing()
+{
+    uint8_t payload[MAX_PAYLOAD];
+    while (fcOtaRingLen() >= (4 + 1 + 1 + 2))
+    {
+        if (!(fcOtaRingPeek(0) == 0xAA && fcOtaRingPeek(1) == 0x55 &&
+              fcOtaRingPeek(2) == 0xAA && fcOtaRingPeek(3) == 0x55))
+        {
+            fcOtaRingPop();          // resync on SOF
+            continue;
+        }
+        const size_t payload_len = fcOtaRingPeek(5);
+        if (payload_len > MAX_PAYLOAD) { fcOtaRingPop(); continue; }
+        const size_t frame_len = 4 + 1 + 1 + payload_len + 2;
+        if (fcOtaRingLen() < frame_len) return;   // rest hasn't arrived yet
+
+        uint8_t frame[MAX_FRAME];
+        for (size_t i = 0; i < frame_len; i++) frame[i] = fcOtaRingPeek(i);
+
+        uint8_t type = 0; size_t out_len = 0;
+        if (!TR_I2C_Interface::unpackMessage(frame, frame_len, type,
+                                             payload, sizeof(payload), out_len, true))
+        {
+            fcOtaRingPop();          // bad CRC — resync one byte
+            continue;
+        }
+        for (size_t i = 0; i < frame_len; i++) fcOtaRingPop();
+
+        if (type == OTA_DATA_CHUNK && out_len >= 4)
+        {
+            uint32_t off = 0; memcpy(&off, payload, 4);
+            const uint8_t* img     = payload + 4;
+            const size_t   img_len = out_len - 4;
+            const uint32_t have    = (uint32_t)fc_ota_receiver.bytesWritten();
+            if (off == have)
+            {
+                const TR_OTA_Receiver::Error e = fc_ota_receiver.writeChunk(off, img, img_len);
+                if (e != TR_OTA_Receiver::Error::Ok)
+                    ESP_LOGE(TAG, "[OTA] writeChunk @%u (%uB) failed: %d",
+                             (unsigned)off, (unsigned)img_len, (int)e);
+            }
+            else if (off > have)
+            {
+                ESP_LOGW(TAG, "[OTA] gap: chunk @%u but have %u", (unsigned)off, (unsigned)have);
+            }
+            // off < have: stale-repeat from an I2S underrun — skip silently.
+        }
+    }
+}
+
+static void fcOtaParserTask(void*)
+{
+    for (;;)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (fc_ota_data_mode) fcOtaParseRing();
+    }
+}
+
+// Flip master-TX -> slave-RX to receive the image. Called from the OTA_BEGIN
+// handler after the READY resends have drained over the still-TX link.
+static void fcFlipToRx()
+{
+    // Let the queued OTA_RELAY_READY resends fully clock out before flipping.
+    for (int i = 0; i < 60 && uxQueueMessagesWaiting(i2s_tx_queue) > 0; i++)
+        delay_ms(10);
+    delay_ms(50);                       // settle: last frame leaves the DMA
+    fc_ota_head = 0;                    // clear any stale ring contents
+    fc_ota_tail = 0;
+    fc_ota_data_mode = true;            // i2sSenderTask idles from here on
+    if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
+    i2s_stream.end();
+    const esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
+                                                config::I2S_WS_PIN,
+                                                config::I2S_DOUT_PIN,   // former DOUT now reads DIN
+                                                -1,                     // no frame-sync for OTA
+                                                OTA_I2S_SAMPLE_RATE_HZ,
+                                                4, 64);
+    if (e == ESP_OK)
+        i2s_stream.registerRecvCallback(fcOtaRecvCallback, nullptr);
+    if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
+    ESP_LOGW(TAG, "[OTA] I2S -> slave RX for image (%s)", esp_err_to_name(e));
+}
+
+// Revert slave-RX -> master-TX (normal telemetry + status). Called before
+// finalizing/aborting so the terminal status rides the normal I2S path.
+static void fcRevertToTx()
+{
+    if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
+    i2s_stream.end();
+    const esp_err_t e = i2s_stream.beginMasterTx(config::I2S_BCLK_PIN,
+                                                 config::I2S_WS_PIN,
+                                                 config::I2S_DOUT_PIN,
+                                                 config::I2S_FSYNC_PIN,
+                                                 config::I2S_SAMPLE_RATE);
+    fc_ota_data_mode = false;           // i2sSenderTask resumes
+    if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
+    ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
+}
+
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
 // the live PID gains from servo_control (these can be NVS- or BLE-overridden),
 // the runtime override globals, the config:: defaults for the compile-time-only
@@ -1178,6 +1327,20 @@ static void i2sSenderTask(void *)
     I2STxMessage msg = {};
     for (;;)
     {
+        // Phase 4 Layer 3: while an OTA image is streaming the link is flipped
+        // to slave RX — stop driving TX entirely.  fc_i2s_mutex serializes the
+        // actual channel access vs the flip/revert (double-checked under lock).
+        if (fc_ota_data_mode)
+        {
+            delay_ms(5);
+            continue;
+        }
+        if (fc_i2s_mutex) xSemaphoreTake(fc_i2s_mutex, portMAX_DELAY);
+        if (fc_ota_data_mode)
+        {
+            if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
+            continue;
+        }
         // Try to dequeue with a short timeout (1ms).
         // If a frame is ready, send it immediately.
         // If not, write idle fill zeros to keep the DMA pipe clean.
@@ -1191,6 +1354,7 @@ static void i2sSenderTask(void *)
             // This prevents stale data replay when the slave reads.
             i2s_stream.writeIdleFill(64, 1);
         }
+        if (fc_i2s_mutex) xSemaphoreGive(fc_i2s_mutex);
     }
 }
 
@@ -1802,6 +1966,14 @@ static void setup_fc()
         ESP_LOGE(TAG, "Failed to create I2C bus mutex");
         while (1) { delay_ms(1000); }
     }
+    // Phase 4 Layer 3: mutex serializing i2s_stream across i2sSenderTask and the
+    // OTA flip/revert; created before the sender task starts so it's always set.
+    fc_i2s_mutex = xSemaphoreCreateMutex();
+    if (fc_i2s_mutex == nullptr)
+    {
+        ESP_LOGE(TAG, "Failed to create I2S mutex");
+        while (1) { delay_ms(1000); }
+    }
     // I2S sender runs on the SAME core as sensor collection (Core 0).
     // Priority 2: below pollIMUdata (4) so sensor SPI reads are never
     // delayed, but above pollGNSSdata (1).  This frees Core 1 entirely
@@ -1817,6 +1989,13 @@ static void setup_fc()
                             2,
                             &i2s_sender_task_handle,
                             i2s_sender_core);
+
+    // Phase 4 Layer 3: OTA image parser. Idle (blocked on notify) until the
+    // I2S link is flipped to slave RX and the recv callback starts waking it.
+    // Pinned to Core 1 (off the sensor core) at low priority — it only runs
+    // during an OTA, when flight is not in progress.
+    xTaskCreatePinnedToCore(fcOtaParserTask, "FC OTA RX", 4096, nullptr, 3,
+                            &fc_ota_parser_task, 1);
 
     // Load persistent rocket settings from NVS (factory default from config.h)
     ESP_LOGI(TAG, "NVS prefs loading...");
@@ -3697,7 +3876,12 @@ static void loop_fc()
                         if (e == TR_OTA_Receiver::Error::Ok)
                         {
                             ESP_LOGI(TAG, "[OTA] ready for image");
+                            fc_ota_total_size = total_size;
                             sendOtaRelayStatusRobust(OTA_RELAY_READY, 0, 0);
+                            // Layer 3: flip to slave RX and receive the image
+                            // over the (now reversed) I2S link. Blocks until the
+                            // READY resends have drained off the still-TX link.
+                            fcFlipToRx();
                         }
                         else
                         {
@@ -3714,11 +3898,22 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_FINISH_CMD)
             {
-                // Image transfer (I2S) is Layer 3 — without it the SHA won't
-                // match and finish() fails, which is the expected Layer 2
-                // result. On success (Layer 3) the FC reboots into ota_1.
-                ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u)",
-                         (unsigned)fc_ota_receiver.bytesWritten());
+                // Layer 3: the OC pumped the tail of the image just before
+                // sending FINISH; give the parser a moment to drain the last
+                // in-flight frames, then revert the I2S link to master-TX so the
+                // terminal status rides the normal-direction path back. (Without
+                // Layer 3 image transfer the SHA won't match and finish() fails
+                // — the expected Layer 2 result.) On success the FC reboots.
+                if (fc_ota_data_mode)
+                {
+                    for (int i = 0; i < 100 &&
+                            (uint32_t)fc_ota_receiver.bytesWritten() < fc_ota_total_size; i++)
+                        delay_ms(5);   // up to ~500 ms for the tail to land
+                    fcRevertToTx();
+                }
+                ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
+                         (unsigned)fc_ota_receiver.bytesWritten(),
+                         (unsigned)fc_ota_total_size);
                 const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
                 if (e == TR_OTA_Receiver::Error::Ok)
                 {
@@ -3739,6 +3934,7 @@ static void loop_fc()
             else if (out_pending_command == OTA_ABORT_CMD)
             {
                 ESP_LOGW(TAG, "[OTA] ABORT");
+                if (fc_ota_data_mode) fcRevertToTx();  // back to TX so status rides I2S
                 (void)fc_ota_receiver.abort();
                 sendOtaRelayStatusRobust(OTA_RELAY_ABORTED, 0, 0);
             }

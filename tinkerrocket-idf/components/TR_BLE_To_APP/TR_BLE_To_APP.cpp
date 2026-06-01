@@ -1449,11 +1449,13 @@ void TR_BLE_To_APP::handleOtaAbort()
 void TR_BLE_To_APP::setOtaRelayDelegate(void (*begin_cb)(void*, uint32_t, const uint8_t*),
                                         void (*finish_cb)(void*),
                                         void (*abort_cb)(void*),
+                                        void (*data_cb)(void*, uint32_t, const uint8_t*, size_t),
                                         void* ctx)
 {
     ota_relay_begin_cb_  = begin_cb;
     ota_relay_finish_cb_ = finish_cb;
     ota_relay_abort_cb_  = abort_cb;
+    ota_relay_data_cb_   = data_cb;
     ota_relay_ctx_       = ctx;
 }
 
@@ -1471,14 +1473,6 @@ void TR_BLE_To_APP::relayFcOtaStatus(const char* state, const char* err,
 
 void TR_BLE_To_APP::onFileTransferWrite(const uint8_t* data, size_t length)
 {
-    // During a target==1 (FC relay) session the image bytes don't belong to
-    // this device's OTA partition — they're relayed to the FC over I2S (Phase
-    // 4 Layer 3). Until that path exists, drop chunks here so they never reach
-    // the idle local receiver (which would error and clobber the relay status).
-    if (ota_relay_active_)
-    {
-        return;
-    }
     // Frame: [offset:4 LE][length:2 LE][flags:1][payload:N]
     if (length < 7)
     {
@@ -1495,6 +1489,17 @@ void TR_BLE_To_APP::onFileTransferWrite(const uint8_t* data, size_t length)
     {
         ESP_LOGW(BLE_TAG, "OTA chunk truncated: declared %u, frame %u",
                  (unsigned)chunk_len, (unsigned)length);
+        return;
+    }
+
+    // During a target==1 (FC relay) session the image doesn't belong to this
+    // device's OTA partition — hand each chunk to the relay delegate, which
+    // pumps it to the FC over the flipped I2S link (Phase 4 Layer 3). The local
+    // OTA receiver stays idle. (Before Layer 3 existed, chunks were dropped.)
+    if (ota_relay_active_)
+    {
+        if (ota_relay_data_cb_)
+            ota_relay_data_cb_(ota_relay_ctx_, offset, data + 7, chunk_len);
         return;
     }
 

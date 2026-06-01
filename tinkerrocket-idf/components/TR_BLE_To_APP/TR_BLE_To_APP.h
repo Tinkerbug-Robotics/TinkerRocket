@@ -270,6 +270,9 @@ private:
     void (*ota_relay_begin_cb_)(void* ctx, uint32_t total_size, const uint8_t* sha256) = nullptr;
     void (*ota_relay_finish_cb_)(void* ctx) = nullptr;
     void (*ota_relay_abort_cb_)(void* ctx) = nullptr;
+    // Image chunk handler (Phase 4 Layer 3): the OC pumps each relayed chunk to
+    // the FC over the flipped I2S link. offset is the absolute byte offset.
+    void (*ota_relay_data_cb_)(void* ctx, uint32_t offset, const uint8_t* data, size_t len) = nullptr;
     void* ota_relay_ctx_ = nullptr;
     bool  ota_relay_active_ = false;  // a target==1 relay session is in progress
 
@@ -291,6 +294,7 @@ public:
     void setOtaRelayDelegate(void (*begin_cb)(void*, uint32_t, const uint8_t*),
                              void (*finish_cb)(void*),
                              void (*abort_cb)(void*),
+                             void (*data_cb)(void*, uint32_t, const uint8_t*, size_t),
                              void* ctx);
     bool isOtaRelayActive() const { return ota_relay_active_; }
     void relayFcOtaStatus(const char* state, const char* err,
