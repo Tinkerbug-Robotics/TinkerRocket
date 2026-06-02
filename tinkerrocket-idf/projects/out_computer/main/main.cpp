@@ -1554,6 +1554,29 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         if (prev != nullptr)
         {
+            // FC-reboot detection (#16). The FC's time_us restarts near 0 on every
+            // reboot — including the one right after a successful OTA. All the
+            // prev_time_*/max_time_us state here is from the prior session, so every
+            // post-reboot frame looks non-monotonic (dropped below) AND stale (dropped
+            // by the 5 s filter) until ts climbs back past the old high-water mark —
+            // tens of seconds of lost telemetry, so the app shows stale FC data right
+            // after an update. A timestamp far behind the global high-water mark (well
+            // beyond any reorder/jitter, which is sub-second) can only mean a new
+            // session: reset the dedup baseline and adopt the new stream. Also covers a
+            // uint32 µs wrap (~71 min) gracefully.
+            static constexpr uint32_t REBOOT_BACKSTEP_US = 10'000'000;  // 10 s
+            if (time_us != 0 && max_time_us > REBOOT_BACKSTEP_US &&
+                time_us < (max_time_us - REBOOT_BACKSTEP_US))
+            {
+                ESP_LOGW("DEDUP", "FC reboot detected (ts=%lu << max=%lu); resetting baseline",
+                         (unsigned long)time_us, (unsigned long)max_time_us);
+                prev_time_ism6 = prev_time_bmp = prev_time_mmc = prev_time_iis2mdc =
+                    prev_time_gnss = prev_time_ns = prev_time_pwr = prev_time_guid = 0;
+                max_time_us = 0;
+                // *prev now reads 0, so this frame passes the checks below as the first
+                // of the new session and re-seeds the baseline.
+            }
+
             // Non-monotonic or exact-duplicate frame for this type — drop.
             // time_us == 0 is excluded so the very first frame of each type
             // (which finds *prev == 0) still passes.
