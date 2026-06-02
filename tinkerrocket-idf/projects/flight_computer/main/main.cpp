@@ -3984,12 +3984,12 @@ static void loop_fc()
             }
             else if (out_pending_command == OTA_FINISH_CMD)
             {
-                // Layer 3: the OC pumped the tail of the image just before
-                // sending FINISH; give the parser a moment to drain the last
-                // in-flight frames, then revert the I2S link to master-TX so the
-                // terminal status rides the normal-direction path back. (Without
-                // Layer 3 image transfer the SHA won't match and finish() fails
-                // — the expected Layer 2 result.) On success the FC reboots.
+                // Layer 3: the OC pumped the tail of the image just before sending
+                // FINISH; give the parser a moment to drain the last in-flight frames,
+                // then revert the I2S link to master-TX so the terminal status rides
+                // the normal-direction path back. Only finalize when an OTA session is
+                // actually active (fc_ota_data_mode); a FINISH with no session is a
+                // stale/duplicate (handled in the else). On success the FC reboots.
                 if (fc_ota_data_mode)
                 {
                     // Wait for the image tail to land. The OC drains its TX queue and
@@ -4012,33 +4012,45 @@ static void loop_fc()
                         else { quiet = 0; last_cb = cb; }
                     }
                     fcRevertToTx();
-                }
-                ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
-                         (unsigned)fc_ota_receiver.bytesWritten(),
-                         (unsigned)fc_ota_total_size);
-                // RX diagnostics summary (bench): which failure mode stalled it?
-                //   write_fail>0  -> flash-write error (not a transport issue)
-                //   gap>0, crc_fail~0 -> frames lost/reordered (forward-only pump)
-                //   crc_fail high -> I2S signal integrity (back off BCLK)
-                ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
-                         (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
-                         (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
-                         (unsigned)fc_ota_ring_ovf);
-                const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
-                if (e == TR_OTA_Receiver::Error::Ok)
-                {
-                    // Robust resend spans ~1.4 s, which also gives the app
-                    // time to catch ready_to_boot before the I2S link drops at
-                    // reboot (replaces the old fixed 500 ms pre-restart delay).
-                    sendOtaRelayStatusRobust(OTA_RELAY_READY_TO_BOOT, 0,
-                                             (uint32_t)fc_ota_receiver.bytesWritten());
-                    esp_restart();
+
+                    ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",
+                             (unsigned)fc_ota_receiver.bytesWritten(),
+                             (unsigned)fc_ota_total_size);
+                    // RX diagnostics summary (bench): which failure mode stalled it?
+                    //   write_fail>0  -> flash-write error (not a transport issue)
+                    //   gap>0, crc_fail~0 -> frames lost/reordered (forward-only pump)
+                    //   crc_fail high -> I2S signal integrity (back off BCLK)
+                    ESP_LOGW(TAG, "[OTA RX] frames_ok=%u gap=%u crc_fail=%u write_fail=%u ring_ovf=%u",
+                             (unsigned)fc_ota_written_frames, (unsigned)fc_ota_gap,
+                             (unsigned)fc_ota_crc_fail, (unsigned)fc_ota_write_fail,
+                             (unsigned)fc_ota_ring_ovf);
+                    const TR_OTA_Receiver::Error e = fc_ota_receiver.finish();
+                    if (e == TR_OTA_Receiver::Error::Ok)
+                    {
+                        // Robust resend spans ~1.4 s, which also gives the app
+                        // time to catch ready_to_boot before the I2S link drops at
+                        // reboot (replaces the old fixed 500 ms pre-restart delay).
+                        sendOtaRelayStatusRobust(OTA_RELAY_READY_TO_BOOT, 0,
+                                                 (uint32_t)fc_ota_receiver.bytesWritten());
+                        esp_restart();
+                    }
+                    else
+                    {
+                        ESP_LOGE(TAG, "[OTA] finish failed: %d", (int)e);
+                        sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
+                                                 (uint32_t)fc_ota_receiver.bytesWritten());
+                    }
                 }
                 else
                 {
-                    ESP_LOGE(TAG, "[OTA] finish failed: %d", (int)e);
-                    sendOtaRelayStatusRobust(OTA_RELAY_VERIFY_FAILED, (uint8_t)e,
-                                             (uint32_t)fc_ota_receiver.bytesWritten());
+                    // Stale/duplicate FINISH with no active OTA session — e.g. the OC's
+                    // pre-loaded I2C status response, read by the freshly-rebooted FC
+                    // right after a *successful* OTA (bench: "finish failed: 2" at boot).
+                    // finish() here only returns SessionNotActive and logs a scary error,
+                    // so a completed OTA appears to end in failure. Ignore it instead —
+                    // the FC is idempotent to a duplicate FINISH regardless of why the
+                    // OC re-sent it.
+                    ESP_LOGI(TAG, "[OTA] FINISH ignored — no active OTA session (stale/duplicate)");
                 }
             }
             else if (out_pending_command == OTA_ABORT_CMD)
