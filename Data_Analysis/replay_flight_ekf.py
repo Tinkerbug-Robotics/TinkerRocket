@@ -88,8 +88,11 @@ def detect_flight_phases(records, t0_us):
     return boost_start, boost_end, apogee_us
 
 
-def replay(binary_file, plot_dir=None):
+def replay(binary_file, plot_dir=None, align_baro=True):
+    mode = ("aligned baro+GNSS frame (the FIX)" if align_baro
+            else "pad-relative baro (firmware behaviour, the BUG)")
     print(f"Parsing: {binary_file}")
+    print(f"  Baro frame mode: {mode}")
     records, stats, config = parse_binary_file(str(binary_file))
     print(f"  Frames: {stats['good_crc']:,} good, {stats['bad_crc']} bad CRC")
     print(f"  IMU: {len(records['ISM6HG256']):,}  GNSS: {len(records['GNSS']):,}  "
@@ -199,8 +202,13 @@ def replay(binary_file, plot_dir=None):
                           f"(from {len(baro_samples_for_ref)} samples at t={t_rel:.2f}s)")
                 continue
 
-            # Defer baro offset until we have a valid GNSS fix
-            if not baro_alt_offset_set and latest_gnss is not None:
+            # Defer baro offset until we have a valid GNSS fix.
+            #   align_baro=True  -> add GNSS alt so baro shares the EKF's
+            #                       absolute-hMSL state frame (the FIX).
+            #   align_baro=False -> leave offset 0, feeding pad-relative
+            #                       altitude — reproduces the firmware bug at
+            #                       flight_computer/main/main.cpp:2812.
+            if align_baro and not baro_alt_offset_set and latest_gnss is not None:
                 baro_alt_offset = latest_gnss["alt_m"]
                 baro_alt_offset_set = True
                 print(f"  Baro alt offset: {baro_alt_offset:.1f}m "
@@ -391,6 +399,17 @@ def replay(binary_file, plot_dir=None):
     print(f"  Accel bias final: X={accel_bias[-1,0]:.3f} Y={accel_bias[-1,1]:.3f} "
           f"Z={accel_bias[-1,2]:.3f} m/s²")
 
+    # Pad / pre-boost sanity metric: a stationary rocket's AGL altitude should
+    # sit at ~0.  The baro frame bug drags the fused altitude negative by
+    # roughly the launch-site MSL elevation.
+    pad_alt = float('nan')
+    if boost_start is not None:
+        bs_rel = (boost_start - t0_us) / 1e6
+        pad_mask = t_ekf < bs_rel
+        if pad_mask.any():
+            pad_alt = float(np.mean(ekf_u[pad_mask]))
+    print(f"  Pad EKF altitude AGL (pre-boost mean): {pad_alt:.2f} m   [should be ~0]")
+
     # ---- Plot ----
     if plot_dir is None:
         plot_dir = Path(__file__).parent.parent / "plots"
@@ -519,7 +538,19 @@ def replay(binary_file, plot_dir=None):
 
     plots = [out1, out2, out3, out4]
     print(f"\nPlots saved to {plot_dir}/")
-    return plots
+    return {
+        "align_baro": align_baro,
+        "t_ekf": t_ekf,
+        "ekf_u": ekf_u,
+        "t_gnss": t_gnss,
+        "gnss_u": gnss_u,
+        "accel_bias": accel_bias,
+        "pad_alt": pad_alt,
+        "ekf_alt_range": (float(ekf_u.min()), float(ekf_u.max())),
+        "boost_start_rel": (boost_start - t0_us) / 1e6 if boost_start else None,
+        "apogee_rel": (apogee_us - t0_us) / 1e6 if apogee_us else None,
+        "plots": plots,
+    }
 
 
 if __name__ == "__main__":
@@ -529,9 +560,13 @@ if __name__ == "__main__":
                                     "TestFlights/2026_03_08/Raw Downloads/"
                                     "Goblin Flight 2 F52/flight_20260308_190239.bin"))
     parser.add_argument("--plot-dir", default=None)
+    parser.add_argument("--emulate-firmware-baro", action="store_true",
+                        help="Feed pad-relative baro (no GNSS-frame offset) to "
+                             "reproduce the firmware bug at main.cpp:2812.")
     args = parser.parse_args()
 
-    plots = replay(Path(args.binary_file), args.plot_dir)
+    result = replay(Path(args.binary_file), args.plot_dir,
+                    align_baro=not args.emulate_firmware_baro)
 
     import subprocess
-    subprocess.run(["open"] + [str(p) for p in plots])
+    subprocess.run(["open"] + [str(p) for p in result["plots"]])
