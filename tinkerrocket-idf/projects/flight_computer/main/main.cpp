@@ -21,6 +21,7 @@
 #include <esp_system.h>           // esp_restart after a verified relayed OTA
 #include <driver/spi_master.h>
 #include <esp_timer.h>
+#include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
@@ -1878,6 +1879,32 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
                time_us());
 }
 
+// ── OTA rollback gate (#8 Phase 4 / Layer 4, #13) ─────────────────────────
+// A freshly OTA-installed FC image boots in ESP_OTA_IMG_PENDING_VERIFY (rollback
+// is enabled in sdkconfig). Unless we call esp_ota_mark_app_valid_cancel_rollback()
+// the bootloader auto-reverts to the previous partition on the next reset — the
+// safety net against a bad image. setup_fc() detects pending-verify at boot;
+// fcMaybeMarkOtaValid() (called every flight-loop tick) confirms the image only
+// after it has run the real flight loop stably for ~10 s. A broken image that
+// boot-loops, hangs (WDT reset), or crashes never reaches the mark, so it rolls
+// back. Mirrors the OC's maybeMarkOtaValid().
+static bool fc_ota_pending_verify = false;
+
+static inline void fcMaybeMarkOtaValid()
+{
+    if (!fc_ota_pending_verify) return;
+    static int64_t first_us = 0;                 // first tick after setup_fc() completed
+    const int64_t now = esp_timer_get_time();
+    if (first_us == 0) { first_us = now; return; }
+    if ((now - first_us) < 10LL * 1000000LL) return;   // need ~10 s of healthy running
+    const esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    if (err == ESP_OK)
+        ESP_LOGW(TAG, "[OTA] new image validated after 10 s stable run; rollback cancelled");
+    else
+        ESP_LOGE(TAG, "[OTA] mark_app_valid_cancel_rollback failed: %s", esp_err_to_name(err));
+    fc_ota_pending_verify = false;
+}
+
 static void setup_fc()
 {
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4 may not auto-init)
@@ -1889,6 +1916,22 @@ static void setup_fc()
     }
 
     ESP_LOGI(TAG, "NVS init: %s", esp_err_to_name(nvs_err));
+
+    // OTA boot-state check (#8 Layer 4). A just-OTA'd image boots PENDING_VERIFY;
+    // arm the rollback gate so fcMaybeMarkOtaValid() confirms it only after a
+    // stable run. A normal USB-flashed image is UNDEFINED here, so this is a no-op.
+    {
+        const esp_partition_t* running = esp_ota_get_running_partition();
+        esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
+        if (running && esp_ota_get_state_partition(running, &st) == ESP_OK &&
+            st == ESP_OTA_IMG_PENDING_VERIFY)
+        {
+            fc_ota_pending_verify = true;
+            ESP_LOGW(TAG, "[OTA] running PENDING_VERIFY image (partition '%s' @ 0x%08x); "
+                          "rollback armed until ~10 s stable run",
+                     running->label, (unsigned)running->address);
+        }
+    }
 
     // The flight task runs continuously and starves IDLE tasks on CPU 1.
     // Reconfigure WDT to not monitor IDLE cores (the flight task itself
@@ -2557,6 +2600,8 @@ static void setup_fc()
 // Loop is responsible for reading sensor data
 static void loop_fc()
 {
+    fcMaybeMarkOtaValid();   // Layer 4: confirm a freshly OTA'd image after a stable run
+
     // ── OTA image pump: yield the core to the OTA RX parser ──
     // During an FC OTA the board is grounded and its I2S is flipped to slave RX.
     // This flight task runs at the top priority (configMAX_PRIORITIES-1) on the
