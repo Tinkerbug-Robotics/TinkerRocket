@@ -1464,6 +1464,13 @@ static constexpr uint8_t OTA_STATUS_MSG      = 0xE7;  // FC→OC: OtaRelayStatus
 // that replays a DMA buffer can't corrupt the image. 0xE8-0xEA are sensor cal.
 static constexpr uint8_t OTA_DATA_CHUNK      = 0xEB;
 
+// FC→OC: firmware version string (null-terminated, <=31 chars), pushed by the
+// FC every ~2 s over I2C. The OC caches it and relays it to the app as a small
+// "fc_identity" config JSON. Lets the app detect a *FC* OTA rollback by comparing
+// the FC's real running version — the OC's own "fw" never changes on an FC-only
+// update, which is why the connected-device version check false-positived (#8).
+static constexpr uint8_t FC_IDENTITY         = 0xEC;
+
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
 // real bottleneck, and the FC writes each received frame to flash (~2-3 ms/frame)

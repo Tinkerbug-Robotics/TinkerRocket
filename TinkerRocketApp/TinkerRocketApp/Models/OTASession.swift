@@ -108,7 +108,12 @@ final class OTASession: ObservableObject {
         let sha = Data(SHA256.hash(data: fileData))
         imageSize = fileData.count
         imageSha256Hex = sha.map { String(format: "%02x", $0) }.joined()
-        preFlashFirmwareVersion = device?.firmwareVersion ?? ""
+        // An FC OTA changes the *FC's* version (relayed as fcFirmwareVersion);
+        // the OC's own firmwareVersion is untouched by an FC-only update — so the
+        // rollback check must compare the right device's version for the chosen
+        // target, else an FC OTA always looks like "version unchanged" (#8 P4).
+        preFlashFirmwareVersion = (targetIsFC ? device?.fcFirmwareVersion
+                                              : device?.firmwareVersion) ?? ""
 
         // ---- 2. Send OTA_BEGIN ----
         guard let beginDevice = device, beginDevice.isConnected else {
@@ -205,20 +210,27 @@ final class OTASession: ObservableObject {
             return
         }
 
-        // ---- 9. Wait for the new identity push (fw field) ----
-        // The firmware republishes config_identity on each connect; we wait
-        // for any non-empty fw value that arrives AFTER reconnect.
+        // ---- 9. Wait for the new version to publish ----
+        // OC/local OTA: the device reboots and republishes config_identity on
+        // reconnect (fast). FC OTA: the OC<->app link never drops; we wait for
+        // the OC to relay the FC's *new* version (fc_identity), which can't
+        // arrive until the FC finishes rebooting (~8 s, longer if GNSS bootstrap
+        // is slow) and pushes FC_IDENTITY — so give it a much wider window.
         let preFlash = preFlashFirmwareVersion
-        let gotNewFw = await waitFor(timeout: 10.0) { [weak self] in
-            guard let fw = self?.device?.firmwareVersion, !fw.isEmpty else { return false }
+        let fwTimeout: TimeInterval = targetIsFC ? 40.0 : 10.0
+        let gotNewFw = await waitFor(timeout: fwTimeout) { [weak self] in
+            let fw = (targetIsFC ? self?.device?.fcFirmwareVersion
+                                 : self?.device?.firmwareVersion) ?? ""
+            guard !fw.isEmpty else { return false }
             return fw != preFlash
         }
-        let postFw = device?.firmwareVersion ?? ""
+        let postFw = (targetIsFC ? device?.fcFirmwareVersion
+                                 : device?.firmwareVersion) ?? ""
         if !gotNewFw {
             if postFw == preFlash && !postFw.isEmpty {
                 state = .rollbackDetected(version: preFlash)
             } else {
-                state = .failed(reason: "Reconnected but device didn't publish a new firmware version within 10s")
+                state = .failed(reason: "Reconnected but device didn't publish a new firmware version within \(Int(fwTimeout))s")
             }
             return
         }

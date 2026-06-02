@@ -637,6 +637,14 @@ static uint32_t ready_entry_ms    = 0;
 
 static OutStatusQueryData last_query_cfg = {};
 
+// FC firmware version, relayed from the FC via FC_IDENTITY (#8 Phase 4). Cached
+// here so the OC can publish it to the app as a "fc_identity" config message,
+// letting the app verify an FC OTA / detect a rollback against the FC's *own*
+// version (the OC's "fw" never changes on an FC-only update). Re-published when
+// it changes mid-connection (an FC OTA never drops the OC<->app BLE link).
+static char          fc_fw_version[40]  = {0};
+static volatile bool fc_identity_dirty  = false;
+
 static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
 {
     return (flags & mask) != 0U;
@@ -1497,6 +1505,7 @@ static bool isKnownMessageType(uint8_t type)
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
+        case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
             return true;
         default:
             return false;
@@ -1509,6 +1518,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     // Reject unknown message types (CRC false positives from I2S noise)
     if (!isKnownMessageType(type))
         return;
+
+    // FC firmware-version push (#8 Phase 4): a version *string*, not timestamped
+    // telemetry, so handle it before the time_us-based dedup below (which would
+    // misread the string's first 4 bytes as a timestamp and drop it). Cache it;
+    // if it changed, flag a re-publish to the app — an FC OTA never drops our
+    // OC<->app BLE link, so the connect-time "fc_identity" won't refresh itself.
+    if (type == FC_IDENTITY)
+    {
+        char incoming[sizeof(fc_fw_version)] = {0};
+        size_t n = (payload_len < sizeof(incoming) - 1) ? payload_len
+                                                        : sizeof(incoming) - 1;
+        if (n > 0) memcpy(incoming, payload, n);
+        if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0)
+        {
+            memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
+            fc_identity_dirty = true;
+        }
+        return;
+    }
 
     // ── Duplicate, replay & stale frame detection for I2S DMA ──
     // Within a boot session, each FC-side time_us (= micros() on the FC) is
@@ -2357,6 +2385,22 @@ static void sendLoRaBeacon()
 // Config readback: send current config to app over BLE
 // ============================================================================
 
+// Publish the FC's relayed firmware version to the app as a compact "fc_identity"
+// config message (#8 Phase 4). Kept separate from "config_identity" so it stays
+// well under the BLE notify MTU (sendConfigJSON silently drops anything over
+// MTU-3). Sent on connect (from sendCurrentConfig) and re-sent whenever the FC
+// version changes mid-connection (after an FC OTA), so the app verifies the
+// update / spots a rollback against the FC's own version, not the OC's.
+static void sendFcIdentity()
+{
+    const char* fc_fw = fc_fw_version[0] ? fc_fw_version : "unknown";
+    char buf[80];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\"}", fc_fw);
+    ble_app.sendConfigJSON(String(buf));
+    ESP_LOGI("CFG", "Sent fc_identity (fc_fw=%s)", fc_fw);
+}
+
 static void sendCurrentConfig()
 {
     // Split config into two smaller JSON messages to stay within MTU limits.
@@ -2425,6 +2469,10 @@ static void sendCurrentConfig()
     String id_json(id_buf);
     ble_app.sendConfigJSON(id_json);
     ESP_LOGI("CFG", "Sent identity readback (%u bytes)", (unsigned)id_json.length());
+
+    // Also push the relayed FC firmware version as its own small message (#8).
+    delay(50);
+    sendFcIdentity();
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -4644,6 +4692,16 @@ static void loop_oc()
             }
         }
         ble_was_connected = ble_now;
+    }
+
+    // Re-publish the FC version to the app when it changes mid-connection: an FC
+    // OTA reboots the FC (new version) but never drops the OC<->app BLE link, so
+    // the connect-time fc_identity won't refresh on its own. This is what lets
+    // the app's FC-OTA verify see the new version (or catch a rollback). #8.
+    if (fc_identity_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_identity_dirty = false;
+        sendFcIdentity();
     }
 
     // Service the BLE library's poll-style work — currently just the OTA

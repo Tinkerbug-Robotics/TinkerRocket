@@ -46,6 +46,15 @@ private struct FirmwareUpdateContent: View {
                 LabeledRow(label: "Firmware",
                            value: device.firmwareVersion.isEmpty ? "(pre-#8 image)" : device.firmwareVersion,
                            mono: true)
+                // FC firmware is relayed by the OC (#8 Phase 4). Show it when
+                // targeting the FC so the user can watch it flip after an update
+                // (or stay put on a rollback) — the OC's own version above never
+                // changes on an FC-only OTA.
+                if targetIsFC && !device.isBaseStation {
+                    LabeledRow(label: "FC firmware",
+                               value: device.fcFirmwareVersion.isEmpty ? "(awaiting relay…)" : device.fcFirmwareVersion,
+                               mono: true)
+                }
                 LabeledRow(label: "Connection", value: device.isConnected ? "Connected" : "Disconnected")
             }
 

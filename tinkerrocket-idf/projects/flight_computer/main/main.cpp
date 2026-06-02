@@ -22,6 +22,7 @@
 #include <driver/spi_master.h>
 #include <esp_timer.h>
 #include <esp_ota_ops.h>          // Layer 4: esp_ota_mark_app_valid_cancel_rollback (#8/#13)
+#include <esp_app_desc.h>         // esp_app_get_description() for FC_IDENTITY version push (#8)
 #include <driver/gpio.h>
 #include <driver/uart.h>
 #include <esp_private/esp_gpio_reserve.h>
@@ -3252,6 +3253,26 @@ static void loop_fc()
                 sizeof(out_status_query_data),
                 10);
             if (send_err == ESP_OK) { query_pending = true; }
+
+            // Push the FC firmware version to the OC every ~8 polls (~2 s) so it
+            // can relay it to the app (config "fc_identity"); the app uses it to
+            // tell a real FC-OTA update from a rollback. Static string, separate
+            // message type so it bypasses the OC's timestamp dedup. Skipped while
+            // an image is streaming in (the version can't change mid-OTA and the
+            // OC already has it — keep the OTA control bus quiet). #8 Phase 4.
+            if (!fc_ota_data_mode)
+            {
+                static uint32_t fc_id_throttle = 1000;  // fire on first poll, then ~2 s
+                if (++fc_id_throttle >= 8)
+                {
+                    fc_id_throttle = 0;
+                    const esp_app_desc_t* d = esp_app_get_description();
+                    const char* v = (d && d->version[0]) ? d->version : "unknown";
+                    (void)i2c_interface.sendMessage(
+                        FC_IDENTITY, reinterpret_cast<const uint8_t*>(v),
+                        strlen(v), 10);
+                }
+            }
 
             // NOTE: mutex is held through command processing below, so
             // readConfigFrame() I2C reads have an idle bus.  Released after
