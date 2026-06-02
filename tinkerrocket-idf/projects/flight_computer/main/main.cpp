@@ -1118,6 +1118,7 @@ static uint32_t fc_ota_crc_fail   = 0;   // frames that failed CRC (resync drops
 static uint32_t fc_ota_gap        = 0;   // valid frames ahead of bytesWritten (skipped)
 static uint32_t fc_ota_write_fail = 0;   // writeChunk() errors
 static uint32_t fc_ota_written_frames = 0;  // frames accepted in order
+static volatile uint32_t fc_ota_rx_cb_count = 0;  // I2S RX cb ticks; teardown silence detect
 
 static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
 {
@@ -1137,6 +1138,7 @@ static inline void    fcOtaRingPop()         { fc_ota_tail = (fc_ota_tail + 1) %
 static IRAM_ATTR bool fcOtaRecvCallback(const uint8_t* buf, size_t len, void* /*ctx*/)
 {
     if (!fc_ota_data_mode) return false;
+    fc_ota_rx_cb_count = fc_ota_rx_cb_count + 1;   // (-Wvolatile: avoid ++) teardown silence
     for (size_t i = 0; i < len; i++) fcOtaRingPush(buf[i]);
     BaseType_t woken = pdFALSE;
     if (fc_ota_parser_task) vTaskNotifyGiveFromISR(fc_ota_parser_task, &woken);
@@ -3945,9 +3947,25 @@ static void loop_fc()
                 // — the expected Layer 2 result.) On success the FC reboots.
                 if (fc_ota_data_mode)
                 {
-                    for (int i = 0; i < 100 &&
+                    // Wait for the image tail to land. The OC drains its TX queue and
+                    // keeps the link clocked briefly after FINISH, so bytesWritten
+                    // should reach the total (it stalled 1 frame short before this).
+                    for (int i = 0; i < 200 &&
                             (uint32_t)fc_ota_receiver.bytesWritten() < fc_ota_total_size; i++)
-                        delay_ms(5);   // up to ~500 ms for the tail to land
+                        delay_ms(5);   // up to ~1 s for the tail to land
+                    // Do NOT seize the bus as master TX until the OC has stopped
+                    // driving BCLK (reverted to slave RX). Otherwise both ends drive
+                    // BCLK = contention and the terminal status is garbled — and the
+                    // final frame is lost. Silence == the I2S RX callback stops firing.
+                    uint32_t last_cb = fc_ota_rx_cb_count;
+                    int quiet = 0;
+                    for (int i = 0; i < 400 && quiet < 20; i++)   // ~100 ms quiet, <=2 s cap
+                    {
+                        delay_ms(5);
+                        const uint32_t cb = fc_ota_rx_cb_count;
+                        if (cb == last_cb) { quiet++; }
+                        else { quiet = 0; last_cb = cb; }
+                    }
                     fcRevertToTx();
                 }
                 ESP_LOGW(TAG, "[OTA] FINISH (bytes_written=%u/%u)",

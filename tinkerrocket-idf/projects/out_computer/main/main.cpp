@@ -1351,14 +1351,17 @@ static void ocOtaTxFeederTask(void *)
     OcOtaTxFrame f;
     for (;;)
     {
-        // Back off the bus the instant a revert is requested. ocRevertToRx() runs
-        // in loop_oc at LOWER priority than this feeder and must take oc_i2s_mutex
-        // to tear down the TX channel; while we keep re-grabbing that mutex at the
-        // higher priority, the revert can never win the race. Bench 2026-06-01
-        // deadlocked exactly here after FINISH — loop_oc wedged in ocRevertToRx and
-        // we idle-filled forever. Stop touching the bus so the revert proceeds; the
-        // flag stays set until ocRevertToRx() completes (see loop_oc).
-        if (!oc_ota_tx_mode || oc_ota_revert_to_rx_requested || oc_i2s_mutex == nullptr)
+        // Back off the bus once a revert is requested so ocRevertToRx() (in loop_oc,
+        // LOWER priority) can take oc_i2s_mutex to tear down TX — while we keep
+        // re-grabbing it at higher priority the revert never wins (bench: deadlock,
+        // idle-filled forever). BUT only back off after the queue is DRAINED: the app
+        // sends FINISH right after the last data chunk, so the image tail can still be
+        // queued here; backing off immediately stranded it (bench: FC 1 frame short ->
+        // SizeMismatch). Drain the tail first, then yield; we just stop idle-filling.
+        const bool revert_drained =
+            oc_ota_revert_to_rx_requested &&
+            (oc_ota_tx_queue == nullptr || uxQueueMessagesWaiting(oc_ota_tx_queue) == 0);
+        if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr || revert_drained)
         {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
