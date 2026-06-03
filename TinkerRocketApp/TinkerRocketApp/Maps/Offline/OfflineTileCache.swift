@@ -52,6 +52,14 @@ final class OfflineTileCache {
         return total
     }
 
+    /// Delete the given tiles for a source from disk (used when a saved region
+    /// is removed). Best-effort.
+    func removeTiles(source: String, tiles: [TileXYZ]) {
+        for t in tiles {
+            try? fm.removeItem(at: fileURL(source: source, z: t.z, x: t.x, y: t.y))
+        }
+    }
+
     // MARK: - Paths
 
     private func fileURL(source: String, z: Int, x: Int, y: Int) -> URL {

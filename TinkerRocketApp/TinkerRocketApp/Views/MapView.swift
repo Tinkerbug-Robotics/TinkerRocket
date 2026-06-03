@@ -35,7 +35,7 @@ struct RocketMapView: UIViewRepresentable {
         mapView.delegate = context.coordinator
         mapView.mapType = tileSource.appleMapType
         mapView.setRegion(region, animated: false)
-        applyTileSource(to: mapView, context: context)
+        context.coordinator.basemap.apply(tileSource, to: mapView)
         return mapView
     }
 
@@ -44,7 +44,7 @@ struct RocketMapView: UIViewRepresentable {
         if mapView.mapType != tileSource.appleMapType {
             mapView.mapType = tileSource.appleMapType
         }
-        applyTileSource(to: mapView, context: context)
+        context.coordinator.basemap.apply(tileSource, to: mapView)
 
         // Reset annotations + DATA overlays each pass (cheap).  The basemap tile
         // overlay is managed separately above so it isn't torn down/reloaded on
@@ -83,26 +83,6 @@ struct RocketMapView: UIViewRepresentable {
         }
     }
 
-    /// Add/swap/remove the basemap tile overlay to match `tileSource`, only when
-    /// it actually changes — so panning and per-tick telemetry updates don't tear
-    /// the overlay down and reload every tile.
-    private func applyTileSource(to mapView: MKMapView, context: Context) {
-        guard context.coordinator.currentSource != tileSource else { return }
-        context.coordinator.currentSource = tileSource
-
-        if let existing = context.coordinator.tileOverlay {
-            mapView.removeOverlay(existing)
-            context.coordinator.tileOverlay = nil
-        }
-        if tileSource.isCacheable {
-            // Above labels so Apple's basemap labels don't bleed through the
-            // replacement imagery; data overlays added later still draw on top.
-            let overlay = CachingTileOverlay(source: tileSource)
-            mapView.addOverlay(overlay, level: .aboveLabels)
-            context.coordinator.tileOverlay = overlay
-        }
-    }
-
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
@@ -110,9 +90,8 @@ struct RocketMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: RocketMapView
         var userIsInteracting = false
-        /// Basemap overlay state, so updateUIView only swaps on real change.
-        var currentSource: TileSource?
-        var tileOverlay: MKTileOverlay?
+        /// Shared basemap overlay controller (swaps tiles only on source change).
+        let basemap = BasemapOverlayController()
 
         init(_ parent: RocketMapView) {
             self.parent = parent
@@ -200,6 +179,7 @@ struct MapView: View {
         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
     )
     @State private var hasInitializedRegion = false
+    @State private var showOfflineMaps = false
 
     /// Always reads from the latched last-valid fix (#140), not raw
     /// telemetry — so a rocket-side GPS dropout or LoRa loss can't blank
@@ -261,13 +241,18 @@ struct MapView: View {
 
             // Floating control buttons
             VStack(spacing: 12) {
-                // Map source picker (Trial 0 offline-maps A/B): Apple basemap
-                // vs. cache-permissive USGS / Esri tile overlays.
+                // Map source picker + offline downloads (shared with Drift Cast).
                 Menu {
                     Picker("Map source", selection: $tileSource) {
                         ForEach(TileSource.allCases) { src in
                             Label(src.displayName, systemImage: src.symbol).tag(src)
                         }
+                    }
+                    Divider()
+                    Button {
+                        showOfflineMaps = true
+                    } label: {
+                        Label("Manage offline maps…", systemImage: "arrow.down.circle")
                     }
                 } label: {
                     Image(systemName: "square.stack.3d.up")
@@ -310,6 +295,9 @@ struct MapView: View {
         }
         .onDisappear {
             landingPredictor.detach()
+        }
+        .sheet(isPresented: $showOfflineMaps) {
+            OfflineMapsView(suggestedCenter: region.center)
         }
     }
 
