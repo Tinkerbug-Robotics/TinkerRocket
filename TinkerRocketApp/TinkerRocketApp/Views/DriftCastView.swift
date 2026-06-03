@@ -525,7 +525,10 @@ struct Trajectory3DView: UIViewRepresentable {
 // MARK: - Main Drift Cast View
 
 struct DriftCastView: View {
-    @ObservedObject var device: BLEDevice
+    /// Optional: Reverse Drift Cast runs as a standalone wind/trajectory tool
+    /// with no live device (#42).  Only "Send to Unit" needs a connection, and
+    /// that control (DriftCastSendButton) is shown only when a device exists.
+    var device: BLEDevice?
     @Environment(\.dismiss) var dismiss
 
     // Display units (#160).  DriftCast is feet/knots-native (winds-aloft
@@ -568,8 +571,6 @@ struct DriftCastView: View {
     @State private var result: GuidanceResult?
     @State private var isComputing = false
     @State private var errorMessage: String?
-    @State private var showSendConfirm = false
-    @State private var showSentAlert = false
 
     // GPS for "Use GPS" button
     @State private var locationManager = CLLocationManager()
@@ -620,10 +621,6 @@ struct DriftCastView: View {
         return true
     }
 
-    private var canSend: Bool {
-        device.isConnected && result != nil && result!.feasible
-    }
-
     // MARK: - Body
 
     var body: some View {
@@ -648,24 +645,6 @@ struct DriftCastView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
-                }
-            }
-            .alert("Guidance Sent", isPresented: $showSentAlert) {
-                Button("OK") { }
-            } message: {
-                if let r = result {
-                    Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: ", r.guidanceLat, r.guidanceLon)
-                         + UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem) + " AGL")
-                }
-            }
-            .alert("Send to Unit?", isPresented: $showSendConfirm) {
-                Button("Send", role: .none) { sendToUnit() }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                if let r = result {
-                    Text(String(format: "Send guidance point (%.6f, %.6f) at ", r.guidanceLat, r.guidanceLon)
-                         + UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem)
-                         + String(format: " AGL to %@?", device.connectedDeviceName))
                 }
             }
         }
@@ -789,19 +768,11 @@ struct DriftCastView: View {
                 resultsSection(r)
                 windProfileSection(r.windProfile)
 
-                // Send to unit
-                Button(action: { showSendConfirm = true }) {
-                    Label("Send to Unit", systemImage: "antenna.radiowaves.left.and.right")
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(canSend ? Color.blue : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                // Send to unit — only when a device is connected (#42).  The
+                // tool itself runs standalone; uploading guidance needs a link.
+                if let device = device {
+                    DriftCastSendButton(device: device, result: r, unitSystem: unitSystem)
                 }
-                .disabled(!canSend)
-                .padding(.horizontal)
-                .padding(.bottom, 20)
             }
         }
         .padding(.top, 12)
@@ -1043,10 +1014,58 @@ struct DriftCastView: View {
         )
     }
 
+}
+
+// MARK: - Send-to-Unit Button
+
+/// Send-to-unit control for the drift cast result.  Split out so it can hold an
+/// `@ObservedObject` device — re-disabling itself the moment the BLE link drops
+/// — while the parent DriftCastView runs device-free (#42).  Only rendered when
+/// a device is present, so the standalone tool never shows a dead "Send" button.
+private struct DriftCastSendButton: View {
+    @ObservedObject var device: BLEDevice
+    let result: GuidanceResult
+    let unitSystem: UnitSystem
+
+    @State private var showSendConfirm = false
+    @State private var showSentAlert = false
+
+    private var canSend: Bool {
+        device.isConnected && result.feasible
+    }
+
+    var body: some View {
+        Button(action: { showSendConfirm = true }) {
+            Label("Send to Unit", systemImage: "antenna.radiowaves.left.and.right")
+                .fontWeight(.bold)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(canSend ? Color.blue : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+        }
+        .disabled(!canSend)
+        .padding(.horizontal)
+        .padding(.bottom, 20)
+        .alert("Send to Unit?", isPresented: $showSendConfirm) {
+            Button("Send", role: .none) { sendToUnit() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(String(format: "Send guidance point (%.6f, %.6f) at ", result.guidanceLat, result.guidanceLon)
+                 + UnitFormatter.altitude(ftToM(result.apogeeFt), system: unitSystem)
+                 + String(format: " AGL to %@?", device.connectedDeviceName))
+        }
+        .alert("Guidance Sent", isPresented: $showSentAlert) {
+            Button("OK") { }
+        } message: {
+            Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: ", result.guidanceLat, result.guidanceLon)
+                 + UnitFormatter.altitude(ftToM(result.apogeeFt), system: unitSystem) + " AGL")
+        }
+    }
+
     private func sendToUnit() {
-        guard let r = result else { return }
-        let altM = Float(ftToM(r.apogeeFt))
-        device.sendGuidancePoint(lat: r.guidanceLat, lon: r.guidanceLon, altitudeM: altM)
+        let altM = Float(ftToM(result.apogeeFt))
+        device.sendGuidancePoint(lat: result.guidanceLat, lon: result.guidanceLon, altitudeM: altM)
         showSentAlert = true
     }
 }
