@@ -15,7 +15,10 @@ import MapKit
 private final class PredictedLandingAnnotation: MKPointAnnotation {}
 
 struct RocketMapView: UIViewRepresentable {
-    @Binding var mapType: MKMapType
+    /// Trial 0 (offline maps): selectable basemap. Apple cases use the native
+    /// basemap; tile cases draw a basemap-replacing MKTileOverlay so we can A/B
+    /// cache-permissive imagery on-device. See docs/plans/offline-maps.md.
+    @Binding var tileSource: TileSource
     var rocketCoordinate: CLLocationCoordinate2D?
     var rocketSubtitle: String?
     /// Predicted landing location (issue #156).  Nil until the predictor
@@ -30,20 +33,24 @@ struct RocketMapView: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
-        mapView.mapType = mapType
+        mapView.mapType = tileSource.appleMapType
         mapView.setRegion(region, animated: false)
+        applyTileSource(to: mapView, context: context)
         return mapView
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        // Update map type when toggle changes
-        if mapView.mapType != mapType {
-            mapView.mapType = mapType
+        // Basemap: Apple mapType + optional tile overlay (Trial 0 source A/B).
+        if mapView.mapType != tileSource.appleMapType {
+            mapView.mapType = tileSource.appleMapType
         }
+        applyTileSource(to: mapView, context: context)
 
-        // Reset annotations + overlays each pass.  Cheap — a handful of objects.
+        // Reset annotations + DATA overlays each pass (cheap).  The basemap tile
+        // overlay is managed separately above so it isn't torn down/reloaded on
+        // every telemetry tick.
         mapView.removeAnnotations(mapView.annotations)
-        mapView.removeOverlays(mapView.overlays)
+        mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
 
         if let coordinate = rocketCoordinate {
             let annotation = MKPointAnnotation()
@@ -76,6 +83,25 @@ struct RocketMapView: UIViewRepresentable {
         }
     }
 
+    /// Add/swap/remove the basemap tile overlay to match `tileSource`, only when
+    /// it actually changes — so panning and per-tick telemetry updates don't tear
+    /// the overlay down and reload every tile.
+    private func applyTileSource(to mapView: MKMapView, context: Context) {
+        guard context.coordinator.currentSource != tileSource else { return }
+        context.coordinator.currentSource = tileSource
+
+        if let existing = context.coordinator.tileOverlay {
+            mapView.removeOverlay(existing)
+            context.coordinator.tileOverlay = nil
+        }
+        if let overlay = tileSource.makeOverlay() {
+            // Above labels so Apple's basemap labels don't bleed through the
+            // replacement imagery; data overlays added later still draw on top.
+            mapView.addOverlay(overlay, level: .aboveLabels)
+            context.coordinator.tileOverlay = overlay
+        }
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
@@ -83,6 +109,9 @@ struct RocketMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: RocketMapView
         var userIsInteracting = false
+        /// Basemap overlay state, so updateUIView only swaps on real change.
+        var currentSource: TileSource?
+        var tileOverlay: MKTileOverlay?
 
         init(_ parent: RocketMapView) {
             self.parent = parent
@@ -140,6 +169,9 @@ struct RocketMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView,
                      rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let tile = overlay as? MKTileOverlay {
+                return MKTileOverlayRenderer(tileOverlay: tile)
+            }
             if let line = overlay as? MKPolyline,
                line.title == "predicted-descent" {
                 let r = MKPolylineRenderer(polyline: line)
@@ -161,7 +193,7 @@ struct MapView: View {
 
     @StateObject private var landingPredictor = LandingPredictor()
 
-    @State private var mapType: MKMapType = .hybrid
+    @State private var tileSource: TileSource = .appleHybrid
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.334_900, longitude: -122.009_020),
         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
@@ -183,7 +215,7 @@ struct MapView: View {
             // would freeze at whatever it was on the most recent re-render.
             TimelineView(.periodic(from: .now, by: 1.0)) { context in
                 RocketMapView(
-                    mapType: $mapType,
+                    tileSource: $tileSource,
                     rocketCoordinate: rocketCoordinate,
                     rocketSubtitle: markerSubtitle(now: context.date),
                     predictedLandingCoordinate: landingPredictor.prediction?.landing,
@@ -206,14 +238,38 @@ struct MapView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
 
+            // Trial 0: active source + attribution, so the on-device A/B is
+            // unambiguous about which provider is rendering.
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tileSource.displayName)
+                    .font(.caption.bold())
+                if let attr = tileSource.attribution {
+                    Text(attr)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.ultraThinMaterial)
+            .cornerRadius(8)
+            .shadow(radius: 2)
+            .padding(.leading, 12)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
             // Floating control buttons
             VStack(spacing: 12) {
-                // Map type toggle
-                Button(action: {
-                    mapType = (mapType == .standard) ? .hybrid : .standard
-                }) {
-                    Image(systemName: mapType == .standard
-                          ? "globe.americas.fill" : "map.fill")
+                // Map source picker (Trial 0 offline-maps A/B): Apple basemap
+                // vs. cache-permissive USGS / Esri tile overlays.
+                Menu {
+                    Picker("Map source", selection: $tileSource) {
+                        ForEach(TileSource.allCases) { src in
+                            Label(src.displayName, systemImage: src.symbol).tag(src)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "square.stack.3d.up")
                         .font(.system(size: 20))
                         .foregroundColor(.primary)
                         .frame(width: 44, height: 44)
