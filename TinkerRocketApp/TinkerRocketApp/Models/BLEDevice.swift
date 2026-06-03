@@ -93,6 +93,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// pushed its identity yet or is running pre-#8 firmware (no "fw" field).
     @Published var firmwareVersion: String = ""
 
+    /// Flight Computer firmware version, relayed by the OUT computer from the FC
+    /// over I2C (config "fc_identity" / "fc_fw"; #8 Phase 4). Same format as
+    /// `firmwareVersion`. Empty until the OC has relayed it (or "unknown" if the
+    /// OC can't reach the FC). For an *FC*-targeted OTA, rollback detection must
+    /// compare THIS — the connected device's `firmwareVersion` is the OC's and
+    /// never changes when only the FC is updated.
+    @Published var fcFirmwareVersion: String = ""
+
     /// Latest OTA status frame from the device (#8 phase 2). Driven by
     /// ota_status JSON notifications on the file-ops characteristic.
     /// nil between sessions; OTASession observes this to advance its
@@ -1320,6 +1328,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             if let fw = dict["fw"] as? String { firmwareVersion = fw }
             print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue) fw=\(firmwareVersion)")
+            return
+        }
+
+        // FC identity readback: "type":"fc_identity" — the Flight Computer's own
+        // firmware version, relayed by the OUT computer over I2C (#8 Phase 4).
+        // A separate small message so it stays well under the BLE notify MTU.
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "fc_identity" {
+            if let fcFw = dict["fc_fw"] as? String { fcFirmwareVersion = fcFw }
+            print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion)")
             return
         }
 

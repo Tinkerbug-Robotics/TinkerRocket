@@ -34,6 +34,7 @@ private struct FirmwareUpdateContent: View {
     @State private var pickedFileURL: URL?
     @State private var pickedFileSize: Int = 0
     @State private var pickedFileName: String = ""
+    @State private var targetIsFC = false   // #14: relay the OTA to the Flight Computer via the OC
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -45,6 +46,15 @@ private struct FirmwareUpdateContent: View {
                 LabeledRow(label: "Firmware",
                            value: device.firmwareVersion.isEmpty ? "(pre-#8 image)" : device.firmwareVersion,
                            mono: true)
+                // FC firmware is relayed by the OC (#8 Phase 4). Show it when
+                // targeting the FC so the user can watch it flip after an update
+                // (or stay put on a rollback) — the OC's own version above never
+                // changes on an FC-only OTA.
+                if targetIsFC && !device.isBaseStation {
+                    LabeledRow(label: "FC firmware",
+                               value: device.fcFirmwareVersion.isEmpty ? "(awaiting relay…)" : device.fcFirmwareVersion,
+                               mono: true)
+                }
                 LabeledRow(label: "Connection", value: device.isConnected ? "Connected" : "Disconnected")
             }
 
@@ -70,6 +80,21 @@ private struct FirmwareUpdateContent: View {
                 .disabled(isInProgress)
             }
 
+            // ----- Target picker (#14) -----
+            // A rocket's BLE peer is the Out Computer, which can relay an OTA
+            // over the OC↔FC link to the Flight Computer. (The Base Station has
+            // no FC, so it only ever flashes itself.)
+            if !device.isBaseStation {
+                GroupBox("Target") {
+                    Picker("Target", selection: $targetIsFC) {
+                        Text("This device").tag(false)
+                        Text("Flight Computer").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(isInProgress)
+                }
+            }
+
             // ----- Action / status block -----
             statusBlock
 
@@ -93,15 +118,7 @@ private struct FirmwareUpdateContent: View {
     private var statusBlock: some View {
         switch session.state {
         case .idle:
-            Button(action: startFlash) {
-                HStack {
-                    Image(systemName: "arrow.up.circle.fill")
-                    Text("Flash \(device.displayName)")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(pickedFileURL == nil || !device.isConnected)
+            flashButton
 
         case .loading:
             ProgressView("Reading file + computing SHA…")
@@ -140,7 +157,7 @@ private struct FirmwareUpdateContent: View {
                 }
                 LabeledRow(label: "Previous", value: session.preFlashFirmwareVersion, mono: true)
                 LabeledRow(label: "Now running", value: newVersion, mono: true)
-                flashAnotherButton
+                flashButton
             }
 
         case .rollbackDetected(let version):
@@ -151,7 +168,7 @@ private struct FirmwareUpdateContent: View {
                 }
                 Text("Device reconnected but is still running the previous firmware (\(version)). The new image likely failed to boot — bootloader auto-reverted to the prior partition.")
                     .font(.subheadline).foregroundColor(.secondary)
-                flashAnotherButton
+                flashButton
             }
 
         case .failed(let reason):
@@ -161,27 +178,32 @@ private struct FirmwareUpdateContent: View {
                     Text("Failed").font(.headline)
                 }
                 Text(reason).font(.subheadline).foregroundColor(.secondary)
-                flashAnotherButton
+                flashButton
             }
         }
     }
 
-    private var flashAnotherButton: some View {
-        Button(action: resetForNextFlash) {
+    // The Flash action, shown in .idle and (greyed) in the terminal states.
+    // After a result it's disabled — choosing a file (which re-arms the
+    // session, see handleFileImport) is the explicit way to start the next
+    // flash, so there's no separate "flash another firmware" reset button.
+    private var flashButton: some View {
+        Button(action: startFlash) {
             HStack {
-                Image(systemName: "arrow.clockwise")
-                Text("Flash another firmware")
+                Image(systemName: "arrow.up.circle.fill")
+                Text(targetIsFC ? "Flash Flight Computer" : "Flash \(device.displayName)")
             }
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.bordered)
-        .padding(.top, 4)
+        .buttonStyle(.borderedProminent)
+        .disabled(pickedFileURL == nil || !device.isConnected || isTerminalState)
     }
 
-    private func resetForNextFlash() {
-        session.reset()
-        pickedFileURL = nil
-        pickedFileName = ""
-        pickedFileSize = 0
+    private var isTerminalState: Bool {
+        switch session.state {
+        case .verified, .rollbackDetected, .failed: return true
+        default: return false
+        }
     }
 
     private var cancelButton: some View {
@@ -215,6 +237,9 @@ private struct FirmwareUpdateContent: View {
             } else {
                 pickedFileSize = 0
             }
+            // Re-arm after a completed/failed run: clearing the terminal state
+            // back to .idle re-enables the Flash button for this new file.
+            if isTerminalState { session.reset() }
         case .failure(let error):
             print("File picker error: \(error)")
         }
@@ -222,7 +247,7 @@ private struct FirmwareUpdateContent: View {
 
     private func startFlash() {
         guard let url = pickedFileURL else { return }
-        session.start(fileURL: url)
+        session.start(fileURL: url, targetIsFC: targetIsFC)
     }
 
     private func byteCountString(_ bytes: Int) -> String {

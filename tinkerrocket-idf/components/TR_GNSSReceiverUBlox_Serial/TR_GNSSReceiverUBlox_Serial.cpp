@@ -99,7 +99,8 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         ESP_LOGI(TAG, "Pulsed RESET_N on pin %d", reset_n_pin);
     };
 
-    auto hasSerialActivity = [&](uint8_t rx_pin, uint8_t tx_pin, uint32_t baud) -> bool
+    auto hasSerialActivity = [&](uint8_t rx_pin, uint8_t tx_pin, uint32_t baud,
+                                 uint32_t window_ms = 400U) -> bool
     {
         uartBegin(baud, rx_pin, tx_pin);
 
@@ -113,7 +114,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         }
 
         const uint32_t activity_window_start = millis();
-        while ((millis() - activity_window_start) < 400U)
+        while ((millis() - activity_window_start) < window_ms)
         {
             if (uartAvailable() > 0)
             {
@@ -187,6 +188,25 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         active_tx = GNSS_TX;
     }
 
+    // Warm-boot fast path for swapped-wiring boards: the module persists its
+    // configured baud (preferred_baud) across resets, so a swapped rev comes
+    // up already at preferred_baud on the swapped pins. Try that before the
+    // 9600 orientation probe + full sweep — otherwise the sweep crawls
+    // 9600→…→preferred (~30 s) even though the orientation was found quickly.
+    if (connected_baud == 0U && GNSS_RX != GNSS_TX)
+    {
+        ESP_LOGI(TAG, "Bootstrap try %lu baud on swapped RX/TX", (unsigned long)bootstrap_baud);
+        uartBegin(bootstrap_baud, GNSS_TX, GNSS_RX);
+        delay(80);
+        if (gnss.begin(_uartPort, 800))
+        {
+            connected_baud = preferred_baud;
+            active_rx = GNSS_TX;
+            active_tx = GNSS_RX;
+            ESP_LOGW(TAG, "Bootstrap: connected at %lu baud on swapped RX/TX", (unsigned long)preferred_baud);
+        }
+    }
+
     // Fast cold-boot orientation probe: u-blox modules power up at 9600 baud
     // (factory default). A ~650 ms listen at 9600 on each orientation finds
     // which way the RX/TX is wired and short-circuits the slow ~30 s
@@ -199,11 +219,18 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         bool    detected = false;
         bool    swapped  = false;
 
-        if (hasSerialActivity(GNSS_RX, GNSS_TX, 9600U))
+        // u-blox modules power up at 9600 baud / 1 Hz output, so the listen
+        // window must exceed one full output period (~1 s) to catch a burst
+        // regardless of phase. A 400 ms window missed it intermittently and
+        // dropped boot into the ~30 s full baud scan (bench 2026-05-29). Probe
+        // the schematic orientation first, then the swapped wiring — both rev's
+        // now detect reliably in one or two ~1.2 s windows instead of ~35 s.
+        const uint32_t kOrientationProbeMs = 1200U;
+        if (hasSerialActivity(GNSS_RX, GNSS_TX, 9600U, kOrientationProbeMs))
         {
             detected = true;
         }
-        else if ((GNSS_RX != GNSS_TX) && hasSerialActivity(GNSS_TX, GNSS_RX, 9600U))
+        else if ((GNSS_RX != GNSS_TX) && hasSerialActivity(GNSS_TX, GNSS_RX, 9600U, kOrientationProbeMs))
         {
             detected = true;
             swapped  = true;

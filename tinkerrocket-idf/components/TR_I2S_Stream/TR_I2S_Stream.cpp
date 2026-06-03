@@ -7,12 +7,24 @@ static const char* TAG = "I2S_STREAM";
 
 TR_I2S_Stream::~TR_I2S_Stream()
 {
+    end();
+}
+
+void TR_I2S_Stream::end()
+{
     if (chan_handle_)
     {
         i2s_channel_disable(chan_handle_);
         i2s_del_channel(chan_handle_);
         chan_handle_ = nullptr;
     }
+    // Reset role/callback state so a subsequent beginMasterTx()/beginSlaveRx()
+    // + registerRecvCallback() starts from a clean slate (the callback was
+    // bound to the now-deleted channel).
+    recv_cb_        = nullptr;
+    recv_cb_ctx_    = nullptr;
+    is_tx_          = false;
+    frame_sync_pin_ = -1;
 }
 
 // ────────────────────────────────────────────────────────────────────

@@ -21,5 +21,33 @@ endif()
 # Exclude BLE and LoRa components not used by FlightComputer
 list(APPEND EXCLUDE_COMPONENTS TR_BLE_To_APP TR_LoRa_Comms TR_INA230)
 
+# Embed git short-sha + build timestamp into the firmware image header
+# (esp_app_desc.version), max 32 chars. Read at runtime via
+# esp_app_get_description()->version and reported as the "fw" field so the OTA
+# flow can verify the running FC image — the OC relays it up over BLE (#8 §7).
+# (Separate from the FW_GIT_SHA compile-def in main/CMakeLists.txt, which feeds
+# the per-flight settings snapshot.)
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE TR_GIT_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT TR_GIT_SHA)
+    set(TR_GIT_SHA "unknown")
+endif()
+execute_process(
+    COMMAND git diff-index --quiet HEAD --
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE TR_GIT_DIRTY_CODE
+    OUTPUT_QUIET ERROR_QUIET
+)
+if(NOT TR_GIT_DIRTY_CODE EQUAL 0)
+    set(TR_GIT_SHA "${TR_GIT_SHA}-dirty")
+endif()
+string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
+set(PROJECT_VER "${TR_GIT_SHA}+${TR_BUILD_DATE}")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(flight_computer)

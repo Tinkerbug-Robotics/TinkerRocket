@@ -1445,6 +1445,61 @@ static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
 // high-water mark per flight).  See LogBufferStatsData.
 static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;
 
+// --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
+// Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
+// (with the OTA_BEGIN_MSG payload) / OTA_FINISH_CMD / OTA_ABORT_CMD as
+// pending commands, the FC pulls them on its poll. The FC reports progress
+// back over I2S via OTA_STATUS_MSG (Layer 2). The image bytes themselves
+// travel over the reconfigured I2S link (Phase 4 Layer 3), not here.
+static constexpr uint8_t OTA_BEGIN_PENDING   = 0xE3;  // OC→FC: OTA_BEGIN_MSG payload follows
+static constexpr uint8_t OTA_BEGIN_MSG       = 0xE4;  // [size:4 LE][sha256:32] = 36 bytes
+static constexpr uint8_t OTA_FINISH_CMD      = 0xE5;  // OC→FC: finalize + verify + reboot
+static constexpr uint8_t OTA_ABORT_CMD       = 0xE6;  // OC→FC: abort session
+static constexpr uint8_t OTA_STATUS_MSG      = 0xE7;  // FC→OC: OtaRelayStatusData. Rides I2S in
+                                                      // Layer 2; once the link flips for the image
+                                                      // pump it rides I2C instead (FC master write).
+// Image-pump frame (Layer 3): OC→FC over the *flipped* I2S link (OC master TX,
+// FC slave RX). Payload = [offset:4 LE][image bytes:N]; the FC writes each by
+// offset, ignoring stale-repeat offsets (< bytes_written) so an I2S underrun
+// that replays a DMA buffer can't corrupt the image. 0xE8-0xEA are sensor cal.
+static constexpr uint8_t OTA_DATA_CHUNK      = 0xEB;
+
+// FC→OC: firmware version string (null-terminated, <=31 chars), pushed by the
+// FC every ~2 s over I2C. The OC caches it and relays it to the app as a small
+// "fc_identity" config JSON. Lets the app detect a *FC* OTA rollback by comparing
+// the FC's real running version — the OC's own "fw" never changes on an FC-only
+// update, which is why the connected-device version check false-positived (#8).
+static constexpr uint8_t FC_IDENTITY         = 0xEC;
+
+// I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
+// Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
+// real bottleneck, and the FC writes each received frame to flash (~2-3 ms/frame)
+// with its I2S RX effectively blind during that write.  At a fast BCLK the OC's
+// per-chunk burst outruns the FC: the frames after the first arrive while it's
+// mid-flash-write and are dropped, and the forward-only pump can't resend them
+// (bench 2026-05-31: stuck at bytes_written=212, every later frame logged as a
+// "gap").  ~50 KB/s spaces frames ~4 ms apart — longer than one flash write — so
+// the FC catches every frame, while still far exceeding the BLE feed rate.  Both
+// OC and FC read this one constant so the master/slave clock can't drift.
+// Bench-tunable (#15); the doc's 2.5 MHz target assumed I2S was the bottleneck.
+static constexpr uint32_t OTA_I2S_SAMPLE_RATE_HZ = 12500;  // ~50 KB/s, ~400 kHz BCLK
+
+// OtaRelayStatusData.state values (FC→OC). The OC maps these to the iOS
+// ota_status JSON strings it already sends for local (OC/BS) OTA.
+static constexpr uint8_t OTA_RELAY_READY         = 1;  // begin OK, ota_1 erased, ready for image
+static constexpr uint8_t OTA_RELAY_WRITING       = 2;  // receiving image (Layer 3)
+static constexpr uint8_t OTA_RELAY_READY_TO_BOOT = 3;  // verified, rebooting (Layer 3)
+static constexpr uint8_t OTA_RELAY_VERIFY_FAILED = 4;  // begin/verify error (see err)
+static constexpr uint8_t OTA_RELAY_ABORTED       = 5;  // session aborted
+static constexpr uint8_t OTA_RELAY_DATA_READY    = 6;  // FC flipped to I2S slave-RX; OC may start
+                                                       // the image pump (Layer 3 flip handshake)
+
+struct __attribute__((packed)) OtaRelayStatusData {
+    uint8_t  state;          // OTA_RELAY_* above
+    uint8_t  err;            // 0 = none; else TR_OTA_Receiver::Error code
+    uint32_t bytes_written;  // progress / final size
+};
+
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
 // Camera types

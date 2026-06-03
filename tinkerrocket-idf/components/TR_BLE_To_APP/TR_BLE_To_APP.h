@@ -263,6 +263,19 @@ private:
     // task, read on the main loop task.
     volatile bool ota_session_active_ = false;
 
+    // ---- OTA relay delegate (#8 Phase 4, OC only) --------------------------
+    // When set, an OTA_BEGIN with target==1 is relayed to the FC over I2C (the
+    // handlers below invoke these) instead of flashing this device. BS leaves
+    // them null → target==1 returns bad_target. Invoked on the NimBLE host task.
+    void (*ota_relay_begin_cb_)(void* ctx, uint32_t total_size, const uint8_t* sha256) = nullptr;
+    void (*ota_relay_finish_cb_)(void* ctx) = nullptr;
+    void (*ota_relay_abort_cb_)(void* ctx) = nullptr;
+    // Image chunk handler (Phase 4 Layer 3): the OC pumps each relayed chunk to
+    // the FC over the flipped I2S link. offset is the absolute byte offset.
+    void (*ota_relay_data_cb_)(void* ctx, uint32_t offset, const uint8_t* data, size_t len) = nullptr;
+    void* ota_relay_ctx_ = nullptr;
+    bool  ota_relay_active_ = false;  // a target==1 relay session is in progress
+
     void onFileTransferWrite(const uint8_t* data, size_t length);
     void handleOtaBegin(const uint8_t* data, size_t length);
     void handleOtaFinish();
@@ -273,6 +286,20 @@ private:
                                    TR_OTA_Receiver::Error err, size_t bytes_written);
 
 public:
+    // ---- OTA relay wiring (#8 Phase 4, OC only) ----------------------------
+    // The OC registers callbacks that relay OTA_BEGIN/FINISH/ABORT to the FC
+    // over I2C. relayFcOtaStatus() pushes the FC's status (already mapped to
+    // the ota_status JSON vocabulary) back up to the app and ends the relay
+    // session on a terminal state. BS never registers → target==1 = bad_target.
+    void setOtaRelayDelegate(void (*begin_cb)(void*, uint32_t, const uint8_t*),
+                             void (*finish_cb)(void*),
+                             void (*abort_cb)(void*),
+                             void (*data_cb)(void*, uint32_t, const uint8_t*, size_t),
+                             void* ctx);
+    bool isOtaRelayActive() const { return ota_relay_active_; }
+    void relayFcOtaStatus(const char* state, const char* err,
+                          uint32_t bytes_written, bool terminal);
+
     // ---- NimBLE callbacks (static, forwarded via user-data pointer) --------
     static int  gap_event_cb(struct ble_gap_event* event, void* arg);
     static int  gatt_svc_access_cb(uint16_t conn_handle, uint16_t attr_handle,

@@ -147,6 +147,19 @@ public:
      */
     int readFrameSync() const;
 
+    /**
+     * Tear down the channel so the object can be re-initialised in a
+     * different role (e.g. flipping OC slave-RX <-> master-TX for the Phase 4
+     * OTA image pump). Disables + deletes the I2S channel, clears the recv
+     * callback, and resets to the uninitialised state. Safe to call when not
+     * initialised (no-op). After end() a fresh beginMasterTx()/beginSlaveRx()
+     * (and registerRecvCallback() for RX) may be called.
+     *
+     * Must run in task context (not ISR) — i2s_channel_disable/del_channel
+     * take the driver mutex.
+     */
+    void end();
+
     /** True if beginMasterTx() or beginSlaveRx() succeeded. */
     bool isInitialized() const { return chan_handle_ != nullptr; }
 

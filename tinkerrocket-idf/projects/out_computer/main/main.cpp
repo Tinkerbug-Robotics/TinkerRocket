@@ -15,6 +15,7 @@
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "freertos/queue.h"
+#include "freertos/semphr.h"    // oc_i2s_mutex for the Phase 4 Layer 3 I2S flip
 #include "host/ble_gap.h"       // ble_gap_update_params
 
 // Nimble's os.h (pulled in by host/ble_gap.h) defines `max` and `min` as
@@ -636,6 +637,14 @@ static uint32_t ready_entry_ms    = 0;
 
 static OutStatusQueryData last_query_cfg = {};
 
+// FC firmware version, relayed from the FC via FC_IDENTITY (#8 Phase 4). Cached
+// here so the OC can publish it to the app as a "fc_identity" config message,
+// letting the app verify an FC OTA / detect a rollback against the FC's *own*
+// version (the OC's "fw" never changes on an FC-only update). Re-published when
+// it changes mid-connection (an FC OTA never drops the OC<->app BLE link).
+static char          fc_fw_version[40]  = {0};
+static volatile bool fc_identity_dirty  = false;
+
 static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
 {
     return (flags & mask) != 0U;
@@ -1082,7 +1091,8 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
            cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
-           cmd == SENSOR_CAL_APPLY_PENDING;    // #132: app-pushed sensor cal payload
+           cmd == SENSOR_CAL_APPLY_PENDING ||  // #132: app-pushed sensor cal payload
+           cmd == OTA_BEGIN_PENDING;           // #8 Phase 4: FC OTA image header
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -1192,6 +1202,254 @@ static void queueOutStatusResponse(bool ready)
     }
 }
 
+// ---- OTA relay to the Flight Computer (#8 Phase 4) ------------------------
+// TR_BLE_To_APP invokes these when an OTA_BEGIN/FINISH/ABORT with target==1
+// arrives over BLE. We stage the matching command (+ the 36-byte image header
+// for BEGIN) for the FC to pull on its next I2C poll — identical delivery to
+// servo/sim config. The FC reports progress back over I2S (OTA_STATUS_MSG),
+// relayed to BLE by the frame processor. (Image bytes are Phase 4 Layer 3.)
+// OTA relay status dedupe (#8 Phase 4): the FC resends each OTA status ~8x over
+// ~1.4s to survive the I2S dedup storm during its flash erase
+// (sendOtaRelayStatusRobust on the FC). That FC->OC (I2S) hop is lossy so the
+// resend is needed there, but the OC->app (BLE/GATT) hop is reliable — relaying
+// every copy just spams the app with identical notifications. Track the last
+// relayed status and collapse identical (state,err,bytes) runs into a single
+// notify; WRITING progress (Layer 3) still flows because bytes_written advances
+// each tick. Reset at session start so a new session's first status always
+// relays even if it matches the prior session's terminal status.
+static uint8_t  last_relay_state_ = 0xFF;
+static uint8_t  last_relay_err_   = 0xFF;
+static uint32_t last_relay_bytes_ = 0xFFFFFFFFu;
+
+// --- Phase 4 Layer 3: OC side of the I2S image pump --------------------------
+// During an FC OTA the OC flips its I2S slave-RX link (normal FC->OC telemetry)
+// to master-TX, pumps the image to the FC as OTA_DATA_CHUNK frames, then reverts
+// to slave-RX so the FC's terminal status (READY_TO_BOOT / VERIFY_FAILED) comes
+// back over the normal-direction link. i2s_stream is touched by loop_oc (the
+// flip/revert) and the BLE host task (ocOtaRelayData pump), so oc_i2s_mutex
+// serializes them. Flip is triggered by OTA_RELAY_READY; revert by FINISH/ABORT.
+static SemaphoreHandle_t oc_i2s_mutex = nullptr;
+static volatile bool oc_ota_tx_mode = false;                // flipped to master TX
+static volatile bool oc_ota_await_flip = false;             // READY seen; waiting for the FC to go quiet
+static volatile bool oc_ota_relay_ready_pending = false;    // relay "ready" to app once flipped to TX
+static volatile bool oc_ota_revert_to_rx_requested = false; // set on FINISH/ABORT staged
+static uint32_t oc_ota_frames_pumped = 0;                   // diag: frames enqueued by relay cb
+static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the feeder wrote to I2S
+static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
+static uint32_t oc_ota_silence_ref_count = 0;               // dma_cb_count snapshot for silence detect
+static uint32_t oc_ota_silence_since_ms  = 0;               // when RX last went quiet
+static uint32_t oc_ota_warmup_since_ms   = 0;               // post-flip RX-lock warmup start (0 = inactive)
+static uint32_t oc_ota_total_size = 0;                      // image size (diag)
+// OC->FC image pump. The BLE callback enqueues image frames here; a dedicated
+// feeder task (ocOtaTxFeederTask) is the SOLE I2S writer while flipped to master
+// TX, writing idle-fill in the gaps between BLE chunks. This is essential: I2S
+// master clocks continuously, so any gap in writes makes the DMA replay its last
+// buffer — the FC then sees a relentless stream of duplicate frames, its RX ring
+// overflows (bench 2026-06-01: ring_ovf=1.37M, transfer stalled at 714 B), and
+// that corruption shreds the real in-order frames too. This mirrors the FC's own
+// i2sSenderTask, whose comment already documents exactly this replay hazard.
+struct OcOtaTxFrame { uint8_t payload[MAX_PAYLOAD]; uint16_t len; };
+static QueueHandle_t oc_ota_tx_queue    = nullptr;
+static TaskHandle_t  oc_ota_feeder_task = nullptr;
+// We must not drive BCLK as master until the FC has released it (flipped to its
+// own slave RX). The FC keeps the link active (idle-fill) right up until it
+// flips, so "I2S RX has gone quiet for this long" is a robust signal that the
+// FC is now in slave RX — more reliable than a fixed delay coupled to the FC's
+// READY-resend duration. The exact window is a bench item (#15).
+static constexpr uint32_t OTA_FLIP_SILENCE_MS = 500;
+
+// After flipping to master TX, idle-fill this long before telling the app it may
+// pump real image data, so the FC's slave RX locks onto the just-started master
+// BCLK first. Offset 0 pumped into a not-yet-locked RX is lost, and the
+// forward-only receiver never recovers (bench 2026-06-02: frames_ok=0, every
+// frame "gap", finish err=7). Generous vs the observed ~tens-of-ms lock; the OTA
+// itself is ~15 s so the cost is negligible. Bench-tunable (#15).
+static constexpr uint32_t OTA_RX_WARMUP_MS = 150;
+
+static bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user_ctx);  // defined below
+
+// Flip slave-RX -> master-TX for the image pump. Runs in loop_oc once the FC's
+// I2S TX has gone quiet (it has flipped to slave RX), so there's no contention.
+static void ocFlipToTx()
+{
+    if (oc_ota_tx_mode || oc_i2s_mutex == nullptr) return;
+    xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+    i2s_stream.end();
+    const esp_err_t e = i2s_stream.beginMasterTx(config::I2S_BCLK_PIN,
+                                                 config::I2S_WS_PIN,
+                                                 config::I2S_DIN_PIN,   // former DIN now drives DOUT
+                                                 -1,                    // no frame-sync for OTA
+                                                 OTA_I2S_SAMPLE_RATE_HZ,
+                                                 4, 64);
+    oc_ota_tx_mode = (e == ESP_OK);
+    xSemaphoreGive(oc_i2s_mutex);
+    ESP_LOGW("OC", "OTA relay: I2S -> master TX for image pump (%s)", esp_err_to_name(e));
+}
+
+// Revert master-TX -> slave-RX (normal telemetry + OTA status path). loop_oc.
+static void ocRevertToRx()
+{
+    if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr) return;
+    // Settle before tearing down TX: let the last pumped image frames fully
+    // clock out of the DMA to the FC (a few ms at the OTA BCLK), and catch any
+    // chunk that arrived just after FINISH (oc_ota_tx_mode is still true here,
+    // so a late ocOtaRelayData still pumps). The FC's FINISH handler separately
+    // waits for its byte count to reach the total, covering parse lag.
+    vTaskDelay(pdMS_TO_TICKS(100));
+    xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+    i2s_stream.end();
+    const esp_err_t e = i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
+                                                config::I2S_WS_PIN,
+                                                config::I2S_DIN_PIN,
+                                                config::I2S_FSYNC_PIN,
+                                                config::I2S_SAMPLE_RATE,
+                                                4, 64);
+    if (e == ESP_OK)
+        i2s_stream.registerRecvCallback(i2sRecvCallback, nullptr);
+    oc_ota_tx_mode = false;
+    xSemaphoreGive(oc_i2s_mutex);
+    ESP_LOGW("OC", "OTA relay: I2S -> slave RX (%s)", esp_err_to_name(e));
+}
+
+// Pump one relayed BLE chunk to the FC. Splits into <= (MAX_PAYLOAD-4)-byte
+// OTA_DATA_CHUNK frames, each prefixed with its absolute offset so the FC writes
+// in order and skips stale-repeat offsets from an I2S underrun. BLE host task;
+// oc_i2s_mutex serializes vs the loop_oc flip/revert.
+static void ocOtaRelayData(void* /*ctx*/, uint32_t offset, const uint8_t* data, size_t len)
+{
+    if (!oc_ota_tx_mode || oc_ota_tx_queue == nullptr)
+    {
+        ESP_LOGW("OC", "OTA relay: chunk @%u dropped — I2S not in TX mode", (unsigned)offset);
+        return;
+    }
+    static constexpr size_t kMaxImg = MAX_PAYLOAD - 4;   // 4-byte offset header
+    size_t sent = 0;
+    while (sent < len)
+    {
+        OcOtaTxFrame f;
+        const size_t n = (len - sent > kMaxImg) ? kMaxImg : (len - sent);
+        const uint32_t off = offset + (uint32_t)sent;
+        memcpy(f.payload, &off, 4);
+        memcpy(f.payload + 4, data + sent, n);
+        f.len = (uint16_t)(4 + n);
+        // The very first frame (offset 0) is reliably lost to the I2S master-TX
+        // startup transient on the FC's slave RX: bench 2026-06-01 showed the
+        // whole 578 KB image streaming in order EXCEPT offset 0, so writeChunk
+        // never started and every later frame was rejected as "ahead of have=0".
+        // Resend offset 0 a few times back-to-back; the FC writes whichever copy
+        // lands first and skips the rest (offset < bytesWritten -> benign gap).
+        // Mirrors the #165 critical-one-shot-frame resend. The image streams
+        // cleanly after the first frame, so only offset 0 needs this.
+        const int copies = (off == 0) ? 5 : 1;
+        for (int c = 0; c < copies; ++c)
+        {
+            // Block (back-pressure BLE) if the feeder is briefly behind; it drains
+            // far faster than BLE delivers, so this should not actually wait. The
+            // long timeout is only a safety valve against a BLE-host-task hang.
+            if (xQueueSend(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1000)) != pdTRUE)
+            {
+                ESP_LOGW("OC", "OTA relay: TX queue full, dropped frame @%u", (unsigned)off);
+                return;
+            }
+            oc_ota_frames_pumped++;
+        }
+        sent += n;
+    }
+}
+
+// Sole I2S writer while flipped to master TX. Drains the image-frame queue and
+// writes idle-fill zeros in the gaps so the I2S DMA never replays a stale buffer
+// (see OcOtaTxFrame comment). Idles harmlessly outside TX mode. Mirrors the FC's
+// i2sSenderTask. The per-iteration mutex serialises against ocFlipToTx /
+// ocRevertToRx (which recreate the channel) — the double-checked oc_ota_tx_mode
+// guarantees we never writeFrame into a torn-down channel.
+static void ocOtaTxFeederTask(void *)
+{
+    OcOtaTxFrame f;
+    for (;;)
+    {
+        // Back off the bus once a revert is requested so ocRevertToRx() (in loop_oc,
+        // LOWER priority) can take oc_i2s_mutex to tear down TX — while we keep
+        // re-grabbing it at higher priority the revert never wins (bench: deadlock,
+        // idle-filled forever). BUT only back off after the queue is DRAINED: the app
+        // sends FINISH right after the last data chunk, so the image tail can still be
+        // queued here; backing off immediately stranded it (bench: FC 1 frame short ->
+        // SizeMismatch). Drain the tail first, then yield; we just stop idle-filling.
+        const bool revert_drained =
+            oc_ota_revert_to_rx_requested &&
+            (oc_ota_tx_queue == nullptr || uxQueueMessagesWaiting(oc_ota_tx_queue) == 0);
+        if (!oc_ota_tx_mode || oc_i2s_mutex == nullptr || revert_drained)
+        {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
+        xSemaphoreTake(oc_i2s_mutex, portMAX_DELAY);
+        if (!oc_ota_tx_mode)            // flipped back to RX while we waited for the mutex
+        {
+            xSemaphoreGive(oc_i2s_mutex);
+            continue;
+        }
+        if (oc_ota_tx_queue != nullptr &&
+            xQueueReceive(oc_ota_tx_queue, &f, pdMS_TO_TICKS(1)) == pdTRUE)
+        {
+            (void)i2s_stream.writeFrame(OTA_DATA_CHUNK, f.payload, f.len);
+            oc_ota_feed_sent++;
+        }
+        else
+        {
+            (void)i2s_stream.writeIdleFill(64, 1);   // keep BCLK fed; no stale replay
+            oc_ota_feed_idle++;
+        }
+        xSemaphoreGive(oc_i2s_mutex);
+        // Diag (~every 512 writes): is the app actually feeding image frames, or are
+        // we only emitting idle-fill?  enq==0/sent==0 -> the app's BLE data never
+        // reached ocOtaRelayData (routing/app). sent>0 while the FC sees nothing ->
+        // loss on the I2S link / FC RX. This is the step neither log showed before.
+        if (((oc_ota_feed_sent + oc_ota_feed_idle) & 0x1FFu) == 0u)
+            ESP_LOGW("OC", "[OTA feed] enq=%u sent=%u idle=%u qdepth=%u",
+                     (unsigned)oc_ota_frames_pumped, (unsigned)oc_ota_feed_sent,
+                     (unsigned)oc_ota_feed_idle,
+                     (unsigned)(oc_ota_tx_queue ? uxQueueMessagesWaiting(oc_ota_tx_queue) : 0u));
+    }
+}
+
+static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* sha256)
+{
+    static_assert(sizeof(pending_config_data) >= 4 + 32,
+                  "pending_config_data too small for the OTA_BEGIN_MSG payload");
+    last_relay_state_ = 0xFF;
+    last_relay_err_   = 0xFF;
+    last_relay_bytes_ = 0xFFFFFFFFu;
+    oc_ota_frames_pumped          = 0;
+    oc_ota_feed_sent              = 0;
+    oc_ota_feed_idle              = 0;
+    oc_ota_await_flip             = false;
+    oc_ota_relay_ready_pending    = false;
+    oc_ota_warmup_since_ms        = 0;
+    oc_ota_revert_to_rx_requested = false;
+    oc_ota_total_size             = total_size;
+    memcpy(pending_config_data, &total_size, 4);
+    memcpy(pending_config_data + 4, sha256, 32);
+    pending_config_data_len = 36;
+    pending_config_msg_type = OTA_BEGIN_MSG;
+    setPendingCommand(OTA_BEGIN_PENDING);
+    ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)", (unsigned)total_size);
+}
+static void ocOtaRelayFinish(void* /*ctx*/)
+{
+    setPendingCommand(OTA_FINISH_CMD);
+    // Revert to slave-RX (in loop_oc) so we can hear the FC's terminal status,
+    // which it sends over the normal-direction I2S after IT reverts to TX.
+    oc_ota_revert_to_rx_requested = true;
+    ESP_LOGI("OC", "OTA relay: staged OTA_FINISH for FC");
+}
+static void ocOtaRelayAbort(void* /*ctx*/)
+{
+    setPendingCommand(OTA_ABORT_CMD);
+    oc_ota_revert_to_rx_requested = true;
+    ESP_LOGI("OC", "OTA relay: staged OTA_ABORT for FC");
+}
+
 static const char* rocketStateToString(RocketState s)
 {
     switch (s)
@@ -1255,7 +1513,9 @@ static bool isKnownMessageType(uint8_t type)
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
+        case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
+        case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
             return true;
         default:
             return false;
@@ -1268,6 +1528,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     // Reject unknown message types (CRC false positives from I2S noise)
     if (!isKnownMessageType(type))
         return;
+
+    // FC firmware-version push (#8 Phase 4): a version *string*, not timestamped
+    // telemetry, so handle it before the time_us-based dedup below (which would
+    // misread the string's first 4 bytes as a timestamp and drop it). Cache it;
+    // if it changed, flag a re-publish to the app — an FC OTA never drops our
+    // OC<->app BLE link, so the connect-time "fc_identity" won't refresh itself.
+    if (type == FC_IDENTITY)
+    {
+        char incoming[sizeof(fc_fw_version)] = {0};
+        size_t n = (payload_len < sizeof(incoming) - 1) ? payload_len
+                                                        : sizeof(incoming) - 1;
+        if (n > 0) memcpy(incoming, payload, n);
+        if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0)
+        {
+            memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
+            fc_identity_dirty = true;
+        }
+        return;
+    }
 
     // ── Duplicate, replay & stale frame detection for I2S DMA ──
     // Within a boot session, each FC-side time_us (= micros() on the FC) is
@@ -1313,6 +1592,29 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         if (prev != nullptr)
         {
+            // FC-reboot detection (#16). The FC's time_us restarts near 0 on every
+            // reboot — including the one right after a successful OTA. All the
+            // prev_time_*/max_time_us state here is from the prior session, so every
+            // post-reboot frame looks non-monotonic (dropped below) AND stale (dropped
+            // by the 5 s filter) until ts climbs back past the old high-water mark —
+            // tens of seconds of lost telemetry, so the app shows stale FC data right
+            // after an update. A timestamp far behind the global high-water mark (well
+            // beyond any reorder/jitter, which is sub-second) can only mean a new
+            // session: reset the dedup baseline and adopt the new stream. Also covers a
+            // uint32 µs wrap (~71 min) gracefully.
+            static constexpr uint32_t REBOOT_BACKSTEP_US = 10'000'000;  // 10 s
+            if (time_us != 0 && max_time_us > REBOOT_BACKSTEP_US &&
+                time_us < (max_time_us - REBOOT_BACKSTEP_US))
+            {
+                ESP_LOGW("DEDUP", "FC reboot detected (ts=%lu << max=%lu); resetting baseline",
+                         (unsigned long)time_us, (unsigned long)max_time_us);
+                prev_time_ism6 = prev_time_bmp = prev_time_mmc = prev_time_iis2mdc =
+                    prev_time_gnss = prev_time_ns = prev_time_pwr = prev_time_guid = 0;
+                max_time_us = 0;
+                // *prev now reads 0, so this frame passes the checks below as the first
+                // of the new session and re-seeds the baseline.
+            }
+
             // Non-monotonic or exact-duplicate frame for this type — drop.
             // time_us == 0 is excluded so the very first frame of each type
             // (which finds *prev == 0) still passes.
@@ -1447,6 +1749,67 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         if (payload_len >= sizeof(SensorCalStatusData))
         {
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
+        }
+    }
+    else if (type == OTA_STATUS_MSG)
+    {
+        // #8 Phase 4: FC→OC OTA relay status. Map the FC's state byte to the
+        // ota_status JSON vocabulary the app already understands for local OTA,
+        // and forward it up over BLE. relayFcOtaStatus() ends the relay session
+        // on a terminal state (ready_to_boot / verify_failed / aborted).
+        if (payload_len >= sizeof(OtaRelayStatusData))
+        {
+            OtaRelayStatusData st;
+            memcpy(&st, payload, sizeof(st));
+            const char* state = "writing";
+            const char* err   = nullptr;
+            bool terminal     = false;
+            switch (st.state)
+            {
+                case OTA_RELAY_READY:         state = "ready";
+                    // FC has erased ota_1 and (after its READY resends) will flip
+                    // to slave-RX. Arm the flip: loop_oc watches for the I2S link
+                    // to go quiet (FC released BCLK) before flipping us to
+                    // master-TX to pump the image (Phase 4 Layer 3). CRITICAL:
+                    // do NOT relay "ready" to the app yet. If the app starts
+                    // pumping chunks before we're in TX mode, the early chunks
+                    // (including offset 0) are dropped and the FC stalls forever
+                    // at bytesWritten=0 (every later chunk is a "gap"). loop_oc
+                    // relays "ready" only after the flip to TX completes.
+                    if (!oc_ota_tx_mode)
+                    {
+                        oc_ota_await_flip          = true;
+                        oc_ota_relay_ready_pending = true;
+                        oc_ota_silence_ref_count   = dma_cb_count;
+                        oc_ota_silence_since_ms    = (uint32_t)(esp_timer_get_time() / 1000);
+                    }
+                    break;
+                case OTA_RELAY_WRITING:       state = "writing"; break;
+                case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
+                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = "fc_error"; terminal = true; break;
+                case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
+                default: break;
+            }
+            // Dedupe identical consecutive FC resends (see last_relay_* above):
+            // keep the per-frame serial log (confirms the resends arrived over
+            // I2S) but only re-notify the app when the status actually changes.
+            const bool dup = (st.state == last_relay_state_ &&
+                              st.err   == last_relay_err_ &&
+                              st.bytes_written == last_relay_bytes_);
+            // READY is held until the OC has flipped to master TX (relayed from
+            // loop_oc post-flip), so the app can't start pumping into a link
+            // that isn't receiving yet.
+            const bool defer_ready = (st.state == OTA_RELAY_READY);
+            ESP_LOGI("OC", "OTA relay: FC status state=%u err=%u bytes=%u%s",
+                     (unsigned)st.state, (unsigned)st.err, (unsigned)st.bytes_written,
+                     dup ? " (dup, not relayed)" : (defer_ready ? " (ready held for TX flip)" : ""));
+            if (!dup && !defer_ready)
+            {
+                last_relay_state_ = st.state;
+                last_relay_err_   = st.err;
+                last_relay_bytes_ = st.bytes_written;
+                ble_app.relayFcOtaStatus(state, err, st.bytes_written, terminal);
+            }
         }
     }
     else if (type == GNSS_MSG)
@@ -2032,6 +2395,22 @@ static void sendLoRaBeacon()
 // Config readback: send current config to app over BLE
 // ============================================================================
 
+// Publish the FC's relayed firmware version to the app as a compact "fc_identity"
+// config message (#8 Phase 4). Kept separate from "config_identity" so it stays
+// well under the BLE notify MTU (sendConfigJSON silently drops anything over
+// MTU-3). Sent on connect (from sendCurrentConfig) and re-sent whenever the FC
+// version changes mid-connection (after an FC OTA), so the app verifies the
+// update / spots a rollback against the FC's own version, not the OC's.
+static void sendFcIdentity()
+{
+    const char* fc_fw = fc_fw_version[0] ? fc_fw_version : "unknown";
+    char buf[80];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\"}", fc_fw);
+    ble_app.sendConfigJSON(String(buf));
+    ESP_LOGI("CFG", "Sent fc_identity (fc_fw=%s)", fc_fw);
+}
+
 static void sendCurrentConfig()
 {
     // Split config into two smaller JSON messages to stay within MTU limits.
@@ -2100,6 +2479,10 @@ static void sendCurrentConfig()
     String id_json(id_buf);
     ble_app.sendConfigJSON(id_json);
     ESP_LOGI("CFG", "Sent identity readback (%u bytes)", (unsigned)id_json.length());
+
+    // Also push the relayed FC firmware version as its own small message (#8).
+    delay(50);
+    sendFcIdentity();
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -3763,6 +4146,16 @@ void initPeripherals()
     // init the slave so the bus is stable.
     ESP_LOGI("PWR", "I2C slave deferred (waiting for FC I2S activity)");
 
+    // Mutex serializing i2s_stream across the loop_oc flip/revert and the BLE
+    // task's image pump during an FC OTA (Phase 4 Layer 3). Created before the
+    // channel so it's ready if an OTA starts immediately after power-on.
+    if (oc_i2s_mutex == nullptr)
+        oc_i2s_mutex = xSemaphoreCreateMutex();
+    // Image-pump frame queue + feeder task (Phase 4 Layer 3). 16 frames (~4 KB)
+    // is several BLE chunks deep; the feeder drains far faster than BLE fills.
+    if (oc_ota_tx_queue == nullptr)
+        oc_ota_tx_queue = xQueueCreate(16, sizeof(OcOtaTxFrame));
+
     // I2S telemetry stream from FlightComputer (DMA-based slave RX)
     // Small DMA buffers (4 × 256 bytes = 1 KB) minimize latency.
     // FRAME_SYNC interrupt gating prevents stale replay regardless of
@@ -3801,6 +4194,15 @@ void initPeripherals()
         // rx_ring to fill until drop_oldest evicted bytes (#104).
         xTaskCreatePinnedToCore(i2sParserTask, "I2S Parse", 4096,
                                 nullptr, 6, &i2s_rx_task_handle, 1);
+
+        // OTA image-pump feeder (Phase 4 Layer 3). Sole I2S writer during an FC
+        // OTA, keeping the master TX DMA continuously fed (frame-or-idle-fill)
+        // so it never replays stale buffers. Idles when not in TX mode. Core 1 /
+        // prio 6 like the parser; during OTA the RX parser is blocked (link is
+        // flipped to TX), so the feeder gets the core to itself.
+        if (oc_ota_feeder_task == nullptr)
+            xTaskCreatePinnedToCore(ocOtaTxFeederTask, "OTA Feed", 4096,
+                                    nullptr, 6, &oc_ota_feeder_task, 1);
     }
 
     // NOTE: do NOT pre-queue a status response here.  With the new
@@ -4046,6 +4448,9 @@ static void setup_oc()
     {
         ESP_LOGE("BLE", "BLE app interface failed to start");
     }
+    // Relay target==1 (Flight Computer) OTA to the FC over I2C (#8 Phase 4).
+    ble_app.setOtaRelayDelegate(ocOtaRelayBegin, ocOtaRelayFinish, ocOtaRelayAbort,
+                                ocOtaRelayData, nullptr);
 
     // Enter low-power mode: 80 MHz, DFS to 40 MHz when idle
     enterLowPowerMode();
@@ -4093,6 +4498,60 @@ static void loop_oc()
     // --- Active mode: FlightComputer + sensors powered on ---
     if (pwr_pin_on)
     {
+        // Phase 4 Layer 3: service the I2S direction flip for an FC OTA image
+        // pump. Done here (not in the BLE/parser task) so all i2s_stream
+        // lifecycle calls live in one place. After READY we wait for the FC's
+        // I2S TX to go quiet — proof it has flipped to slave RX and released
+        // BCLK — before we flip to master TX, so the two never drive BCLK at
+        // once. (The FC idle-fills until it flips, so quiet == flipped.)
+        if (oc_ota_await_flip && !oc_ota_tx_mode)
+        {
+            const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (dma_cb_count != oc_ota_silence_ref_count)
+            {
+                oc_ota_silence_ref_count = dma_cb_count;   // still receiving — reset timer
+                oc_ota_silence_since_ms  = now_ms;
+            }
+            else if ((now_ms - oc_ota_silence_since_ms) >= OTA_FLIP_SILENCE_MS)
+            {
+                oc_ota_await_flip = false;
+                ocFlipToTx();                              // FC is quiet → safe to drive
+                // Don't release "ready" yet: the FC's slave RX needs a few ms to
+                // lock onto the just-started master BCLK. Offset 0 pumped before
+                // then is lost and the forward-only receiver never recovers
+                // (bench: frames_ok=0, every frame "gap"). Start a warmup window —
+                // the feeder idle-fills (BCLK live) so RX can lock; the gate below
+                // releases the app once it has. #15.
+                if (oc_ota_tx_mode)
+                    oc_ota_warmup_since_ms = now_ms;
+            }
+        }
+        // Post-flip RX warmup gate: hold the app's "ready" until the FC slave RX
+        // has had time to lock onto BCLK (feeder idle-filling meanwhile), so the
+        // first real image frame (offset 0) lands. (Held since READY so the app
+        // can't drop offset 0 into a not-yet-locked link.) #8 Phase 4 / #15.
+        if (oc_ota_tx_mode && oc_ota_relay_ready_pending && oc_ota_warmup_since_ms != 0)
+        {
+            const uint32_t warm_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if ((warm_now_ms - oc_ota_warmup_since_ms) >= OTA_RX_WARMUP_MS)
+            {
+                oc_ota_relay_ready_pending = false;
+                oc_ota_warmup_since_ms     = 0;
+                ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
+            }
+        }
+        if (oc_ota_revert_to_rx_requested)
+        {
+            // Clear AFTER the revert completes, not before. The feeder watches this
+            // flag to back off oc_i2s_mutex so ocRevertToRx() can acquire it (see the
+            // feeder's comment). Clearing first would let the higher-priority feeder
+            // resume mid-revert and starve ocRevertToRx()'s mutex take — the FINISH
+            // deadlock. ocRevertToRx() sets oc_ota_tx_mode=false, so the feeder idles
+            // regardless once it returns.
+            ocRevertToRx();
+            oc_ota_revert_to_rx_requested = false;
+        }
+
         // Deferred I2C slave init: wait for I2S DMA activity confirming
         // the FC is alive before enabling the slave on the bus.
         if (!i2c_slave_initialized && dma_cb_count > 50)
@@ -4257,6 +4716,16 @@ static void loop_oc()
             }
         }
         ble_was_connected = ble_now;
+    }
+
+    // Re-publish the FC version to the app when it changes mid-connection: an FC
+    // OTA reboots the FC (new version) but never drops the OC<->app BLE link, so
+    // the connect-time fc_identity won't refresh on its own. This is what lets
+    // the app's FC-OTA verify see the new version (or catch a rollback). #8.
+    if (fc_identity_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_identity_dirty = false;
+        sendFcIdentity();
     }
 
     // Service the BLE library's poll-style work — currently just the OTA

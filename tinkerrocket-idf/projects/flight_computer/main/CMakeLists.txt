@@ -27,6 +27,9 @@ idf_component_register(
         TR_ControlMixer
         TR_GNSSReceiverUBlox_Serial
         TR_IMU_Int_V2
+        TR_OTA
+        app_update
+        esp_app_format
         driver
         esp_timer
         nvs_flash
