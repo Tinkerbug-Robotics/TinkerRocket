@@ -547,15 +547,18 @@ struct DriftCastView: View {
     // Map state
     @State private var tileSource: TileSource = .appleHybrid
     @State private var showOfflineMaps = false
+    /// Per-open guard: auto-seed launch/landing + map from the first GPS fix
+    /// once each time the view opens, unless the user has already acted.
+    @State private var didAutoSeed = false
     @State private var mapRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.7608, longitude: -75.7446),
         span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
     )
     @State private var tapMode: TapMode = .launch
 
-    // Input fields (persisted).  Launch/landing default to empty so a fresh
-    // install seeds them from the phone's GPS on first open instead of an
-    // arbitrary fixed site; once set they persist across opens as before.
+    // Input fields (persisted).  Launch/landing re-seed from the phone's GPS on
+    // each open (applyCurrentLocation); the persisted values are the fallback
+    // when no GPS fix is available, and hold any edits made within a session.
     @AppStorage("dc_launchLat") private var launchLat: String = ""
     @AppStorage("dc_launchLon") private var launchLon: String = ""
     @AppStorage("dc_landingLat") private var landingLat: String = ""
@@ -666,7 +669,9 @@ struct DriftCastView: View {
             // while they're still blank — never clobber a value the user typed
             // or one restored from a previous session.
             .onReceive(locationManager.$userLocation) { coord in
-                if let coord = coord { seedPointsIfBlank(from: coord) }
+                guard let coord = coord, !didAutoSeed else { return }
+                didAutoSeed = true
+                applyCurrentLocation(coord)
             }
             .sheet(isPresented: $showOfflineMaps) {
                 OfflineMapsView(suggestedCenter: mapRegion.center)
@@ -954,6 +959,7 @@ struct DriftCastView: View {
     // MARK: - Actions
 
     private func handleMapTap(_ coord: CLLocationCoordinate2D) {
+        didAutoSeed = true   // user is placing points — don't auto-seed over them
         if tapMode == .launch {
             launchLat = String(format: "%.6f", coord.latitude)
             launchLon = String(format: "%.6f", coord.longitude)
@@ -965,28 +971,26 @@ struct DriftCastView: View {
         }
     }
 
-    /// Fill the launch/landing fields from a GPS fix the first time we get one,
-    /// leaving any field the user has already populated (or one restored from a
-    /// previous session) untouched.
-    private func seedPointsIfBlank(from coord: CLLocationCoordinate2D) {
-        if launchLat.isEmpty || launchLon.isEmpty {
-            launchLat = String(format: "%.6f", coord.latitude)
-            launchLon = String(format: "%.6f", coord.longitude)
-            mapRegion = MKCoordinateRegion(
-                center: coord,
-                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
-            )
-        }
-        if landingLat.isEmpty || landingLon.isEmpty {
-            landingLat = String(format: "%.6f", coord.latitude)
-            landingLon = String(format: "%.6f", coord.longitude)
-        }
+    /// Center the map on the phone's current location and seed launch+landing to
+    /// it. Called once per open from the first GPS fix (see the onReceive guard),
+    /// so "current location" is the default each time the tool opens — unless the
+    /// user has already tapped/used GPS this session.
+    private func applyCurrentLocation(_ coord: CLLocationCoordinate2D) {
+        let lat = String(format: "%.6f", coord.latitude)
+        let lon = String(format: "%.6f", coord.longitude)
+        launchLat = lat;  launchLon = lon
+        landingLat = lat; landingLon = lon
+        mapRegion = MKCoordinateRegion(
+            center: coord,
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        )
     }
 
     /// "Use GPS" button: snap the launch point to the phone's current location.
     /// (Landing is the target, so it's intentionally left untouched here.)
     private func useGPS() {
         guard let coord = locationManager.userLocation else { return }
+        didAutoSeed = true   // explicit user action — suppress the auto-seed
         launchLat = String(format: "%.6f", coord.latitude)
         launchLon = String(format: "%.6f", coord.longitude)
         mapRegion = MKCoordinateRegion(
