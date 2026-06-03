@@ -11,6 +11,7 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import SceneKit
+import Combine
 
 // MARK: - Map Representable
 
@@ -544,11 +545,13 @@ struct DriftCastView: View {
     )
     @State private var tapMode: TapMode = .launch
 
-    // Input fields (persisted)
-    @AppStorage("dc_launchLat") private var launchLat: String = "37.7608"
-    @AppStorage("dc_launchLon") private var launchLon: String = "-75.7446"
-    @AppStorage("dc_landingLat") private var landingLat: String = "37.7608"
-    @AppStorage("dc_landingLon") private var landingLon: String = "-75.7446"
+    // Input fields (persisted).  Launch/landing default to empty so a fresh
+    // install seeds them from the phone's GPS on first open instead of an
+    // arbitrary fixed site; once set they persist across opens as before.
+    @AppStorage("dc_launchLat") private var launchLat: String = ""
+    @AppStorage("dc_launchLon") private var launchLon: String = ""
+    @AppStorage("dc_landingLat") private var landingLat: String = ""
+    @AppStorage("dc_landingLon") private var landingLon: String = ""
     @AppStorage("dc_apogeeFt") private var apogeeFt: String = "10000"
     @AppStorage("dc_drogueRate") private var drogueRate: String = "60"
     @AppStorage("dc_mainRate") private var mainRate: String = "18"
@@ -572,9 +575,11 @@ struct DriftCastView: View {
     @State private var isComputing = false
     @State private var errorMessage: String?
 
-    // GPS for "Use GPS" button
-    @State private var locationManager = CLLocationManager()
-    @State private var lastUserLocation: CLLocationCoordinate2D?
+    // Phone GPS — seeds the launch/landing points on first open and backs the
+    // "Use GPS" button.  Reuses the app's delegate-backed manager so we get a
+    // real fix asynchronously, rather than whatever a bare CLLocationManager
+    // happened to have cached.
+    @StateObject private var locationManager = LocationManager()
 
     enum TapMode: String, CaseIterable {
         case launch = "Set Launch"
@@ -646,6 +651,14 @@ struct DriftCastView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .onAppear { locationManager.startUpdates() }
+            .onDisappear { locationManager.stopUpdates() }
+            // Seed the launch/landing points from the first GPS fix, but only
+            // while they're still blank — never clobber a value the user typed
+            // or one restored from a previous session.
+            .onReceive(locationManager.$userLocation) { coord in
+                if let coord = coord { seedPointsIfBlank(from: coord) }
             }
         }
     }
@@ -920,20 +933,34 @@ struct DriftCastView: View {
         }
     }
 
-    private func useGPS() {
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-
-        // Use the cached location directly instead of requestLocation(),
-        // which requires a CLLocationManagerDelegate that isn't set up here.
-        if let loc = locationManager.location {
-            launchLat = String(format: "%.6f", loc.coordinate.latitude)
-            launchLon = String(format: "%.6f", loc.coordinate.longitude)
+    /// Fill the launch/landing fields from a GPS fix the first time we get one,
+    /// leaving any field the user has already populated (or one restored from a
+    /// previous session) untouched.
+    private func seedPointsIfBlank(from coord: CLLocationCoordinate2D) {
+        if launchLat.isEmpty || launchLon.isEmpty {
+            launchLat = String(format: "%.6f", coord.latitude)
+            launchLon = String(format: "%.6f", coord.longitude)
             mapRegion = MKCoordinateRegion(
-                center: loc.coordinate,
+                center: coord,
                 span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
             )
         }
+        if landingLat.isEmpty || landingLon.isEmpty {
+            landingLat = String(format: "%.6f", coord.latitude)
+            landingLon = String(format: "%.6f", coord.longitude)
+        }
+    }
+
+    /// "Use GPS" button: snap the launch point to the phone's current location.
+    /// (Landing is the target, so it's intentionally left untouched here.)
+    private func useGPS() {
+        guard let coord = locationManager.userLocation else { return }
+        launchLat = String(format: "%.6f", coord.latitude)
+        launchLon = String(format: "%.6f", coord.longitude)
+        mapRegion = MKCoordinateRegion(
+            center: coord,
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        )
     }
 
     private func compute() {

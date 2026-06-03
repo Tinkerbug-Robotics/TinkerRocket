@@ -15,5 +15,7 @@
 	<string>Microphone access is needed for video recording during pyro channel testing.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Photo library access is needed to save pyro test videos.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location access sets the launch and landing points from your current position in the drift cast tool, and shows the direction and distance to your rocket.</string>
 </dict>
 </plist>
