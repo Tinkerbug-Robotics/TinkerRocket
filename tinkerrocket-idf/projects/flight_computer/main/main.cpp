@@ -3126,8 +3126,18 @@ static void loop_fc()
                     {
                         EkfBaroData ekf_baro = {};
                         ekf_baro.time_us = bmp_latest_si.time_us;
-                        // ISA pressure altitude relative to launch site
-                        ekf_baro.altitude_m = (double)pressure_altitude_m;
+                        // pressure_altitude_m is height above the launch pad
+                        // (~0 at the pad), but the EKF altitude state is
+                        // absolute MSL (init + fused from GNSS hMSL). Re-reference
+                        // baro into the GNSS frame by adding the launch-site
+                        // elevation, otherwise the baro innovation carries a
+                        // constant bias ≈ -(launch elevation) that the 15-state
+                        // filter leaks into altitude / accel_bias_z — the
+                        // stationary altitude drift in #44. (ref_alt_m is the
+                        // frozen running-average pad hMSL; ~0 until the first
+                        // GNSS fix, by which point the EKF isn't yet running
+                        // baro updates.)
+                        ekf_baro.altitude_m = (double)pressure_altitude_m + ref_alt_m;
                         ekf.baroMeasUpdate(ekf_baro);
                     }
                     else if (spike)
