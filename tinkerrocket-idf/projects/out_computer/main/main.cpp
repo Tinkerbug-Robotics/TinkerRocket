@@ -1238,6 +1238,7 @@ static uint32_t oc_ota_feed_sent     = 0;                   // diag: frames the 
 static uint32_t oc_ota_feed_idle     = 0;                   // diag: idle-fill writes (queue empty)
 static uint32_t oc_ota_silence_ref_count = 0;               // dma_cb_count snapshot for silence detect
 static uint32_t oc_ota_silence_since_ms  = 0;               // when RX last went quiet
+static uint32_t oc_ota_warmup_since_ms   = 0;               // post-flip RX-lock warmup start (0 = inactive)
 static uint32_t oc_ota_total_size = 0;                      // image size (diag)
 // OC->FC image pump. The BLE callback enqueues image frames here; a dedicated
 // feeder task (ocOtaTxFeederTask) is the SOLE I2S writer while flipped to master
@@ -1256,6 +1257,14 @@ static TaskHandle_t  oc_ota_feeder_task = nullptr;
 // FC is now in slave RX — more reliable than a fixed delay coupled to the FC's
 // READY-resend duration. The exact window is a bench item (#15).
 static constexpr uint32_t OTA_FLIP_SILENCE_MS = 500;
+
+// After flipping to master TX, idle-fill this long before telling the app it may
+// pump real image data, so the FC's slave RX locks onto the just-started master
+// BCLK first. Offset 0 pumped into a not-yet-locked RX is lost, and the
+// forward-only receiver never recovers (bench 2026-06-02: frames_ok=0, every
+// frame "gap", finish err=7). Generous vs the observed ~tens-of-ms lock; the OTA
+// itself is ~15 s so the cost is negligible. Bench-tunable (#15).
+static constexpr uint32_t OTA_RX_WARMUP_MS = 150;
 
 static bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user_ctx);  // defined below
 
@@ -1416,6 +1425,7 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     oc_ota_feed_idle              = 0;
     oc_ota_await_flip             = false;
     oc_ota_relay_ready_pending    = false;
+    oc_ota_warmup_since_ms        = 0;
     oc_ota_revert_to_rx_requested = false;
     oc_ota_total_size             = total_size;
     memcpy(pending_config_data, &total_size, 4);
@@ -4506,14 +4516,28 @@ static void loop_oc()
             {
                 oc_ota_await_flip = false;
                 ocFlipToTx();                              // FC is quiet → safe to drive
-                // Only now — once we're actually in TX and able to receive —
-                // tell the app it may start pumping. (Held since READY so the
-                // app can't drop offset 0 into a not-yet-flipped link.)
-                if (oc_ota_tx_mode && oc_ota_relay_ready_pending)
-                {
-                    oc_ota_relay_ready_pending = false;
-                    ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
-                }
+                // Don't release "ready" yet: the FC's slave RX needs a few ms to
+                // lock onto the just-started master BCLK. Offset 0 pumped before
+                // then is lost and the forward-only receiver never recovers
+                // (bench: frames_ok=0, every frame "gap"). Start a warmup window —
+                // the feeder idle-fills (BCLK live) so RX can lock; the gate below
+                // releases the app once it has. #15.
+                if (oc_ota_tx_mode)
+                    oc_ota_warmup_since_ms = now_ms;
+            }
+        }
+        // Post-flip RX warmup gate: hold the app's "ready" until the FC slave RX
+        // has had time to lock onto BCLK (feeder idle-filling meanwhile), so the
+        // first real image frame (offset 0) lands. (Held since READY so the app
+        // can't drop offset 0 into a not-yet-locked link.) #8 Phase 4 / #15.
+        if (oc_ota_tx_mode && oc_ota_relay_ready_pending && oc_ota_warmup_since_ms != 0)
+        {
+            const uint32_t warm_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if ((warm_now_ms - oc_ota_warmup_since_ms) >= OTA_RX_WARMUP_MS)
+            {
+                oc_ota_relay_ready_pending = false;
+                oc_ota_warmup_since_ms     = 0;
+                ble_app.relayFcOtaStatus("ready", nullptr, 0, false);
             }
         }
         if (oc_ota_revert_to_rx_requested)
