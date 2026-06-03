@@ -1,7 +1,7 @@
 # Offline map tiles for no-signal launch sites
 
 **Issue:** _to be filed_ (tracking issue TBD)
-**Status:** Phase 0 — design + trials. No production code lands until Trial 0 clears the look‑and‑feel gate.
+**Status:** Trial 1 (read-through cache) landed. Trial 0 cleared — standardizing on **Apple** (global, online-only) + **USGS** (cacheable). Esri dropped; international imagery deferred to [#231](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/231).
 **Last updated:** 2026-06-03
 **Mockups:** [`offline-maps-mockups.html`](offline-maps-mockups.html) (open in a browser)
 
@@ -104,7 +104,7 @@ A single shared subsystem, injected into both map views and the 3D texture fetch
 | Esri World Imagery | ✅* | none | Global | Already used by `Trajectory3DView`. *Verify current ToS for persistent offline caching + attribution before relying on it. |
 | OSM / MapTiler / Mapbox | ✅ | key (most) | Global / vector | For non-US or topo styling later; OSM policy discourages bulk download. |
 
-Recommendation: **USGS imagery as the saved source, USGS topo as a second saved option** (topo is often *more* useful than satellite for spotting recovery terrain — fields, tree lines, roads). Keep Apple Hybrid as the default online layer. The `TileSource` abstraction means Trial 0 swaps these with a one-line change.
+**Decided (Trial 0):** standardize on **Apple Standard/Hybrid** (global, online-only) + **USGS Imagery / Imagery+Topo / Topo** (public-domain, cacheable). Esri World Imagery looked best online and zoomed deeper, but its free terms restrict the persistent offline caching this feature is built around — and Apple already covers global *online* — so it was dropped. Only USGS is offered for offline download, gated on `TileSource.isCacheable`. International (non-US) cacheable imagery is deferred to [#231](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/231).
 
 ---
 
@@ -169,7 +169,7 @@ Entry points: a "layers/offline" button on `RocketMapView`'s existing floating c
 
 ## 7. Open questions
 
-1. Primary saved source: **USGS Imagery**, USGS Topo, or both selectable? (I lean both.)
+1. ~~Primary saved source~~ — **Resolved (Trial 0):** Apple + USGS (Imagery / Imagery+Topo / Topo); USGS-only caching; Esri dropped; international deferred to [#231](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/231).
 2. Acceptable default size cap / warning threshold per region?
 3. Region selection: center **+ radius** (recommended) vs. free-draw rectangle?
 4. Should "Save this area" auto-suggest a region centered on the DriftCast launch point / last rocket fix?
