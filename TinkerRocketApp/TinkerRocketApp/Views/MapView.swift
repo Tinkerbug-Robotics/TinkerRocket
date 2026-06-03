@@ -219,8 +219,12 @@ struct MapView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
 
-            // Trial 0: active source + attribution, so the on-device A/B is
-            // unambiguous about which provider is rendering.
+            // Offline indicator (top-center) when there's no connection.
+            OfflinePill()
+                .padding(.top, 12)
+                .frame(maxWidth: .infinity, alignment: .top)
+
+            // Active source + attribution, so it's clear which provider renders.
             VStack(alignment: .leading, spacing: 1) {
                 Text(tileSource.displayName)
                     .font(.caption.bold())

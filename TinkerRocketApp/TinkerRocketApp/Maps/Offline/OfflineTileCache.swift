@@ -60,6 +60,25 @@ final class OfflineTileCache {
         }
     }
 
+    // MARK: - Keyed blobs (non-tile images, e.g. the 3D ground texture)
+
+    func blob(forKey key: String) -> Data? {
+        try? Data(contentsOf: blobURL(key))
+    }
+
+    func storeBlob(_ data: Data, forKey key: String) {
+        let url = blobURL(key)
+        try? fm.createDirectory(at: url.deletingLastPathComponent(),
+                                withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private func blobURL(_ key: String) -> URL {
+        let safe = key.replacingOccurrences(of: "/", with: "_")
+        return root.appendingPathComponent("blobs", isDirectory: true)
+            .appendingPathComponent("\(safe).dat", isDirectory: false)
+    }
+
     // MARK: - Paths
 
     private func fileURL(source: String, z: Int, x: Int, y: Int) -> URL {

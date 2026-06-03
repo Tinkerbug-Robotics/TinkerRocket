@@ -238,10 +238,12 @@ struct Trajectory3DView: UIViewRepresentable {
         return SCNVector3(x, Float(altM), z)
     }
 
-    // MARK: - ArcGIS Satellite Imagery
+    // MARK: - USGS Satellite Imagery (cached)
 
-    /// Fetch satellite image from ArcGIS MapServer export API (no API key needed)
-    /// and apply as the ground plane texture.
+    /// Fetch the ground-plane texture from the USGS MapServer export API (no key,
+    /// public domain — consistent with the 2D source) and apply it. Routed
+    /// through OfflineTileCache so a scene viewed once renders offline later; if
+    /// there's no imagery and no connection, the grid stays.
     private static func fetchArcGISImagery(
         refLat: Double, refLon: Double, extent: Float,
         groundNode: SCNNode, sceneRoot: SCNNode
@@ -256,17 +258,12 @@ struct Trajectory3DView: UIViewRepresentable {
         let east = refLon + halfM / mPerDegLon
 
         let bbox = "\(west),\(south),\(east),\(north)"
-        let urlStr = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
+        let urlStr = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export"
             + "?bbox=\(bbox)&bboxSR=4326&imageSR=4326"
             + "&size=1024,1024&format=png&f=image"
+        let cacheKey = "3d_\(bbox)"
 
-        guard let url = URL(string: urlStr) else { return }
-
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            guard let data = data,
-                  let httpResp = response as? HTTPURLResponse,
-                  httpResp.statusCode == 200,
-                  let image = UIImage(data: data) else { return }
+        let apply: (UIImage) -> Void = { image in
             DispatchQueue.main.async {
                 groundNode.geometry?.firstMaterial?.diffuse.contents = image
                 groundNode.geometry?.firstMaterial?.diffuse.wrapS = .clamp
@@ -276,6 +273,23 @@ struct Trajectory3DView: UIViewRepresentable {
                 sceneRoot.childNode(withName: "groundGrid", recursively: false)?
                     .removeFromParentNode()
             }
+        }
+
+        // Cached copy first → renders offline for a scene viewed before.
+        if let data = OfflineTileCache.shared.blob(forKey: cacheKey),
+           let image = UIImage(data: data) {
+            apply(image)
+            return
+        }
+
+        guard let url = URL(string: urlStr) else { return }
+        URLSession.shared.dataTask(with: url) { data, response, _ in
+            guard let data = data,
+                  let httpResp = response as? HTTPURLResponse,
+                  httpResp.statusCode == 200,
+                  let image = UIImage(data: data) else { return }
+            OfflineTileCache.shared.storeBlob(data, forKey: cacheKey)
+            apply(image)
         }.resume()
     }
 
@@ -731,28 +745,32 @@ struct DriftCastView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
 
-            // Map view: 2D or 3D
-            if show3D {
-                Trajectory3DView(result: result, unitSystem: unitSystem)
-                    .frame(height: 350)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            // Map view: 2D or 3D (offline pill overlaid on top).
+            ZStack(alignment: .top) {
+                if show3D {
+                    Trajectory3DView(result: result, unitSystem: unitSystem)
+                        .frame(height: 350)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal)
+                } else {
+                    DriftCastMapView(
+                        tileSource: $tileSource,
+                        launchCoord: launchCoord,
+                        landingCoord: landingCoord,
+                        guidanceCoord: guidanceCoord,
+                        descentTrack: descentTrackCoords,
+                        boostLine: boostLineCoords,
+                        region: $mapRegion,
+                        onTap: { coord in
+                            handleMapTap(coord)
+                        }
+                    )
+                    .frame(height: 250)
+                    .cornerRadius(12)
                     .padding(.horizontal)
-            } else {
-                DriftCastMapView(
-                    tileSource: $tileSource,
-                    launchCoord: launchCoord,
-                    landingCoord: landingCoord,
-                    guidanceCoord: guidanceCoord,
-                    descentTrack: descentTrackCoords,
-                    boostLine: boostLineCoords,
-                    region: $mapRegion,
-                    onTap: { coord in
-                        handleMapTap(coord)
-                    }
-                )
-                .frame(height: 250)
-                .cornerRadius(12)
-                .padding(.horizontal)
+                }
+                OfflinePill()
+                    .padding(.top, 8)
             }
         }
     }

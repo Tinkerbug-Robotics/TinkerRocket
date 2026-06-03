@@ -17,6 +17,29 @@ final class CachingTileOverlay: MKTileOverlay {
     private let sourceKey: String
     private let cache = OfflineTileCache.shared
 
+    /// Neutral "not downloaded / no imagery" tile — a faint hatch — returned on
+    /// any miss so offline gaps (or zoom past the provider's max) read as
+    /// intentional rather than a broken/blank map (canReplaceMapContent leaves
+    /// nothing underneath).
+    private static let placeholderTile: Data = {
+        let size = CGSize(width: 256, height: 256)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            UIColor(white: 0.93, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            let c = ctx.cgContext
+            c.setStrokeColor(UIColor(white: 0.82, alpha: 1).cgColor)
+            c.setLineWidth(1)
+            var x: CGFloat = -256
+            while x < 256 {
+                c.move(to: CGPoint(x: x, y: 0))
+                c.addLine(to: CGPoint(x: x + 256, y: 256))
+                x += 16
+            }
+            c.strokePath()
+        }
+        return img.pngData() ?? Data()
+    }()
+
     init(source: TileSource) {
         sourceKey = source.rawValue
         super.init(urlTemplate: source.urlTemplate)
@@ -41,7 +64,8 @@ final class CachingTileOverlay: MKTileOverlay {
         URLSession.shared.dataTask(with: request) { data, response, error in
             guard let data = data,
                   let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                result(nil, error)
+                // Offline miss, 404 past max zoom, etc. → neutral placeholder.
+                result(Self.placeholderTile, nil)
                 return
             }
             cache.store(data, source: key, z: path.z, x: path.x, y: path.y)
