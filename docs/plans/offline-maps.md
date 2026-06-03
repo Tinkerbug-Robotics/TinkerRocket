@@ -1,7 +1,7 @@
 # Offline map tiles for no-signal launch sites
 
 **Issue:** _to be filed_ (tracking issue TBD)
-**Status:** Trial 1 (read-through cache) landed. Trial 0 cleared — standardizing on **Apple** (global, online-only) + **USGS** (cacheable). Esri dropped; international imagery deferred to [#231](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/231).
+**Status:** Implemented — Trials 0–2 + Drift Cast alignment + Phase 4 polish (offline pill, neutral missing-tile fill, cached 3D ground texture). Local on `feat/offline-map-tiles`, not yet pushed. Source set: **Apple** (global, online-only) + **USGS** (cacheable); Esri dropped; international imagery deferred to [#231](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/231). Remaining/future: pre-download offline 3D from a saved region (today the 3D texture is passive-cached only, like Trial 1 was for 2D).
 **Last updated:** 2026-06-03
 **Mockups:** [`offline-maps-mockups.html`](offline-maps-mockups.html) (open in a browser)
 
