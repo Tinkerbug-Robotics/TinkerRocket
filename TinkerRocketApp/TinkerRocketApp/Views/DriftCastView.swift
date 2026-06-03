@@ -17,7 +17,7 @@ import Combine
 
 /// MapKit wrapper with tap gesture, annotations, and polyline overlays.
 struct DriftCastMapView: UIViewRepresentable {
-    @Binding var mapType: MKMapType
+    @Binding var tileSource: TileSource
     var launchCoord: CLLocationCoordinate2D?
     var landingCoord: CLLocationCoordinate2D?
     var guidanceCoord: CLLocationCoordinate2D?
@@ -29,8 +29,9 @@ struct DriftCastMapView: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
-        mapView.mapType = mapType
+        mapView.mapType = tileSource.appleMapType
         mapView.setRegion(region, animated: false)
+        context.coordinator.basemap.apply(tileSource, to: mapView)
 
         // Add tap gesture
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -40,9 +41,10 @@ struct DriftCastMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        if mapView.mapType != mapType {
-            mapView.mapType = mapType
+        if mapView.mapType != tileSource.appleMapType {
+            mapView.mapType = tileSource.appleMapType
         }
+        context.coordinator.basemap.apply(tileSource, to: mapView)
 
         // Update annotations
         mapView.removeAnnotations(mapView.annotations)
@@ -69,8 +71,8 @@ struct DriftCastMapView: UIViewRepresentable {
             mapView.addAnnotation(ann)
         }
 
-        // Update overlays
-        mapView.removeOverlays(mapView.overlays)
+        // Update DATA overlays only; leave the basemap tile overlay in place.
+        mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
 
         if descentTrack.count > 1 {
             let polyline = MKPolyline(coordinates: descentTrack, count: descentTrack.count)
@@ -98,6 +100,8 @@ struct DriftCastMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: DriftCastMapView
         var userIsInteracting = false
+        /// Shared basemap overlay controller (aligns Drift Cast with Rocket Map).
+        let basemap = BasemapOverlayController()
 
         init(_ parent: DriftCastMapView) {
             self.parent = parent
@@ -156,6 +160,9 @@ struct DriftCastMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let tile = overlay as? MKTileOverlay {
+                return MKTileOverlayRenderer(tileOverlay: tile)
+            }
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 if polyline.title == "descent" {
@@ -538,7 +545,8 @@ struct DriftCastView: View {
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     // Map state
-    @State private var mapType: MKMapType = .hybrid
+    @State private var tileSource: TileSource = .appleHybrid
+    @State private var showOfflineMaps = false
     @State private var mapRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.7608, longitude: -75.7446),
         span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
@@ -660,6 +668,9 @@ struct DriftCastView: View {
             .onReceive(locationManager.$userLocation) { coord in
                 if let coord = coord { seedPointsIfBlank(from: coord) }
             }
+            .sheet(isPresented: $showOfflineMaps) {
+                OfflineMapsView(suggestedCenter: mapRegion.center)
+            }
         }
     }
 
@@ -678,6 +689,27 @@ struct DriftCastView: View {
                     .pickerStyle(.segmented)
                 } else {
                     Spacer()
+                }
+
+                // Basemap source + offline downloads (shared with Rocket Map).
+                Menu {
+                    Picker("Map source", selection: $tileSource) {
+                        ForEach(TileSource.allCases) { src in
+                            Label(src.displayName, systemImage: src.symbol).tag(src)
+                        }
+                    }
+                    Divider()
+                    Button { showOfflineMaps = true } label: {
+                        Label("Manage offline maps…", systemImage: "arrow.down.circle")
+                    }
+                } label: {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.2))
+                        .foregroundColor(.blue)
+                        .cornerRadius(8)
                 }
 
                 Button(action: { show3D.toggle() }) {
@@ -702,7 +734,7 @@ struct DriftCastView: View {
                     .padding(.horizontal)
             } else {
                 DriftCastMapView(
-                    mapType: $mapType,
+                    tileSource: $tileSource,
                     launchCoord: launchCoord,
                     landingCoord: landingCoord,
                     guidanceCoord: guidanceCoord,
