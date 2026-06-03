@@ -94,9 +94,10 @@ struct RocketMapView: UIViewRepresentable {
             mapView.removeOverlay(existing)
             context.coordinator.tileOverlay = nil
         }
-        if let overlay = tileSource.makeOverlay() {
+        if tileSource.isCacheable {
             // Above labels so Apple's basemap labels don't bleed through the
             // replacement imagery; data overlays added later still draw on top.
+            let overlay = CachingTileOverlay(source: tileSource)
             mapView.addOverlay(overlay, level: .aboveLabels)
             context.coordinator.tileOverlay = overlay
         }
