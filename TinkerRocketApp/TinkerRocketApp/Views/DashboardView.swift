@@ -227,24 +227,25 @@ struct DashboardView: View {
             }
         }
         .sheet(item: $activeSheet) { sheet in
-            if let device = fleet.activeDevice {
-                Group {
-                    switch sheet {
-                    case .simulator:
-                        SimulationView(device: device)
-                    case .settings:
-                        SettingsView(device: device)
-                    case .servoTest:
-                        ServoTestView(device: device)
-                    case .driftCast:
-                        DriftCastView(device: device)
-                    }
+            Group {
+                switch sheet {
+                // Reverse Drift Cast is a standalone wind/trajectory tool — it
+                // runs with no live device (#42).  "Send to Unit" inside the
+                // view is the only part gated on an active connection.
+                case .driftCast:
+                    DriftCastView(device: fleet.activeDevice)
+                case .simulator:
+                    if let device = fleet.activeDevice { SimulationView(device: device) }
+                case .settings:
+                    if let device = fleet.activeDevice { SettingsView(device: device) }
+                case .servoTest:
+                    if let device = fleet.activeDevice { ServoTestView(device: device) }
                 }
-                // SwiftUI sheets get a fresh environment by default — re-inject
-                // fleet so SettingsView's FirmwareUpdateView can resolve the
-                // OTASession off it (#15 second pass).
-                .environmentObject(fleet)
             }
+            // SwiftUI sheets get a fresh environment by default — re-inject
+            // fleet so SettingsView's FirmwareUpdateView can resolve the
+            // OTASession off it (#15 second pass).
+            .environmentObject(fleet)
         }
         .sheet(isPresented: $showProvisioning) {
             if let device = fleet.activeDevice {

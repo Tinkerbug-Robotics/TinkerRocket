@@ -11,6 +11,7 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import SceneKit
+import Combine
 
 // MARK: - Map Representable
 
@@ -525,7 +526,10 @@ struct Trajectory3DView: UIViewRepresentable {
 // MARK: - Main Drift Cast View
 
 struct DriftCastView: View {
-    @ObservedObject var device: BLEDevice
+    /// Optional: Reverse Drift Cast runs as a standalone wind/trajectory tool
+    /// with no live device (#42).  Only "Send to Unit" needs a connection, and
+    /// that control (DriftCastSendButton) is shown only when a device exists.
+    var device: BLEDevice?
     @Environment(\.dismiss) var dismiss
 
     // Display units (#160).  DriftCast is feet/knots-native (winds-aloft
@@ -541,11 +545,13 @@ struct DriftCastView: View {
     )
     @State private var tapMode: TapMode = .launch
 
-    // Input fields (persisted)
-    @AppStorage("dc_launchLat") private var launchLat: String = "37.7608"
-    @AppStorage("dc_launchLon") private var launchLon: String = "-75.7446"
-    @AppStorage("dc_landingLat") private var landingLat: String = "37.7608"
-    @AppStorage("dc_landingLon") private var landingLon: String = "-75.7446"
+    // Input fields (persisted).  Launch/landing default to empty so a fresh
+    // install seeds them from the phone's GPS on first open instead of an
+    // arbitrary fixed site; once set they persist across opens as before.
+    @AppStorage("dc_launchLat") private var launchLat: String = ""
+    @AppStorage("dc_launchLon") private var launchLon: String = ""
+    @AppStorage("dc_landingLat") private var landingLat: String = ""
+    @AppStorage("dc_landingLon") private var landingLon: String = ""
     @AppStorage("dc_apogeeFt") private var apogeeFt: String = "10000"
     @AppStorage("dc_drogueRate") private var drogueRate: String = "60"
     @AppStorage("dc_mainRate") private var mainRate: String = "18"
@@ -568,12 +574,12 @@ struct DriftCastView: View {
     @State private var result: GuidanceResult?
     @State private var isComputing = false
     @State private var errorMessage: String?
-    @State private var showSendConfirm = false
-    @State private var showSentAlert = false
 
-    // GPS for "Use GPS" button
-    @State private var locationManager = CLLocationManager()
-    @State private var lastUserLocation: CLLocationCoordinate2D?
+    // Phone GPS — seeds the launch/landing points on first open and backs the
+    // "Use GPS" button.  Reuses the app's delegate-backed manager so we get a
+    // real fix asynchronously, rather than whatever a bare CLLocationManager
+    // happened to have cached.
+    @StateObject private var locationManager = LocationManager()
 
     enum TapMode: String, CaseIterable {
         case launch = "Set Launch"
@@ -620,10 +626,6 @@ struct DriftCastView: View {
         return true
     }
 
-    private var canSend: Bool {
-        device.isConnected && result != nil && result!.feasible
-    }
-
     // MARK: - Body
 
     var body: some View {
@@ -650,23 +652,13 @@ struct DriftCastView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .alert("Guidance Sent", isPresented: $showSentAlert) {
-                Button("OK") { }
-            } message: {
-                if let r = result {
-                    Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: ", r.guidanceLat, r.guidanceLon)
-                         + UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem) + " AGL")
-                }
-            }
-            .alert("Send to Unit?", isPresented: $showSendConfirm) {
-                Button("Send", role: .none) { sendToUnit() }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                if let r = result {
-                    Text(String(format: "Send guidance point (%.6f, %.6f) at ", r.guidanceLat, r.guidanceLon)
-                         + UnitFormatter.altitude(ftToM(r.apogeeFt), system: unitSystem)
-                         + String(format: " AGL to %@?", device.connectedDeviceName))
-                }
+            .onAppear { locationManager.startUpdates() }
+            .onDisappear { locationManager.stopUpdates() }
+            // Seed the launch/landing points from the first GPS fix, but only
+            // while they're still blank — never clobber a value the user typed
+            // or one restored from a previous session.
+            .onReceive(locationManager.$userLocation) { coord in
+                if let coord = coord { seedPointsIfBlank(from: coord) }
             }
         }
     }
@@ -789,19 +781,11 @@ struct DriftCastView: View {
                 resultsSection(r)
                 windProfileSection(r.windProfile)
 
-                // Send to unit
-                Button(action: { showSendConfirm = true }) {
-                    Label("Send to Unit", systemImage: "antenna.radiowaves.left.and.right")
-                        .fontWeight(.bold)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(canSend ? Color.blue : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
+                // Send to unit — only when a device is connected (#42).  The
+                // tool itself runs standalone; uploading guidance needs a link.
+                if let device = device {
+                    DriftCastSendButton(device: device, result: r, unitSystem: unitSystem)
                 }
-                .disabled(!canSend)
-                .padding(.horizontal)
-                .padding(.bottom, 20)
             }
         }
         .padding(.top, 12)
@@ -949,20 +933,34 @@ struct DriftCastView: View {
         }
     }
 
-    private func useGPS() {
-        locationManager.requestWhenInUseAuthorization()
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
-
-        // Use the cached location directly instead of requestLocation(),
-        // which requires a CLLocationManagerDelegate that isn't set up here.
-        if let loc = locationManager.location {
-            launchLat = String(format: "%.6f", loc.coordinate.latitude)
-            launchLon = String(format: "%.6f", loc.coordinate.longitude)
+    /// Fill the launch/landing fields from a GPS fix the first time we get one,
+    /// leaving any field the user has already populated (or one restored from a
+    /// previous session) untouched.
+    private func seedPointsIfBlank(from coord: CLLocationCoordinate2D) {
+        if launchLat.isEmpty || launchLon.isEmpty {
+            launchLat = String(format: "%.6f", coord.latitude)
+            launchLon = String(format: "%.6f", coord.longitude)
             mapRegion = MKCoordinateRegion(
-                center: loc.coordinate,
+                center: coord,
                 span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
             )
         }
+        if landingLat.isEmpty || landingLon.isEmpty {
+            landingLat = String(format: "%.6f", coord.latitude)
+            landingLon = String(format: "%.6f", coord.longitude)
+        }
+    }
+
+    /// "Use GPS" button: snap the launch point to the phone's current location.
+    /// (Landing is the target, so it's intentionally left untouched here.)
+    private func useGPS() {
+        guard let coord = locationManager.userLocation else { return }
+        launchLat = String(format: "%.6f", coord.latitude)
+        launchLon = String(format: "%.6f", coord.longitude)
+        mapRegion = MKCoordinateRegion(
+            center: coord,
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        )
     }
 
     private func compute() {
@@ -1043,10 +1041,58 @@ struct DriftCastView: View {
         )
     }
 
+}
+
+// MARK: - Send-to-Unit Button
+
+/// Send-to-unit control for the drift cast result.  Split out so it can hold an
+/// `@ObservedObject` device — re-disabling itself the moment the BLE link drops
+/// — while the parent DriftCastView runs device-free (#42).  Only rendered when
+/// a device is present, so the standalone tool never shows a dead "Send" button.
+private struct DriftCastSendButton: View {
+    @ObservedObject var device: BLEDevice
+    let result: GuidanceResult
+    let unitSystem: UnitSystem
+
+    @State private var showSendConfirm = false
+    @State private var showSentAlert = false
+
+    private var canSend: Bool {
+        device.isConnected && result.feasible
+    }
+
+    var body: some View {
+        Button(action: { showSendConfirm = true }) {
+            Label("Send to Unit", systemImage: "antenna.radiowaves.left.and.right")
+                .fontWeight(.bold)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(canSend ? Color.blue : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+        }
+        .disabled(!canSend)
+        .padding(.horizontal)
+        .padding(.bottom, 20)
+        .alert("Send to Unit?", isPresented: $showSendConfirm) {
+            Button("Send", role: .none) { sendToUnit() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(String(format: "Send guidance point (%.6f, %.6f) at ", result.guidanceLat, result.guidanceLon)
+                 + UnitFormatter.altitude(ftToM(result.apogeeFt), system: unitSystem)
+                 + String(format: " AGL to %@?", device.connectedDeviceName))
+        }
+        .alert("Guidance Sent", isPresented: $showSentAlert) {
+            Button("OK") { }
+        } message: {
+            Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: ", result.guidanceLat, result.guidanceLon)
+                 + UnitFormatter.altitude(ftToM(result.apogeeFt), system: unitSystem) + " AGL")
+        }
+    }
+
     private func sendToUnit() {
-        guard let r = result else { return }
-        let altM = Float(ftToM(r.apogeeFt))
-        device.sendGuidancePoint(lat: r.guidanceLat, lon: r.guidanceLon, altitudeM: altM)
+        let altM = Float(ftToM(result.apogeeFt))
+        device.sendGuidancePoint(lat: result.guidanceLat, lon: result.guidanceLon, altitudeM: altM)
         showSentAlert = true
     }
 }
