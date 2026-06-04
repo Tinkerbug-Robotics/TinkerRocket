@@ -9,10 +9,10 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.3
+    version: 6.0.1
 direct_dependencies:
 - espressif/dhara
 - idf
 manifest_hash: 6f4972c0cd856d2015cba9831063a6a730deae8bd16edbea178fa4c6411182a3
 target: esp32p4
-version: 2.0.0
+version: 3.0.0
