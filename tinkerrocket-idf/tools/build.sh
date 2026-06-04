@@ -17,12 +17,14 @@ export PATH="/opt/homebrew/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Source ESP-IDF environment if not already loaded
+# Source ESP-IDF environment if not already loaded.
+# Pinned to the v5.5.x parallel install for the #88 I2C-V2 bench branch.
+IDF_EXPORT="$HOME/esp/esp-idf-v5.5/export.sh"
 if ! command -v idf.py &>/dev/null; then
-    if [ -f "$HOME/esp/esp-idf/export.sh" ]; then
-        . "$HOME/esp/esp-idf/export.sh" >/dev/null 2>&1
+    if [ -f "$IDF_EXPORT" ]; then
+        . "$IDF_EXPORT" >/dev/null 2>&1
     else
-        echo "ERROR: ESP-IDF not found. Run: . ~/esp/esp-idf/export.sh"
+        echo "ERROR: ESP-IDF v5.5 not found. Run: . $IDF_EXPORT"
         exit 1
     fi
 fi

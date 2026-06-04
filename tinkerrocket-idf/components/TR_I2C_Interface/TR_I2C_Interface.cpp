@@ -3,14 +3,35 @@
 #include <cstring>
 #include <esp_log.h>
 
+// This component targets the ESP-IDF V2 I2C slave driver (on_receive /
+// on_request + i2c_slave_write). On IDF 5.4/5.5 that requires the option
+// below; on 6.0+ V2 is the only slave driver and the macro is absent, so
+// this guard is a no-op there.
+#if defined(CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2) && !CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
+#error "TR_I2C_Interface needs the V2 slave driver: set CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2=y"
+#endif
+
 static const char *TAG = "I2C_IF";
+
+// I2C slave TX service task (services the V2 on_request callback by writing
+// the staged response). Pinned to the slave ISR's core and run at high
+// priority so it clears the V2 address-match SCL stretch well within the
+// hardware stretch-protect window (I2C_LL_STRETCH_PROTECT_TIME ~= 2.55 ms at
+// 400 kHz) — otherwise the master sees a held bus and wedges on clear_bus.
+static constexpr uint32_t    SLAVE_TX_TASK_STACK       = 3072;
+static constexpr UBaseType_t SLAVE_TX_TASK_PRIO        = 20;
+static constexpr int         SLAVE_TX_WRITE_TIMEOUT_MS = 20;
 
 TR_I2C_Interface::TR_I2C_Interface(uint8_t device_address_7bit)
     : device_address(device_address_7bit),
       _master_bus(nullptr),
       _master_dev(nullptr),
       _slave_dev(nullptr),
-      _rx_queue(nullptr)
+      _rx_queue(nullptr),
+      _tx_req_queue(nullptr),
+      _tx_mux(nullptr),
+      _tx_task(nullptr),
+      _tx_len(0)
 {
 }
 
@@ -60,26 +81,32 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
                                        size_t tx_buffer_len,
                                        bool enable_internal_pullups)
 {
-    (void)clock_hz;       // slave clock is driven by master
-    (void)rx_buffer_len;  // new API uses per-transaction buffers
+    (void)clock_hz;  // slave clock is driven by master
 
-    // Queue for ISR → task notification of completed receives
-    _rx_queue = xQueueCreate(4, sizeof(uint8_t *));
-    if (_rx_queue == nullptr)
+    // ISR -> task signals: _rx_queue carries each received frame's byte count;
+    // _tx_req_queue carries one token per master-read request. _tx_mux guards
+    // the staged TX response shared between writeToSlave() and slaveTxTask().
+    _rx_queue     = xQueueCreate(4, sizeof(size_t));
+    _tx_req_queue = xQueueCreate(4, sizeof(uint8_t));
+    _tx_mux       = xSemaphoreCreateMutex();
+    if (_rx_queue == nullptr || _tx_req_queue == nullptr || _tx_mux == nullptr)
     {
-        ESP_LOGE(TAG, "Failed to create slave RX queue");
+        ESP_LOGE(TAG, "Failed to create slave queues/mutex");
         return ESP_ERR_NO_MEM;
     }
+    _tx_len = 0;
 
     i2c_slave_config_t slave_cfg = {};
     slave_cfg.i2c_port = I2C_NUM_0;
     slave_cfg.sda_io_num = static_cast<gpio_num_t>(sda_pin);
     slave_cfg.scl_io_num = static_cast<gpio_num_t>(scl_pin);
     slave_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    slave_cfg.send_buf_depth = tx_buffer_len;
+    slave_cfg.send_buf_depth = tx_buffer_len;     // TX ringbuffer depth
+    slave_cfg.receive_buf_depth = rx_buffer_len;  // driver-owned RX ring
     slave_cfg.slave_addr = device_address;
     slave_cfg.addr_bit_len = I2C_ADDR_BIT_LEN_7;
     slave_cfg.intr_priority = 0;
+    slave_cfg.flags.enable_internal_pullup = enable_internal_pullups;
 
     esp_err_t err = i2c_new_slave_device(&slave_cfg, &_slave_dev);
     if (err != ESP_OK)
@@ -88,33 +115,49 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
         return err;
     }
 
-    // Register receive-done callback
+    memset(_slave_rx_buf, 0, SLAVE_RX_BUF_SIZE);
+
+    // Start the TX service task before registering callbacks so the consumer
+    // is ready the instant on_request can fire. Pin it to the core this runs
+    // on — the slave ISR is allocated on the same core, so on_request -> task
+    // wakeups stay on-core and clear the SCL stretch with minimal latency.
+    BaseType_t task_ok = xTaskCreatePinnedToCore(slaveTxTask, "i2c_slv_tx",
+                                                 SLAVE_TX_TASK_STACK, this,
+                                                 SLAVE_TX_TASK_PRIO, &_tx_task,
+                                                 xPortGetCoreID());
+    if (task_ok != pdPASS)
+    {
+        ESP_LOGE(TAG, "Failed to create I2C slave TX task");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Register both halves of the V2 slave protocol: on_receive (master writes
+    // land in our RX ring) and on_request (master reads -> wake the TX task).
+    // The V2 driver auto-receives, so there is no i2c_slave_receive() arming
+    // call as in V1.
     i2c_slave_event_callbacks_t cbs = {};
-    cbs.on_recv_done = slaveRxDoneISR;
+    cbs.on_receive = slaveReceiveISR;
+    cbs.on_request = slaveRequestISR;
     err = i2c_slave_register_event_callbacks(_slave_dev, &cbs, this);
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "i2c_slave_register_event_callbacks failed: %s", esp_err_to_name(err));
+        vTaskDelete(_tx_task);
+        _tx_task = nullptr;
         return err;
     }
 
-    // Zero the buffer and arm the first receive
-    memset(_slave_rx_buf, 0, SLAVE_RX_BUF_SIZE);
-    err = i2c_slave_receive(_slave_dev, _slave_rx_buf, SLAVE_RX_BUF_SIZE);
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG, "i2c_slave_receive (initial arm) failed: %s", esp_err_to_name(err));
-    }
-    return err;
+    return ESP_OK;
 }
 
 // ---------------------------------------------------------------------------
-//  Slave RX done ISR callback
-//  The new API fires this when the master completes a write transaction
-//  (STOP condition). edata->buffer points to our _slave_rx_buf.
-//  We post the buffer pointer to the queue so readFromSlave() can pick it up.
+//  Slave on_receive ISR (V2): master finished a write transaction.
+//  edata->buffer is driver-owned and reused on the next receive, so copy the
+//  payload into our class-scoped _slave_rx_buf and post the byte count to
+//  _rx_queue. Single-buffer: a second master write before readFromSlave()
+//  consumes the first overwrites it — acceptable at the FC->OC poll rate.
 // ---------------------------------------------------------------------------
-bool IRAM_ATTR TR_I2C_Interface::slaveRxDoneISR(
+bool IRAM_ATTR TR_I2C_Interface::slaveReceiveISR(
     i2c_slave_dev_handle_t channel,
     const i2c_slave_rx_done_event_data_t *edata,
     void *user_data)
@@ -123,11 +166,91 @@ bool IRAM_ATTR TR_I2C_Interface::slaveRxDoneISR(
     auto *self = static_cast<TR_I2C_Interface *>(user_data);
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    // Post the buffer pointer (for identification, not ownership transfer)
-    uint8_t *buf = edata->buffer;
-    xQueueSendFromISR(self->_rx_queue, &buf, &xHigherPriorityTaskWoken);
+    size_t copy_len = edata->length;
+    if (copy_len > SLAVE_RX_BUF_SIZE)
+    {
+        copy_len = SLAVE_RX_BUF_SIZE;
+    }
+    memcpy(self->_slave_rx_buf, edata->buffer, copy_len);
+    xQueueSendFromISR(self->_rx_queue, &copy_len, &xHigherPriorityTaskWoken);
 
     return xHigherPriorityTaskWoken == pdTRUE;
+}
+
+// ---------------------------------------------------------------------------
+//  Slave on_request ISR (V2): master is addressing us for a read. We cannot
+//  call i2c_slave_write() here (it takes a mutex), so post a token and let the
+//  TX service task perform the write — that feeds the master and releases the
+//  address-match SCL stretch.
+// ---------------------------------------------------------------------------
+bool IRAM_ATTR TR_I2C_Interface::slaveRequestISR(
+    i2c_slave_dev_handle_t channel,
+    const i2c_slave_request_event_data_t *edata,
+    void *user_data)
+{
+    (void)channel;
+    (void)edata;
+    auto *self = static_cast<TR_I2C_Interface *>(user_data);
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    const uint8_t token = 1;
+    xQueueSendFromISR(self->_tx_req_queue, &token, &xHigherPriorityTaskWoken);
+
+    return xHigherPriorityTaskWoken == pdTRUE;
+}
+
+// ---------------------------------------------------------------------------
+//  Slave TX service task: blocks on _tx_req_queue, then writes the staged
+//  response with i2c_slave_write() (which also clears the SCL stretch). If
+//  nothing has been staged yet, it writes a single zero byte so the master's
+//  read still completes and the bus is released promptly instead of hanging
+//  until the hardware stretch-protect timer.
+//
+//  Wire-alignment note: i2c_slave_write() pushes exactly _tx_len bytes; the FC
+//  reads a fixed size and resyncs on the SOF marker, so a small size mismatch
+//  is tolerated. Watch for cumulative drift on the bench — if the staged size
+//  and the master read size differ, leftover TX bytes can accumulate in the
+//  ringbuffer across polls.
+// ---------------------------------------------------------------------------
+void TR_I2C_Interface::slaveTxTask(void *arg)
+{
+    auto *self = static_cast<TR_I2C_Interface *>(arg);
+    uint8_t token = 0;
+
+    for (;;)
+    {
+        if (xQueueReceive(self->_tx_req_queue, &token, portMAX_DELAY) != pdTRUE)
+        {
+            continue;
+        }
+
+        // Snapshot the staged response under the mutex, then write outside it.
+        uint8_t local[SLAVE_TX_BUF_SIZE];
+        size_t len = 0;
+        if (xSemaphoreTake(self->_tx_mux, portMAX_DELAY) == pdTRUE)
+        {
+            len = self->_tx_len;
+            if (len > SLAVE_TX_BUF_SIZE)
+            {
+                len = SLAVE_TX_BUF_SIZE;
+            }
+            if (len > 0)
+            {
+                memcpy(local, self->_tx_buf, len);
+            }
+            xSemaphoreGive(self->_tx_mux);
+        }
+
+        if (len == 0)
+        {
+            local[0] = 0x00;
+            len = 1;
+        }
+
+        uint32_t written = 0;
+        i2c_slave_write(self->_slave_dev, local, static_cast<uint32_t>(len),
+                        &written, SLAVE_TX_WRITE_TIMEOUT_MS);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,8 +318,11 @@ int TR_I2C_Interface::readFromSlave(uint8_t* out_buf,
         return -1;
     }
 
-    uint8_t *buf_ptr = nullptr;
-    if (xQueueReceive(_rx_queue, &buf_ptr, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    // The on_receive ISR already copied the master-write payload into
+    // _slave_rx_buf and posted its byte count. The V2 driver auto-re-arms via
+    // its internal RX ring, so there is no explicit re-arming here.
+    size_t rx_len = 0;
+    if (xQueueReceive(_rx_queue, &rx_len, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
     {
         return 0; // no data available
     }
@@ -204,42 +330,29 @@ int TR_I2C_Interface::readFromSlave(uint8_t* out_buf,
     // Determine valid data length from frame protocol:
     // SOF(4) + type(1) + len(1) + payload(len) + CRC(2)
     size_t valid_len = 0;
-    if (buf_ptr[0] == SOF0 && buf_ptr[1] == SOF1 &&
-        buf_ptr[2] == SOF2 && buf_ptr[3] == SOF3)
+    if (rx_len >= 6 &&
+        _slave_rx_buf[0] == SOF0 && _slave_rx_buf[1] == SOF1 &&
+        _slave_rx_buf[2] == SOF2 && _slave_rx_buf[3] == SOF3)
     {
-        size_t payload_len = buf_ptr[5];
+        size_t payload_len = _slave_rx_buf[5];
         valid_len = 4 + 1 + 1 + payload_len + 2; // SOF + type + len + payload + CRC
-        if (valid_len > SLAVE_RX_BUF_SIZE)
+        if (valid_len > rx_len)
         {
-            valid_len = SLAVE_RX_BUF_SIZE; // safety clamp
+            valid_len = rx_len; // clamp to actually-received bytes
         }
     }
     else
     {
-        // Non-framed data or corrupted — return whatever we can
-        // Scan backwards for last non-zero byte
-        valid_len = SLAVE_RX_BUF_SIZE;
-        while (valid_len > 0 && buf_ptr[valid_len - 1] == 0)
-        {
-            valid_len--;
-        }
+        valid_len = rx_len;
     }
 
     if (valid_len == 0)
     {
-        // Re-arm and return no data
-        memset(_slave_rx_buf, 0, SLAVE_RX_BUF_SIZE);
-        i2c_slave_receive(_slave_dev, _slave_rx_buf, SLAVE_RX_BUF_SIZE);
         return 0;
     }
 
     size_t copy_len = (valid_len < out_buf_capacity) ? valid_len : out_buf_capacity;
-    memcpy(out_buf, buf_ptr, copy_len);
-
-    // Zero the buffer and re-arm for next receive
-    memset(_slave_rx_buf, 0, SLAVE_RX_BUF_SIZE);
-    i2c_slave_receive(_slave_dev, _slave_rx_buf, SLAVE_RX_BUF_SIZE);
-
+    memcpy(out_buf, _slave_rx_buf, copy_len);
     return static_cast<int>(copy_len);
 }
 
@@ -250,15 +363,28 @@ int TR_I2C_Interface::writeToSlave(const uint8_t* data,
                                    size_t len,
                                    uint32_t timeout_ms)
 {
-    if (data == nullptr || len == 0 || _slave_dev == nullptr)
+    if (data == nullptr || len == 0 || _slave_dev == nullptr || _tx_mux == nullptr)
     {
         return -1;
     }
-    esp_err_t err = i2c_slave_transmit(_slave_dev,
-                                       data,
-                                       static_cast<int>(len),
-                                       static_cast<int>(timeout_ms));
-    return (err == ESP_OK) ? static_cast<int>(len) : -1;
+    if (len > SLAVE_TX_BUF_SIZE)
+    {
+        len = SLAVE_TX_BUF_SIZE; // clamp to staging capacity
+    }
+
+    // Stage the latest response; slaveTxTask() serves it when on_request
+    // fires. Non-blocking when timeout_ms == 0: if the task momentarily holds
+    // the mutex, drop this update (the next poll stages a fresh one) — the
+    // same drop-on-contention behaviour the V1 path had on a full TX FIFO.
+    if (xSemaphoreTake(_tx_mux, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    {
+        return -1;
+    }
+    memcpy(_tx_buf, data, len);
+    _tx_len = len;
+    xSemaphoreGive(_tx_mux);
+
+    return static_cast<int>(len);
 }
 
 // ---------------------------------------------------------------------------
