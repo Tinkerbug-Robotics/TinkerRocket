@@ -2451,8 +2451,14 @@ static void setup_fc()
                 delay_ms(20);  // let OC service the request and queue the response
 
                 constexpr size_t kRespFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
-                uint8_t buf[kRespFrameLen + 16] = {};  // + slack for SOF byte loss
-                esp_err_t rerr = i2c_interface.masterRead(buf, sizeof(buf), 100);
+                // Read EXACTLY the staged frame size. The OC stages
+                // kRespFrameLen bytes; under the V2 slave driver, clocking out
+                // more than was staged underflows the TX path (the +16 "SOF
+                // byte loss" slack was a V1-only defense and V2 keeps the SOF
+                // at offset 0). Over-reading here is the inverse of the #88
+                // status-path residue bug. Buffer keeps slack for the scan.
+                uint8_t buf[kRespFrameLen + 16] = {};
+                esp_err_t rerr = i2c_interface.masterRead(buf, kRespFrameLen, 100);
                 if (rerr == ESP_OK) {
                     // SOF scan — same defensive pattern as the [CFG READ] path.
                     for (size_t off = 0; off + kRespFrameLen <= sizeof(buf); off++) {
@@ -4254,10 +4260,14 @@ static void loop_fc()
                         pin_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
                         gpio_config(&pin_cfg);
 
+                        // Force IO MUX back to plain GPIO. gpio_iomux_out()
+                        // was removed in ESP-IDF 6.0; gpio_func_sel(.., PIN_FUNC_GPIO)
+                        // is the supported replacement and matches the canonical
+                        // safePyroOutputInit() path above.
                         esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_iomux_out(arm_pin, 1, false);
+                        gpio_func_sel(arm_pin, PIN_FUNC_GPIO);
                         esp_rom_gpio_connect_out_signal(fire_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_iomux_out(fire_pin, 1, false);
+                        gpio_func_sel(fire_pin, PIN_FUNC_GPIO);
 
                         // ARM → settle → FIRE pulse → disarm (synchronous; ground only)
                         portENTER_CRITICAL(&pyro_spinlock);

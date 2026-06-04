@@ -6,6 +6,8 @@
 #include <driver/i2c_slave.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <RocketComputerTypes.h>
 
 class TR_I2C_Interface
@@ -67,10 +69,25 @@ private:
     static constexpr uint8_t SOF2 = 0xAA;
     static constexpr uint8_t SOF3 = 0x55;
 
-    // Slave RX callback — signals that a receive transaction completed
-    static bool IRAM_ATTR slaveRxDoneISR(i2c_slave_dev_handle_t channel,
+    // --- Slave callbacks (ESP-IDF V2 slave driver; run in ISR context) ----
+    // on_receive: master finished writing to us. The driver-owned buffer is
+    // reused on the next receive, so we memcpy it into _slave_rx_buf and post
+    // the byte count to _rx_queue for readFromSlave() to pick up.
+    static bool IRAM_ATTR slaveReceiveISR(i2c_slave_dev_handle_t channel,
                                           const i2c_slave_rx_done_event_data_t *edata,
                                           void *user_data);
+    // on_request: master is addressing us for a read. The V2 driver stretches
+    // SCL on address-match and only releases it when i2c_slave_write() runs —
+    // but that call takes a mutex and is illegal in ISR context. So we just
+    // wake slaveTxTask(), which performs the write (feeding the master and
+    // clearing the stretch). This is the fix for the #88 V2 bus-wedge: the
+    // earlier attempt left on_request unregistered, so reads never got served
+    // and the bus hung until the hardware stretch-protect timer.
+    static bool IRAM_ATTR slaveRequestISR(i2c_slave_dev_handle_t channel,
+                                          const i2c_slave_request_event_data_t *edata,
+                                          void *user_data);
+    // TX service task: blocks on _tx_req_queue, writes the staged response.
+    static void slaveTxTask(void *arg);
 
     uint8_t device_address;
 
@@ -81,11 +98,22 @@ private:
     // Slave mode handles
     i2c_slave_dev_handle_t _slave_dev;
 
-    // Slave RX: ISR posts buffer pointer to queue, readFromSlave dequeues.
-    // The frame protocol (SOF + len) determines how many bytes are valid.
+    // Slave RX: on_receive ISR copies the received frame into _slave_rx_buf
+    // and posts its byte count to _rx_queue; readFromSlave() dequeues + parses
+    // the framed message (SOF + len) from it.
     QueueHandle_t _rx_queue;
     static constexpr size_t SLAVE_RX_BUF_SIZE = 256;
     uint8_t _slave_rx_buf[SLAVE_RX_BUF_SIZE];
+
+    // Slave TX: writeToSlave() stages the latest response into _tx_buf under
+    // _tx_mux. on_request posts a token to _tx_req_queue; slaveTxTask() wakes,
+    // snapshots the staged bytes, and calls i2c_slave_write().
+    QueueHandle_t _tx_req_queue;
+    SemaphoreHandle_t _tx_mux;
+    TaskHandle_t _tx_task;
+    static constexpr size_t SLAVE_TX_BUF_SIZE = 256;
+    uint8_t _tx_buf[SLAVE_TX_BUF_SIZE];
+    volatile size_t _tx_len;
 };
 
 #endif

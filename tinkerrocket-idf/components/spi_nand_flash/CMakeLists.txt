@@ -45,5 +45,5 @@ endif()
 idf_component_register(SRCS ${srcs}
         INCLUDE_DIRS ${inc}
         PRIV_INCLUDE_DIRS ${priv_inc}
-        REQUIRES ${reqs}
+        REQUIRES esp_driver_spi ${reqs}
         PRIV_REQUIRES ${priv_reqs})

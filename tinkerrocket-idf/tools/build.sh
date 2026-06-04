@@ -17,12 +17,17 @@ export PATH="/opt/homebrew/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Source ESP-IDF environment if not already loaded
-if ! command -v idf.py &>/dev/null; then
-    if [ -f "$HOME/esp/esp-idf/export.sh" ]; then
-        . "$HOME/esp/esp-idf/export.sh" >/dev/null 2>&1
+# Source ESP-IDF environment. Pinned to the v6.0.x parallel install for the
+# #88 6.0 migration branch. FORCE it even when a different IDF is already
+# sourced: if a stray older IDF reconfigures the build dir it can silently
+# drop/alter sdkconfig options (defaults are only applied on a fresh
+# set-target). So we re-source whenever the active IDF isn't exactly this one.
+IDF_HOME="$HOME/esp/esp-idf-v6.0"
+if [ "$IDF_PATH" != "$IDF_HOME" ] || ! command -v idf.py &>/dev/null; then
+    if [ -f "$IDF_HOME/export.sh" ]; then
+        . "$IDF_HOME/export.sh" >/dev/null 2>&1
     else
-        echo "ERROR: ESP-IDF not found. Run: . ~/esp/esp-idf/export.sh"
+        echo "ERROR: ESP-IDF v6.0 not found at $IDF_HOME"
         exit 1
     fi
 fi
