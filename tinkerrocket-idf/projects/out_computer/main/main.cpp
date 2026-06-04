@@ -1100,11 +1100,22 @@ static bool isConfigCommand(uint8_t cmd)
 // than are in the TX ringbuffer.  Always write exactly this many bytes
 // so the slave hardware never underflows.
 static constexpr size_t FC_COMBINED_READ_SIZE = 96;
-// ESP-IDF I2C slave hardware eats 1 extra byte from the TX ring buffer
-// on each master read (prefetches into shift register, discarded at STOP).
-// Transmit 1 extra padding byte so the eaten byte is padding, not the
-// start of the next response.  FC still reads FC_COMBINED_READ_SIZE.
+// TX-byte accounting differs by slave-driver version (#88):
+//   V1: the hardware "eats" 1 extra byte per master read (prefetched into the
+//       shift register, discarded at STOP), so we padded by 1 to keep the
+//       ringbuffer drained and responses aligned.
+//   V2 (IDF >= 5.4): does NOT consume that extra byte. Anything staged beyond
+//       what the FC clocks out lingers in the TX ringbuffer and accumulates
+//       across polls, so the SOF drifts forward a byte each read and only the
+//       first (aligned) read parses (bench: query ok/fail stuck at 1/N).
+//       Under V2, stage exactly what the FC reads (pad = 0). Staged == read
+//       also avoids the V2 driver's "master clocked out more than staged"
+//       underflow.
+#if CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
+static constexpr size_t I2C_TX_PAD = 0;
+#else
 static constexpr size_t I2C_TX_PAD = 1;
+#endif
 static constexpr size_t I2C_TX_SIZE = FC_COMBINED_READ_SIZE + I2C_TX_PAD;
 
 static void queueOutStatusResponse(bool ready)

@@ -68,6 +68,14 @@ esp_err_t TR_I2C_Interface::beginMaster(int sda_pin,
     dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     dev_cfg.device_address  = device_address;
     dev_cfg.scl_speed_hz    = clock_hz;
+    // The OC slave runs the ESP-IDF V2 driver, which stretches SCL on
+    // address-match until its on_request TX task calls i2c_slave_write
+    // (bounded by the ~2.56 ms hardware stretch-protect timer @ 400 kHz). The
+    // master's default SCL-wait (I2C_LL_SCL_WAIT_US_VAL_DEFAULT = 2000 us) is
+    // shorter than that window, so reads abort mid-stretch (#88 bench:
+    // "[I2C] read FAIL ... dur~2400us", query ok/fail=0/N). Wait past the
+    // protect timer so the master tolerates the V2 slave's stretch.
+    dev_cfg.scl_wait_us     = 5000;
 
     err = i2c_master_bus_add_device(_master_bus, &dev_cfg, &_master_dev);
     if (err != ESP_OK)
