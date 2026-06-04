@@ -17,7 +17,7 @@ import Combine
 
 /// MapKit wrapper with tap gesture, annotations, and polyline overlays.
 struct DriftCastMapView: UIViewRepresentable {
-    @Binding var mapType: MKMapType
+    @Binding var tileSource: TileSource
     var launchCoord: CLLocationCoordinate2D?
     var landingCoord: CLLocationCoordinate2D?
     var guidanceCoord: CLLocationCoordinate2D?
@@ -29,8 +29,9 @@ struct DriftCastMapView: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
-        mapView.mapType = mapType
+        mapView.mapType = tileSource.appleMapType
         mapView.setRegion(region, animated: false)
+        context.coordinator.basemap.apply(tileSource, to: mapView)
 
         // Add tap gesture
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
@@ -40,9 +41,10 @@ struct DriftCastMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        if mapView.mapType != mapType {
-            mapView.mapType = mapType
+        if mapView.mapType != tileSource.appleMapType {
+            mapView.mapType = tileSource.appleMapType
         }
+        context.coordinator.basemap.apply(tileSource, to: mapView)
 
         // Update annotations
         mapView.removeAnnotations(mapView.annotations)
@@ -69,8 +71,8 @@ struct DriftCastMapView: UIViewRepresentable {
             mapView.addAnnotation(ann)
         }
 
-        // Update overlays
-        mapView.removeOverlays(mapView.overlays)
+        // Update DATA overlays only; leave the basemap tile overlay in place.
+        mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
 
         if descentTrack.count > 1 {
             let polyline = MKPolyline(coordinates: descentTrack, count: descentTrack.count)
@@ -98,6 +100,8 @@ struct DriftCastMapView: UIViewRepresentable {
     class Coordinator: NSObject, MKMapViewDelegate {
         var parent: DriftCastMapView
         var userIsInteracting = false
+        /// Shared basemap overlay controller (aligns Drift Cast with Rocket Map).
+        let basemap = BasemapOverlayController()
 
         init(_ parent: DriftCastMapView) {
             self.parent = parent
@@ -156,6 +160,9 @@ struct DriftCastMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let tile = overlay as? MKTileOverlay {
+                return MKTileOverlayRenderer(tileOverlay: tile)
+            }
             if let polyline = overlay as? MKPolyline {
                 let renderer = MKPolylineRenderer(polyline: polyline)
                 if polyline.title == "descent" {
@@ -231,10 +238,12 @@ struct Trajectory3DView: UIViewRepresentable {
         return SCNVector3(x, Float(altM), z)
     }
 
-    // MARK: - ArcGIS Satellite Imagery
+    // MARK: - USGS Satellite Imagery (cached)
 
-    /// Fetch satellite image from ArcGIS MapServer export API (no API key needed)
-    /// and apply as the ground plane texture.
+    /// Fetch the ground-plane texture from the USGS MapServer export API (no key,
+    /// public domain — consistent with the 2D source) and apply it. Routed
+    /// through OfflineTileCache so a scene viewed once renders offline later; if
+    /// there's no imagery and no connection, the grid stays.
     private static func fetchArcGISImagery(
         refLat: Double, refLon: Double, extent: Float,
         groundNode: SCNNode, sceneRoot: SCNNode
@@ -249,17 +258,12 @@ struct Trajectory3DView: UIViewRepresentable {
         let east = refLon + halfM / mPerDegLon
 
         let bbox = "\(west),\(south),\(east),\(north)"
-        let urlStr = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
+        let urlStr = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export"
             + "?bbox=\(bbox)&bboxSR=4326&imageSR=4326"
             + "&size=1024,1024&format=png&f=image"
+        let cacheKey = "3d_\(bbox)"
 
-        guard let url = URL(string: urlStr) else { return }
-
-        URLSession.shared.dataTask(with: url) { data, response, error in
-            guard let data = data,
-                  let httpResp = response as? HTTPURLResponse,
-                  httpResp.statusCode == 200,
-                  let image = UIImage(data: data) else { return }
+        let apply: (UIImage) -> Void = { image in
             DispatchQueue.main.async {
                 groundNode.geometry?.firstMaterial?.diffuse.contents = image
                 groundNode.geometry?.firstMaterial?.diffuse.wrapS = .clamp
@@ -269,6 +273,23 @@ struct Trajectory3DView: UIViewRepresentable {
                 sceneRoot.childNode(withName: "groundGrid", recursively: false)?
                     .removeFromParentNode()
             }
+        }
+
+        // Cached copy first → renders offline for a scene viewed before.
+        if let data = OfflineTileCache.shared.blob(forKey: cacheKey),
+           let image = UIImage(data: data) {
+            apply(image)
+            return
+        }
+
+        guard let url = URL(string: urlStr) else { return }
+        URLSession.shared.dataTask(with: url) { data, response, _ in
+            guard let data = data,
+                  let httpResp = response as? HTTPURLResponse,
+                  httpResp.statusCode == 200,
+                  let image = UIImage(data: data) else { return }
+            OfflineTileCache.shared.storeBlob(data, forKey: cacheKey)
+            apply(image)
         }.resume()
     }
 
@@ -538,16 +559,20 @@ struct DriftCastView: View {
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     // Map state
-    @State private var mapType: MKMapType = .hybrid
+    @State private var tileSource: TileSource = .appleHybrid
+    @State private var showOfflineMaps = false
+    /// Per-open guard: auto-seed launch/landing + map from the first GPS fix
+    /// once each time the view opens, unless the user has already acted.
+    @State private var didAutoSeed = false
     @State private var mapRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.7608, longitude: -75.7446),
         span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
     )
     @State private var tapMode: TapMode = .launch
 
-    // Input fields (persisted).  Launch/landing default to empty so a fresh
-    // install seeds them from the phone's GPS on first open instead of an
-    // arbitrary fixed site; once set they persist across opens as before.
+    // Input fields (persisted).  Launch/landing re-seed from the phone's GPS on
+    // each open (applyCurrentLocation); the persisted values are the fallback
+    // when no GPS fix is available, and hold any edits made within a session.
     @AppStorage("dc_launchLat") private var launchLat: String = ""
     @AppStorage("dc_launchLon") private var launchLon: String = ""
     @AppStorage("dc_landingLat") private var landingLat: String = ""
@@ -658,7 +683,12 @@ struct DriftCastView: View {
             // while they're still blank — never clobber a value the user typed
             // or one restored from a previous session.
             .onReceive(locationManager.$userLocation) { coord in
-                if let coord = coord { seedPointsIfBlank(from: coord) }
+                guard let coord = coord, !didAutoSeed else { return }
+                didAutoSeed = true
+                applyCurrentLocation(coord)
+            }
+            .sheet(isPresented: $showOfflineMaps) {
+                OfflineMapsView(suggestedCenter: mapRegion.center)
             }
         }
     }
@@ -680,6 +710,27 @@ struct DriftCastView: View {
                     Spacer()
                 }
 
+                // Basemap source + offline downloads (shared with Rocket Map).
+                Menu {
+                    Picker("Map source", selection: $tileSource) {
+                        ForEach(TileSource.allCases) { src in
+                            Label(src.displayName, systemImage: src.symbol).tag(src)
+                        }
+                    }
+                    Divider()
+                    Button { showOfflineMaps = true } label: {
+                        Label("Manage offline maps…", systemImage: "arrow.down.circle")
+                    }
+                } label: {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.2))
+                        .foregroundColor(.blue)
+                        .cornerRadius(8)
+                }
+
                 Button(action: { show3D.toggle() }) {
                     Label(show3D ? "2D" : "3D",
                           systemImage: show3D ? "map" : "cube")
@@ -694,28 +745,32 @@ struct DriftCastView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
 
-            // Map view: 2D or 3D
-            if show3D {
-                Trajectory3DView(result: result, unitSystem: unitSystem)
-                    .frame(height: 350)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            // Map view: 2D or 3D (offline pill overlaid on top).
+            ZStack(alignment: .top) {
+                if show3D {
+                    Trajectory3DView(result: result, unitSystem: unitSystem)
+                        .frame(height: 350)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal)
+                } else {
+                    DriftCastMapView(
+                        tileSource: $tileSource,
+                        launchCoord: launchCoord,
+                        landingCoord: landingCoord,
+                        guidanceCoord: guidanceCoord,
+                        descentTrack: descentTrackCoords,
+                        boostLine: boostLineCoords,
+                        region: $mapRegion,
+                        onTap: { coord in
+                            handleMapTap(coord)
+                        }
+                    )
+                    .frame(height: 250)
+                    .cornerRadius(12)
                     .padding(.horizontal)
-            } else {
-                DriftCastMapView(
-                    mapType: $mapType,
-                    launchCoord: launchCoord,
-                    landingCoord: landingCoord,
-                    guidanceCoord: guidanceCoord,
-                    descentTrack: descentTrackCoords,
-                    boostLine: boostLineCoords,
-                    region: $mapRegion,
-                    onTap: { coord in
-                        handleMapTap(coord)
-                    }
-                )
-                .frame(height: 250)
-                .cornerRadius(12)
-                .padding(.horizontal)
+                }
+                OfflinePill()
+                    .padding(.top, 8)
             }
         }
     }
@@ -922,6 +977,7 @@ struct DriftCastView: View {
     // MARK: - Actions
 
     private func handleMapTap(_ coord: CLLocationCoordinate2D) {
+        didAutoSeed = true   // user is placing points — don't auto-seed over them
         if tapMode == .launch {
             launchLat = String(format: "%.6f", coord.latitude)
             launchLon = String(format: "%.6f", coord.longitude)
@@ -933,28 +989,26 @@ struct DriftCastView: View {
         }
     }
 
-    /// Fill the launch/landing fields from a GPS fix the first time we get one,
-    /// leaving any field the user has already populated (or one restored from a
-    /// previous session) untouched.
-    private func seedPointsIfBlank(from coord: CLLocationCoordinate2D) {
-        if launchLat.isEmpty || launchLon.isEmpty {
-            launchLat = String(format: "%.6f", coord.latitude)
-            launchLon = String(format: "%.6f", coord.longitude)
-            mapRegion = MKCoordinateRegion(
-                center: coord,
-                span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
-            )
-        }
-        if landingLat.isEmpty || landingLon.isEmpty {
-            landingLat = String(format: "%.6f", coord.latitude)
-            landingLon = String(format: "%.6f", coord.longitude)
-        }
+    /// Center the map on the phone's current location and seed launch+landing to
+    /// it. Called once per open from the first GPS fix (see the onReceive guard),
+    /// so "current location" is the default each time the tool opens — unless the
+    /// user has already tapped/used GPS this session.
+    private func applyCurrentLocation(_ coord: CLLocationCoordinate2D) {
+        let lat = String(format: "%.6f", coord.latitude)
+        let lon = String(format: "%.6f", coord.longitude)
+        launchLat = lat;  launchLon = lon
+        landingLat = lat; landingLon = lon
+        mapRegion = MKCoordinateRegion(
+            center: coord,
+            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+        )
     }
 
     /// "Use GPS" button: snap the launch point to the phone's current location.
     /// (Landing is the target, so it's intentionally left untouched here.)
     private func useGPS() {
         guard let coord = locationManager.userLocation else { return }
+        didAutoSeed = true   // explicit user action — suppress the auto-seed
         launchLat = String(format: "%.6f", coord.latitude)
         launchLon = String(format: "%.6f", coord.longitude)
         mapRegion = MKCoordinateRegion(
