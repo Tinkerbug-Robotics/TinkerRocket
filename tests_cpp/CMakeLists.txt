@@ -204,12 +204,14 @@ gtest_discover_tests(test_tr_flightlog_core)
 # ---------- test_tr_ota (#8 phase 2) ----------
 # Host coverage for TR_OTA_Receiver: state machine, offset/size validation,
 # SHA-256 verification, callback fan-out. Real esp_ota_* is replaced with
-# FakeOTABackend (tests_cpp/fakes/) and mbedtls/sha256 is replaced with the
-# portable shim in host_shim/.
+# FakeOTABackend (tests_cpp/fakes/) and PSA Crypto (psa/crypto.h, used since the
+# 6.0 migration) is replaced with the portable SHA-256 shim in host_shim/
+# (psa_crypto_impl.c over sha256_impl.c).
 add_executable(test_tr_ota
     test_tr_ota.cpp
     ${LIB_DIR}/TR_OTA/TR_OTA_Receiver.cpp
     ${SHIM_DIR}/sha256_impl.c
+    ${SHIM_DIR}/psa_crypto_impl.c
 )
 target_include_directories(test_tr_ota PRIVATE
     ${SHIM_DIR}
