@@ -4260,10 +4260,14 @@ static void loop_fc()
                         pin_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
                         gpio_config(&pin_cfg);
 
+                        // Force IO MUX back to plain GPIO. gpio_iomux_out()
+                        // was removed in ESP-IDF 6.0; gpio_func_sel(.., PIN_FUNC_GPIO)
+                        // is the supported replacement and matches the canonical
+                        // safePyroOutputInit() path above.
                         esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_iomux_out(arm_pin, 1, false);
+                        gpio_func_sel(arm_pin, PIN_FUNC_GPIO);
                         esp_rom_gpio_connect_out_signal(fire_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_iomux_out(fire_pin, 1, false);
+                        gpio_func_sel(fire_pin, PIN_FUNC_GPIO);
 
                         // ARM → settle → FIRE pulse → disarm (synchronous; ground only)
                         portENTER_CRITICAL(&pyro_spinlock);

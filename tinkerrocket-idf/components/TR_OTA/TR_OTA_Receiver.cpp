@@ -3,7 +3,9 @@
 #include <cstdlib>
 #include <cstring>
 
-#include <mbedtls/sha256.h>
+// ESP-IDF 6.0 (TF-PSA-Crypto) made mbedtls' low-level <mbedtls/sha256.h>
+// private. Use the public PSA Crypto hashing API for the OTA image digest.
+#include <psa/crypto.h>
 
 TR_OTA_Receiver::TR_OTA_Receiver(TR_OTA_Backend& backend)
     : backend_(backend)
@@ -46,10 +48,17 @@ void TR_OTA_Receiver::notify()
 void TR_OTA_Receiver::initShaCtx()
 {
     freeShaCtx();
-    auto* ctx = static_cast<mbedtls_sha256_context*>(std::malloc(sizeof(mbedtls_sha256_context)));
+    // psa_crypto_init() is idempotent; safe to call on each session start.
+    if (psa_crypto_init() != PSA_SUCCESS) return;
+    auto* ctx = static_cast<psa_hash_operation_t*>(std::malloc(sizeof(psa_hash_operation_t)));
     if (!ctx) return;
-    mbedtls_sha256_init(ctx);
-    mbedtls_sha256_starts(ctx, 0);  // 0 = SHA-256 (not 224)
+    static const psa_hash_operation_t kInit = PSA_HASH_OPERATION_INIT;
+    *ctx = kInit;
+    if (psa_hash_setup(ctx, PSA_ALG_SHA_256) != PSA_SUCCESS)
+    {
+        std::free(ctx);
+        return;
+    }
     sha_ctx_ = ctx;
 }
 
@@ -57,8 +66,8 @@ void TR_OTA_Receiver::freeShaCtx()
 {
     if (sha_ctx_)
     {
-        auto* ctx = static_cast<mbedtls_sha256_context*>(sha_ctx_);
-        mbedtls_sha256_free(ctx);
+        auto* ctx = static_cast<psa_hash_operation_t*>(sha_ctx_);
+        psa_hash_abort(ctx);  // safe on an already-finished/inactive op
         std::free(ctx);
         sha_ctx_ = nullptr;
     }
@@ -67,17 +76,21 @@ void TR_OTA_Receiver::freeShaCtx()
 void TR_OTA_Receiver::shaUpdate(const uint8_t* data, size_t len)
 {
     if (!sha_ctx_) return;
-    auto* ctx = static_cast<mbedtls_sha256_context*>(sha_ctx_);
-    mbedtls_sha256_update(ctx, data, len);
+    auto* ctx = static_cast<psa_hash_operation_t*>(sha_ctx_);
+    psa_hash_update(ctx, data, len);
 }
 
 bool TR_OTA_Receiver::shaFinalAndCompare(const uint8_t expected[32])
 {
     if (!sha_ctx_) return false;
-    auto* ctx = static_cast<mbedtls_sha256_context*>(sha_ctx_);
+    auto* ctx = static_cast<psa_hash_operation_t*>(sha_ctx_);
     uint8_t computed[32];
-    mbedtls_sha256_finish(ctx, computed);
-    return std::memcmp(computed, expected, 32) == 0;
+    size_t computed_len = 0;
+    if (psa_hash_finish(ctx, computed, sizeof(computed), &computed_len) != PSA_SUCCESS)
+    {
+        return false;
+    }
+    return (computed_len == 32) && (std::memcmp(computed, expected, 32) == 0);
 }
 
 TR_OTA_Receiver::Error TR_OTA_Receiver::begin(uint32_t total_size, const uint8_t sha256[32])

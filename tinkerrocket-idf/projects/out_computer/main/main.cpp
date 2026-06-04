@@ -1111,10 +1111,14 @@ static constexpr size_t FC_COMBINED_READ_SIZE = 96;
 //       Under V2, stage exactly what the FC reads (pad = 0). Staged == read
 //       also avoids the V2 driver's "master clocked out more than staged"
 //       underflow.
-#if CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
-static constexpr size_t I2C_TX_PAD = 0;
+// V2 is in use when the 5.4/5.5 opt-in flag is set, OR unconditionally on
+// 6.0+ (V1 removed). The flag macro is absent on 6.0, so test the version too.
+#include <esp_idf_version.h>
+#if (defined(CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2) && CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2) \
+    || (ESP_IDF_VERSION_MAJOR >= 6)
+static constexpr size_t I2C_TX_PAD = 0;   // V2 slave driver
 #else
-static constexpr size_t I2C_TX_PAD = 1;
+static constexpr size_t I2C_TX_PAD = 1;   // legacy V1
 #endif
 static constexpr size_t I2C_TX_SIZE = FC_COMBINED_READ_SIZE + I2C_TX_PAD;
 

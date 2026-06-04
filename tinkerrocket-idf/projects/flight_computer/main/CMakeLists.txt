@@ -12,7 +12,7 @@ idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
     REQUIRES
-        TR_NVS
+        esp_driver_gpio esp_driver_spi esp_driver_uart TR_NVS
         TR_RocketComputerTypes
         TR_Sensor_Collector
         TR_Sensor_Collector_Sim

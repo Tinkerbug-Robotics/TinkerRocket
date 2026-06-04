@@ -17,8 +17,13 @@ if(ESP_PLATFORM)
   idf_component_register(
     SRCS ${RADIOLIB_SOURCES}
     INCLUDE_DIRS . src
-    REQUIRES driver
+    REQUIRES esp_driver_gpio driver
   )
+
+  # RadioLib (vendored) trips GCC-14's -Woverloaded-virtual: PhysicalLayer base
+  # methods are hidden by derived overloads. It's upstream third-party code, so
+  # downgrade that one warning from error rather than patch their sources (#88, 6.0).
+  target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=overloaded-virtual)
 
   return()
 endif()
