@@ -2,13 +2,19 @@
 #include <CRC.h>
 #include <cstring>
 #include <esp_log.h>
+#include <esp_idf_version.h>
 
 // This component targets the ESP-IDF V2 I2C slave driver (on_receive /
-// on_request + i2c_slave_write). On IDF 5.4/5.5 that requires the option
-// below; on 6.0+ V2 is the only slave driver and the macro is absent, so
-// this guard is a no-op there.
-#if defined(CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2) && !CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
-#error "TR_I2C_Interface needs the V2 slave driver: set CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2=y"
+// on_request + i2c_slave_write). Pre-6.0 it is opt-in, and a *missing* flag
+// (Kconfig "not set" => undefined macro, not defined-to-0) silently exposes
+// the V1 API — yielding a wall of confusing "no member 'on_receive'" /
+// "i2c_slave_write not declared" errors. Key the guard off the IDF version so
+// it fires on absent-OR-disabled, not just disabled. (On 6.0+ V2 is the only
+// slave driver and the flag no longer exists.)
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0)
+#  if !defined(CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2) || !CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
+#    error "TR_I2C_Interface requires the V2 I2C slave driver. Set CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2=y in sdkconfig.defaults, then regenerate sdkconfig (idf.py set-target <chip>)."
+#  endif
 #endif
 
 static const char *TAG = "I2C_IF";
