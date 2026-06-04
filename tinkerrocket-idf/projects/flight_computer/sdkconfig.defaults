@@ -25,12 +25,8 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
-# --- IDF 5.5 bench-branch additions (#88) --------------------------------
-# I2C slave driver V2 — FC is I2C master-only, but TR_I2C_Interface includes
-# <driver/i2c_slave.h> unconditionally, so the flag must match OC's.
-CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2=y
-
-# ESP32-P4 silicon: our boards are v1.x. IDF 5.5 raises the default min chip
+# --- ESP32-P4 / IDF version tuning (#88) ---------------------------------
+# ESP32-P4 silicon: our boards are v1.x. IDF 5.5+ raises the default min chip
 # rev to v3.x, which refuses to boot on v1.x. Accept the legacy series.
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
 CONFIG_ESP32P4_REV_MIN_100=y

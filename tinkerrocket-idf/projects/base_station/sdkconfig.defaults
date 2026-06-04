@@ -38,8 +38,3 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # FAT filesystem — enable long filenames (required for timestamped CSV logs)
 CONFIG_FATFS_LFN_HEAP=y
-
-# I2C slave driver V2: BS doesn't use slave functionality, but IDF builds the
-# shared TR_I2C_Interface component for every project, so the flag must match
-# OC/FC for the same .cpp to compile. See issue #88.
-CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2=y
