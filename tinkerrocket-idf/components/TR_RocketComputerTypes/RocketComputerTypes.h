@@ -1487,6 +1487,15 @@ static constexpr uint8_t OTA_DATA_CHUNK      = 0xEB;
 // update, which is why the connected-device version check false-positived (#8).
 static constexpr uint8_t FC_IDENTITY         = 0xEC;
 
+// --- Board→rocket mounting orientation setting (app → OC → FC) ---
+// Two-phase like CAMERA_CONFIG: the OC stages ORIENT_CONFIG_PENDING with an
+// ImuOrientConfigData payload readable as ORIENT_CONFIG_MSG.  The OC also
+// re-stages a stored MANUAL setting whenever the FC's status query reports a
+// different mapping (e.g. after an FC reboot fell back to auto), so manual
+// roll clocking survives power cycles without the app connected.
+static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload follows as ORIENT_CONFIG_MSG
+static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
+
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
 // real bottleneck, and the FC writes each received frame to flash (~2-3 ms/frame)
@@ -1529,6 +1538,19 @@ typedef struct __attribute__((packed))
     uint8_t camera_type;  // CAM_TYPE_NONE, CAM_TYPE_GOPRO, CAM_TYPE_RUNCAM
 } CameraConfigData;
 static_assert(sizeof(CameraConfigData) == 1, "CameraConfigData must be 1 byte");
+
+// Board→rocket mounting orientation setting (ORIENT_CONFIG_MSG payload).
+// IMU_ORIENT_AUTO lets the pad-gravity detect drive the mapping (fine for
+// non-controlled flights); a manual TR_Orientation code (0..23) is
+// authoritative and also fixes the roll clocking, which gravity cannot
+// observe — required when roll control / guidance must know which way the
+// control surfaces point.
+static constexpr uint8_t IMU_ORIENT_AUTO = 0xFF;
+typedef struct __attribute__((packed))
+{
+    uint8_t setting;  // IMU_ORIENT_AUTO or orientation code 0..23
+} ImuOrientConfigData;
+static_assert(sizeof(ImuOrientConfigData) == 1, "ImuOrientConfigData must be 1 byte");
 
 // Pyro trigger modes
 enum PyroTriggerMode : uint8_t {

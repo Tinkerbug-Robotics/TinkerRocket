@@ -572,6 +572,25 @@ static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
 static bool    cfg_guidance_en  = false;
 static uint8_t cfg_camera_type  = CAM_TYPE_RUNCAM;  // default: RunCam
+
+// IMU mounting orientation setting (#phase3): IMU_ORIENT_AUTO lets the
+// FC's pad-gravity detect drive the mapping; 0..23 pins a manual code.
+// NVS-persisted so a manual roll clocking survives power cycles.
+static uint8_t cfg_imu_orient = IMU_ORIENT_AUTO;
+
+// Stage the orientation setting as a two-phase config command to the FC
+// (same shape as camera/servo config).  Called from the BLE handler and
+// from the status-query self-heal when an FC reboot dropped a MANUAL
+// setting back to auto.
+static void stageImuOrientConfig()
+{
+    ImuOrientConfigData cfg;
+    cfg.setting = cfg_imu_orient;
+    memcpy(pending_config_data, &cfg, sizeof(cfg));
+    pending_config_data_len = sizeof(cfg);
+    pending_config_msg_type = ORIENT_CONFIG_MSG;
+    setPendingCommand(ORIENT_CONFIG_PENDING);
+}
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -1096,6 +1115,7 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == SERVO_REPLAY_PENDING ||
            cmd == ROLL_CTRL_CONFIG_PENDING ||
            cmd == PYRO_CONFIG_PENDING ||
+           cmd == ORIENT_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
            cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
@@ -1532,6 +1552,8 @@ static bool isKnownMessageType(uint8_t type)
         case GUIDANCE_TELEM_MSG:
         case CAMERA_CONFIG_PENDING:
         case CAMERA_CONFIG_MSG:
+        case ORIENT_CONFIG_PENDING:
+        case ORIENT_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -1729,6 +1751,27 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     last_query_cfg.b2r_mode != imu_orient_pub_mode)
                 {
                     imu_orient_dirty = true;
+                }
+
+                // Self-heal a stored MANUAL setting: if the FC reports a
+                // different mapping (e.g. it rebooted and fell back to
+                // auto), re-stage the config.  Idempotent — once applied
+                // the query reflects MANUAL+code and this goes quiet.
+                // Never during flight (the FC refuses mid-flight anyway).
+                if (cfg_imu_orient != IMU_ORIENT_AUTO &&
+                    latest_rocket_state != INFLIGHT &&
+                    (last_query_cfg.b2r_mode != ORIENT_MODE_MANUAL ||
+                     last_query_cfg.b2r_code != cfg_imu_orient))
+                {
+                    static uint32_t last_restage_ms = 0;
+                    const uint32_t now = millis();
+                    if ((now - last_restage_ms) > 5000U && pending_out_command == 0U)
+                    {
+                        last_restage_ms = now;
+                        stageImuOrientConfig();
+                        ESP_LOGI("CFG", "Re-staged MANUAL IMU orientation %u to FC",
+                                 (unsigned)cfg_imu_orient);
+                    }
                 }
             }
         }
@@ -2465,12 +2508,15 @@ static void sendFcIdentity()
 static void sendImuOrientation()
 {
     if (last_query_cfg.format_version < 3) return;  // pre-orientation FC
-    char buf[96];
+    // "set" is the user's SETTING (0xFF auto / manual code), distinct from
+    // code/mode/name which describe what the FC is actively applying.
+    char buf[112];
     snprintf(buf, sizeof(buf),
-             "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\"}",
+             "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\",\"set\":%u}",
              (unsigned)last_query_cfg.b2r_code,
              (unsigned)last_query_cfg.b2r_mode,
-             orientCodeName(last_query_cfg.b2r_code));
+             orientCodeName(last_query_cfg.b2r_code),
+             (unsigned)cfg_imu_orient);
     ble_app.sendConfigJSON(String(buf));
     imu_orient_pub_code = last_query_cfg.b2r_code;
     imu_orient_pub_mode = last_query_cfg.b2r_mode;
@@ -4158,6 +4204,16 @@ void initPeripherals()
                  cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                  cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
 
+        // Load cached IMU mounting orientation setting from NVS.  A MANUAL
+        // value gets pushed to the FC by the status-query self-heal once
+        // the FC starts polling — no explicit boot staging needed.
+        prefs.begin("orient", false);
+        cfg_imu_orient = prefs.getUChar("set", cfg_imu_orient);
+        prefs.end();
+        ESP_LOGI("CFG", "NVS IMU orientation: %s",
+                 cfg_imu_orient == IMU_ORIENT_AUTO
+                     ? "AUTO" : orientCodeName(cfg_imu_orient));
+
         // Load cached pyro config from NVS (4 channels)
         prefs.begin("pyro", true);
         size_t pyro_sz = prefs.getBytesLength("cfg");
@@ -5416,6 +5472,26 @@ static void loop_oc()
                          cfg_camera_type,
                          cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                          cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
+            }
+        }
+        else if (ble_cmd == 64)
+        {
+            // IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or
+            // a TR_Orientation code (0..23, manual incl. roll clocking).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1 &&
+                (payload[0] == IMU_ORIENT_AUTO || payload[0] < ORIENT_CODE_COUNT))
+            {
+                cfg_imu_orient = payload[0];
+                stageImuOrientConfig();
+                Preferences prefs;
+                prefs.begin("orient", false);
+                prefs.putUChar("set", cfg_imu_orient);
+                prefs.end();
+                ESP_LOGI("BLE", "IMU orientation setting: %s",
+                         cfg_imu_orient == IMU_ORIENT_AUTO
+                             ? "AUTO" : orientCodeName(cfg_imu_orient));
             }
         }
         else if (ble_cmd == 34)

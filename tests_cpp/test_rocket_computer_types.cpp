@@ -916,6 +916,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(OTA_STATUS_MSG),           MT(OTA_DATA_CHUNK),
         // FC->OC firmware-version push, relayed to the app for OTA verify (#8 P4).
         MT(FC_IDENTITY),
+        // Board->rocket mounting orientation setting (app->OC->FC).
+        MT(ORIENT_CONFIG_PENDING),    MT(ORIENT_CONFIG_MSG),
         MT(LORA_MSG),
     };
 #undef MT
@@ -936,7 +938,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // Tripwire: keep the registry above exhaustive.  If you add or remove a
     // message type in RocketComputerTypes.h, update this list AND this count
     // -- the uniqueness check is only as strong as the list it walks.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 78u)
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 80u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

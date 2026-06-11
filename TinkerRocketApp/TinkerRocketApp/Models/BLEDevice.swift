@@ -727,6 +727,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(33, payload: Data([cameraType]))
     }
 
+    /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
+    /// manual board→rocket code (authoritative incl. roll clocking).
+    func sendImuOrientationConfig(_ setting: UInt8) {
+        sendRawCommand(64, payload: Data([setting]))
+        if var cfg = rocketConfig {
+            cfg.imuOrientSetting = setting
+            rocketConfig = cfg
+        }
+    }
+
     /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
     /// Wire layout (24 bytes): 4 × {u8 enabled, u8 mode, f32 value}.
     func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) {
@@ -1352,11 +1362,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // axis the FC has mapped to the rocket nose and how it decided
         // (default / manual / pad-gravity auto-detect). Re-sent whenever the
         // FC re-orients on the pad, so the display tracks the live mapping.
+        // "set" is the user's setting (0xFF auto / manual code), cached into
+        // rocketConfig like the other readback values.
         if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            dict["type"] as? String == "imu_orient" {
             if let name = dict["name"] as? String { imuOrientationName = name }
             if let mode = dict["mode"] as? Int {
                 imuOrientationMode = IMUOrientationMode(rawValue: mode) ?? .unknown
+            }
+            if let set = dict["set"] as? Int, var cfg = rocketConfig {
+                cfg.imuOrientSetting = UInt8(clamping: set)
+                rocketConfig = cfg
             }
             print("[CFG] IMU orientation: \(imuOrientationName) (\(imuOrientationMode.label))")
             return

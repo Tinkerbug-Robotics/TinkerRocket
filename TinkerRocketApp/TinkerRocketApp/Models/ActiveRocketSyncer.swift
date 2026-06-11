@@ -160,6 +160,7 @@ final class ActiveRocketSyncer: ObservableObject {
         })
         device.sendGuidanceConfig(enabled: profile.guidanceEnabled)
         device.sendCameraConfig(cameraType: profile.cameraType)
+        device.sendImuOrientationConfig(profile.imuOrientSetting)
         device.sendSoundConfig(enabled: profile.soundsEnabled)
         device.sendPyroConfig(channels: [
             (profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),

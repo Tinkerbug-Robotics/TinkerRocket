@@ -4372,6 +4372,50 @@ static void loop_fc()
                              runtime_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
                 }
             }
+            else if (out_pending_command == ORIENT_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(ImuOrientConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(ORIENT_CONFIG_MSG, sizeof(ImuOrientConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(ImuOrientConfigData))
+                {
+                    const uint8_t setting = cfg_payload[0];
+                    if (rocket_state == INFLIGHT)
+                    {
+                        // Never re-frame mid-flight: EKF/control state is
+                        // only meaningful in the latched frame.
+                        ESP_LOGW(TAG, "[CFG] IMU orientation change ignored INFLIGHT");
+                    }
+                    else if (setting == IMU_ORIENT_AUTO)
+                    {
+                        // Back to auto.  Only act when leaving MANUAL —
+                        // reset to identity and let the pad-gravity detect
+                        // re-derive within a couple of seconds.
+                        if (b2r_active_mode == ORIENT_MODE_MANUAL)
+                        {
+                            applyBoardToRocketOrientation(ORIENT_CODE_IDENTITY,
+                                                          ORIENT_MODE_DEFAULT);
+                            orient_estimator.reset();
+                            if (ekf_initialized) ekf_initialized = false;
+                            ESP_LOGI(TAG, "[CFG] IMU orientation: AUTO (pad-gravity detect)");
+                        }
+                    }
+                    else if (setting < ORIENT_CODE_COUNT)
+                    {
+                        // Manual code is authoritative — it also fixes the
+                        // roll clocking the control surfaces need, which
+                        // auto-detect cannot observe.
+                        const bool changed = (b2r_active_code != setting) ||
+                                             (b2r_active_mode != ORIENT_MODE_MANUAL);
+                        applyBoardToRocketOrientation(setting, ORIENT_MODE_MANUAL);
+                        if (changed && ekf_initialized) ekf_initialized = false;
+                        ESP_LOGI(TAG, "[CFG] IMU orientation: MANUAL %s",
+                                 orientCodeName(setting));
+                    }
+                }
+            }
             else if (out_pending_command == PYRO_CONFIG_PENDING)
             {
                 delay_ms(1);
