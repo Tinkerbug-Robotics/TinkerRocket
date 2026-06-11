@@ -85,8 +85,15 @@ struct config
     // to the IMU's Z axis.
     static constexpr float IIS2MDC_ROT_Z_DEG = 0.0f;
 
-    // TODO Auto dection of orientation and rotation of aribtrary board position
-    // to body frame
+    // Board -> rocket mounting orientation (TR_Orientation code, 0-23).
+    // 0 = board +X toward the nose (the historical assumption).  Set to a
+    // different code when the board is mounted off-axis: nose_sel*4 + clock,
+    // nose_sel 0..5 = +X,-X,+Y,-Y,+Z,-Z, clock = quarter-turns about the
+    // nose.  Applied after the per-chip rotations above, so those stay
+    // PCB facts and this stays an airframe fact.  Pad-gravity auto-detect
+    // and the app-side setting arrive in later phases; until then this
+    // constant is the manual override.
+    static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0;
 
     // ### Camera Controls ###
     // Camera type: 0 = none, 1 = GoPro (GPIO pulse), 2 = RunCam (UART command)

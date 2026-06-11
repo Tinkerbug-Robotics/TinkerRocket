@@ -86,9 +86,10 @@ MSG_NAMES = {
     MSG_LORA:             "LoRa",
 }
 
-# Expected payload sizes for validation
+# Expected payload sizes for validation.  A tuple lists every valid size
+# (wire structs grow by appending version-gated fields).
 MSG_EXPECTED_LEN = {
-    MSG_OUT_STATUS_QUERY:  16,   # OutStatusQueryData
+    MSG_OUT_STATUS_QUERY:  (16, 26),  # OutStatusQueryData v2 / v3 (+b2r orientation)
     MSG_GNSS:              42,
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
@@ -116,8 +117,9 @@ FMT_POWER = '<I Hhh'
 FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
-# OutStatusQueryData: 16 bytes
+# OutStatusQueryData: 16 bytes (v2) / 26 bytes (v3, +b2r orientation)
 FMT_STATUS_QUERY = '<B H H hh B hhh'
+FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
 
@@ -166,6 +168,34 @@ PSF_CH3_CONT  = (1 << 4)
 PSF_CH3_FIRED = (1 << 5)
 PSF_CH4_CONT  = (1 << 6)
 PSF_CH4_FIRED = (1 << 7)
+
+
+# ---------- Board→rocket orientation ----------
+# Names for the 24 discrete mounting codes (TR_Orientation): which board
+# axis points at the nose + quarter-turn clocking about the nose.
+def b2r_code_name(code):
+    if code is None:
+        return "+X (default)"
+    axes = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
+    if not (0 <= code < 24):
+        return f"? ({code})"
+    name = axes[code // 4]
+    clock = (code % 4) * 90
+    return name if clock == 0 else f"{name} r{clock}"
+
+
+def quat_to_matrix(q):
+    """Scalar-first unit quaternion → row-major 3x3 rotation (list of rows)."""
+    w, x, y, z = q
+    n = math.sqrt(w * w + x * x + y * y + z * z)
+    if n < 1e-9:
+        return [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    w, x, y, z = w / n, x / n, y / n, z / n
+    return [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+    ]
 
 
 # ---------- CRC-16 (Rob Tillaart CRC library defaults) ----------
@@ -258,6 +288,11 @@ def parse_binary_file(filepath):
         "ism6_rot_z_deg": ISM6_ROT_Z_DEG,
         "mmc_rot_z_deg":  MMC_ROT_Z_DEG,
         "hg_bias": (0.0, 0.0, 0.0),
+        # Board→rocket mounting orientation (OutStatusQueryData v3+).
+        # None = identity (board +X toward the nose, pre-v3 logs).
+        "b2r_code": None,
+        "b2r_mode": None,
+        "b2r_quat": None,
     }
 
     stats = {
@@ -287,12 +322,14 @@ def parse_binary_file(filepath):
         msg_len = data[pos + 1]
         pos += 2
 
-        # Validate known types
+        # Validate known types (int = exact size, tuple = any listed size)
         if msg_type in MSG_EXPECTED_LEN:
             expected = MSG_EXPECTED_LEN[msg_type]
-            if expected is not None and msg_len != expected:
-                pos -= 1
-                continue
+            if expected is not None:
+                valid = expected if isinstance(expected, tuple) else (expected,)
+                if msg_len not in valid:
+                    pos -= 1
+                    continue
 
         if pos + msg_len + 2 > file_size:
             break
@@ -334,6 +371,12 @@ def parse_binary_file(filepath):
                             fields[7] / 100.0,
                             fields[8] / 100.0,
                         )
+                    if fmt_ver >= 3 and msg_len >= 26:
+                        b2r = struct.unpack(FMT_STATUS_QUERY_B2R, payload[16:26])
+                        config["b2r_code"] = b2r[0]
+                        config["b2r_mode"] = b2r[1]
+                        config["b2r_quat"] = (b2r[2] / 10000.0, b2r[3] / 10000.0,
+                                              b2r[4] / 10000.0, b2r[5] / 10000.0)
                     config_seen = True
 
             elif msg_type == MSG_GNSS:
@@ -497,6 +540,17 @@ def parse_binary_file(filepath):
     c_rot, s_rot = math.cos(rot_rad), math.sin(rot_rad)
     hg_bx, hg_by, hg_bz = config["hg_bias"]
 
+    # Board→rocket mounting rotation (matches SensorConverter: applied LAST,
+    # after the chip Z rotation and bias subtraction).  Identity when absent.
+    b2r = quat_to_matrix(config["b2r_quat"]) if config["b2r_quat"] else None
+
+    def apply_b2r(x, y, z):
+        if b2r is None:
+            return x, y, z
+        return (b2r[0][0] * x + b2r[0][1] * y + b2r[0][2] * z,
+                b2r[1][0] * x + b2r[1][1] * y + b2r[1][2] * z,
+                b2r[2][0] * x + b2r[2][1] * y + b2r[2][2] * z)
+
     for r in ism6_raw:
         # Low-g accel → m/s², rotate to board frame
         lg_x = r["lg_x"] * acc_low_scale
@@ -511,17 +565,27 @@ def parse_binary_file(filepath):
         gy_y = r["gy_y"] * gyro_scale
         gy_z = r["gy_z"] * gyro_scale
 
+        low = apply_b2r(lg_x * c_rot - lg_y * s_rot,
+                        lg_x * s_rot + lg_y * c_rot,
+                        lg_z)
+        high = apply_b2r((hg_x * c_rot - hg_y * s_rot) - hg_bx,
+                         (hg_x * s_rot + hg_y * c_rot) - hg_by,
+                         hg_z - hg_bz)
+        gyro = apply_b2r(gy_x * c_rot - gy_y * s_rot,
+                         gy_x * s_rot + gy_y * c_rot,
+                         gy_z)
+
         records["ISM6HG256"].append({
             "time_us":     r["time_us"],
-            "low_acc_x":   lg_x * c_rot - lg_y * s_rot,
-            "low_acc_y":   lg_x * s_rot + lg_y * c_rot,
-            "low_acc_z":   lg_z,
-            "high_acc_x":  (hg_x * c_rot - hg_y * s_rot) - hg_bx,
-            "high_acc_y":  (hg_x * s_rot + hg_y * c_rot) - hg_by,
-            "high_acc_z":  hg_z - hg_bz,
-            "gyro_x":      gy_x * c_rot - gy_y * s_rot,
-            "gyro_y":      gy_x * s_rot + gy_y * c_rot,
-            "gyro_z":      gy_z,
+            "low_acc_x":   low[0],
+            "low_acc_y":   low[1],
+            "low_acc_z":   low[2],
+            "high_acc_x":  high[0],
+            "high_acc_y":  high[1],
+            "high_acc_z":  high[2],
+            "gyro_x":      gyro[0],
+            "gyro_y":      gyro[1],
+            "gyro_z":      gyro[2],
         })
 
     # --- Post-process MMC raw data with rotation ---
@@ -531,9 +595,12 @@ def parse_binary_file(filepath):
         mx = decode_mmc_centered(rec.pop("raw_x"))
         my = decode_mmc_centered(rec.pop("raw_y"))
         mz = decode_mmc_centered(rec.pop("raw_z"))
-        rec["mag_x"] = mx * c_mmc - my * s_mmc
-        rec["mag_y"] = mx * s_mmc + my * c_mmc
-        rec["mag_z"] = mz
+        mag = apply_b2r(mx * c_mmc - my * s_mmc,
+                        mx * s_mmc + my * c_mmc,
+                        mz)
+        rec["mag_x"] = mag[0]
+        rec["mag_y"] = mag[1]
+        rec["mag_z"] = mag[2]
 
     # Sort each sensor type by timestamp so MRAM ring-buffer drain
     # (which can interleave older pre-launch frames with newer ones)
@@ -1436,6 +1503,9 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
     print(f"    MMC rot Z:     {config['mmc_rot_z_deg']:.1f}°")
     print(f"    HG bias:       ({config['hg_bias'][0]:.2f}, "
           f"{config['hg_bias'][1]:.2f}, {config['hg_bias'][2]:.2f}) m/s²")
+    mode_names = {0: "default", 1: "manual", 2: "auto-snap", 3: "auto-exact"}
+    mode = mode_names.get(config["b2r_mode"], "pre-v3 log")
+    print(f"    Board→rocket:  {b2r_code_name(config['b2r_code'])} ({mode})")
     print()
 
     # Determine global t0 (earliest timestamp)

@@ -555,13 +555,24 @@ typedef struct __attribute__((packed))
     uint16_t ism6_gyro_fs_dps;    // e.g. 4000
     int16_t  ism6_rot_z_cdeg;     // centi-deg
     int16_t  mmc_rot_z_cdeg;      // centi-deg
-    uint8_t  format_version;      // payload format version (2 = has HG bias)
+    uint8_t  format_version;      // payload format version
+                                  //   2 = has HG bias
+                                  //   3 = has board→rocket orientation
     int16_t  hg_bias_x_cmss;     // high-g bias X, centi-m/s² (0.01 m/s² units)
     int16_t  hg_bias_y_cmss;     // high-g bias Y, centi-m/s²
     int16_t  hg_bias_z_cmss;     // high-g bias Z, centi-m/s²
+
+    // Board→rocket mounting orientation (format_version >= 3).  The
+    // quaternion (scalar-first, ×10000 like NonSensorData) is what the
+    // OC actually applies to its SensorConverter — it covers both the
+    // 24 discrete codes and a future exact (non-snapped) auto rotation.
+    // code/mode (TR_Orientation ORIENT_*) describe it for display/log.
+    uint8_t  b2r_code;           // discrete orientation code (0 = +X nose)
+    uint8_t  b2r_mode;           // ORIENT_MODE_* (how it was determined)
+    int16_t  b2r_q[4];           // board→rocket quaternion ×10000
 } OutStatusQueryData;
-static_assert(sizeof(OutStatusQueryData) == 16,
-              "OutStatusQueryData must be 16 bytes");
+static_assert(sizeof(OutStatusQueryData) == 26,
+              "OutStatusQueryData must be 26 bytes");
 
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
@@ -1635,7 +1646,8 @@ static_assert(sizeof(RollControlConfigData) == 4, "RollControlConfigData must be
 // bytes" convention still holds.
 struct __attribute__((packed)) FlightSettingsData
 {
-    static constexpr uint8_t VERSION = 1;
+    // v2: appended board→rocket mounting orientation (b2r_* fields).
+    static constexpr uint8_t VERSION = 2;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -1692,8 +1704,18 @@ struct __attribute__((packed)) FlightSettingsData
 
     // Active roll profile (num_waypoints == 0 → rate-only)
     RollProfileData roll_profile;
+
+    // Board→rocket mounting orientation that actually flew (v2+).
+    // Mirrors OutStatusQueryData v3: quaternion is authoritative,
+    // code/mode (TR_Orientation ORIENT_*) describe it.  residual is the
+    // angle between the auto-detected nose vector and the snapped axis
+    // (0 for manual/default; meaningful once auto-detect lands).
+    uint8_t  b2r_code;            // discrete orientation code (0 = +X nose)
+    uint8_t  b2r_mode;            // ORIENT_MODE_*
+    int16_t  b2r_residual_cdeg;   // auto-snap residual, centi-deg
+    int16_t  b2r_q[4];            // board→rocket quaternion ×10000
 };
-static_assert(sizeof(FlightSettingsData) == 188, "FlightSettingsData layout check");
+static_assert(sizeof(FlightSettingsData) == 200, "FlightSettingsData layout check");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the

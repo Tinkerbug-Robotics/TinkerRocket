@@ -52,6 +52,7 @@ static inline std::string itos(int v)
 #include <TR_LogToFlash.h>
 #include <TR_LoRa_Comms.h>
 #include <TR_Sensor_Data_Converter.h>
+#include <TR_Orientation.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <RocketComputerTypes.h>
@@ -1701,6 +1702,20 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     (float)last_query_cfg.hg_bias_x_cmss / 100.0f,
                     (float)last_query_cfg.hg_bias_y_cmss / 100.0f,
                     (float)last_query_cfg.hg_bias_z_cmss / 100.0f);
+            }
+            // Apply board→rocket mounting orientation (format v3+) so the
+            // OC's conversions match the FC's.  The quaternion is the
+            // authoritative rotation; code/mode are descriptive.
+            if (last_query_cfg.format_version >= 3)
+            {
+                float q[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    q[i] = (float)last_query_cfg.b2r_q[i] / ORIENT_QUAT_WIRE_SCALE;
+                }
+                float R[9];
+                orientQuatToMatrix(q, R);
+                sensor_converter.configureBoardToRocket(R);
             }
         }
         queueOutStatusResponse(true);

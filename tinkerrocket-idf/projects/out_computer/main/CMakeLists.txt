@@ -13,6 +13,7 @@ idf_component_register(
         TR_FlightLog
         TR_LoRa_Comms
         TR_Sensor_Data_Converter
+        TR_Orientation
         TR_Coordinates
         TR_BLE_To_APP
         TR_INA230

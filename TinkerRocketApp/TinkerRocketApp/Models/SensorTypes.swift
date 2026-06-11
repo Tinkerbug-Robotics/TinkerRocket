@@ -23,7 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
-    case flightSettings = 0xE1  // FlightSettingsData (149B) — runtime settings snapshot at launch (#165)
+    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
@@ -129,6 +129,25 @@ nonisolated struct FlightSettingsData {
     let num_waypoints: UInt8
     let waypoints: [RollWaypointRaw]
 
+    // v2 tail: board→rocket mounting orientation, appended at fixed offset
+    // 188 after the full v1 layout. nil on v1 frames (pre-orientation
+    // firmware, which always assumed the +X-nose mounting).
+    let b2r_code: UInt8?
+    let b2r_mode: UInt8?            // 0 default, 1 manual, 2 auto-snap, 3 auto-exact
+    let b2r_residual_deg: Float?    // auto-snap residual angle
+    let b2r_quat: [Float]?          // board→rocket quaternion, scalar-first
+
+    /// "−Z r90"-style mounting name (mirrors firmware orientCodeName):
+    /// which board axis points at the nose + quarter-turn clocking.
+    static func b2rName(code: UInt8) -> String {
+        let axes = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"]
+        guard code < 24 else { return "?" }
+        let base = axes[Int(code) / 4]
+        let clock = (Int(code) % 4) * 90
+        return clock == 0 ? base : "\(base) r\(clock)"
+    }
+    var b2rDisplayName: String? { b2r_code.map { FlightSettingsData.b2rName(code: $0) } }
+
     var useAngleControl: Bool { flags & (1 << FlightSettingsData.fUseAngleControl) != 0 }
     var gainScheduleEnabled: Bool { flags & (1 << FlightSettingsData.fGainSchedule) != 0 }
     var guidanceEnabled: Bool { flags & (1 << FlightSettingsData.fGuidance) != 0 }
@@ -213,6 +232,21 @@ nonisolated struct FlightSettingsData {
             wps.append(RollWaypointRaw(time_s: t, angle_deg: a, mode: m))
         }
         waypoints = wps
+
+        // v2 board→rocket orientation tail at fixed offset 188 (after the
+        // full 76-byte roll profile, independent of num_waypoints).
+        if version >= 2 && data.count >= 200 {
+            var o = 188
+            b2r_code = data.readUInt8(at: &o)
+            b2r_mode = data.readUInt8(at: &o)
+            b2r_residual_deg = Float(data.readInt16LE(at: &o)) / 100.0
+            b2r_quat = (0..<4).map { _ in Float(data.readInt16LE(at: &o)) / 10000.0 }
+        } else {
+            b2r_code = nil
+            b2r_mode = nil
+            b2r_residual_deg = nil
+            b2r_quat = nil
+        }
     }
 }
 

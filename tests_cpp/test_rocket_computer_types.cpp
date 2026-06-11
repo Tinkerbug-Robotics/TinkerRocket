@@ -790,7 +790,7 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
 // here so a struct edit can't silently desync the cross-language decode.
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
-    EXPECT_EQ(sizeof(FlightSettingsData), 188u);  // +12 vs pre-4ch pyro
+    EXPECT_EQ(sizeof(FlightSettingsData), 200u);  // v2: +12 for b2r orientation
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
@@ -824,6 +824,13 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
 
     // Roll profile waypoints start (RollProfileData @ 112, after num+pad).
     EXPECT_EQ(offsetof(FlightSettingsData, roll_profile) + offsetof(RollProfileData, waypoints), 116u);
+
+    // v2 board→rocket orientation tail — appended after the full v1 layout
+    // (188 bytes) so v1 parsers still decode their prefix unchanged.
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_code),          188u);
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_mode),          189u);
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_residual_cdeg), 190u);
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_q),             192u);
 }
 
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {

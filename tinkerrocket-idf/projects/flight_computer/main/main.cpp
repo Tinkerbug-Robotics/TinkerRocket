@@ -9,6 +9,7 @@
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
 #include <TR_Sensor_Data_Converter.h>
+#include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
 #include <TR_KinematicChecks.h>
 #include <TR_MagCalibrator.h>
@@ -249,6 +250,15 @@ static uint8_t out_pending_command = 0U;
 static uint8_t last_processed_cmd = 0U;  // dedup: ignore OutComputer repeats
 static bool end_flight_sent = false;
 static OutStatusQueryData out_status_query_data = {};
+
+// Active board→rocket mounting orientation.  Phase 1: static from
+// config::BOARD_TO_ROCKET_ORIENT at boot; pad-gravity auto-detect (phase 2)
+// and the app setting (phase 3) will call applyBoardToRocketOrientation()
+// again at runtime.  Cached here so the OC status query and the flight
+// settings snapshot both report what the converter is actually applying.
+static uint8_t b2r_active_code = ORIENT_CODE_IDENTITY;
+static uint8_t b2r_active_mode = ORIENT_MODE_DEFAULT;
+static float   b2r_active_quat[4] = {1.0f, 0.0f, 0.0f, 0.0f};
 static float ground_pressure_pa = 101325.0f;
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
@@ -1264,6 +1274,36 @@ static void fcRevertToTx()
     ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
 }
 
+// Apply a discrete board→rocket mounting orientation everywhere it matters:
+// the converter (rotates all vector sensors into rocket frame), the sim
+// collector (inverse, so synthesized sensor counts survive the forward
+// path), the cached b2r_active_* globals (flight settings snapshot), and
+// the OC status query payload (keeps the OC's converter consistent — the
+// query repeats every poll, so a runtime change propagates within one
+// cycle).  Phase 1 calls this once at boot from config; auto-detect
+// (phase 2) and the app setting (phase 3) re-call it at runtime.
+static void applyBoardToRocketOrientation(uint8_t code, uint8_t mode)
+{
+    float R[9];
+    orientCodeToMatrix(code, R);
+    sensor_converter.configureBoardToRocket(R);
+    sensor_collector.configureSimBoardToRocket(R);
+
+    b2r_active_code = code;
+    b2r_active_mode = mode;
+    orientCodeToQuat(code, b2r_active_quat);
+
+    out_status_query_data.b2r_code = code;
+    out_status_query_data.b2r_mode = mode;
+    for (int i = 0; i < 4; ++i) {
+        out_status_query_data.b2r_q[i] =
+            (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
+    }
+
+    ESP_LOGI(TAG, "Board→rocket orientation: %s (code %u, mode %u)",
+             orientCodeName(code), (unsigned)code, (unsigned)mode);
+}
+
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
 // the live PID gains from servo_control (these can be NVS- or BLE-overridden),
 // the runtime override globals, the config:: defaults for the compile-time-only
@@ -1326,6 +1366,14 @@ static void buildFlightSettings(FlightSettingsData& s)
     strncpy(s.fw_git_sha, FW_GIT_SHA, sizeof(s.fw_git_sha) - 1);
 
     s.roll_profile = roll_profile;
+
+    // Board→rocket mounting orientation that actually flew (v2).
+    s.b2r_code = b2r_active_code;
+    s.b2r_mode = b2r_active_mode;
+    s.b2r_residual_cdeg = 0;  // meaningful once pad-gravity auto-detect lands
+    for (int i = 0; i < 4; ++i) {
+        s.b2r_q[i] = (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
+    }
 }
 
 static void sendFlightSettings()
@@ -2282,6 +2330,12 @@ static void setup_fc()
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
 
+    // Board→rocket mounting orientation (converter + sim + OC query payload).
+    applyBoardToRocketOrientation(
+        config::BOARD_TO_ROCKET_ORIENT,
+        (config::BOARD_TO_ROCKET_ORIENT == ORIENT_CODE_IDENTITY)
+            ? ORIENT_MODE_DEFAULT : ORIENT_MODE_MANUAL);
+
     // Apply mag hard-iron offset to the IIS2MDC chip now that begin() has
     // finished its softReset (which zeroes OFFSET_X/Y/Z).  Issue #96.
     if (pending_mag_apply && sensor_collector.isIIS2MDCActive())
@@ -2308,7 +2362,9 @@ static void setup_fc()
     out_status_query_data.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
     out_status_query_data.ism6_rot_z_cdeg = (int16_t)lroundf(config::ISM6HG256_ROT_Z_DEG * 100.0f);
     out_status_query_data.mmc_rot_z_cdeg = (int16_t)lroundf(config::MMC5983MA_ROT_Z_DEG * 100.0f);
-    out_status_query_data.format_version = 2;
+    // v3: adds board→rocket orientation (b2r_* fields, filled by
+    // applyBoardToRocketOrientation above and on any runtime change).
+    out_status_query_data.format_version = 3;
 
     // NOTE: Do NOT drain the slave TX buffer here.  With the new
     // i2c_slave driver, reading when the slave has no TX data queued
@@ -3052,36 +3108,24 @@ static void loop_fc()
                 if (have_ref_pos && gnss_gate3_init) {
                     ekf.init(ekf_imu, ekf_gnss, ekf_mag);
 
-                    // Pad heading initialization: compute initial quaternion from
-                    // accel (pitch) + known heading, bypassing noisy magnetometer.
+                    // Pad attitude initialization: quaternion from measured
+                    // gravity (any attitude — see quatFromAccelHeading) plus
+                    // the known pad heading, bypassing the noisy magnetometer.
+                    // The IMU data is already in ROCKET frame here (the
+                    // converter applies the board→rocket mounting rotation),
+                    // so this is mounting-agnostic by construction.
                     {
                         static constexpr double DEG2RAD_d = M_PI / 180.0;
-                        const float g = 9.807f;
-                        // acc in FRD: nose-up → acc_x ≈ +g, acc_z ≈ 0
-                        float g_mag = sqrtf(ekf_imu.acc_x*ekf_imu.acc_x +
-                                            ekf_imu.acc_y*ekf_imu.acc_y +
-                                            ekf_imu.acc_z*ekf_imu.acc_z);
-                        if (g_mag < 0.1f) g_mag = g;
-                        float pitch_rad = asinf((float)ekf_imu.acc_x / g_mag);
-                        float roll_rad = 0.0f;
-                        if (fabsf(pitch_rad) < 80.0f * (float)DEG2RAD_d) {
-                            roll_rad = atan2f(-(float)ekf_imu.acc_y, -(float)ekf_imu.acc_z);
-                        }
-                        float heading_rad = (float)(config::PAD_HEADING_DEG * DEG2RAD_d);
-
-                        // Build body-to-NED quaternion from ZYX Euler (yaw, pitch, roll)
-                        float cy = cosf(heading_rad * 0.5f), sy = sinf(heading_rad * 0.5f);
-                        float cp = cosf(pitch_rad * 0.5f),   sp = sinf(pitch_rad * 0.5f);
-                        float cr = cosf(roll_rad * 0.5f),     sr = sinf(roll_rad * 0.5f);
-                        float q0 = cr*cp*cy + sr*sp*sy;
-                        float q1 = sr*cp*cy - cr*sp*sy;
-                        float q2 = cr*sp*cy + sr*cp*sy;
-                        float q3 = cr*cp*sy - sr*sp*cy;
-
-                        ekf.setQuaternion(q0, q1, q2, q3);
-                        ESP_LOGI(TAG, "[EKF] Init: pitch=%.1f roll=%.1f heading=%.1f deg",
-                                      (double)(pitch_rad * 180.0f / M_PI),
-                                      (double)(roll_rad * 180.0f / M_PI),
+                        const float heading_rad =
+                            (float)(config::PAD_HEADING_DEG * DEG2RAD_d);
+                        float q[4];
+                        quatFromAccelHeading((float)ekf_imu.acc_x,
+                                             (float)ekf_imu.acc_y,
+                                             (float)ekf_imu.acc_z,
+                                             heading_rad, q);
+                        ekf.setQuaternion(q[0], q[1], q[2], q[3]);
+                        ESP_LOGI(TAG, "[EKF] Init: acc=(%.2f,%.2f,%.2f) heading=%.1f deg",
+                                      ekf_imu.acc_x, ekf_imu.acc_y, ekf_imu.acc_z,
                                       (double)config::PAD_HEADING_DEG);
                     }
                     ekf_initialized = true;

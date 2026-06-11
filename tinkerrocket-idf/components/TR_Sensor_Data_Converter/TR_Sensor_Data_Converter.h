@@ -45,6 +45,13 @@ public:
     void configureMMC5983MARotationZ(float rotation_z_deg);
     void configureIIS2MDCRotationZ(float rotation_z_deg);
 
+    // Board→rocket mounting rotation (row-major 3x3, v_rocket = R * v_board).
+    // Applied LAST in every vector conversion (after the per-chip Z rotation
+    // and after bias subtraction, both of which are board-frame facts fixed
+    // by the PCB), so changing the mounting never invalidates stored
+    // calibrations.  Defaults to identity (board +X toward the nose).
+    void configureBoardToRocket(const float R[9]);
+
     // Set high-g accelerometer bias (m/s², in body frame).
     // Subtracted from ISM6HG256 high-g output during conversion.
     void setHighGBias(float bx, float by, float bz);
@@ -97,6 +104,24 @@ private:
 
     // High-g accelerometer bias (m/s², body frame)
     float hg_bias_x_ = 0.0f, hg_bias_y_ = 0.0f, hg_bias_z_ = 0.0f;
+
+    // Board→rocket mounting rotation (row-major; identity by default).
+    // b2r_identity_ short-circuits the matrix multiply on the hot path
+    // for the standard +X-nose mounting.
+    float b2r_[9] = {1.0f, 0.0f, 0.0f,
+                     0.0f, 1.0f, 0.0f,
+                     0.0f, 0.0f, 1.0f};
+    bool  b2r_identity_ = true;
+
+    // Apply board→rocket rotation in place (no-op when identity).
+    inline void applyB2R(double &x, double &y, double &z) const
+    {
+        if (b2r_identity_) return;
+        const double rx = b2r_[0] * x + b2r_[1] * y + b2r_[2] * z;
+        const double ry = b2r_[3] * x + b2r_[4] * y + b2r_[5] * z;
+        const double rz = b2r_[6] * x + b2r_[7] * y + b2r_[8] * z;
+        x = rx; y = ry; z = rz;
+    }
 
     // MMC5983MA hard-iron offset (centered-counts, issue #96).  Applied in
     // convertMMC5983MAData; zero by default so behaviour is unchanged

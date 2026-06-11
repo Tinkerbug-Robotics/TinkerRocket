@@ -59,6 +59,18 @@ void SensorConverter::configureIIS2MDCRotationZ(float rotation_z_deg)
     iis2mdc_rot_z_rad = rotation_z_deg * (PI / 180.0f);
 }
 
+void SensorConverter::configureBoardToRocket(const float R[9])
+{
+    bool identity = true;
+    for (int i = 0; i < 9; i++)
+    {
+        b2r_[i] = R[i];
+        const float ref = (i % 4 == 0) ? 1.0f : 0.0f;
+        if (fabsf(R[i] - ref) > 1e-6f) identity = false;
+    }
+    b2r_identity_ = identity;
+}
+
 void SensorConverter::setHighGBias(float bx, float by, float bz)
 {
     if (bx == hg_bias_x_ && by == hg_bias_y_ && bz == hg_bias_z_)
@@ -195,6 +207,8 @@ void SensorConverter::convertISM6HG256Data(const ISM6HG256Data& in, ISM6HG256Dat
     out.low_g_acc_z = (double)in.acc_low_raw.z * (double)acc_low_ms2_per_lsb;
 
     // High-g accel (m/s^2), rotate about +Z to board frame, subtract bias.
+    // Bias is calibrated in board frame, so it must come off BEFORE the
+    // board→rocket rotation below.
     const double hg_x = (double)in.acc_high_raw.x * (double)acc_high_ms2_per_lsb;
     const double hg_y = (double)in.acc_high_raw.y * (double)acc_high_ms2_per_lsb;
     out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_;
@@ -208,6 +222,11 @@ void SensorConverter::convertISM6HG256Data(const ISM6HG256Data& in, ISM6HG256Dat
     out.gyro_y = (g_x * s) + (g_y * c);
     out.gyro_z = (double)in.gyro_raw.z * (double)gyro_dps_per_lsb;
 
+    // Board frame → rocket frame (mounting orientation; identity when the
+    // board's +X points at the nose).
+    applyB2R(out.low_g_acc_x,  out.low_g_acc_y,  out.low_g_acc_z);
+    applyB2R(out.high_g_acc_x, out.high_g_acc_y, out.high_g_acc_z);
+    applyB2R(out.gyro_x,       out.gyro_y,       out.gyro_z);
 }
 
 // ---------------- MMC5983MA ----------------
@@ -243,6 +262,9 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
   out.mag_x_uT = (mx * c) - (my * s);
   out.mag_y_uT = (mx * s) + (my * c);
   out.mag_z_uT = mz;
+
+  // Board frame → rocket frame (mounting orientation).
+  applyB2R(out.mag_x_uT, out.mag_y_uT, out.mag_z_uT);
 }
 
 // --- IIS2MDC (new-PCB magnetometer) ---
@@ -267,6 +289,9 @@ void SensorConverter::convertIIS2MDCData(const IIS2MDCData& in, IIS2MDCDataSI& o
     out.mag_x_uT = (mx * c) - (my * s);
     out.mag_y_uT = (mx * s) + (my * c);
     out.mag_z_uT = mz;
+
+    // Board frame → rocket frame (mounting orientation).
+    applyB2R(out.mag_x_uT, out.mag_y_uT, out.mag_z_uT);
 }
 
 // --- NonSensor ---

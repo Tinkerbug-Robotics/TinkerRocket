@@ -19,6 +19,7 @@ idf_component_register(
         TR_I2C_Interface
         TR_I2S_Stream
         TR_Sensor_Data_Converter
+        TR_Orientation
         TR_GpsInsEKF
         TR_KinematicChecks
         TR_MagCalibrator
