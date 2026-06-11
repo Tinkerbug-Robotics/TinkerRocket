@@ -179,6 +179,170 @@ const char *orientCodeName(uint8_t code)
     return (code < ORIENT_CODE_COUNT) ? names[code] : "?";
 }
 
+bool orientMatrixFromNoseVector(const float v_board[3], float R[9])
+{
+    const float n = sqrtf(v_board[0] * v_board[0] +
+                          v_board[1] * v_board[1] +
+                          v_board[2] * v_board[2]);
+    for (int i = 0; i < 9; i++) R[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+    if (n < 1e-9f) return false;
+
+    const float ax = v_board[0] / n;
+    const float ay = v_board[1] / n;
+    const float az = v_board[2] / n;
+
+    // Shortest arc a→x̂:  R = I + [k]× + [k]×² / (1 + c),  k = a × x̂.
+    // c = a·x̂ = ax;  k = (a_y*0 - a_z*0, a_z*1 - a_x*0, a_x*0 - a_y*1)
+    //              = (0, az, -ay).
+    const float c = ax;
+    if (c < -1.0f + 1e-6f)
+    {
+        // a ≈ -x̂: arc is ambiguous; use the -X convention (180° about +Z).
+        R[0] = -1.0f; R[4] = -1.0f; R[8] = 1.0f;
+        R[1] = R[2] = R[3] = R[5] = R[6] = R[7] = 0.0f;
+        return true;
+    }
+
+    const float kx = 0.0f, ky = az, kz = -ay;
+    const float f = 1.0f / (1.0f + c);
+    // [k]× and [k]×² expanded (kx = 0 simplifies the products).
+    R[0] = 1.0f + f * (-(ky * ky + kz * kz));
+    R[1] = -kz + f * (kx * ky);
+    R[2] =  ky + f * (kx * kz);
+    R[3] =  kz + f * (kx * ky);
+    R[4] = 1.0f + f * (-(kx * kx + kz * kz));
+    R[5] = -kx + f * (ky * kz);
+    R[6] = -ky + f * (kx * kz);
+    R[7] =  kx + f * (ky * kz);
+    R[8] = 1.0f + f * (-(kx * kx + ky * ky));
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// OrientationEstimator
+
+static constexpr float kOrientG = 9.80665f;
+
+void OrientationEstimator::reset()
+{
+    sum_[0] = sum_[1] = sum_[2] = 0.0;
+    count_ = 0;
+    accumulating_ = false;
+    fresh_ = false;
+}
+
+bool OrientationEstimator::update(uint32_t t_us, float ax, float ay, float az,
+                                  float gx, float gy, float gz)
+{
+    if (t_us == last_t_us_) return false;  // caller re-fed the same sample
+    last_t_us_ = t_us;
+
+    const float a_mag = sqrtf(ax * ax + ay * ay + az * az);
+    const bool quiet = fabsf(gx) < gyro_quiet_dps &&
+                       fabsf(gy) < gyro_quiet_dps &&
+                       fabsf(gz) < gyro_quiet_dps &&
+                       fabsf(a_mag - kOrientG) < acc_tol_ms2;
+    if (!quiet)
+    {
+        // Motion: drop the partial window and wait for stillness again.
+        sum_[0] = sum_[1] = sum_[2] = 0.0;
+        count_ = 0;
+        accumulating_ = false;
+        return false;
+    }
+
+    if (!accumulating_)
+    {
+        accumulating_ = true;
+        window_start_us_ = t_us;
+        sum_[0] = sum_[1] = sum_[2] = 0.0;
+        count_ = 0;
+    }
+
+    sum_[0] += ax; sum_[1] += ay; sum_[2] += az;
+    count_++;
+
+    if ((uint32_t)(t_us - window_start_us_) < window_us || count_ < min_samples)
+    {
+        return false;
+    }
+
+    const double m = sqrt(sum_[0] * sum_[0] + sum_[1] * sum_[1] + sum_[2] * sum_[2]);
+    if (m > 1e-9)
+    {
+        est_[0] = (float)(sum_[0] / m);
+        est_[1] = (float)(sum_[1] / m);
+        est_[2] = (float)(sum_[2] / m);
+        fresh_ = true;
+    }
+    // Start the next window immediately — continuous re-estimation until
+    // the caller latches at launch.
+    accumulating_ = false;
+    return fresh_;
+}
+
+bool OrientationEstimator::takeEstimate(float up_rocket[3])
+{
+    if (!fresh_) return false;
+    up_rocket[0] = est_[0];
+    up_rocket[1] = est_[1];
+    up_rocket[2] = est_[2];
+    fresh_ = false;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ThrustAxisCheck
+
+void ThrustAxisCheck::start(uint32_t t_us)
+{
+    sum_[0] = sum_[1] = sum_[2] = 0.0;
+    count_ = 0;
+    start_us_ = t_us;
+    last_t_us_ = 0;
+    running_ = true;
+    done_ = false;
+    valid_ = false;
+    angle_deg_ = 0.0f;
+}
+
+bool ThrustAxisCheck::update(uint32_t t_us, float ax, float ay, float az)
+{
+    if (!running_ || done_) return false;
+    if (t_us == last_t_us_) return false;
+    last_t_us_ = t_us;
+
+    if ((uint32_t)(t_us - start_us_) <= window_us)
+    {
+        const float a_mag = sqrtf(ax * ax + ay * ay + az * az);
+        if (a_mag > min_acc_ms2)
+        {
+            sum_[0] += ax; sum_[1] += ay; sum_[2] += az;
+            count_++;
+        }
+        return false;
+    }
+
+    // Window elapsed — finalize.
+    done_ = true;
+    running_ = false;
+    // Require a sensible number of thrusting samples; a chuffed/slow
+    // ignition or saturated channel shouldn't produce a verdict.
+    if (count_ >= 10)
+    {
+        const double m = sqrt(sum_[0] * sum_[0] + sum_[1] * sum_[1] + sum_[2] * sum_[2]);
+        if (m > 1e-9)
+        {
+            double cx = sum_[0] / m;
+            if (cx > 1.0) cx = 1.0;
+            if (cx < -1.0) cx = -1.0;
+            angle_deg_ = (float)(acos(cx) * 180.0 / M_PI);
+            valid_ = true;
+        }
+    }
+    return true;
+}
+
 void quatFromAccelHeading(float acc_x_frd, float acc_y_frd, float acc_z_frd,
                           float heading_rad, float q[4])
 {

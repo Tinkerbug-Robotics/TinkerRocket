@@ -83,4 +83,94 @@ const char *orientCodeName(uint8_t code);
 void quatFromAccelHeading(float acc_x_frd, float acc_y_frd, float acc_z_frd,
                           float heading_rad, float q[4]);
 
+// Exact (non-snapped) board→rocket rotation from a measured nose vector:
+// the shortest-arc rotation taking v̂ to +X.  Used when the pad-gravity
+// estimate is further than the snap tolerance from every axis (board
+// mounted off-orthogonal).  For axis-aligned v this reproduces the
+// canonical clock=0 matrices, including the 180°-about-+Z convention for
+// -X.  Returns false (R = identity) for a zero-length input.
+bool orientMatrixFromNoseVector(const float v_board[3], float R[9]);
+
+// ---------------------------------------------------------------------------
+// Pad-gravity orientation estimator.
+//
+// Continuously averages the specific-force direction while the rocket sits
+// still before launch.  On a (near-)vertical pad that direction IS the nose
+// direction, so it reveals how the board is mounted.  The caller feeds
+// converted ROCKET-frame samples (post board→rocket rotation) and, on each
+// completed window, decides whether the active rotation needs updating —
+// if the mounting is already correct the estimate simply confirms +X.
+//
+// Stationarity gating: every gyro axis under gyro_quiet_dps AND |‖a‖−g|
+// under acc_tol_ms2; any violation restarts the window, so handling,
+// wind-rock, and transport never contribute samples.  Duplicate timestamps
+// (caller polls faster than the IMU updates) are ignored.
+class OrientationEstimator
+{
+public:
+    // Thresholds are members (not constructor params) so tests and future
+    // config plumbing can tune them; defaults match the landing detector's
+    // notion of "still" with margin for pad wind.
+    float    gyro_quiet_dps = 3.0f;      // per-axis |gyro| ceiling
+    float    acc_tol_ms2    = 2.0f;      // | ‖a‖ − g | ceiling (~0.2 g)
+    uint32_t window_us      = 2000000;   // averaging window
+    uint32_t min_samples    = 200;       // floor on samples per window
+
+    void reset();
+
+    // Feed one rocket-frame SI sample (accel m/s², gyro dps).  Returns true
+    // when this sample completed a window (a fresh estimate is available).
+    bool update(uint32_t t_us, float ax, float ay, float az,
+                float gx, float gy, float gz);
+
+    // Fetch the latest completed estimate (unit "up/nose" vector in rocket
+    // frame) and clear the fresh flag.  False if no unread estimate.
+    bool takeEstimate(float up_rocket[3]);
+
+private:
+    double   sum_[3]        = {0.0, 0.0, 0.0};
+    uint32_t count_         = 0;
+    uint32_t window_start_us_ = 0;
+    uint32_t last_t_us_     = 0;
+    bool     accumulating_  = false;
+    bool     fresh_         = false;
+    float    est_[3]        = {1.0f, 0.0f, 0.0f};
+};
+
+// ---------------------------------------------------------------------------
+// Thrust-axis cross-check.
+//
+// During the first instants of powered flight the specific force is
+// dominated by thrust, which acts along the rocket axis regardless of rail
+// tilt.  Averaging the rocket-frame accel direction right after launch
+// detection and comparing it to +X validates the latched orientation: a
+// large angle means the pad-gravity estimate (or a manual setting) was
+// wrong — e.g. the rocket sat non-vertical at the final stationary window.
+// The result is a flag, not a correction: re-orienting mid-boost would
+// yank the EKF and control frames at the worst possible moment.
+class ThrustAxisCheck
+{
+public:
+    float    min_acc_ms2 = 20.0f;   // only count clearly-thrusting samples
+    uint32_t window_us   = 150000;  // averaging window after start()
+
+    void start(uint32_t t_us);
+    // Feed rocket-frame accel.  Returns true once, when the window closes.
+    bool update(uint32_t t_us, float ax, float ay, float az);
+
+    bool  done() const  { return done_; }
+    bool  valid() const { return valid_; }      // enough samples to judge
+    float angleFromNoseDeg() const { return angle_deg_; }
+
+private:
+    double   sum_[3]   = {0.0, 0.0, 0.0};
+    uint32_t count_    = 0;
+    uint32_t start_us_ = 0;
+    uint32_t last_t_us_ = 0;
+    bool     running_  = false;
+    bool     done_     = false;
+    bool     valid_    = false;
+    float    angle_deg_ = 0.0f;
+};
+
 #endif // TR_ORIENTATION_H

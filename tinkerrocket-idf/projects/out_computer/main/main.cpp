@@ -646,6 +646,13 @@ static OutStatusQueryData last_query_cfg = {};
 static char          fc_fw_version[40]  = {0};
 static volatile bool fc_identity_dirty  = false;
 
+// FC's active board→rocket mounting orientation, mirrored from the v3
+// status query.  Re-published to the app when it changes mid-connection
+// (the pad auto-detect can re-orient any time before launch).
+static volatile bool imu_orient_dirty    = false;
+static uint8_t       imu_orient_pub_code = 0xFF;   // last published (0xFF = never)
+static uint8_t       imu_orient_pub_mode = 0xFF;
+
 static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
 {
     return (flags & mask) != 0U;
@@ -1716,6 +1723,13 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 float R[9];
                 orientQuatToMatrix(q, R);
                 sensor_converter.configureBoardToRocket(R);
+
+                // Surface changes to the app (pre-arm orientation display).
+                if (last_query_cfg.b2r_code != imu_orient_pub_code ||
+                    last_query_cfg.b2r_mode != imu_orient_pub_mode)
+                {
+                    imu_orient_dirty = true;
+                }
             }
         }
         queueOutStatusResponse(true);
@@ -2441,6 +2455,30 @@ static void sendFcIdentity()
     ESP_LOGI("CFG", "Sent fc_identity (fc_fw=%s)", fc_fw);
 }
 
+// Publish the FC's active board→rocket mounting orientation as its own
+// compact config message.  Lets the app show "nose = -Z (auto)" before
+// arming so a wrong auto-detect is caught while the rocket is still on
+// the ground.  Sent on connect and whenever the FC reports a change
+// (auto-detect re-orients on the pad; the status query repeats every
+// poll, so changes surface within a cycle).  Kept tiny — sendConfigJSON
+// drops anything over the BLE notify MTU.
+static void sendImuOrientation()
+{
+    if (last_query_cfg.format_version < 3) return;  // pre-orientation FC
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\"}",
+             (unsigned)last_query_cfg.b2r_code,
+             (unsigned)last_query_cfg.b2r_mode,
+             orientCodeName(last_query_cfg.b2r_code));
+    ble_app.sendConfigJSON(String(buf));
+    imu_orient_pub_code = last_query_cfg.b2r_code;
+    imu_orient_pub_mode = last_query_cfg.b2r_mode;
+    ESP_LOGI("CFG", "Sent imu_orient (%s, mode %u)",
+             orientCodeName(last_query_cfg.b2r_code),
+             (unsigned)last_query_cfg.b2r_mode);
+}
+
 static void sendCurrentConfig()
 {
     // Split config into two smaller JSON messages to stay within MTU limits.
@@ -2513,6 +2551,10 @@ static void sendCurrentConfig()
     // Also push the relayed FC firmware version as its own small message (#8).
     delay(50);
     sendFcIdentity();
+
+    // And the FC's board→rocket mounting orientation (pre-arm display).
+    delay(50);
+    sendImuOrientation();
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -4756,6 +4798,15 @@ static void loop_oc()
     {
         fc_identity_dirty = false;
         sendFcIdentity();
+    }
+
+    // Same pattern for the board→rocket orientation: the pad auto-detect
+    // can re-orient mid-connection, and the app's pre-arm display should
+    // follow without a reconnect.
+    if (imu_orient_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        imu_orient_dirty = false;
+        sendImuOrientation();
     }
 
     // Service the BLE library's poll-style work — currently just the OTA

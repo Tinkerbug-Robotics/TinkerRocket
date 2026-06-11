@@ -1085,6 +1085,11 @@ static constexpr uint8_t NSF2_MASTER_APOGEE    = (1u << 2);
 // 4-channel pyro layout.
 static constexpr uint8_t NSF2_REBOOT_RECOVERY  = (1u << 3);  // mid-flight reboot recovery occurred
 static constexpr uint8_t NSF2_GUIDANCE_ENABLED = (1u << 4);  // FC's live guidance_enabled config
+// Thrust-axis cross-check failed: the boost-phase accel direction
+// disagreed with the latched board→rocket orientation by >25°.  The
+// orientation is NOT corrected mid-flight — this flags the mismatch for
+// telemetry and post-flight analysis (suspect attitude-derived data).
+static constexpr uint8_t NSF2_ORIENT_THRUST_MISMATCH = (1u << 5);
 
 // Pyro status byte — 4 channels × (continuity, fired) = exactly 8 bits.
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
@@ -1774,7 +1779,8 @@ static_assert(sizeof(GuidanceTelemData) == 15, "GuidanceTelemData must be 15 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 2;           // v2: 4-channel pyro layout, no per-channel ARM
+    static constexpr uint8_t  VERSION = 3;           // v2: 4-channel pyro layout, no per-channel ARM
+                                                     // v3: board→rocket orientation (b2r_*)
 
     // --- Header ---
     uint32_t magic;
@@ -1797,7 +1803,13 @@ struct __attribute__((packed)) FlightSnapshotData
     uint8_t  pyro2_fired;
     uint8_t  pyro3_fired;
     uint8_t  pyro4_fired;
-    uint8_t  pad2[3];
+    // Board→rocket orientation that was active at launch (v3, reclaimed
+    // from pad2).  Restored BEFORE the EKF state below — the quaternion,
+    // velocities and biases were all estimated in this rocket frame, so a
+    // post-reboot boot-default orientation would silently invalidate them.
+    uint8_t  b2r_code;            // discrete orientation code
+    uint8_t  b2r_mode;            // ORIENT_MODE_*
+    uint8_t  pad2[1];
 
     // --- Flight references ---
     float    ground_pressure_pa;
@@ -1821,11 +1833,15 @@ struct __attribute__((packed)) FlightSnapshotData
     uint32_t ekf_t_prev_us;
     float    ekf_euler[3];
 
+    // Board→rocket quaternion ×10000 (v3) — authoritative rotation,
+    // covers AUTO_EXACT mountings the discrete code can't express.
+    int16_t  b2r_q[4];
+
     // --- Integrity (CRC32 over all preceding bytes) ---
     uint32_t crc32;
 };
-static_assert(sizeof(FlightSnapshotData) == 216,
-              "FlightSnapshotData must be 216 bytes — fits one I2S frame and one I2C TX response");
+static_assert(sizeof(FlightSnapshotData) == 224,
+              "FlightSnapshotData must be 224 bytes — fits one I2S frame and one I2C TX response");
 
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);

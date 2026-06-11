@@ -77,6 +77,26 @@ nonisolated struct RollWaypointRaw {
     let mode: UInt8       // 0 = ROLL_SEG_ANGLE, 1 = ROLL_SEG_NULL_RATE
 }
 
+/// How the FC determined its board→rocket mounting orientation
+/// (mirrors TR_Orientation ORIENT_MODE_*; "imu_orient" config message).
+nonisolated enum IMUOrientationMode: Int, Sendable {
+    case unknown = -1
+    case defaultMounting = 0   // identity, nothing configured
+    case manual = 1            // user/config supplied
+    case autoSnap = 2          // pad-gravity detect, snapped to an axis
+    case autoExact = 3         // pad-gravity detect, exact off-axis rotation
+
+    var label: String {
+        switch self {
+        case .unknown:         return "—"
+        case .defaultMounting: return "default"
+        case .manual:          return "manual"
+        case .autoSnap:        return "auto"
+        case .autoExact:       return "auto, off-axis"
+        }
+    }
+}
+
 /// Decoded FlightSettingsData wire frame. Layout mirrors the packed C++
 /// struct in RocketComputerTypes.h byte-for-byte (verified by offset).
 nonisolated struct FlightSettingsData {
