@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MultipleLocator
 import numpy as np
 
 try:
@@ -188,6 +189,25 @@ def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
     if peak > lim * 1.05:
         ax.text(0.01, 0.04, f"axis clipped — peak |rate| {peak:.0f}°/s",
                 transform=ax.transAxes, ha="left", va="bottom", fontsize=8, color="0.4")
+
+
+def _fine_time_axis(ax):
+    """1 s major / 0.5 s minor ticks with a two-level grid, so transition times
+    are easy to read off the launch→eject figures."""
+    ax.xaxis.set_major_locator(MultipleLocator(1.0))
+    ax.xaxis.set_minor_locator(MultipleLocator(0.5))
+    ax.grid(True, which="major", alpha=0.35)
+    ax.grid(True, which="minor", alpha=0.15)
+
+
+def _phase_label(wps, i):
+    """Short label for the control phase that STARTS at waypoint i."""
+    wt, wa, wnull = wps[i]
+    if wnull:
+        return "null-rate"
+    if i < len(wps) - 1:
+        return f"angle ramp →{wps[i + 1][1]:g}°"
+    return f"hold {wa:g}°"
 
 
 def _baro_eject_time(flight, t0, launch_t, burnout_t, apogee_t):
@@ -491,19 +511,34 @@ def analyze(flight: Flight) -> AnalysisResult:
     fig.tight_layout()
     result.figures.append(fig)
 
-    # Event markers shared by the launch→eject figures (within the plotted window).
-    def _mark_events(ax, with_labels=False):
-        ax.axvline(t_control_on, color="red", linestyle="--", lw=1.0,
-                   label=(f"control on ({t_control_on:.2f}s)" if with_labels else None))
+    # Program events / phase transitions within the plotted window. With
+    # annotate=True, each line gets a timestamped, vertical label (use on the
+    # top panel only).
+    def _event_list():
+        evs = [(t_control_on, "control on", "red", "--")]
         if burnout_t is not None and -0.2 <= burnout_t <= win_end + 0.2:
-            ax.axvline(burnout_t, color="tab:purple", linestyle="--", lw=1.0,
-                       label=(f"burnout ({burnout_t:.2f}s)" if with_labels else None))
+            evs.append((burnout_t, "burnout", "tab:purple", "--"))
         if eject_t <= win_end + 0.2:
-            ax.axvline(eject_t, color="black", linestyle="--", lw=1.0,
-                       label=(f"apogee/eject ({eject_t:.2f}s)" if with_labels else None))
-        for (wt, _, _) in wps:
+            evs.append((eject_t, "apogee/eject", "black", "--"))
+        for i, (wt, _, wnull) in enumerate(wps):
             if -0.2 <= wt <= win_end + 0.2:
-                ax.axvline(wt, color="gray", linestyle=":", lw=0.8)
+                # null-rate segments are already shown by the gray shading; only
+                # label the meaningful mode-change transitions (angle / hold).
+                evs.append((wt, None if wnull else _phase_label(wps, i), "gray", ":"))
+        return evs
+
+    def _mark_events(ax, annotate=False):
+        for et, lbl, c, ls in _event_list():
+            ax.axvline(et, color=c, linestyle=ls, lw=(0.8 if ls == ":" else 1.0))
+        if annotate:
+            for et, lbl, c, ls in _event_list():
+                if lbl is None:
+                    continue
+                ax.annotate(f"{et:.2f}s  {lbl}", xy=(et, 0.0),
+                            xycoords=("data", "axes fraction"),
+                            xytext=(2, 3), textcoords="offset points",
+                            rotation=90, va="bottom", ha="left",
+                            fontsize=7, color=c)
 
     # Launch → ejection window (shared by the figures below), trimmed if configured.
     t_lo, t_hi = -0.2, win_end + 0.2
@@ -520,16 +555,15 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[0].axhline(0, color="k", lw=0.5)
         axes[0].set_ylabel("Roll rate (deg/s)")
         axes[0].set_title("Roll control — launch → ejection")
-        axes[0].grid(True, alpha=0.3)
         _clip_rate_axis(axes[0], t_imu[win], g[win], win_end, rate_cap)
-        _mark_events(axes[0], with_labels=True)
-        axes[0].legend(loc="upper right", fontsize=8)
+        _mark_events(axes[0], annotate=True)
         axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
         axes[1].axhline(0, color="k", lw=0.5)
         axes[1].set_xlabel("Time since launch (s)")
         axes[1].set_ylabel("Roll cmd (deg)")
-        axes[1].grid(True, alpha=0.3)
         _mark_events(axes[1])
+        for ax in axes:
+            _fine_time_axis(ax)
         fig.tight_layout()
         result.figures.append(fig)
 
@@ -551,8 +585,8 @@ def analyze(flight: Flight) -> AnalysisResult:
                 axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
                                  color="tab:orange", ha="left", va="bottom",
                                  xytext=(2, 2), textcoords="offset points")
-        _mark_events(axes[0], with_labels=True)
-        axes[0].legend(loc="upper left", fontsize=8, ncol=2)
+        _mark_events(axes[0], annotate=True)
+        axes[0].legend(loc="upper left", fontsize=8)
 
         # Panel 1 — tracking error
         _shade_segments(axes[1], track_tw, track_is_ang, label=None)
@@ -595,6 +629,8 @@ def analyze(flight: Flight) -> AnalysisResult:
         _mark_events(axes[3])
         axes[3].legend(loc="upper right", fontsize=8)
 
+        for ax in axes:
+            _fine_time_axis(ax)
         fig.tight_layout()
         result.figures.append(fig)
 
