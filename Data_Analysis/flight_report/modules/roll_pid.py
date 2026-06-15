@@ -192,18 +192,29 @@ def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
 
 
 def _zoom_cmd_axis(ax, cmd_win, cmd_limit=None):
-    """Zoom a roll-command axis to the command's actual range (it typically uses
-    a tiny fraction of the ±cmd-limit authority), and note the peak / limit."""
+    """Zoom a roll-command axis to the command's actual range (the observed
+    min/max padded by 5°), and note the range / ±cmd-limit authority."""
     if cmd_win is None or len(cmd_win) == 0:
         return
-    peak = float(np.nanmax(np.abs(cmd_win)))
-    m = max(peak * 1.3, 1.0)
-    ax.set_ylim(-m, m)
-    note = f"peak |cmd| {peak:.1f}°"
+    lo, hi = float(np.nanmin(cmd_win)), float(np.nanmax(cmd_win))
+    ax.set_ylim(lo - 5.0, hi + 5.0)
+    note = f"cmd ∈ [{lo:.1f}, {hi:.1f}]°"
     if cmd_limit is not None:
         note += f"  ·  limit ±{cmd_limit:g}°"
-    ax.text(0.99, 0.05, note, transform=ax.transAxes, ha="right", va="bottom",
+    ax.text(0.99, 0.04, note, transform=ax.transAxes, ha="right", va="bottom",
             fontsize=8, color="0.4")
+
+
+def _overlay_speed(ax, t, speed):
+    """Overlay airspeed on a right-hand twin axis (roll authority scales with it).
+    Keeps the primary (command) line drawn on top."""
+    axb = ax.twinx()
+    axb.plot(t, speed, color="0.45", lw=1.1, alpha=0.7, zorder=1)
+    axb.set_ylabel("Speed (m/s)", color="0.45")
+    axb.tick_params(axis="y", labelcolor="0.45")
+    ax.set_zorder(axb.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    return axb
 
 
 def _fine_time_axis(ax):
@@ -398,7 +409,17 @@ def analyze(flight: Flight) -> AnalysisResult:
         win_end = min(win_end, float(trim_t))
     win_end = float(min(win_end, t_imu[-1]))
 
-    track_tw = track_tgt = track_act = track_err = track_is_ang = None
+    # Steepest commanded ramp rate across the angle segments (deg/s).
+    rate_cap_cfg = _as_float(rc_cfg.get("rate_cap_dps"))
+    kp_angle_cfg = _as_float(rc_cfg.get("kp_angle"))
+    rate_setpt = _as_float(rc_cfg.get("roll_rate_set_point")) or 0.0
+    profile_ramp = 0.0
+    for i in range(len(wps) - 1):
+        (t0w, a0w, n0), (t1w, a1w, _) = wps[i], wps[i + 1]
+        if not n0 and t1w > t0w:
+            profile_ramp = max(profile_ramp, abs(a1w - a0w) / (t1w - t0w))
+
+    track_tw = track_tgt = track_act = track_err = track_is_ang = track_ratecmd = None
     angle_rms = angle_peak = float("nan")
     if has_angle_profile:
         roll_act = _quat_roll_deg(*(get_array(ns, k) for k in ("q0", "q1", "q2", "q3")))
@@ -421,6 +442,12 @@ def analyze(flight: Flight) -> AnalysisResult:
         if ea.size:
             angle_rms = float(np.sqrt(np.mean(ea ** 2)))
             angle_peak = float(np.max(np.abs(ea)))
+        # Reconstruct the firmware's outer-loop rate command: angle segments
+        # → clip(kp_angle·wrapped_err, ±rate_cap); null-rate segments → setpoint.
+        # Same sign frame as gyro_x (the inner loop drives gyro_x → rate_cmd).
+        if kp_angle_cfg is not None and rate_cap_cfg is not None:
+            rc_angle = np.clip(kp_angle_cfg * err, -rate_cap_cfg, rate_cap_cfg)
+            track_ratecmd = np.where(track_is_ang, rc_angle, rate_setpt)
 
     # ── Current gains (from sidecar if available) ──
     kp_flight, ki_flight, kd_flight = _gain_from_sidecar(flight.sidecar)
@@ -491,6 +518,12 @@ def analyze(flight: Flight) -> AnalysisResult:
     if has_angle_profile:
         metrics["profile_plan"] = "; ".join(
             f"{wt:g}s→{'null-rate' if wn else f'{wa:g}°'}" for (wt, wa, wn) in wps)
+        if profile_ramp > 0:
+            feasible = (rate_cap_cfg is None) or (profile_ramp <= rate_cap_cfg + 1e-6)
+            note = "" if feasible else f"  (EXCEEDS rate cap {rate_cap_cfg:g}°/s — target unreachable)"
+            metrics["profile_ramp_dps"] = f"{profile_ramp:.0f}{note}"
+        # NOTE: with an over-fast ramp the wrapped error reflects an unreachable
+        # setpoint, not control performance — read alongside profile_ramp_dps.
         metrics["angle_track_rms_deg"]  = round(angle_rms, 1)  if np.isfinite(angle_rms)  else "—"
         metrics["angle_track_peak_deg"] = round(angle_peak, 1) if np.isfinite(angle_peak) else "—"
     result.metrics = metrics
@@ -572,11 +605,13 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[0].set_title("Roll control — launch → ejection")
         _clip_rate_axis(axes[0], t_imu[win], g[win], win_end, rate_cap)
         _mark_events(axes[0], annotate=True)
-        axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
+        axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=1.0, zorder=3)
         axes[1].axhline(0, color="k", lw=0.5)
         axes[1].set_xlabel("Time since launch (s)")
-        axes[1].set_ylabel("Roll cmd (deg)")
+        axes[1].set_ylabel("Roll cmd (deg)", color="tab:orange")
+        axes[1].tick_params(axis="y", labelcolor="tab:orange")
         _zoom_cmd_axis(axes[1], cmd[win_c], _as_float(rc_cfg.get("cmd_limit_max_deg")))
+        _overlay_speed(axes[1], t_ns[win_c], speed[win_c])
         _mark_events(axes[1])
         for ax in axes:
             _fine_time_axis(ax)
@@ -612,14 +647,23 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[1].grid(True, alpha=0.3)
         _mark_events(axes[1])
         if np.isfinite(angle_rms):
-            axes[1].text(0.99, 0.05, f"RMS {angle_rms:.1f}°   peak {angle_peak:.1f}°",
-                         transform=axes[1].transAxes, ha="right", va="bottom", fontsize=9,
+            txt = f"RMS {angle_rms:.1f}°   peak {angle_peak:.1f}°"
+            if rate_cap is not None and profile_ramp > rate_cap + 1e-6:
+                txt += (f"\nramp {profile_ramp:.0f}°/s > cap {rate_cap:g}°/s"
+                        f"\n→ setpoint unreachable, error not a control metric")
+            axes[1].text(0.99, 0.05, txt,
+                         transform=axes[1].transAxes, ha="right", va="bottom", fontsize=8,
                          bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.85))
 
-        # Panel 2 — roll rate (gyro X), with the outer-loop rate cap for reference
+        # Panel 2 — roll rate: achieved (gyro) vs the firmware's commanded rate
+        # (outer loop, clipped to ±rate cap), so the cap + the ±180° wrap flip
+        # are visible against what the rocket actually did.
         _shade_segments(axes[2], track_tw, track_is_ang, label=None)
         axes[2].axhline(0, color="k", lw=0.5)
-        axes[2].plot(t_imu[win], g[win], color="tab:green", lw=0.9, label="roll rate (gyro)")
+        axes[2].plot(t_imu[win], g[win], color="tab:green", lw=0.9, label="roll rate (gyro, achieved)")
+        if track_ratecmd is not None:
+            axes[2].plot(track_tw, track_ratecmd, color="tab:blue", lw=1.5,
+                         label="commanded rate (outer loop)")
         axes[2].set_ylabel("Roll rate\n(deg/s)")
         axes[2].grid(True, alpha=0.3)
         _clip_rate_axis(axes[2], t_imu[win], g[win], win_end, rate_cap)
@@ -630,14 +674,16 @@ def analyze(flight: Flight) -> AnalysisResult:
         _mark_events(axes[2])
         axes[2].legend(loc="upper right", fontsize=8)
 
-        # Panel 3 — roll command (PID output → servo), zoomed to the command's
-        # actual range: it uses only a sliver of the ±cmd-limit authority.
+        # Panel 3 — roll command (PID output → servo), zoomed to its actual
+        # range, with airspeed overlaid (roll authority scales with speed).
         _shade_segments(axes[3], track_tw, track_is_ang, label=None)
         axes[3].axhline(0, color="k", lw=0.5)
-        axes[3].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
-        axes[3].set_ylabel("Roll cmd\n(deg)")
+        axes[3].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=1.0, zorder=3)
+        axes[3].set_ylabel("Roll cmd (deg)", color="tab:orange")
+        axes[3].tick_params(axis="y", labelcolor="tab:orange")
         axes[3].set_xlabel("Time since launch (s)")
         _zoom_cmd_axis(axes[3], cmd[win_c], _as_float(rc_cfg.get("cmd_limit_max_deg")))
+        _overlay_speed(axes[3], t_ns[win_c], speed[win_c])
         _mark_events(axes[3])
 
         for ax in axes:
