@@ -191,6 +191,21 @@ def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
                 transform=ax.transAxes, ha="left", va="bottom", fontsize=8, color="0.4")
 
 
+def _zoom_cmd_axis(ax, cmd_win, cmd_limit=None):
+    """Zoom a roll-command axis to the command's actual range (it typically uses
+    a tiny fraction of the ±cmd-limit authority), and note the peak / limit."""
+    if cmd_win is None or len(cmd_win) == 0:
+        return
+    peak = float(np.nanmax(np.abs(cmd_win)))
+    m = max(peak * 1.3, 1.0)
+    ax.set_ylim(-m, m)
+    note = f"peak |cmd| {peak:.1f}°"
+    if cmd_limit is not None:
+        note += f"  ·  limit ±{cmd_limit:g}°"
+    ax.text(0.99, 0.05, note, transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=8, color="0.4")
+
+
 def _fine_time_axis(ax):
     """1 s major / 0.5 s minor ticks with a two-level grid, so transition times
     are easy to read off the launch→eject figures."""
@@ -561,6 +576,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[1].axhline(0, color="k", lw=0.5)
         axes[1].set_xlabel("Time since launch (s)")
         axes[1].set_ylabel("Roll cmd (deg)")
+        _zoom_cmd_axis(axes[1], cmd[win_c], _as_float(rc_cfg.get("cmd_limit_max_deg")))
         _mark_events(axes[1])
         for ax in axes:
             _fine_time_axis(ax)
@@ -614,20 +630,15 @@ def analyze(flight: Flight) -> AnalysisResult:
         _mark_events(axes[2])
         axes[2].legend(loc="upper right", fontsize=8)
 
-        # Panel 3 — roll command (PID output → servo), with saturation limits
+        # Panel 3 — roll command (PID output → servo), zoomed to the command's
+        # actual range: it uses only a sliver of the ±cmd-limit authority.
         _shade_segments(axes[3], track_tw, track_is_ang, label=None)
         axes[3].axhline(0, color="k", lw=0.5)
-        axes[3].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9, label="roll cmd")
+        axes[3].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
         axes[3].set_ylabel("Roll cmd\n(deg)")
         axes[3].set_xlabel("Time since launch (s)")
-        axes[3].grid(True, alpha=0.3)
-        cmin, cmax = _as_float(rc_cfg.get("cmd_limit_min_deg")), _as_float(rc_cfg.get("cmd_limit_max_deg"))
-        if cmax is not None:
-            axes[3].axhline(cmax, color="tab:purple", ls=":", lw=1.0, label="cmd limit")
-        if cmin is not None:
-            axes[3].axhline(cmin, color="tab:purple", ls=":", lw=1.0)
+        _zoom_cmd_axis(axes[3], cmd[win_c], _as_float(rc_cfg.get("cmd_limit_max_deg")))
         _mark_events(axes[3])
-        axes[3].legend(loc="upper right", fontsize=8)
 
         for ax in axes:
             _fine_time_axis(ax)
