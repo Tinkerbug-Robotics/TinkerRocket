@@ -40,13 +40,11 @@ _K_PLANT_FALLBACK = 200.0                   # deg/s² per deg deflection
 _F_TARGET_HZ = 2.0                          # target closed-loop crossover
 _PM_TARGET_DEG = 50.0                       # target phase margin
 
-# Per-flight launch→ejection window trims (seconds since launch), keyed by .bin
-# stem. Some flights tumble well before apogee; capping the window keeps the
-# roll-tracking plots (and error stats) clean. The actual apogee is still
-# reported in the metrics.
-_WINDOW_TRIM_S: dict[str, float] = {
-    "flight_20260614_150808": 9.0,  # Rolly Polly III — tumble onset ~9s, apogee 10.27s
-}
+# Manual per-flight launch→ejection window overrides (seconds since launch),
+# keyed by .bin stem. The window end is normally found automatically from the
+# barometric ejection event (see _baro_eject_time); this map is only an escape
+# hatch for flights where that detection misfires. Empty by default.
+_WINDOW_TRIM_S: dict[str, float] = {}
 
 
 def _moving_average(arr: np.ndarray, window: int) -> np.ndarray:
@@ -192,6 +190,37 @@ def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
                 transform=ax.transAxes, ha="left", va="bottom", fontsize=8, color="0.4")
 
 
+def _baro_eject_time(flight, t0, launch_t, burnout_t, apogee_t):
+    """Detect the ejection event from the barometric pressure spike (the charge
+    gas pulse over-pressuring the baro port): the first post-burnout sample where
+    |dP/dt| massively exceeds the coast baseline. The spike is ~1e6 Pa/s vs ~1e3
+    in clean coast, so it separates cleanly. Returns launch-relative seconds, or
+    None if no clear event (then we fall back to apogee)."""
+    bmp = flight.records.get("BMP585") or []
+    if len(bmp) < 50:
+        return None
+    tb = (get_array(bmp, "time_us") - t0) / 1e6 - launch_t
+    p = get_array(bmp, "pressure_pa")
+    order = np.argsort(tb, kind="stable")
+    tb, p = tb[order], p[order]
+    keep = np.concatenate(([True], np.diff(tb) > 1e-6)) & np.isfinite(p)
+    tb, p = tb[keep], p[keep]
+    if tb.size < 50:
+        return None
+    dpdt = np.abs(np.gradient(p, tb))
+    bo = burnout_t if burnout_t is not None else 1.0
+    coast = tb > bo + 0.5
+    if coast.sum() < 20:
+        return None
+    # Threshold well above coast noise (absolute floor) yet far below the spike;
+    # the median term lifts it for unusually noisy baro.
+    thr = max(100000.0, 50.0 * float(np.median(dpdt[coast])))
+    # Ejection is at/near apogee for these motors — ignore later descent/landing spikes.
+    search = coast & (tb <= apogee_t + 2.0) & (dpdt > thr)
+    idx = np.where(search)[0]
+    return float(tb[idx[0]]) if idx.size else None
+
+
 def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="roll_pid", title="Roll PID Tracking & Tuning")
     recs = flight.records
@@ -317,13 +346,22 @@ def analyze(flight: Flight) -> AnalysisResult:
                    else float(min(t_control_on + 6.0, t_imu[-1])))
     eject_t = float(min(eject_t, t_imu[-1]))
 
-    # Optional per-flight trim of the plot/analysis window (drop the messy
-    # pre-apogee tumble at the end). eject_t stays the real apogee for metrics.
-    trim_t = _WINDOW_TRIM_S.get(flight.bin_path.stem)
-    win_end = float(min(eject_t, trim_t)) if trim_t is not None else eject_t
-
     burnout_t = flight.sidecar.get("burnout_time_s")
     burnout_t = float(burnout_t) if burnout_t not in (None, "") else None
+
+    # End the plot/analysis window 0.25 s before the barometric ejection event
+    # (charge pressure spike), so the post-ejection tumble is excluded generally
+    # rather than per-flight. Fall back to apogee if no clear baro event. eject_t
+    # stays the real apogee for the metrics/marker.
+    eject_baro = _baro_eject_time(flight, t0, launch_t, burnout_t, eject_t)
+    if eject_baro is not None:
+        win_end = max(eject_baro - 0.25, (burnout_t or 0.0) + 0.5)
+    else:
+        win_end = eject_t
+    trim_t = _WINDOW_TRIM_S.get(flight.bin_path.stem)  # manual override (rare); wins if set
+    if trim_t is not None:
+        win_end = min(win_end, float(trim_t))
+    win_end = float(min(win_end, t_imu[-1]))
 
     track_tw = track_tgt = track_act = track_err = track_is_ang = None
     angle_rms = angle_peak = float("nan")
@@ -339,8 +377,10 @@ def analyze(flight: Flight) -> AnalysisResult:
         err = _wrap180(target_ang - act_w)
         # Plot both target and actual wrapped to (-180,180] so the vertical gap
         # equals the true error the controller acts on; break the ±180 seam.
+        # Actual roll is shown across the whole window (incl. the null-rate
+        # period); the target/error exist only where an angle is commanded.
         track_tgt = _break_seam(np.where(track_is_ang, _wrap180(target_ang), np.nan))
-        track_act = _break_seam(np.where(track_is_ang, _wrap180(act_w), np.nan))
+        track_act = _break_seam(_wrap180(act_w))
         track_err = np.where(track_is_ang, err, np.nan)
         ea = err[track_is_ang]
         if ea.size:
@@ -408,12 +448,14 @@ def analyze(flight: Flight) -> AnalysisResult:
                                      f"{rc_cfg.get('cmd_limit_max_deg', '?')}]")
         metrics["d_lpf_hz"]       = rc_cfg.get("d_lpf_hz", "—")
         metrics["guidance_enabled"] = rc_cfg.get("guidance_enabled", "—")
+    # Window timing (applies to every active-roll flight's launch→eject figure).
+    metrics["eject_time_s"] = round(eject_t, 2)
+    if eject_baro is not None:
+        metrics["baro_eject_s"] = round(eject_baro, 2)
+    metrics["plot_window_s"] = f"[0, {win_end:.2f}]"
     if has_angle_profile:
         metrics["profile_plan"] = "; ".join(
             f"{wt:g}s→{'null-rate' if wn else f'{wa:g}°'}" for (wt, wa, wn) in wps)
-        metrics["eject_time_s"]         = round(eject_t, 2)
-        if win_end < eject_t - 1e-6:
-            metrics["plot_window_trimmed_s"] = f"[0, {win_end:g}] (apogee {eject_t:.2f}s)"
         metrics["angle_track_rms_deg"]  = round(angle_rms, 1)  if np.isfinite(angle_rms)  else "—"
         metrics["angle_track_peak_deg"] = round(angle_peak, 1) if np.isfinite(angle_peak) else "—"
     result.metrics = metrics
