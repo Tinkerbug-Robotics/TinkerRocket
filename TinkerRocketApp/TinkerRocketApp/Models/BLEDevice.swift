@@ -658,16 +658,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func sendRollControlConfig(useAngleControl: Bool, rollDelayMs: UInt16) {
+    func sendRollControlConfig(useAngleControl: Bool, rollDelayMs: UInt16, rateCapDps: Float) {
         var payload = Data()
         payload.append(useAngleControl ? 0x01 : 0x00)
         payload.append(0x00)
         var delay = rollDelayMs
         payload.append(Data(bytes: &delay, count: 2))
+        var cap = rateCapDps                      // outer-loop angle→rate cap (deg/s), LE float
+        payload.append(Data(bytes: &cap, count: 4))
         sendRawCommand(31, payload: payload)
         if var cfg = rocketConfig {
             cfg.useAngleControl = useAngleControl
             cfg.rollDelayMs = rollDelayMs
+            cfg.rateCapDps = rateCapDps
             rocketConfig = cfg
         }
     }
@@ -1269,6 +1272,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.gainScheduleEnabled = dict["gs"] as? Bool ?? cfg.gainScheduleEnabled
             cfg.useAngleControl = dict["ac"] as? Bool ?? cfg.useAngleControl
             cfg.rollDelayMs = UInt16(dict["rdly"] as? Int ?? Int(cfg.rollDelayMs))
+            cfg.rateCapDps = parseFloat(dict["rcap"]) ?? cfg.rateCapDps
             cfg.guidanceEnabled = dict["ge"] as? Bool ?? cfg.guidanceEnabled
             cfg.cameraType = UInt8(dict["camt"] as? Int ?? Int(cfg.cameraType))
             cfg.loraFreqMHz = parseFloat(dict["lf"])

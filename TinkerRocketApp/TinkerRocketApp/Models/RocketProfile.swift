@@ -84,6 +84,7 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
     var rollDelayMs: UInt16 = 0
+    var rateCapDps: Float = 60          // outer-loop angle→rate cap (deg/s)
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2          // 0=None, 1=GoPro, 2=RunCam
 
@@ -174,6 +175,7 @@ extension RocketProfile {
         gainScheduleEnabled = try c.decodeIfPresent(Bool.self, forKey: .gainScheduleEnabled) ?? defaults.gainScheduleEnabled
         useAngleControl = try c.decodeIfPresent(Bool.self, forKey: .useAngleControl) ?? defaults.useAngleControl
         rollDelayMs = try c.decodeIfPresent(UInt16.self, forKey: .rollDelayMs) ?? defaults.rollDelayMs
+        rateCapDps = try c.decodeIfPresent(Float.self, forKey: .rateCapDps) ?? defaults.rateCapDps
         guidanceEnabled = try c.decodeIfPresent(Bool.self, forKey: .guidanceEnabled) ?? defaults.guidanceEnabled
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
 
