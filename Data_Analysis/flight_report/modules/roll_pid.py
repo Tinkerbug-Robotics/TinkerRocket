@@ -157,6 +157,33 @@ def _shade_segments(ax, tw, is_ang, label="rate-null (no angle target)"):
                    label=(label if not shown else None))
 
 
+def _as_float(v):
+    """Parse a sidecar value to float, or None if missing / non-numeric."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
+    """Clip a roll-rate axis to in-flight magnitudes so the apogee tumble spike
+    doesn't crush the controlled-flight detail; annotate if anything is clipped.
+    Scale is anchored on the rate cap (the natural scale of controlled roll rate),
+    with a robust percentile floor; the final second before ejection is excluded
+    so a pre-apogee tumble ramp can't inflate the scale."""
+    if gw is None or len(gw) == 0:
+        return
+    core = gw[tw <= eject_t - 1.0]
+    core = core if core.size else gw
+    lim = max(float(np.percentile(np.abs(core), 95)) * 1.4,
+              (rate_cap * 2.5) if rate_cap else 0.0, 30.0)
+    peak = float(np.max(np.abs(gw)))
+    ax.set_ylim(-lim, lim)
+    if peak > lim * 1.05:
+        ax.text(0.01, 0.04, f"axis clipped — apogee tumble peaks {peak:.0f}°/s",
+                transform=ax.transAxes, ha="left", va="bottom", fontsize=8, color="0.4")
+
+
 def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="roll_pid", title="Roll PID Tracking & Tuning")
     recs = flight.records
@@ -420,71 +447,96 @@ def analyze(flight: Flight) -> AnalysisResult:
             if -0.2 <= wt <= eject_t + 0.2:
                 ax.axvline(wt, color="gray", linestyle=":", lw=0.8)
 
-    # 2) Control timeline — launch → ejection (roll rate + servo command)
-    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    # Launch → ejection window (shared by the figures below).
     t_lo, t_hi = -0.2, eject_t + 0.2
     win = (t_imu >= t_lo) & (t_imu <= t_hi)
     win_c = (t_ns >= t_lo) & (t_ns <= t_hi)
-    axes[0].plot(t_imu[win], g[win], color="tab:green", lw=0.9)
-    axes[0].axhline(0, color="k", lw=0.5)
-    axes[0].set_ylabel("Roll rate (deg/s)")
-    axes[0].set_title("Roll control — launch → ejection")
-    axes[0].grid(True, alpha=0.3)
-    # Clip the rate axis to in-flight magnitudes so the apogee tumble spike
-    # doesn't crush the controlled-flight detail.
-    gw = g[win]
-    core = gw[t_imu[win] <= eject_t - 0.4]
-    core = core if core.size else gw
-    if core.size:
-        lim = max(float(np.percentile(np.abs(core), 99)) * 1.3, 30.0)
-        peak = float(np.max(np.abs(gw))) if gw.size else 0.0
-        axes[0].set_ylim(-lim, lim)
-        if peak > lim:
-            axes[0].text(0.01, 0.04, f"axis clipped — apogee tumble peaks {peak:.0f}°/s",
-                         transform=axes[0].transAxes, ha="left", va="bottom", fontsize=8,
-                         color="0.4")
-    _mark_events(axes[0], with_labels=True)
-    axes[0].legend(loc="upper right", fontsize=8)
-    axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
-    axes[1].axhline(0, color="k", lw=0.5)
-    axes[1].set_xlabel("Time since launch (s)")
-    axes[1].set_ylabel("Roll cmd (deg)")
-    axes[1].grid(True, alpha=0.3)
-    _mark_events(axes[1])
-    fig.tight_layout()
-    result.figures.append(fig)
+    rate_cap = _as_float(rc_cfg.get("rate_cap_dps"))
 
-    # 3) Roll-angle tracking vs profile plan (launch → ejection)
+    # 2) Control timeline — launch → ejection (roll rate + servo command).
+    #    For angle-profile flights this is folded into the 4-panel tracking
+    #    figure below, so only render it standalone for rate-only flights.
+    if not has_angle_profile:
+        fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+        axes[0].plot(t_imu[win], g[win], color="tab:green", lw=0.9)
+        axes[0].axhline(0, color="k", lw=0.5)
+        axes[0].set_ylabel("Roll rate (deg/s)")
+        axes[0].set_title("Roll control — launch → ejection")
+        axes[0].grid(True, alpha=0.3)
+        _clip_rate_axis(axes[0], t_imu[win], g[win], eject_t, rate_cap)
+        _mark_events(axes[0], with_labels=True)
+        axes[0].legend(loc="upper right", fontsize=8)
+        axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
+        axes[1].axhline(0, color="k", lw=0.5)
+        axes[1].set_xlabel("Time since launch (s)")
+        axes[1].set_ylabel("Roll cmd (deg)")
+        axes[1].grid(True, alpha=0.3)
+        _mark_events(axes[1])
+        fig.tight_layout()
+        result.figures.append(fig)
+
+    # 3) Roll-angle tracking vs profile plan + control activity (launch → ejection)
     if has_angle_profile and track_tw is not None and track_tw.size > 5:
-        fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+        fig, axes = plt.subplots(4, 1, figsize=(12, 12), sharex=True)
+
+        # Panel 0 — roll angle: target vs actual (both wrapped ±180)
         _shade_segments(axes[0], track_tw, track_is_ang)
         axes[0].plot(track_tw, track_tgt, color="tab:orange", lw=2.2, label="profile target")
         axes[0].plot(track_tw, track_act, color="tab:green", lw=1.4, label="actual roll (quaternion)")
-        axes[0].set_ylabel("Roll angle (deg, wrapped ±180)")
+        axes[0].set_ylabel("Roll angle\n(deg, wrapped ±180)")
         axes[0].set_ylim(-189, 189)
         axes[0].set_yticks([-180, -90, 0, 90, 180])
         axes[0].set_title("Roll angle tracking vs profile plan (launch → ejection)")
         axes[0].grid(True, alpha=0.3)
-        # Annotate each angle waypoint with its absolute commanded target.
         for (wt, wa, wn) in wps:
             if not wn and 0 <= wt <= eject_t:
                 axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
                                  color="tab:orange", ha="left", va="bottom",
                                  xytext=(2, 2), textcoords="offset points")
-        _mark_events(axes[0])
-        axes[0].legend(loc="lower left", fontsize=8)
+        _mark_events(axes[0], with_labels=True)
+        axes[0].legend(loc="upper left", fontsize=8, ncol=2)
 
-        _shade_segments(axes[1], track_tw, track_is_ang)
+        # Panel 1 — tracking error
+        _shade_segments(axes[1], track_tw, track_is_ang, label=None)
         axes[1].axhline(0, color="k", lw=0.5)
         axes[1].plot(track_tw, track_err, color="tab:red", lw=1.1)
-        axes[1].set_ylabel("Tracking error (deg)")
-        axes[1].set_xlabel("Time since launch (s)")
+        axes[1].set_ylabel("Tracking error\n(deg)")
         axes[1].grid(True, alpha=0.3)
         _mark_events(axes[1])
         if np.isfinite(angle_rms):
             axes[1].text(0.99, 0.05, f"RMS {angle_rms:.1f}°   peak {angle_peak:.1f}°",
                          transform=axes[1].transAxes, ha="right", va="bottom", fontsize=9,
                          bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.85))
+
+        # Panel 2 — roll rate (gyro X), with the outer-loop rate cap for reference
+        _shade_segments(axes[2], track_tw, track_is_ang, label=None)
+        axes[2].axhline(0, color="k", lw=0.5)
+        axes[2].plot(t_imu[win], g[win], color="tab:green", lw=0.9, label="roll rate (gyro)")
+        axes[2].set_ylabel("Roll rate\n(deg/s)")
+        axes[2].grid(True, alpha=0.3)
+        _clip_rate_axis(axes[2], t_imu[win], g[win], eject_t, rate_cap)
+        if rate_cap is not None:
+            axes[2].axhline(rate_cap, color="tab:blue", ls=":", lw=1.0,
+                            label=f"rate cap ±{rate_cap:g}°/s")
+            axes[2].axhline(-rate_cap, color="tab:blue", ls=":", lw=1.0)
+        _mark_events(axes[2])
+        axes[2].legend(loc="upper right", fontsize=8)
+
+        # Panel 3 — roll command (PID output → servo), with saturation limits
+        _shade_segments(axes[3], track_tw, track_is_ang, label=None)
+        axes[3].axhline(0, color="k", lw=0.5)
+        axes[3].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9, label="roll cmd")
+        axes[3].set_ylabel("Roll cmd\n(deg)")
+        axes[3].set_xlabel("Time since launch (s)")
+        axes[3].grid(True, alpha=0.3)
+        cmin, cmax = _as_float(rc_cfg.get("cmd_limit_min_deg")), _as_float(rc_cfg.get("cmd_limit_max_deg"))
+        if cmax is not None:
+            axes[3].axhline(cmax, color="tab:purple", ls=":", lw=1.0, label="cmd limit")
+        if cmin is not None:
+            axes[3].axhline(cmin, color="tab:purple", ls=":", lw=1.0)
+        _mark_events(axes[3])
+        axes[3].legend(loc="upper right", fontsize=8)
+
         fig.tight_layout()
         result.figures.append(fig)
 
