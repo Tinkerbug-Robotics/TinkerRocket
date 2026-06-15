@@ -40,6 +40,14 @@ _K_PLANT_FALLBACK = 200.0                   # deg/s² per deg deflection
 _F_TARGET_HZ = 2.0                          # target closed-loop crossover
 _PM_TARGET_DEG = 50.0                       # target phase margin
 
+# Per-flight launch→ejection window trims (seconds since launch), keyed by .bin
+# stem. Some flights tumble well before apogee; capping the window keeps the
+# roll-tracking plots (and error stats) clean. The actual apogee is still
+# reported in the metrics.
+_WINDOW_TRIM_S: dict[str, float] = {
+    "flight_20260614_150808": 9.0,  # Rolly Polly III — tumble onset ~9s, apogee 10.27s
+}
+
 
 def _moving_average(arr: np.ndarray, window: int) -> np.ndarray:
     if _HAS_SCIPY:
@@ -180,7 +188,7 @@ def _clip_rate_axis(ax, tw, gw, eject_t, rate_cap=None):
     peak = float(np.max(np.abs(gw)))
     ax.set_ylim(-lim, lim)
     if peak > lim * 1.05:
-        ax.text(0.01, 0.04, f"axis clipped — apogee tumble peaks {peak:.0f}°/s",
+        ax.text(0.01, 0.04, f"axis clipped — peak |rate| {peak:.0f}°/s",
                 transform=ax.transAxes, ha="left", va="bottom", fontsize=8, color="0.4")
 
 
@@ -309,6 +317,11 @@ def analyze(flight: Flight) -> AnalysisResult:
                    else float(min(t_control_on + 6.0, t_imu[-1])))
     eject_t = float(min(eject_t, t_imu[-1]))
 
+    # Optional per-flight trim of the plot/analysis window (drop the messy
+    # pre-apogee tumble at the end). eject_t stays the real apogee for metrics.
+    trim_t = _WINDOW_TRIM_S.get(flight.bin_path.stem)
+    win_end = float(min(eject_t, trim_t)) if trim_t is not None else eject_t
+
     burnout_t = flight.sidecar.get("burnout_time_s")
     burnout_t = float(burnout_t) if burnout_t not in (None, "") else None
 
@@ -316,7 +329,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     angle_rms = angle_peak = float("nan")
     if has_angle_profile:
         roll_act = _quat_roll_deg(*(get_array(ns, k) for k in ("q0", "q1", "q2", "q3")))
-        wmask = (t_ns >= 0.0) & (t_ns <= eject_t + 0.05) & np.isfinite(roll_act)
+        wmask = (t_ns >= 0.0) & (t_ns <= win_end + 0.05) & np.isfinite(roll_act)
         track_tw = t_ns[wmask]
         act_w = roll_act[wmask]
         tq = [_profile_target(wps, float(tt)) for tt in track_tw]
@@ -399,6 +412,8 @@ def analyze(flight: Flight) -> AnalysisResult:
         metrics["profile_plan"] = "; ".join(
             f"{wt:g}s→{'null-rate' if wn else f'{wa:g}°'}" for (wt, wa, wn) in wps)
         metrics["eject_time_s"]         = round(eject_t, 2)
+        if win_end < eject_t - 1e-6:
+            metrics["plot_window_trimmed_s"] = f"[0, {win_end:g}] (apogee {eject_t:.2f}s)"
         metrics["angle_track_rms_deg"]  = round(angle_rms, 1)  if np.isfinite(angle_rms)  else "—"
         metrics["angle_track_peak_deg"] = round(angle_peak, 1) if np.isfinite(angle_peak) else "—"
     result.metrics = metrics
@@ -434,21 +449,22 @@ def analyze(flight: Flight) -> AnalysisResult:
     fig.tight_layout()
     result.figures.append(fig)
 
-    # Event markers shared by the launch→eject figures.
+    # Event markers shared by the launch→eject figures (within the plotted window).
     def _mark_events(ax, with_labels=False):
         ax.axvline(t_control_on, color="red", linestyle="--", lw=1.0,
                    label=(f"control on ({t_control_on:.2f}s)" if with_labels else None))
-        if burnout_t is not None and -0.2 <= burnout_t <= eject_t + 0.2:
+        if burnout_t is not None and -0.2 <= burnout_t <= win_end + 0.2:
             ax.axvline(burnout_t, color="tab:purple", linestyle="--", lw=1.0,
                        label=(f"burnout ({burnout_t:.2f}s)" if with_labels else None))
-        ax.axvline(eject_t, color="black", linestyle="--", lw=1.0,
-                   label=(f"apogee/eject ({eject_t:.2f}s)" if with_labels else None))
+        if eject_t <= win_end + 0.2:
+            ax.axvline(eject_t, color="black", linestyle="--", lw=1.0,
+                       label=(f"apogee/eject ({eject_t:.2f}s)" if with_labels else None))
         for (wt, _, _) in wps:
-            if -0.2 <= wt <= eject_t + 0.2:
+            if -0.2 <= wt <= win_end + 0.2:
                 ax.axvline(wt, color="gray", linestyle=":", lw=0.8)
 
-    # Launch → ejection window (shared by the figures below).
-    t_lo, t_hi = -0.2, eject_t + 0.2
+    # Launch → ejection window (shared by the figures below), trimmed if configured.
+    t_lo, t_hi = -0.2, win_end + 0.2
     win = (t_imu >= t_lo) & (t_imu <= t_hi)
     win_c = (t_ns >= t_lo) & (t_ns <= t_hi)
     rate_cap = _as_float(rc_cfg.get("rate_cap_dps"))
@@ -463,7 +479,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[0].set_ylabel("Roll rate (deg/s)")
         axes[0].set_title("Roll control — launch → ejection")
         axes[0].grid(True, alpha=0.3)
-        _clip_rate_axis(axes[0], t_imu[win], g[win], eject_t, rate_cap)
+        _clip_rate_axis(axes[0], t_imu[win], g[win], win_end, rate_cap)
         _mark_events(axes[0], with_labels=True)
         axes[0].legend(loc="upper right", fontsize=8)
         axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
@@ -489,7 +505,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[0].set_title("Roll angle tracking vs profile plan (launch → ejection)")
         axes[0].grid(True, alpha=0.3)
         for (wt, wa, wn) in wps:
-            if not wn and 0 <= wt <= eject_t:
+            if not wn and 0 <= wt <= win_end:
                 axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
                                  color="tab:orange", ha="left", va="bottom",
                                  xytext=(2, 2), textcoords="offset points")
@@ -514,7 +530,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[2].plot(t_imu[win], g[win], color="tab:green", lw=0.9, label="roll rate (gyro)")
         axes[2].set_ylabel("Roll rate\n(deg/s)")
         axes[2].grid(True, alpha=0.3)
-        _clip_rate_axis(axes[2], t_imu[win], g[win], eject_t, rate_cap)
+        _clip_rate_axis(axes[2], t_imu[win], g[win], win_end, rate_cap)
         if rate_cap is not None:
             axes[2].axhline(rate_cap, color="tab:blue", ls=":", lw=1.0,
                             label=f"rate cap ±{rate_cap:g}°/s")
