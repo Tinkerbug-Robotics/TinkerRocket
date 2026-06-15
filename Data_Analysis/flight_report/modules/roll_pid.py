@@ -53,9 +53,19 @@ def _moving_average(arr: np.ndarray, window: int) -> np.ndarray:
     return np.convolve(padded, np.ones(w) / w, mode="valid")
 
 
+def _roll_cfg(sidecar: dict) -> dict:
+    """The `settings.roll_control` block from the #165 flight-settings snapshot, or {}."""
+    rc = (sidecar.get("settings") or {}).get("roll_control")
+    return rc if isinstance(rc, dict) else {}
+
+
 def _gain_from_sidecar(sidecar: dict) -> tuple[float | None, float | None, float | None]:
     """Best-effort extract of (Kp, Ki, Kd) from the per-flight .json sidecar."""
-    # The post-#178 RocketProfile dump nests these — accept a few common shapes.
+    # Current firmware (#165 settings snapshot) nests the flown gains under
+    # settings.roll_control.{kp,ki,kd}. Prefer that; fall back to older shapes.
+    rc = _roll_cfg(sidecar)
+    if all(k in rc for k in ("kp", "ki", "kd")):
+        return float(rc["kp"]), float(rc["ki"]), float(rc["kd"])
     for keyset in (("roll_kp", "roll_ki", "roll_kd"),
                    ("Kp", "Ki", "Kd")):
         if all(k in sidecar for k in keyset):
@@ -66,6 +76,85 @@ def _gain_from_sidecar(sidecar: dict) -> tuple[float | None, float | None, float
             if all(k in profile for k in keyset):
                 return tuple(float(profile[k]) for k in keyset)  # type: ignore[return-value]
     return None, None, None
+
+
+def _parse_profile(rc: dict) -> list[tuple[float, float, bool]]:
+    """Roll-control waypoints as [(time_s_after_launch, angle_deg, is_null_rate)], sorted by time."""
+    out: list[tuple[float, float, bool]] = []
+    for seg in rc.get("profile") or []:
+        try:
+            out.append((float(seg["time_s"]), float(seg["angle_deg"]),
+                        str(seg.get("mode", "")).lower() == "null_rate"))
+        except (KeyError, TypeError, ValueError):
+            continue
+    out.sort(key=lambda s: s[0])
+    return out
+
+
+def _profile_target(wps: list[tuple[float, float, bool]], t: float) -> tuple[float, bool]:
+    """Replicate firmware `roll_profile_query` (main.cpp): returns (target_angle_deg, is_angle_mode)
+    at flight time `t` (seconds since launch). Segment mode = mode of the waypoint that STARTS it;
+    the angle is linearly interpolated between consecutive waypoints. Holds the first / last
+    waypoint outside the profile span."""
+    if not wps:
+        return 0.0, False
+    if t <= wps[0][0]:
+        return wps[0][1], not wps[0][2]
+    if t >= wps[-1][0]:
+        return wps[-1][1], not wps[-1][2]
+    for i in range(len(wps) - 1):
+        if t < wps[i + 1][0]:
+            t0, a0, null0 = wps[i]
+            t1, a1, _ = wps[i + 1]
+            if t1 <= t0:
+                return a0, not null0
+            frac = (t - t0) / (t1 - t0)
+            return a0 + frac * (a1 - a0), not null0
+    return wps[-1][1], not wps[-1][2]
+
+
+def _quat_roll_deg(q0, q1, q2, q3):
+    """Roll angle (deg) extracted exactly as the flight controller does in main.cpp:
+    ``-atan2(z_east, z_north)`` from the body-Z axis projected into the nav frame.
+    NOTE: the logged ``NonSensor.roll`` Euler field uses a *different* convention and is
+    not what the roll controller regulates — always reconstruct from the quaternion."""
+    z_north = 2.0 * (q1 * q3 + q0 * q2)
+    z_east = 2.0 * (q2 * q3 - q0 * q1)
+    return -np.degrees(np.arctan2(z_east, z_north))
+
+
+def _wrap180(x):
+    """Wrap angle(s) in degrees to (-180, 180]."""
+    return (np.asarray(x, dtype=float) + 180.0) % 360.0 - 180.0
+
+
+def _break_seam(y):
+    """NaN-break a wrapped series where it jumps the ±180 seam, so a line plot
+    doesn't draw a vertical connector across the discontinuity."""
+    y = np.asarray(y, dtype=float).copy()
+    d = np.abs(np.diff(y))
+    y[1:][d > 180.0] = np.nan
+    return y
+
+
+def _shade_segments(ax, tw, is_ang, label="rate-null (no angle target)"):
+    """Shade the contiguous time spans where the profile is in null-rate mode."""
+    if tw is None or len(tw) == 0:
+        return
+    shown = False
+    start = None
+    for i in range(len(tw)):
+        null = not bool(is_ang[i])
+        if null and start is None:
+            start = float(tw[i])
+        elif not null and start is not None:
+            ax.axvspan(start, float(tw[i]), color="0.85", alpha=0.6, lw=0,
+                       label=(label if not shown else None))
+            shown = True
+            start = None
+    if start is not None:
+        ax.axvspan(start, float(tw[-1]), color="0.85", alpha=0.6, lw=0,
+                   label=(label if not shown else None))
 
 
 def analyze(flight: Flight) -> AnalysisResult:
@@ -174,8 +263,53 @@ def analyze(flight: Flight) -> AnalysisResult:
     mask_ss_v = (t_ns >= ss_t0) & (t_ns <= ss_t1)
     v_mean = float(np.mean(speed[mask_ss_v])) if mask_ss_v.any() else float("nan")
 
+    # ── Roll-angle tracking vs profile plan (launch → ejection) ──
+    # Reconstruct the commanded waypoint plan and the actual roll the controller
+    # regulated, both exactly as the firmware computes them.
+    rc_cfg = _roll_cfg(flight.sidecar)
+    wps = _parse_profile(rc_cfg)
+    has_angle_profile = any(not null for (_, _, null) in wps)
+
+    # Ejection ≈ apogee (end of roll authority), launch-relative.
+    eject_t = None
+    for r in ns:
+        if r.get("apogee_flag"):
+            eject_t = (r["time_us"] - t0) / 1e6 - launch_t
+            break
+    if eject_t is None or not np.isfinite(eject_t) or eject_t <= 0:
+        apo = flight.sidecar.get("apogee_time_s")
+        eject_t = (float(apo) if apo not in (None, "")
+                   else float(min(t_control_on + 6.0, t_imu[-1])))
+    eject_t = float(min(eject_t, t_imu[-1]))
+
+    burnout_t = flight.sidecar.get("burnout_time_s")
+    burnout_t = float(burnout_t) if burnout_t not in (None, "") else None
+
+    track_tw = track_tgt = track_act = track_err = track_is_ang = None
+    angle_rms = angle_peak = float("nan")
+    if has_angle_profile:
+        roll_act = _quat_roll_deg(*(get_array(ns, k) for k in ("q0", "q1", "q2", "q3")))
+        wmask = (t_ns >= 0.0) & (t_ns <= eject_t + 0.05) & np.isfinite(roll_act)
+        track_tw = t_ns[wmask]
+        act_w = roll_act[wmask]
+        tq = [_profile_target(wps, float(tt)) for tt in track_tw]
+        target_ang = np.array([x[0] for x in tq], dtype=float)
+        track_is_ang = np.array([x[1] for x in tq], dtype=bool)
+        # Wrapped shortest-path error, exactly like servo_control.controlAngle().
+        err = _wrap180(target_ang - act_w)
+        # Plot both target and actual wrapped to (-180,180] so the vertical gap
+        # equals the true error the controller acts on; break the ±180 seam.
+        track_tgt = _break_seam(np.where(track_is_ang, _wrap180(target_ang), np.nan))
+        track_act = _break_seam(np.where(track_is_ang, _wrap180(act_w), np.nan))
+        track_err = np.where(track_is_ang, err, np.nan)
+        ea = err[track_is_ang]
+        if ea.size:
+            angle_rms = float(np.sqrt(np.mean(ea ** 2)))
+            angle_peak = float(np.max(np.abs(ea)))
+
     # ── Current gains (from sidecar if available) ──
     kp_flight, ki_flight, kd_flight = _gain_from_sidecar(flight.sidecar)
+    kp_angle_flight = rc_cfg.get("kp_angle")
 
     # ── Stability with current gains ──
     pm_current: float | None = None
@@ -216,6 +350,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         "current_Kp":             round(kp_flight, 4) if kp_flight is not None else "—",
         "current_Ki":             round(ki_flight, 5) if ki_flight is not None else "—",
         "current_Kd":             round(kd_flight, 5) if kd_flight is not None else "—",
+        "current_Kp_angle":       kp_angle_flight if kp_angle_flight is not None else "—",
         "current_crossover_hz":   round(f_c_current, 2) if f_c_current is not None else "—",
         "current_phase_margin_°": round(pm_current, 1)  if pm_current  is not None else "—",
         "recommended_Kp":         round(kp_new, 4),
@@ -224,6 +359,21 @@ def analyze(flight: Flight) -> AnalysisResult:
         "target_crossover_hz":    round(_F_TARGET_HZ, 2),
         "target_phase_margin_°":  round(_PM_TARGET_DEG, 1),
     }
+    # Flown roll-control setup parameters (from the #165 settings snapshot).
+    if rc_cfg:
+        metrics["roll_mode"]      = rc_cfg.get("mode", "—")
+        metrics["roll_delay_ms"]  = rc_cfg.get("delay_ms", "—")
+        metrics["rate_cap_dps"]   = rc_cfg.get("rate_cap_dps", "—")
+        metrics["cmd_limit_deg"]  = (f"[{rc_cfg.get('cmd_limit_min_deg', '?')}, "
+                                     f"{rc_cfg.get('cmd_limit_max_deg', '?')}]")
+        metrics["d_lpf_hz"]       = rc_cfg.get("d_lpf_hz", "—")
+        metrics["guidance_enabled"] = rc_cfg.get("guidance_enabled", "—")
+    if has_angle_profile:
+        metrics["profile_plan"] = "; ".join(
+            f"{wt:g}s→{'null-rate' if wn else f'{wa:g}°'}" for (wt, wa, wn) in wps)
+        metrics["eject_time_s"]         = round(eject_t, 2)
+        metrics["angle_track_rms_deg"]  = round(angle_rms, 1)  if np.isfinite(angle_rms)  else "—"
+        metrics["angle_track_peak_deg"] = round(angle_peak, 1) if np.isfinite(angle_peak) else "—"
     result.metrics = metrics
 
     # ── Figures ──
@@ -257,27 +407,88 @@ def analyze(flight: Flight) -> AnalysisResult:
     fig.tight_layout()
     result.figures.append(fig)
 
-    # 2) Transient detail (-0.5 s … +2 s around control on)
-    fig, axes = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
-    win = (t_imu >= t_control_on - 0.5) & (t_imu <= t_control_on + 2.0)
-    win_c = (t_ns  >= t_control_on - 0.5) & (t_ns  <= t_control_on + 2.0)
-    axes[0].plot(t_imu[win], g[win], color="tab:green", lw=1.0)
+    # Event markers shared by the launch→eject figures.
+    def _mark_events(ax, with_labels=False):
+        ax.axvline(t_control_on, color="red", linestyle="--", lw=1.0,
+                   label=(f"control on ({t_control_on:.2f}s)" if with_labels else None))
+        if burnout_t is not None and -0.2 <= burnout_t <= eject_t + 0.2:
+            ax.axvline(burnout_t, color="tab:purple", linestyle="--", lw=1.0,
+                       label=(f"burnout ({burnout_t:.2f}s)" if with_labels else None))
+        ax.axvline(eject_t, color="black", linestyle="--", lw=1.0,
+                   label=(f"apogee/eject ({eject_t:.2f}s)" if with_labels else None))
+        for (wt, _, _) in wps:
+            if -0.2 <= wt <= eject_t + 0.2:
+                ax.axvline(wt, color="gray", linestyle=":", lw=0.8)
+
+    # 2) Control timeline — launch → ejection (roll rate + servo command)
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    t_lo, t_hi = -0.2, eject_t + 0.2
+    win = (t_imu >= t_lo) & (t_imu <= t_hi)
+    win_c = (t_ns >= t_lo) & (t_ns <= t_hi)
+    axes[0].plot(t_imu[win], g[win], color="tab:green", lw=0.9)
     axes[0].axhline(0, color="k", lw=0.5)
-    axes[0].axvline(t_control_on, color="red", linestyle="--", lw=1.2, label="control on")
     axes[0].set_ylabel("Roll rate (deg/s)")
-    axes[0].set_title("Transient response — first 2 s of active control")
+    axes[0].set_title("Roll control — launch → ejection")
     axes[0].grid(True, alpha=0.3)
+    # Clip the rate axis to in-flight magnitudes so the apogee tumble spike
+    # doesn't crush the controlled-flight detail.
+    gw = g[win]
+    core = gw[t_imu[win] <= eject_t - 0.4]
+    core = core if core.size else gw
+    if core.size:
+        lim = max(float(np.percentile(np.abs(core), 99)) * 1.3, 30.0)
+        peak = float(np.max(np.abs(gw))) if gw.size else 0.0
+        axes[0].set_ylim(-lim, lim)
+        if peak > lim:
+            axes[0].text(0.01, 0.04, f"axis clipped — apogee tumble peaks {peak:.0f}°/s",
+                         transform=axes[0].transAxes, ha="left", va="bottom", fontsize=8,
+                         color="0.4")
+    _mark_events(axes[0], with_labels=True)
     axes[0].legend(loc="upper right", fontsize=8)
-    axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=1.0)
+    axes[1].plot(t_ns[win_c], cmd[win_c], color="tab:orange", lw=0.9)
     axes[1].axhline(0, color="k", lw=0.5)
-    axes[1].axvline(t_control_on, color="red", linestyle="--", lw=1.2)
     axes[1].set_xlabel("Time since launch (s)")
     axes[1].set_ylabel("Roll cmd (deg)")
     axes[1].grid(True, alpha=0.3)
+    _mark_events(axes[1])
     fig.tight_layout()
     result.figures.append(fig)
 
-    # 3) FFT of steady-state roll rate
+    # 3) Roll-angle tracking vs profile plan (launch → ejection)
+    if has_angle_profile and track_tw is not None and track_tw.size > 5:
+        fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+        _shade_segments(axes[0], track_tw, track_is_ang)
+        axes[0].plot(track_tw, track_tgt, color="tab:orange", lw=2.2, label="profile target")
+        axes[0].plot(track_tw, track_act, color="tab:green", lw=1.4, label="actual roll (quaternion)")
+        axes[0].set_ylabel("Roll angle (deg, wrapped ±180)")
+        axes[0].set_ylim(-189, 189)
+        axes[0].set_yticks([-180, -90, 0, 90, 180])
+        axes[0].set_title("Roll angle tracking vs profile plan (launch → ejection)")
+        axes[0].grid(True, alpha=0.3)
+        # Annotate each angle waypoint with its absolute commanded target.
+        for (wt, wa, wn) in wps:
+            if not wn and 0 <= wt <= eject_t:
+                axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
+                                 color="tab:orange", ha="left", va="bottom",
+                                 xytext=(2, 2), textcoords="offset points")
+        _mark_events(axes[0])
+        axes[0].legend(loc="lower left", fontsize=8)
+
+        _shade_segments(axes[1], track_tw, track_is_ang)
+        axes[1].axhline(0, color="k", lw=0.5)
+        axes[1].plot(track_tw, track_err, color="tab:red", lw=1.1)
+        axes[1].set_ylabel("Tracking error (deg)")
+        axes[1].set_xlabel("Time since launch (s)")
+        axes[1].grid(True, alpha=0.3)
+        _mark_events(axes[1])
+        if np.isfinite(angle_rms):
+            axes[1].text(0.99, 0.05, f"RMS {angle_rms:.1f}°   peak {angle_peak:.1f}°",
+                         transform=axes[1].transAxes, ha="right", va="bottom", fontsize=9,
+                         bbox=dict(boxstyle="round", fc="white", ec="0.7", alpha=0.85))
+        fig.tight_layout()
+        result.figures.append(fig)
+
+    # 4) FFT of steady-state roll rate
     if fft_freqs is not None and fft_mag is not None:
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.semilogy(fft_freqs, fft_mag, color="tab:blue", lw=0.8)
