@@ -707,7 +707,8 @@ nonisolated struct FlightSettings: Codable, Sendable {
         imu = IMUSettings(
             gyro_fs_dps: Int(raw.ism6_gyro_fs_dps),
             low_g_fs_g: Int(raw.ism6_low_g_fs_g),
-            high_g_fs_g: Int(raw.ism6_high_g_fs_g)
+            high_g_fs_g: Int(raw.ism6_high_g_fs_g),
+            mounting: MountingSettings(from: raw)
         )
     }
 }
@@ -845,6 +846,30 @@ nonisolated struct IMUSettings: Codable, Sendable {
     let gyro_fs_dps: Int
     let low_g_fs_g: Int
     let high_g_fs_g: Int
+    /// Board→rocket mounting orientation (v2 settings frames). nil on
+    /// pre-orientation logs, which always meant the +X-nose mounting.
+    let mounting: MountingSettings?
+}
+
+nonisolated struct MountingSettings: Codable, Sendable {
+    /// Which board axis pointed at the nose + clocking, e.g. "+X", "-Z r90".
+    let orientation: String
+    /// How it was determined: "default" | "manual" | "auto_snap" | "auto_exact".
+    let mode: String
+    /// Auto-snap residual angle (deg); 0 for default/manual.
+    let residual_deg: Double
+
+    init?(from raw: FlightSettingsData) {
+        guard let code = raw.b2r_code, let mode = raw.b2r_mode else { return nil }
+        orientation = FlightSettingsData.b2rName(code: code)
+        switch mode {
+        case 1: self.mode = "manual"
+        case 2: self.mode = "auto_snap"
+        case 3: self.mode = "auto_exact"
+        default: self.mode = "default"
+        }
+        residual_deg = sigFig(raw.b2r_residual_deg ?? 0, 3)
+    }
 }
 
 // MARK: - CSV Errors

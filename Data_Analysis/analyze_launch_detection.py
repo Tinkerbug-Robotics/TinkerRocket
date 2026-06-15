@@ -52,7 +52,7 @@ MSG_NAMES = {
 }
 
 MSG_EXPECTED_LEN = {
-    MSG_OUT_STATUS_QUERY: 16,
+    MSG_OUT_STATUS_QUERY: (16, 26),  # v2 / v3 (+b2r orientation)
     MSG_GNSS:             42,
     MSG_ISM6HG256:        22,
     MSG_BMP585:           12,
@@ -159,9 +159,11 @@ def parse_file(filepath):
 
         if msg_type in MSG_EXPECTED_LEN:
             expected = MSG_EXPECTED_LEN[msg_type]
-            if expected is not None and msg_len != expected:
-                pos -= 1
-                continue
+            if expected is not None:
+                valid = expected if isinstance(expected, tuple) else (expected,)
+                if msg_len not in valid:
+                    pos -= 1
+                    continue
 
         if pos + msg_len + 2 > file_size:
             break

@@ -397,7 +397,9 @@ struct ConnectedDashboardView: View {
 
             if showRocketViews {
                 IMUView(telemetry: device.telemetry,
-                        isBaseStation: device.isBaseStation)
+                        isBaseStation: device.isBaseStation,
+                        orientationName: device.isBaseStation ? "" : device.imuOrientationName,
+                        orientationMode: device.imuOrientationMode)
                     .opacity(staleOpacity)
             }
 
@@ -909,11 +911,24 @@ struct AltitudeView: View {
 struct IMUView: View {
     let telemetry: TelemetryData
     var isBaseStation: Bool = false
+    // Board→rocket mounting orientation (direct rocket connection only).
+    // Empty until the FC reports it; shown so the flyer can confirm the
+    // auto-detected mounting before arming.
+    var orientationName: String = ""
+    var orientationMode: IMUOrientationMode = .unknown
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("IMU")
-                .font(.headline)
+            HStack {
+                Text("IMU")
+                    .font(.headline)
+                Spacer()
+                if !orientationName.isEmpty {
+                    Text("nose: \(orientationName) (\(orientationMode.label))")
+                        .font(.caption)
+                        .foregroundColor(orientationMode == .autoExact ? .orange : .secondary)
+                }
+            }
 
             HStack(spacing: 0) {
                 Text("")

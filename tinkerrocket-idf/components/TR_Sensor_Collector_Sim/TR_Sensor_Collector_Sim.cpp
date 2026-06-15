@@ -106,6 +106,24 @@ void SensorCollectorSim::configureSimRotation(float ism6_rot_z_deg)
              (double)ism6_rot_z_deg, (double)ism6_inv_c_, (double)ism6_inv_s_);
 }
 
+void SensorCollectorSim::configureSimBoardToRocket(const float R[9])
+{
+    // Store the transpose (rocket→board); flag identity to skip the
+    // multiply in the hot encode path.
+    bool identity = true;
+    for (int r = 0; r < 3; r++)
+    {
+        for (int c = 0; c < 3; c++)
+        {
+            const float v = R[c * 3 + r];  // transpose
+            b2r_inv_[r * 3 + c] = v;
+            const float ref = (r == c) ? 1.0f : 0.0f;
+            if (fabsf(v - ref) > 1e-6f) identity = false;
+        }
+    }
+    b2r_identity_ = identity;
+}
+
 void SensorCollectorSim::startSim(float ground_pressure_pa)
 {
     if (!configured_)
@@ -424,13 +442,18 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     const float sp = sinf(pitch_rad_);
     const float cp = cosf(pitch_rad_);
     const float sf_vert = accel_mps2_ + GRAVITY;  // specific force if perfectly vertical
-    const float body_ax = sf_vert * sp;  // axial (along rocket)
-    const float body_az = sf_vert * cp;  // perpendicular
+    float body_ax = sf_vert * sp;  // axial (along rocket)
+    float body_ay = 0.0f;
+    float body_az = sf_vert * cp;  // perpendicular
 
-    // Inverse rotation: body-frame → sensor-frame (ISM6 board rotation about Z)
+    // Rocket frame → board frame (inverse of the mounting orientation;
+    // identity for the standard +X-nose mounting).
+    rocketToBoard(body_ax, body_ay, body_az);
+
+    // Inverse rotation: board-frame → sensor-frame (ISM6 board rotation about Z)
     // Only rotates X/Y; Z passes through
-    const float sensor_ax =  body_ax * ism6_inv_c_;
-    const float sensor_ay = -body_ax * ism6_inv_s_;
+    const float sensor_ax =  body_ax * ism6_inv_c_ + body_ay * ism6_inv_s_;
+    const float sensor_ay = -body_ax * ism6_inv_s_ + body_ay * ism6_inv_c_;
     const float sensor_az =  body_az;
 
     // Low-G accelerometer (±16g range)
@@ -449,15 +472,22 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     out.acc_high_raw.z = (int16_t)constrain(
         lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
 
-    // Gyro: pitch rate on body Y axis (right-hand rule: Y = pitch axis)
-    // Rotated by ISM6 board angle same as accel X/Y
-    const float gyro_body_y_dps = pitch_rate_rps_ * (180.0f / 3.14159265f);
-    const float sensor_gx =  gyro_body_y_dps * ism6_inv_s_;  // cross-coupling
-    const float sensor_gy =  gyro_body_y_dps * ism6_inv_c_;
+    // Gyro: pitch rate on body Y axis (right-hand rule: Y = pitch axis),
+    // through the same inverse chain as accel (rocket → board → sensor).
+    float gyro_body_x_dps = 0.0f;
+    float gyro_body_y_dps = pitch_rate_rps_ * (180.0f / 3.14159265f);
+    float gyro_body_z_dps = 0.0f;
+    rocketToBoard(gyro_body_x_dps, gyro_body_y_dps, gyro_body_z_dps);
+
+    const float sensor_gx =  gyro_body_x_dps * ism6_inv_c_ + gyro_body_y_dps * ism6_inv_s_;
+    const float sensor_gy = -gyro_body_x_dps * ism6_inv_s_ + gyro_body_y_dps * ism6_inv_c_;
+    const float sensor_gz =  gyro_body_z_dps;
     out.gyro_raw.x = (int16_t)constrain(
         lroundf(sensor_gx / GYRO_DPS_PER_LSB), -32768, 32767);
     out.gyro_raw.y = (int16_t)constrain(
         lroundf(sensor_gy / GYRO_DPS_PER_LSB), -32768, 32767);
+    out.gyro_raw.z = (int16_t)constrain(
+        lroundf(sensor_gz / GYRO_DPS_PER_LSB), -32768, 32767);
 }
 
 void SensorCollectorSim::encodeBMP585(uint32_t time_us, BMP585Data& out)
@@ -488,9 +518,13 @@ void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
 
     const float sp = sinf(pitch_rad_);
     const float cp = cosf(pitch_rad_);
-    const float body_x =  B_NORTH * sp + B_DOWN * cp;
-    const float body_y =  B_EAST;
-    const float body_z = -B_NORTH * cp + B_DOWN * sp;
+    float body_x =  B_NORTH * sp + B_DOWN * cp;
+    float body_y =  B_EAST;
+    float body_z = -B_NORTH * cp + B_DOWN * sp;
+
+    // Rocket frame → board frame (inverse mounting orientation), matching
+    // the forward board→rocket rotation the converter now applies to mag.
+    rocketToBoard(body_x, body_y, body_z);
 
     out.mag_x = (uint32_t)(lroundf(body_x * COUNTS_PER_UT) + 131072);
     out.mag_y = (uint32_t)(lroundf(body_y * COUNTS_PER_UT) + 131072);

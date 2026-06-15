@@ -290,5 +290,36 @@ final class MessageParserTests: XCTestCase {
 
         // Undersized payload is rejected.
         XCTAssertThrowsError(try FlightSettingsData(from: Data(p.prefix(187))))
+
+        // v1 frame: no board→rocket orientation tail.
+        XCTAssertNil(raw.b2r_code)
+        XCTAssertNil(raw.b2rDisplayName)
+        XCTAssertNil(s.imu.mounting)
+
+        // ---- v2: board→rocket orientation tail @188 (firmware VERSION 2) ----
+        var p2 = p
+        p2[4] = 2                  // version
+        p2.append(17)              // b2r_code @188: +Z nose, r90 clocking
+        p2.append(2)               // b2r_mode @189: auto-snap
+        p2 += leI16(350)           // b2r_residual_cdeg @190: 3.5°
+        // board→rocket quat for +Z r90 — the x→y→z cyclic permutation,
+        // 120° about (1,1,1): (0.5, 0.5, 0.5, 0.5) ×10000
+        p2 += leI16(5000); p2 += leI16(5000); p2 += leI16(5000); p2 += leI16(5000)
+        XCTAssertEqual(p2.count, 200)
+
+        let raw2 = try FlightSettingsData(from: Data(p2))
+        XCTAssertEqual(raw2.version, 2)
+        XCTAssertEqual(raw2.b2r_code, 17)
+        XCTAssertEqual(raw2.b2r_mode, 2)
+        XCTAssertEqual(raw2.b2r_residual_deg ?? -1, 3.5, accuracy: 1e-4)
+        XCTAssertEqual(raw2.b2r_quat?.count, 4)
+        XCTAssertEqual(raw2.b2r_quat?[0] ?? -1, 0.5, accuracy: 1e-4)
+        XCTAssertEqual(raw2.b2r_quat?[3] ?? -1, 0.5, accuracy: 1e-4)
+        XCTAssertEqual(raw2.b2rDisplayName, "+Z r90")
+
+        let s2 = FlightSettings(from: raw2)
+        XCTAssertEqual(s2.imu.mounting?.orientation, "+Z r90")
+        XCTAssertEqual(s2.imu.mounting?.mode, "auto_snap")
+        XCTAssertEqual(s2.imu.mounting?.residual_deg ?? -1, 3.5, accuracy: 1e-6)
     }
 }

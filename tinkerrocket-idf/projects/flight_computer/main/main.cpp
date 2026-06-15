@@ -9,6 +9,7 @@
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
 #include <TR_Sensor_Data_Converter.h>
+#include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
 #include <TR_KinematicChecks.h>
 #include <TR_MagCalibrator.h>
@@ -249,6 +250,25 @@ static uint8_t out_pending_command = 0U;
 static uint8_t last_processed_cmd = 0U;  // dedup: ignore OutComputer repeats
 static bool end_flight_sent = false;
 static OutStatusQueryData out_status_query_data = {};
+
+// Active board→rocket mounting orientation.  Phase 1: static from
+// config::BOARD_TO_ROCKET_ORIENT at boot; pad-gravity auto-detect (phase 2)
+// and the app setting (phase 3) will call applyBoardToRocketOrientation()
+// again at runtime.  Cached here so the OC status query and the flight
+// settings snapshot both report what the converter is actually applying.
+static uint8_t b2r_active_code = ORIENT_CODE_IDENTITY;
+static uint8_t b2r_active_mode = ORIENT_MODE_DEFAULT;
+static float   b2r_active_quat[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+static float   b2r_active_R[9] = {1.0f, 0.0f, 0.0f,
+                                  0.0f, 1.0f, 0.0f,
+                                  0.0f, 0.0f, 1.0f};
+static int16_t b2r_active_residual_cdeg = 0;
+
+// Pad-gravity auto-detect (runs READY/PRELAUNCH, latched at launch) and
+// the boost-phase thrust-axis cross-check on the latched orientation.
+static OrientationEstimator orient_estimator;
+static ThrustAxisCheck      orient_thrust_check;
+static bool                 orient_thrust_mismatch = false;
 static float ground_pressure_pa = 101325.0f;
 static float pressure_alt_m = 0.0f;
 static float pressure_alt_rate_mps = 0.0f;
@@ -437,6 +457,14 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.guidance_enabled = guidance_enabled ? 1 : 0;
     snap.burnout_detected = burnout_detected ? 1 : 0;
     snap.servo_enabled    = servo_enabled    ? 1 : 0;
+
+    // Board→rocket orientation latched at launch (v3) — the EKF state
+    // below is only meaningful in this rocket frame.
+    snap.b2r_code = b2r_active_code;
+    snap.b2r_mode = b2r_active_mode;
+    for (int i = 0; i < 4; ++i) {
+        snap.b2r_q[i] = (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
+    }
 
     if (ekf_initialized) {
         EkfStateSnapshot s;
@@ -1264,6 +1292,128 @@ static void fcRevertToTx()
     ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
 }
 
+// Apply a discrete board→rocket mounting orientation everywhere it matters:
+// the converter (rotates all vector sensors into rocket frame), the sim
+// collector (inverse, so synthesized sensor counts survive the forward
+// path), the cached b2r_active_* globals (flight settings snapshot), and
+// the OC status query payload (keeps the OC's converter consistent — the
+// query repeats every poll, so a runtime change propagates within one
+// cycle).  Phase 1 calls this once at boot from config; auto-detect
+// (phase 2) and the app setting (phase 3) re-call it at runtime.
+static void applyBoardToRocketRotation(const float R[9], uint8_t code,
+                                       uint8_t mode, int16_t residual_cdeg)
+{
+    sensor_converter.configureBoardToRocket(R);
+    sensor_collector.configureSimBoardToRocket(R);
+
+    memcpy(b2r_active_R, R, sizeof(b2r_active_R));
+    b2r_active_code = code;
+    b2r_active_mode = mode;
+    b2r_active_residual_cdeg = residual_cdeg;
+    orientMatrixToQuat(R, b2r_active_quat);
+
+    out_status_query_data.b2r_code = code;
+    out_status_query_data.b2r_mode = mode;
+    for (int i = 0; i < 4; ++i) {
+        out_status_query_data.b2r_q[i] =
+            (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
+    }
+
+    ESP_LOGI(TAG, "Board→rocket orientation: %s (code %u, mode %u, residual %.2f°)",
+             orientCodeName(code), (unsigned)code, (unsigned)mode,
+             (double)residual_cdeg / 100.0);
+}
+
+static void applyBoardToRocketOrientation(uint8_t code, uint8_t mode)
+{
+    float R[9];
+    orientCodeToMatrix(code, R);
+    applyBoardToRocketRotation(R, code, mode, 0);
+}
+
+// Snap tolerance: a measured nose vector within this angle of a board axis
+// is treated as that axis (covers rail tilt + sensor noise for orthogonal
+// mounts).  Beyond it the board is genuinely mounted off-axis and the
+// exact shortest-arc rotation is used instead.
+static constexpr float ORIENT_SNAP_TOL_DEG   = 15.0f;
+// Leave the active orientation alone while the measured nose stays within
+// this angle of rocket +X — normal rail tilt never causes churn.
+static constexpr float ORIENT_ACCEPT_TOL_DEG = 5.0f;
+
+// One completed pad-gravity window: decide whether the active board→rocket
+// rotation still matches how the rocket is actually sitting on the rail.
+static void handleOrientationEstimate(const float up_rocket[3])
+{
+    float cx = up_rocket[0];
+    if (cx > 1.0f) cx = 1.0f;
+    if (cx < -1.0f) cx = -1.0f;
+    const float off_deg = acosf(cx) * (180.0f / (float)M_PI);
+
+    // A manual orientation is authoritative (it also encodes the roll
+    // clocking for the control surfaces, which gravity cannot observe).
+    // Auto-detect only warns when gravity disagrees badly.
+    if (b2r_active_mode == ORIENT_MODE_MANUAL)
+    {
+        static uint32_t last_warn_ms = 0;
+        const uint32_t now_ms = time_ms();
+        if (off_deg > ORIENT_SNAP_TOL_DEG && (now_ms - last_warn_ms) > 10000U)
+        {
+            last_warn_ms = now_ms;
+            ESP_LOGW(TAG, "[ORIENT] pad gravity %.1f° off nose with MANUAL "
+                          "orientation %s — check the setting",
+                     (double)off_deg, orientCodeName(b2r_active_code));
+        }
+        return;
+    }
+
+    if (off_deg <= ORIENT_ACCEPT_TOL_DEG) return;  // mapping already right
+
+    // Un-rotate the measurement into BOARD frame (transpose = inverse) and
+    // re-derive the mapping from scratch.
+    float n_board[3];
+    n_board[0] = b2r_active_R[0] * up_rocket[0] + b2r_active_R[3] * up_rocket[1] + b2r_active_R[6] * up_rocket[2];
+    n_board[1] = b2r_active_R[1] * up_rocket[0] + b2r_active_R[4] * up_rocket[1] + b2r_active_R[7] * up_rocket[2];
+    n_board[2] = b2r_active_R[2] * up_rocket[0] + b2r_active_R[5] * up_rocket[1] + b2r_active_R[8] * up_rocket[2];
+
+    float residual_deg = 0.0f;
+    const uint8_t code = orientNearestNoseCode(n_board, &residual_deg);
+    const int16_t residual_cdeg = (int16_t)lroundf(residual_deg * 100.0f);
+
+    float R[9];
+    uint8_t mode;
+    if (residual_deg <= ORIENT_SNAP_TOL_DEG)
+    {
+        if (code == b2r_active_code && b2r_active_mode != ORIENT_MODE_AUTO_EXACT)
+        {
+            return;  // same discrete mounting — off_deg was just rail tilt
+        }
+        orientCodeToMatrix(code, R);
+        mode = ORIENT_MODE_AUTO_SNAP;
+    }
+    else
+    {
+        // Off-orthogonal mounting (or an extreme rail angle — the two are
+        // indistinguishable from gravity alone; the thrust-axis check at
+        // launch is the cross-check).  Use the exact rotation.
+        if (!orientMatrixFromNoseVector(n_board, R)) return;
+        mode = ORIENT_MODE_AUTO_EXACT;
+        ESP_LOGW(TAG, "[ORIENT] nose %.1f° from nearest board axis — using "
+                      "exact rotation (off-orthogonal mount or steep rail?)",
+                 (double)residual_deg);
+    }
+
+    applyBoardToRocketRotation(R, code, mode, residual_cdeg);
+
+    // EKF attitude/velocity/biases were estimated in the OLD rocket frame.
+    // Re-init from scratch (pad-only path: GNSS gates re-pass within ~1 s
+    // and the gravity init re-aligns attitude in the new frame).
+    if (ekf_initialized)
+    {
+        ekf_initialized = false;
+        ESP_LOGI(TAG, "[ORIENT] EKF re-init scheduled after orientation change");
+    }
+}
+
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
 // the live PID gains from servo_control (these can be NVS- or BLE-overridden),
 // the runtime override globals, the config:: defaults for the compile-time-only
@@ -1326,6 +1476,14 @@ static void buildFlightSettings(FlightSettingsData& s)
     strncpy(s.fw_git_sha, FW_GIT_SHA, sizeof(s.fw_git_sha) - 1);
 
     s.roll_profile = roll_profile;
+
+    // Board→rocket mounting orientation that actually flew (v2).
+    s.b2r_code = b2r_active_code;
+    s.b2r_mode = b2r_active_mode;
+    s.b2r_residual_cdeg = b2r_active_residual_cdeg;
+    for (int i = 0; i < 4; ++i) {
+        s.b2r_q[i] = (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
+    }
 }
 
 static void sendFlightSettings()
@@ -2282,6 +2440,12 @@ static void setup_fc()
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
 
+    // Board→rocket mounting orientation (converter + sim + OC query payload).
+    applyBoardToRocketOrientation(
+        config::BOARD_TO_ROCKET_ORIENT,
+        (config::BOARD_TO_ROCKET_ORIENT == ORIENT_CODE_IDENTITY)
+            ? ORIENT_MODE_DEFAULT : ORIENT_MODE_MANUAL);
+
     // Apply mag hard-iron offset to the IIS2MDC chip now that begin() has
     // finished its softReset (which zeroes OFFSET_X/Y/Z).  Issue #96.
     if (pending_mag_apply && sensor_collector.isIIS2MDCActive())
@@ -2308,7 +2472,9 @@ static void setup_fc()
     out_status_query_data.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
     out_status_query_data.ism6_rot_z_cdeg = (int16_t)lroundf(config::ISM6HG256_ROT_Z_DEG * 100.0f);
     out_status_query_data.mmc_rot_z_cdeg = (int16_t)lroundf(config::MMC5983MA_ROT_Z_DEG * 100.0f);
-    out_status_query_data.format_version = 2;
+    // v3: adds board→rocket orientation (b2r_* fields, filled by
+    // applyBoardToRocketOrientation above and on any runtime change).
+    out_status_query_data.format_version = 3;
 
     // NOTE: Do NOT drain the slave TX buffer here.  With the new
     // i2c_slave driver, reading when the slave has no TX data queued
@@ -2546,6 +2712,23 @@ static void setup_fc()
             have_ref_pos = true;
             ref_pos_frozen = true;
             ground_pressure_found = true;
+
+            // Restore the board→rocket orientation BEFORE the EKF state —
+            // the snapshot's quaternion/velocities/biases were estimated in
+            // this rocket frame, and every conversion from here on must
+            // match it (the boot default from config may differ when the
+            // pad auto-detect re-oriented before launch).
+            {
+                float q[4];
+                for (int i = 0; i < 4; ++i) {
+                    q[i] = (float)snap.b2r_q[i] / ORIENT_QUAT_WIRE_SCALE;
+                }
+                float R[9];
+                orientQuatToMatrix(q, R);
+                applyBoardToRocketRotation(R, snap.b2r_code, snap.b2r_mode, 0);
+                ESP_LOGW(TAG, "[RECOVERY] Board→rocket orientation restored: %s (mode %u)",
+                         orientCodeName(snap.b2r_code), (unsigned)snap.b2r_mode);
+            }
 
             // Restore control state
             ekf_initialized  = snap.ekf_initialized;
@@ -2897,6 +3080,50 @@ static void loop_fc()
             const float acc_z = low_g_near_sat ? hz : az;
             accel_norm = sqrtf(acc_x * acc_x + acc_y * acc_y + acc_z * acc_z);
 
+            // ── Board→rocket orientation: pad auto-detect + thrust check ──
+            // On the pad, the averaged specific-force direction reveals the
+            // mounting (continuously re-estimated, so late re-racking after
+            // horizontal prep self-corrects; latched by leaving READY/
+            // PRELAUNCH at launch).  During boost, the thrust direction
+            // cross-checks whatever was latched.
+            if (rocket_state == READY || rocket_state == PRELAUNCH)
+            {
+                if (orient_estimator.update(ism6_latest_si.time_us,
+                                            acc_x, acc_y, acc_z,
+                                            (float)ism6_latest_si.gyro_x,
+                                            (float)ism6_latest_si.gyro_y,
+                                            (float)ism6_latest_si.gyro_z))
+                {
+                    float up_rocket[3];
+                    if (orient_estimator.takeEstimate(up_rocket))
+                    {
+                        handleOrientationEstimate(up_rocket);
+                    }
+                }
+            }
+            else if (rocket_state == INFLIGHT && !orient_thrust_check.done())
+            {
+                if (orient_thrust_check.update(ism6_latest_si.time_us,
+                                               acc_x, acc_y, acc_z))
+                {
+                    if (orient_thrust_check.valid() &&
+                        orient_thrust_check.angleFromNoseDeg() > 25.0f)
+                    {
+                        orient_thrust_mismatch = true;
+                        ESP_LOGE(TAG, "[ORIENT] thrust axis %.1f° off nose — "
+                                      "latched orientation %s (mode %u) suspect",
+                                 (double)orient_thrust_check.angleFromNoseDeg(),
+                                 orientCodeName(b2r_active_code),
+                                 (unsigned)b2r_active_mode);
+                    }
+                    else if (orient_thrust_check.valid())
+                    {
+                        ESP_LOGI(TAG, "[ORIENT] thrust-axis check OK (%.1f° off nose)",
+                                 (double)orient_thrust_check.angleFromNoseDeg());
+                    }
+                }
+            }
+
             // ── Build EKF input: IMU in FRD body frame ──
             // SensorConverter outputs FLU (X=Fwd, Y=Left, Z=Up).
             // EKF expects FRD (X=Fwd, Y=Right, Z=Down): negate Y and Z.
@@ -3052,36 +3279,24 @@ static void loop_fc()
                 if (have_ref_pos && gnss_gate3_init) {
                     ekf.init(ekf_imu, ekf_gnss, ekf_mag);
 
-                    // Pad heading initialization: compute initial quaternion from
-                    // accel (pitch) + known heading, bypassing noisy magnetometer.
+                    // Pad attitude initialization: quaternion from measured
+                    // gravity (any attitude — see quatFromAccelHeading) plus
+                    // the known pad heading, bypassing the noisy magnetometer.
+                    // The IMU data is already in ROCKET frame here (the
+                    // converter applies the board→rocket mounting rotation),
+                    // so this is mounting-agnostic by construction.
                     {
                         static constexpr double DEG2RAD_d = M_PI / 180.0;
-                        const float g = 9.807f;
-                        // acc in FRD: nose-up → acc_x ≈ +g, acc_z ≈ 0
-                        float g_mag = sqrtf(ekf_imu.acc_x*ekf_imu.acc_x +
-                                            ekf_imu.acc_y*ekf_imu.acc_y +
-                                            ekf_imu.acc_z*ekf_imu.acc_z);
-                        if (g_mag < 0.1f) g_mag = g;
-                        float pitch_rad = asinf((float)ekf_imu.acc_x / g_mag);
-                        float roll_rad = 0.0f;
-                        if (fabsf(pitch_rad) < 80.0f * (float)DEG2RAD_d) {
-                            roll_rad = atan2f(-(float)ekf_imu.acc_y, -(float)ekf_imu.acc_z);
-                        }
-                        float heading_rad = (float)(config::PAD_HEADING_DEG * DEG2RAD_d);
-
-                        // Build body-to-NED quaternion from ZYX Euler (yaw, pitch, roll)
-                        float cy = cosf(heading_rad * 0.5f), sy = sinf(heading_rad * 0.5f);
-                        float cp = cosf(pitch_rad * 0.5f),   sp = sinf(pitch_rad * 0.5f);
-                        float cr = cosf(roll_rad * 0.5f),     sr = sinf(roll_rad * 0.5f);
-                        float q0 = cr*cp*cy + sr*sp*sy;
-                        float q1 = sr*cp*cy - cr*sp*sy;
-                        float q2 = cr*sp*cy + sr*cp*sy;
-                        float q3 = cr*cp*sy - sr*sp*cy;
-
-                        ekf.setQuaternion(q0, q1, q2, q3);
-                        ESP_LOGI(TAG, "[EKF] Init: pitch=%.1f roll=%.1f heading=%.1f deg",
-                                      (double)(pitch_rad * 180.0f / M_PI),
-                                      (double)(roll_rad * 180.0f / M_PI),
+                        const float heading_rad =
+                            (float)(config::PAD_HEADING_DEG * DEG2RAD_d);
+                        float q[4];
+                        quatFromAccelHeading((float)ekf_imu.acc_x,
+                                             (float)ekf_imu.acc_y,
+                                             (float)ekf_imu.acc_z,
+                                             heading_rad, q);
+                        ekf.setQuaternion(q[0], q[1], q[2], q[3]);
+                        ESP_LOGI(TAG, "[EKF] Init: acc=(%.2f,%.2f,%.2f) heading=%.1f deg",
+                                      ekf_imu.acc_x, ekf_imu.acc_y, ekf_imu.acc_z,
                                       (double)config::PAD_HEADING_DEG);
                     }
                     ekf_initialized = true;
@@ -4157,6 +4372,50 @@ static void loop_fc()
                              runtime_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
                 }
             }
+            else if (out_pending_command == ORIENT_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(ImuOrientConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(ORIENT_CONFIG_MSG, sizeof(ImuOrientConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(ImuOrientConfigData))
+                {
+                    const uint8_t setting = cfg_payload[0];
+                    if (rocket_state == INFLIGHT)
+                    {
+                        // Never re-frame mid-flight: EKF/control state is
+                        // only meaningful in the latched frame.
+                        ESP_LOGW(TAG, "[CFG] IMU orientation change ignored INFLIGHT");
+                    }
+                    else if (setting == IMU_ORIENT_AUTO)
+                    {
+                        // Back to auto.  Only act when leaving MANUAL —
+                        // reset to identity and let the pad-gravity detect
+                        // re-derive within a couple of seconds.
+                        if (b2r_active_mode == ORIENT_MODE_MANUAL)
+                        {
+                            applyBoardToRocketOrientation(ORIENT_CODE_IDENTITY,
+                                                          ORIENT_MODE_DEFAULT);
+                            orient_estimator.reset();
+                            if (ekf_initialized) ekf_initialized = false;
+                            ESP_LOGI(TAG, "[CFG] IMU orientation: AUTO (pad-gravity detect)");
+                        }
+                    }
+                    else if (setting < ORIENT_CODE_COUNT)
+                    {
+                        // Manual code is authoritative — it also fixes the
+                        // roll clocking the control surfaces need, which
+                        // auto-detect cannot observe.
+                        const bool changed = (b2r_active_code != setting) ||
+                                             (b2r_active_mode != ORIENT_MODE_MANUAL);
+                        applyBoardToRocketOrientation(setting, ORIENT_MODE_MANUAL);
+                        if (changed && ekf_initialized) ekf_initialized = false;
+                        ESP_LOGI(TAG, "[CFG] IMU orientation: MANUAL %s",
+                                 orientCodeName(setting));
+                    }
+                }
+            }
             else if (out_pending_command == PYRO_CONFIG_PENDING)
             {
                 delay_ms(1);
@@ -4628,6 +4887,11 @@ static void loop_fc()
                 {
                     rocket_state = INFLIGHT;
                     launch_time_millis = now_ms;
+                    // Orientation is now latched (estimator only runs in
+                    // READY/PRELAUNCH).  Start the boost-phase thrust-axis
+                    // cross-check on what was latched.
+                    orient_thrust_mismatch = false;
+                    orient_thrust_check.start(time_us());
                     // Safety: warn and disable guidance if EKF never initialized
                     if (!ekf_initialized) {
                         ESP_LOGW(TAG, "[EKF] WARNING: Launching without EKF initialization!");
@@ -5103,6 +5367,7 @@ static void loop_fc()
         if (kinematics.apogee_flag)       non_sensor_data.apogee_flags |= NSF2_MASTER_APOGEE;
         if (reboot_recovery_telem)        non_sensor_data.apogee_flags |= NSF2_REBOOT_RECOVERY;
         if (guidance_enabled)             non_sensor_data.apogee_flags |= NSF2_GUIDANCE_ENABLED;
+        if (orient_thrust_mismatch)       non_sensor_data.apogee_flags |= NSF2_ORIENT_THRUST_MISMATCH;
         // Snapshot pyro state under spinlock for telemetry. With per-fire
         // arming the global "armed" bit just mirrors the live PYRO_ARM pin.
         bool arm_now;

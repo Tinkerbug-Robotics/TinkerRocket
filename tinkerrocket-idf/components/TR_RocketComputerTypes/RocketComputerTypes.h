@@ -555,13 +555,24 @@ typedef struct __attribute__((packed))
     uint16_t ism6_gyro_fs_dps;    // e.g. 4000
     int16_t  ism6_rot_z_cdeg;     // centi-deg
     int16_t  mmc_rot_z_cdeg;      // centi-deg
-    uint8_t  format_version;      // payload format version (2 = has HG bias)
+    uint8_t  format_version;      // payload format version
+                                  //   2 = has HG bias
+                                  //   3 = has board→rocket orientation
     int16_t  hg_bias_x_cmss;     // high-g bias X, centi-m/s² (0.01 m/s² units)
     int16_t  hg_bias_y_cmss;     // high-g bias Y, centi-m/s²
     int16_t  hg_bias_z_cmss;     // high-g bias Z, centi-m/s²
+
+    // Board→rocket mounting orientation (format_version >= 3).  The
+    // quaternion (scalar-first, ×10000 like NonSensorData) is what the
+    // OC actually applies to its SensorConverter — it covers both the
+    // 24 discrete codes and a future exact (non-snapped) auto rotation.
+    // code/mode (TR_Orientation ORIENT_*) describe it for display/log.
+    uint8_t  b2r_code;           // discrete orientation code (0 = +X nose)
+    uint8_t  b2r_mode;           // ORIENT_MODE_* (how it was determined)
+    int16_t  b2r_q[4];           // board→rocket quaternion ×10000
 } OutStatusQueryData;
-static_assert(sizeof(OutStatusQueryData) == 16,
-              "OutStatusQueryData must be 16 bytes");
+static_assert(sizeof(OutStatusQueryData) == 26,
+              "OutStatusQueryData must be 26 bytes");
 
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
@@ -1074,6 +1085,11 @@ static constexpr uint8_t NSF2_MASTER_APOGEE    = (1u << 2);
 // 4-channel pyro layout.
 static constexpr uint8_t NSF2_REBOOT_RECOVERY  = (1u << 3);  // mid-flight reboot recovery occurred
 static constexpr uint8_t NSF2_GUIDANCE_ENABLED = (1u << 4);  // FC's live guidance_enabled config
+// Thrust-axis cross-check failed: the boost-phase accel direction
+// disagreed with the latched board→rocket orientation by >25°.  The
+// orientation is NOT corrected mid-flight — this flags the mismatch for
+// telemetry and post-flight analysis (suspect attitude-derived data).
+static constexpr uint8_t NSF2_ORIENT_THRUST_MISMATCH = (1u << 5);
 
 // Pyro status byte — 4 channels × (continuity, fired) = exactly 8 bits.
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
@@ -1471,6 +1487,15 @@ static constexpr uint8_t OTA_DATA_CHUNK      = 0xEB;
 // update, which is why the connected-device version check false-positived (#8).
 static constexpr uint8_t FC_IDENTITY         = 0xEC;
 
+// --- Board→rocket mounting orientation setting (app → OC → FC) ---
+// Two-phase like CAMERA_CONFIG: the OC stages ORIENT_CONFIG_PENDING with an
+// ImuOrientConfigData payload readable as ORIENT_CONFIG_MSG.  The OC also
+// re-stages a stored MANUAL setting whenever the FC's status query reports a
+// different mapping (e.g. after an FC reboot fell back to auto), so manual
+// roll clocking survives power cycles without the app connected.
+static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload follows as ORIENT_CONFIG_MSG
+static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
+
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
 // real bottleneck, and the FC writes each received frame to flash (~2-3 ms/frame)
@@ -1513,6 +1538,19 @@ typedef struct __attribute__((packed))
     uint8_t camera_type;  // CAM_TYPE_NONE, CAM_TYPE_GOPRO, CAM_TYPE_RUNCAM
 } CameraConfigData;
 static_assert(sizeof(CameraConfigData) == 1, "CameraConfigData must be 1 byte");
+
+// Board→rocket mounting orientation setting (ORIENT_CONFIG_MSG payload).
+// IMU_ORIENT_AUTO lets the pad-gravity detect drive the mapping (fine for
+// non-controlled flights); a manual TR_Orientation code (0..23) is
+// authoritative and also fixes the roll clocking, which gravity cannot
+// observe — required when roll control / guidance must know which way the
+// control surfaces point.
+static constexpr uint8_t IMU_ORIENT_AUTO = 0xFF;
+typedef struct __attribute__((packed))
+{
+    uint8_t setting;  // IMU_ORIENT_AUTO or orientation code 0..23
+} ImuOrientConfigData;
+static_assert(sizeof(ImuOrientConfigData) == 1, "ImuOrientConfigData must be 1 byte");
 
 // Pyro trigger modes
 enum PyroTriggerMode : uint8_t {
@@ -1635,7 +1673,8 @@ static_assert(sizeof(RollControlConfigData) == 4, "RollControlConfigData must be
 // bytes" convention still holds.
 struct __attribute__((packed)) FlightSettingsData
 {
-    static constexpr uint8_t VERSION = 1;
+    // v2: appended board→rocket mounting orientation (b2r_* fields).
+    static constexpr uint8_t VERSION = 2;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -1692,8 +1731,18 @@ struct __attribute__((packed)) FlightSettingsData
 
     // Active roll profile (num_waypoints == 0 → rate-only)
     RollProfileData roll_profile;
+
+    // Board→rocket mounting orientation that actually flew (v2+).
+    // Mirrors OutStatusQueryData v3: quaternion is authoritative,
+    // code/mode (TR_Orientation ORIENT_*) describe it.  residual is the
+    // angle between the auto-detected nose vector and the snapped axis
+    // (0 for manual/default; meaningful once auto-detect lands).
+    uint8_t  b2r_code;            // discrete orientation code (0 = +X nose)
+    uint8_t  b2r_mode;            // ORIENT_MODE_*
+    int16_t  b2r_residual_cdeg;   // auto-snap residual, centi-deg
+    int16_t  b2r_q[4];            // board→rocket quaternion ×10000
 };
-static_assert(sizeof(FlightSettingsData) == 188, "FlightSettingsData layout check");
+static_assert(sizeof(FlightSettingsData) == 200, "FlightSettingsData layout check");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
@@ -1752,7 +1801,8 @@ static_assert(sizeof(GuidanceTelemData) == 15, "GuidanceTelemData must be 15 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 2;           // v2: 4-channel pyro layout, no per-channel ARM
+    static constexpr uint8_t  VERSION = 3;           // v2: 4-channel pyro layout, no per-channel ARM
+                                                     // v3: board→rocket orientation (b2r_*)
 
     // --- Header ---
     uint32_t magic;
@@ -1775,7 +1825,13 @@ struct __attribute__((packed)) FlightSnapshotData
     uint8_t  pyro2_fired;
     uint8_t  pyro3_fired;
     uint8_t  pyro4_fired;
-    uint8_t  pad2[3];
+    // Board→rocket orientation that was active at launch (v3, reclaimed
+    // from pad2).  Restored BEFORE the EKF state below — the quaternion,
+    // velocities and biases were all estimated in this rocket frame, so a
+    // post-reboot boot-default orientation would silently invalidate them.
+    uint8_t  b2r_code;            // discrete orientation code
+    uint8_t  b2r_mode;            // ORIENT_MODE_*
+    uint8_t  pad2[1];
 
     // --- Flight references ---
     float    ground_pressure_pa;
@@ -1799,11 +1855,15 @@ struct __attribute__((packed)) FlightSnapshotData
     uint32_t ekf_t_prev_us;
     float    ekf_euler[3];
 
+    // Board→rocket quaternion ×10000 (v3) — authoritative rotation,
+    // covers AUTO_EXACT mountings the discrete code can't express.
+    int16_t  b2r_q[4];
+
     // --- Integrity (CRC32 over all preceding bytes) ---
     uint32_t crc32;
 };
-static_assert(sizeof(FlightSnapshotData) == 216,
-              "FlightSnapshotData must be 216 bytes — fits one I2S frame and one I2C TX response");
+static_assert(sizeof(FlightSnapshotData) == 224,
+              "FlightSnapshotData must be 224 bytes — fits one I2S frame and one I2C TX response");
 
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);

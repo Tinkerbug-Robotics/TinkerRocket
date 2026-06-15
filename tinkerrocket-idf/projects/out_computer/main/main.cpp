@@ -52,6 +52,7 @@ static inline std::string itos(int v)
 #include <TR_LogToFlash.h>
 #include <TR_LoRa_Comms.h>
 #include <TR_Sensor_Data_Converter.h>
+#include <TR_Orientation.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <RocketComputerTypes.h>
@@ -571,6 +572,25 @@ static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
 static bool    cfg_guidance_en  = false;
 static uint8_t cfg_camera_type  = CAM_TYPE_RUNCAM;  // default: RunCam
+
+// IMU mounting orientation setting (#phase3): IMU_ORIENT_AUTO lets the
+// FC's pad-gravity detect drive the mapping; 0..23 pins a manual code.
+// NVS-persisted so a manual roll clocking survives power cycles.
+static uint8_t cfg_imu_orient = IMU_ORIENT_AUTO;
+
+// Stage the orientation setting as a two-phase config command to the FC
+// (same shape as camera/servo config).  Called from the BLE handler and
+// from the status-query self-heal when an FC reboot dropped a MANUAL
+// setting back to auto.
+static void stageImuOrientConfig()
+{
+    ImuOrientConfigData cfg;
+    cfg.setting = cfg_imu_orient;
+    memcpy(pending_config_data, &cfg, sizeof(cfg));
+    pending_config_data_len = sizeof(cfg);
+    pending_config_msg_type = ORIENT_CONFIG_MSG;
+    setPendingCommand(ORIENT_CONFIG_PENDING);
+}
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -644,6 +664,13 @@ static OutStatusQueryData last_query_cfg = {};
 // it changes mid-connection (an FC OTA never drops the OC<->app BLE link).
 static char          fc_fw_version[40]  = {0};
 static volatile bool fc_identity_dirty  = false;
+
+// FC's active board→rocket mounting orientation, mirrored from the v3
+// status query.  Re-published to the app when it changes mid-connection
+// (the pad auto-detect can re-orient any time before launch).
+static volatile bool imu_orient_dirty    = false;
+static uint8_t       imu_orient_pub_code = 0xFF;   // last published (0xFF = never)
+static uint8_t       imu_orient_pub_mode = 0xFF;
 
 static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
 {
@@ -1088,6 +1115,7 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == SERVO_REPLAY_PENDING ||
            cmd == ROLL_CTRL_CONFIG_PENDING ||
            cmd == PYRO_CONFIG_PENDING ||
+           cmd == ORIENT_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
            cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
@@ -1524,6 +1552,8 @@ static bool isKnownMessageType(uint8_t type)
         case GUIDANCE_TELEM_MSG:
         case CAMERA_CONFIG_PENDING:
         case CAMERA_CONFIG_MSG:
+        case ORIENT_CONFIG_PENDING:
+        case ORIENT_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -1701,6 +1731,48 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     (float)last_query_cfg.hg_bias_x_cmss / 100.0f,
                     (float)last_query_cfg.hg_bias_y_cmss / 100.0f,
                     (float)last_query_cfg.hg_bias_z_cmss / 100.0f);
+            }
+            // Apply board→rocket mounting orientation (format v3+) so the
+            // OC's conversions match the FC's.  The quaternion is the
+            // authoritative rotation; code/mode are descriptive.
+            if (last_query_cfg.format_version >= 3)
+            {
+                float q[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    q[i] = (float)last_query_cfg.b2r_q[i] / ORIENT_QUAT_WIRE_SCALE;
+                }
+                float R[9];
+                orientQuatToMatrix(q, R);
+                sensor_converter.configureBoardToRocket(R);
+
+                // Surface changes to the app (pre-arm orientation display).
+                if (last_query_cfg.b2r_code != imu_orient_pub_code ||
+                    last_query_cfg.b2r_mode != imu_orient_pub_mode)
+                {
+                    imu_orient_dirty = true;
+                }
+
+                // Self-heal a stored MANUAL setting: if the FC reports a
+                // different mapping (e.g. it rebooted and fell back to
+                // auto), re-stage the config.  Idempotent — once applied
+                // the query reflects MANUAL+code and this goes quiet.
+                // Never during flight (the FC refuses mid-flight anyway).
+                if (cfg_imu_orient != IMU_ORIENT_AUTO &&
+                    latest_rocket_state != INFLIGHT &&
+                    (last_query_cfg.b2r_mode != ORIENT_MODE_MANUAL ||
+                     last_query_cfg.b2r_code != cfg_imu_orient))
+                {
+                    static uint32_t last_restage_ms = 0;
+                    const uint32_t now = millis();
+                    if ((now - last_restage_ms) > 5000U && pending_out_command == 0U)
+                    {
+                        last_restage_ms = now;
+                        stageImuOrientConfig();
+                        ESP_LOGI("CFG", "Re-staged MANUAL IMU orientation %u to FC",
+                                 (unsigned)cfg_imu_orient);
+                    }
+                }
             }
         }
         queueOutStatusResponse(true);
@@ -2426,6 +2498,33 @@ static void sendFcIdentity()
     ESP_LOGI("CFG", "Sent fc_identity (fc_fw=%s)", fc_fw);
 }
 
+// Publish the FC's active board→rocket mounting orientation as its own
+// compact config message.  Lets the app show "nose = -Z (auto)" before
+// arming so a wrong auto-detect is caught while the rocket is still on
+// the ground.  Sent on connect and whenever the FC reports a change
+// (auto-detect re-orients on the pad; the status query repeats every
+// poll, so changes surface within a cycle).  Kept tiny — sendConfigJSON
+// drops anything over the BLE notify MTU.
+static void sendImuOrientation()
+{
+    if (last_query_cfg.format_version < 3) return;  // pre-orientation FC
+    // "set" is the user's SETTING (0xFF auto / manual code), distinct from
+    // code/mode/name which describe what the FC is actively applying.
+    char buf[112];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\",\"set\":%u}",
+             (unsigned)last_query_cfg.b2r_code,
+             (unsigned)last_query_cfg.b2r_mode,
+             orientCodeName(last_query_cfg.b2r_code),
+             (unsigned)cfg_imu_orient);
+    ble_app.sendConfigJSON(String(buf));
+    imu_orient_pub_code = last_query_cfg.b2r_code;
+    imu_orient_pub_mode = last_query_cfg.b2r_mode;
+    ESP_LOGI("CFG", "Sent imu_orient (%s, mode %u)",
+             orientCodeName(last_query_cfg.b2r_code),
+             (unsigned)last_query_cfg.b2r_mode);
+}
+
 static void sendCurrentConfig()
 {
     // Split config into two smaller JSON messages to stay within MTU limits.
@@ -2498,6 +2597,10 @@ static void sendCurrentConfig()
     // Also push the relayed FC firmware version as its own small message (#8).
     delay(50);
     sendFcIdentity();
+
+    // And the FC's board→rocket mounting orientation (pre-arm display).
+    delay(50);
+    sendImuOrientation();
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -4101,6 +4204,16 @@ void initPeripherals()
                  cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                  cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
 
+        // Load cached IMU mounting orientation setting from NVS.  A MANUAL
+        // value gets pushed to the FC by the status-query self-heal once
+        // the FC starts polling — no explicit boot staging needed.
+        prefs.begin("orient", false);
+        cfg_imu_orient = prefs.getUChar("set", cfg_imu_orient);
+        prefs.end();
+        ESP_LOGI("CFG", "NVS IMU orientation: %s",
+                 cfg_imu_orient == IMU_ORIENT_AUTO
+                     ? "AUTO" : orientCodeName(cfg_imu_orient));
+
         // Load cached pyro config from NVS (4 channels)
         prefs.begin("pyro", true);
         size_t pyro_sz = prefs.getBytesLength("cfg");
@@ -4743,6 +4856,15 @@ static void loop_oc()
         sendFcIdentity();
     }
 
+    // Same pattern for the board→rocket orientation: the pad auto-detect
+    // can re-orient mid-connection, and the app's pre-arm display should
+    // follow without a reconnect.
+    if (imu_orient_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        imu_orient_dirty = false;
+        sendImuOrientation();
+    }
+
     // Service the BLE library's poll-style work — currently just the OTA
     // deferred-restart watchdog. handleOtaFinish() sets the boot partition and
     // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
@@ -5350,6 +5472,26 @@ static void loop_oc()
                          cfg_camera_type,
                          cfg_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                          cfg_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
+            }
+        }
+        else if (ble_cmd == 64)
+        {
+            // IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or
+            // a TR_Orientation code (0..23, manual incl. roll clocking).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1 &&
+                (payload[0] == IMU_ORIENT_AUTO || payload[0] < ORIENT_CODE_COUNT))
+            {
+                cfg_imu_orient = payload[0];
+                stageImuOrientConfig();
+                Preferences prefs;
+                prefs.begin("orient", false);
+                prefs.putUChar("set", cfg_imu_orient);
+                prefs.end();
+                ESP_LOGI("BLE", "IMU orientation setting: %s",
+                         cfg_imu_orient == IMU_ORIENT_AUTO
+                             ? "AUTO" : orientCodeName(cfg_imu_orient));
             }
         }
         else if (ble_cmd == 34)

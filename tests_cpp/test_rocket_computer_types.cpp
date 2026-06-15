@@ -790,7 +790,7 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
 // here so a struct edit can't silently desync the cross-language decode.
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
-    EXPECT_EQ(sizeof(FlightSettingsData), 188u);  // +12 vs pre-4ch pyro
+    EXPECT_EQ(sizeof(FlightSettingsData), 200u);  // v2: +12 for b2r orientation
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
@@ -824,6 +824,13 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
 
     // Roll profile waypoints start (RollProfileData @ 112, after num+pad).
     EXPECT_EQ(offsetof(FlightSettingsData, roll_profile) + offsetof(RollProfileData, waypoints), 116u);
+
+    // v2 board→rocket orientation tail — appended after the full v1 layout
+    // (188 bytes) so v1 parsers still decode their prefix unchanged.
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_code),          188u);
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_mode),          189u);
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_residual_cdeg), 190u);
+    EXPECT_EQ(offsetof(FlightSettingsData, b2r_q),             192u);
 }
 
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
@@ -909,6 +916,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(OTA_STATUS_MSG),           MT(OTA_DATA_CHUNK),
         // FC->OC firmware-version push, relayed to the app for OTA verify (#8 P4).
         MT(FC_IDENTITY),
+        // Board->rocket mounting orientation setting (app->OC->FC).
+        MT(ORIENT_CONFIG_PENDING),    MT(ORIENT_CONFIG_MSG),
         MT(LORA_MSG),
     };
 #undef MT
@@ -929,7 +938,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // Tripwire: keep the registry above exhaustive.  If you add or remove a
     // message type in RocketComputerTypes.h, update this list AND this count
     // -- the uniqueness check is only as strong as the list it walks.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 78u)
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 80u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

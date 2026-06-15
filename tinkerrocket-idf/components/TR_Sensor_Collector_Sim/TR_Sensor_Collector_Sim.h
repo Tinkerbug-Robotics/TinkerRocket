@@ -57,6 +57,11 @@ public:
     // ---- Sim control ----
     void configureSim(const SimConfigData& cfg);
     void configureSimRotation(float ism6_rot_z_deg);
+    // Board→rocket mounting rotation (row-major, v_rocket = R * v_board).
+    // The sim's physics are rocket-frame; encoders apply the INVERSE so the
+    // forward conversion (chip rotZ, then board→rocket) reproduces the
+    // simulated values regardless of the configured mounting.
+    void configureSimBoardToRocket(const float R[9]);
     void startSim(float ground_pressure_pa);
     void stopSim();
     bool isSimActive() const;
@@ -101,6 +106,22 @@ private:
     // Inverse rotation (body frame → sensor frame) for ISM6 encoding
     float ism6_inv_c_ = 1.0f;   // cos(config_angle)
     float ism6_inv_s_ = 0.0f;   // sin(config_angle)
+
+    // Inverse board→rocket rotation (rocket frame → board frame), i.e. the
+    // transpose of the configured mounting matrix.  Identity by default.
+    float b2r_inv_[9] = {1.0f, 0.0f, 0.0f,
+                         0.0f, 1.0f, 0.0f,
+                         0.0f, 0.0f, 1.0f};
+    bool  b2r_identity_ = true;
+
+    inline void rocketToBoard(float &x, float &y, float &z) const
+    {
+        if (b2r_identity_) return;
+        const float bx = b2r_inv_[0] * x + b2r_inv_[1] * y + b2r_inv_[2] * z;
+        const float by = b2r_inv_[3] * x + b2r_inv_[4] * y + b2r_inv_[5] * z;
+        const float bz = b2r_inv_[6] * x + b2r_inv_[7] * y + b2r_inv_[8] * z;
+        x = bx; y = by; z = bz;
+    }
 
     // GNSS fallback timer (for indoor testing without GPS fix)
     uint32_t last_gnss_real_us_ = 0;

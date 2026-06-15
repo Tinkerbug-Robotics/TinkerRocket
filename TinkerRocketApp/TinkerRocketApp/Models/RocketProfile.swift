@@ -86,6 +86,11 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var rollDelayMs: UInt16 = 0
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2          // 0=None, 1=GoPro, 2=RunCam
+    /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
+    /// manual board→rocket code. Manual fixes the roll clocking the control
+    /// surfaces need — required for roll-controlled/guided flights with an
+    /// off-axis board; optional for non-controlled flights.
+    var imuOrientSetting: UInt8 = 0xFF
 
     // MARK: Servo
     var servoBias1: Int16 = 85
@@ -176,6 +181,7 @@ extension RocketProfile {
         rollDelayMs = try c.decodeIfPresent(UInt16.self, forKey: .rollDelayMs) ?? defaults.rollDelayMs
         guidanceEnabled = try c.decodeIfPresent(Bool.self, forKey: .guidanceEnabled) ?? defaults.guidanceEnabled
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
+        imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
 
         servoBias1 = try c.decodeIfPresent(Int16.self, forKey: .servoBias1) ?? defaults.servoBias1
         servoBias2 = try c.decodeIfPresent(Int16.self, forKey: .servoBias2) ?? defaults.servoBias2
