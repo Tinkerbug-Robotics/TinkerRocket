@@ -1591,7 +1591,7 @@ static constexpr uint8_t MAX_ROLL_WAYPOINTS = 8;
 // holds indefinitely if this is the last waypoint).
 enum RollSegmentMode : uint8_t
 {
-    ROLL_SEG_ANGLE     = 0,  // interpolate to next waypoint's angle (cascaded angle PID)
+    ROLL_SEG_ANGLE     = 0,  // hold next waypoint's absolute angle, shortest path (cascaded angle PID)
     ROLL_SEG_NULL_RATE = 1,  // hold roll rate = 0 (rate-only inner PID); angle field ignored
 };
 
