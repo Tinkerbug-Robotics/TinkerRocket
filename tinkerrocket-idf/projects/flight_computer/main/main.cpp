@@ -4382,12 +4382,17 @@ static void loop_fc()
                     memcpy(&rc, cfg_payload, sizeof(rc));
                     use_angle_control = (rc.use_angle_control != 0);
                     roll_delay_ms     = rc.roll_delay_ms;
-                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms",
+                    // Outer-loop rate cap: a positive, sane value overrides the
+                    // firmware default; <=0 (or garbage) leaves it unchanged.
+                    if (rc.kp_angle_rate_cap_dps > 0.0f && rc.kp_angle_rate_cap_dps <= 2000.0f)
+                        kp_angle_rate_cap_dps = rc.kp_angle_rate_cap_dps;
+                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms rate_cap=%.0f dps",
                                   use_angle_control ? "ON" : "OFF",
-                                  (unsigned)roll_delay_ms);
+                                  (unsigned)roll_delay_ms, (double)kp_angle_rate_cap_dps);
                     prefs.begin("servo", false);
                     prefs.putBool("ac", use_angle_control);
                     prefs.putUShort("rdly", roll_delay_ms);
+                    prefs.putFloat("rcap", kp_angle_rate_cap_dps);
                     prefs.end();
                     ESP_LOGI(TAG, "[ROLL CFG] Saved to NVS");
                 }
