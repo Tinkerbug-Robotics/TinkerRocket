@@ -1629,7 +1629,7 @@ static constexpr uint8_t MAX_ROLL_WAYPOINTS = 8;
 // holds indefinitely if this is the last waypoint).
 enum RollSegmentMode : uint8_t
 {
-    ROLL_SEG_ANGLE     = 0,  // interpolate to next waypoint's angle (cascaded angle PID)
+    ROLL_SEG_ANGLE     = 0,  // hold next waypoint's absolute angle, shortest path (cascaded angle PID)
     ROLL_SEG_NULL_RATE = 1,  // hold roll rate = 0 (rate-only inner PID); angle field ignored
 };
 
@@ -1655,8 +1655,9 @@ typedef struct __attribute__((packed))
     uint8_t  use_angle_control;   // 0 = rate-only (null roll), 1 = cascaded angle control w/ profile
     uint8_t  _pad;
     uint16_t roll_delay_ms;       // ms after launch before any roll control activates
+    float    kp_angle_rate_cap_dps;  // outer-loop angle→rate command cap (deg/s); <=0 keeps firmware default
 } RollControlConfigData;
-static_assert(sizeof(RollControlConfigData) == 4, "RollControlConfigData must be 4 bytes");
+static_assert(sizeof(RollControlConfigData) == 8, "RollControlConfigData must be 8 bytes");
 
 // --- Flight settings snapshot (#165) ---
 // One-shot snapshot of the rocket's runtime settings, emitted FC→OC over I2S

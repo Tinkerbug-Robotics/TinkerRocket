@@ -42,6 +42,7 @@ struct SettingsView: View {
     @State private var sPidMinCmd = ""
     @State private var sPidMaxCmd = ""
     @State private var sRollDelayMs = ""
+    @State private var sRateCapDps = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
@@ -107,6 +108,7 @@ struct SettingsView: View {
         case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
+        case rateCap
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
     }
@@ -117,7 +119,7 @@ struct SettingsView: View {
         switch field {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
-        case .rollDelay: return .rollControl
+        case .rollDelay, .rateCap: return .rollControl
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case nil: return nil
@@ -574,6 +576,19 @@ struct SettingsView: View {
             Text("Milliseconds after launch before any roll control activates. Keeps fins neutral during initial boost.")
                 .font(.caption).foregroundColor(.secondary)
 
+            HStack {
+                Text("Rate Cap")
+                Spacer()
+                TextField("60", text: $sRateCapDps)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .focused($focusedField, equals: .rateCap)
+                Text("\u{00B0}/s").foregroundColor(.secondary)
+            }
+            Text("Max roll rate the angle controller commands while slewing toward a profile angle (Track Profile mode). Higher = faster turns.")
+                .font(.caption).foregroundColor(.secondary)
+
             if profile.useAngleControl {
                 rollWaypointEditor
             }
@@ -739,6 +754,7 @@ struct SettingsView: View {
         sPidMinCmd = formatDecimal(Double(p.pidMinCmd))
         sPidMaxCmd = formatDecimal(Double(p.pidMaxCmd))
         sRollDelayMs = formatInt(Double(p.rollDelayMs))
+        sRateCapDps = formatInt(Double(p.rateCapDps))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg), mode: $0.mode.rawValue)
         }
@@ -909,10 +925,14 @@ struct SettingsView: View {
 
     private func applyRollControlConfig() {
         let delayMs = UInt16(clamping: Int(Double(sRollDelayMs) ?? Double(profile.rollDelayMs)))
+        let rateCap = max(0, Float(sRateCapDps) ?? profile.rateCapDps)
         let useAngle = profile.useAngleControl
-        updateProfile { $0.rollDelayMs = delayMs }
+        updateProfile {
+            $0.rollDelayMs = delayMs
+            $0.rateCapDps = rateCap
+        }
         if device.isConnected {
-            device.sendRollControlConfig(useAngleControl: useAngle, rollDelayMs: delayMs)
+            device.sendRollControlConfig(useAngleControl: useAngle, rollDelayMs: delayMs, rateCapDps: rateCap)
         }
         showApplied($rollControlApplied)
     }

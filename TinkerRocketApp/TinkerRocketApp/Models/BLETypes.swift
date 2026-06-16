@@ -98,6 +98,7 @@ struct RocketConfig {
     var gainScheduleEnabled: Bool = true
     var useAngleControl: Bool = false
     var rollDelayMs: UInt16 = 0
+    var rateCapDps: Float = 60
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)

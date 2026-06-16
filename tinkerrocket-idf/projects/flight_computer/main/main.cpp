@@ -945,11 +945,15 @@ static void servicePyroChannels(uint32_t now_ms)
     }
 }
 
-// ── Roll profile interpolation ────────────────────────────────────────────────
+// ── Roll profile lookup ─────────────────────────────────────────────────────
 // Returns the desired (angle, mode) for the current flight time.
 // Mode is the segment mode of the waypoint that STARTS the current segment.
-// Linear interpolation of angle between consecutive waypoints (ROLL_SEG_ANGLE
-// segments); ROLL_SEG_NULL_RATE segments instead null roll rate to 0 in the
+// Within a ROLL_SEG_ANGLE segment the controller is commanded straight to the
+// segment's DESTINATION (next waypoint's) absolute angle and takes the shortest
+// path there — no ramp. (Previously the setpoint was linearly interpolated
+// between waypoints, but sweeping it through intermediate angles flipped the
+// command direction at the ±180° error wrap mid-maneuver; see the roll-control
+// flight analysis.) ROLL_SEG_NULL_RATE segments null roll rate to 0 in the
 // inner loop and ignore the angle field. Before WP1 or after WPn we hold that
 // waypoint's mode and angle.
 // If no waypoints are loaded, defaults to NULL_RATE / 0 deg.
@@ -985,23 +989,15 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
         out.mode      = roll_profile.waypoints[n - 1].mode;
         return out;
     }
-    // Inside profile -- find the segment [i, i+1)
+    // Inside profile -- find the active segment [i, i+1). No ramp: command the
+    // segment's DESTINATION (next waypoint's) absolute angle directly and let
+    // controlAngle take the shortest path to it.
     for (uint8_t i = 0; i < n - 1; ++i)
     {
         if (t_flight_s < roll_profile.waypoints[i + 1].time_s)
         {
-            const float t0 = roll_profile.waypoints[i].time_s;
-            const float t1 = roll_profile.waypoints[i + 1].time_s;
-            const float a0 = roll_profile.waypoints[i].angle_deg;
-            const float a1 = roll_profile.waypoints[i + 1].angle_deg;
-            out.mode = roll_profile.waypoints[i].mode;
-            if (t1 <= t0)
-            {
-                out.angle_deg = a0;  // guard against duplicate timestamps
-                return out;
-            }
-            const float frac = (t_flight_s - t0) / (t1 - t0);
-            out.angle_deg = a0 + frac * (a1 - a0);
+            out.angle_deg = roll_profile.waypoints[i + 1].angle_deg;
+            out.mode      = roll_profile.waypoints[i].mode;
             return out;
         }
     }
@@ -4645,12 +4641,17 @@ static void loop_fc()
                     memcpy(&rc, cfg_payload, sizeof(rc));
                     use_angle_control = (rc.use_angle_control != 0);
                     roll_delay_ms     = rc.roll_delay_ms;
-                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms",
+                    // Outer-loop rate cap: a positive, sane value overrides the
+                    // firmware default; <=0 (or garbage) leaves it unchanged.
+                    if (rc.kp_angle_rate_cap_dps > 0.0f && rc.kp_angle_rate_cap_dps <= 2000.0f)
+                        kp_angle_rate_cap_dps = rc.kp_angle_rate_cap_dps;
+                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms rate_cap=%.0f dps",
                                   use_angle_control ? "ON" : "OFF",
-                                  (unsigned)roll_delay_ms);
+                                  (unsigned)roll_delay_ms, (double)kp_angle_rate_cap_dps);
                     prefs.begin("servo", false);
                     prefs.putBool("ac", use_angle_control);
                     prefs.putUShort("rdly", roll_delay_ms);
+                    prefs.putFloat("rcap", kp_angle_rate_cap_dps);
                     prefs.end();
                     ESP_LOGI(TAG, "[ROLL CFG] Saved to NVS");
                 }
