@@ -224,6 +224,8 @@ struct SettingsView: View {
             Section(header: Text("Summary")) {
                 summaryRow("Control mode", p.useAngleControl ? "Track Profile" : "Null Roll")
                 summaryRow("Camera", cameraLabel(p.cameraType))
+                summaryRow("IMU mounting", p.imuOrientSetting == 0xFF
+                    ? "Auto" : "Nose \(FlightSettingsData.b2rName(code: p.imuOrientSetting))")
                 summaryRow("Gain scheduling", p.gainScheduleEnabled ? "On" : "Off")
                 summaryRow("Mag cal", p.magCal == nil ? "Not saved" : "Saved")
                 summaryRow("Sensor cal", p.sensorCal == nil ? "Not saved" : "Saved")
@@ -515,6 +517,37 @@ struct SettingsView: View {
                     .font(.caption).foregroundColor(.orange)
             }
         }
+
+        Section("IMU Mounting") {
+            Picker("Orientation", selection: imuOrientBinding) {
+                Text("Auto-detect").tag(255)
+                ForEach(0..<24, id: \.self) { code in
+                    Text("Nose \(FlightSettingsData.b2rName(code: UInt8(code)))").tag(code)
+                }
+            }
+            if !device.imuOrientationName.isEmpty {
+                HStack {
+                    Text("Active on rocket")
+                    Spacer()
+                    Text("\(device.imuOrientationName) (\(device.imuOrientationMode.label))")
+                        .foregroundColor(.secondary)
+                }
+            }
+            Text(profile.imuOrientSetting == 0xFF
+                ? "Auto detects which board axis points at the nose from gravity on the pad. Fine for non-controlled flights."
+                : "Manual mounting also fixes the fin clocking (rNN = quarter-turns about the nose) — required for roll-controlled or guided flights when the board is mounted off-axis.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private var imuOrientBinding: Binding<Int> {
+        Binding(
+            get: { Int(profile.imuOrientSetting) },
+            set: { newValue in
+                let v = UInt8(clamping: newValue)
+                updateProfile { $0.imuOrientSetting = v }
+                if device.isConnected { device.sendImuOrientationConfig(v) }
+            })
     }
 
     @ViewBuilder

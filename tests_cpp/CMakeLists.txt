@@ -145,14 +145,29 @@ gtest_discover_tests(test_coordinates)
 # ---------- test_sensor_data_converter ----------
 add_executable(test_sensor_data_converter test_sensor_data_converter.cpp
     ${LIB_DIR}/TR_Sensor_Data_Converter/TR_Sensor_Data_Converter.cpp
+    ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
 )
 target_include_directories(test_sensor_data_converter PRIVATE
     ${SHIM_DIR}
     ${LIB_DIR}/TR_Sensor_Data_Converter
     ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_Orientation
 )
 target_link_libraries(test_sensor_data_converter GTest::gtest_main)
 gtest_discover_tests(test_sensor_data_converter)
+
+# ---------- test_orientation ----------
+# Board→rocket mounting orientation utilities (discrete 24-code set,
+# quaternion round-trips, gravity nose snap, pad attitude init).
+add_executable(test_orientation test_orientation.cpp
+    ${LIB_DIR}/TR_Orientation/TR_Orientation.cpp
+)
+target_include_directories(test_orientation PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Orientation
+)
+target_link_libraries(test_orientation GTest::gtest_main)
+gtest_discover_tests(test_orientation)
 
 # ---------- test_lora_roundtrip ----------
 # This tests the OutComputer -> BaseStation -> iOS App data pipeline

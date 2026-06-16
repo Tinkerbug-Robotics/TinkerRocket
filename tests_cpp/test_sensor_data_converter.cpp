@@ -194,3 +194,110 @@ TEST_F(SensorConverterTest, NonSensor_QuatAndPosition) {
     EXPECT_EQ(si.rocket_state, INFLIGHT);
     EXPECT_NEAR(si.altitude_rate, 10.0f, 0.1f);
 }
+
+// ---------- Board→Rocket Mounting Orientation ----------
+// The converter applies an optional board→rocket rotation LAST (after the
+// per-chip Z rotation and bias subtraction) so PCB-fact calibrations stay
+// valid for any mounting.  Codes/matrices come from TR_Orientation.
+
+#include "TR_Orientation.h"
+
+class SensorConverterB2RTest : public SensorConverterTest {
+protected:
+    void configureNose(uint8_t code) {
+        float R[9];
+        orientCodeToMatrix(code, R);
+        conv.configureBoardToRocket(R);
+    }
+};
+
+TEST_F(SensorConverterB2RTest, ZNose_MovesBoardZToRocketX_AllChannels) {
+    configureNose(16);  // +Z toward the nose
+
+    ISM6HG256Data raw{};
+    raw.acc_low_raw.z  = 16384;  // +8g
+    raw.acc_high_raw.z = 1024;   // +8g at 256g FS
+    raw.gyro_raw.z     = 8192;   // +1000 dps at 4000 FS
+    ISM6HG256DataSI si{};
+    conv.convertISM6HG256Data(raw, si);
+
+    const double exp_lg = 8.0 * 9.80665;
+    EXPECT_NEAR(si.low_g_acc_x, exp_lg, 0.1);
+    EXPECT_NEAR(si.low_g_acc_y, 0.0, 1e-6);
+    EXPECT_NEAR(si.low_g_acc_z, 0.0, 1e-6);
+    EXPECT_NEAR(si.high_g_acc_x, exp_lg, 0.2);
+    EXPECT_NEAR(si.gyro_x, 1000.0, 0.5);
+    EXPECT_NEAR(si.gyro_z, 0.0, 1e-6);
+}
+
+TEST_F(SensorConverterB2RTest, IdentityCode_MatchesUnconfigured) {
+    ISM6HG256Data raw{};
+    raw.acc_low_raw.x = 16384;
+    raw.acc_low_raw.y = -8192;
+    raw.acc_low_raw.z = 4096;
+    ISM6HG256DataSI base{};
+    conv.convertISM6HG256Data(raw, base);
+
+    configureNose(ORIENT_CODE_IDENTITY);
+    ISM6HG256DataSI si{};
+    conv.convertISM6HG256Data(raw, si);
+
+    EXPECT_DOUBLE_EQ(si.low_g_acc_x, base.low_g_acc_x);
+    EXPECT_DOUBLE_EQ(si.low_g_acc_y, base.low_g_acc_y);
+    EXPECT_DOUBLE_EQ(si.low_g_acc_z, base.low_g_acc_z);
+}
+
+TEST_F(SensorConverterB2RTest, HighGBias_SubtractedInBoardFrame_BeforeB2R) {
+    // Bias is a board-frame (PCB) fact: with zero raw input the board-frame
+    // value is (-1,-2,-3); a +Z-nose mounting must then rotate that vector,
+    // giving rocket (-3,-2,+1).  If bias were wrongly subtracted after the
+    // rotation the result would stay (-1,-2,-3).
+    conv.setHighGBias(1.0f, 2.0f, 3.0f);
+    configureNose(16);  // +Z nose: rocket x=+z_b, y=+y_b, z=-x_b
+
+    ISM6HG256Data raw{};
+    ISM6HG256DataSI si{};
+    conv.convertISM6HG256Data(raw, si);
+
+    EXPECT_NEAR(si.high_g_acc_x, -3.0, 0.01);
+    EXPECT_NEAR(si.high_g_acc_y, -2.0, 0.01);
+    EXPECT_NEAR(si.high_g_acc_z,  1.0, 0.01);
+}
+
+TEST_F(SensorConverterB2RTest, ComposesWithChipRotZ_ChipFirst) {
+    // Chip rotZ 90° maps sensor +X → board +Y; a -Y-nose mounting (code 12)
+    // then maps board +Y → rocket -X.  Sensor +X must come out at rocket -X.
+    conv.configureISM6HG256RotationZ(90.0f);
+    configureNose(12);  // -Y toward the nose
+
+    ISM6HG256Data raw{};
+    raw.acc_low_raw.x = 16384;  // +8g on sensor X
+    ISM6HG256DataSI si{};
+    conv.convertISM6HG256Data(raw, si);
+
+    EXPECT_NEAR(si.low_g_acc_x, -8.0 * 9.80665, 0.1);
+    EXPECT_NEAR(si.low_g_acc_y, 0.0, 0.5);
+    EXPECT_NEAR(si.low_g_acc_z, 0.0, 1e-6);
+}
+
+TEST_F(SensorConverterB2RTest, Magnetometers_GetSameRotation) {
+    configureNose(16);  // +Z nose
+
+    MMC5983MAData mmc{};
+    mmc.mag_x = 131072;
+    mmc.mag_y = 131072;
+    mmc.mag_z = 131072 + 16384;  // +100 µT on board Z
+    MMC5983MADataSI mmc_si{};
+    conv.convertMMC5983MAData(mmc, mmc_si);
+    EXPECT_NEAR(mmc_si.mag_x_uT, 100.0, 0.1);   // board z → rocket x
+    EXPECT_NEAR(mmc_si.mag_z_uT, 0.0, 0.1);
+
+    IIS2MDCData iis{};
+    iis.mag_x = 0;
+    iis.mag_y = 0;
+    iis.mag_z = 400;  // 400 * 0.15 = 60 µT on board Z
+    IIS2MDCDataSI iis_si{};
+    conv.convertIIS2MDCData(iis, iis_si);
+    EXPECT_NEAR(iis_si.mag_x_uT, 60.0, 0.1);
+    EXPECT_NEAR(iis_si.mag_z_uT, 0.0, 0.1);
+}

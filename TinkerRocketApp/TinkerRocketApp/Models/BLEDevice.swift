@@ -107,6 +107,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// state machine.
     @Published var otaStatus: OTAStatusUpdate?
 
+    /// FC's active board→rocket mounting orientation ("imu_orient" config
+    /// message, relayed by the OC). Display name like "+X" or "-Z r90" plus
+    /// how it was determined. Lets the flyer confirm the auto-detected
+    /// mounting before arming. Empty until a v3-orientation FC reports it.
+    @Published var imuOrientationName: String = ""
+    @Published var imuOrientationMode: IMUOrientationMode = .unknown
+
     /// Display name: unitName if set, otherwise connectedDeviceName
     var displayName: String {
         unitName.isEmpty ? connectedDeviceName : unitName
@@ -721,6 +728,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func sendCameraConfig(cameraType: UInt8) {
         sendRawCommand(33, payload: Data([cameraType]))
+    }
+
+    /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
+    /// manual board→rocket code (authoritative incl. roll clocking).
+    func sendImuOrientationConfig(_ setting: UInt8) {
+        sendRawCommand(64, payload: Data([setting]))
+        if var cfg = rocketConfig {
+            cfg.imuOrientSetting = setting
+            rocketConfig = cfg
+        }
     }
 
     /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
@@ -1342,6 +1359,26 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
            dict["type"] as? String == "fc_identity" {
             if let fcFw = dict["fc_fw"] as? String { fcFirmwareVersion = fcFw }
             print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion)")
+            return
+        }
+
+        // Board→rocket mounting orientation: "type":"imu_orient" — which board
+        // axis the FC has mapped to the rocket nose and how it decided
+        // (default / manual / pad-gravity auto-detect). Re-sent whenever the
+        // FC re-orients on the pad, so the display tracks the live mapping.
+        // "set" is the user's setting (0xFF auto / manual code), cached into
+        // rocketConfig like the other readback values.
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "imu_orient" {
+            if let name = dict["name"] as? String { imuOrientationName = name }
+            if let mode = dict["mode"] as? Int {
+                imuOrientationMode = IMUOrientationMode(rawValue: mode) ?? .unknown
+            }
+            if let set = dict["set"] as? Int, var cfg = rocketConfig {
+                cfg.imuOrientSetting = UInt8(clamping: set)
+                rocketConfig = cfg
+            }
+            print("[CFG] IMU orientation: \(imuOrientationName) (\(imuOrientationMode.label))")
             return
         }
 
