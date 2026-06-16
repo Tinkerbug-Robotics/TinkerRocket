@@ -7,7 +7,7 @@ Parses binary log files from the TinkerRocket Mini (OutComputer) flight computer
 and generates flight data plots.
 
 Sensors: ISM6HG256 (low-g + high-g accel + gyro), BMP585 (baro),
-         MMC5983MA (magnetometer), GNSS, Power ADC
+         MMC5983MA / IIS2MDC (magnetometer, old / new PCB rev), GNSS, Power ADC
 
 Frame format: [0xAA][0x55][0xAA][0x55] + type(1) + length(1) + payload(N) + CRC16(2)
 CRC-16: poly=0x8001, init=0x0000, no reflection, big-endian CRC bytes
@@ -42,7 +42,8 @@ ISM6_LOW_G_FS_G   = 16     # ±16 g
 ISM6_HIGH_G_FS_G  = 256    # ±256 g
 ISM6_GYRO_FS_DPS  = 4000   # ±4000 dps
 ISM6_ROT_Z_DEG    = -45.0  # sensor → board frame rotation about +Z
-MMC_ROT_Z_DEG     = 180.0  # sensor → board frame rotation about +Z
+MMC_ROT_Z_DEG     = 180.0  # sensor → board frame rotation about +Z (old-PCB MMC5983MA)
+IIS2MDC_ROT_Z_DEG = 0.0    # sensor → board frame rotation about +Z (new-PCB IIS2MDC)
 
 def ism6_scales(low_g_fs=ISM6_LOW_G_FS_G, high_g_fs=ISM6_HIGH_G_FS_G,
                 gyro_fs=ISM6_GYRO_FS_DPS):
@@ -55,6 +56,10 @@ def ism6_scales(low_g_fs=ISM6_LOW_G_FS_G, high_g_fs=ISM6_HIGH_G_FS_G,
 
 # MMC5983MA: 18-bit centered, Gauss = centered * (8 / 131072), uT = Gauss * 100
 MMC_UT_PER_COUNT = (8.0 * 100.0) / 131072.0  # ≈ 0.006104
+
+# IIS2MDC (new-PCB magnetometer): signed 16-bit raw, 1.5 mgauss/LSB = 0.15 µT/LSB
+# (datasheet 9.13).  Matches TR_Sensor_Data_Converter::convertIIS2MDCData.
+IIS2MDC_UT_PER_LSB = 0.15
 
 # BMP585: temp in Q16 (degC * 65536), pressure in Q6 (Pa * 64)
 # ------------------------------------
@@ -69,6 +74,7 @@ MSG_NON_SENSOR        = 0xA5
 MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
 MSG_END_FLIGHT        = 0xA8
+MSG_IIS2MDC           = 0xD1  # new-PCB IIS2MDC magnetometer raw frame
 MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
 
@@ -78,6 +84,7 @@ MSG_NAMES = {
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
+    MSG_IIS2MDC:          "IIS2MDC",
     MSG_NON_SENSOR:       "NonSensor",
     MSG_POWER:            "POWER",
     MSG_START_LOGGING:    "StartLogging",
@@ -94,6 +101,7 @@ MSG_EXPECTED_LEN = {
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
+    MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:             10,
     MSG_START_LOGGING:     None,  # variable / no payload
@@ -111,6 +119,8 @@ FMT_ISM6 = '<I hhh hhh hhh'
 FMT_BMP585 = '<I i I'
 # MMC5983MAData: 16 bytes (time_us, mag_x/y/z:u32)
 FMT_MMC = '<I III'
+# IIS2MDCData: 10 bytes (time_us, mag_x/y/z:i16) — new PCB rev
+FMT_IIS2MDC = '<I hhh'
 # POWERData: 10 bytes (time_us, voltage_raw:u16, current_raw:i16, soc_raw:i16)
 FMT_POWER = '<I Hhh'
 # NonSensorData: 42 bytes (q0-q3 as int16*10000, roll_cmd centideg)
@@ -276,6 +286,7 @@ def parse_binary_file(filepath):
         "ISM6HG256":      [],
         "BMP585":         [],
         "MMC5983MA":      [],
+        "IIS2MDC":        [],
         "NonSensor":      [],
         "POWER":          [],
         "LogBufferStats": [],
@@ -287,6 +298,7 @@ def parse_binary_file(filepath):
         "gyro_fs_dps":   ISM6_GYRO_FS_DPS,
         "ism6_rot_z_deg": ISM6_ROT_Z_DEG,
         "mmc_rot_z_deg":  MMC_ROT_Z_DEG,
+        "iis2mdc_rot_z_deg": IIS2MDC_ROT_Z_DEG,
         "hg_bias": (0.0, 0.0, 0.0),
         # Board→rocket mounting orientation (OutStatusQueryData v3+).
         # None = identity (board +X toward the nose, pre-v3 logs).
@@ -425,6 +437,16 @@ def parse_binary_file(filepath):
                 fields = struct.unpack(FMT_MMC, payload)
                 # Store raw; will rotate after parsing when we have config
                 records["MMC5983MA"].append({
+                    "time_us":  fields[0],
+                    "raw_x":    fields[1],
+                    "raw_y":    fields[2],
+                    "raw_z":    fields[3],
+                })
+
+            elif msg_type == MSG_IIS2MDC:
+                fields = struct.unpack(FMT_IIS2MDC, payload)
+                # Store raw int16; scale + rotate after parsing (see post-process)
+                records["IIS2MDC"].append({
                     "time_us":  fields[0],
                     "raw_x":    fields[1],
                     "raw_y":    fields[2],
@@ -597,6 +619,21 @@ def parse_binary_file(filepath):
         mz = decode_mmc_centered(rec.pop("raw_z"))
         mag = apply_b2r(mx * c_mmc - my * s_mmc,
                         mx * s_mmc + my * c_mmc,
+                        mz)
+        rec["mag_x"] = mag[0]
+        rec["mag_y"] = mag[1]
+        rec["mag_z"] = mag[2]
+
+    # --- Post-process IIS2MDC raw data: scale (0.15 µT/LSB), chip-Z rotate,
+    #     then board→rocket (matches SensorConverter::convertIIS2MDCData) ---
+    iis_rad = math.radians(config["iis2mdc_rot_z_deg"])
+    c_iis, s_iis = math.cos(iis_rad), math.sin(iis_rad)
+    for rec in records["IIS2MDC"]:
+        mx = rec.pop("raw_x") * IIS2MDC_UT_PER_LSB
+        my = rec.pop("raw_y") * IIS2MDC_UT_PER_LSB
+        mz = rec.pop("raw_z") * IIS2MDC_UT_PER_LSB
+        mag = apply_b2r(mx * c_iis - my * s_iis,
+                        mx * s_iis + my * c_iis,
                         mz)
         rec["mag_x"] = mag[0]
         rec["mag_y"] = mag[1]
@@ -869,23 +906,31 @@ def plot_temperature(records, t0_global):
 
 
 def plot_magnetometer(records, t0_global):
-    """MMC5983MA magnetometer X/Y/Z."""
-    mag = records["MMC5983MA"]
-    if not mag:
+    """Magnetometer X/Y/Z in µT.
+
+    Plots whichever mag the board logged: MMC5983MA (old PCB, msg 0xA4) or
+    IIS2MDC (new PCB, msg 0xD1).  The two are mutually exclusive per board
+    revision, but if both streams are present they're shown stacked.
+    """
+    sources = [(name, records.get(name))
+               for name in ("IIS2MDC", "MMC5983MA")
+               if records.get(name)]
+    if not sources:
         return None
 
-    t = (get_array(mag, "time_us") - t0_global) / 1e6
-    fig, ax = plt.subplots(figsize=(12, 5))
+    fig, axes = plt.subplots(len(sources), 1, figsize=(12, 5 * len(sources)),
+                             squeeze=False)
+    for ax, (name, mag) in zip(axes[:, 0], sources):
+        t = (get_array(mag, "time_us") - t0_global) / 1e6
+        for axis, color in [("x", "tab:blue"), ("y", "tab:orange"), ("z", "tab:green")]:
+            vals = get_array(mag, f"mag_{axis}")
+            ax.scatter(t, vals, s=8, alpha=0.4, color=color, label=f"Mag {axis.upper()}")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Magnetic Field (µT)")
+        ax.set_title(f"{name} Magnetometer")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
 
-    for axis, color in [("x", "tab:blue"), ("y", "tab:orange"), ("z", "tab:green")]:
-        vals = get_array(mag, f"mag_{axis}")
-        ax.scatter(t, vals, s=8, alpha=0.4, color=color, label=f"Mag {axis.upper()}")
-
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Magnetic Field (µT)")
-    ax.set_title("MMC5983MA Magnetometer")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
     fig.tight_layout()
     return fig
 
