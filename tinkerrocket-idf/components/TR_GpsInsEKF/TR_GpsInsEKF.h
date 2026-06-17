@@ -8,8 +8,10 @@
 // Unified EKF architecture (Mahony AHRS removed):
 //   - Quaternion propagation via gyro in timeUpdate()
 //   - Accelerometer gravity-reference measurement update (accelMeasUpdate)
-//   - Magnetometer proportional heading correction (magHeadingUpdate)
-//   - cos²(pitch) gating on magnetometer and GNSS attitude corrections
+//   - Magnetometer heading-only scalar Kalman update (magMeasUpdate):
+//     tilt-compensated, true-north via magnetic declination, well-conditioned
+//     at any attitude including vertical (no cos²(pitch) blind spot)
+//   - cos⁴(pitch) gating on GNSS velocity-derived attitude correction only
 //   - Specific force magnitude gating (0.5g–1.5g) during thrust/free-fall
 //   - Consistent FRD body frame / NED world frame convention
 
@@ -105,6 +107,12 @@ public:
     void setGpsNoiseScale(float scale) { gpsNoiseScale_ = scale; }
     float getGpsNoiseScale() const { return gpsNoiseScale_; }
 
+    /// Magnetic declination (radians, EAST-positive) added to the measured
+    /// magnetic heading so the filter tracks TRUE north.  0 = magnetic north.
+    /// Set once from GPS lat/lon/date via the World Magnetic Model.
+    void setDeclination(float dec_rad) { declination_rad_ = dec_rad; }
+    float getDeclination() const { return declination_rad_; }
+
     /// Inject known position (lat_rad, lon_rad, alt_m) and reset pos covariance.
     void setPosition(double lat_rad, double lon_rad, double alt_m) {
         pEst_D_rrm_[0] = lat_rad; pEst_D_rrm_[1] = lon_rad; pEst_D_rrm_[2] = alt_m;
@@ -186,7 +194,7 @@ private:
     void timeUpdate();
     void measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]);
     void accelMeasUpdate(const float aMeas[3]);
-    void magHeadingUpdate(const float aMeas[3], const float magMeas[3]);
+    void magMeasUpdate(const float aMeas[3], const float magMeas[3]);
 
     // Numerical safety net: floor P diagonals at a tiny positive value and
     // cap them at the per-state P_MAX_* values. Call after every path that
@@ -269,8 +277,12 @@ private:
     // Accel gravity-reference measurement noise variance (sigma m/s²)^2
     float R_accel_ = 0.25f;
 
-    // Mag heading proportional gain
-    float magKp_ = 1.0f;
+    // Mag heading-only Kalman measurement noise variance (rad²; ~3° sigma)
+    float R_mag_ = 0.0027f;
+
+    // Magnetic declination (rad, EAST-positive); added to the measured magnetic
+    // heading to yield a true-north heading.  Set from GPS+WMM at fix; 0 until.
+    float declination_rad_ = 0.0f;
 
     // P diagonal clamping — prevents float32 overflow when states are
     // unobservable (e.g. no GPS fix on bench).  Caps are well above
