@@ -54,6 +54,17 @@ struct FlightChartView: View {
 
     // MARK: - Zoom Helpers
 
+    /// A chart-safe domain: never reversed (the `Range requires lowerBound <=
+    /// upperBound` trap, #236), never zero-width, always finite.  Every chart
+    /// domain and zoom window is built through this, so no data shape, gesture,
+    /// or floating-point edge can hand Swift Charts an inverted `ClosedRange`.
+    static func safeDomain(_ a: Double, _ b: Double,
+                           minWidth: Double = 1e-6) -> ClosedRange<Double> {
+        guard a.isFinite, b.isFinite else { return 0...1 }
+        let lo = min(a, b), hi = max(a, b)
+        return (hi - lo) < minWidth ? lo...(lo + minWidth) : lo...hi
+    }
+
     /// Whether the chart is currently zoomed in beyond the full view
     private var isZoomed: Bool {
         let fullSpan = fullXRange.upperBound - fullXRange.lowerBound
@@ -82,10 +93,10 @@ struct FlightChartView: View {
         let span = maxY - minY
         if span < 1e-9 {
             // Flat data — give it a ±1 range
-            return (minY - 1)...(maxY + 1)
+            return Self.safeDomain(minY - 1, maxY + 1)
         }
         let padding = span * 0.05
-        return (minY - padding)...(maxY + padding)
+        return Self.safeDomain(minY - padding, maxY + padding)
     }
 
     // MARK: - Body
@@ -271,7 +282,8 @@ struct FlightChartView: View {
                     newLower = newUpper - newSpan
                 }
 
-                visibleXRange = max(newLower, fullXRange.lowerBound)...min(newUpper, fullXRange.upperBound)
+                visibleXRange = Self.safeDomain(max(newLower, fullXRange.lowerBound),
+                                                min(newUpper, fullXRange.upperBound))
             }
             .onEnded { _ in
                 gestureStartXRange = nil
@@ -312,7 +324,7 @@ struct FlightChartView: View {
                     newLower = newUpper - visibleSpan
                 }
 
-                visibleXRange = newLower...newUpper
+                visibleXRange = Self.safeDomain(newLower, newUpper)
             }
             .onEnded { _ in
                 dragStartXRange = nil
@@ -390,7 +402,7 @@ struct FlightChartView: View {
             var cleanX: [Double] = []
             var cleanY: [Double] = []
             for i in 0..<min(timeSeconds.count, values.count) {
-                if !timeSeconds[i].isNaN && !values[i].isNaN {
+                if timeSeconds[i].isFinite && values[i].isFinite {
                     cleanX.append(timeSeconds[i])
                     cleanY.append(values[i])
                 }
@@ -421,8 +433,8 @@ struct FlightChartView: View {
             // Use actual min/max across all series
             let allMinX = newFullData.compactMap { $0.x.first }.min() ?? minX
             let allMaxX = newFullData.compactMap { $0.x.last }.max() ?? maxX
-            fullXRange = allMinX...allMaxX
-            visibleXRange = allMinX...allMaxX
+            fullXRange = Self.safeDomain(allMinX, allMaxX)
+            visibleXRange = fullXRange
         } else {
             fullXRange = 0...1
             visibleXRange = 0...1
