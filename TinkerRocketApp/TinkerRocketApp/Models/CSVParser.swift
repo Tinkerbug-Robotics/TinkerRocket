@@ -144,8 +144,12 @@ class CSVParser {
                     columns[col].append(.nan)
                 }
             }
-            // Pad if row has fewer columns than header
-            for col in fields.count..<columnCount {
+            // Pad short rows.  min() guards over-long rows (more fields than the
+            // header — e.g. garbled LoRa telemetry like "166.65.5" splitting into
+            // extra fields): bare `fields.count..<columnCount` traps with
+            // "Range requires lowerBound <= upperBound" when fields.count >
+            // columnCount (#236).  Extra fields were already consumed above.
+            for col in min(fields.count, columnCount)..<columnCount {
                 columns[col].append(.nan)
             }
         }
