@@ -21,6 +21,7 @@ idf_component_register(
         TR_Sensor_Data_Converter
         TR_Orientation
         TR_GpsInsEKF
+        TR_GeoMag
         TR_KinematicChecks
         TR_MagCalibrator
         TR_ServoControl_ledc_mult

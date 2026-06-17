@@ -11,6 +11,7 @@
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Orientation.h>
 #include <TR_GpsInsEKF.h>
+#include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <TR_MagCalibrator.h>
 #include <TR_ServoControl_ledc_mult.h>
@@ -3294,6 +3295,33 @@ static void loop_fc()
                         ESP_LOGI(TAG, "[EKF] Init: acc=(%.2f,%.2f,%.2f) heading=%.1f deg",
                                       ekf_imu.acc_x, ekf_imu.acc_y, ekf_imu.acc_z,
                                       (double)config::PAD_HEADING_DEG);
+                    }
+
+                    // Magnetic declination → true-north heading.  Computed once
+                    // here (off the flight-loop hot path) from the averaged pad
+                    // position + GPS date via WMM2025; falls back to the config
+                    // constant if the GNSS date is implausible.
+                    {
+                        float decl_deg = config::MAGNETIC_DECLINATION_DEG;
+                        const uint16_t yr = gnss_latest_si.year;
+                        if (yr >= 2020 && yr <= 2035) {
+                            static const int mdays[12] =
+                                {31,28,31,30,31,30,31,31,30,31,30,31};
+                            int doy = gnss_latest_si.day;
+                            for (int mo = 1; mo < gnss_latest_si.month && mo <= 12; mo++)
+                                doy += mdays[mo - 1];
+                            const bool leap = (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0));
+                            if (leap && gnss_latest_si.month > 2) doy += 1;
+                            const double decimal_year =
+                                (double)yr + (double)(doy - 1) / (leap ? 366.0 : 365.0);
+                            const float decl_rad = TR_GeoMag::declinationRad(
+                                ref_lat_rad, ref_lon_rad, ref_alt_m, decimal_year);
+                            decl_deg = decl_rad * (180.0f / (float)M_PI);
+                        }
+                        ekf.setDeclination(decl_deg * ((float)M_PI / 180.0f));
+                        ESP_LOGI(TAG, "[EKF] Declination %.2f deg (WMM2025, %u-%02u-%02u)",
+                                      (double)decl_deg, gnss_latest_si.year,
+                                      gnss_latest_si.month, gnss_latest_si.day);
                     }
                     ekf_initialized = true;
                 }
