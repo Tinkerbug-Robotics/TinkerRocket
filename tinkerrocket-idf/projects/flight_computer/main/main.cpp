@@ -2469,9 +2469,11 @@ static void setup_fc()
     out_status_query_data.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
     out_status_query_data.ism6_rot_z_cdeg = (int16_t)lroundf(config::ISM6HG256_ROT_Z_DEG * 100.0f);
     out_status_query_data.mmc_rot_z_cdeg = (int16_t)lroundf(config::MMC5983MA_ROT_Z_DEG * 100.0f);
+    out_status_query_data.iis2mdc_rot_z_cdeg = (int16_t)lroundf(config::IIS2MDC_ROT_Z_DEG * 100.0f);
     // v3: adds board→rocket orientation (b2r_* fields, filled by
     // applyBoardToRocketOrientation above and on any runtime change).
-    out_status_query_data.format_version = 3;
+    // v4: adds per-chip iis2mdc_rot_z_cdeg (#204).
+    out_status_query_data.format_version = 4;
 
     // NOTE: Do NOT drain the slave TX buffer here.  With the new
     // i2c_slave driver, reading when the slave has no TX data queued

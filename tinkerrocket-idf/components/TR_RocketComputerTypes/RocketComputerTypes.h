@@ -558,6 +558,7 @@ typedef struct __attribute__((packed))
     uint8_t  format_version;      // payload format version
                                   //   2 = has HG bias
                                   //   3 = has board→rocket orientation
+                                  //   4 = has IIS2MDC rotation
     int16_t  hg_bias_x_cmss;     // high-g bias X, centi-m/s² (0.01 m/s² units)
     int16_t  hg_bias_y_cmss;     // high-g bias Y, centi-m/s²
     int16_t  hg_bias_z_cmss;     // high-g bias Z, centi-m/s²
@@ -570,9 +571,15 @@ typedef struct __attribute__((packed))
     uint8_t  b2r_code;           // discrete orientation code (0 = +X nose)
     uint8_t  b2r_mode;           // ORIENT_MODE_* (how it was determined)
     int16_t  b2r_q[4];           // board→rocket quaternion ×10000
+
+    // Per-chip IIS2MDC magnetometer rotation (format_version >= 4, #204).
+    // New-PCB boards carry the IIS2MDC, whose sensor→board rotation differs
+    // from the MMC5983MA's (mmc_rot_z_cdeg).  Consumers must apply THIS to
+    // IIS2MDC data — using mmc_rot_z_cdeg gives a 180° (or worse) heading error.
+    int16_t  iis2mdc_rot_z_cdeg; // centi-deg
 } OutStatusQueryData;
-static_assert(sizeof(OutStatusQueryData) == 26,
-              "OutStatusQueryData must be 26 bytes");
+static_assert(sizeof(OutStatusQueryData) == 28,
+              "OutStatusQueryData must be 28 bytes");
 
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
