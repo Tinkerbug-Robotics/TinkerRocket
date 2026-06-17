@@ -323,6 +323,18 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
         }
     }
 
+    /// Direction word for a SIGNED altitude rate, or nil within the deadband
+    /// (near-level → omit direction).  Single source of truth so a callout's
+    /// spoken direction can never contradict the rate's sign.  #235: "climbing"
+    /// was announced during descent because the word came from the apogee-phase
+    /// flag (`alt_apo`, which clears below ~15 m AGL near landing) instead of
+    /// the rate.
+    static func climbDescendWord(forRate rate: Float, deadband: Float = 1.0) -> String? {
+        if rate >  deadband { return "climbing" }
+        if rate < -deadband { return "descending" }
+        return nil
+    }
+
     private func checkPeriodicAltitude(_ telemetry: TelemetryData) {
         let now = Date()
         guard now.timeIntervalSince(lastAltitudeAnnounceTime) >= Self.altitudeInterval else { return }
@@ -330,10 +342,13 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
 
         lastAltitudeAnnounceTime = now
         let altStr = UnitFormatter.spokenAltitude(Double(alt))
-        // Only include climb rate after burnout — during powered flight the
-        // rate changes too rapidly and isn't meaningful to announce.
-        if burnoutAnnounced, let rate = telemetry.altitude_rate, abs(rate) > 1.0 {
-            announce("\(altStr), climbing \(UnitFormatter.spokenSpeed(Double(abs(rate))))")
+        // Only include the vertical rate after burnout — during powered flight
+        // it changes too rapidly to be meaningful.  The direction word comes
+        // from the rate's sign (#235), never the apogee phase, so it can't
+        // contradict the motion (e.g. "climbing" while descending near landing).
+        if burnoutAnnounced, let rate = telemetry.altitude_rate,
+           let word = Self.climbDescendWord(forRate: rate) {
+            announce("\(altStr), \(word) \(UnitFormatter.spokenSpeed(Double(abs(rate))))")
         } else {
             announce(altStr)
         }
@@ -347,8 +362,9 @@ class FlightAnnouncer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, 
         lastDescentAnnounceTime = now
 
         let altStr = UnitFormatter.spokenAltitude(Double(alt))
-        if let rate = telemetry.altitude_rate, abs(rate) > 1.0 {
-            announce("\(altStr), descending \(UnitFormatter.spokenSpeed(Double(abs(rate))))")
+        if let rate = telemetry.altitude_rate,
+           let word = Self.climbDescendWord(forRate: rate) {
+            announce("\(altStr), \(word) \(UnitFormatter.spokenSpeed(Double(abs(rate))))")
         } else {
             announce(altStr)
         }

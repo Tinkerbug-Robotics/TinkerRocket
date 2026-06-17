@@ -108,3 +108,46 @@ final class FlightAnnouncerDispatchTests: XCTestCase {
                        "Non-relayed frames should not populate remoteRockets")
     }
 }
+
+/// #235: the altitude-rate callout's direction word must follow the SIGN of the
+/// rate, never the apogee-phase flag — so "climbing" is never spoken while
+/// descending (the original bug, which surfaced below ~15 m AGL when `alt_apo`
+/// cleared near landing and the pre-apogee branch re-fired).
+final class FlightAnnouncerWordingTests: XCTestCase {
+
+    func testWord_MatchesRateSign() {
+        XCTAssertEqual(FlightAnnouncer.climbDescendWord(forRate: 80),   "climbing")
+        XCTAssertEqual(FlightAnnouncer.climbDescendWord(forRate: 1.5),  "climbing")
+        XCTAssertEqual(FlightAnnouncer.climbDescendWord(forRate: -30),  "descending")
+        XCTAssertEqual(FlightAnnouncer.climbDescendWord(forRate: -1.5), "descending")
+    }
+
+    func testWord_OmittedWithinDeadband() {
+        XCTAssertNil(FlightAnnouncer.climbDescendWord(forRate: 0))
+        XCTAssertNil(FlightAnnouncer.climbDescendWord(forRate: 0.5))
+        XCTAssertNil(FlightAnnouncer.climbDescendWord(forRate: -0.5))
+        XCTAssertNil(FlightAnnouncer.climbDescendWord(forRate: 1.0),   "boundary is strict (> deadband)")
+        XCTAssertNil(FlightAnnouncer.climbDescendWord(forRate: -1.0))
+    }
+
+    /// Sweep a synthetic ascent → apogee → descent → near-ground profile; the
+    /// direction word must never contradict the sign of the rate.
+    func testWord_NeverContradictsRate_AcrossFlightProfile() {
+        let rates: [Float] = [80, 40, 12, 5, 1.5, 0.4, 0, -0.4, -1.5, -8, -20, -6, -3, -2]
+        for r in rates {
+            let word = FlightAnnouncer.climbDescendWord(forRate: r)
+            if r > 1.0 {
+                XCTAssertEqual(word, "climbing", "rate \(r) m/s should read 'climbing'")
+            } else if r < -1.0 {
+                XCTAssertEqual(word, "descending", "rate \(r) m/s should read 'descending'")
+            } else {
+                XCTAssertNil(word, "near-level rate \(r) m/s should omit the direction word")
+            }
+            // The cardinal #235 guarantee: never "climbing" while descending.
+            if r < 0 {
+                XCTAssertNotEqual(word, "climbing",
+                                  "must never say 'climbing' at a negative rate (\(r) m/s)")
+            }
+        }
+    }
+}
