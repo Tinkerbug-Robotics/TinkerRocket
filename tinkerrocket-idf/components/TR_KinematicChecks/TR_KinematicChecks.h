@@ -23,7 +23,8 @@ public:
                          bool  new_gps = false,
                          float pitch_rad = 1.57f,
                          bool  burnout_detected = false,
-                         bool  baro_locked_out = false);
+                         bool  baro_locked_out = false,
+                         float gps_vel_u = 0.0f);
 
     bool launch_flag;
     bool alt_landed_flag;       // Voted master landed

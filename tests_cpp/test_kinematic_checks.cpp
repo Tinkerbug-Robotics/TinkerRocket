@@ -23,11 +23,12 @@ protected:
     // Helper: call with flight-like data
     void callFlight(float alt, float acc_mag, float vel_u, float roll_rate = 0.0f,
                     float gps_alt = 0.0f, bool new_gps = false,
-                    float pitch_rad = 1.57f, bool burnout = false, bool baro_lockout = false) {
+                    float pitch_rad = 1.57f, bool burnout = false, bool baro_lockout = false,
+                    float gps_vel_u = 0.0f) {
         float pos[3] = {0, 0, alt};
         float vel[3] = {0, 0, vel_u};
         kc.kinematicChecks(alt, acc_mag, pos, vel, roll_rate, true, gps_alt, new_gps,
-                           pitch_rad, burnout, baro_lockout);
+                           pitch_rad, burnout, baro_lockout, gps_vel_u);
     }
 };
 
@@ -142,6 +143,28 @@ TEST_F(KinematicChecksTest, Apogee_WithBurnout_DetectsApogee) {
         callFlight(alt, 5.0f, -10.0f, 0.0f, alt, true, -0.2f, true);
     }
     EXPECT_TRUE(kc.apogee_flag);
+}
+
+// #237/#242: GPS apogee is computed + logged but is NOT a voter — on RP III the
+// GPS solution is corrupted during boost (vel_u noise to -38 m/s while climbing,
+// fix=3), so a GPS-only "apogee" must never fire the master.
+TEST_F(KinematicChecksTest, Apogee_GPSExcludedFromVote) {
+    for (int i = 0; i < 80; i++) {           // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+
+    // Post-burnout, drive ONLY GPS "descending" (gps_vel_u = -10) while the real
+    // detectors say still-ascending: EKF velocity +10, altitude climbing, nose up.
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callFlight(/*alt*/100.0f + i, /*acc*/5.0f, /*vel_u*/10.0f, /*roll*/0.0f,
+                   /*gps_alt*/0.0f, /*new_gps*/true, /*pitch*/1.0f, /*burnout*/true,
+                   /*baro_lockout*/false, /*gps_vel_u*/-10.0f);
+    }
+    EXPECT_TRUE(kc.gps_apogee_flag)  << "GPS apogee flag should still be computed";
+    EXPECT_FALSE(kc.apogee_flag)     << "GPS must NOT vote the master apogee (#237)";
 }
 
 TEST_F(KinematicChecksTest, Landing_StableAlt) {

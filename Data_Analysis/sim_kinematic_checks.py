@@ -58,6 +58,9 @@ APOGEE_COUNT_MAX     = 10
 APOGEE_COUNT_HI      = 6        # baro/pitch/vel latch-on threshold
 GPS_APOGEE_COUNT_MAX = 8
 GPS_APOGEE_COUNT_HI  = 4
+# GPS apogee now fires on sustained Doppler descent faster than this m/s
+# (#237/#242): GPS velocity is real-time, GPS position lags ~4 s.
+GPS_VEL_APOGEE_DESCENT_MPS = 1.0
 
 # CHANGED (5): Landing sub-detector hysteresis thresholds.
 # Slow detectors evaluated at 1 Hz inside the existing landing_check_dt
@@ -213,6 +216,7 @@ class KinematicChecks:
         burnout_detected: bool,
         baro_locked_out: bool,
         now_ms: int,
+        gps_vel_u: float = 0.0,
     ) -> None:
         self._now_ms = now_ms
 
@@ -411,9 +415,12 @@ class KinematicChecks:
             elif self.apogee_count == 0:
                 self.alt_apogee_flag = False
 
-            # ─ Test 3: GPS (CHANGED (4): leaky counter; same HI=4) ─
-            if new_gps and self.gps_available_ and gps_altitude > 15.0:
-                gps_pass = gps_altitude < self.max_gps_altitude_ - 10.0
+            # ─ Test 3: GPS Doppler vertical velocity (descending), #237/#242 ─
+            # GPS position lags ~4 s & dives during boost; Doppler velocity is
+            # real-time, so descending vel_u tracks true apogee.  No altitude
+            # gate (that lag is the bug); fresh-fix gated; post-burnout only.
+            if new_gps and self.gps_available_:
+                gps_pass = gps_vel_u < -GPS_VEL_APOGEE_DESCENT_MPS
                 self.last_gps_pass = gps_pass
                 if gps_pass:
                     self.gps_apogee_count_ = min(GPS_APOGEE_COUNT_MAX,
@@ -450,10 +457,8 @@ class KinematicChecks:
                     available += 1
                     if self.alt_apogee_flag: passed += 1
 
-                if (self.gps_available_
-                        and (self._now_ms - self.last_gps_time_ms_) < 5000):
-                    available += 1
-                    if self.gps_apogee_flag: passed += 1
+                # GPS — NOT a voter (#237/#242): unreliable during boost on
+                # this hardware; gps_apogee_flag is computed + logged, excluded.
 
                 available += 1
                 if self.pitch_apogee_flag: passed += 1

@@ -4765,7 +4765,8 @@ static void loop_fc()
                                        gps_new_for_kc,
                                        imu_rpy[1],
                                        burnout_detected,
-                                       mach_locked_out);
+                                       mach_locked_out,
+                                       (float)gnss_latest_si.vel_u);
         }
         bmp_new_for_kf = false;
         gps_new_for_kc = false;

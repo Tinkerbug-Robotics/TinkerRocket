@@ -113,6 +113,7 @@ def replay(binary_path: str) -> dict:
     latest_vel = (0.0, 0.0, 0.0)
     latest_roll_rate: float = 0.0
     latest_gps_alt: float = 0.0
+    latest_gps_vel_u: float = 0.0
     latest_pitch_rad: float = math.pi / 2
     burnout: bool = False
     mach_locked_out: bool = False
@@ -160,6 +161,7 @@ def replay(binary_path: str) -> dict:
 
         if kind == "gnss":
             latest_gps_alt = float(r["alt_m"])
+            latest_gps_vel_u = float(r["vel_u"])
             new_gps = True
             # Record GPS pass-state at GPS sample time (separate axis since
             # GPS is much slower than IMU and shouldn't be smeared along it).
@@ -194,6 +196,7 @@ def replay(binary_path: str) -> dict:
             roll_rate=latest_roll_rate,
             new_baro=new_baro,
             gps_altitude=latest_gps_alt,
+            gps_vel_u=latest_gps_vel_u,
             new_gps=new_gps,
             pitch_rad=latest_pitch_rad,
             burnout_detected=burnout,
