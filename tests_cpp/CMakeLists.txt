@@ -84,6 +84,19 @@ target_include_directories(test_ekf PRIVATE
 target_link_libraries(test_ekf GTest::gtest_main)
 gtest_discover_tests(test_ekf)
 
+# ---------- test_geomag ----------
+# WMM2025 magnetic-declination model (TR_GeoMag), validated against the
+# official NOAA WMM2025_TestValues.txt reference declinations.
+add_executable(test_geomag test_geomag.cpp
+    ${LIB_DIR}/TR_GeoMag/TR_GeoMag.cpp
+)
+target_include_directories(test_geomag PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GeoMag
+)
+target_link_libraries(test_geomag GTest::gtest_main)
+gtest_discover_tests(test_geomag)
+
 # ---------- test_kinematic_checks ----------
 add_executable(test_kinematic_checks test_kinematic_checks.cpp
     ${LIB_DIR}/TR_KinematicChecks/TR_KinematicChecks.cpp
