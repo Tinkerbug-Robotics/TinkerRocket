@@ -26,6 +26,7 @@ nonisolated class SensorConverter {
     // Mini sensor-frame → board-frame rotation angles (configurable per device)
     private var ism6_rot_z_rad: Double = 0.0
     private var mmc_rot_z_rad: Double = 0.0
+    private var iis2mdc_rot_z_rad: Double = 0.0
 
     init() {
         // Calculate sensitivity values
@@ -49,9 +50,13 @@ nonisolated class SensorConverter {
 
     /// Configure Mini sensor rotation angles from status query data.
     /// Called when a 0xA0 (statusQuery) frame is found in the binary log.
-    func configureMiniRotation(imuDeg: Double, magDeg: Double) {
+    func configureMiniRotation(imuDeg: Double, magDeg: Double, iisDeg: Double? = nil) {
         ism6_rot_z_rad = imuDeg * .pi / 180.0
         mmc_rot_z_rad = magDeg * .pi / 180.0
+        // IIS2MDC (new PCB) has its own sensor→board rotation (#204).  Older
+        // logs (status query format_version < 4) don't carry it; fall back to
+        // the MMC value to preserve prior behavior on those.
+        iis2mdc_rot_z_rad = (iisDeg ?? magDeg) * .pi / 180.0
     }
 
     /// Configure Legacy sensor rotation.
@@ -195,9 +200,9 @@ nonisolated class SensorConverter {
 
     /// Convert IIS2MDC raw counts to MMC5983MADataSI (µT) so CSV writer
     /// stays unified between MMC and IIS2MDC boards.  IIS2MDC sensitivity
-    /// is 0.15 µT/LSB (datasheet 9.13).  Frame rotation reuses
-    /// mmc_rot_z_rad — only one mag rotation comes back in the status
-    /// query (mmc_rot_z_cdeg), applied to whichever mag chip is present.
+    /// is 0.15 µT/LSB (datasheet 9.13).  Applies the IIS2MDC-specific
+    /// sensor→board rotation (iis2mdc_rot_z_rad, from status query
+    /// iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT the MMC's.
     func convertIIS2MDC(_ raw: IIS2MDCData) -> MMC5983MADataSI {
         let UT_PER_LSB = 0.15
 
@@ -205,8 +210,8 @@ nonisolated class SensorConverter {
         let my = Double(raw.mag_y) * UT_PER_LSB
         let mz = Double(raw.mag_z) * UT_PER_LSB
 
-        let c = cos(mmc_rot_z_rad)
-        let s = sin(mmc_rot_z_rad)
+        let c = cos(iis2mdc_rot_z_rad)
+        let s = sin(iis2mdc_rot_z_rad)
 
         // Sensor frame -> board frame, rotation about +Z.
         let mag_x = (mx * c) - (my * s)

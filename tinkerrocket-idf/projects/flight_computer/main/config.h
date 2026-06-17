@@ -79,11 +79,13 @@ struct config
     // MMC5983MA -> board frame (deg), CCW positive about +Z.
     // Note: board frame: +X forward, +Y left, +Z up.
     static constexpr float MMC5983MA_ROT_Z_DEG = 180.0f;
-    // IIS2MDC -> board frame (deg). Default 0 deg (no rotation) until
-    // bench characterization confirms the chip's mounting on the new PCB
-    // rev. Adjust here when the EKF heading shows a fixed offset relative
-    // to the IMU's Z axis.
-    static constexpr float IIS2MDC_ROT_Z_DEG = 0.0f;
+    // IIS2MDC -> board frame (deg), CCW positive about +Z.
+    // +90 deg from bench characterization (#204): with board +X pointed
+    // true north the IIS2MDC reads Earth's horizontal field on its -Y axis
+    // (and on -X when board +X points east) -> chip +Y is parallel to
+    // board -X, a +90 deg sensor->board rotation.  Validated against two
+    // static logs (board+X -> N and board+X -> E, 2026-06-17).
+    static constexpr float IIS2MDC_ROT_Z_DEG = 90.0f;
 
     // Board -> rocket mounting orientation (TR_Orientation code, 0-23).
     // 0 = board +X toward the nose (the historical assumption).  Set to a

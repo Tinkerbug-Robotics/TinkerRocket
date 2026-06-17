@@ -417,9 +417,10 @@ nonisolated class CSVGenerator {
                let config = try? OutStatusQueryData(from: queryFrame.payload) {
                 converter.configureMiniRotation(
                     imuDeg: config.imuRotationDeg,
-                    magDeg: config.magRotationDeg
+                    magDeg: config.magRotationDeg,
+                    iisDeg: config.iisRotationDeg
                 )
-                print("[CSV] Mini rotation config: IMU=\(config.imuRotationDeg)° MAG=\(config.magRotationDeg)°")
+                print("[CSV] Mini rotation config: IMU=\(config.imuRotationDeg)° MAG=\(config.magRotationDeg)° IIS=\(config.iisRotationDeg.map { String($0) } ?? "n/a")°")
             } else {
                 print("[CSV] No statusQuery frame found — using default rotation (0°)")
             }
