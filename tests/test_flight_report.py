@@ -1,8 +1,8 @@
 """Smoke test for the flight_report suite (issue #184).
 
 Runs the full suite against the canonical golden flight checked into
-`tests/test_data/`; fails if the report doesn't render or any required
-section is missing.
+`tests/test_data/` (a new-PCB / IIS2MDC capture); fails if the report
+doesn't render or any required section is missing.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GOLDEN_BIN = REPO_ROOT / "tests" / "test_data" / "flight_20260520_173339.bin"
+GOLDEN_BIN = REPO_ROOT / "tests" / "test_data" / "flight_20260615_170318.bin"
 
 REQUIRED_SECTIONS = [
     'id="kinematics"',

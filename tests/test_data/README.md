@@ -16,7 +16,7 @@ revision produced the capture:
 { "board": "new" }   # IIS2MDC over I2C; no MMC5983MA frames expected
 ```
 
-Naming: `<binfile-stem>.meta.json` (e.g., `flight_20260520_173339.meta.json`).
+Naming: `<binfile-stem>.meta.json` (e.g., `flight_20260615_170318.meta.json`).
 See `tests/integration/conftest.py:117` for the convention. Without a
 `.meta.json`, `board_variant()` falls back to `BOARD_OLD` so the
 integration tests will fail on a new-PCB capture.

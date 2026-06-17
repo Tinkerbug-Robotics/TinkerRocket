@@ -1,0 +1,95 @@
+{
+  "apogee_time_s" : 10.767112,
+  "burnout_time_s" : 1.262087,
+  "max_altitude_m" : 455.0676001962608,
+  "max_speed_mps" : 100.78104434862739,
+  "settings" : {
+    "camera" : {
+      "type" : "runcam"
+    },
+    "fw_dirty" : true,
+    "fw_git_sha" : "d75cdb4",
+    "imu" : {
+      "gyro_fs_dps" : 4000,
+      "high_g_fs_g" : 256,
+      "low_g_fs_g" : 16,
+      "mounting" : {
+        "mode" : "manual",
+        "orientation" : "+X",
+        "residual_deg" : 0
+      }
+    },
+    "pyro" : {
+      "ch1" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 1
+      },
+      "ch2" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 100
+      },
+      "ch3" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 0
+      },
+      "ch4" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 0
+      }
+    },
+    "roll_control" : {
+      "cmd_limit_max_deg" : 20,
+      "cmd_limit_min_deg" : -20,
+      "d_lpf_hz" : 10,
+      "delay_ms" : 500,
+      "gain_schedule" : {
+        "enabled" : false,
+        "scale_cap" : 3,
+        "v_min" : 25,
+        "v_ref" : 50
+      },
+      "guidance_enabled" : false,
+      "kd" : 0.00015,
+      "ki" : 0.0003,
+      "kp" : 0.01,
+      "kp_angle" : 4,
+      "mode" : "angle_profile",
+      "profile" : [
+        {
+          "angle_deg" : 0,
+          "mode" : "null_rate",
+          "time_s" : 1
+        },
+        {
+          "angle_deg" : 90,
+          "mode" : "angle",
+          "time_s" : 3
+        },
+        {
+          "angle_deg" : 180,
+          "mode" : "angle",
+          "time_s" : 5
+        }
+      ],
+      "rate_cap_dps" : 60,
+      "roll_rate_set_point" : 0
+    },
+    "servo" : {
+      "bias_us" : [
+        83,
+        22,
+        33,
+        44
+      ],
+      "enabled" : true,
+      "frequency_hz" : 333,
+      "max_pulse_us" : 1750,
+      "min_pulse_us" : 1250
+    },
+    "sounds_enabled" : false
+  }
+}
