@@ -174,6 +174,11 @@ struct config
     // EKF pad heading: compass heading of board Z+ (deg, 0=North, 90=East)
     static constexpr float PAD_HEADING_DEG = 0.0f;
 
+    // Magnetic declination fallback (deg, EAST-positive) used until a good GPS
+    // fix lets TR_GeoMag (WMM2025) compute the true value from lat/lon/date.
+    // 0 = the EKF heading tracks MAGNETIC north until the WMM value is set.
+    static constexpr float MAGNETIC_DECLINATION_DEG = 0.0f;
+
     // GNSS quality gates — layered rejection of bad fixes
     // Note: h_acc is uint8_t (max 255). Many receivers report 255 = "unknown".
     // Set thresholds to 0 to disable h_acc gating when receiver doesn't populate it.

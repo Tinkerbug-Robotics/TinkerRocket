@@ -37,6 +37,38 @@ static EkfMagData makeStationaryMag(uint32_t time_us) {
     return mag;
 }
 
+// Nose-up (vertical) fixtures physically consistent with the EKF's init
+// attitude (quat = [0.707,0,0.707,0] → body-X = up).  Specific force points
+// up along the nose (+X).  FRD body mag for an Earth field of (22 N, 0 E,
+// 42 D) µT (magnetic north) rotated into the nose-up body frame → heading ≈ 0.
+static EkfIMUData makeNoseUpIMU(uint32_t time_us) {
+    EkfIMUData imu;
+    imu.time_us = time_us;
+    imu.acc_x = 9.807; imu.acc_y = 0.0; imu.acc_z = 0.0;   // specific force up = +X (nose)
+    imu.gyro_x = 0.0; imu.gyro_y = 0.0; imu.gyro_z = 0.0;
+    return imu;
+}
+static EkfMagData makeNoseUpMag(uint32_t time_us) {
+    EkfMagData mag;
+    mag.time_us = time_us;
+    mag.mag_x = -42.0; mag.mag_y = 0.0; mag.mag_z = 22.0;
+    return mag;
+}
+
+// Hamilton quaternion product (scalar-first) and geodesic angle (deg) —
+// singularity-safe heading comparison (Euler yaw is gimbal-locked at vertical).
+static void tqMul(const float a[4], const float b[4], float o[4]) {
+    o[0] = a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3];
+    o[1] = a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2];
+    o[2] = a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1];
+    o[3] = a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0];
+}
+static float tqGeodesicDeg(const float a[4], const float b[4]) {
+    float d = std::fabs(a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]);
+    if (d > 1.0f) d = 1.0f;
+    return 2.0f * std::acos(d) * 180.0f / (float)M_PI;
+}
+
 class EKFTest : public ::testing::Test {
 protected:
     GpsInsEKF ekf;
@@ -129,6 +161,46 @@ TEST_F(EKFTest, StationaryVelocityAccuracy) {
     for (int i = 0; i < 3; i++) {
         EXPECT_NEAR(vel[i], 0.0f, 0.5f); // < 0.5 m/s for stationary
     }
+}
+
+// Heading fusion must CONVERGE while nose-vertical — the exact case the old
+// Mahony correction (cos²(pitch) → 0 at vertical) could not handle.
+TEST_F(EKFTest, MagHeadingConvergesWhenVertical) {
+    ekf.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
+    uint32_t t = 0;
+    for (int i = 0; i < 2000; i++) { t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+    float q_ref[4]; ekf.getQuaternion(q_ref);
+
+    // Inject a 50° heading error (rotation about NED-down), then reopen the
+    // attitude covariance so the filter has room to correct it.
+    const float a = 50.0f * (float)M_PI / 180.0f;
+    const float qyaw[4] = { std::cos(a/2), 0.0f, 0.0f, std::sin(a/2) };  // about NED +Z (down)
+    float q_err[4]; tqMul(qyaw, q_ref, q_err);
+    ekf.setQuaternion(q_err[0], q_err[1], q_err[2], q_err[3]);
+    for (int i = 6; i < 9; i++) ekf.inflateCovDiag(i, 1.0f);
+    EXPECT_GT(tqGeodesicDeg(q_err, q_ref), 30.0f);     // error really was injected
+
+    for (int i = 0; i < 6000; i++) { t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+    float q_fin[4]; ekf.getQuaternion(q_fin);
+    EXPECT_LT(tqGeodesicDeg(q_fin, q_ref), 8.0f);      // heading converged back
+}
+
+// Heading fusion must be STABLE (no drift) while stationary nose-vertical —
+// the symptom we observed (±180° roll/yaw cycling) must not recur.
+TEST_F(EKFTest, MagHeadingStableVertical) {
+    ekf.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
+    uint32_t t = 0;
+    for (int i = 0; i < 2000; i++) { t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+    float q_a[4]; ekf.getQuaternion(q_a);
+    for (int i = 0; i < 4000; i++) { t += 2000;
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+    float q_b[4]; ekf.getQuaternion(q_b);
+    EXPECT_LT(tqGeodesicDeg(q_a, q_b), 2.0f);          // no heading drift over 8 s
+    float n = std::sqrt(q_b[0]*q_b[0] + q_b[1]*q_b[1] + q_b[2]*q_b[2] + q_b[3]*q_b[3]);
+    EXPECT_NEAR(n, 1.0f, 0.01f);
 }
 
 TEST_F(EKFTest, SetQuaternion_ResetsAttCovariance) {

@@ -198,8 +198,10 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     // 8. Accelerometer gravity reference update
     if (accel_valid) accelMeasUpdate(aMeas);
 
-    // 9. Magnetometer heading update (needs valid accel for gravity direction)
-    if (mag_valid && accel_valid) magHeadingUpdate(aMeas, magMeas);
+    // 9. Magnetometer heading update — scalar Kalman, yaw-only (needs valid
+    //    accel for the gravity/level reference; accel owns roll/pitch, mag owns
+    //    heading, so the two are complementary, not competing).
+    if (mag_valid && accel_valid) magMeasUpdate(aMeas, magMeas);
 
     // 10. GNSS measurement update
     if ((gnss_time_us - timeWeekPrev_) > 0) {
@@ -659,84 +661,125 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
     stabilizeP();
 }
 
-// ─── Magnetometer Heading Update ─────────────────────────────────────
+// ─── Magnetometer Heading Update (heading-only scalar Kalman) ────────
+//
+// Fuses a tilt-compensated magnetic-heading measurement into the 15-state
+// error covariance, correcting ONLY yaw (rotation about NED-down).  Unlike
+// the retired Mahony correction, the measurement — a tilt-compensated atan2
+// heading — stays well-defined at every attitude including nose-vertical, so
+// there is no cos²(pitch) blind spot.  The accelerometer owns roll/pitch and
+// the magnetometer owns heading; their measurement Jacobians are orthogonal in
+// the attitude block, so the two updates are complementary, not competing.
 
-void GpsInsEKF::magHeadingUpdate(const float aMeas[3], const float magMeas[3]) {
-    // Proportional heading correction ported from Mahony mag logic.
-    // No covariance update — simple, stateless correction.
+void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
+    // Body-down unit vector from the current attitude (= aGrav_B / G); this is
+    // both the leveling reference and the heading-error axis (H below).
+    float T_NED2B[3][3];
+    Quat2DCM(T_NED2B, quat_BL_);
+    const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
 
-    float q0l = quat_BL_[0], q1l = quat_BL_[1], q2l = quat_BL_[2], q3l = quat_BL_[3];
+    // ── Measured magnetic heading: tilt-compensate the body mag with the
+    //    accelerometer (independent of the quaternion's yaw → no circularity).
+    const float aN = std::sqrt(aMeas[0]*aMeas[0] + aMeas[1]*aMeas[1] + aMeas[2]*aMeas[2]);
+    if (aN < 0.01f) return;
+    // Down direction in body = -accel/|accel| (specific force at rest opposes
+    // modeled gravity-in-body; same sign convention as accelMeasUpdate).
+    const float dmx = -aMeas[0]/aN, dmy = -aMeas[1]/aN, dmz = -aMeas[2]/aN;
+    // Roll/pitch from the measured down vector (FRD): d = (-sθ, sφcθ, cφcθ).
+    const float roll  = std::atan2(dmy, dmz);
+    const float pitch = std::atan2(-dmx, std::sqrt(dmy*dmy + dmz*dmz));
+    const float sr = std::sin(roll),  cr = std::cos(roll);
+    const float sp = std::sin(pitch), cp = std::cos(pitch);
+    // Tilt-compensated horizontal field (level frame), standard e-compass.
+    const float mx = magMeas[0], my = magMeas[1], mz = magMeas[2];
+    const float Xh = mx*cp + my*sr*sp + mz*cr*sp;   // north-ish
+    const float Yh = my*cr - mz*sr;                 // east-ish
+    if (Xh*Xh + Yh*Yh < 9.0f) return;               // |B_horiz| < 3 µT: heading
+                                                    // unobservable (polar/vertical field)
+    const float psi_meas = std::atan2(-Yh, Xh) + declination_rad_;   // TRUE heading
 
-    // Normalize accel (gravity direction)
-    float ax = aMeas[0], ay = aMeas[1], az = aMeas[2];
-    float aNorm = std::sqrt(ax*ax + ay*ay + az*az);
-    if (aNorm < 0.01f) return;
-    float inv_aNorm = 1.0f / aNorm;
-    ax *= inv_aNorm; ay *= inv_aNorm; az *= inv_aNorm;
+    // ── Predicted heading (yaw) from the state quaternion (true-NED frame).
+    //    Computed from T_NED2B directly (euler_BL_rad_ is a cycle stale here).
+    const float psi_pred = std::atan2(T_NED2B[0][1], T_NED2B[0][0]);
 
-    // Normalize mag
-    float mx = magMeas[0], my = magMeas[1], mz = magMeas[2];
-    float mNorm = std::sqrt(mx*mx + my*my + mz*mz);
-    if (mNorm < 0.01f) return;
-    float inv_mNorm = 1.0f / mNorm;
-    mx *= inv_mNorm; my *= inv_mNorm; mz *= inv_mNorm;
+    // ── Scalar innovation, wrapped to (-π, π] (≤2 iters: inputs are bounded).
+    float y = psi_meas - psi_pred;
+    while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
+    while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
 
-    // Pre-compute quaternion products
-    float q0q0=q0l*q0l, q0q1=q0l*q1l, q0q2=q0l*q2l, q0q3=q0l*q3l;
-    float q1q1=q1l*q1l, q1q2=q1l*q2l, q1q3=q1l*q3l;
-    float q2q2=q2l*q2l, q2q3=q2l*q3l;
+    // ── H (1×15): ∂ψ_pred/∂(δθ/2) in the body-frame error state.  ∂ψ/∂δθ is
+    //    the body-down axis d (yaw is rotation about NED-down); the factor 2
+    //    accounts for the half-angle attitude error xk[6..8] = δθ/2 (matching
+    //    accelMeasUpdate's -2·skew).  Nonzero only in cols 6,7,8.
+    const float H6 = 2.0f*d[0], H7 = 2.0f*d[1], H8 = 2.0f*d[2];
 
-    // Estimated gravity direction in body frame (half-vectors, Mahony convention)
-    float halfvx = q1q3 - q0q2;
-    float halfvy = q0q1 + q2q3;
-    float halfvz = q0q0 - 0.5f + q3l*q3l;
+    // S = H P Hᵀ + R_mag_  (only the attitude block contributes)
+    float HP[15];
+    for (int j = 0; j < 15; j++)
+        HP[j] = H6*P_[6][j] + H7*P_[7][j] + H8*P_[8][j];
+    const float S = HP[6]*H6 + HP[7]*H7 + HP[8]*H8 + R_mag_;
+    if (!(S > 1e-9f)) return;            // |H|=2 ⇒ S ≥ R_mag_ at any attitude; NaN-safe
+    const float S_inv = 1.0f / S;
 
-    // Rotate mag to NED frame to find reference field direction
-    float hx = 2*(mx*(0.5f-q2q2-q3l*q3l) + my*(q1q2-q0q3) + mz*(q1q3+q0q2));
-    float hy = 2*(mx*(q1q2+q0q3) + my*(0.5f-q1q1-q3l*q3l) + mz*(q2q3-q0q1));
-    float bx = std::sqrt(hx*hx + hy*hy);
-    float bz = 2*(mx*(q1q3-q0q2) + my*(q2q3+q0q1) + mz*(0.5f-q1q1-q2q2));
+    // K = P Hᵀ S⁻¹  (15×1)
+    float K[15];
+    for (int i = 0; i < 15; i++)
+        K[i] = (P_[i][6]*H6 + P_[i][7]*H7 + P_[i][8]*H8) * S_inv;
 
-    // Expected mag field direction in body frame (from reference [bx, 0, bz])
-    float halfwx = bx*(0.5f-q2q2-q3l*q3l) + bz*(q1q3-q0q2);
-    float halfwy = bx*(q1q2-q0q3) + bz*(q0q1+q2q3);
-    float halfwz = bx*(q0q2+q1q3) + bz*(0.5f-q1q1-q2q2);
+    // State correction xk = K y
+    float xk[15];
+    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
 
-    // Mag error: cross product of measured vs expected
-    float halfex = my*halfwz - mz*halfwy;
-    float halfey = mz*halfwx - mx*halfwz;
-    float halfez = mx*halfwy - my*halfwx;
-
-    // Project onto gravity axis (heading-only correction)
-    float grav_mag2 = halfvx*halfvx + halfvy*halfvy + halfvz*halfvz;
-    if (grav_mag2 > 0.01f) {
-        float proj = (halfex*halfvx + halfey*halfvy + halfez*halfvz) / grav_mag2;
-        halfex = proj * halfvx;
-        halfey = proj * halfvy;
-        halfez = proj * halfvz;
+    double Rew, Rns;
+    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
+    pEst_D_rrm_[2] -= xk[2];
+    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
+    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
+    for (int i = 0; i < 3; i++) {
+        vEst_NED_mps_[i] += xk[i + 3];
+        aBias_mps2_[i]   += xk[i + 9];
+        wBias_rps_[i]    += xk[i + 12];
     }
 
-    // Scale by cos²(pitch) to avoid gimbal-lock corruption near vertical
-    {
-        float cross_sq = halfvy*halfvy + halfvz*halfvz;
-        float cos2_pitch = (grav_mag2 > 0.01f) ? (cross_sq / grav_mag2) : 1.0f;
-        halfex *= cos2_pitch;
-        halfey *= cos2_pitch;
-        halfez *= cos2_pitch;
-    }
+    // Quaternion correction (body-frame δθ, left-multiply — same convention as
+    // accel/baro/GNSS updates)
+    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
+    normalizeQuaternion(quatDelta, quatDelta);
+    float qTemp[4];
+    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
+    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
 
-    // Apply proportional correction to quaternion via first-order kinematics.
-    // Correction rate: omega = magKp_ * [halfex, halfey, halfez]
-    // Quaternion update: q += 0.5 * dt * Omega(omega) * q
-    float hw[3] = {0.5f * magKp_ * halfex * dt_s_,
-                    0.5f * magKp_ * halfey * dt_s_,
-                    0.5f * magKp_ * halfez * dt_s_};
-    float qw = quat_BL_[0], qx = quat_BL_[1], qy = quat_BL_[2], qz = quat_BL_[3];
-    quat_BL_[0] = qw - qx*hw[0] - qy*hw[1] - qz*hw[2];
-    quat_BL_[1] = qx + qw*hw[0] + qy*hw[2] - qz*hw[1];
-    quat_BL_[2] = qy + qw*hw[1] - qx*hw[2] + qz*hw[0];
-    quat_BL_[3] = qz + qw*hw[2] + qx*hw[1] - qy*hw[0];
-    normalizeQuaternion(quat_BL_, quat_BL_);
+    // Joseph form: P = (I-KH) P (I-KH)ᵀ + K R Kᵀ.  H is sparse — nonzero only
+    // in cols {6,7,8} with values {H6,H7,H8}.
+    float Hrow[15] = {};
+    Hrow[6] = H6; Hrow[7] = H7; Hrow[8] = H8;
+
+    float I_KH[15][15];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * Hrow[j];
+
+    float P_new[15][15] = {};
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            for (int k = 0; k < 15; k++)
+                P_new[i][j] += I_KH[i][k] * P_[k][j];
+
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++) {
+            float sum = 0;
+            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
+            P_[i][j] = sum + K[i] * R_mag_ * K[j];
+        }
+
+    // Symmetrize P
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j <= i; j++) {
+            float s = 0.5f * (P_[i][j] + P_[j][i]);
+            P_[i][j] = s; P_[j][i] = s;
+        }
+
+    stabilizeP();
 }
 
 // ─── Measurement Update (GNSS correction) ───────────────────────────

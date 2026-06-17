@@ -40,7 +40,11 @@ def build_event_list(records):
         events.append((r["time_us"], "gnss", r))
     for r in records["BMP585"]:
         events.append((r["time_us"], "baro", r))
-    for r in records["MMC5983MA"]:
+    # Magnetometer: old PCB logs MMC5983MA, new PCB logs IIS2MDC. Both carry
+    # mag_x/y/z (µT) post-parse, so the "mag" handler is identical.
+    for r in records.get("MMC5983MA", []):
+        events.append((r["time_us"], "mag", r))
+    for r in records.get("IIS2MDC", []):
         events.append((r["time_us"], "mag", r))
     events.sort(key=lambda e: e[0])
     return events
