@@ -31,6 +31,10 @@ constexpr uint8_t  APOGEE_COUNT_MAX         = 10;
 constexpr uint8_t  APOGEE_COUNT_HI          = 6;
 constexpr uint8_t  GPS_APOGEE_COUNT_MAX     = 8;
 constexpr uint8_t  GPS_APOGEE_COUNT_HI      = 4;
+// GPS apogee fires on sustained Doppler descent faster than this (m/s).  GPS
+// *velocity* is real-time; GPS *position* lags ~4 s and dives during boost
+// (#237/#242), so the old altitude-below-peak test fired wildly off.
+constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 
 // Landing slow-detector hysteresis (#166). Slow detectors evaluate inside
 // the 1 Hz landing_check_dt gate, so HI=4 → 4 s to fire (matches the
@@ -160,7 +164,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  new_gps,
                                          float pitch_rad,
                                          bool  burnout_detected,
-                                         bool  baro_locked_out)
+                                         bool  baro_locked_out,
+                                         float gps_vel_u)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -360,15 +365,11 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         }
     }
 
-    // ### GPS altitude tracking ###
-    // Track max GPS altitude from launch onwards (raw MSL — relative
-    // tracking means absolute value doesn't matter).
-    // #166: the 100 m spike-reject window was removed.  On big flights where
-    // GPS lost lock through boost (Eagle Claw 5/17/26), the post-recovery
-    // sample legitimately differs from the pad fix by hundreds of metres,
-    // and the gate permanently rejected those updates — leaving the GPS
-    // apogee detector silent for the entire flight.  Boost-phase dropout is
-    // common, so the gate did more harm than good.
+    // ### GPS freshness tracking ###
+    // Mark GPS available + stamp the last fix for the voting staleness gate.
+    // max_gps_altitude_ is still tracked (cheap, kept for diagnostics) but the
+    // GPS apogee test no longer uses it — it fires on Doppler velocity now
+    // (#237/#242), which is real-time, unlike the ~4 s-lagging GPS position.
     if (new_gps && launch_flag)
     {
         gps_available_ = true;
@@ -411,10 +412,16 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         if (apogee_count >= APOGEE_COUNT_HI)            alt_apogee_flag = true;
         else if (apogee_count == 0)                     alt_apogee_flag = false;
 
-        // --- Test 3: GPS altitude (GPS altitude decreasing) ---
-        if (new_gps && gps_available_ && gps_altitude > 15.0f)
+        // --- Test 3: GPS Doppler vertical velocity (descending) ---
+        // Was "GPS altitude below running max", but GPS *position* lags ~4 s
+        // and dives during boost (#242) — firing this wildly off (III at
+        // T+3.6 s, II at T+9.9 s vs true apogee #237).  GPS *velocity*
+        // (Doppler) is real-time, so a sustained descent tracks true apogee.
+        // Gated only on a fresh fix — NO gps-altitude gate, since that lag is
+        // the bug.  Post-burnout only, so an ascent excursion can't fire it.
+        if (new_gps && gps_available_)
         {
-            const bool gps_pass = (gps_altitude < max_gps_altitude_ - 10.0f);
+            const bool gps_pass = (gps_vel_u < -GPS_VEL_APOGEE_DESCENT_MPS);
             if (gps_pass) {
                 if (gps_apogee_count_ < GPS_APOGEE_COUNT_MAX) gps_apogee_count_++;
             } else {
@@ -436,7 +443,7 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         if (pitch_apogee_count_ >= APOGEE_COUNT_HI)     pitch_apogee_flag = true;
         else if (pitch_apogee_count_ == 0)              pitch_apogee_flag = false;
 
-        // --- Dynamic N-1 of N voting ---
+        // --- Dynamic N-1 of N voting (vel + baro + pitch; GPS excluded #237) ---
         if (!apogee_flag)
         {
             uint8_t available = 0;
@@ -453,20 +460,19 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 if (alt_apogee_flag) passed++;
             }
 
-            // GPS — excluded if stale (>5s since last fix)
-            if (gps_available_ &&
-                (millis() - last_gps_time_ms_ < 5000))
-            {
-                available++;
-                if (gps_apogee_flag) passed++;
-            }
+            // GPS — NOT a voter (#237/#242).  GPS apogee is unreliable during
+            // boost on this hardware (RP III: position AND Doppler velocity
+            // corrupted — vel_u noise to -38 m/s while climbing — at fix=3 with
+            // good reported accuracy), so it false-fires.  gps_apogee_flag is
+            // still computed + logged as a diagnostic, just excluded from the
+            // vote so it can't move pyro timing.
 
             // Pitch — always available
             available++;
             if (pitch_apogee_flag) passed++;
 
             // N-1 of N with minimum 2 confirmations required.
-            // 4 available → need 3.  3 available → need 2.  2 available → need 2.
+            // 3 available → need 2.  2 available (mach lockout) → need 2.
             if (available >= 2 && passed >= 2 && passed >= (available - 1))
             {
                 apogee_flag = true;
