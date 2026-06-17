@@ -47,6 +47,7 @@ nonisolated struct OutStatusQueryData {
     let ism6_rot_z_cdeg: Int16       // centi-degrees
     let mmc_rot_z_cdeg: Int16        // centi-degrees
     let format_version: UInt8
+    let iis2mdc_rot_z_cdeg: Int16?   // centi-degrees; format_version >= 4 (#204)
 
     init(from data: Data) throws {
         guard data.count >= 10 else {
@@ -60,12 +61,23 @@ nonisolated struct OutStatusQueryData {
         ism6_rot_z_cdeg = data.readInt16LE(at: &offset)
         mmc_rot_z_cdeg = data.readInt16LE(at: &offset)
         format_version = data.readUInt8(at: &offset)
+
+        // v4 (#204): per-chip IIS2MDC rotation appended after the b2r block.
+        // Byte offset 26 = ism6(1+2+2) + mmc(2) + ver(1) + hg_bias(6) + b2r(2+8).
+        if format_version >= 4 && data.count >= 28 {
+            var iisOffset = 26
+            iis2mdc_rot_z_cdeg = data.readInt16LE(at: &iisOffset)
+        } else {
+            iis2mdc_rot_z_cdeg = nil
+        }
     }
 
     /// IMU rotation in degrees
     var imuRotationDeg: Double { Double(ism6_rot_z_cdeg) / 100.0 }
-    /// Magnetometer rotation in degrees
+    /// Magnetometer (MMC5983MA) rotation in degrees
     var magRotationDeg: Double { Double(mmc_rot_z_cdeg) / 100.0 }
+    /// IIS2MDC rotation in degrees (format_version >= 4); nil on older logs
+    var iisRotationDeg: Double? { iis2mdc_rot_z_cdeg.map { Double($0) / 100.0 } }
 }
 
 // MARK: - Flight Settings Snapshot (176 bytes) — runtime config at launch (#165)

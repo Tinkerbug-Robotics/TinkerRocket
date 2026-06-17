@@ -43,7 +43,7 @@ ISM6_HIGH_G_FS_G  = 256    # ±256 g
 ISM6_GYRO_FS_DPS  = 4000   # ±4000 dps
 ISM6_ROT_Z_DEG    = -45.0  # sensor → board frame rotation about +Z
 MMC_ROT_Z_DEG     = 180.0  # sensor → board frame rotation about +Z (old-PCB MMC5983MA)
-IIS2MDC_ROT_Z_DEG = 0.0    # sensor → board frame rotation about +Z (new-PCB IIS2MDC)
+IIS2MDC_ROT_Z_DEG = 90.0   # sensor → board frame rotation about +Z (new-PCB IIS2MDC, #204)
 
 def ism6_scales(low_g_fs=ISM6_LOW_G_FS_G, high_g_fs=ISM6_HIGH_G_FS_G,
                 gyro_fs=ISM6_GYRO_FS_DPS):
@@ -389,6 +389,9 @@ def parse_binary_file(filepath):
                         config["b2r_mode"] = b2r[1]
                         config["b2r_quat"] = (b2r[2] / 10000.0, b2r[3] / 10000.0,
                                               b2r[4] / 10000.0, b2r[5] / 10000.0)
+                    if fmt_ver >= 4 and msg_len >= 28:
+                        # v4 (#204): per-chip IIS2MDC sensor→board rotation
+                        config["iis2mdc_rot_z_deg"] = struct.unpack("<h", payload[26:28])[0] / 100.0
                     config_seen = True
 
             elif msg_type == MSG_GNSS:
