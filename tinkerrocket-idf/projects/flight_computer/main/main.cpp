@@ -1728,6 +1728,13 @@ static const uint8_t RUNCAM_PWR_CMD[] = {0xCC, 0x01, 0x01, 0xE7};
 static constexpr uart_port_t RUNCAM_UART_PORT = UART_NUM_2;
 static bool runcam_uart_ready = false;
 
+// RCDEVICE feature bitfield from GET_DEVICE_INFO (0 until a probe succeeds).
+// Bit 0x40 = explicit START_RECORDING support, which we prefer over the
+// power-button toggle: on the bench unit the toggle only blips the LED without
+// holding record, whereas START_RECORDING holds it (#234).
+static constexpr uint16_t RUNCAM_FEAT_START_RECORDING = 0x0040;
+static uint16_t runcam_features = 0;
+
 static void initRunCam()
 {
     if (!config::USE_RUNCAM)
@@ -1857,6 +1864,7 @@ static bool runCamQueryDeviceInfo()
         ESP_LOGI(TAG, "RunCam ALIVE — protocol v%u, feature bytes "
                       "0x%02X 0x%02X (LE=0x%04X BE=0x%04X)",
                  resp[1], resp[2], resp[3], feat_le, feat_be);
+        runcam_features = feat_le;
         return true;
     }
 
@@ -1971,13 +1979,24 @@ static inline void serviceCameraStart(uint32_t now_ms)
     const bool alive = runCamQueryDeviceInfo();
     // The camera boots to IDLE — it does not auto-record on a clean power-up
     // (the old assumption only held because the UART-idle glitch kept it
-    // powered continuously; see #234).  So we must explicitly command the
-    // record start here.  Power-button toggle: idle -> recording, the mirror
-    // of the stop toggle in serviceCameraStop().  Sent regardless of the probe
-    // result — if only the RX wire is bad the TX toggle still lands.
-    sendRunCamToggle();
-    ESP_LOGI(TAG, "RunCam record START toggle sent (probe %s)",
-             alive ? "OK" : "no-reply");
+    // powered continuously; see #234).  So explicitly command record start.
+    // Prefer the deterministic START_RECORDING command when the camera advertises
+    // it (feature 0x40): the power-button toggle only blips the LED without
+    // holding record on the bench unit.  Fall back to the toggle otherwise.
+    if (runcam_features & RUNCAM_FEAT_START_RECORDING)
+    {
+        uint8_t rec[4] = {0xCC, 0x01, 0x03, 0x00};  // CAMERA_CONTROL: START_RECORDING
+        rec[3] = runCamCrc8(rec, 3);
+        uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
+        ESP_LOGI(TAG, "RunCam START_RECORDING sent (probe OK, feat 0x%04X)",
+                 runcam_features);
+    }
+    else
+    {
+        sendRunCamToggle();
+        ESP_LOGI(TAG, "RunCam record toggle sent (probe %s, no explicit-record feature)",
+                 alive ? "OK" : "no-reply");
+    }
     camera_start_phase = CameraStartPhase::Idle;
 }
 
