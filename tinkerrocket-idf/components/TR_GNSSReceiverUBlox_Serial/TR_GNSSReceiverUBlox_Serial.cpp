@@ -484,6 +484,21 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         if (!ok) return false;
         ESP_LOGI(TAG, "Dynamic model set to Airborne <4g");
 
+        // Read it back (#242): on the 6/14 flights the GPS solution was
+        // corrupted through boost (position dive + vel_u noise) at fix=3 with
+        // good reported accuracy — confirm the model actually took, since a
+        // silently-rejected set would explain the boost-phase de-weighting.
+        {
+            const uint8_t actual_dynmodel = gnss.getDynamicModel();
+            if (actual_dynmodel == DYN_MODEL_AIRBORNE4g)
+                ESP_LOGI(TAG, "Dynamic model readback OK: Airborne <4g (%u)",
+                         (unsigned)actual_dynmodel);
+            else
+                ESP_LOGW(TAG, "Dynamic model readback MISMATCH (#242): set %u "
+                              "(Airborne <4g) but reads %u",
+                         (unsigned)DYN_MODEL_AIRBORNE4g, (unsigned)actual_dynmodel);
+        }
+
         ok = false;
         for (i = 0; i < 8; i++)
         {
