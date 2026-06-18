@@ -1968,7 +1968,16 @@ static inline void serviceCameraStart(uint32_t now_ms)
     if ((int32_t)(now_ms - camera_start_due_ms) < 0) return;
     // WaitingForBoot elapsed — camera should now accept UART.
     ESP_LOGI(TAG, "RunCam boot wait elapsed — probing over UART");
-    runCamQueryDeviceInfo();
+    const bool alive = runCamQueryDeviceInfo();
+    // The camera boots to IDLE — it does not auto-record on a clean power-up
+    // (the old assumption only held because the UART-idle glitch kept it
+    // powered continuously; see #234).  So we must explicitly command the
+    // record start here.  Power-button toggle: idle -> recording, the mirror
+    // of the stop toggle in serviceCameraStop().  Sent regardless of the probe
+    // result — if only the RX wire is bad the TX toggle still lands.
+    sendRunCamToggle();
+    ESP_LOGI(TAG, "RunCam record START toggle sent (probe %s)",
+             alive ? "OK" : "no-reply");
     camera_start_phase = CameraStartPhase::Idle;
 }
 
