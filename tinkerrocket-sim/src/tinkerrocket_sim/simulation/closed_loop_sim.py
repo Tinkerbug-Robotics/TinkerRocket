@@ -59,6 +59,15 @@ class SimConfig:
     # When set, a cascaded controller tracks angle → rate → fin tab
     roll_profile: Optional[list] = None
     kp_angle: float = 5.0          # outer loop gain: (deg/s) per (deg error)
+    rate_cap_dps: float = 60.0     # outer-loop rate command cap (KP_ANGLE_RATE_CAP_DPS)
+    # Real TR_ServoControl SIL (controlAngle / gain schedule / rate cap) vs the
+    # legacy Python RollController. The real controller is negative-feedback in
+    # the FIRMWARE sign convention, which is opposite the legacy Python cascade,
+    # so it only stabilizes when the rocket's roll-tab fin->torque sign matches
+    # the real vehicle (set fin_tabs.Kt_ref sign from CFD/flight; negative in the
+    # sim body frame for the 67mm RollyPolly III testbed). Opt-in until that
+    # per-vehicle plant sign is locked from CFD.
+    use_firmware_roll_controller: bool = False
 
     # Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s
     gain_V_ref: float = 50.0
@@ -196,6 +205,20 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         V_ref=config.gain_V_ref, V_min=config.gain_V_min,
         max_scale=config.gain_max_scale,
     )
+
+    # Real firmware roll controller (SIL): runs the exact TR_ServoControl
+    # controlAngle cascade / V^2 gain schedule / KP_ANGLE rate cap that flies,
+    # replacing the Python RollController when use_firmware_roll_controller.
+    # Its PID derives dt from micros(); we advance a monotonic mock clock by
+    # imu_dt each control tick, mirroring the real flight loop.
+    from tinkerrocket_sim._servo import (ServoControl,
+                                         set_mock_micros as _servo_set_micros)
+    servo = ServoControl(
+        kp=config.pid_kp, ki=config.pid_ki, kd=config.pid_kd,
+        min_cmd=config.deflection_min, max_cmd=config.deflection_max,
+    )
+    servo.enable_gain_schedule(config.gain_V_ref, config.gain_V_min)
+    servo_clock_us = 0
 
     # Initialize EKF
     from tinkerrocket_sim._ekf import (GpsInsEKF, IMUData, GNSSData as EKFGNSSData,
@@ -730,20 +753,34 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         current_roll_deg = -math.degrees(
                             math.atan2(z_east, z_north))
 
-                        # 3. Compute angle error with wrapping to [-180, 180]
-                        angle_error = target_angle - current_roll_deg
-                        angle_error = (angle_error + 180.0) % 360.0 - 180.0
-
-                        # 4. Outer loop: angle error → rate setpoint
-                        rate_setpoint = config.kp_angle * angle_error
-
-                        # 5. Inner loop: rate PID
-                        fin_tab_cmd = controller.compute(
-                            rate_setpoint,
-                            roll_rate_dps,
-                            imu_dt,
-                            airspeed=speed,
-                        )
+                        if config.use_firmware_roll_controller:
+                            # Real firmware cascade: controlAngle does the outer
+                            # angle→rate loop (with KP_ANGLE rate cap) and the
+                            # inner gain-scheduled rate PID. Mirror the flight
+                            # call exactly — firmware passes -roll_rate_dps
+                            # (= -gyro_x) as the rate argument (main.cpp).
+                            servo_clock_us += int(round(imu_dt * 1e6))
+                            _servo_set_micros(servo_clock_us)
+                            servo.control_angle(
+                                target_angle,
+                                current_roll_deg,
+                                -roll_rate_dps,
+                                speed,
+                                config.kp_angle,
+                                config.rate_cap_dps,
+                            )
+                            fin_tab_cmd = servo.roll_cmd_deg
+                        else:
+                            # Legacy Python cascade (re-implementation).
+                            angle_error = target_angle - current_roll_deg
+                            angle_error = (angle_error + 180.0) % 360.0 - 180.0
+                            rate_setpoint = config.kp_angle * angle_error
+                            fin_tab_cmd = controller.compute(
+                                rate_setpoint,
+                                roll_rate_dps,
+                                imu_dt,
+                                airspeed=speed,
+                            )
 
                         # Store for logging
                         roll_target_deg = target_angle
