@@ -103,9 +103,13 @@ struct config
     static constexpr bool USE_GOPRO = (CAMERA_TYPE == 1);
     static constexpr bool USE_RUNCAM = (CAMERA_TYPE == 2);
 
-    // GoPro pins & timing
-    static constexpr int8_t CAM_PWR_PIN = 30;        // powers on camera
-    static constexpr int8_t CAM_SHUTTER_PIN = 31;    // GoPro shutter pulse
+    // GoPro pins & timing.  DEAD on this PCB: USE_GOPRO is false (CAMERA_TYPE=2,
+    // RunCam) so the setup() block that drives these never runs.  J6 carries the
+    // camera power gate on pin 32 and the RunCam UART on 30/31 — there is no
+    // separate GoPro shutter line.  Revisit these numbers before ever setting
+    // CAMERA_TYPE=1 on this hardware.
+    static constexpr int8_t CAM_PWR_PIN = 30;        // powers on camera (GoPro path, unused)
+    static constexpr int8_t CAM_SHUTTER_PIN = 31;    // GoPro shutter pulse (unused)
     static constexpr uint16_t GOPRO_PULSE_MS = 120;
 
     // Time to keep the camera rolling after LANDED before issuing the stop.
@@ -114,10 +118,20 @@ struct config
     // (which saturated i2s_tx_queue and dropped END_FLIGHT; see #141).
     static constexpr uint32_t CAMERA_STOP_DELAY_MS = 30000;  // 30 s
 
-    // RunCam UART pins & settings
-    static constexpr int8_t RUNCAM_RX_PIN = 31;      // FC receives from RunCam
-    static constexpr int8_t RUNCAM_TX_PIN = 32;      // FC sends to RunCam
-    static constexpr int8_t RUNCAM_PWR_PIN = 30;     // powers on RunCam
+    // RunCam UART + power pins.
+    // J6 mapping verified against the board schematic (#234):
+    //   pin 32 = CAM_ACT  → PMPB14XNX gate = camera POWER (R42 holds it off when
+    //                        the pin is low/floating)
+    //   pin 30 = Camera_TX → FC receives  (RX)
+    //   pin 31 = Camera_RX → FC transmits (TX)
+    // These were previously rotated (RX=31/TX=32/PWR=30), which put the UART TX
+    // on the power gate (pin 32).  A UART TX line idles HIGH, so the camera was
+    // powered on and auto-recording from boot, uncontrollably, while the firmware
+    // toggled a dead pin (30): the root cause of #234 (records on power-up,
+    // ignores app commands, overheats from continuous recording).
+    static constexpr int8_t RUNCAM_RX_PIN = 30;      // FC receives from RunCam (Camera_TX)
+    static constexpr int8_t RUNCAM_TX_PIN = 31;      // FC sends to RunCam (Camera_RX)
+    static constexpr int8_t RUNCAM_PWR_PIN = 32;     // camera power gate (CAM_ACT)
     static constexpr uint32_t RUNCAM_BAUD = 115200;
 
     // ### Pyro Channel Pins ###
