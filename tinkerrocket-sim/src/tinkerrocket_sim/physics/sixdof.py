@@ -422,6 +422,12 @@ class SixDOF:
                 tau_roll = ft.n_tabs * ft.Kt_ref * V_ratio_sq * fin_tab_deflection_deg
                 moments_body[0] += tau_roll
 
+            # Aerodynamic roll damping (Cl_p): opposes roll rate, tau = -K*V*wx,
+            # K (N*m/(m/s*rad)) ~ 0.25*rho*S_ref*d^2*|Cl_p|. Was absent before —
+            # without it a constant roll disturbance gives unbounded roll rate.
+            if getattr(self.rocket, 'roll_damping_K', 0.0) > 0.0:
+                moments_body[0] -= self.rocket.roll_damping_K * v_air_mag * omega[0]
+
         # 5. Roll disturbance torque (constant, e.g. motor spin or asymmetry)
         if hasattr(self.rocket, 'roll_disturbance_torque'):
             moments_body[0] += self.rocket.roll_disturbance_torque

@@ -68,6 +68,8 @@ class SimConfig:
     # sim body frame for the 67mm RollyPolly III testbed). Opt-in until that
     # per-vehicle plant sign is locked from CFD.
     use_firmware_roll_controller: bool = False
+    roll_gain_schedule_enabled: bool = True   # servo V^2 gain schedule on/off (firmware path)
+    d_lpf_hz: float = 0.0                      # servo PID derivative LPF cutoff Hz (0=off)
 
     # Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s
     gain_V_ref: float = 50.0
@@ -217,7 +219,10 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         kp=config.pid_kp, ki=config.pid_ki, kd=config.pid_kd,
         min_cmd=config.deflection_min, max_cmd=config.deflection_max,
     )
-    servo.enable_gain_schedule(config.gain_V_ref, config.gain_V_min)
+    if config.roll_gain_schedule_enabled:
+        servo.enable_gain_schedule(config.gain_V_ref, config.gain_V_min)
+    if config.d_lpf_hz > 0.0:
+        servo.set_pid_derivative_filter_cutoff_hz(config.d_lpf_hz)
     servo_clock_us = 0
 
     # Initialize EKF
