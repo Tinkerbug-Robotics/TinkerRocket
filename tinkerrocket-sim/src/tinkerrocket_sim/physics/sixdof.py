@@ -422,6 +422,15 @@ class SixDOF:
                 tau_roll = ft.n_tabs * ft.Kt_ref * V_ratio_sq * fin_tab_deflection_deg
                 moments_body[0] += tau_roll
 
+            # Fin-misalignment roll disturbance (V^2-scaled, like a fixed tab
+            # offset): strong at boost speed, ~0 at low coast speed, so roll rate
+            # ~ proportional to V — matching the 6/14 trace (~40 dps boost decaying
+            # to ~0 in coast). Replaces an unphysical constant disturbance torque.
+            mis = getattr(self.rocket, 'roll_misalign_deg', 0.0)
+            if mis != 0.0:
+                ft = self.rocket.fin_tabs
+                moments_body[0] += ft.n_tabs * ft.Kt_ref * (v_air_mag / ft.V_ref) ** 2 * mis
+
             # Aerodynamic roll damping (Cl_p): opposes roll rate, tau = -K*V*wx,
             # K (N*m/(m/s*rad)) ~ 0.25*rho*S_ref*d^2*|Cl_p|. Was absent before —
             # without it a constant roll disturbance gives unbounded roll rate.

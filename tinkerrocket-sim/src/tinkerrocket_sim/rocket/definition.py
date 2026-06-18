@@ -130,6 +130,7 @@ class RocketDefinition:
     # Disturbances
     roll_disturbance_torque: float = 0.0  # N-m constant roll torque (e.g. motor spin)
     roll_damping_K: float = 0.0  # N-m/(m/s*rad) roll damping: tau_damp = -K*V*wx (Cl_p)
+    roll_misalign_deg: float = 0.0  # fin-tab misalignment (deg) -> V^2 roll disturbance
 
     # Motor
     motor: MotorConfig = field(default_factory=MotorConfig)
