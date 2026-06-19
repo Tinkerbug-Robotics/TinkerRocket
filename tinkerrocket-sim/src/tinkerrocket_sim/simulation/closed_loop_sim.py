@@ -70,6 +70,7 @@ class SimConfig:
     use_firmware_roll_controller: bool = False
     roll_gain_schedule_enabled: bool = True   # servo V^2 gain schedule on/off (firmware path)
     d_lpf_hz: float = 0.0                      # servo PID derivative LPF cutoff Hz (0=off)
+    integral_sep_threshold: float = 0.0        # PID integral-separation anti-windup; freeze I when |err|>thr (0=off)
     # Roll-profile targeting: "hold" = flown 6/14 firmware (hold the most-recent
     # waypoint); "endpoint" = updated firmware (803d23f) — command the segment's
     # END waypoint angle by the shortest path (no ramp), so a maneuver engages at
@@ -232,6 +233,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         servo.enable_gain_schedule(config.gain_V_ref, config.gain_V_min)
     if config.d_lpf_hz > 0.0:
         servo.set_pid_derivative_filter_cutoff_hz(config.d_lpf_hz)
+    if config.integral_sep_threshold > 0.0:
+        servo.set_pid_integral_separation_threshold(config.integral_sep_threshold)
     servo_clock_us = 0
 
     # Initialize EKF

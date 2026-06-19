@@ -54,6 +54,8 @@ PYBIND11_MODULE(_servo, m) {
              py::arg("min_cmd"), py::arg("max_cmd"))
         .def("set_pid_derivative_filter_cutoff_hz",
              &TR_ServoControl::setPIDDerivativeFilterCutoffHz, py::arg("fc_hz"))
+        .def("set_pid_integral_separation_threshold",
+             &TR_ServoControl::setPIDIntegralSeparationThreshold, py::arg("threshold"))
         .def("set_servo_timing", &TR_ServoControl::setServoTiming,
              py::arg("hz"), py::arg("min_us"), py::arg("max_us"))
         .def("set_angle_control_kp_angle", &TR_ServoControl::setAngleControlKpAngle,
