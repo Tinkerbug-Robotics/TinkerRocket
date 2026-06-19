@@ -21,6 +21,19 @@ from . import atmosphere as atm
 from .drag import compute_Cd
 
 
+def _fin_tab_moment(ft, delta_deg: float) -> float:
+    """Per-tab roll moment (N*m at V_ref) for a fin-tab deflection (deg).
+
+    Uses the CFD Kt(delta) curve (fin_tabs.Kt_curve_deg / Kt_curve_nm) when the
+    rocket carries one — capturing the nonlinearity (effectiveness is lower at the
+    small <1 deg deflections the controller actually uses) — else linear Kt_ref.
+    """
+    curve_d = getattr(ft, 'Kt_curve_deg', None)
+    if curve_d is not None:
+        return float(np.interp(delta_deg, curve_d, ft.Kt_curve_nm))
+    return ft.Kt_ref * delta_deg
+
+
 @dataclass
 class SimState:
     """Simulation state at a point in time."""
@@ -419,7 +432,7 @@ class SixDOF:
                 # --- Single fin tab mode (roll-only) ---
                 ft = self.rocket.fin_tabs
                 V_ratio_sq = (v_air_mag / ft.V_ref) ** 2
-                tau_roll = ft.n_tabs * ft.Kt_ref * V_ratio_sq * fin_tab_deflection_deg
+                tau_roll = ft.n_tabs * _fin_tab_moment(ft, fin_tab_deflection_deg) * V_ratio_sq
                 moments_body[0] += tau_roll
 
             # Fin-misalignment roll disturbance (V^2-scaled, like a fixed tab
@@ -429,7 +442,8 @@ class SixDOF:
             mis = getattr(self.rocket, 'roll_misalign_deg', 0.0)
             if mis != 0.0:
                 ft = self.rocket.fin_tabs
-                moments_body[0] += ft.n_tabs * ft.Kt_ref * (v_air_mag / ft.V_ref) ** 2 * mis
+                moments_body[0] += (ft.n_tabs * _fin_tab_moment(ft, mis)
+                                    * (v_air_mag / ft.V_ref) ** 2)
 
             # Aerodynamic roll damping (Cl_p): opposes roll rate, tau = -K*V*wx,
             # K (N*m/(m/s*rad)) ~ 0.25*rho*S_ref*d^2*|Cl_p|. Was absent before —
