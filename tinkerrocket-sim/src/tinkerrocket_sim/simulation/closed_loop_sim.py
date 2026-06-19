@@ -293,6 +293,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     fin_tab_cmd = 0.0
     fin_tab_actual = 0.0
     roll_target_deg = None  # current angle target (for profile mode logging)
+    current_roll_deg = None  # controller's regulated roll angle (azimuth, for logging)
     _roll_kicked = False
 
     # 4-fin actuator state (guided mode)
@@ -957,6 +958,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
             # Add roll angle profile data if active
             if roll_target_deg is not None:
                 row['roll_target_deg'] = roll_target_deg
+            if current_roll_deg is not None:
+                row['current_roll_deg'] = current_roll_deg
 
             if ekf_initialized:
                 orient = ekf.get_orientation()
