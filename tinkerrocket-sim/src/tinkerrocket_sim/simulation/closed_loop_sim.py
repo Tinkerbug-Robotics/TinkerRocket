@@ -895,6 +895,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 'roll_rate_dps': np.degrees(omega[0]),
                 'pitch_rate_dps': np.degrees(omega[1]),
                 'yaw_rate_dps': np.degrees(omega[2]),
+                'ekf_roll_rate_dps': np.degrees(ekf.get_rot_rate_est()[0]),
+                'ekf_roll_bias_dps': np.degrees(ekf.get_rot_rate_bias()[0]),
                 'alpha_deg': alpha_log,
                 'thrust': rocket_def.motor.thrust_at(flight_t),
                 'mass': rocket_def.mass_at(flight_t),
