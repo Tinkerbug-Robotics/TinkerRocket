@@ -89,7 +89,10 @@ class SimConfig:
     # Actuator limits — PTK 7308 at 8.2V: 923 deg/s slew, +/-20 deg
     deflection_min: float = -20.0   # deg
     deflection_max: float = 20.0    # deg
-    servo_rate_limit: float = 923.0 # deg/s
+    # Servo actuator model (PTK 7308: 0.065 s/60deg, 2 us deadband).
+    servo_rate_limit: float = 923.0 # deg/s slew rate (= 60 / 0.065 s-per-60deg)
+    servo_tau_s: float = 0.0325     # first-order lag time const (s); ~half the 60deg-travel time; 0 -> pure slew (legacy)
+    servo_deadband_us: float = 2.0  # servo PWM deadband (us); 0 -> none
 
     # Wind (constant ENU, m/s)
     wind_speed: float = 0.0             # m/s
@@ -279,6 +282,11 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Start at -pad_time so t=0 corresponds to motor ignition / launch
     t = -config.pad_time
     imu_dt = 1.0 / config.imu_rate
+    # Servo PWM deadband -> fin degrees. The servo maps its 1000 us pulse band
+    # (1000-2000 us) across the full deflection range, so us/deg = 1000/span.
+    _servo_deadband_deg = (config.servo_deadband_us *
+                           (config.deflection_max - config.deflection_min) / 1000.0)
+    _servo_tau_eff = max(config.servo_tau_s, imu_dt)  # tau<=dt -> pure slew limiter
     baro_dt = 1.0 / config.baro_rate
     mag_dt = 1.0 / config.mag_rate
     gnss_dt = 1.0 / config.gnss_rate
@@ -855,10 +863,17 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         delta_i = max_delta if delta_i > 0 else -max_delta
                     fin_actuals[i] += delta_i
             else:
-                delta = fin_tab_cmd - fin_tab_actual
-                if abs(delta) > max_delta:
-                    delta = max_delta if delta > 0 else -max_delta
-                fin_tab_actual += delta
+                # Roll-fin servo: PWM deadband, then a first-order lag toward the
+                # command capped by the slew rate. Within the deadband the servo
+                # holds; servo_tau_s<=imu_dt collapses to the prior slew limiter.
+                err = fin_tab_cmd - fin_tab_actual
+                if abs(err) >= _servo_deadband_deg:
+                    rate = err / _servo_tau_eff
+                    if rate > config.servo_rate_limit:
+                        rate = config.servo_rate_limit
+                    elif rate < -config.servo_rate_limit:
+                        rate = -config.servo_rate_limit
+                    fin_tab_actual += rate * imu_dt
 
         # --- Logging ---
         if t >= next_log:
