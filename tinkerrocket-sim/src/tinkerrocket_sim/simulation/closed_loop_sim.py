@@ -739,11 +739,17 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
                     elif config.roll_profile is not None:
                         # --- Cascaded angle control ---
-                        # 1. Look up target angle from profile
+                        # 1. Look up target angle + segment mode, holding the most
+                        #    recent waypoint (flown firmware roll_profile_query
+                        #    semantics). Waypoints are (time_s, angle_deg) or
+                        #    (time_s, angle_deg, mode), mode in {"angle","null_rate"}.
                         target_angle = config.roll_profile[0][1]
-                        for wp_t, wp_angle in config.roll_profile:
-                            if t >= wp_t:
-                                target_angle = wp_angle
+                        seg_mode = (config.roll_profile[0][2]
+                                    if len(config.roll_profile[0]) > 2 else "angle")
+                        for wp in config.roll_profile:
+                            if t >= wp[0]:
+                                target_angle = wp[1]
+                                seg_mode = wp[2] if len(wp) > 2 else "angle"
                             else:
                                 break
 
@@ -759,21 +765,26 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             math.atan2(z_east, z_north))
 
                         if config.use_firmware_roll_controller:
-                            # Real firmware cascade: controlAngle does the outer
-                            # angle→rate loop (with KP_ANGLE rate cap) and the
-                            # inner gain-scheduled rate PID. Mirror the flight
-                            # call exactly — firmware passes -roll_rate_dps
-                            # (= -gyro_x) as the rate argument (main.cpp).
+                            # Real firmware cascade. Mirror the flight call exactly —
+                            # firmware passes -roll_rate_dps (= -gyro_x) as the rate
+                            # arg (main.cpp). ROLL_SEG_ANGLE -> controlAngle (outer
+                            # angle→rate + KP_ANGLE cap); ROLL_SEG_NULL_RATE ->
+                            # controlWithGainSchedule holding ROLL_RATE_SET_POINT.
                             servo_clock_us += int(round(imu_dt * 1e6))
                             _servo_set_micros(servo_clock_us)
-                            servo.control_angle(
-                                target_angle,
-                                current_roll_deg,
-                                -roll_rate_dps,
-                                speed,
-                                config.kp_angle,
-                                config.rate_cap_dps,
-                            )
+                            if seg_mode == "null_rate":
+                                servo.set_setpoint(config.roll_setpoint_dps)
+                                servo.control_with_gain_schedule(
+                                    -roll_rate_dps, speed)
+                            else:
+                                servo.control_angle(
+                                    target_angle,
+                                    current_roll_deg,
+                                    -roll_rate_dps,
+                                    speed,
+                                    config.kp_angle,
+                                    config.rate_cap_dps,
+                                )
                             fin_tab_cmd = servo.roll_cmd_deg
                         else:
                             # Legacy Python cascade (re-implementation).
