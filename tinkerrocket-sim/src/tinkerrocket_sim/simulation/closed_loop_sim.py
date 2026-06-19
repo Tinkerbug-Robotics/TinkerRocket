@@ -75,6 +75,10 @@ class SimConfig:
     # END waypoint angle by the shortest path (no ramp), so a maneuver engages at
     # the segment START, not its end.
     roll_targeting: str = "hold"
+    # Impulsive roll-rate perturbation for the controller to null: add
+    # roll_kick_dps to the body roll rate once at roll_kick_time_s (s after launch).
+    roll_kick_time_s: float = 0.0
+    roll_kick_dps: float = 0.0
 
     # Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s
     gain_V_ref: float = 50.0
@@ -286,6 +290,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     fin_tab_cmd = 0.0
     fin_tab_actual = 0.0
     roll_target_deg = None  # current angle target (for profile mode logging)
+    _roll_kicked = False
 
     # 4-fin actuator state (guided mode)
     fin_cmds = np.zeros(4)
@@ -1020,6 +1025,13 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 state = sim.step_rk4(state, t, config.physics_dt,
                                      fin_tab_actual, wind_enu)
         t += config.physics_dt
+
+        # Impulsive roll-rate kick for the controller to null (e.g. a launch /
+        # staging perturbation): add roll_kick_dps to body roll rate (wx) once.
+        if (config.roll_kick_dps != 0.0 and not _roll_kicked
+                and t >= config.roll_kick_time_s):
+            state[10] += math.radians(config.roll_kick_dps)
+            _roll_kicked = True
 
     # Build result
     result = SimResult()
