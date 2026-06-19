@@ -70,6 +70,11 @@ class SimConfig:
     use_firmware_roll_controller: bool = False
     roll_gain_schedule_enabled: bool = True   # servo V^2 gain schedule on/off (firmware path)
     d_lpf_hz: float = 0.0                      # servo PID derivative LPF cutoff Hz (0=off)
+    # Roll-profile targeting: "hold" = flown 6/14 firmware (hold the most-recent
+    # waypoint); "endpoint" = updated firmware (803d23f) — command the segment's
+    # END waypoint angle by the shortest path (no ramp), so a maneuver engages at
+    # the segment START, not its end.
+    roll_targeting: str = "hold"
 
     # Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s
     gain_V_ref: float = 50.0
@@ -739,19 +744,40 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
                     elif config.roll_profile is not None:
                         # --- Cascaded angle control ---
-                        # 1. Look up target angle + segment mode, holding the most
-                        #    recent waypoint (flown firmware roll_profile_query
-                        #    semantics). Waypoints are (time_s, angle_deg) or
-                        #    (time_s, angle_deg, mode), mode in {"angle","null_rate"}.
-                        target_angle = config.roll_profile[0][1]
-                        seg_mode = (config.roll_profile[0][2]
-                                    if len(config.roll_profile[0]) > 2 else "angle")
-                        for wp in config.roll_profile:
-                            if t >= wp[0]:
+                        # 1. Look up target angle + segment mode per config.roll_targeting.
+                        #    Waypoints are (time_s, angle_deg[, mode]), mode in
+                        #    {"angle","null_rate"}.
+                        _wps = config.roll_profile
+                        if config.roll_targeting == "endpoint" and len(_wps) > 1:
+                            # Updated firmware (803d23f): command the END waypoint of
+                            # the current segment; segment mode = the starting waypoint.
+                            if t <= _wps[0][0]:
+                                wp = _wps[0]
+                                target_angle = wp[1]
+                                seg_mode = wp[2] if len(wp) > 2 else "angle"
+                            elif t >= _wps[-1][0]:
+                                wp = _wps[-1]
                                 target_angle = wp[1]
                                 seg_mode = wp[2] if len(wp) > 2 else "angle"
                             else:
-                                break
+                                target_angle = _wps[-1][1]
+                                seg_mode = "angle"
+                                for i in range(len(_wps) - 1):
+                                    if _wps[i][0] <= t < _wps[i + 1][0]:
+                                        target_angle = _wps[i + 1][1]
+                                        seg_mode = (_wps[i][2]
+                                                    if len(_wps[i]) > 2 else "angle")
+                                        break
+                        else:
+                            # Flown 6/14 firmware: hold the most-recent waypoint.
+                            target_angle = _wps[0][1]
+                            seg_mode = _wps[0][2] if len(_wps[0]) > 2 else "angle"
+                            for wp in _wps:
+                                if t >= wp[0]:
+                                    target_angle = wp[1]
+                                    seg_mode = wp[2] if len(wp) > 2 else "angle"
+                                else:
+                                    break
 
                         # 2. Get current roll angle from EKF quaternion.
                         #    "Roll" = azimuth of body-Z in the NED horizontal
