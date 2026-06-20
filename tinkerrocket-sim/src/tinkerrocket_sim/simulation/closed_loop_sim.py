@@ -59,6 +59,27 @@ class SimConfig:
     # When set, a cascaded controller tracks angle → rate → fin tab
     roll_profile: Optional[list] = None
     kp_angle: float = 5.0          # outer loop gain: (deg/s) per (deg error)
+    rate_cap_dps: float = 60.0     # outer-loop rate command cap (KP_ANGLE_RATE_CAP_DPS)
+    # Real TR_ServoControl SIL (controlAngle / gain schedule / rate cap) vs the
+    # legacy Python RollController. The real controller is negative-feedback in
+    # the FIRMWARE sign convention, which is opposite the legacy Python cascade,
+    # so it only stabilizes when the rocket's roll-tab fin->torque sign matches
+    # the real vehicle (set fin_tabs.Kt_ref sign from CFD/flight; negative in the
+    # sim body frame for the 67mm RollyPolly III testbed). Opt-in until that
+    # per-vehicle plant sign is locked from CFD.
+    use_firmware_roll_controller: bool = False
+    roll_gain_schedule_enabled: bool = True   # servo V^2 gain schedule on/off (firmware path)
+    d_lpf_hz: float = 0.0                      # servo PID derivative LPF cutoff Hz (0=off)
+    integral_sep_threshold: float = 0.0        # PID integral-separation anti-windup; freeze I when |err|>thr (0=off)
+    # Roll-profile targeting: "hold" = flown 6/14 firmware (hold the most-recent
+    # waypoint); "endpoint" = updated firmware (803d23f) — command the segment's
+    # END waypoint angle by the shortest path (no ramp), so a maneuver engages at
+    # the segment START, not its end.
+    roll_targeting: str = "hold"
+    # Impulsive roll-rate perturbation for the controller to null: add
+    # roll_kick_dps to the body roll rate once at roll_kick_time_s (s after launch).
+    roll_kick_time_s: float = 0.0
+    roll_kick_dps: float = 0.0
 
     # Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s
     gain_V_ref: float = 50.0
@@ -68,7 +89,10 @@ class SimConfig:
     # Actuator limits — PTK 7308 at 8.2V: 923 deg/s slew, +/-20 deg
     deflection_min: float = -20.0   # deg
     deflection_max: float = 20.0    # deg
-    servo_rate_limit: float = 923.0 # deg/s
+    # Servo actuator model (PTK 7308: 0.065 s/60deg, 2 us deadband).
+    servo_rate_limit: float = 923.0 # deg/s slew rate (= 60 / 0.065 s-per-60deg)
+    servo_tau_s: float = 0.0325     # first-order lag time const (s); ~half the 60deg-travel time; 0 -> pure slew (legacy)
+    servo_deadband_us: float = 2.0  # servo PWM deadband (us); 0 -> none
 
     # Wind (constant ENU, m/s)
     wind_speed: float = 0.0             # m/s
@@ -197,6 +221,25 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         max_scale=config.gain_max_scale,
     )
 
+    # Real firmware roll controller (SIL): runs the exact TR_ServoControl
+    # controlAngle cascade / V^2 gain schedule / KP_ANGLE rate cap that flies,
+    # replacing the Python RollController when use_firmware_roll_controller.
+    # Its PID derives dt from micros(); we advance a monotonic mock clock by
+    # imu_dt each control tick, mirroring the real flight loop.
+    from tinkerrocket_sim._servo import (ServoControl,
+                                         set_mock_micros as _servo_set_micros)
+    servo = ServoControl(
+        kp=config.pid_kp, ki=config.pid_ki, kd=config.pid_kd,
+        min_cmd=config.deflection_min, max_cmd=config.deflection_max,
+    )
+    if config.roll_gain_schedule_enabled:
+        servo.enable_gain_schedule(config.gain_V_ref, config.gain_V_min)
+    if config.d_lpf_hz > 0.0:
+        servo.set_pid_derivative_filter_cutoff_hz(config.d_lpf_hz)
+    if config.integral_sep_threshold > 0.0:
+        servo.set_pid_integral_separation_threshold(config.integral_sep_threshold)
+    servo_clock_us = 0
+
     # Initialize EKF
     from tinkerrocket_sim._ekf import (GpsInsEKF, IMUData, GNSSData as EKFGNSSData,
                                         MagData as EKFMagData, BaroData as EKFBaroData)
@@ -239,6 +282,11 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Start at -pad_time so t=0 corresponds to motor ignition / launch
     t = -config.pad_time
     imu_dt = 1.0 / config.imu_rate
+    # Servo PWM deadband -> fin degrees. The servo maps its 1000 us pulse band
+    # (1000-2000 us) across the full deflection range, so us/deg = 1000/span.
+    _servo_deadband_deg = (config.servo_deadband_us *
+                           (config.deflection_max - config.deflection_min) / 1000.0)
+    _servo_tau_eff = max(config.servo_tau_s, imu_dt)  # tau<=dt -> pure slew limiter
     baro_dt = 1.0 / config.baro_rate
     mag_dt = 1.0 / config.mag_rate
     gnss_dt = 1.0 / config.gnss_rate
@@ -253,6 +301,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     fin_tab_cmd = 0.0
     fin_tab_actual = 0.0
     roll_target_deg = None  # current angle target (for profile mode logging)
+    current_roll_deg = None  # controller's regulated roll angle (azimuth, for logging)
+    _roll_kicked = False
 
     # 4-fin actuator state (guided mode)
     fin_cmds = np.zeros(4)
@@ -711,13 +761,40 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
                     elif config.roll_profile is not None:
                         # --- Cascaded angle control ---
-                        # 1. Look up target angle from profile
-                        target_angle = config.roll_profile[0][1]
-                        for wp_t, wp_angle in config.roll_profile:
-                            if t >= wp_t:
-                                target_angle = wp_angle
+                        # 1. Look up target angle + segment mode per config.roll_targeting.
+                        #    Waypoints are (time_s, angle_deg[, mode]), mode in
+                        #    {"angle","null_rate"}.
+                        _wps = config.roll_profile
+                        if config.roll_targeting == "endpoint" and len(_wps) > 1:
+                            # Updated firmware (803d23f): command the END waypoint of
+                            # the current segment; segment mode = the starting waypoint.
+                            if t <= _wps[0][0]:
+                                wp = _wps[0]
+                                target_angle = wp[1]
+                                seg_mode = wp[2] if len(wp) > 2 else "angle"
+                            elif t >= _wps[-1][0]:
+                                wp = _wps[-1]
+                                target_angle = wp[1]
+                                seg_mode = wp[2] if len(wp) > 2 else "angle"
                             else:
-                                break
+                                target_angle = _wps[-1][1]
+                                seg_mode = "angle"
+                                for i in range(len(_wps) - 1):
+                                    if _wps[i][0] <= t < _wps[i + 1][0]:
+                                        target_angle = _wps[i + 1][1]
+                                        seg_mode = (_wps[i][2]
+                                                    if len(_wps[i]) > 2 else "angle")
+                                        break
+                        else:
+                            # Flown 6/14 firmware: hold the most-recent waypoint.
+                            target_angle = _wps[0][1]
+                            seg_mode = _wps[0][2] if len(_wps[0]) > 2 else "angle"
+                            for wp in _wps:
+                                if t >= wp[0]:
+                                    target_angle = wp[1]
+                                    seg_mode = wp[2] if len(wp) > 2 else "angle"
+                                else:
+                                    break
 
                         # 2. Get current roll angle from EKF quaternion.
                         #    "Roll" = azimuth of body-Z in the NED horizontal
@@ -730,20 +807,39 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         current_roll_deg = -math.degrees(
                             math.atan2(z_east, z_north))
 
-                        # 3. Compute angle error with wrapping to [-180, 180]
-                        angle_error = target_angle - current_roll_deg
-                        angle_error = (angle_error + 180.0) % 360.0 - 180.0
-
-                        # 4. Outer loop: angle error → rate setpoint
-                        rate_setpoint = config.kp_angle * angle_error
-
-                        # 5. Inner loop: rate PID
-                        fin_tab_cmd = controller.compute(
-                            rate_setpoint,
-                            roll_rate_dps,
-                            imu_dt,
-                            airspeed=speed,
-                        )
+                        if config.use_firmware_roll_controller:
+                            # Real firmware cascade. Mirror the flight call exactly —
+                            # firmware passes -roll_rate_dps (= -gyro_x) as the rate
+                            # arg (main.cpp). ROLL_SEG_ANGLE -> controlAngle (outer
+                            # angle→rate + KP_ANGLE cap); ROLL_SEG_NULL_RATE ->
+                            # controlWithGainSchedule holding ROLL_RATE_SET_POINT.
+                            servo_clock_us += int(round(imu_dt * 1e6))
+                            _servo_set_micros(servo_clock_us)
+                            if seg_mode == "null_rate":
+                                servo.set_setpoint(config.roll_setpoint_dps)
+                                servo.control_with_gain_schedule(
+                                    -roll_rate_dps, speed)
+                            else:
+                                servo.control_angle(
+                                    target_angle,
+                                    current_roll_deg,
+                                    -roll_rate_dps,
+                                    speed,
+                                    config.kp_angle,
+                                    config.rate_cap_dps,
+                                )
+                            fin_tab_cmd = servo.roll_cmd_deg
+                        else:
+                            # Legacy Python cascade (re-implementation).
+                            angle_error = target_angle - current_roll_deg
+                            angle_error = (angle_error + 180.0) % 360.0 - 180.0
+                            rate_setpoint = config.kp_angle * angle_error
+                            fin_tab_cmd = controller.compute(
+                                rate_setpoint,
+                                roll_rate_dps,
+                                imu_dt,
+                                airspeed=speed,
+                            )
 
                         # Store for logging
                         roll_target_deg = target_angle
@@ -767,10 +863,17 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         delta_i = max_delta if delta_i > 0 else -max_delta
                     fin_actuals[i] += delta_i
             else:
-                delta = fin_tab_cmd - fin_tab_actual
-                if abs(delta) > max_delta:
-                    delta = max_delta if delta > 0 else -max_delta
-                fin_tab_actual += delta
+                # Roll-fin servo: PWM deadband, then a first-order lag toward the
+                # command capped by the slew rate. Within the deadband the servo
+                # holds; servo_tau_s<=imu_dt collapses to the prior slew limiter.
+                err = fin_tab_cmd - fin_tab_actual
+                if abs(err) >= _servo_deadband_deg:
+                    rate = err / _servo_tau_eff
+                    if rate > config.servo_rate_limit:
+                        rate = config.servo_rate_limit
+                    elif rate < -config.servo_rate_limit:
+                        rate = -config.servo_rate_limit
+                    fin_tab_actual += rate * imu_dt
 
         # --- Logging ---
         if t >= next_log:
@@ -811,6 +914,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 'roll_rate_dps': np.degrees(omega[0]),
                 'pitch_rate_dps': np.degrees(omega[1]),
                 'yaw_rate_dps': np.degrees(omega[2]),
+                'ekf_roll_rate_dps': np.degrees(ekf.get_rot_rate_est()[0]),
+                'ekf_roll_bias_dps': np.degrees(ekf.get_rot_rate_bias()[0]),
                 'alpha_deg': alpha_log,
                 'thrust': rocket_def.motor.thrust_at(flight_t),
                 'mass': rocket_def.mass_at(flight_t),
@@ -868,6 +973,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
             # Add roll angle profile data if active
             if roll_target_deg is not None:
                 row['roll_target_deg'] = roll_target_deg
+            if current_roll_deg is not None:
+                row['current_roll_deg'] = current_roll_deg
 
             if ekf_initialized:
                 orient = ekf.get_orientation()
@@ -941,6 +1048,13 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 state = sim.step_rk4(state, t, config.physics_dt,
                                      fin_tab_actual, wind_enu)
         t += config.physics_dt
+
+        # Impulsive roll-rate kick for the controller to null (e.g. a launch /
+        # staging perturbation): add roll_kick_dps to body roll rate (wx) once.
+        if (config.roll_kick_dps != 0.0 and not _roll_kicked
+                and t >= config.roll_kick_time_s):
+            state[10] += math.radians(config.roll_kick_dps)
+            _roll_kicked = True
 
     # Build result
     result = SimResult()

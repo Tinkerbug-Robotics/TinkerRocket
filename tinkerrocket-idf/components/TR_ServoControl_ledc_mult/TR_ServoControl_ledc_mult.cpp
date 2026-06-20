@@ -219,6 +219,10 @@ void TR_ServoControl::setPIDDerivativeFilterCutoffHz(float fc_hz) {
     pid.setDerivativeFilterCutoffHz(fc_hz);
 }
 
+void TR_ServoControl::setPIDIntegralSeparationThreshold(float threshold) {
+    pid.setIntegralSeparationThreshold(threshold);
+}
+
 void TR_ServoControl::resetPID() {
     pid.reset();
 }

@@ -85,6 +85,7 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var useAngleControl: Bool = false
     var rollDelayMs: UInt16 = 0
     var rateCapDps: Float = 60          // outer-loop angle→rate cap (deg/s)
+    var kpAngle: Float = 2.0            // outer angle-loop P-gain (cascaded angle control)
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2          // 0=None, 1=GoPro, 2=RunCam
     /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
@@ -103,11 +104,14 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var servoMaxUs: Int16 = 1750
 
     // MARK: PID
-    var pidKp: Float = 0.08
-    var pidKi: Float = 0.005
-    var pidKd: Float = 0.003
+    // Defaults: RollyPolly III SIL tune (#170). KI raised for fin-misalignment
+    // rejection, made safe by the integral-separation anti-windup below.
+    var pidKp: Float = 0.02
+    var pidKi: Float = 0.03
+    var pidKd: Float = 0.0
     var pidMinCmd: Float = -10.0
     var pidMaxCmd: Float = 10.0
+    var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
 
     // MARK: Roll profile
     var rollWaypoints: [RollWaypoint] = []
@@ -181,6 +185,7 @@ extension RocketProfile {
         useAngleControl = try c.decodeIfPresent(Bool.self, forKey: .useAngleControl) ?? defaults.useAngleControl
         rollDelayMs = try c.decodeIfPresent(UInt16.self, forKey: .rollDelayMs) ?? defaults.rollDelayMs
         rateCapDps = try c.decodeIfPresent(Float.self, forKey: .rateCapDps) ?? defaults.rateCapDps
+        kpAngle = try c.decodeIfPresent(Float.self, forKey: .kpAngle) ?? defaults.kpAngle
         guidanceEnabled = try c.decodeIfPresent(Bool.self, forKey: .guidanceEnabled) ?? defaults.guidanceEnabled
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
         imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
@@ -198,6 +203,7 @@ extension RocketProfile {
         pidKd = try c.decodeIfPresent(Float.self, forKey: .pidKd) ?? defaults.pidKd
         pidMinCmd = try c.decodeIfPresent(Float.self, forKey: .pidMinCmd) ?? defaults.pidMinCmd
         pidMaxCmd = try c.decodeIfPresent(Float.self, forKey: .pidMaxCmd) ?? defaults.pidMaxCmd
+        integralSepThreshold = try c.decodeIfPresent(Float.self, forKey: .integralSepThreshold) ?? defaults.integralSepThreshold
 
         rollWaypoints = try c.decodeIfPresent([RollWaypoint].self, forKey: .rollWaypoints) ?? defaults.rollWaypoints
 

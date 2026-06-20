@@ -326,6 +326,8 @@ static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
 static bool use_angle_control = config::USE_ANGLE_CONTROL;
 static uint16_t roll_delay_ms = config::ROLL_CONTROL_DELAY_MS;
 static float kp_angle_rate_cap_dps = config::KP_ANGLE_RATE_CAP_DPS;
+static float kp_angle_outer = config::KP_ANGLE;  // outer angle-loop P-gain (runtime/app-overridable)
+static float integral_sep_threshold_dps = config::INTEGRAL_SEP_THRESHOLD_DPS;  // PID anti-windup threshold
 // --- Guidance (PN) state ---
 static TR_GuidancePN guidance;
 static TR_ControlMixer control_mixer;
@@ -1441,8 +1443,8 @@ static void buildFlightSettings(FlightSettingsData& s)
     s.min_cmd_deg = servo_control.getMinCmd();
     s.max_cmd_deg = servo_control.getMaxCmd();
 
-    // Outer (cascaded angle) loop.  kp_angle is compile-time only.
-    s.kp_angle              = config::KP_ANGLE;
+    // Outer (cascaded angle) loop.  kp_angle is now runtime/app-overridable.
+    s.kp_angle              = kp_angle_outer;
     s.kp_angle_rate_cap_dps = kp_angle_rate_cap_dps;
 
     // Gain schedule.  v_ref/v_min are compile-time only; the cap is owned by
@@ -2299,8 +2301,14 @@ static void setup_fc()
     use_angle_control       = prefs.getBool("ac", config::USE_ANGLE_CONTROL);
     roll_delay_ms           = prefs.getUShort("rdly", config::ROLL_CONTROL_DELAY_MS);
     kp_angle_rate_cap_dps   = prefs.getFloat("rcap", config::KP_ANGLE_RATE_CAP_DPS);
+    kp_angle_outer          = prefs.getFloat("kpang", config::KP_ANGLE);
+    integral_sep_threshold_dps = prefs.getFloat("iwind", config::INTEGRAL_SEP_THRESHOLD_DPS);
+    servo_control.setPIDIntegralSeparationThreshold(integral_sep_threshold_dps);
     guidance_enabled        = prefs.getBool("guid_en", config::GUIDANCE_ENABLED);
     prefs.end();
+    ESP_LOGI(TAG, "Roll: kp_angle=%.2f rate_cap=%.0f iwindup=%.0f dps",
+                  (double)kp_angle_outer, (double)kp_angle_rate_cap_dps,
+                  (double)integral_sep_threshold_dps);
     ESP_LOGI(TAG, "Gain scheduling: %s", gain_sched_enabled ? "ON" : "OFF");
     ESP_LOGI(TAG, "Angle control: %s  Roll delay: %u ms  Rate cap: %.1f dps",
                   use_angle_control ? "ON" : "OFF", (unsigned)roll_delay_ms,
@@ -4689,7 +4697,7 @@ static void loop_fc()
             else if (out_pending_command == ROLL_CTRL_CONFIG_PENDING)
             {
                 delay_ms(1);
-                uint8_t cfg_payload[4];
+                uint8_t cfg_payload[sizeof(RollControlConfigData)];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(ROLL_CTRL_CONFIG_MSG, sizeof(RollControlConfigData),
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
@@ -4703,13 +4711,26 @@ static void loop_fc()
                     // firmware default; <=0 (or garbage) leaves it unchanged.
                     if (rc.kp_angle_rate_cap_dps > 0.0f && rc.kp_angle_rate_cap_dps <= 2000.0f)
                         kp_angle_rate_cap_dps = rc.kp_angle_rate_cap_dps;
-                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms rate_cap=%.0f dps",
+                    // Outer angle-loop P-gain: a positive, sane value overrides.
+                    if (rc.kp_angle > 0.0f && rc.kp_angle <= 100.0f)
+                        kp_angle_outer = rc.kp_angle;
+                    // Integral-separation anti-windup threshold: >=0 applies it
+                    // to the live PID (0 disables); <0 (or garbage) leaves it.
+                    if (rc.integral_sep_threshold_dps >= 0.0f && rc.integral_sep_threshold_dps <= 2000.0f)
+                    {
+                        integral_sep_threshold_dps = rc.integral_sep_threshold_dps;
+                        servo_control.setPIDIntegralSeparationThreshold(integral_sep_threshold_dps);
+                    }
+                    ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms rate_cap=%.0f kp_angle=%.2f iwindup=%.0f",
                                   use_angle_control ? "ON" : "OFF",
-                                  (unsigned)roll_delay_ms, (double)kp_angle_rate_cap_dps);
+                                  (unsigned)roll_delay_ms, (double)kp_angle_rate_cap_dps,
+                                  (double)kp_angle_outer, (double)integral_sep_threshold_dps);
                     prefs.begin("servo", false);
                     prefs.putBool("ac", use_angle_control);
                     prefs.putUShort("rdly", roll_delay_ms);
                     prefs.putFloat("rcap", kp_angle_rate_cap_dps);
+                    prefs.putFloat("kpang", kp_angle_outer);
+                    prefs.putFloat("iwind", integral_sep_threshold_dps);
                     prefs.end();
                     ESP_LOGI(TAG, "[ROLL CFG] Saved to NVS");
                 }
@@ -5192,7 +5213,7 @@ static void loop_fc()
                                                            actual_roll_deg,
                                                            -roll_rate_dps,
                                                            speed,
-                                                           config::KP_ANGLE,
+                                                           kp_angle_outer,
                                                            kp_angle_rate_cap_dps);
                             }
                             else if (gain_sched_enabled)

@@ -64,8 +64,17 @@ float TR_PID::computePID(float setpoint, float actual, float dt_seconds)
     // Proportional component of output
     float P = Kp * error;
 
-    // Integral component of output
-    cumulative_error += error * dt;
+    // Integral component of output. Conditional-integration anti-windup:
+    // skip accumulation while |error| exceeds the separation threshold so a
+    // large transient (e.g. a launch roll kick) can't wind up the integrator.
+    // The accumulator holds its value through the transient and resumes near
+    // the setpoint to reject steady disturbances. threshold <= 0 => always
+    // integrate (original behavior).
+    float abs_error = (error < 0.0f) ? -error : error;
+    if (integral_sep_threshold <= 0.0f || abs_error <= integral_sep_threshold)
+    {
+        cumulative_error += error * dt;
+    }
     float I = constrain(Ki * cumulative_error, min_cmd, max_cmd);
 
     // Derivative-on-measurement to avoid kick on setpoint change.
@@ -118,6 +127,11 @@ void TR_PID::setDerivativeFilterCutoffHz(float fc_hz)
 {
     d_filter_fc_hz = (fc_hz > 0.0f) ? fc_hz : 0.0f;
     d_filtered = 0.0f;
+}
+
+void TR_PID::setIntegralSeparationThreshold(float threshold)
+{
+    integral_sep_threshold = (threshold > 0.0f) ? threshold : 0.0f;
 }
 
 void TR_PID::setMinCmd(float min_in)

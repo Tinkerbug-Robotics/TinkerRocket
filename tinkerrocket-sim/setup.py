@@ -92,6 +92,25 @@ if (os.path.exists("cpp/mixer/mixer_bindings.cpp") and
         ),
     )
 
+# ServoControl: the real firmware roll controller (controlAngle cascade, V^2
+# gain schedule, KP_ANGLE rate cap). Build from shared TR_ServoControl_ledc_mult
+# + TR_PID; needs the host shim for <compat.h> and the stubbed <driver/ledc.h>.
+servo_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_ServoControl_ledc_mult")
+if (os.path.exists("cpp/servo/servo_bindings.cpp") and
+        os.path.exists(servo_lib_dir) and os.path.exists(pid_lib_dir)):
+    ext_modules.append(
+        Pybind11Extension(
+            "tinkerrocket_sim._servo",
+            [
+                os.path.join(servo_lib_dir, "TR_ServoControl_ledc_mult.cpp"),
+                os.path.join(pid_lib_dir, "TR_PID.cpp"),
+                "cpp/servo/servo_bindings.cpp",
+            ],
+            include_dirs=[SHIM_DIR, servo_lib_dir, pid_lib_dir, "cpp/common"],
+            cxx_std=17,
+        ),
+    )
+
 setup(
     ext_modules=ext_modules,
     cmdclass={"build_ext": build_ext},

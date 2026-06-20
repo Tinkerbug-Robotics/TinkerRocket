@@ -50,6 +50,9 @@ public:
     // See TR_PID::setDerivativeFilterCutoffHz — rejects measurement noise
     // on the D term. fc_hz<=0 disables.
     void setPIDDerivativeFilterCutoffHz(float fc_hz);
+    // See TR_PID::setIntegralSeparationThreshold — freezes the integrator
+    // during large transients (e.g. a roll kick) to prevent windup.
+    void setPIDIntegralSeparationThreshold(float threshold);
 
     // Reset PID internal state (for replay / test sessions)
     void resetPID();

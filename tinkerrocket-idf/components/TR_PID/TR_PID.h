@@ -42,6 +42,14 @@ public:
     void setMinCmd(float min_in);
     void setMaxCmd(float max_in);
 
+    // Integral-separation (conditional-integration) anti-windup: while
+    // |error| exceeds this threshold the integral accumulator is frozen, so a
+    // large transient (e.g. a launch roll-rate kick) cannot wind up the
+    // integrator. It holds its value through the transient and resumes once
+    // the error is small enough to reject steady disturbances (e.g. a fin
+    // misalignment). threshold <= 0 disables it (default) — original behavior.
+    void setIntegralSeparationThreshold(float threshold);
+
     // Reset internal state (for replay / test sessions)
     void reset();
 
@@ -77,6 +85,9 @@ protected:
     // (output equals raw backward-difference derivative).
     float d_filter_fc_hz = 0.0f;
     float d_filtered     = 0.0f;
+
+    // Integral-separation threshold (anti-windup). <= 0 disables.
+    float integral_sep_threshold = 0.0f;
 
 };
 

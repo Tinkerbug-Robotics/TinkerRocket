@@ -1663,8 +1663,10 @@ typedef struct __attribute__((packed))
     uint8_t  _pad;
     uint16_t roll_delay_ms;       // ms after launch before any roll control activates
     float    kp_angle_rate_cap_dps;  // outer-loop angle→rate command cap (deg/s); <=0 keeps firmware default
+    float    kp_angle;               // outer-loop angle P-gain; <=0 keeps firmware default
+    float    integral_sep_threshold_dps;  // roll-rate PID integral-separation anti-windup threshold (deg/s); >=0 applies (0 disables), <0 keeps firmware default
 } RollControlConfigData;
-static_assert(sizeof(RollControlConfigData) == 8, "RollControlConfigData must be 8 bytes");
+static_assert(sizeof(RollControlConfigData) == 16, "RollControlConfigData must be 16 bytes");
 
 // --- Flight settings snapshot (#165) ---
 // One-shot snapshot of the rocket's runtime settings, emitted FC→OC over I2S
