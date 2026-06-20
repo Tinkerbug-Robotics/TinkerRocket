@@ -206,16 +206,6 @@ struct DashboardView: View {
             fleet.activeDevice?.flightAnnouncer = flightAnnouncer
             if fleet.isConnected, let dev = fleet.activeDevice {
                 syncer.attach(device: dev, store: profileStore)
-                // Already-connected case: .onChange(of: fleet.isConnected) only
-                // fires on a *transition*, so when the dashboard appears with a
-                // live base-station link already up (auto-reconnect, app relaunch,
-                // or connected on another screen) location updates were never
-                // started — leaving the direction-to-rocket arrow blank despite a
-                // good rocket GNSS fix. Start them here too, matching the onChange
-                // path and DriftCastView's onAppear.
-                if dev.isBaseStation {
-                    locationManager.startUpdates()
-                }
             }
         }
         .onChange(of: fleet.isConnected) { connected in
@@ -230,11 +220,9 @@ struct DashboardView: View {
             if !connected && !fleet.isScanning {
                 fleet.startScanning()
             }
-            if connected, let dev = fleet.activeDevice, dev.isBaseStation {
-                locationManager.startUpdates()
-            } else if !connected {
-                locationManager.stopUpdates()
-            }
+            // Phone-location lifecycle is driven from ConnectedDashboardView,
+            // which observes the device — fleet.isConnected flips before the
+            // device's type resolves, so it's the wrong signal to gate on here.
         }
         .sheet(item: $activeSheet) { sheet in
             Group {
@@ -304,6 +292,18 @@ struct ConnectedDashboardView: View {
     var body: some View {
         // Active rocket profile summary + sync status (#132).
         ActiveRocketHeader(device: device)
+            // Phone-location lifecycle lives here, on the view that actually
+            // @ObservedObject's the device. deviceType (→ isBaseStation) resolves
+            // a beat after connect, and BLEFleet doesn't forward child-device
+            // changes, so the outer DashboardView never sees it. Start phone GPS
+            // once the active device identifies as a base station; stop otherwise
+            // and on teardown (disconnect / leaving the dashboard).
+            .onAppear { if device.isBaseStation { locationManager.startUpdates() } }
+            .onChange(of: device.isBaseStation) { isBaseStation in
+                if isBaseStation { locationManager.startUpdates() }
+                else { locationManager.stopUpdates() }
+            }
+            .onDisappear { locationManager.stopUpdates() }
 
         // Device chip bar (multi-device) or simple status (single device)
         if fleet.devices.count > 1 {
@@ -2084,19 +2084,16 @@ struct SignalStrengthView: View {
                             .foregroundColor(.secondary)
                     }
                 } else if isBaseStation, let locMgr = locationManager {
-                    // Say why the arrow is hidden instead of showing nothing:
-                    // distinguishes "phone has no fix yet" from "rocket has no
-                    // latched GPS fix yet".
+                    // Say why the arrow is hidden instead of showing nothing.
+                    // "phone" = app hasn't received a phone location yet (NOT a
+                    // signal-quality problem); "rocket" = no GPS fix latched yet.
                     VStack(spacing: 6) {
                         Image(systemName: "location.slash")
                             .font(.system(size: 44))
                             .foregroundColor(.secondary)
-                        Text(locMgr.userLocation == nil ? "No phone GPS" : "Waiting for\nrocket fix")
+                        Text(locMgr.userLocation == nil ? "Getting phone\nlocation…" : "Waiting for\nrocket GPS")
                             .font(.caption2)
                             .multilineTextAlignment(.center)
-                            .foregroundColor(.secondary)
-                        Text("Rocket")
-                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
