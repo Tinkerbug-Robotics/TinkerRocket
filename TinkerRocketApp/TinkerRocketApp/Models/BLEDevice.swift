@@ -665,7 +665,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func sendRollControlConfig(useAngleControl: Bool, rollDelayMs: UInt16, rateCapDps: Float) {
+    func sendRollControlConfig(useAngleControl: Bool, rollDelayMs: UInt16, rateCapDps: Float,
+                               kpAngle: Float, integralSepThreshold: Float) {
         var payload = Data()
         payload.append(useAngleControl ? 0x01 : 0x00)
         payload.append(0x00)
@@ -673,11 +674,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         payload.append(Data(bytes: &delay, count: 2))
         var cap = rateCapDps                      // outer-loop angle→rate cap (deg/s), LE float
         payload.append(Data(bytes: &cap, count: 4))
-        sendRawCommand(31, payload: payload)
+        var kpa = kpAngle                         // outer angle-loop P-gain, LE float
+        payload.append(Data(bytes: &kpa, count: 4))
+        var iwind = integralSepThreshold          // PID integral-separation anti-windup threshold (deg/s), LE float
+        payload.append(Data(bytes: &iwind, count: 4))
+        sendRawCommand(31, payload: payload)      // RollControlConfigData = 16 bytes
         if var cfg = rocketConfig {
             cfg.useAngleControl = useAngleControl
             cfg.rollDelayMs = rollDelayMs
             cfg.rateCapDps = rateCapDps
+            cfg.kpAngle = kpAngle
+            cfg.integralSepThreshold = integralSepThreshold
             rocketConfig = cfg
         }
     }

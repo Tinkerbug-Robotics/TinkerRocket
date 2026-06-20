@@ -155,7 +155,9 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendGainScheduleConfig(enabled: profile.gainScheduleEnabled)
         device.sendRollControlConfig(useAngleControl: profile.useAngleControl,
                                      rollDelayMs: profile.rollDelayMs,
-                                     rateCapDps: profile.rateCapDps)
+                                     rateCapDps: profile.rateCapDps,
+                                     kpAngle: profile.kpAngle,
+                                     integralSepThreshold: profile.integralSepThreshold)
         device.sendRollProfile(waypoints: profile.rollWaypoints.map {
             (time: $0.timeSeconds, angle: $0.angleDeg, mode: $0.mode.rawValue)
         })

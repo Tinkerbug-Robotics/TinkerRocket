@@ -43,6 +43,8 @@ struct SettingsView: View {
     @State private var sPidMaxCmd = ""
     @State private var sRollDelayMs = ""
     @State private var sRateCapDps = ""
+    @State private var sKpAngle = ""
+    @State private var sIntegralSep = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
@@ -109,6 +111,8 @@ struct SettingsView: View {
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
         case rateCap
+        case kpAngle
+        case integralSep
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
     }
@@ -119,7 +123,7 @@ struct SettingsView: View {
         switch field {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
-        case .rollDelay, .rateCap: return .rollControl
+        case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case nil: return nil
@@ -589,6 +593,31 @@ struct SettingsView: View {
             Text("Max roll rate the angle controller commands while slewing toward a profile angle (Track Profile mode). Higher = faster turns.")
                 .font(.caption).foregroundColor(.secondary)
 
+            HStack {
+                Text("Angle Gain (Kp)")
+                Spacer()
+                TextField("2.0", text: $sKpAngle)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .focused($focusedField, equals: .kpAngle)
+            }
+            Text("Outer angle-loop proportional gain (Track Profile mode). Lower = gentler, better-damped return to target; higher returns faster but rings.")
+                .font(.caption).foregroundColor(.secondary)
+
+            HStack {
+                Text("Anti-Windup")
+                Spacer()
+                TextField("40", text: $sIntegralSep)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .focused($focusedField, equals: .integralSep)
+                Text("\u{00B0}/s").foregroundColor(.secondary)
+            }
+            Text("Integral-separation threshold: the roll-rate PID integrator freezes while the rate error exceeds this, preventing windup during the launch transient. 0 disables.")
+                .font(.caption).foregroundColor(.secondary)
+
             if profile.useAngleControl {
                 rollWaypointEditor
             }
@@ -755,6 +784,8 @@ struct SettingsView: View {
         sPidMaxCmd = formatDecimal(Double(p.pidMaxCmd))
         sRollDelayMs = formatInt(Double(p.rollDelayMs))
         sRateCapDps = formatInt(Double(p.rateCapDps))
+        sKpAngle = formatDecimal(Double(p.kpAngle))
+        sIntegralSep = formatInt(Double(p.integralSepThreshold))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg), mode: $0.mode.rawValue)
         }
@@ -926,13 +957,18 @@ struct SettingsView: View {
     private func applyRollControlConfig() {
         let delayMs = UInt16(clamping: Int(Double(sRollDelayMs) ?? Double(profile.rollDelayMs)))
         let rateCap = max(0, Float(sRateCapDps) ?? profile.rateCapDps)
+        let kpAngle = max(0, Float(sKpAngle) ?? profile.kpAngle)
+        let iwind   = max(0, Float(sIntegralSep) ?? profile.integralSepThreshold)
         let useAngle = profile.useAngleControl
         updateProfile {
             $0.rollDelayMs = delayMs
             $0.rateCapDps = rateCap
+            $0.kpAngle = kpAngle
+            $0.integralSepThreshold = iwind
         }
         if device.isConnected {
-            device.sendRollControlConfig(useAngleControl: useAngle, rollDelayMs: delayMs, rateCapDps: rateCap)
+            device.sendRollControlConfig(useAngleControl: useAngle, rollDelayMs: delayMs, rateCapDps: rateCap,
+                                         kpAngle: kpAngle, integralSepThreshold: iwind)
         }
         showApplied($rollControlApplied)
     }

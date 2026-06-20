@@ -155,11 +155,15 @@ struct config
     static constexpr int SERVO_MAX_US = 2000;
 
     static constexpr float ROLL_RATE_SET_POINT = 0.0f;
-    // Tuned from Rolly Poly IV flight 2026-03-08 (Kp=0.04, Ki=0.001, Kd=0.0001)
-    // K_plant ≈ 345 deg/s² per deg at V≈38 m/s. PM ≈ 64° at 2.2 Hz crossover.
-    static constexpr float KP = 0.04f;
-    static constexpr float KI = 0.001f;
-    static constexpr float KD = 0.0003f;
+    // Tuned for RollyPolly III via SIL (#170), 2026-06. KI raised ~30x for
+    // fin-misalignment rejection — only safe because integral-separation
+    // anti-windup (INTEGRAL_SEP_THRESHOLD_DPS) freezes the integrator during
+    // the launch transient. Validated vs the 6/14 flight + robustness and
+    // servo-lag sweeps. (Prior RP IV 2026-03-08 tune: Kp=0.04, Ki=0.001,
+    // Kd=0.0003.) Runtime-overridable via NVS "kp"/"ki"/"kd" / the app.
+    static constexpr float KP = 0.02f;
+    static constexpr float KI = 0.03f;
+    static constexpr float KD = 0.0f;
     static constexpr float MIN_CMD = -10.0f;
     static constexpr float MAX_CMD = 10.0f;
     // 1-pole LP filter cutoff on the PID D-term. The raw backward-difference
@@ -169,6 +173,13 @@ struct config
     // flight tune so damping is preserved, but below the 100+ Hz noise
     // floor. 0 disables the filter (legacy behavior).
     static constexpr float D_FILTER_CUTOFF_HZ = 10.0f;
+
+    // Integral-separation anti-windup threshold (deg/s). The roll-rate PID
+    // integrator is frozen while |rate error| exceeds this, so a launch roll
+    // transient can't wind it up — which, with the higher KI above, would
+    // otherwise overshoot hard on an opposing-sign kick. Validated at 40 via
+    // SIL (#170). Runtime-overridable via NVS "iwind" / the app. <=0 disables.
+    static constexpr float INTEGRAL_SEP_THRESHOLD_DPS = 40.0f;
 
     static constexpr bool USE_SERVO_CONTROL = true;
     static constexpr bool SERVO_WIGGLE_ON_BOOT = true;
@@ -210,8 +221,11 @@ struct config
     // still runs every iteration so no IMU samples are lost.
     static constexpr uint8_t EKF_DECIMATION = 2;
 
-    // Cascaded angle control: outer loop P-gain (rad/s per rad)
-    static constexpr float KP_ANGLE = 4.0f;
+    // Cascaded angle control: outer loop P-gain. Tuned to 2.0 via SIL (#170) —
+    // 4.0 gave too narrow a deceleration band (rate_cap/kp_angle) so the
+    // angle-hold rang; 2.0 returns to target cleanly within the controlled
+    // window. Runtime-overridable via NVS "kpang" / the app.
+    static constexpr float KP_ANGLE = 2.0f;
     static constexpr bool USE_ANGLE_CONTROL = false;  // default; overridden at runtime via app
 
     // Cascaded angle control: cap on outer-loop rate command (deg/s).
