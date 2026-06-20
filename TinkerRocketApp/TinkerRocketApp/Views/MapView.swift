@@ -79,7 +79,10 @@ struct RocketMapView: UIViewRepresentable {
         let centerDelta = abs(mapView.region.center.latitude - region.center.latitude) +
                           abs(mapView.region.center.longitude - region.center.longitude)
         if centerDelta > 0.0001 && !context.coordinator.userIsInteracting {
-            mapView.setRegion(region, animated: true)
+            // Snap large jumps (e.g. the first center from the default location
+            // to the rocket); an animated cross-region setRegion streams tiles
+            // along the whole path and visibly hitches. Animate small re-centers.
+            mapView.setRegion(region, animated: centerDelta < 1.0)
         }
     }
 
@@ -110,8 +113,16 @@ struct RocketMapView: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
-            parent.region = mapView.region
             userIsInteracting = false
+            // Defer the binding write to the next runloop so we never mutate
+            // SwiftUI state during a view-update pass. updateUIView calls
+            // setRegion(), which feeds back here; writing parent.region inline
+            // triggers "Modifying state during view update" and a re-render
+            // churn that freezes the map. Async breaks the cycle while still
+            // tracking the map (so user pans aren't snapped back).
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.region = mapView.region
+            }
         }
 
         func mapView(_ mapView: MKMapView,
