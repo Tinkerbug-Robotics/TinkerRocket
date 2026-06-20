@@ -388,7 +388,8 @@ struct ConnectedDashboardView: View {
                 telemetry: device.telemetry,
                 bleRSSI: device.connectedRSSI,
                 isBaseStation: device.isBaseStation,
-                locationManager: device.isBaseStation ? locationManager : nil
+                locationManager: device.isBaseStation ? locationManager : nil,
+                rocketFix: device.isBaseStation ? device.lastValidRocketFix : nil
             )
 
             // BatteryView shows BS battery (always live) + rocket battery.
@@ -2031,6 +2032,7 @@ struct SignalStrengthView: View {
     let bleRSSI: Int?
     let isBaseStation: Bool
     var locationManager: LocationManager? = nil
+    var rocketFix: LastValidRocketFix? = nil
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     var body: some View {
@@ -2039,20 +2041,22 @@ struct SignalStrengthView: View {
                 .font(.headline)
 
             HStack(spacing: 30) {
-                // Direction arrow (base station only)
+                // Direction arrow (base station only). Uses the latched
+                // lastValidRocketFix (same source as MapView) rather than
+                // telemetry.latitude — relay frames frequently arrive with
+                // lat/lon = nil (#140), so reading the live frame left the
+                // arrow blank on almost every render.
                 if isBaseStation, let locMgr = locationManager,
-                   let rocketLat = telemetry.latitude,
-                   let rocketLon = telemetry.longitude,
-                   !rocketLat.isNaN && !rocketLon.isNaN,
+                   let fix = rocketFix,
                    let phoneLoc = locMgr.userLocation {
 
                     let dist = LocationManager.haversineDistance(
                         lat1: phoneLoc.latitude, lon1: phoneLoc.longitude,
-                        lat2: rocketLat, lon2: rocketLon
+                        lat2: fix.latitude, lon2: fix.longitude
                     )
                     let bear = LocationManager.bearing(
                         lat1: phoneLoc.latitude, lon1: phoneLoc.longitude,
-                        lat2: rocketLat, lon2: rocketLon
+                        lat2: fix.latitude, lon2: fix.longitude
                     )
                     let arrowAngle = bear - locMgr.heading
 
@@ -2075,6 +2079,22 @@ struct SignalStrengthView: View {
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.primary)
 
+                        Text("Rocket")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                } else if isBaseStation, let locMgr = locationManager {
+                    // Say why the arrow is hidden instead of showing nothing:
+                    // distinguishes "phone has no fix yet" from "rocket has no
+                    // latched GPS fix yet".
+                    VStack(spacing: 6) {
+                        Image(systemName: "location.slash")
+                            .font(.system(size: 44))
+                            .foregroundColor(.secondary)
+                        Text(locMgr.userLocation == nil ? "No phone GPS" : "Waiting for\nrocket fix")
+                            .font(.caption2)
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(.secondary)
                         Text("Rocket")
                             .font(.caption2)
                             .foregroundColor(.secondary)
