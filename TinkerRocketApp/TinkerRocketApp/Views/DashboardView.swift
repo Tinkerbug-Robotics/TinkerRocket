@@ -220,11 +220,9 @@ struct DashboardView: View {
             if !connected && !fleet.isScanning {
                 fleet.startScanning()
             }
-            if connected, let dev = fleet.activeDevice, dev.isBaseStation {
-                locationManager.startUpdates()
-            } else if !connected {
-                locationManager.stopUpdates()
-            }
+            // Phone-location lifecycle is driven from ConnectedDashboardView,
+            // which observes the device — fleet.isConnected flips before the
+            // device's type resolves, so it's the wrong signal to gate on here.
         }
         .sheet(item: $activeSheet) { sheet in
             Group {
@@ -294,6 +292,18 @@ struct ConnectedDashboardView: View {
     var body: some View {
         // Active rocket profile summary + sync status (#132).
         ActiveRocketHeader(device: device)
+            // Phone-location lifecycle lives here, on the view that actually
+            // @ObservedObject's the device. deviceType (→ isBaseStation) resolves
+            // a beat after connect, and BLEFleet doesn't forward child-device
+            // changes, so the outer DashboardView never sees it. Start phone GPS
+            // once the active device identifies as a base station; stop otherwise
+            // and on teardown (disconnect / leaving the dashboard).
+            .onAppear { if device.isBaseStation { locationManager.startUpdates() } }
+            .onChange(of: device.isBaseStation) { isBaseStation in
+                if isBaseStation { locationManager.startUpdates() }
+                else { locationManager.stopUpdates() }
+            }
+            .onDisappear { locationManager.stopUpdates() }
 
         // Device chip bar (multi-device) or simple status (single device)
         if fleet.devices.count > 1 {
@@ -378,7 +388,8 @@ struct ConnectedDashboardView: View {
                 telemetry: device.telemetry,
                 bleRSSI: device.connectedRSSI,
                 isBaseStation: device.isBaseStation,
-                locationManager: device.isBaseStation ? locationManager : nil
+                locationManager: device.isBaseStation ? locationManager : nil,
+                rocketFix: device.isBaseStation ? device.lastValidRocketFix : nil
             )
 
             // BatteryView shows BS battery (always live) + rocket battery.
@@ -2021,6 +2032,7 @@ struct SignalStrengthView: View {
     let bleRSSI: Int?
     let isBaseStation: Bool
     var locationManager: LocationManager? = nil
+    var rocketFix: LastValidRocketFix? = nil
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     var body: some View {
@@ -2029,20 +2041,22 @@ struct SignalStrengthView: View {
                 .font(.headline)
 
             HStack(spacing: 30) {
-                // Direction arrow (base station only)
+                // Direction arrow (base station only). Uses the latched
+                // lastValidRocketFix (same source as MapView) rather than
+                // telemetry.latitude — relay frames frequently arrive with
+                // lat/lon = nil (#140), so reading the live frame left the
+                // arrow blank on almost every render.
                 if isBaseStation, let locMgr = locationManager,
-                   let rocketLat = telemetry.latitude,
-                   let rocketLon = telemetry.longitude,
-                   !rocketLat.isNaN && !rocketLon.isNaN,
+                   let fix = rocketFix,
                    let phoneLoc = locMgr.userLocation {
 
                     let dist = LocationManager.haversineDistance(
                         lat1: phoneLoc.latitude, lon1: phoneLoc.longitude,
-                        lat2: rocketLat, lon2: rocketLon
+                        lat2: fix.latitude, lon2: fix.longitude
                     )
                     let bear = LocationManager.bearing(
                         lat1: phoneLoc.latitude, lon1: phoneLoc.longitude,
-                        lat2: rocketLat, lon2: rocketLon
+                        lat2: fix.latitude, lon2: fix.longitude
                     )
                     let arrowAngle = bear - locMgr.heading
 
@@ -2067,6 +2081,19 @@ struct SignalStrengthView: View {
 
                         Text("Rocket")
                             .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                } else if isBaseStation, let locMgr = locationManager {
+                    // Say why the arrow is hidden instead of showing nothing.
+                    // "phone" = app hasn't received a phone location yet (NOT a
+                    // signal-quality problem); "rocket" = no GPS fix latched yet.
+                    VStack(spacing: 6) {
+                        Image(systemName: "location.slash")
+                            .font(.system(size: 44))
+                            .foregroundColor(.secondary)
+                        Text(locMgr.userLocation == nil ? "Getting phone\nlocation…" : "Waiting for\nrocket GPS")
+                            .font(.caption2)
+                            .multilineTextAlignment(.center)
                             .foregroundColor(.secondary)
                     }
                 }

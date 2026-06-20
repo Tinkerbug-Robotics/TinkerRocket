@@ -99,6 +99,8 @@ struct RocketConfig {
     var useAngleControl: Bool = false
     var rollDelayMs: UInt16 = 0
     var rateCapDps: Float = 60
+    var kpAngle: Float = 2.0               // outer angle-loop P-gain (cascaded angle control)
+    var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)
