@@ -206,6 +206,16 @@ struct DashboardView: View {
             fleet.activeDevice?.flightAnnouncer = flightAnnouncer
             if fleet.isConnected, let dev = fleet.activeDevice {
                 syncer.attach(device: dev, store: profileStore)
+                // Already-connected case: .onChange(of: fleet.isConnected) only
+                // fires on a *transition*, so when the dashboard appears with a
+                // live base-station link already up (auto-reconnect, app relaunch,
+                // or connected on another screen) location updates were never
+                // started — leaving the direction-to-rocket arrow blank despite a
+                // good rocket GNSS fix. Start them here too, matching the onChange
+                // path and DriftCastView's onAppear.
+                if dev.isBaseStation {
+                    locationManager.startUpdates()
+                }
             }
         }
         .onChange(of: fleet.isConnected) { connected in
