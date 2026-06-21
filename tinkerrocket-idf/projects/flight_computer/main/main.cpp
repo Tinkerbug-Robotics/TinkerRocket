@@ -5559,13 +5559,23 @@ static void loop_fc()
             }
             sh = shSet(sh, SH_IMU_SHIFT, imu_st);
 
-            // EKF / attitude — BAD until initialized; DEGRADED if unhealthy (#265)
-            // or the orientation residual is large / thrust-axis mismatch (#238).
+            // EKF — the FILTER's own health, not the board-orientation auto-detect
+            // (#238): that residual is a mounting-config signal that reads large off
+            // the vertical pad and says nothing about the Kalman state.  BAD until
+            // initialized; DEGRADED if diverging (isHealthy()'s NaN-repair cooldown)
+            // or the covariance hasn't converged — stabilizeP() pins the diagonals
+            // at P_MAX_* on divergence, which a finite isHealthy() can't see, so we
+            // check the worst attitude + velocity variance directly.  OK = converged.
             SensorHealthState ekf_st = SH_BAD;
             if (ekf_initialized) {
-                const bool orient_ok = (b2r_active_residual_cdeg < 1000) &&  // < 10 deg
-                                       !orient_thrust_mismatch;
-                ekf_st = (ekf.isHealthy() && orient_ok) ? SH_OK : SH_DEGRADED;
+                float covO[3], covV[3];
+                ekf.getCovOrient(covO);
+                ekf.getCovVel(covV);
+                const float att_var = fmaxf(covO[0], fmaxf(covO[1], covO[2]));
+                const float vel_var = fmaxf(covV[0], fmaxf(covV[1], covV[2]));
+                const bool converged = att_var < config::EKF_ATT_VAR_OK &&
+                                       vel_var < config::EKF_VEL_VAR_OK;
+                ekf_st = (ekf.isHealthy() && converged) ? SH_OK : SH_DEGRADED;
             }
             sh = shSet(sh, SH_EKF_SHIFT, ekf_st);
 

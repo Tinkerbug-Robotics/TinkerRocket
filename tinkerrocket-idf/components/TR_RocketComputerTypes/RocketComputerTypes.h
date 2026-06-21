@@ -1087,7 +1087,7 @@ enum SensorHealthState : uint8_t { SH_NA = 0, SH_OK = 1, SH_DEGRADED = 2, SH_BAD
 // Bit shift (×2) per item within the 32-bit field.
 static constexpr uint8_t SH_BARO_SHIFT = 0;
 static constexpr uint8_t SH_IMU_SHIFT  = 2;
-static constexpr uint8_t SH_EKF_SHIFT  = 4;   // EKF health + init + orientation residual
+static constexpr uint8_t SH_EKF_SHIFT  = 4;   // EKF filter health: init + isHealthy + covariance converged
 static constexpr uint8_t SH_MAG_SHIFT  = 6;
 static constexpr uint8_t SH_GNSS_SHIFT = 8;
 static constexpr uint8_t SH_BATT_SHIFT = 10;  // set by the OC from POWERData

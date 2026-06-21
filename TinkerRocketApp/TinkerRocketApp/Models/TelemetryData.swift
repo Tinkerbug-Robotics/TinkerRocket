@@ -150,7 +150,7 @@ struct TelemetryData: Codable {
     }
     var baroHealth: SensorHealth { shState(0) }
     var imuHealth:  SensorHealth { shState(2) }
-    var ekfHealth:  SensorHealth { shState(4) }   // health + init + orientation residual
+    var ekfHealth:  SensorHealth { shState(4) }   // filter health: init + isHealthy + covariance converged
     var magHealth:  SensorHealth { shState(6) }   // advisory only — never gates go/no-go
     var gnssHealth: SensorHealth { shState(8) }
     var battHealth: SensorHealth { shState(10) }
