@@ -1230,6 +1230,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
         if (ps != 0) { addInt("ps", (int)ps); }
     }
 
+    // Sensor health scorecard bitfield (#303): 2 bits/sensor, NA/OK/DEGRADED/BAD.
+    // Omitted when zero (nothing reported) to save MTU; iOS unpacks per SH_*_SHIFT.
+    if (data.sensor_health != 0) { addInt("h", (int)data.sensor_health); }
+
     // Source rocket identity (base station relay only)
     if (data.source_rocket_id > 0) {
         addInt("rid", data.source_rocket_id);

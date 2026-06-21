@@ -1100,6 +1100,10 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.gdop = lora.pdop;
     out.num_sats = (int)lora.num_sats;
 
+    // Sensor health scorecard bitfield (#303) — relayed straight from the
+    // FC/OC LoRa downlink; iOS unpacks the 2-bit-per-sensor states.
+    out.sensor_health = lora.sensor_health;
+
     // State
     out.state = rocketStateToString(lora.rocket_state);
 

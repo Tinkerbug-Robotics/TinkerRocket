@@ -2343,12 +2343,7 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         // FC leaves battery N/A — only the OC reads POWERData).  2S-pack
         // thresholds; tunable, and #272 may refine the low-voltage policy.
         uint32_t sh = latest_non_sensor_valid ? latest_non_sensor.sensor_health : 0u;
-        const float v = power_si.voltage;
-        SensorHealthState batt = (v < 1.0f)  ? SH_NA       // no/implausible reading
-                               : (v >= 7.0f) ? SH_OK       // 2S pack healthy
-                               : (v >= 6.6f) ? SH_DEGRADED
-                                             : SH_BAD;
-        lora.sensor_health = shSet(sh, SH_BATT_SHIFT, batt);
+        lora.sensor_health = shSet(sh, SH_BATT_SHIFT, shBatteryState(power_si.voltage));
     }
 
     lora.pressure_alt = pressure_alt_m;
@@ -3898,6 +3893,18 @@ static void printStats()
     ble_telem.q2 = (float)latest_non_sensor.q2 / 10000.0f;
     ble_telem.q3 = (float)latest_non_sensor.q3 / 10000.0f;
     ble_telem.roll_cmd = (float)latest_non_sensor.roll_cmd / 100.0f;
+    // Sensor health scorecard (#303) — direct-BLE path (no LoRa hop): take the
+    // FC's bits and fold in the OC-owned battery verdict.  The FC never reads the
+    // pack, so without this the operator would see battery = N/A on a direct link.
+    {
+        uint32_t sh = latest_non_sensor.sensor_health;
+        if (latest_power_valid) {
+            POWERDataSI p = {};
+            sensor_converter.convertPowerData(latest_power_raw, p);
+            sh = shSet(sh, SH_BATT_SHIFT, shBatteryState(p.voltage));
+        }
+        ble_telem.sensor_health = sh;
+    }
     ble_telem.rssi = NAN;  // LoRa RSSI only meaningful on base station (continuous RX)
     ble_telem.snr = NAN;
     ble_telem.bs_soc = NAN;      // No base station battery

@@ -1102,6 +1102,15 @@ static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st
 static inline uint8_t shGet(uint32_t field, uint8_t shift) {
     return (uint8_t)((field >> shift) & 0x3u);
 }
+// Battery verdict from pack voltage (2S Li-ion).  The OC owns this — the FC
+// never reads the pack — so both OC downlink paths (LoRa relay + direct BLE)
+// classify here to keep the thresholds in one place.  NaN/implausible -> NA.
+static inline SensorHealthState shBatteryState(float voltage) {
+    if (!(voltage == voltage) || voltage < 1.0f) return SH_NA;  // NaN or no reading
+    if (voltage >= 7.0f) return SH_OK;
+    if (voltage >= 6.6f) return SH_DEGRADED;
+    return SH_BAD;
+}
 
 static constexpr uint8_t NSF_ALT_LANDED   = (1u << 0);
 static constexpr uint8_t NSF_ALT_APOGEE   = (1u << 1);
