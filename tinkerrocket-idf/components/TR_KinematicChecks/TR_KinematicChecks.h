@@ -50,6 +50,7 @@ public:
 private:
 
     uint16_t launch_count;
+    uint16_t launch_count_hi;   // #258 sustained-high-G counter for the accel-only launch fallback
     uint32_t landing_check_time;
     float landing_look_back_alt;
     uint32_t landing_check_dt;

@@ -65,6 +65,42 @@ TEST_F(KinematicChecksTest, Launch_BriefSpike_NoTrigger) {
     EXPECT_FALSE(kc.launch_flag);
 }
 
+// ── #258: accel-only launch fallback when the baro is invalid ──
+
+// Baro invalid (dead) -> d_alt_est_ never confirms a climb.  Sustained >3 g for
+// >500 samples must still latch launch so recovery arms (a missed launch = no
+// pyro arming = ballistic).  callFlight's last arg is baro_healthy.
+TEST_F(KinematicChecksTest, Launch_DeadBaro_AccelOnlyFallbackFires) {
+    for (int i = 0; i < 600; i++) {
+        setMockMillis(i * 2);
+        // flat altitude (no climb), ~3.5 g, baro UNHEALTHY
+        callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   /*ekf_healthy=*/true, /*baro_healthy=*/false);
+    }
+    EXPECT_TRUE(kc.launch_flag);
+}
+
+// Baro invalid but only ~300 samples of >3 g (< 500) -> fallback must NOT fire.
+TEST_F(KinematicChecksTest, Launch_DeadBaro_ShortHighG_NoLaunch) {
+    for (int i = 0; i < 300; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/false);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// Explicit goal: accel must NOT decide launch while the baro is VALID.
+// Static-fire / clamped case — healthy baro shows no climb, sustained >3 g.
+TEST_F(KinematicChecksTest, Launch_HealthyBaro_HighGNoClimb_NoLaunch) {
+    for (int i = 0; i < 600; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/true);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
 TEST_F(KinematicChecksTest, MaxAltitude_SpikeRejection) {
     // Per #142, max_altitude tracks the KF-smoothed altitude (alt_est)
     // rather than the raw pressure_altitude so individual noise spikes
