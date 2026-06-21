@@ -134,6 +134,72 @@ struct TelemetryData: Codable {
                           default: return false }
     }
 
+    // ── Sensor health scorecard (#303) ────────────────────────────────────
+    // Packed "h" bitfield: FC sets sensors + EKF, OC sets battery.  2 bits per
+    // item; layout mirrors RocketComputerTypes.h (SH_*_SHIFT).  0 = nothing
+    // reported (older firmware or a BS self-frame) → card hidden.
+    var sensor_health: Int = 0
+    enum SensorHealth: Int { case na = 0, ok = 1, degraded = 2, bad = 3
+        var label: String {
+            switch self { case .na: return "N/A"; case .ok: return "OK"
+                          case .degraded: return "DEGRADED"; case .bad: return "BAD" }
+        }
+    }
+    private func shState(_ shift: Int) -> SensorHealth {
+        SensorHealth(rawValue: (sensor_health >> shift) & 0x3) ?? .na
+    }
+    var baroHealth: SensorHealth { shState(0) }
+    var imuHealth:  SensorHealth { shState(2) }
+    var ekfHealth:  SensorHealth { shState(4) }   // health + init + orientation residual
+    var magHealth:  SensorHealth { shState(6) }   // advisory only — never gates go/no-go
+    var gnssHealth: SensorHealth { shState(8) }
+    var battHealth: SensorHealth { shState(10) }
+    func pyroHealth(channel: Int) -> SensorHealth {   // channel 1...4; .na = not configured
+        guard (1...4).contains(channel) else { return .na }
+        return shState(12 + (channel - 1) * 2)
+    }
+    var hasSensorHealth: Bool { sensor_health != 0 }
+
+    // Rows for the pre-launch health card.  Core sensors always shown; a pyro
+    // channel appears only when configured for the flight (state != .na).
+    struct SensorHealthRow: Identifiable { let name: String; let state: SensorHealth; var id: String { name } }
+    var sensorHealthRows: [SensorHealthRow] {
+        var rows = [
+            SensorHealthRow(name: "Baro",    state: baroHealth),
+            SensorHealthRow(name: "IMU",     state: imuHealth),
+            SensorHealthRow(name: "EKF",     state: ekfHealth),
+            SensorHealthRow(name: "GNSS",    state: gnssHealth),
+            SensorHealthRow(name: "Battery", state: battHealth),
+            SensorHealthRow(name: "Mag",     state: magHealth),
+        ]
+        for ch in 1...4 where pyroHealth(channel: ch) != .na {
+            rows.append(SensorHealthRow(name: "Pyro \(ch)", state: pyroHealth(channel: ch)))
+        }
+        return rows
+    }
+
+    // Go/no-go rollup (#303).  Red = a hard fault waiting won't fix (baro/IMU/
+    // battery BAD, or a configured pyro with no continuity).  Green needs every
+    // required item OK — including EKF initialized/converged and a GNSS fix.
+    // Mag is advisory and never gates.  Amber = anything in between.
+    enum FlightReadiness { case unknown, ready, caution, notReady
+        var label: String {
+            switch self { case .unknown:  return "Waiting for telemetry…"
+                          case .ready:    return "Ready to fly"
+                          case .caution:  return "Not ready — check sensors"
+                          case .notReady: return "Do not fly" }
+        }
+    }
+    var flightReadiness: FlightReadiness {
+        guard hasSensorHealth else { return .unknown }
+        let hardFault = [baroHealth, imuHealth, battHealth].contains(.bad)
+            || (1...4).contains { pyroHealth(channel: $0) == .bad }
+        if hardFault { return .notReady }
+        var mustBeOK = [baroHealth, imuHealth, battHealth, ekfHealth, gnssHealth]
+        for ch in 1...4 where pyroHealth(channel: ch) != .na { mustBeOK.append(pyroHealth(channel: ch)) }
+        return mustBeOK.allSatisfy { $0 == .ok } ? .ready : .caution
+    }
+
     // Short JSON keys → Swift property names (saves ~150 bytes in BLE payload)
     enum CodingKeys: String, CodingKey {
         case soc
@@ -173,6 +239,7 @@ struct TelemetryData: Codable {
         // cam/log/bslog).  Bit layout mirrors TR_BLE_To_APP.cpp.
         case flight_status_bits = "fs"
         case pyro_status_bits = "ps"  // packed bitfield: b0=armed (global), then (cont,fired) per channel 1..4
+        case sensor_health = "h"      // #303 scorecard: 2 bits/sensor, see RocketComputerTypes.h
         case source_rocket_id = "rid"
         case source_unit_name = "run"
         case data_status = "ds"        // #95
@@ -221,6 +288,7 @@ struct TelemetryData: Codable {
         bs_log_silence_remaining_s = try c.decodeIfPresent(UInt16.self, forKey: .bs_log_silence_remaining_s)
         flight_status_bits = try c.decodeIfPresent(Int.self, forKey: .flight_status_bits) ?? 0
         pyro_status_bits = try c.decodeIfPresent(Int.self, forKey: .pyro_status_bits) ?? 0
+        sensor_health = try c.decodeIfPresent(Int.self, forKey: .sensor_health) ?? 0
         source_rocket_id = try c.decodeIfPresent(Int.self, forKey: .source_rocket_id)
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
         // #95: missing "ds" → .live (older firmware doesn't emit it)

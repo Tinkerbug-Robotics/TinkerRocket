@@ -428,6 +428,14 @@ struct ConnectedDashboardView: View {
                             isBaseStation: device.isBaseStation)
                 .opacity(showRocketViews ? staleOpacity : 1.0)
 
+            // Pre-launch sensor health scorecard + go/no-go (#303), sitting just
+            // above the pyro channels.  Only shown once the rocket reports a
+            // scorecard ("h" present → hasSensorHealth).
+            if showRocketViews && device.telemetry.hasSensorHealth {
+                HealthCardView(telemetry: device.telemetry)
+                    .opacity(staleOpacity)
+            }
+
             if !device.isBaseStation {
                 PyroChannelsView(device: device)
             }
@@ -613,6 +621,89 @@ struct RocketStateView: View {
         .padding()
         .frame(maxWidth: .infinity)
         .background(stateColor.opacity(0.1))
+        .cornerRadius(10)
+    }
+}
+
+/// Pre-launch sensor health scorecard + go/no-go recommendation (#303).
+/// Driven by the packed "h" bitfield (FC sensors/EKF + OC battery); the parent
+/// only renders it once the rocket actually reports a scorecard.  The rollup
+/// rule lives in TelemetryData.flightReadiness — EKF-init and a GNSS fix gate
+/// green, configured pyros must have continuity, and mag is advisory.
+struct HealthCardView: View {
+    let telemetry: TelemetryData
+
+    private func color(for state: TelemetryData.SensorHealth) -> Color {
+        switch state {
+        case .ok:       return .green
+        case .degraded: return .orange
+        case .bad:      return .red
+        case .na:       return .gray
+        }
+    }
+    private var readinessColor: Color {
+        switch telemetry.flightReadiness {
+        case .ready:    return .green
+        case .caution:  return .orange
+        case .notReady: return .red
+        case .unknown:  return .gray
+        }
+    }
+    private var readinessIcon: String {
+        switch telemetry.flightReadiness {
+        case .ready:    return "checkmark.seal.fill"
+        case .caution:  return "exclamationmark.triangle.fill"
+        case .notReady: return "xmark.octagon.fill"
+        case .unknown:  return "hourglass"
+        }
+    }
+
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 8)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sensor Health")
+                .font(.headline)
+
+            // Go/no-go recommendation banner.
+            HStack(spacing: 10) {
+                Image(systemName: readinessIcon)
+                    .font(.title2)
+                    .foregroundColor(readinessColor)
+                Text(telemetry.flightReadiness.label)
+                    .font(.system(.title3, design: .default).weight(.semibold))
+                    .foregroundColor(readinessColor)
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(readinessColor.opacity(0.12))
+            .cornerRadius(8)
+
+            // Per-sensor chips — core sensors always, configured pyros appended.
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                ForEach(telemetry.sensorHealthRows) { row in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(color(for: row.state))
+                            .frame(width: 8, height: 8)
+                        Text(row.name)
+                            .font(.caption)
+                        Spacer(minLength: 2)
+                        Text(row.state.label)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(color(for: row.state))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(color(for: row.state).opacity(0.10))
+                    .cornerRadius(6)
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6))
         .cornerRadius(10)
     }
 }
