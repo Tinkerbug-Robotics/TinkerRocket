@@ -5113,6 +5113,25 @@ static void loop_fc()
                                             imu_vel[1]*imu_vel[1] +
                                             imu_vel[2]*imu_vel[2]);
 
+                        // #265: EKF health gates the attitude/velocity-based
+                        // control modes below (coast guidance, angle mode, and
+                        // the speed-scaled gain schedule).  When the filter is
+                        // unhealthy — non-finite or freshly diverged per
+                        // GpsInsEKF::isHealthy() — they are all skipped and
+                        // control falls through to PURE GYRO rate-null (no EKF
+                        // dependency), instead of a stabilizeP() attitude jump
+                        // slamming the fins.  Logged on transition so a
+                        // flight/bench run shows if the gate ever fired.
+                        const bool ekf_ctrl_healthy = ekf.isHealthy();
+                        static bool ekf_ctrl_healthy_prev = true;
+                        if (ekf_ctrl_healthy != ekf_ctrl_healthy_prev) {
+                            ESP_LOGW(TAG, "[CTRL] EKF health %s — roll control %s",
+                                     ekf_ctrl_healthy ? "RECOVERED" : "LOST",
+                                     ekf_ctrl_healthy ? "resumed attitude/guidance"
+                                                      : "fell back to gyro rate-null");
+                            ekf_ctrl_healthy_prev = ekf_ctrl_healthy;
+                        }
+
                         // --- Guided coast mode (PN guidance) ---
                         // Active only during coast when guidance is enabled and EKF is valid.
                         // Stops at closest point of approach (CPA) or when speed drops.
@@ -5120,6 +5139,7 @@ static void loop_fc()
                             guidance_enabled &&
                             burnout_detected &&
                             ekf_initialized &&
+                            ekf_ctrl_healthy &&   // #265: don't fly guidance on a diverged EKF
                             (now_ms - burnout_time_ms >= config::PN_COAST_DELAY_MS) &&
                             (speed > config::PN_MIN_SPEED_MPS) &&
                             !guidance.isCpaReached();
@@ -5208,7 +5228,8 @@ static void loop_fc()
                             // Profile-mode lookup is only meaningful when angle
                             // control is enabled and the EKF is initialized.
                             const float t_flight = (float)(now_ms - launch_time_millis) / 1000.0f;
-                            const bool angle_mode_active = use_angle_control && ekf_initialized;
+                            const bool angle_mode_active =
+                                use_angle_control && ekf_initialized && ekf_ctrl_healthy; // #265
                             RollProfileQuery seg = {0.0f, ROLL_SEG_NULL_RATE};
                             if (angle_mode_active)
                             {
@@ -5232,15 +5253,21 @@ static void loop_fc()
                                                            kp_angle_outer,
                                                            kp_angle_rate_cap_dps);
                             }
-                            else if (gain_sched_enabled)
+                            else if (gain_sched_enabled && ekf_ctrl_healthy)
                             {
                                 // Rate-null path (used when angle control is off,
                                 // OR when angle control is on but the current
                                 // profile segment selects ROLL_SEG_NULL_RATE).
+                                // Gated on EKF health (#265): the schedule scales
+                                // on EKF speed, so an unhealthy filter drops to
+                                // the pure-gyro rate-null below.
                                 servo_control.controlWithGainSchedule(-roll_rate_dps, speed);
                             }
                             else
                             {
+                                // Pure gyro rate-null — raw gyro only, no EKF
+                                // dependency; the safe fallback when the EKF is
+                                // unhealthy (#265) or the gain schedule is off.
                                 servo_control.control(-roll_rate_dps);
                             }
                         }
