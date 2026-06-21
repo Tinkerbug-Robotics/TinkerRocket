@@ -36,6 +36,14 @@ constexpr uint8_t  GPS_APOGEE_COUNT_HI      = 4;
 // (#237/#242), so the old altitude-below-peak test fired wildly off.
 constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 
+// Layer-2 apogee backstop (#257). When the primary vote can't reach quorum
+// (e.g. an unhealthy EKF leaves < 2 healthy voters), a healthy + mach-unlocked
+// baro that has dropped this far below the running peak while still descending
+// is unambiguously "past apogee", independent of the EKF/IMU.  Altitude-
+// relative (not time-based), so it is rocket-agnostic; ~30 m past apogee is
+// ~24 m/s, fine for a drogue.  Reuses the APOGEE_COUNT_HI/MAX debounce.
+constexpr float    APOGEE_BACKSTOP_DROP_M     = 30.0f;
+
 // Landing slow-detector hysteresis (#166). Slow detectors evaluate inside
 // the 1 Hz landing_check_dt gate, so HI=4 → 4 s to fire (matches the
 // original ``landing_checks > 4`` first-fire timing).
@@ -65,6 +73,7 @@ TR_KinematicChecks::TR_KinematicChecks()
     gps_apogee_flag = false;
     pitch_apogee_flag = false;
     apogee_flag = false;
+    apogee_backstop_flag = false;
     launch_count = 0;
     max_altitude = 0.0f;
     max_speed = 0.0f;
@@ -74,6 +83,7 @@ TR_KinematicChecks::TR_KinematicChecks()
     apogee_count = 0;
     vel_apogee_count_ = 0;
     pitch_apogee_count_ = 0;
+    backstop_descent_count_ = 0;
     impact_seen_count = 0;
     impact_flag = false;
     baro_stable_flag = false;
@@ -121,6 +131,7 @@ void TR_KinematicChecks::reset()
     gps_apogee_flag = false;
     pitch_apogee_flag = false;
     apogee_flag = false;
+    apogee_backstop_flag = false;
     launch_count = 0;
     max_altitude = 0.0f;
     max_speed = 0.0f;
@@ -129,6 +140,7 @@ void TR_KinematicChecks::reset()
     apogee_count = 0;
     vel_apogee_count_ = 0;
     pitch_apogee_count_ = 0;
+    backstop_descent_count_ = 0;
     impact_seen_count = 0;
     impact_flag = false;
     baro_stable_flag = false;
@@ -165,7 +177,9 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          float pitch_rad,
                                          bool  burnout_detected,
                                          bool  baro_locked_out,
-                                         float gps_vel_u)
+                                         float gps_vel_u,
+                                         bool  ekf_healthy,
+                                         bool  baro_healthy)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -443,18 +457,29 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         if (pitch_apogee_count_ >= APOGEE_COUNT_HI)     pitch_apogee_flag = true;
         else if (pitch_apogee_count_ == 0)              pitch_apogee_flag = false;
 
-        // --- Dynamic N-1 of N voting (vel + baro + pitch; GPS excluded #237) ---
+        // --- Dynamic N-1 of N voting with health-aware quorum (#237/#257) ---
+        // Only HEALTHY voters count toward `available`, so a positively-faulted
+        // voter (dead baro, diverged EKF) no longer *raises* the bar via
+        // `available - 1` — the healthy voters become sufficient.  The
+        // `passed >= 2` floor is kept, so we never fire on fewer than two
+        // concurring voters during ascent.  Velocity and pitch are both
+        // EKF-derived, so an unhealthy EKF excludes BOTH (no double-counting a
+        // single sick filter).  With < 2 healthy voters the vote cannot fire —
+        // the Layer-2 baro backstop below covers that degraded case.
         if (!apogee_flag)
         {
             uint8_t available = 0;
             uint8_t passed = 0;
 
-            // Velocity — always available
-            available++;
-            if (vel_u_apogee_flag) passed++;
+            // Velocity (EKF) — available only when the EKF is healthy
+            if (ekf_healthy)
+            {
+                available++;
+                if (vel_u_apogee_flag) passed++;
+            }
 
-            // Baro — excluded during mach lockout
-            if (!baro_locked_out)
+            // Baro — excluded during mach lockout or when baro is unhealthy
+            if (!baro_locked_out && baro_healthy)
             {
                 available++;
                 if (alt_apogee_flag) passed++;
@@ -467,16 +492,47 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             // still computed + logged as a diagnostic, just excluded from the
             // vote so it can't move pyro timing.
 
-            // Pitch — always available
-            available++;
-            if (pitch_apogee_flag) passed++;
+            // Pitch (EKF) — available only when the EKF is healthy
+            if (ekf_healthy)
+            {
+                available++;
+                if (pitch_apogee_flag) passed++;
+            }
 
-            // N-1 of N with minimum 2 confirmations required.
-            // 3 available → need 2.  2 available (mach lockout) → need 2.
+            // N-1 of N, floor of 2 concurring.  3 healthy → need 2; 2 healthy
+            // → need both; < 2 healthy → cannot fire (see Layer-2 backstop).
             if (available >= 2 && passed >= 2 && passed >= (available - 1))
             {
                 apogee_flag = true;
             }
+        }
+
+        // --- Layer 2: baro-only descent backstop (#257) ---
+        // Last-resort net for the degraded case where the primary vote cannot
+        // reach quorum (e.g. an unhealthy EKF leaves < 2 healthy voters).  A
+        // healthy, mach-unlocked baro that has fallen >= APOGEE_BACKSTOP_DROP_M
+        // below the running peak while still descending is unambiguously past
+        // apogee — a condition unreachable during a normal boost, so there is
+        // no false-positive exposure.  alt_est / d_alt_est_ come from the
+        // baro-only KF, so this still works with a dead EKF (and dead IMU).
+        // Latches apogee_flag exactly like the vote, enabling the full
+        // drogue + main sequence; apogee_backstop_flag records that Layer 2
+        // (not the vote) was the path that fired, for post-flight diagnostics.
+        if (baro_healthy && !baro_locked_out &&
+            alt_est > 15.0f &&
+            alt_est <= max_altitude - APOGEE_BACKSTOP_DROP_M &&
+            d_alt_est_ < 0.0f)
+        {
+            if (backstop_descent_count_ < APOGEE_COUNT_MAX) backstop_descent_count_++;
+        }
+        else if (backstop_descent_count_ > 0)
+        {
+            backstop_descent_count_--;
+        }
+        if (backstop_descent_count_ >= APOGEE_COUNT_HI && !apogee_flag)
+        {
+            apogee_flag = true;
+            apogee_backstop_flag = true;
         }
     } // end burnout gate
 

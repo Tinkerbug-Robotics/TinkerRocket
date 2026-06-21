@@ -24,7 +24,9 @@ public:
                          float pitch_rad = 1.57f,
                          bool  burnout_detected = false,
                          bool  baro_locked_out = false,
-                         float gps_vel_u = 0.0f);
+                         float gps_vel_u = 0.0f,
+                         bool  ekf_healthy = true,
+                         bool  baro_healthy = true);
 
     bool launch_flag;
     bool alt_landed_flag;       // Voted master landed
@@ -33,6 +35,7 @@ public:
     bool gps_apogee_flag;       // Test 3: GPS altitude decreasing
     bool pitch_apogee_flag;     // Test 4: pitch below horizontal
     bool apogee_flag;           // Combined voted result
+    bool apogee_backstop_flag;  // Layer-2 baro descent backstop fired (#257)
     // Landing sub-detector flags (#166) — exposed for diagnostics/logging.
     bool impact_flag;           // High-G ground impact (one-shot latch)
     bool baro_stable_flag;      // palt low and stable
@@ -53,6 +56,7 @@ private:
     uint8_t apogee_count;          // baro apogee leaky counter
     uint8_t vel_apogee_count_;     // velocity apogee leaky counter
     uint8_t pitch_apogee_count_;   // pitch apogee leaky counter
+    uint8_t backstop_descent_count_; // #257 Layer-2 descent backstop leaky counter
     uint16_t impact_seen_count;
     // Landing sub-detector leaky counters (#166).
     uint8_t baro_stable_count_;

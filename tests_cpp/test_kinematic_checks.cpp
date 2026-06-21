@@ -24,11 +24,11 @@ protected:
     void callFlight(float alt, float acc_mag, float vel_u, float roll_rate = 0.0f,
                     float gps_alt = 0.0f, bool new_gps = false,
                     float pitch_rad = 1.57f, bool burnout = false, bool baro_lockout = false,
-                    float gps_vel_u = 0.0f) {
+                    float gps_vel_u = 0.0f, bool ekf_healthy = true, bool baro_healthy = true) {
         float pos[3] = {0, 0, alt};
         float vel[3] = {0, 0, vel_u};
         kc.kinematicChecks(alt, acc_mag, pos, vel, roll_rate, true, gps_alt, new_gps,
-                           pitch_rad, burnout, baro_lockout, gps_vel_u);
+                           pitch_rad, burnout, baro_lockout, gps_vel_u, ekf_healthy, baro_healthy);
     }
 };
 
@@ -242,6 +242,7 @@ TEST_F(KinematicChecksTest, Reset_ClearsAll) {
     EXPECT_FALSE(kc.gps_apogee_flag);
     EXPECT_FALSE(kc.pitch_apogee_flag);
     EXPECT_FALSE(kc.apogee_flag);
+    EXPECT_FALSE(kc.apogee_backstop_flag);
     EXPECT_FLOAT_EQ(kc.max_altitude, 0.0f);
     EXPECT_FLOAT_EQ(kc.max_speed, 0.0f);
 }
@@ -402,4 +403,96 @@ TEST_F(KinematicChecksTest, Landing_SubflagsResetOnApogeeRisingEdge) {
         << "gps_stationary_flag should reset on apogee rising edge";
     EXPECT_FALSE(kc.baro_stable_flag)
         << "baro_stable_flag should reset on apogee rising edge";
+}
+
+// ── #257: health-aware adaptive quorum + Layer-2 baro descent backstop ──
+
+// EKF demonstrably unhealthy → velocity + pitch voters excluded, so the primary
+// vote is starved.  A healthy baro that has dropped > APOGEE_BACKSTOP_DROP_M
+// (30 m) below the peak while descending must still fire apogee via Layer 2 —
+// the rocket must not come in ballistic just because the EKF died.
+TEST_F(KinematicChecksTest, Apogee_EKFUnhealthy_BaroBackstopFires) {
+    kc.launch_flag = true;
+
+    // Seed the baro KF at a 140 m apogee, then pin the running peak.
+    for (int i = 0; i < 250; i++) {
+        setMockMillis(i * 2);
+        callFlight(140.0f, 9.81f, 0.0f, 0.0f, 0.0f, false, 1.0f, true);
+    }
+    ASSERT_GT(kc.alt_est, 130.0f);     // KF converged near the apogee
+    kc.max_altitude = 140.0f;
+
+    // Descend ~0.5 m/call (inside the baro rate-gate) with the EKF UNHEALTHY
+    // and baro healthy.  The backstop must stay silent until > 30 m below the
+    // peak, then latch apogee.
+    uint32_t t = 600;
+    float alt = 140.0f;
+    bool fired_too_high = false;
+    for (int i = 0; i < 160; i++, t += 2) {
+        alt -= 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f, true,
+                   false, 0.0f, /*ekf_healthy=*/false, /*baro_healthy=*/true);
+        if (kc.apogee_flag && (140.0f - kc.alt_est) < 28.0f) fired_too_high = true;
+    }
+    EXPECT_TRUE(kc.apogee_flag)          << "backstop should fire once > 30 m below peak";
+    EXPECT_TRUE(kc.apogee_backstop_flag) << "Layer-2 backstop should be the firing path";
+    EXPECT_FALSE(fired_too_high)         << "backstop must not fire < 30 m below the peak";
+}
+
+// False-positive guard: the EKF flagged unhealthy DURING ascent must not fire
+// apogee.  The vote is starved and the backstop stays silent because altitude
+// is rising (never 30 m below the peak).
+TEST_F(KinematicChecksTest, Apogee_NoFalsePositive_AscentWithUnhealthyEKF) {
+    for (int i = 0; i < 80; i++) {                       // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 250; i++) {                      // long ascent, worst case
+        setMockMillis(200 + i * 2);
+        callFlight(40.0f + i * 1.0f, 5.0f, 10.0f, 0.0f, 0.0f, false, 1.0f, true,
+                   false, 0.0f, /*ekf_healthy=*/false, /*baro_healthy=*/true);
+    }
+    EXPECT_FALSE(kc.apogee_flag)          << "no apogee during ascent even with EKF unhealthy";
+    EXPECT_FALSE(kc.apogee_backstop_flag);
+}
+
+// Baro flagged unhealthy → excluded; a healthy EKF (velocity + pitch) must
+// still carry the vote (floor of 2 = both EKF voters).  This is the
+// mach-lockout-equivalent path, now also reachable on a baro fault.
+TEST_F(KinematicChecksTest, Apogee_BaroUnhealthy_EKFVotersCarry) {
+    for (int i = 0; i < 80; i++) {                       // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 50; i++) {                       // ascent, burnout latches
+        setMockMillis(200 + i * 2);
+        callFlight(80.0f + i, 5.0f, 10.0f, 0.0f, 0.0f, false, 1.0f, true);
+    }
+    for (int i = 0; i < 40; i++) {                       // descent, baro UNHEALTHY
+        setMockMillis(300 + i * 2);
+        callFlight(130.0f - i * 2, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f, true,
+                   false, 0.0f, /*ekf_healthy=*/true, /*baro_healthy=*/false);
+    }
+    EXPECT_TRUE(kc.apogee_flag)           << "EKF vel+pitch should carry when baro unhealthy";
+    EXPECT_FALSE(kc.apogee_backstop_flag) << "primary vote fired, not the backstop";
+}
+
+// With NO healthy sensor there is nothing to detect apogee from, so apogee
+// stays false (documented blind case — beyond recovery's reach).
+TEST_F(KinematicChecksTest, Apogee_BothUnhealthy_NoFire) {
+    for (int i = 0; i < 80; i++) {                       // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 120; i++) {                      // descend, both unhealthy
+        setMockMillis(200 + i * 2);
+        callFlight(130.0f - i, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f, true,
+                   false, 0.0f, /*ekf_healthy=*/false, /*baro_healthy=*/false);
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+    EXPECT_FALSE(kc.apogee_backstop_flag);
 }

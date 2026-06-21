@@ -309,6 +309,29 @@ TEST_F(EKFTest, Quat2Euler_KnownAngles) {
     EXPECT_NEAR(orient[1], 0.0f, 0.2f); // pitch
 }
 
+// ── #257/#265: EKF health signal (isHealthy) ──
+TEST_F(EKFTest, IsHealthy_TrueWhenConverged) {
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    for (uint32_t i = 1; i <= 50; ++i) {
+        uint32_t t = i * 2000;  // 2 ms steps
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+    EXPECT_TRUE(ekf.isHealthy());
+}
+
+// A non-finite IMU sample drives the quaternion to NaN; isHealthy() must report
+// the filter unhealthy so #257 excludes the EKF voters (and #265 stows the fins).
+TEST_F(EKFTest, IsHealthy_FalseOnNonFiniteInput) {
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+    ekf.update(true, makeStationaryIMU(2000), makeStationaryGNSS(2000), makeStationaryMag(2000));
+    ASSERT_TRUE(ekf.isHealthy());   // healthy before the fault
+
+    EkfIMUData bad = makeStationaryIMU(4000);
+    bad.gyro_x = NAN;               // non-finite gyro → quaternion propagates to NaN
+    ekf.update(true, bad, makeStationaryGNSS(4000), makeStationaryMag(4000));
+    EXPECT_FALSE(ekf.isHealthy()) << "EKF must report unhealthy after a non-finite update";
+}
+
 TEST_F(EKFTest, LargeTimestepStability) {
     ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
 

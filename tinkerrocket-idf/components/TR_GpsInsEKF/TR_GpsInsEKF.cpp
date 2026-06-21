@@ -260,6 +260,9 @@ void GpsInsEKF::update(bool use_ahrs_acc,
 // ─── Time Update (prediction) ───────────────────────────────────────
 
 void GpsInsEKF::timeUpdate() {
+    // #257/#265: age out the post-divergence unhealthy window one sample/cycle.
+    if (unhealthy_cooldown_ > 0) unhealthy_cooldown_--;
+
     // Compute DCM from current (pre-propagation) quaternion
     float T_NED2B[3][3];
     Quat2DCM(T_NED2B, quat_BL_);
@@ -516,8 +519,15 @@ void GpsInsEKF::stabilizeP() {
         P_MAX_ABIAS, P_MAX_ABIAS, P_MAX_ABIAS,
         P_MAX_GBIAS, P_MAX_GBIAS, P_MAX_GBIAS
     };
+    // Cooldown (in timeUpdate cycles) for which isHealthy() reports the filter
+    // unhealthy after a genuine divergence, giving it time to re-converge before
+    // consumers (#257 apogee voters, #265 servo gate) trust it again.
+    constexpr uint16_t EKF_UNHEALTHY_COOLDOWN = 500;
     for (int i = 0; i < 15; i++) {
         if (!std::isfinite(P_[i][i]) || P_[i][i] < P_MIN_DIAG) {
+            // A non-finite covariance is a genuine divergence (vs a benign
+            // underflow below P_MIN_DIAG) — flag the filter unhealthy (#257/#265).
+            if (!std::isfinite(P_[i][i])) unhealthy_cooldown_ = EKF_UNHEALTHY_COOLDOWN;
             // Zero the whole row and column so correlation terms can't carry
             // NaN forward even if this diagonal was non-finite.
             for (int j = 0; j < 15; j++) { P_[i][j] = 0.0f; P_[j][i] = 0.0f; }

@@ -135,6 +135,17 @@ public:
     void getVelEst(float (&r)[3]) const { r[0]=vEst_NED_mps_[0]; r[1]=vEst_NED_mps_[1]; r[2]=vEst_NED_mps_[2]; }
     void getQuaternion(float (&r)[4]) const { r[0]=quat_BL_[0]; r[1]=quat_BL_[1]; r[2]=quat_BL_[2]; r[3]=quat_BL_[3]; }
 
+    /// EKF health for downstream consumers (#257 apogee voter exclusion, #265
+    /// servo-stow gate).  v1 signal: the quaternion + velocity estimate are
+    /// finite AND stabilizeP() has not had to repair a non-finite covariance
+    /// within the last divergence-cooldown window.  Conservative — covariance-
+    /// magnitude thresholds are deferred until tuned against flight logs.
+    bool isHealthy() const {
+        for (int i = 0; i < 4; ++i) if (!std::isfinite(quat_BL_[i]))      return false;
+        for (int i = 0; i < 3; ++i) if (!std::isfinite(vEst_NED_mps_[i])) return false;
+        return unhealthy_cooldown_ == 0;
+    }
+
     void getCovPos(float (&r)[3]) const { r[0]=P_[0][0]; r[1]=P_[1][1]; r[2]=P_[2][2]; }
     void getCovVel(float (&r)[3]) const { r[0]=P_[3][3]; r[1]=P_[4][4]; r[2]=P_[5][5]; }
     void getCovOrient(float (&r)[3]) const { r[0]=P_[6][6]; r[1]=P_[7][7]; r[2]=P_[8][8]; }
@@ -249,6 +260,11 @@ private:
     uint32_t timeWeekPrev_;
     uint32_t baroTimePrev_ = 0;
     float euler_BL_rad_[3];
+
+    // #257/#265 health: counts down (one per timeUpdate) after stabilizeP()
+    // repairs a non-finite covariance — a genuine divergence — keeping
+    // isHealthy() false while the filter re-converges.
+    uint16_t unhealthy_cooldown_ = 0;
 
     // Kalman matrices
     float quat_BL_[4];
