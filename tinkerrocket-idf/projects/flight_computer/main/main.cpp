@@ -13,6 +13,7 @@
 #include <TR_GpsInsEKF.h>
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
+#include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <TR_MagCalibrator.h>
 #include <TR_ServoControl_ledc_mult.h>
 #include <TR_GuidancePN.h>
@@ -5057,10 +5058,33 @@ static void loop_fc()
                     ESP_LOGI(TAG, "[RECOVERY] Servo settle complete, control resumed");
                 }
 
+                // --- Burnout detection — runs independently of servo/roll
+                // control (#256) ---
+                // Apogee detection (TR_KinematicChecks) is gated on
+                // burnout_detected, and drogue/main deployment is gated on
+                // apogee, so this MUST NOT live inside `if (servo_enabled)` —
+                // otherwise recovery silently never fires when roll control is
+                // disabled.  Hoisted above the servo block (and ahead of the
+                // roll-delay branch, so a non-zero ROLL_CONTROL_DELAY_MS can't
+                // suppress it either).  Body-X accel (forward axis in FRD) goes
+                // negative after motor burnout; the 200 ms lockout + N-sample
+                // hysteresis (#197) reject boost vibration.  Logic is shared
+                // with the host unit test via BurnoutDetector.h.
+                const uint32_t t_since_launch_ms = now_ms - launch_time_millis;
+                if (have_ism6_si &&
+                    tr::burnoutDetectStep(burnout_detected, burnout_neg_count,
+                                          ism6_latest_si.low_g_acc_x,
+                                          t_since_launch_ms,
+                                          config::BURNOUT_NEG_HYSTERESIS))
+                {
+                    burnout_time_ms = now_ms;
+                    ESP_LOGI(TAG, "[GUID] Burnout detected at T+%lu ms",
+                                  (unsigned long)t_since_launch_ms);
+                }
+
                 if (servo_enabled)
                 {
                     // Delay roll control activation after launch if configured
-                    const uint32_t t_since_launch_ms = now_ms - launch_time_millis;
                     if (reboot_recovery || t_since_launch_ms < roll_delay_ms)
                     {
                         // Hold fins neutral until delay/settle elapses
@@ -5071,31 +5095,6 @@ static void loop_fc()
                         float speed = sqrtf(imu_vel[0]*imu_vel[0] +
                                             imu_vel[1]*imu_vel[1] +
                                             imu_vel[2]*imu_vel[2]);
-
-                        // --- Burnout detection ---
-                        // Body-X accel (forward axis in FRD) goes negative when
-                        // decelerating after motor burnout.  Wait at least 200ms
-                        // after launch to avoid false triggers from vibration.
-                        // Require N consecutive negative samples (#197) so a
-                        // single vibration cycle or wind gust can't trip it.
-                        if (!burnout_detected && t_since_launch_ms > 200)
-                        {
-                            float body_ax = ism6_latest_si.low_g_acc_x;
-                            if (body_ax < 0.0f)
-                            {
-                                if (++burnout_neg_count >= config::BURNOUT_NEG_HYSTERESIS)
-                                {
-                                    burnout_detected = true;
-                                    burnout_time_ms = now_ms;
-                                    ESP_LOGI(TAG, "[GUID] Burnout detected at T+%lu ms",
-                                                  (unsigned long)t_since_launch_ms);
-                                }
-                            }
-                            else
-                            {
-                                burnout_neg_count = 0;
-                            }
-                        }
 
                         // --- Guided coast mode (PN guidance) ---
                         // Active only during coast when guidance is enabled and EKF is valid.

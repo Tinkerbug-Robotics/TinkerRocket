@@ -265,11 +265,15 @@ target_include_directories(test_bs_log_policy PRIVATE
 target_link_libraries(test_bs_log_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_log_policy)
 
-# ---------- test_burnout_detector (#197) ----------
-# Hysteresis-based burnout detector lives inline in
-# flight_computer/main/main.cpp; test reimplements the small state
-# machine and asserts behavior matches spec. See test file header.
+# ---------- test_burnout_detector (#197/#256) ----------
+# Detector logic is shared with the firmware via
+# components/TR_KinematicChecks/BurnoutDetector.h — the test exercises the
+# real code, not a mirror.
 add_executable(test_burnout_detector test_burnout_detector.cpp)
+target_include_directories(test_burnout_detector PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_KinematicChecks
+)
 target_link_libraries(test_burnout_detector GTest::gtest_main)
 gtest_discover_tests(test_burnout_detector)
 
