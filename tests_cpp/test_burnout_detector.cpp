@@ -1,40 +1,33 @@
-// Tests for the burnout-detector hysteresis added in #197.
-//
-// The detector itself lives inline in the flight_computer main loop at
-// tinkerrocket-idf/projects/flight_computer/main/main.cpp:3860 (search
-// for "Burnout detection").  Extracting the logic to a shared component
-// is a deliberate follow-up — for now this test reimplements the small
-// state machine and verifies it matches the spec.  If main.cpp diverges
-// from this reference, this test will pass while the firmware is wrong;
-// the next refactor should consolidate to a single source of truth.
+// Tests for the post-launch burnout-detector hysteresis (#197), exercising the
+// REAL firmware logic in
+// tinkerrocket-idf/components/TR_KinematicChecks/BurnoutDetector.h (no longer a
+// hand-copied mirror).  The flight loop calls the same tr::burnoutDetectStep()
+// unconditionally — independent of roll/servo control (#256) — so these tests
+// are the single source of truth for the detector's behavior.
 
 #include <gtest/gtest.h>
 #include <cstdint>
+#include "BurnoutDetector.h"
 
 namespace {
 
 // Mirror of config::BURNOUT_NEG_HYSTERESIS in
 // tinkerrocket-idf/projects/flight_computer/main/config.h.
 constexpr uint16_t BURNOUT_NEG_HYSTERESIS = 50;
-// 200 ms launch lockout — pre-existing, unchanged by #197.
-constexpr uint32_t LAUNCH_LOCKOUT_MS = 200;
+// 200 ms launch lockout, owned by BurnoutDetector.h.
+constexpr uint32_t LAUNCH_LOCKOUT_MS = tr::kBurnoutLaunchLockoutMs;
 
+// Thin test wrapper over the real detector step so the existing cases read
+// unchanged; fired_at_ms is captured from the single rising-edge return.
 struct BurnoutDetector {
     bool     detected  = false;
     uint16_t neg_count = 0;
     uint32_t fired_at_ms = 0;
 
-    // Mirror of the inline detector at main.cpp:3860.
     void update(float body_ax, uint32_t t_since_launch_ms) {
-        if (detected) return;
-        if (t_since_launch_ms <= LAUNCH_LOCKOUT_MS) return;
-        if (body_ax < 0.0f) {
-            if (++neg_count >= BURNOUT_NEG_HYSTERESIS) {
-                detected = true;
-                fired_at_ms = t_since_launch_ms;
-            }
-        } else {
-            neg_count = 0;
+        if (tr::burnoutDetectStep(detected, neg_count, body_ax,
+                                  t_since_launch_ms, BURNOUT_NEG_HYSTERESIS)) {
+            fired_at_ms = t_since_launch_ms;
         }
     }
 };
@@ -146,4 +139,28 @@ TEST(BurnoutDetector, RIM66Profile_FiresAtRealCutoff) {
     EXPECT_TRUE(kd.detected);
     // Fire time should be at sample-50 of the negative run.
     EXPECT_EQ(kd.fired_at_ms, 250 + 2000 + BURNOUT_NEG_HYSTERESIS - 1);
+}
+
+// #256 regression: burnout detection must depend ONLY on the IMU sample and
+// time-since-launch — never on roll/servo control state.  The shared step
+// function takes no control-mode input, so a flight with roll control disabled
+// detects burnout byte-identically to one with it enabled.  (In the firmware
+// tr::burnoutDetectStep() is called above `if (servo_enabled)`; apogee + pyro
+// recovery depend on the burnout it latches — so gating it behind servo
+// control silently disables recovery.)
+TEST(BurnoutDetector, Issue256_DetectionIndependentOfControlMode) {
+    auto run_to_burnout = []() {
+        BurnoutDetector kd;
+        uint32_t t = 250;  // past lockout
+        for (int i = 0; i < 2000; ++i, ++t) kd.update(75.0f, t);                    // boost
+        for (int i = 0; i < BURNOUT_NEG_HYSTERESIS; ++i, ++t) kd.update(-7.0f, t);  // cutoff
+        return kd;
+    };
+    // Two notional flights with identical IMU history — e.g. servos enabled vs
+    // disabled — must reach identical detector state.
+    BurnoutDetector roll_on  = run_to_burnout();
+    BurnoutDetector roll_off = run_to_burnout();
+    EXPECT_TRUE(roll_on.detected);
+    EXPECT_TRUE(roll_off.detected);
+    EXPECT_EQ(roll_on.fired_at_ms, roll_off.fired_at_ms);
 }
