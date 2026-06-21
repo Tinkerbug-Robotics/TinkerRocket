@@ -863,12 +863,13 @@ static void servicePyroChannels(uint32_t now_ms)
     if (!pyro_apogee_detected && kinematics.apogee_flag) {
         pyro_apogee_detected = true;
         pyro_apogee_time_ms  = now_ms;
-        ESP_LOGI(TAG, "[PYRO] Apogee detected at t=%lu ms (vel=%d baro=%d gps=%d pitch=%d)",
+        ESP_LOGI(TAG, "[PYRO] Apogee detected at t=%lu ms (vel=%d baro=%d gps=%d pitch=%d backstop=%d)",
                  (unsigned long)now_ms,
                  kinematics.vel_u_apogee_flag,
                  kinematics.alt_apogee_flag,
                  kinematics.gps_apogee_flag,
-                 kinematics.pitch_apogee_flag);
+                 kinematics.pitch_apogee_flag,
+                 kinematics.apogee_backstop_flag);
     }
 
     bool just_fired[4]  = { false, false, false, false };
@@ -4805,6 +4806,20 @@ static void loop_fc()
         // semantics as if the evaluator had consumed them.
         if (rocket_state != MAG_CALIBRATION)
         {
+            // #257: per-sensor health for the adaptive apogee quorum + Layer-2
+            // backstop.  baro_healthy = last sample finite and in a plausible
+            // range (the range test also rejects NaN/Inf, which compare false)
+            // and not stale — have_bmp_si latches once (#259) so it is not a
+            // freshness signal by itself.  ekf_healthy = filter initialized and
+            // reporting no recent divergence (TR_GpsInsEKF::isHealthy()).
+            constexpr uint32_t BARO_STALE_TIMEOUT_US = 500000u;  // 0.5 s -> dead
+            const bool baro_healthy =
+                have_bmp_si &&
+                bmp_latest_si.pressure > 25000.0f &&   // BMP585 valid 30-125 kPa;
+                bmp_latest_si.pressure < 125000.0f &&  // 25 kPa floor = margin below spec
+                (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
+            const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
+
             kinematics.kinematicChecks(pressure_altitude_m,
                                        accel_norm,
                                        imu_pos,
@@ -4816,7 +4831,9 @@ static void loop_fc()
                                        imu_rpy[1],
                                        burnout_detected,
                                        mach_locked_out,
-                                       (float)gnss_latest_si.vel_u);
+                                       (float)gnss_latest_si.vel_u,
+                                       ekf_healthy,
+                                       baro_healthy);
         }
         bmp_new_for_kf = false;
         gps_new_for_kc = false;
