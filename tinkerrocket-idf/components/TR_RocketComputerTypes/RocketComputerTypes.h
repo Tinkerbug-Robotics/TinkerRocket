@@ -1299,10 +1299,12 @@ typedef struct __attribute__((packed))
 
     int16_t speed;           // m/s
 
+    uint32_t sensor_health;  // #303 scorecard bitfield (see SH_*_SHIFT)
+
 } LoRaData;
 
-static_assert(sizeof(LoRaData) == 62,
-              "LoRaData must be 62 bytes (5-byte routing header incl. 16-bit seq + 57-byte telemetry payload)");
+static_assert(sizeof(LoRaData) == 66,
+              "LoRaData must be 66 bytes (62 + uint32 sensor_health, #303)");
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -1356,6 +1358,7 @@ typedef struct
     float   yaw;                    // int16_t      : -180 to 180
     float   q0, q1, q2, q3;        // quaternion   : -1 to 1
     float   speed;                  // 1 m/s        : 0 to 4000
+    uint32_t sensor_health;         // #303 scorecard bitfield (see SH_*_SHIFT)
 } LoRaDataSI;
 
 

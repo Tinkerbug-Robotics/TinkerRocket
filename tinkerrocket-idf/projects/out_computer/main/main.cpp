@@ -2338,6 +2338,17 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         lora.voltage = power_si.voltage;
         lora.current = power_si.current;
         lora.soc = power_si.soc;
+
+        // #303: relay the FC's health verdicts and OR in the battery state (the
+        // FC leaves battery N/A — only the OC reads POWERData).  2S-pack
+        // thresholds; tunable, and #272 may refine the low-voltage policy.
+        uint32_t sh = latest_non_sensor_valid ? latest_non_sensor.sensor_health : 0u;
+        const float v = power_si.voltage;
+        SensorHealthState batt = (v < 1.0f)  ? SH_NA       // no/implausible reading
+                               : (v >= 7.0f) ? SH_OK       // 2S pack healthy
+                               : (v >= 6.6f) ? SH_DEGRADED
+                                             : SH_BAD;
+        lora.sensor_health = shSet(sh, SH_BATT_SHIFT, batt);
     }
 
     lora.pressure_alt = pressure_alt_m;

@@ -481,6 +481,8 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
         float sp = clampf(in.speed, 0.f, 4000.f);
         out.speed = (int16_t)lroundf(sp);
     }
+
+    out.sensor_health = in.sensor_health;  // #303 raw bitfield, no encoding
 }
 
 void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
@@ -537,6 +539,7 @@ void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
     out.q3 = (float)in.q3 / 10000.0f;
 
     out.speed = (float)in.speed;
+    out.sensor_health = in.sensor_health;  // #303
 
     // Not transmitted in LoRaData (superset fields)
     out.base_station_voltage = 0.0f;
