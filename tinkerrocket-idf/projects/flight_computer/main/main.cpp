@@ -5088,7 +5088,18 @@ static void loop_fc()
                 // hysteresis (#197) reject boost vibration.  Logic is shared
                 // with the host unit test via BurnoutDetector.h.
                 const uint32_t t_since_launch_ms = now_ms - launch_time_millis;
-                if (have_ism6_si &&
+
+                // #259: treat the IMU as unavailable when its last sample is
+                // stale.  have_ism6_si latches on first read and never clears,
+                // so without this a mid-flight IMU dropout would feed a frozen
+                // accel into burnout detection (miss / false burnout) and frozen
+                // gyro/velocity into roll control.  (Baro staleness is already
+                // handled by baro_healthy / the bmp_new_for_kf KF gate.)
+                constexpr uint32_t IMU_STALE_TIMEOUT_US = 100000u;  // 0.1 s (~1 kHz IMU)
+                const bool ism6_fresh = have_ism6_si &&
+                    (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
+
+                if (ism6_fresh &&
                     tr::burnoutDetectStep(burnout_detected, burnout_neg_count,
                                           ism6_latest_si.low_g_acc_x,
                                           t_since_launch_ms,
@@ -5107,7 +5118,7 @@ static void loop_fc()
                         // Hold fins neutral until delay/settle elapses
                         servo_control.control(0.0f);
                     }
-                    else if (have_ism6_si)
+                    else if (ism6_fresh)   // #259: stale IMU -> neutral-hold branch below
                     {
                         float speed = sqrtf(imu_vel[0]*imu_vel[0] +
                                             imu_vel[1]*imu_vel[1] +
