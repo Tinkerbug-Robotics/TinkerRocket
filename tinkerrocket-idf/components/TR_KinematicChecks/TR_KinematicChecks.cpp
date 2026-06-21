@@ -36,6 +36,15 @@ constexpr uint8_t  GPS_APOGEE_COUNT_HI      = 4;
 // (#237/#242), so the old altitude-below-peak test fired wildly off.
 constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 
+// Launch accel-only fallback (#258): when the baro is INVALID, latch launch on
+// sustained high-G alone.  Deliberately a much higher bar than the baro-
+// confirmed path (3 g vs 2 g, 500 vs 50 samples) so handling/transport can't
+// fake it — a missed launch means recovery never arms (ballistic), so we
+// over-confirm.  Gated on !baro_healthy, so accel never decides launch while
+// the baro is valid.
+constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
+constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 500;    // sustained samples
+
 // Layer-2 apogee backstop (#257). When the primary vote can't reach quorum
 // (e.g. an unhealthy EKF leaves < 2 healthy voters), a healthy + mach-unlocked
 // baro that has dropped this far below the running peak while still descending
@@ -75,6 +84,7 @@ TR_KinematicChecks::TR_KinematicChecks()
     apogee_flag = false;
     apogee_backstop_flag = false;
     launch_count = 0;
+    launch_count_hi = 0;
     max_altitude = 0.0f;
     max_speed = 0.0f;
     landing_check_time = 0;
@@ -133,6 +143,7 @@ void TR_KinematicChecks::reset()
     apogee_flag = false;
     apogee_backstop_flag = false;
     launch_count = 0;
+    launch_count_hi = 0;
     max_altitude = 0.0f;
     max_speed = 0.0f;
     landing_check_time = 0;
@@ -242,14 +253,31 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         if (acc_mag > 20.0)
         {
             launch_count++;
+            // Separate sustained-high-G counter for the accel-only fallback.
+            if (acc_mag > LAUNCH_ACCEL_FALLBACK_MS2) launch_count_hi++;
+            else                                     launch_count_hi = 0;
+
             if (launch_count > 50 && d_alt_est_ > 1.0)
             {
+                // Primary: accel + baro-confirmed climb (fast).
+                launch_flag = true;
+            }
+            else if (!baro_healthy &&
+                     launch_count_hi > LAUNCH_ACCEL_FALLBACK_COUNT)
+            {
+                // #258 accel-only fallback — ONLY when the baro is invalid.
+                // On a healthy baro this branch is unreachable (the primary
+                // latches first), so accel never decides launch unless the baro
+                // can't.  Half a second of sustained >3 g with a dead baro is an
+                // unambiguous boost; latching here is what keeps recovery from
+                // never arming (ballistic) on a baro failure.
                 launch_flag = true;
             }
         }
         else
         {
             launch_count = 0;
+            launch_count_hi = 0;
         }
     }
 
