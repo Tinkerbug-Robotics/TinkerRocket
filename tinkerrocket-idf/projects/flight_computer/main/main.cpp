@@ -5573,16 +5573,16 @@ static void loop_fc()
             sh = shSet(sh, SH_MAG_SHIFT,
                        (have_iis2mdc_si || have_mmc_si) ? SH_OK : SH_NA);
 
-            // GNSS — 3D fix + sats + horizontal accuracy.
+            // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
+            // but only when that gate is enabled: config::GNSS_MAX_HACC_M == 0
+            // is a "disabled" sentinel, so comparing against it would make OK
+            // unreachable).  DEGRADED = 3D fix but marginal; BAD = no 3D fix.
             SensorHealthState gnss_st = SH_BAD;
-            if (have_gnss_si) {
-                if (gnss_latest_si.fix_mode >= 3U &&
-                    gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
-                    gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M) {
-                    gnss_st = SH_OK;
-                } else if (gnss_latest_si.fix_mode >= 3U) {
-                    gnss_st = SH_DEGRADED;   // 3D fix but marginal sats/accuracy
-                }
+            if (have_gnss_si && gnss_latest_si.fix_mode >= 3U) {
+                const bool hacc_ok = (config::GNSS_MAX_HACC_M <= 0.0f) ||
+                                     (gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M);
+                gnss_st = (gnss_latest_si.num_sats >= config::GNSS_MIN_SATS && hacc_ok)
+                          ? SH_OK : SH_DEGRADED;
             }
             sh = shSet(sh, SH_GNSS_SHIFT, gnss_st);
 
