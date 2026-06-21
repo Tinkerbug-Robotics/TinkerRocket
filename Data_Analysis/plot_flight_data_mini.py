@@ -127,6 +127,7 @@ FMT_POWER = '<I Hhh'
 FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
+FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'  # +uint32 sensor_health (#303)
 # OutStatusQueryData: 16 bytes (v2) / 26 bytes (v3, +b2r orientation)
 FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
@@ -456,8 +457,12 @@ def parse_binary_file(filepath):
                     "raw_z":    fields[3],
                 })
 
-            elif msg_type == MSG_NON_SENSOR and msg_len in (42, 43, 44):
-                if msg_len == 44:
+            elif msg_type == MSG_NON_SENSOR and msg_len in (42, 43, 44, 48):
+                if msg_len == 48:
+                    fields = struct.unpack(FMT_NONSENSOR_48, payload)
+                    pyro_status = fields[15]
+                    apogee_flags_b = fields[16]
+                elif msg_len == 44:
                     fields = struct.unpack(FMT_NONSENSOR_44, payload)
                     pyro_status = fields[15]
                     apogee_flags_b = fields[16]

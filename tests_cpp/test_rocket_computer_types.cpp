@@ -25,7 +25,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(ISM6HG256Data),  22u);
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
-    EXPECT_EQ(sizeof(NonSensorData),  44u);  // #142/#143: +1 apogee_flags byte
+    EXPECT_EQ(sizeof(NonSensorData),  48u);  // #303: +uint32 sensor_health (4 B)
     EXPECT_EQ(sizeof(LoRaData),       62u);  // 5-byte routing header (incl. 16-bit seq) + 57-byte payload
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);

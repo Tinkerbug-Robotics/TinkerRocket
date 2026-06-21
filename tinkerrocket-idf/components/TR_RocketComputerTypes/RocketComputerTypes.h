@@ -1068,10 +1068,40 @@ typedef struct __attribute__((packed))
         bit 3–7: reserved
     */
 
+    // Sensor health scorecard (#303): 2 bits per item (SensorHealthState), see
+    // the SH_*_SHIFT positions below — incl. a state per pyro channel.  FC fills
+    // baro/IMU/EKF/mag/GNSS/pyro×4; the OC ORs in the battery bits before relay.
+    uint32_t sensor_health;
+
 } NonSensorData;
 
-static_assert(sizeof(NonSensorData) == 44,
-              "NonSensorData must be 44 bytes");
+static_assert(sizeof(NonSensorData) == 48,
+              "NonSensorData must be 48 bytes");
+
+// ── Sensor health scorecard (#303) ──────────────────────────────────────────
+// 2 bits per item packed into NonSensorData.sensor_health (FC→OC) and
+// LoRaData.sensor_health (OC→BS), a uint32.  Surfaced to the operator pre-launch
+// on iOS (BLE JSON key "h").  Mirror this encoding in the iOS app's
+// TelemetryData.  Per pyro channel so the operator sees each configured charge.
+enum SensorHealthState : uint8_t { SH_NA = 0, SH_OK = 1, SH_DEGRADED = 2, SH_BAD = 3 };
+// Bit shift (×2) per item within the 32-bit field.
+static constexpr uint8_t SH_BARO_SHIFT = 0;
+static constexpr uint8_t SH_IMU_SHIFT  = 2;
+static constexpr uint8_t SH_EKF_SHIFT  = 4;   // EKF health + init + orientation residual
+static constexpr uint8_t SH_MAG_SHIFT  = 6;
+static constexpr uint8_t SH_GNSS_SHIFT = 8;
+static constexpr uint8_t SH_BATT_SHIFT = 10;  // set by the OC from POWERData
+// Per pyro channel.  SH_NA = channel not configured for this flight (ignored by
+// the operator's go/no-go); OK = continuity present; DEGRADED = configured but
+// continuity not yet tested; BAD = configured, tested, no continuity.
+static constexpr uint8_t SH_PYRO_SHIFT[4] = { 12, 14, 16, 18 };
+// bits 20-31 reserved
+static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st) {
+    return (field & ~(uint32_t)(0x3u << shift)) | ((uint32_t)st << shift);
+}
+static inline uint8_t shGet(uint32_t field, uint8_t shift) {
+    return (uint8_t)((field >> shift) & 0x3u);
+}
 
 static constexpr uint8_t NSF_ALT_LANDED   = (1u << 0);
 static constexpr uint8_t NSF_ALT_APOGEE   = (1u << 1);
