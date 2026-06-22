@@ -219,13 +219,14 @@ struct config
     // EKF scorecard health (#303): the filter counts as "converged" when its
     // worst-axis attitude and velocity covariance sit below these.  stabilizeP()
     // caps the diagonals at P_MAX_ATT=10 (~180° σ) and P_MAX_VEL=1e4 (~100 m/s σ),
-    // so a diverged filter pins at the cap while isHealthy() (NaN-only) still
-    // reads true — these bars catch that.  Chosen well below the caps but loose
-    // enough to pass a stationary bench (where heading/yaw is weakly observable),
-    // and robust to the half-angle attitude convention.  PROVISIONAL — validate
-    // against converged values from a bench log via Data_Analysis/replay_flight_ekf.py.
-    static constexpr float    EKF_ATT_VAR_OK        = 1.0f;   // rad², worst attitude axis
-    static constexpr float    EKF_VEL_VAR_OK        = 25.0f;  // (m/s)², worst velocity axis (~5 m/s σ)
+    // so a diverged filter pins at the cap while isHealthy() (NaN-only) still reads
+    // true — these bars catch that.  Tuned from a 34 s stationary bench run
+    // (Data_Analysis/analyze_ekf_cov.py, replay through this same EKF): converged
+    // worst-axis attitude settled to ~0.01–0.028 rad² (1σ ~6–9.5°) and velocity to
+    // ~0.03–1.0 (m/s)² (1σ ~0.2–1 m/s).  Bars sit a few× above that — pass a
+    // converged filter, flag one that hasn't converged or is pinned at the cap.
+    static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad²,  worst attitude axis (~18° 1σ)
+    static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
 
     // Barometer spike rejection: max altitude change (m) between consecutive
     // BMP585 samples before the reading is rejected.  At 500 Hz a 5 m jump
