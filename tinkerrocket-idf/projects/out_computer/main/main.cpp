@@ -722,6 +722,63 @@ static void updateEulerFromNonSensor()
 // Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
 // polls CVRF for completion, reads results, then INA returns to power-down.
 // Called inline from the main loop at ~100 Hz.
+// 2S pack bus-voltage window we trust from the INA230.  A real pack — even
+// sagging hard under boost — sits well inside this; a dropped/failed read (0 V)
+// or a stuck/garbage value falls outside.  Wide on purpose: it rejects only
+// *failed* reads.  A genuinely low pack stays valid and is flagged DEGRADED/BAD
+// by the scorecard's shBatteryState (#272/#303).
+static constexpr float   POWER_BUS_V_MIN      = 5.5f;
+static constexpr float   POWER_BUS_V_MAX      = 9.0f;
+// Invalidate cached power (-> battery N/A on the scorecard) only after this many
+// consecutive bad reads, so a one-off glitch holds last-good instead of flickering.
+static constexpr uint8_t POWER_BAD_READ_LIMIT = 3;
+
+// Validate one INA230 sample and, if plausible, commit it to latest_power_raw and
+// mark latest_power_valid.  A failed/stale read must not masquerade as a healthy
+// pack (#272): pass bus_v = 0 to register a hard read failure (I2C error / CVRF
+// timeout) — 0 is out of range and counts as bad.  After POWER_BAD_READ_LIMIT
+// consecutive rejects, latest_power_valid is cleared so the operator sees battery
+// N/A rather than a stale or garbage value.  Returns true when the sample was
+// accepted.
+static bool commitPowerSample(float bus_v, float current_a)
+{
+    static uint8_t consec_bad = 0;
+
+    if (!(bus_v == bus_v) || bus_v < POWER_BUS_V_MIN || bus_v > POWER_BUS_V_MAX)
+    {
+        if (consec_bad < 255) consec_bad++;
+        if (consec_bad >= POWER_BAD_READ_LIMIT) latest_power_valid = false;
+        return false;
+    }
+    consec_bad = 0;
+
+    // 2S LiPo voltage-to-SOC lookup (linear interp): 8.40V=100% ... 6.60V=0%.
+    static constexpr float SOC_V[] = { 6.60f, 7.00f, 7.40f, 7.60f, 7.80f, 8.40f };
+    static constexpr float SOC_P[] = { 0.0f,  10.0f, 25.0f, 50.0f, 75.0f, 100.0f };
+    float soc_pct = 0.0f;
+    if (bus_v <= SOC_V[0])      soc_pct = SOC_P[0];
+    else if (bus_v >= SOC_V[5]) soc_pct = SOC_P[5];
+    else for (int i = 0; i < 5; i++)
+        if (bus_v <= SOC_V[i + 1])
+        {
+            soc_pct = SOC_P[i] + (bus_v - SOC_V[i]) / (SOC_V[i + 1] - SOC_V[i]) * (SOC_P[i + 1] - SOC_P[i]);
+            break;
+        }
+
+    POWERDataSI psi = {};
+    // FC timebase if available (aligns power with the sensor logs); else OC micros().
+    psi.time_us = (latest_non_sensor_valid && latest_non_sensor.time_us != 0)
+                  ? latest_non_sensor.time_us
+                  : (uint32_t)micros();
+    psi.voltage = bus_v;
+    // Negative = discharging; the INA shunt reads load current positive, so invert.
+    psi.current = -current_a * 1000.0f;
+    psi.soc     = soc_pct;
+    sensor_converter.packPowerData(psi, latest_power_raw);
+    latest_power_valid = true;
+    return true;
+}
+
 static void readINA230Power()
 {
     if (!ina230_ok) return;
@@ -731,59 +788,27 @@ static void readINA230Power()
 
     // Poll CVRF (Conversion Ready Flag, bit 3 of Mask/Enable register)
     // instead of a fixed delay.  Conversion takes ~0.7ms (1 avg × 332µs × 2ch).
+    bool cvrf = false;
     for (int i = 0; i < 20; i++)  // max ~2ms total
     {
         delayMicroseconds(100);
         uint16_t me = 0;
         if (ina230.readMaskEnable(&me) == TR_INA230_OK && (me & (1 << 3)))
-            break;  // CVRF set — conversion complete
-    }
-
-    float bus_v = 0.0f;
-    if (ina230.readBusVoltage_V(&bus_v) != TR_INA230_OK) return;
-    float current_a = 0.0f;
-    if (ina230.readCurrent_A(&current_a) != TR_INA230_OK) return;
-
-    // 2S LiPo voltage-to-SOC lookup (linear interpolation)
-    // Per-cell: 4.20V=100%, 3.90V=75%, 3.80V=50%, 3.70V=25%, 3.50V=10%, 3.30V=0%
-    // Doubled for 2S pack: 8.40V=100%, 7.80V=75%, 7.60V=50%, 7.40V=25%, 7.00V=10%, 6.60V=0%
-    static constexpr float SOC_V[] = { 6.60f, 7.00f, 7.40f, 7.60f, 7.80f, 8.40f };
-    static constexpr float SOC_P[] = { 0.0f,  10.0f, 25.0f, 50.0f, 75.0f, 100.0f };
-    static constexpr int SOC_N = 6;
-    float soc_pct = 0.0f;
-    if (bus_v <= SOC_V[0])
-        soc_pct = SOC_P[0];
-    else if (bus_v >= SOC_V[SOC_N - 1])
-        soc_pct = SOC_P[SOC_N - 1];
-    else
-    {
-        for (int i = 0; i < SOC_N - 1; i++)
         {
-            if (bus_v <= SOC_V[i + 1])
-            {
-                float frac = (bus_v - SOC_V[i]) / (SOC_V[i + 1] - SOC_V[i]);
-                soc_pct = SOC_P[i] + frac * (SOC_P[i + 1] - SOC_P[i]);
-                break;
-            }
+            cvrf = true;
+            break;  // CVRF set — conversion complete
         }
     }
 
-    POWERDataSI psi = {};
-    // Use FC's timebase (from latest NonSensor frame) so power timestamps
-    // align with other sensor data in log files.  Fall back to OC micros()
-    // if no NonSensor data has arrived yet.
-    psi.time_us = (latest_non_sensor_valid && latest_non_sensor.time_us != 0)
-                  ? latest_non_sensor.time_us
-                  : (uint32_t)micros();
-    psi.voltage = bus_v;
-    // Sign convention: negative = discharging (power consumed), positive = charging.
-    // The INA230 shunt is wired such that load current reads positive, so invert
-    // here to match the base-station battery convention.
-    psi.current = -current_a * 1000.0f;
-    psi.soc     = soc_pct;
-
-    sensor_converter.packPowerData(psi, latest_power_raw);
-    latest_power_valid = true;
+    // A CVRF timeout means the conversion never completed, so any value read back
+    // would be stale — treat that (and any I2C read error) as a failed sample
+    // (#272) by passing 0 V, which commitPowerSample rejects.  NOTE: readMaskEnable
+    // clears CVRF, so we must capture it in the poll above, not re-read it here.
+    float bus_v = 0.0f, current_a = 0.0f;
+    const bool read_ok = cvrf
+        && ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK
+        && ina230.readCurrent_A(&current_a) == TR_INA230_OK;
+    commitPowerSample(read_ok ? bus_v : 0.0f, read_ok ? current_a : 0.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -4796,31 +4821,12 @@ static void loop_oc()
                 // Read directly — INA230 is free-running, no trigger needed
                 if (ina230_ok) {
                     float bus_v = 0.0f, current_a = 0.0f;
-                    if (ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK &&
-                        ina230.readCurrent_A(&current_a) == TR_INA230_OK) {
-                        POWERDataSI psi = {};
-                        psi.time_us = (uint32_t)micros();
-                        psi.voltage = bus_v;
-                        // Invert so negative = discharging, matching base-station convention.
-                        psi.current = -current_a * 1000.0f;
-                        // SOC lookup (same as readINA230Power)
-                        static constexpr float SOC_V[] = { 6.60f, 7.00f, 7.40f, 7.60f, 7.80f, 8.40f };
-                        static constexpr float SOC_P[] = { 0.0f,  10.0f, 25.0f, 50.0f, 75.0f, 100.0f };
-                        float soc = 0.0f;
-                        if (bus_v <= SOC_V[0]) soc = SOC_P[0];
-                        else if (bus_v >= SOC_V[5]) soc = SOC_P[5];
-                        else {
-                            for (int i = 0; i < 5; i++) {
-                                if (bus_v <= SOC_V[i+1]) {
-                                    soc = SOC_P[i] + (bus_v - SOC_V[i]) / (SOC_V[i+1] - SOC_V[i]) * (SOC_P[i+1] - SOC_P[i]);
-                                    break;
-                                }
-                            }
-                        }
-                        psi.soc = soc;
-                        sensor_converter.packPowerData(psi, latest_power_raw);
-                        latest_power_valid = true;
-                    }
+                    const bool read_ok =
+                        ina230.readBusVoltage_V(&bus_v) == TR_INA230_OK &&
+                        ina230.readCurrent_A(&current_a) == TR_INA230_OK;
+                    // Same validity + SOC + commit policy as the triggered path
+                    // (#272).  Continuous mode is free-running — no CVRF to check.
+                    commitPowerSample(read_ok ? bus_v : 0.0f, read_ok ? current_a : 0.0f);
                 }
             }
         }
