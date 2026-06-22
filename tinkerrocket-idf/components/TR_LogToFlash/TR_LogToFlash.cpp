@@ -2025,7 +2025,17 @@ void TR_LogToFlash::flushRingToNand()
 
             if (!ok)
             {
+                // #271: a persistent write failure (flight region full or a
+                // bad-block run) must NOT wedge the drain.  The staged page was
+                // already popped from the ring (:ringPop above) and can't be
+                // recovered, so drop it and keep going: rewind current_file_bytes
+                // (this page never reached NAND) and reset page_buf_idx so the
+                // next flushRingToNand computes need>0 and keeps draining —
+                // instead of need==0 -> chunk==0 -> break, forever, which dropped
+                // the entire rest of the flight as ring overruns.
                 nand_prog_fail++;
+                current_file_bytes -= chunk_target;
+                page_buf_idx = 0;
                 return;
             }
             nand_bytes_written += chunk_target;
