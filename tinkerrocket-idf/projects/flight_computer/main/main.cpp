@@ -2606,6 +2606,9 @@ static void setup_fc()
     if (servoPinsValid())
     {
         servo_control.begin();
+        // #267: apply the physical fin-angle <-> pulse calibration so commanded
+        // fin degrees map to real deflection (not the command-clamp span).
+        servo_control.setFinCalibration(config::FIN_MIN_DEG, config::FIN_MAX_DEG);
         if (nvs_servo_timing_changed)
         {
             servo_control.setServoTiming(nvs_servo_hz, nvs_servo_min, nvs_servo_max);

@@ -54,6 +54,14 @@ public:
     // during large transients (e.g. a roll kick) to prevent windup.
     void setPIDIntegralSeparationThreshold(float threshold);
 
+    // Physical fin-angle <-> servo-pulse calibration (#267): the fin angle (deg)
+    // at servo_min_us and at servo_max_us.  Decouples the deg->us scale from the
+    // command clamp (min_cmd/max_cmd) so a commanded fin angle maps to the pulse
+    // that produces that *physical* deflection.
+    void setFinCalibration(float finMinDeg, float finMaxDeg);
+    float getFinMinDeg() const { return fin_min_deg_; }
+    float getFinMaxDeg() const { return fin_max_deg_; }
+
     // Reset PID internal state (for replay / test sessions)
     void resetPID();
 
@@ -105,6 +113,9 @@ private:
     // update all four servos to a single nominal pulse
     void setPulse(int base_pulse_us);
     int  saturateCommand(int command);
+    // Map a physical fin angle (deg) to a servo pulse (us) via the fin
+    // calibration (fin_min_deg_->servo_min_us, fin_max_deg_->servo_max_us). #267
+    int  usFromFinDeg(float fin_deg) const;
 
     // arrays for each servo pin, bias and mid positions
     uint8_t servo_pin_[4];
@@ -123,6 +134,11 @@ private:
     int   roll_cmd_us;
     float min_cmd;
     float max_cmd;
+    // Fin angle (deg) at servo_min_us / servo_max_us — the physical us<->deg
+    // calibration (#267).  Defaults to min_cmd/max_cmd (legacy behaviour) until
+    // setFinCalibration() is called with the real airframe values.
+    float fin_min_deg_;
+    float fin_max_deg_;
 
     // Base PID gains (used as reference for gain scheduling)
     float kp_base;

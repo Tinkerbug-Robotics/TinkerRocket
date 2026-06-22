@@ -179,8 +179,16 @@ struct config
     static constexpr float KP = 0.02f;
     static constexpr float KI = 0.03f;
     static constexpr float KD = 0.0f;
-    static constexpr float MIN_CMD = -10.0f;
-    static constexpr float MAX_CMD = 10.0f;
+    static constexpr float MIN_CMD = -20.0f;   // max commanded fin deflection (deg); app-tunable via PIDConfigData min/max
+    static constexpr float MAX_CMD = 20.0f;
+    // #267 servo fin-angle calibration: the physical fin deflection (deg) at
+    // SERVO_MIN_US and SERVO_MAX_US.  The fin is bolted directly to the servo arm
+    // (1:1), so the full 1000-2000us travel = +/-60 deg of fin.  Kept separate
+    // from the command clamp above so a commanded fin angle maps to the pulse
+    // that produces that *physical* deflection (was: ±cmd stretched over full
+    // travel -> 6x over-deflection).
+    static constexpr float FIN_MIN_DEG = -60.0f;
+    static constexpr float FIN_MAX_DEG = 60.0f;
     // 1-pole LP filter cutoff on the PID D-term. The raw backward-difference
     // derivative amplifies sample-to-sample gyro noise (≈1 dps Δ / 2 ms =
     // 500 dps/s "rate") into visible servo flutter even when the rocket is
