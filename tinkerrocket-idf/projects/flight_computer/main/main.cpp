@@ -219,6 +219,12 @@ static uint32_t lt_loop_max_us __attribute__((unused)) = 0;
 // --- Converted SI values (latest sample of each sensor) ---
 static ISM6HG256DataSI ism6_latest_si = {};
 static BMP585DataSI bmp_latest_si = {};
+// #260: source-validity bounds for BMP585 pressure (Pa).  Wide enough to pass any
+// real flight pressure; because they're finite bounds, the same comparison also
+// rejects NaN and +/-Inf (which fail every finite compare).  Downstream trust
+// gates (kinematics/scorecard) use a tighter 25-125 kPa window.
+static constexpr float BMP_PRESSURE_MIN_PA = 1000.0f;
+static constexpr float BMP_PRESSURE_MAX_PA = 120000.0f;
 static MMC5983MADataSI mmc_latest_si = {};
 static GNSSDataSI gnss_latest_si = {};
 static bool have_ism6_si = false;
@@ -2849,7 +2855,7 @@ static void loop_fc()
     // ### Read and Send Sensor Data ###
     // Poll as fast as possible so high-rate sensor frames are not dropped by
     // loop-period gating.
-    static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_mmc_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
+    static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_bmp_bad_reads = 0, dbg_mmc_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
 
     if (sensor_collector.getISM6HG256Data(ism6hg256_data))
     {
@@ -2877,9 +2883,27 @@ static void loop_fc()
     if (sensor_collector.getBMP585Data(bmp585_data))
     {
         dbg_bmp_reads++;
-        sensor_converter.convertBMP585Data(bmp585_data, bmp_latest_si);
-        have_bmp_si = true;
-        bmp_new_for_kf = true;
+        // #260: validate pressure at the source before it drives the altitude /
+        // apogee math.  Convert into a candidate and commit only if it's in band
+        // — the bounded check also rejects NaN/+-Inf — so a sensor glitch or
+        // SPI-corrupted sample can't poison ground_pressure_pa / pressure_altitude_m
+        // and the kinematics KF (a single NaN/Inf altitude stays NaN forever, since
+        // NaN fails every gate).  On reject we keep the last good sample
+        // (have_bmp_si stays latched; the 0.5 s downstream staleness gate catches a
+        // persistent outage and marks baro unhealthy).
+        BMP585DataSI bmp_candidate = {};
+        sensor_converter.convertBMP585Data(bmp585_data, bmp_candidate);
+        if (bmp_candidate.pressure >= BMP_PRESSURE_MIN_PA &&
+            bmp_candidate.pressure <= BMP_PRESSURE_MAX_PA)
+        {
+            bmp_latest_si = bmp_candidate;
+            have_bmp_si = true;
+            bmp_new_for_kf = true;
+        }
+        else
+        {
+            dbg_bmp_bad_reads++;
+        }
 
         memcpy(bmp585_data_buffer,
                &bmp585_data,
@@ -5703,9 +5727,10 @@ static void loop_fc()
             lt_loop_count = 0;
 
             // Sensor data flow diagnostic
-            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu mmc=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
+            ESP_LOGI(TAG, "[SENSOR] reads/s: ism6=%lu bmp=%lu bmp_bad=%lu mmc=%lu iis=%lu gnss=%lu | bmp_p=%.0f ism6_gz=%.1f drdy_pin=%d",
                           (unsigned long)dbg_ism6_reads,
                           (unsigned long)dbg_bmp_reads,
+                          (unsigned long)dbg_bmp_bad_reads,
                           (unsigned long)dbg_mmc_reads,
                           (unsigned long)dbg_iis2mdc_reads,
                           (unsigned long)dbg_gnss_reads,
@@ -5714,6 +5739,7 @@ static void loop_fc()
                           gpio_get_level((gpio_num_t)config::ISM6HG256_INT));
             dbg_ism6_reads = 0;
             dbg_bmp_reads = 0;
+            dbg_bmp_bad_reads = 0;
             dbg_mmc_reads = 0;
             dbg_iis2mdc_reads = 0;
             dbg_gnss_reads = 0;
