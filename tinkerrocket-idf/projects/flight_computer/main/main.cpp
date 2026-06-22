@@ -5534,6 +5534,84 @@ static void loop_fc()
             non_sensor_data.pyro_status = ps;
         }
 
+        // Sensor health scorecard (#303): pack 2-bit verdicts for the operator's
+        // pre-launch go/no-go (surfaced on iOS).  FC fills all but battery, which
+        // the OC ORs in from POWERData before the LoRa relay.
+        {
+            uint32_t sh = 0;
+            const uint32_t now_us_h = time_us();
+
+            // Baro — in BMP585 range + fresh (mirrors #257 baro_healthy).
+            SensorHealthState baro_st = SH_BAD;
+            if (have_bmp_si) {
+                const bool fresh = (uint32_t)(now_us_h - bmp_latest_si.time_us) < 500000u;
+                const bool inrange = bmp_latest_si.pressure > 25000.0f &&
+                                     bmp_latest_si.pressure < 125000.0f;
+                baro_st = inrange ? (fresh ? SH_OK : SH_DEGRADED) : SH_BAD;
+            }
+            sh = shSet(sh, SH_BARO_SHIFT, baro_st);
+
+            // IMU — present + fresh (mirrors #259 ism6_fresh).
+            SensorHealthState imu_st = SH_BAD;
+            if (have_ism6_si) {
+                const bool fresh = (uint32_t)(now_us_h - ism6_latest_si.time_us) < 100000u;
+                imu_st = fresh ? SH_OK : SH_DEGRADED;
+            }
+            sh = shSet(sh, SH_IMU_SHIFT, imu_st);
+
+            // EKF — the FILTER's own health, not the board-orientation auto-detect
+            // (#238): that residual is a mounting-config signal that reads large off
+            // the vertical pad and says nothing about the Kalman state.  BAD until
+            // initialized; DEGRADED if diverging (isHealthy()'s NaN-repair cooldown)
+            // or the covariance hasn't converged — stabilizeP() pins the diagonals
+            // at P_MAX_* on divergence, which a finite isHealthy() can't see, so we
+            // check the worst attitude + velocity variance directly.  OK = converged.
+            SensorHealthState ekf_st = SH_BAD;
+            if (ekf_initialized) {
+                float covO[3], covV[3];
+                ekf.getCovOrient(covO);
+                ekf.getCovVel(covV);
+                const float att_var = fmaxf(covO[0], fmaxf(covO[1], covO[2]));
+                const float vel_var = fmaxf(covV[0], fmaxf(covV[1], covV[2]));
+                const bool converged = att_var < config::EKF_ATT_VAR_OK &&
+                                       vel_var < config::EKF_VEL_VAR_OK;
+                ekf_st = (ekf.isHealthy() && converged) ? SH_OK : SH_DEGRADED;
+            }
+            sh = shSet(sh, SH_EKF_SHIFT, ekf_st);
+
+            // Mag — present (cal-residual refinement is a follow-up; amber-only).
+            sh = shSet(sh, SH_MAG_SHIFT,
+                       (have_iis2mdc_si || have_mmc_si) ? SH_OK : SH_NA);
+
+            // GNSS — OK needs a 3D fix + enough sats (+ horizontal accuracy,
+            // but only when that gate is enabled: config::GNSS_MAX_HACC_M == 0
+            // is a "disabled" sentinel, so comparing against it would make OK
+            // unreachable).  DEGRADED = 3D fix but marginal; BAD = no 3D fix.
+            SensorHealthState gnss_st = SH_BAD;
+            if (have_gnss_si && gnss_latest_si.fix_mode >= 3U) {
+                const bool hacc_ok = (config::GNSS_MAX_HACC_M <= 0.0f) ||
+                                     (gnss_latest_si.horizontal_accuracy < config::GNSS_MAX_HACC_M);
+                gnss_st = (gnss_latest_si.num_sats >= config::GNSS_MIN_SATS && hacc_ok)
+                          ? SH_OK : SH_DEGRADED;
+            }
+            sh = shSet(sh, SH_GNSS_SHIFT, gnss_st);
+
+            // Per-channel pyro (#303): only configured channels matter.  Carried
+            // in sensor_health because LoRaData has no pyro_status, so on a
+            // base-station relay this is the only pyro signal.
+            for (int i = 0; i < 4; ++i) {
+                SensorHealthState pst = SH_NA;              // not configured -> ignored
+                if (pyroChEnabled(i)) {
+                    pst = !cont_known[i] ? SH_DEGRADED      // configured, not yet tested
+                        : (cont_state[i] ? SH_OK : SH_BAD); // continuity present / none
+                }
+                sh = shSet(sh, SH_PYRO_SHIFT[i], pst);
+            }
+
+            // Battery bits (12-13) left N/A — the OC fills them from POWERData.
+            non_sensor_data.sensor_health = sh;
+        }
+
         if ((logic_now_us - last_non_sensor_tx_time_us) >= non_sensor_tx_period_us)
         {
             last_non_sensor_tx_time_us = logic_now_us;

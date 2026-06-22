@@ -90,6 +90,10 @@ public:
         bool pyro_cont[4];      // true = continuity OK (load present, closed)
         bool pyro_fired[4];
 
+        // Per-sensor health scorecard (#303): 2 bits/sensor, NA/OK/DEGRADED/BAD.
+        // Layout in RocketComputerTypes.h (SH_*_SHIFT). 0 = nothing reported.
+        uint32_t sensor_health;
+
         // Source rocket identity (base station only — for multi-rocket demux)
         uint8_t source_rocket_id;       // 0 = not set (direct connection)
         const char* source_unit_name;   // nullptr = not set

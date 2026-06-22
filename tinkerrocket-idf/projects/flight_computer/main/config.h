@@ -216,6 +216,18 @@ struct config
     static constexpr float    GNSS_MAX_VEL_INIT_MPS = 2.0f;  // max velocity magnitude for EKF init
     static constexpr uint8_t  GNSS_MIN_SATS_INIT    = 5;     // minimum sats for EKF init (stricter)
 
+    // EKF scorecard health (#303): the filter counts as "converged" when its
+    // worst-axis attitude and velocity covariance sit below these.  stabilizeP()
+    // caps the diagonals at P_MAX_ATT=10 (~180° σ) and P_MAX_VEL=1e4 (~100 m/s σ),
+    // so a diverged filter pins at the cap while isHealthy() (NaN-only) still reads
+    // true — these bars catch that.  Tuned from a 34 s stationary bench run
+    // (Data_Analysis/analyze_ekf_cov.py, replay through this same EKF): converged
+    // worst-axis attitude settled to ~0.01–0.028 rad² (1σ ~6–9.5°) and velocity to
+    // ~0.03–1.0 (m/s)² (1σ ~0.2–1 m/s).  Bars sit a few× above that — pass a
+    // converged filter, flag one that hasn't converged or is pinned at the cap.
+    static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad²,  worst attitude axis (~18° 1σ)
+    static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
+
     // Barometer spike rejection: max altitude change (m) between consecutive
     // BMP585 samples before the reading is rejected.  At 500 Hz a 5 m jump
     // implies >2500 m/s — far beyond any model rocket — so real flight data
