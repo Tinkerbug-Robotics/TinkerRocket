@@ -722,12 +722,15 @@ static void updateEulerFromNonSensor()
 // Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
 // polls CVRF for completion, reads results, then INA returns to power-down.
 // Called inline from the main loop at ~100 Hz.
-// 2S pack bus-voltage window we trust from the INA230.  A real pack — even
-// sagging hard under boost — sits well inside this; a dropped/failed read (0 V)
-// or a stuck/garbage value falls outside.  Wide on purpose: it rejects only
-// *failed* reads.  A genuinely low pack stays valid and is flagged DEGRADED/BAD
-// by the scorecard's shBatteryState (#272/#303).
-static constexpr float   POWER_BUS_V_MIN      = 5.5f;
+// Plausible bus-voltage window from the INA230 — accept any real powered-board
+// reading and reject only a *failed* read.  The floor sits below USB (~5.2 V) so
+// USB-bench power is still reported: the operator wants to see the actual reading
+// (and knows it's USB) rather than have it suppressed to N/A, even though 5 V reads
+// BAD on the 2S scorecard.  A dropped/failed read (0 V — the failure sentinel
+// readINA230Power passes on I2C error / CVRF timeout) or NaN/+-Inf falls below the
+// floor and is rejected.  Flight pack is 2S (6.6-8.4 V); shBatteryState classifies
+// the reading's health (#272/#303).
+static constexpr float   POWER_BUS_V_MIN      = 3.0f;   // below USB; still rejects 0 V failed reads
 static constexpr float   POWER_BUS_V_MAX      = 9.0f;
 // Invalidate cached power (-> battery N/A on the scorecard) only after this many
 // consecutive bad reads, so a one-off glitch holds last-good instead of flickering.
