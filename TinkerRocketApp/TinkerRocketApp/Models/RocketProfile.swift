@@ -100,17 +100,25 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var servoBias3: Int16 = 0
     var servoBias4: Int16 = 0
     var servoHz: Int16 = 333
-    var servoMinUs: Int16 = 1250
-    var servoMaxUs: Int16 = 1750
+    // #267: full-travel range. 1000us = fin -60deg, 2000us = +60deg (the servo's
+    // mechanical limit). MUST match config.h SERVO_MIN_US/MAX_US + the firmware
+    // setFinCalibration endpoints, or the commanded-vs-physical fin angle is wrong
+    // (e.g. 1250/1750 would only reach +/-30deg at a +/-60deg command).
+    var servoMinUs: Int16 = 1000
+    var servoMaxUs: Int16 = 2000
 
     // MARK: PID
-    // Defaults: RollyPolly III SIL tune (#170). KI raised for fin-misalignment
-    // rejection, made safe by the integral-separation anti-windup below.
-    var pidKp: Float = 0.02
-    var pidKi: Float = 0.03
+    // Defaults match the FC factory config (#267): kp=0.12 reproduces the flown
+    // physical roll authority on the corrected 1:1 fin-angle scale; ki is a small
+    // bench-tunable seed (SIL roll plant unvalidated). MinCmd/MaxCmd are the max
+    // command deflection (+/-20deg), well inside the +/-60deg mechanical limit.
+    // MUST stay in sync with config.h KP/KI/MIN_CMD/MAX_CMD -- this profile is
+    // pushed on connect (ActiveRocketSyncer) and OVERRIDES the firmware defaults.
+    var pidKp: Float = 0.12
+    var pidKi: Float = 0.01
     var pidKd: Float = 0.0
-    var pidMinCmd: Float = -10.0
-    var pidMaxCmd: Float = 10.0
+    var pidMinCmd: Float = -20.0
+    var pidMaxCmd: Float = 20.0
     var integralSepThreshold: Float = 40   // PID integral-separation anti-windup threshold (deg/s); 0 disables
 
     // MARK: Roll profile
