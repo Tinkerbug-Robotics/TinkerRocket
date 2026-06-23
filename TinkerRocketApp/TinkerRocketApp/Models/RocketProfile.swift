@@ -106,6 +106,11 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     // (e.g. 1250/1750 would only reach +/-30deg at a +/-60deg command).
     var servoMinUs: Int16 = 1000
     var servoMaxUs: Int16 = 2000
+    // #267: physical fin angle (deg) the servo reaches at servoMinUs / servoMaxUs.
+    // Fin bolts directly to the servo arm (1:1), so this is the servo's mechanical
+    // travel. Sent with the servo config; the FC maps commanded fin-deg across it.
+    var finMinDeg: Float = -60.0
+    var finMaxDeg: Float = 60.0
 
     // MARK: PID
     // Defaults match the FC factory config (#267): kp=0.12 reproduces the flown
@@ -205,6 +210,8 @@ extension RocketProfile {
         servoHz = try c.decodeIfPresent(Int16.self, forKey: .servoHz) ?? defaults.servoHz
         servoMinUs = try c.decodeIfPresent(Int16.self, forKey: .servoMinUs) ?? defaults.servoMinUs
         servoMaxUs = try c.decodeIfPresent(Int16.self, forKey: .servoMaxUs) ?? defaults.servoMaxUs
+        finMinDeg = try c.decodeIfPresent(Float.self, forKey: .finMinDeg) ?? defaults.finMinDeg
+        finMaxDeg = try c.decodeIfPresent(Float.self, forKey: .finMaxDeg) ?? defaults.finMaxDeg
 
         pidKp = try c.decodeIfPresent(Float.self, forKey: .pidKp) ?? defaults.pidKp
         pidKi = try c.decodeIfPresent(Float.self, forKey: .pidKi) ?? defaults.pidKi

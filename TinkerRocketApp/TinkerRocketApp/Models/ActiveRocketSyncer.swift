@@ -147,7 +147,8 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendServoConfig(
             biases: [profile.servoBias1, profile.servoBias2,
                      profile.servoBias3, profile.servoBias4],
-            hz: profile.servoHz, minUs: profile.servoMinUs, maxUs: profile.servoMaxUs)
+            hz: profile.servoHz, minUs: profile.servoMinUs, maxUs: profile.servoMaxUs,
+            finMinDeg: profile.finMinDeg, finMaxDeg: profile.finMaxDeg)
         device.sendPIDConfig(
             kp: profile.pidKp, ki: profile.pidKi, kd: profile.pidKd,
             minCmd: profile.pidMinCmd, maxCmd: profile.pidMaxCmd)
