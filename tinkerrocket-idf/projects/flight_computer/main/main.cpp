@@ -556,6 +556,29 @@ static TR_ServoControl servo_control(config::SERVO_PIN_1,
                                      config::MIN_CMD,
                                      config::MAX_CMD);
 
+// #268: the FC runs TWO roll-rate PIDs that must stay in lockstep — servo_control's
+// internal PID (INFLIGHT roll null) and roll_rate_pid_standalone (ground-test +
+// coast-guidance roll null, whose output is mixed with the PN pitch/yaw fins).
+// Route every gain / limit / anti-windup change through these helpers so the
+// standalone can't silently run stale gains or with integral-separation disabled
+// (the original bug: the threshold + runtime gains were wired to servo_control only).
+static void applyRollPidGains(float kp, float ki, float kd, float min_cmd, float max_cmd)
+{
+    servo_control.setPIDGains(kp, ki, kd);
+    servo_control.setPIDLimits(min_cmd, max_cmd);
+    roll_rate_pid_standalone.setKp(kp);
+    roll_rate_pid_standalone.setKi(ki);
+    roll_rate_pid_standalone.setKd(kd);
+    roll_rate_pid_standalone.setMinCmd(min_cmd);
+    roll_rate_pid_standalone.setMaxCmd(max_cmd);
+}
+
+static void applyRollPidSepThreshold(float threshold)
+{
+    servo_control.setPIDIntegralSeparationThreshold(threshold);
+    roll_rate_pid_standalone.setIntegralSeparationThreshold(threshold);
+}
+
 static bool servoPinsValid()
 {
     return (config::SERVO_PIN_1 != 255U) &&
@@ -2305,8 +2328,7 @@ static void setup_fc()
         float kd = prefs.getFloat("kd", config::KD);
         float mincmd = prefs.getFloat("mincmd", config::MIN_CMD);
         float maxcmd = prefs.getFloat("maxcmd", config::MAX_CMD);
-        servo_control.setPIDGains(kp, ki, kd);
-        servo_control.setPIDLimits(mincmd, maxcmd);
+        applyRollPidGains(kp, ki, kd, mincmd, maxcmd);  // #268: both roll PIDs
         ESP_LOGI(TAG, "NVS PID: kp=%.4f ki=%.4f kd=%.4f min=%.1f max=%.1f",
                       (double)kp, (double)ki, (double)kd,
                       (double)mincmd, (double)maxcmd);
@@ -2317,7 +2339,7 @@ static void setup_fc()
     kp_angle_rate_cap_dps   = prefs.getFloat("rcap", config::KP_ANGLE_RATE_CAP_DPS);
     kp_angle_outer          = prefs.getFloat("kpang", config::KP_ANGLE);
     integral_sep_threshold_dps = prefs.getFloat("iwind", config::INTEGRAL_SEP_THRESHOLD_DPS);
-    servo_control.setPIDIntegralSeparationThreshold(integral_sep_threshold_dps);
+    applyRollPidSepThreshold(integral_sep_threshold_dps);  // #268: both roll PIDs
     guidance_enabled        = prefs.getBool("guid_en", config::GUIDANCE_ENABLED);
     prefs.end();
     ESP_LOGI(TAG, "Roll: kp_angle=%.2f rate_cap=%.0f iwindup=%.0f dps",
@@ -3715,8 +3737,7 @@ static void loop_fc()
                                   (double)cfg.kp, (double)cfg.ki, (double)cfg.kd,
                                   (double)cfg.min_cmd, (double)cfg.max_cmd);
 
-                    servo_control.setPIDGains(cfg.kp, cfg.ki, cfg.kd);
-                    servo_control.setPIDLimits(cfg.min_cmd, cfg.max_cmd);
+                    applyRollPidGains(cfg.kp, cfg.ki, cfg.kd, cfg.min_cmd, cfg.max_cmd);  // #268
 
                     prefs.begin("servo", false);
                     prefs.putFloat("kp", cfg.kp);
@@ -4761,7 +4782,7 @@ static void loop_fc()
                     if (rc.integral_sep_threshold_dps >= 0.0f && rc.integral_sep_threshold_dps <= 2000.0f)
                     {
                         integral_sep_threshold_dps = rc.integral_sep_threshold_dps;
-                        servo_control.setPIDIntegralSeparationThreshold(integral_sep_threshold_dps);
+                        applyRollPidSepThreshold(integral_sep_threshold_dps);  // #268: both roll PIDs
                     }
                     ESP_LOGI(TAG, "[ROLL CFG] angle_ctrl=%s delay=%u ms rate_cap=%.0f kp_angle=%.2f iwindup=%.0f",
                                   use_angle_control ? "ON" : "OFF",
