@@ -1474,6 +1474,8 @@ static void buildFlightSettings(FlightSettingsData& s)
     s.servo_hz     = (int16_t)servo_control.getServoHz();
     s.servo_min_us = (int16_t)servo_control.getServoMinUs();
     s.servo_max_us = (int16_t)servo_control.getServoMaxUs();
+    s.fin_min_deg  = servo_control.getFinMinDeg();
+    s.fin_max_deg  = servo_control.getFinMaxDeg();
 
     s.camera_type = runtime_camera_type;
     s.pyro        = pyro_config;
