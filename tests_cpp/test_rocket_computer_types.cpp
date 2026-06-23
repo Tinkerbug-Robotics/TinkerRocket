@@ -790,7 +790,7 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
 // here so a struct edit can't silently desync the cross-language decode.
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
-    EXPECT_EQ(sizeof(FlightSettingsData), 200u);  // v2: +12 for b2r orientation
+    EXPECT_EQ(sizeof(FlightSettingsData), 208u);  // v2: +12 b2r orientation; v3: +8 fin cal
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
@@ -831,6 +831,11 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     EXPECT_EQ(offsetof(FlightSettingsData, b2r_mode),          189u);
     EXPECT_EQ(offsetof(FlightSettingsData, b2r_residual_cdeg), 190u);
     EXPECT_EQ(offsetof(FlightSettingsData, b2r_q),             192u);
+
+    // v3 fin-angle calibration tail (#267) — appended after b2r_q (192 + 8 = 200)
+    // so v1/v2 parsers decode their prefix unchanged.
+    EXPECT_EQ(offsetof(FlightSettingsData, fin_min_deg),       200u);
+    EXPECT_EQ(offsetof(FlightSettingsData, fin_max_deg),       204u);
 }
 
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
