@@ -23,7 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
-    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2) — runtime settings snapshot at launch (#165)
+    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
@@ -164,6 +164,11 @@ nonisolated struct FlightSettingsData {
     // v2 tail: board→rocket mounting orientation, appended at fixed offset
     // 188 after the full v1 layout. nil on v1 frames (pre-orientation
     // firmware, which always assumed the +X-nose mounting).
+    // v3 tail: fin-angle calibration (#267), appended at offset 200. nil on
+    // pre-v3 frames.
+    let fin_min_deg: Float?
+    let fin_max_deg: Float?
+
     let b2r_code: UInt8?
     let b2r_mode: UInt8?            // 0 default, 1 manual, 2 auto-snap, 3 auto-exact
     let b2r_residual_deg: Float?    // auto-snap residual angle
@@ -278,6 +283,16 @@ nonisolated struct FlightSettingsData {
             b2r_mode = nil
             b2r_residual_deg = nil
             b2r_quat = nil
+        }
+
+        // v3 fin-angle calibration tail at fixed offset 200 (#267).
+        if version >= 3 && data.count >= 208 {
+            var o = 200
+            fin_min_deg = data.readFloat32LE(at: &o)
+            fin_max_deg = data.readFloat32LE(at: &o)
+        } else {
+            fin_min_deg = nil
+            fin_max_deg = nil
         }
     }
 }

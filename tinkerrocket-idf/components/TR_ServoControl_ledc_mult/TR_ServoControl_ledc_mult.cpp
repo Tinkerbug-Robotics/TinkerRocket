@@ -27,6 +27,8 @@ TR_ServoControl::TR_ServoControl(uint8_t servo_pin_1,
       roll_cmd_us(min_us),
       min_cmd(min_cmd_in),
       max_cmd(max_cmd_in),
+      fin_min_deg_(min_cmd_in),
+      fin_max_deg_(max_cmd_in),
       kp_base(kp),
       ki_base(ki),
       kd_base(kd),
@@ -85,14 +87,28 @@ void TR_ServoControl::control(float roll_rate) {
     roll_cmd_deg = pid.computePID(pid_setpoint, roll_rate);
     roll_cmd_deg = constrain(roll_cmd_deg, min_cmd, max_cmd);
 
-    // normalise to [0..1]
-    float span_deg = max_cmd - min_cmd;
-    float norm     = (roll_cmd_deg - min_cmd) / span_deg;
-    // convert to pulse (centre bias and servo range)
-    int base_pulse = servo_min_us + static_cast<int>(norm * (servo_max_us - servo_min_us));
+    // Map the commanded fin angle (deg) to a servo pulse via the physical
+    // fin calibration (#267) — NOT the command-clamp span.
+    int base_pulse = usFromFinDeg(roll_cmd_deg);
     base_pulse     = saturateCommand(base_pulse);
     // drive all servos
     setPulse(base_pulse);
+}
+
+// #267: physical fin-angle (deg) -> servo pulse (us).  The line is defined by
+// (fin_min_deg_ -> servo_min_us) and (fin_max_deg_ -> servo_max_us), so a
+// commanded fin angle produces the pulse that yields that physical deflection,
+// independent of the roll command clamp.
+int TR_ServoControl::usFromFinDeg(float fin_deg) const {
+    float span_deg = fin_max_deg_ - fin_min_deg_;
+    if (span_deg == 0.0f) return (servo_min_us + servo_max_us) / 2;
+    float norm = (fin_deg - fin_min_deg_) / span_deg;
+    return servo_min_us + static_cast<int>(norm * (servo_max_us - servo_min_us));
+}
+
+void TR_ServoControl::setFinCalibration(float finMinDeg, float finMaxDeg) {
+    fin_min_deg_ = finMinDeg;
+    fin_max_deg_ = finMaxDeg;
 }
 
 void TR_ServoControl::wiggle() {
@@ -113,15 +129,12 @@ void TR_ServoControl::stowControl() {
 }
 
 void TR_ServoControl::setServoAngles(const float angles[4]) {
-    float span_deg = max_cmd - min_cmd;
-    if (span_deg <= 0.0f) return;
-
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
+        // Clamp to the command limit (max deflection), then map via the physical
+        // fin calibration (#267) so the fin reaches the commanded *physical* angle
+        // — no longer truncated to / scaled by the roll-PID clamp.
         float angle = constrain(angles[i], min_cmd, max_cmd);
-        float norm = (angle - min_cmd) / span_deg;
-        int pulse_us = servo_min_us
-                     + static_cast<int>(norm * (servo_max_us - servo_min_us))
-                     + servo_bias_us_[i];
+        int pulse_us = usFromFinDeg(angle) + servo_bias_us_[i];
         pulse_us = saturateCommand(pulse_us);
 
         uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;

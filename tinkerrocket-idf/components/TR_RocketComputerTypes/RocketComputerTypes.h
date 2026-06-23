@@ -1632,8 +1632,10 @@ typedef struct __attribute__((packed))
     int16_t hz;           // PWM frequency
     int16_t min_us;       // Minimum pulse width
     int16_t max_us;       // Maximum pulse width
+    float   fin_min_deg;  // #267: physical fin angle (deg) at min_us pulse
+    float   fin_max_deg;  // #267: physical fin angle (deg) at max_us pulse
 } ServoConfigData;
-static_assert(sizeof(ServoConfigData) == 14, "ServoConfigData must be 14 bytes");
+static_assert(sizeof(ServoConfigData) == 22, "ServoConfigData must be 22 bytes");
 
 typedef struct __attribute__((packed))
 {
@@ -1726,7 +1728,8 @@ static_assert(sizeof(RollControlConfigData) == 16, "RollControlConfigData must b
 struct __attribute__((packed)) FlightSettingsData
 {
     // v2: appended board→rocket mounting orientation (b2r_* fields).
-    static constexpr uint8_t VERSION = 2;
+    // v3: appended fin-angle calibration (fin_min_deg/fin_max_deg, #267).
+    static constexpr uint8_t VERSION = 3;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -1793,8 +1796,13 @@ struct __attribute__((packed)) FlightSettingsData
     uint8_t  b2r_mode;            // ORIENT_MODE_*
     int16_t  b2r_residual_cdeg;   // auto-snap residual, centi-deg
     int16_t  b2r_q[4];            // board→rocket quaternion ×10000
+
+    // Fin-angle calibration that actually flew (v3+, #267): physical fin
+    // deflection (deg) at servo_min_us / servo_max_us.
+    float    fin_min_deg;
+    float    fin_max_deg;
 };
-static_assert(sizeof(FlightSettingsData) == 200, "FlightSettingsData layout check");
+static_assert(sizeof(FlightSettingsData) == 208, "FlightSettingsData layout check");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the

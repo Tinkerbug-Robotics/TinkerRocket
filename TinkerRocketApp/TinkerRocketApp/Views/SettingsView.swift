@@ -36,6 +36,8 @@ struct SettingsView: View {
     @State private var sServoHz = ""
     @State private var sServoMinUs = ""
     @State private var sServoMaxUs = ""
+    @State private var sFinMinDeg = ""
+    @State private var sFinMaxDeg = ""
     @State private var sPidKp = ""
     @State private var sPidKi = ""
     @State private var sPidKd = ""
@@ -107,7 +109,7 @@ struct SettingsView: View {
     // MARK: - Focus-driven self-apply (#144)
 
     private enum EditField: Hashable {
-        case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax
+        case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax, finMin, finMax
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
         case rateCap
@@ -121,7 +123,7 @@ struct SettingsView: View {
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
-        case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax: return .servo
+        case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finMin, .finMax: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
         case .wpTime, .wpAngle: return .rollWaypoints
@@ -338,12 +340,16 @@ struct SettingsView: View {
             stringRow("Kp", text: $sPidKp, field: .pidKp, decimal: true)
             stringRow("Ki", text: $sPidKi, field: .pidKi, decimal: true)
             stringRow("Kd", text: $sPidKd, field: .pidKd, decimal: true)
-            stringRow("Min Cmd", text: $sPidMinCmd, field: .pidMin, unit: "deg")
-            stringRow("Max Cmd", text: $sPidMaxCmd, field: .pidMax, unit: "deg")
+            Text("Roll-rate-null PID, in fin-degrees per deg/s of roll-rate error. Kp sets roll authority, Ki slowly cancels a steady fin-misalignment spin, Kd is normally 0.")
+                .font(.caption).foregroundColor(.secondary)
+            stringRow("Min Deflection", text: $sPidMinCmd, field: .pidMin, unit: "deg")
+            stringRow("Max Deflection", text: $sPidMaxCmd, field: .pidMax, unit: "deg")
+            Text("Hard clamp on commanded fin deflection (\u{00B1} max deflection). Stay inside the servo's mechanical fin-angle range set in the Servo section below.")
+                .font(.caption).foregroundColor(.secondary)
             Toggle("Velocity Gain Scheduling", isOn: bind(\.gainScheduleEnabled) {
                 device.sendGainScheduleConfig(enabled: $0)
             })
-            Text("Scales PID gains with (V_ref/V)\u{00B2}. Disable for fixed gains at all speeds.")
+            Text("Scales the gains by (V_ref/V)\u{00B2} so fin authority stays roughly constant as speed changes. Disable for fixed gains at all speeds.")
                 .font(.caption).foregroundColor(.secondary)
         }
 
@@ -355,11 +361,15 @@ struct SettingsView: View {
             stringRow("Servo 2", text: $sBias2, field: .bias2)
             stringRow("Servo 3", text: $sBias3, field: .bias3)
             stringRow("Servo 4", text: $sBias4, field: .bias4)
-            Text("Microsecond offset per servo to trim mechanical misalignment.")
+            Text("Per-servo pulse offset (\u{00B5}s) to trim mechanical misalignment so a zero command holds the fin straight.")
                 .font(.caption).foregroundColor(.secondary)
             stringRow("Frequency", text: $sServoHz, field: .servoHz, unit: "Hz")
             stringRow("Min Pulse", text: $sServoMinUs, field: .servoMin, unit: "\u{00B5}s")
             stringRow("Max Pulse", text: $sServoMaxUs, field: .servoMax, unit: "\u{00B5}s")
+            stringRow("Min Fin Angle", text: $sFinMinDeg, field: .finMin, unit: "deg")
+            stringRow("Max Fin Angle", text: $sFinMaxDeg, field: .finMax, unit: "deg")
+            Text("Fin-angle calibration: the physical fin deflection at Min/Max Pulse \u{2014} the servo's mechanical travel (fin bolts 1:1 to the arm). The controller maps a commanded fin angle onto the pulse that produces it, so e.g. 1000/2000\u{00B5}s = \u{2212}60/+60\u{00B0}.")
+                .font(.caption).foregroundColor(.secondary)
         }
 
         rollControlSection
@@ -777,6 +787,8 @@ struct SettingsView: View {
         sServoHz = formatInt(Double(p.servoHz))
         sServoMinUs = formatInt(Double(p.servoMinUs))
         sServoMaxUs = formatInt(Double(p.servoMaxUs))
+        sFinMinDeg = formatDecimal(Double(p.finMinDeg))
+        sFinMaxDeg = formatDecimal(Double(p.finMaxDeg))
         sPidKp = formatDecimal(Double(p.pidKp))
         sPidKi = formatDecimal(Double(p.pidKi))
         sPidKd = formatDecimal(Double(p.pidKd))
@@ -887,13 +899,17 @@ struct SettingsView: View {
         let hz = Int16(clamping: Int(parseDouble(sServoHz, fallback: Double(profile.servoHz)).rounded()))
         let mn = Int16(clamping: Int(parseDouble(sServoMinUs, fallback: Double(profile.servoMinUs)).rounded()))
         let mx = Int16(clamping: Int(parseDouble(sServoMaxUs, fallback: Double(profile.servoMaxUs)).rounded()))
+        let fmn = Float(parseDouble(sFinMinDeg, fallback: Double(profile.finMinDeg)))
+        let fmx = Float(parseDouble(sFinMaxDeg, fallback: Double(profile.finMaxDeg)))
 
         updateProfile {
             $0.servoBias1 = b1; $0.servoBias2 = b2; $0.servoBias3 = b3; $0.servoBias4 = b4
             $0.servoHz = hz; $0.servoMinUs = mn; $0.servoMaxUs = mx
+            $0.finMinDeg = fmn; $0.finMaxDeg = fmx
         }
         if device.isConnected {
-            device.sendServoConfig(biases: [b1, b2, b3, b4], hz: hz, minUs: mn, maxUs: mx)
+            device.sendServoConfig(biases: [b1, b2, b3, b4], hz: hz, minUs: mn, maxUs: mx,
+                                   finMinDeg: fmn, finMaxDeg: fmx)
         }
         showApplied($servoApplied)
     }

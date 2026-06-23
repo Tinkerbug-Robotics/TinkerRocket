@@ -2887,11 +2887,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                      lora_hop_disabled ? "DISABLED" : "ENABLED");
         }
     }
-    else if (cmd == 12 && payload_len >= 14)
+    else if (cmd == 12 && payload_len >= sizeof(ServoConfigData))
     {
         // Servo config from BaseStation: relay to FlightComputer + cache
-        memcpy(pending_config_data, payload, 14);
-        pending_config_data_len = 14;
+        memcpy(pending_config_data, payload, sizeof(ServoConfigData));
+        pending_config_data_len = sizeof(ServoConfigData);
         pending_config_msg_type = SERVO_CONFIG_MSG;
         setPendingCommand(SERVO_CONFIG_PENDING);
         cacheServoConfig(payload, payload_len);
@@ -5329,13 +5329,13 @@ static void loop_oc()
         }
         else if (ble_cmd == 12)
         {
-            // Servo configuration: [bias1:2][bias2:2][bias3:2][bias4:2][hz:2][min:2][max:2] = 14 bytes
+            // Servo config: [bias1:2][bias2:2][bias3:2][bias4:2][hz:2][min:2][max:2][fin_min:4][fin_max:4] = 22 bytes
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= 14)
+            if (plen >= sizeof(ServoConfigData))
             {
-                memcpy(pending_config_data, payload, 14);
-                pending_config_data_len = 14;
+                memcpy(pending_config_data, payload, sizeof(ServoConfigData));
+                pending_config_data_len = sizeof(ServoConfigData);
                 pending_config_msg_type = SERVO_CONFIG_MSG;
                 setPendingCommand(SERVO_CONFIG_PENDING);
                 cacheServoConfig(payload, plen);

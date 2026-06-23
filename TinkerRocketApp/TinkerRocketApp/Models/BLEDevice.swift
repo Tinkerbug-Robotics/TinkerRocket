@@ -611,7 +611,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func sendServoConfig(biases: [Int16], hz: Int16, minUs: Int16, maxUs: Int16) {
+    func sendServoConfig(biases: [Int16], hz: Int16, minUs: Int16, maxUs: Int16,
+                         finMinDeg: Float, finMaxDeg: Float) {
         var payload = Data()
         for i in 0..<4 {
             var b: Int16 = i < biases.count ? biases[i] : 0
@@ -620,6 +621,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         var h = hz;  payload.append(Data(bytes: &h, count: 2))
         var mn = minUs; payload.append(Data(bytes: &mn, count: 2))
         var mx = maxUs; payload.append(Data(bytes: &mx, count: 2))
+        // #267: fin-angle calibration (physical deg at min/max pulse) — 14 -> 22 bytes
+        var fmn = finMinDeg; payload.append(Data(bytes: &fmn, count: 4))
+        var fmx = finMaxDeg; payload.append(Data(bytes: &fmx, count: 4))
         sendRawCommand(12, payload: payload)
         if var cfg = rocketConfig {
             cfg.servoBias1 = biases.count > 0 ? biases[0] : 0

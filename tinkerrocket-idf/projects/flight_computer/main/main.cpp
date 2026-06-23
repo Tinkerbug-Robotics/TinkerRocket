@@ -1474,6 +1474,8 @@ static void buildFlightSettings(FlightSettingsData& s)
     s.servo_hz     = (int16_t)servo_control.getServoHz();
     s.servo_min_us = (int16_t)servo_control.getServoMinUs();
     s.servo_max_us = (int16_t)servo_control.getServoMaxUs();
+    s.fin_min_deg  = servo_control.getFinMinDeg();
+    s.fin_max_deg  = servo_control.getFinMaxDeg();
 
     s.camera_type = runtime_camera_type;
     s.pyro        = pyro_config;
@@ -2272,6 +2274,8 @@ static void setup_fc()
     int16_t nvs_servo_hz  = config::SERVO_HZ;
     int16_t nvs_servo_min = config::SERVO_MIN_US;
     int16_t nvs_servo_max = config::SERVO_MAX_US;
+    float   nvs_fin_min_deg = config::FIN_MIN_DEG;
+    float   nvs_fin_max_deg = config::FIN_MAX_DEG;
     bool nvs_servo_timing_changed = false;
 
     prefs.begin("servo", false);  // read-write (creates namespace on first boot)
@@ -2284,6 +2288,8 @@ static void setup_fc()
         nvs_servo_hz  = prefs.getShort("hz",  config::SERVO_HZ);
         nvs_servo_min = prefs.getShort("min", config::SERVO_MIN_US);
         nvs_servo_max = prefs.getShort("max", config::SERVO_MAX_US);
+        nvs_fin_min_deg = prefs.getFloat("fmin", config::FIN_MIN_DEG);
+        nvs_fin_max_deg = prefs.getFloat("fmax", config::FIN_MAX_DEG);
         nvs_servo_timing_changed = (nvs_servo_hz  != config::SERVO_HZ ||
                                      nvs_servo_min != config::SERVO_MIN_US ||
                                      nvs_servo_max != config::SERVO_MAX_US);
@@ -2606,6 +2612,10 @@ static void setup_fc()
     if (servoPinsValid())
     {
         servo_control.begin();
+        // #267: apply the physical fin-angle <-> pulse calibration so commanded
+        // fin degrees map to real deflection (not the command-clamp span).
+        // From NVS if the app has set it, else the config default.
+        servo_control.setFinCalibration(nvs_fin_min_deg, nvs_fin_max_deg);
         if (nvs_servo_timing_changed)
         {
             servo_control.setServoTiming(nvs_servo_hz, nvs_servo_min, nvs_servo_max);
@@ -3641,7 +3651,7 @@ static void loop_fc()
             else if (out_pending_command == SERVO_CONFIG_PENDING)
             {
                 delay_ms(1);  // let slave TX FIFO settle
-                uint8_t cfg_payload[14];
+                uint8_t cfg_payload[sizeof(ServoConfigData)];
                 size_t  cfg_len = 0;
                 if (readConfigFrame(SERVO_CONFIG_MSG, sizeof(ServoConfigData),
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
@@ -3649,10 +3659,11 @@ static void loop_fc()
                 {
                     ServoConfigData cfg;
                     memcpy(&cfg, cfg_payload, sizeof(cfg));
-                    ESP_LOGI(TAG, "[SERVO CFG] bias=[%d,%d,%d,%d] hz=%d min=%d max=%d",
+                    ESP_LOGI(TAG, "[SERVO CFG] bias=[%d,%d,%d,%d] hz=%d min=%d max=%d fin=[%.1f,%.1f]",
                                   cfg.bias_us[0], cfg.bias_us[1],
                                   cfg.bias_us[2], cfg.bias_us[3],
-                                  cfg.hz, cfg.min_us, cfg.max_us);
+                                  cfg.hz, cfg.min_us, cfg.max_us,
+                                  cfg.fin_min_deg, cfg.fin_max_deg);
 
                     for (int i = 0; i < 4; ++i)
                     {
@@ -3661,10 +3672,13 @@ static void loop_fc()
                     if (rocket_state != INFLIGHT)
                     {
                         servo_control.setServoTiming(cfg.hz, cfg.min_us, cfg.max_us);
+                        // #267: apply fin-angle calibration (skip a degenerate span)
+                        if (cfg.fin_max_deg != cfg.fin_min_deg)
+                            servo_control.setFinCalibration(cfg.fin_min_deg, cfg.fin_max_deg);
                     }
                     else
                     {
-                        ESP_LOGW(TAG, "[SERVO CFG] Hz/min/max deferred (INFLIGHT)");
+                        ESP_LOGW(TAG, "[SERVO CFG] Hz/min/max/fin deferred (INFLIGHT)");
                     }
 
                     prefs.begin("servo", false);
@@ -3675,6 +3689,8 @@ static void loop_fc()
                     prefs.putShort("hz", cfg.hz);
                     prefs.putShort("min", cfg.min_us);
                     prefs.putShort("max", cfg.max_us);
+                    prefs.putFloat("fmin", cfg.fin_min_deg);
+                    prefs.putFloat("fmax", cfg.fin_max_deg);
                     prefs.end();
                     ESP_LOGI(TAG, "[SERVO CFG] Saved to NVS");
                 }

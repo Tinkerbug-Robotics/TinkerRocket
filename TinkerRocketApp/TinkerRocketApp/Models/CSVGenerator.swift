@@ -786,6 +786,8 @@ nonisolated struct ServoSettings: Codable, Sendable {
     let frequency_hz: Int
     let min_pulse_us: Int
     let max_pulse_us: Int
+    let fin_min_deg: Double?   // #267: physical fin angle at min_pulse_us (nil pre-v3)
+    let fin_max_deg: Double?   // #267: physical fin angle at max_pulse_us (nil pre-v3)
 
     init(from raw: FlightSettingsData) {
         enabled = raw.servoEnabled
@@ -793,6 +795,8 @@ nonisolated struct ServoSettings: Codable, Sendable {
         frequency_hz = Int(raw.servo_hz)
         min_pulse_us = Int(raw.servo_min_us)
         max_pulse_us = Int(raw.servo_max_us)
+        fin_min_deg = raw.fin_min_deg.map { sigFig($0) }
+        fin_max_deg = raw.fin_max_deg.map { sigFig($0) }
     }
 }
 
