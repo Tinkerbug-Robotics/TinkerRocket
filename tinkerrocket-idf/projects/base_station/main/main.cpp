@@ -3749,10 +3749,10 @@ static void loop_bs()
         // Servo config: cache locally + relay to OutComputer via LoRa uplink
         const uint8_t* payload = ble_app.getCommandPayload();
         size_t payload_len = ble_app.getCommandPayloadLength();
-        if (payload_len >= 14)
+        if (payload_len >= sizeof(ServoConfigData))
         {
             cacheServoConfig(payload, payload_len);
-            buildUplinkPacket(12, payload, 14);
+            buildUplinkPacket(12, payload, sizeof(ServoConfigData));
             ESP_LOGI(TAG, "[BLE->UPLINK] Servo config relayed");
         }
     }

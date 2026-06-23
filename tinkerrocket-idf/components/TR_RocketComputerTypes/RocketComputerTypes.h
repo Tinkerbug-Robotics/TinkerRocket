@@ -1632,8 +1632,10 @@ typedef struct __attribute__((packed))
     int16_t hz;           // PWM frequency
     int16_t min_us;       // Minimum pulse width
     int16_t max_us;       // Maximum pulse width
+    float   fin_min_deg;  // #267: physical fin angle (deg) at min_us pulse
+    float   fin_max_deg;  // #267: physical fin angle (deg) at max_us pulse
 } ServoConfigData;
-static_assert(sizeof(ServoConfigData) == 14, "ServoConfigData must be 14 bytes");
+static_assert(sizeof(ServoConfigData) == 22, "ServoConfigData must be 22 bytes");
 
 typedef struct __attribute__((packed))
 {
