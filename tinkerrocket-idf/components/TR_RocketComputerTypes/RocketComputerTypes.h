@@ -1546,6 +1546,8 @@ static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload foll
 static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
 static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload follows as GUIDANCE_CONFIG_MSG
 static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 36-byte GuidanceConfigData
+static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
+static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 17-byte FinConfigData
 
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
@@ -1671,6 +1673,19 @@ typedef struct __attribute__((packed))
     uint8_t  target_mode;       // GUIDE_TARGET_OVERHEAD / _POINT
 } GuidanceConfigData;
 static_assert(sizeof(GuidanceConfigData) == 36, "GuidanceConfigData must be 36 bytes");
+
+// App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
+// driven by servo i: deflection_i = sign_i · (roll + pitch·cos(az_i) + yaw·sin(az_i)),
+// where sign_i = -1 if bit i of reverse_mask is set (mirrored servo) else +1.  The
+// defaults {0,90,180,270} + mask 0 reproduce the legacy hardcoded "+" mix exactly
+// (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The app derives these
+// from the ring GUI (servo placement + +/× orientation + per-fin reverse).
+typedef struct __attribute__((packed))
+{
+    float   azimuth_deg[4];  // per-servo fin control azimuth (deg)
+    uint8_t reverse_mask;    // bit i set ⇒ servo i deflection negated (mirrored mount)
+} FinConfigData;
+static_assert(sizeof(FinConfigData) == 17, "FinConfigData must be 17 bytes");
 
 typedef struct __attribute__((packed))
 {

@@ -1,10 +1,6 @@
 #include "TR_ControlMixer.h"
 #include <algorithm>
-
-// Static constexpr member definitions (required pre-C++17 for ODR-use)
-constexpr float TR_ControlMixer::PITCH_MIX[4];
-constexpr float TR_ControlMixer::YAW_MIX[4];
-constexpr float TR_ControlMixer::ROLL_MIX[4];
+#include <cmath>
 
 TR_ControlMixer::TR_ControlMixer()
     : pitch_rate_pid_(0.04f, 0.001f, 0.0003f, 15.0f, -15.0f),
@@ -106,9 +102,9 @@ void TR_ControlMixer::update(float pitch_angle_cmd_deg,
 
     // --- Mix into 4 fin deflections ---
     for (int i = 0; i < 4; ++i) {
-        float d = PITCH_MIX[i] * pitch_fin_cmd_
-                + YAW_MIX[i]   * yaw_fin_cmd_
-                + ROLL_MIX[i]  * roll_cmd_deg;
+        float d = pitch_mix_[i] * pitch_fin_cmd_
+                + yaw_mix_[i]   * yaw_fin_cmd_
+                + roll_mix_[i]  * roll_cmd_deg;
 
         // Per-fin deflection clamp
         deflections_[i] = constrain(d, -max_fin_deg_, max_fin_deg_);
@@ -119,6 +115,34 @@ void TR_ControlMixer::getFinDeflections(float deflections[4]) const
 {
     for (int i = 0; i < 4; ++i) {
         deflections[i] = deflections_[i];
+    }
+}
+
+void TR_ControlMixer::setFinLayout(const float azimuth_deg[4], uint8_t reverse_mask)
+{
+    constexpr float DEG2RAD = 0.01745329252f;
+    fin_reverse_mask_ = reverse_mask;
+    for (int i = 0; i < 4; ++i) {
+        fin_azimuth_deg_[i] = azimuth_deg[i];
+        float c = cosf(azimuth_deg[i] * DEG2RAD);
+        float s = sinf(azimuth_deg[i] * DEG2RAD);
+        if (fabsf(c) < 1e-6f) c = 0.0f;   // snap cardinal angles to exact 0 / ±1
+        if (fabsf(s) < 1e-6f) s = 0.0f;
+        float sign = (reverse_mask & (1u << i)) ? -1.0f : 1.0f;
+        pitch_mix_[i] = sign * c;
+        yaw_mix_[i]   = sign * s;
+        roll_mix_[i]  = sign;
+    }
+}
+
+void TR_ControlMixer::mixToFins(float roll_cmd_deg, float pitch_fin_cmd, float yaw_fin_cmd,
+                                float max_fin_deg, float out_deflections[4]) const
+{
+    for (int i = 0; i < 4; ++i) {
+        float d = pitch_mix_[i] * pitch_fin_cmd
+                + yaw_mix_[i]   * yaw_fin_cmd
+                + roll_mix_[i]  * roll_cmd_deg;
+        out_deflections[i] = constrain(d, -max_fin_deg, max_fin_deg);
     }
 }
 

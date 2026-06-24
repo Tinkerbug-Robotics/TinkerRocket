@@ -99,6 +99,13 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
     EXPECT_EQ(offsetof(GuidanceConfigData, target_mode),      35u);
 }
 
+TEST(RocketComputerTypes, FinConfigData_Layout) {
+    // Wire struct relayed app→OC→BS→FC; size is hardcoded in the relay paths.
+    EXPECT_EQ(sizeof(FinConfigData), 17u);
+    EXPECT_EQ(offsetof(FinConfigData, azimuth_deg),  0u);
+    EXPECT_EQ(offsetof(FinConfigData, reverse_mask), 16u);
+}
+
 TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {
     // MAX_PAYLOAD must be >= every packed struct that can be a frame payload
     EXPECT_GE(MAX_PAYLOAD, sizeof(GNSSData));

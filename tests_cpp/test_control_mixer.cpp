@@ -181,3 +181,88 @@ TEST_F(ControlMixerTest, Reset_ClearsAllState) {
     EXPECT_FLOAT_EQ(mixer.getPitchFinCmd(), 0.0f);
     EXPECT_FLOAT_EQ(mixer.getYawFinCmd(), 0.0f);
 }
+
+// ─── Configurable fin layout (servo→azimuth + reverse) ───────────────────────
+
+// REGRESSION: with no setFinLayout call (default {0,90,180,270} + mask 0),
+// mixToFins must reproduce the legacy hardcoded "+" mix exactly:
+//   d0=+pitch+roll  d1=+yaw+roll  d2=-pitch+roll  d3=-yaw+roll
+TEST_F(ControlMixerTest, MixToFins_DefaultReproducesHardcodedPlus) {
+    float d[4];
+    mixer.mixToFins(0.0f, 2.0f, 0.0f, MAX_FIN, d);          // pure pitch
+    EXPECT_NEAR(d[0],  2.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[2], -2.0f, 1e-4f);
+    EXPECT_NEAR(d[3],  0.0f, 1e-4f);
+
+    mixer.mixToFins(0.0f, 0.0f, 3.0f, MAX_FIN, d);          // pure yaw
+    EXPECT_NEAR(d[0],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  3.0f, 1e-4f);
+    EXPECT_NEAR(d[2],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[3], -3.0f, 1e-4f);
+
+    mixer.mixToFins(4.0f, 0.0f, 0.0f, MAX_FIN, d);          // pure roll → common
+    for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 4.0f, 1e-4f);
+
+    mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);          // combined
+    EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);
+}
+
+TEST_F(ControlMixerTest, SetFinLayout_DefaultAzimuthsMatchHardcode) {
+    const float az[4] = {0.0f, 90.0f, 180.0f, 270.0f};
+    mixer.setFinLayout(az, 0);
+    float d[4];
+    mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
+    EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);
+}
+
+// "×" layout: every fin shares pitch AND yaw at cos/sin(45°)=±0.707.
+TEST_F(ControlMixerTest, SetFinLayout_CrossSharesPitchAndYaw) {
+    const float az[4] = {45.0f, 135.0f, 225.0f, 315.0f};
+    mixer.setFinLayout(az, 0);
+    const float k = 0.70710678f;
+    float d[4];
+    mixer.mixToFins(0.0f, 1.0f, 0.0f, MAX_FIN, d);          // pitch → cos(az)
+    EXPECT_NEAR(d[0],  k, 1e-4f);
+    EXPECT_NEAR(d[1], -k, 1e-4f);
+    EXPECT_NEAR(d[2], -k, 1e-4f);
+    EXPECT_NEAR(d[3],  k, 1e-4f);
+
+    mixer.mixToFins(0.0f, 0.0f, 1.0f, MAX_FIN, d);          // yaw → sin(az)
+    EXPECT_NEAR(d[0],  k, 1e-4f);
+    EXPECT_NEAR(d[1],  k, 1e-4f);
+    EXPECT_NEAR(d[2], -k, 1e-4f);
+    EXPECT_NEAR(d[3], -k, 1e-4f);
+
+    mixer.mixToFins(2.0f, 0.0f, 0.0f, MAX_FIN, d);          // roll still common
+    for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 2.0f, 1e-4f);
+}
+
+// A reverse bit negates that servo's whole deflection (mirrored mount).
+TEST_F(ControlMixerTest, SetFinLayout_ReverseNegatesFin) {
+    const float az[4] = {0.0f, 90.0f, 180.0f, 270.0f};
+    mixer.setFinLayout(az, 0x02);                            // reverse servo 1
+    float d[4];
+    mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
+    EXPECT_NEAR(d[0],   2.0f + 1.0f,  1e-4f);                // unchanged
+    EXPECT_NEAR(d[1], -(3.0f + 1.0f), 1e-4f);                // fully negated
+    EXPECT_NEAR(d[2],  -2.0f + 1.0f,  1e-4f);                // unchanged
+    EXPECT_NEAR(d[3],  -3.0f + 1.0f,  1e-4f);                // unchanged
+    EXPECT_EQ(mixer.getFinReverseMask(), 0x02);
+    EXPECT_NEAR(mixer.getFinAzimuthDeg(1), 90.0f, 1e-4f);
+}
+
+TEST_F(ControlMixerTest, MixToFins_Clamps) {
+    float d[4];
+    mixer.mixToFins(100.0f, 100.0f, 100.0f, MAX_FIN, d);
+    for (int i = 0; i < 4; i++) {
+        EXPECT_LE(d[i],  MAX_FIN);
+        EXPECT_GE(d[i], -MAX_FIN);
+    }
+}
