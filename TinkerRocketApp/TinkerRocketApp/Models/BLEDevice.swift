@@ -760,6 +760,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
     }
 
+    /// Fin layout (FinConfigData = 17 bytes, cmd 66). Derives each servo's CONTROL
+    /// azimuth from the ring slot it occupies (slot azimuths {0,90,180,270} for "+"
+    /// or {45,135,225,315} for "×"), then sends 4 LE floats + a per-servo reverse
+    /// bitmask. The ring GUI's nose-down view is a rendering choice and does not
+    /// change these control-frame azimuths.
+    func sendFinConfig(ringMode: UInt8, servoAtSlot: [Int], reverse: [Bool]) {
+        guard servoAtSlot.count == 4, reverse.count == 4 else { return }
+        let slotAz: [Float] = ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]
+        var az: [Float] = [0, 90, 180, 270]            // per servo index (0=servo 1)
+        for slot in 0..<4 {
+            let servo = servoAtSlot[slot]              // 1-4
+            if servo >= 1 && servo <= 4 { az[servo - 1] = slotAz[slot] }
+        }
+        var payload = Data()
+        for i in 0..<4 { var a = az[i]; payload.append(Data(bytes: &a, count: 4)) }
+        var mask: UInt8 = 0
+        for i in 0..<4 where reverse[i] { mask |= (UInt8(1) << UInt8(i)) }
+        payload.append(mask)
+        sendRawCommand(66, payload: payload)           // FinConfigData = 17 bytes
+    }
+
     func sendCameraConfig(cameraType: UInt8) {
         sendRawCommand(33, payload: Data([cameraType]))
     }

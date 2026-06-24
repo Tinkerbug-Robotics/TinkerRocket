@@ -124,6 +124,16 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var finMinDeg: Float = -60.0
     var finMaxDeg: Float = 60.0
 
+    // MARK: Fin layout
+    // Servo→fin mapping + ring orientation, sent as FinConfigData (cmd 66): each
+    // servo's CONTROL azimuth (deg) + a reverse bitmask. finServoAtSlot[s] is the
+    // servo (1-4) at ring slot s; slot control azimuths are {0,90,180,270} ("+")
+    // or {45,135,225,315} ("×"). Defaults reproduce the firmware "+" (servo 1 top/
+    // +pitch, 2 right/+yaw, 3 bottom, 4 left) so an unconfigured rocket is unchanged.
+    var finRingMode: UInt8 = 0                              // 0 = "+" on-axis, 1 = "×" 45°
+    var finServoAtSlot: [Int] = [1, 2, 3, 4]               // servo (1-4) at slot 0..3
+    var finReverse: [Bool] = [false, false, false, false]  // per-servo (1-4) reverse
+
     // MARK: PID
     // Defaults match the FC factory config (#267): kp=0.12 reproduces the flown
     // physical roll authority on the corrected 1:1 fin-angle scale; ki is a small
@@ -234,6 +244,11 @@ extension RocketProfile {
         servoMaxUs = try c.decodeIfPresent(Int16.self, forKey: .servoMaxUs) ?? defaults.servoMaxUs
         finMinDeg = try c.decodeIfPresent(Float.self, forKey: .finMinDeg) ?? defaults.finMinDeg
         finMaxDeg = try c.decodeIfPresent(Float.self, forKey: .finMaxDeg) ?? defaults.finMaxDeg
+        finRingMode = try c.decodeIfPresent(UInt8.self, forKey: .finRingMode) ?? defaults.finRingMode
+        let finSlots = try c.decodeIfPresent([Int].self, forKey: .finServoAtSlot) ?? defaults.finServoAtSlot
+        finServoAtSlot = finSlots.count == 4 ? finSlots : defaults.finServoAtSlot
+        let finRev = try c.decodeIfPresent([Bool].self, forKey: .finReverse) ?? defaults.finReverse
+        finReverse = finRev.count == 4 ? finRev : defaults.finReverse
 
         pidKp = try c.decodeIfPresent(Float.self, forKey: .pidKp) ?? defaults.pidKp
         pidKi = try c.decodeIfPresent(Float.self, forKey: .pidKi) ?? defaults.pidKi

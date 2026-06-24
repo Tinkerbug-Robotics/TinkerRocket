@@ -66,6 +66,7 @@ struct SettingsView: View {
     @State private var pidApplied = false
     @State private var rollControlApplied = false
     @State private var guidanceApplied = false
+    @State private var finApplied = false
     @State private var pyroApplied = false
 
     // LoRa TX power (BS only) — hydrated from rocketConfig, debounced send.
@@ -383,6 +384,7 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
         }
 
+        finLayoutSection
         rollControlSection
         guidanceSection
     }
@@ -645,6 +647,23 @@ struct SettingsView: View {
             }
 
             Text("Stored in the rocket profile. Persists across reboots.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private var finLayoutSection: some View {
+        Section(header: configHeader("Fin Layout", applied: finApplied)) {
+            FinLayoutView(
+                device: device,
+                ringMode: profile.finRingMode,
+                servoAtSlot: profile.finServoAtSlot,
+                reverse: profile.finReverse,
+                canJog: device.isConnected && !device.isBaseStation && device.telemetry.pwr_pin_on,
+                onSetRingMode: { m in updateProfile { $0.finRingMode = m }; applyFinConfig() },
+                onSetServoAtSlot: { s in updateProfile { $0.finServoAtSlot = s }; applyFinConfig() },
+                onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() }
+            )
+            Text("Map each servo to its fin, set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}), and reverse any mirrored servo. On the bench, jog each servo to confirm it deflects the way the ring shows.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1074,6 +1093,15 @@ struct SettingsView: View {
                                          kpAngle: kpAngle, integralSepThreshold: iwind)
         }
         showApplied($rollControlApplied)
+    }
+
+    private func applyFinConfig() {
+        if device.isConnected {
+            device.sendFinConfig(ringMode: profile.finRingMode,
+                                 servoAtSlot: profile.finServoAtSlot,
+                                 reverse: profile.finReverse)
+        }
+        showApplied($finApplied)
     }
 
     private func applyGuidanceConfig() {
