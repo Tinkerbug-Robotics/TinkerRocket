@@ -2376,6 +2376,14 @@ static void setup_fc()
     pn_target_e       = prefs.getFloat("gte", config::PN_TARGET_E_M);
     pn_target_n       = prefs.getFloat("gtn", config::PN_TARGET_N_M);
     pn_target_alt     = prefs.getFloat("gta", config::PN_TARGET_ALT_M);
+    // Fin→servo layout (servo azimuth + reverse), shared by every mix site.
+    float fin_az[4] = {
+        prefs.getFloat("fa0", config::FIN_AZIMUTH_0_DEG),
+        prefs.getFloat("fa1", config::FIN_AZIMUTH_1_DEG),
+        prefs.getFloat("fa2", config::FIN_AZIMUTH_2_DEG),
+        prefs.getFloat("fa3", config::FIN_AZIMUTH_3_DEG),
+    };
+    uint8_t fin_rev = prefs.getUChar("frv", config::FIN_REVERSE_MASK);
     prefs.end();
     ESP_LOGI(TAG, "Roll: kp_angle=%.2f rate_cap=%.0f iwindup=%.0f dps",
                   (double)kp_angle_outer, (double)kp_angle_rate_cap_dps,
@@ -2402,6 +2410,10 @@ static void setup_fc()
         control_mixer.enableGainSchedule(config::GAIN_SCHEDULE_V_REF,
                                          config::GAIN_SCHEDULE_V_MIN);
     }
+    control_mixer.setFinLayout(fin_az, fin_rev);
+    ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X",
+                  (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
+                  (unsigned)fin_rev);
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -4886,6 +4898,44 @@ static void loop_fc()
                     ESP_LOGW(TAG, "[GUID CFG] readConfigFrame failed");
                 }
             }
+            else if (out_pending_command == FIN_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(FinConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(FIN_CONFIG_MSG, sizeof(FinConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(FinConfigData))
+                {
+                    FinConfigData f;
+                    memcpy(&f, cfg_payload, sizeof(f));
+                    // Reject garbage azimuths (range check also rejects NaN/Inf).
+                    bool ok = true;
+                    for (int i = 0; i < 4; ++i)
+                        if (!(f.azimuth_deg[i] >= -360.0f && f.azimuth_deg[i] <= 360.0f)) ok = false;
+                    if (ok) {
+                        control_mixer.setFinLayout(f.azimuth_deg, f.reverse_mask);
+                        ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X",
+                                      (double)f.azimuth_deg[0], (double)f.azimuth_deg[1],
+                                      (double)f.azimuth_deg[2], (double)f.azimuth_deg[3],
+                                      (unsigned)f.reverse_mask);
+                        prefs.begin("servo", false);
+                        prefs.putFloat("fa0", f.azimuth_deg[0]);
+                        prefs.putFloat("fa1", f.azimuth_deg[1]);
+                        prefs.putFloat("fa2", f.azimuth_deg[2]);
+                        prefs.putFloat("fa3", f.azimuth_deg[3]);
+                        prefs.putUChar("frv", f.reverse_mask);
+                        prefs.end();
+                        ESP_LOGI(TAG, "[FIN CFG] Saved to NVS");
+                    } else {
+                        ESP_LOGW(TAG, "[FIN CFG] rejected out-of-range azimuth");
+                    }
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[FIN CFG] readConfigFrame failed");
+                }
+            }
             else if (out_pending_command == SERVO_REPLAY_PENDING)
             {
                 if (isCommandLockoutState(rocket_state)) {
@@ -5051,13 +5101,10 @@ static void loop_fc()
                 // would stay zero otherwise.
                 last_external_roll_cmd_deg = roll_fin_cmd;
 
-                // 4-fin cruciform mixing
+                // 4-fin mix via the configured fin layout (servo→azimuth + reverse)
                 float max_fin = config::PN_MAX_FIN_DEG;
                 float deflections[4];
-                deflections[0] = constrain(+pitch_fin + roll_fin_cmd, -max_fin, max_fin); // top
-                deflections[1] = constrain(+yaw_fin   + roll_fin_cmd, -max_fin, max_fin); // right
-                deflections[2] = constrain(-pitch_fin + roll_fin_cmd, -max_fin, max_fin); // bottom
-                deflections[3] = constrain(-yaw_fin   + roll_fin_cmd, -max_fin, max_fin); // left
+                control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                 servo_control.setServoAngles(deflections);
 
                 // Periodic debug output (1 Hz)
@@ -5365,13 +5412,10 @@ static void loop_fc()
                             float roll_fin_cmd = roll_rate_pid_standalone.computePID(
                                 config::ROLL_RATE_SET_POINT, -roll_rate_dps);
 
-                            // Mix to 4 fins: pitch differential + yaw differential + roll common
+                            // 4-fin mix via the configured fin layout (servo→azimuth + reverse)
                             float max_fin = pn_max_fin_deg;
                             float deflections[4];
-                            deflections[0] = constrain(+pitch_fin + roll_fin_cmd, -max_fin, max_fin);  // top
-                            deflections[1] = constrain(+yaw_fin   + roll_fin_cmd, -max_fin, max_fin);  // right
-                            deflections[2] = constrain(-pitch_fin + roll_fin_cmd, -max_fin, max_fin);  // bottom
-                            deflections[3] = constrain(-yaw_fin   + roll_fin_cmd, -max_fin, max_fin);  // left
+                            control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                             servo_control.setServoAngles(deflections);
                             guidance_active = true;
                         }
