@@ -3756,6 +3756,17 @@ static void loop_bs()
             ESP_LOGI(TAG, "[BLE->UPLINK] Servo config relayed");
         }
     }
+    else if (ble_cmd == 65)
+    {
+        // Full guidance config: relay to OutComputer via LoRa uplink
+        const uint8_t* payload = ble_app.getCommandPayload();
+        size_t payload_len = ble_app.getCommandPayloadLength();
+        if (payload_len >= sizeof(GuidanceConfigData))
+        {
+            buildUplinkPacket(65, payload, sizeof(GuidanceConfigData));
+            ESP_LOGI(TAG, "[BLE->UPLINK] Guidance config relayed");
+        }
+    }
     else if (ble_cmd == 13)
     {
         // PID config: cache locally + relay to OutComputer via LoRa uplink

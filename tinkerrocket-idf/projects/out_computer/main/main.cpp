@@ -1142,6 +1142,7 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == ROLL_PROFILE_PENDING ||
            cmd == SERVO_REPLAY_PENDING ||
            cmd == ROLL_CTRL_CONFIG_PENDING ||
+           cmd == GUIDANCE_CONFIG_PENDING ||
            cmd == PYRO_CONFIG_PENDING ||
            cmd == ORIENT_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
@@ -1575,6 +1576,8 @@ static bool isKnownMessageType(uint8_t type)
         case SERVO_REPLAY_STOP:
         case ROLL_CTRL_CONFIG_PENDING:
         case ROLL_CTRL_CONFIG_MSG:
+        case GUIDANCE_CONFIG_PENDING:
+        case GUIDANCE_CONFIG_MSG:
         case GUIDANCE_ENABLE:
         case GUIDANCE_DISABLE:
         case GUIDANCE_TELEM_MSG:
@@ -2940,6 +2943,15 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         cfg_guidance_en = enabled;
         setPendingCommand(enabled ? GUIDANCE_ENABLE : GUIDANCE_DISABLE);
         ESP_LOGI("LORA", "UPLINK Guidance: %s", enabled ? "ENABLE" : "DISABLE");
+    }
+    else if (cmd == 65 && payload_len >= sizeof(GuidanceConfigData))
+    {
+        // Full guidance config from BaseStation: relay to FC
+        memcpy(pending_config_data, payload, sizeof(GuidanceConfigData));
+        pending_config_data_len = sizeof(GuidanceConfigData);
+        pending_config_msg_type = GUIDANCE_CONFIG_MSG;
+        setPendingCommand(GUIDANCE_CONFIG_PENDING);
+        ESP_LOGI("LORA", "UPLINK Guidance config queued for RocketComputer");
     }
     else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 5)
     {
@@ -5474,6 +5486,20 @@ static void loop_oc()
                 prefs.putBool("en", enabled);
                 prefs.end();
                 ESP_LOGI("BLE", "Guidance: %s", enabled ? "ENABLE" : "DISABLE");
+            }
+        }
+        else if (ble_cmd == 65)
+        {
+            // Full guidance config (GuidanceConfigData): relay the whole struct to the FC
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(GuidanceConfigData))
+            {
+                memcpy(pending_config_data, payload, sizeof(GuidanceConfigData));
+                pending_config_data_len = sizeof(GuidanceConfigData);
+                pending_config_msg_type = GUIDANCE_CONFIG_MSG;
+                setPendingCommand(GUIDANCE_CONFIG_PENDING);
+                ESP_LOGI("BLE", "Guidance config queued for RocketComputer");
             }
         }
         else if (ble_cmd == 33)
