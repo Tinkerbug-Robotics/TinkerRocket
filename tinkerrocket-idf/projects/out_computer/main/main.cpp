@@ -1143,6 +1143,7 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == SERVO_REPLAY_PENDING ||
            cmd == ROLL_CTRL_CONFIG_PENDING ||
            cmd == GUIDANCE_CONFIG_PENDING ||
+           cmd == FIN_CONFIG_PENDING ||
            cmd == PYRO_CONFIG_PENDING ||
            cmd == ORIENT_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
@@ -1578,6 +1579,8 @@ static bool isKnownMessageType(uint8_t type)
         case ROLL_CTRL_CONFIG_MSG:
         case GUIDANCE_CONFIG_PENDING:
         case GUIDANCE_CONFIG_MSG:
+        case FIN_CONFIG_PENDING:
+        case FIN_CONFIG_MSG:
         case GUIDANCE_ENABLE:
         case GUIDANCE_DISABLE:
         case GUIDANCE_TELEM_MSG:
@@ -2952,6 +2955,15 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         pending_config_msg_type = GUIDANCE_CONFIG_MSG;
         setPendingCommand(GUIDANCE_CONFIG_PENDING);
         ESP_LOGI("LORA", "UPLINK Guidance config queued for RocketComputer");
+    }
+    else if (cmd == 66 && payload_len >= sizeof(FinConfigData))
+    {
+        // Full fin layout from BaseStation: relay to FC
+        memcpy(pending_config_data, payload, sizeof(FinConfigData));
+        pending_config_data_len = sizeof(FinConfigData);
+        pending_config_msg_type = FIN_CONFIG_MSG;
+        setPendingCommand(FIN_CONFIG_PENDING);
+        ESP_LOGI("LORA", "UPLINK Fin layout queued for RocketComputer");
     }
     else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 5)
     {
@@ -5500,6 +5512,20 @@ static void loop_oc()
                 pending_config_msg_type = GUIDANCE_CONFIG_MSG;
                 setPendingCommand(GUIDANCE_CONFIG_PENDING);
                 ESP_LOGI("BLE", "Guidance config queued for RocketComputer");
+            }
+        }
+        else if (ble_cmd == 66)
+        {
+            // Full fin layout (FinConfigData): relay the whole struct to the FC
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(FinConfigData))
+            {
+                memcpy(pending_config_data, payload, sizeof(FinConfigData));
+                pending_config_data_len = sizeof(FinConfigData);
+                pending_config_msg_type = FIN_CONFIG_MSG;
+                setPendingCommand(FIN_CONFIG_PENDING);
+                ESP_LOGI("BLE", "Fin layout queued for RocketComputer");
             }
         }
         else if (ble_cmd == 33)
