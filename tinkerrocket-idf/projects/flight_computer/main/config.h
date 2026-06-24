@@ -135,6 +135,19 @@ struct config
     static constexpr int8_t RUNCAM_PWR_PIN = 32;     // camera power gate (CAM_ACT)
     static constexpr uint32_t RUNCAM_BAUD = 115200;
 
+    // RunCam record-start timing (serviceCameraStart poll loop, #251 follow-up).
+    // The camera cold-boots on every power-on and only answers UART once ready.
+    // A fixed wait + single probe raced the boot time and, on a miss, fell back
+    // to a record-less power toggle (camera on, not recording — the intermittent
+    // failure).  Instead we poll GET_DEVICE_INFO from BOOT_MIN_MS to BOOT_MAX_MS
+    // and fire START_RECORDING the moment it answers (or blind at the deadline).
+    static constexpr uint32_t RUNCAM_BOOT_MIN_MS      = 2000;  // earliest probe
+    static constexpr uint32_t RUNCAM_BOOT_MAX_MS      = 8000;  // give up, record blind
+    static constexpr uint32_t RUNCAM_PROBE_INTERVAL_MS = 250;  // poll cadence
+    static constexpr uint32_t RUNCAM_PROBE_READ_MS    = 60;    // per-probe RX wait
+    static constexpr uint8_t  RUNCAM_RECORD_RESENDS   = 2;     // extra START sends
+    static constexpr uint32_t RUNCAM_RECORD_RESEND_MS = 150;   // resend spacing
+
     // ### Pyro Channel Pins ###
     // New PCB: one shared arming FET feeds all four squib drivers.
     // ARM is raised only momentarily — for the PRELAUNCH continuity

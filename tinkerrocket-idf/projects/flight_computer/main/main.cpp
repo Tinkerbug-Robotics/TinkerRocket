@@ -316,17 +316,25 @@ enum class CameraStopPhase : uint8_t {
 static CameraStopPhase camera_stop_phase = CameraStopPhase::Idle;
 static uint32_t camera_stop_due_ms = 0;
 // Deferred camera-start sequence (RunCam only; see cameraStart /
-// serviceCameraStart).  The RunCam needs ~5s to boot after power-on
-// before it accepts UART.  Waiting inline used to block the flight task
-// long enough to trip the task watchdog (#146), so the boot wait is now
-// serviced from the main loop.  Idle → WaitingForBoot (5s after
-// power-on, then probe GET_DEVICE_INFO) → Idle.
+// serviceCameraStart).  The RunCam cold-boots on each power-on and only
+// answers UART once ready.  Waiting inline used to block the flight task
+// long enough to trip the task watchdog (#146), so the boot wait is
+// serviced from the main loop.  A fixed wait + single probe raced the boot
+// time and, on a miss, fell back to a record-less power toggle; we now POLL
+// GET_DEVICE_INFO and command START_RECORDING the moment the camera answers
+// (or blind at the deadline), then resend it for UART reliability.
+//   Idle → WaitingForBoot → Probing → ResendRecord → Idle.
 enum class CameraStartPhase : uint8_t {
     Idle,
-    WaitingForBoot,
+    WaitingForBoot,  // min boot grace before the first probe
+    Probing,         // polling GET_DEVICE_INFO until the camera answers
+    ResendRecord,    // re-sending START_RECORDING for reliability
 };
 static CameraStartPhase camera_start_phase = CameraStartPhase::Idle;
 static uint32_t camera_start_due_ms = 0;
+static uint32_t camera_start_power_ms = 0;       // when RUNCAM_PWR_PIN went high
+static uint32_t camera_probe_deadline_ms = 0;    // stop polling, record blind
+static uint8_t  camera_record_resends_left = 0;  // remaining START_RECORDING resends
 static uint8_t runtime_camera_type = config::CAMERA_TYPE;  // can be overridden via BLE
 static bool servo_enabled = false;
 static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
@@ -1842,10 +1850,11 @@ static uint8_t runCamCrc8(const uint8_t *data, size_t len)
 // GET_DEVICE_INFO request frame: header, command 0x00, CRC8.
 static const uint8_t RUNCAM_DEVICE_INFO_CMD[] = {0xCC, 0x00, 0x60};
 
-// Send GET_DEVICE_INFO and read the 5-byte reply.  Returns true on a
-// header- and CRC-valid response.  Verbose by design — this is the
-// RX-wire bench-test path for #146.
-static bool runCamQueryDeviceInfo()
+// One GET_DEVICE_INFO exchange.  Returns true on a header- and CRC-valid
+// 5-byte reply, caching the feature bitfield in runcam_features.  Quiet on
+// failure (the start poll calls this repeatedly); the caller logs the final
+// timeout.  Also the RX-wire bench-test path for #146.
+static bool runCamProbeOnce()
 {
     if (!config::USE_RUNCAM || !runcam_uart_ready)
         return false;
@@ -1854,60 +1863,37 @@ static bool runCamQueryDeviceInfo()
     uint8_t scratch[32];
     while (uart_read_bytes(RUNCAM_UART_PORT, scratch, sizeof(scratch), 0) > 0) {}
 
-    // The camera can be slow to answer right after boot — retry a few times.
-    for (int attempt = 1; attempt <= 3; ++attempt)
-    {
-        uart_write_bytes(RUNCAM_UART_PORT, RUNCAM_DEVICE_INFO_CMD,
-                         sizeof(RUNCAM_DEVICE_INFO_CMD));
-        ESP_LOGI(TAG, "RunCam GET_DEVICE_INFO sent (attempt %d/3)", attempt);
+    uart_write_bytes(RUNCAM_UART_PORT, RUNCAM_DEVICE_INFO_CMD,
+                     sizeof(RUNCAM_DEVICE_INFO_CMD));
 
-        uint8_t resp[5] = {0};
-        int n = uart_read_bytes(RUNCAM_UART_PORT, resp, sizeof(resp),
-                                pdMS_TO_TICKS(150));
-        if (n <= 0)
-        {
-            ESP_LOGW(TAG, "RunCam: no RX bytes (attempt %d/3)", attempt);
-            continue;
-        }
+    uint8_t resp[5] = {0};
+    int n = uart_read_bytes(RUNCAM_UART_PORT, resp, sizeof(resp),
+                            pdMS_TO_TICKS(config::RUNCAM_PROBE_READ_MS));
+    if (n < (int)sizeof(resp) || resp[0] != 0xCC)
+        return false;
+    if (runCamCrc8(resp, 4) != resp[4])
+        return false;
 
-        ESP_LOGI(TAG, "RunCam RX %d byte(s):", n);
-        ESP_LOG_BUFFER_HEX(TAG, resp, n);
+    // resp[2..3] is the 16-bit feature bitfield, little-endian (bench reply
+    // cc 01 77 00 → 0x0077).
+    runcam_features = (uint16_t)resp[2] | ((uint16_t)resp[3] << 8);
+    ESP_LOGI(TAG, "RunCam ALIVE — protocol v%u, features 0x%04X",
+             resp[1], runcam_features);
+    ESP_LOG_BUFFER_HEX(TAG, resp, n);
+    return true;
+}
 
-        if (n < (int)sizeof(resp))
-        {
-            ESP_LOGW(TAG, "RunCam: short reply (%d/%d bytes)",
-                     n, (int)sizeof(resp));
-            continue;
-        }
-        if (resp[0] != 0xCC)
-        {
-            ESP_LOGW(TAG, "RunCam: bad header 0x%02X (expected 0xCC)", resp[0]);
-            continue;
-        }
-        const uint8_t want_crc = runCamCrc8(resp, 4);
-        if (want_crc != resp[4])
-        {
-            ESP_LOGW(TAG, "RunCam: CRC mismatch (got 0x%02X, computed 0x%02X)",
-                     resp[4], want_crc);
-            continue;
-        }
-
-        // resp[2..3] is a 16-bit feature bitfield; log both endian
-        // readings since the bench reply settles which one is real.
-        const uint16_t feat_le = (uint16_t)resp[2] | ((uint16_t)resp[3] << 8);
-        const uint16_t feat_be = ((uint16_t)resp[2] << 8) | (uint16_t)resp[3];
-        ESP_LOGI(TAG, "RunCam ALIVE — protocol v%u, feature bytes "
-                      "0x%02X 0x%02X (LE=0x%04X BE=0x%04X)",
-                 resp[1], resp[2], resp[3], feat_le, feat_be);
-        runcam_features = feat_le;
-        return true;
-    }
-
-    ESP_LOGW(TAG, "RunCam: GET_DEVICE_INFO got no valid reply. Check the RX "
-                  "wire (RunCam TX -> FC pin %d) and that UART control is "
-                  "enabled in the camera's menu.",
-             (int)config::RUNCAM_RX_PIN);
-    return false;
+// START_RECORDING (CAMERA_CONTROL 0x03).  The unit advertises this (feature
+// 0x40) and holds record on it, unlike the power-button toggle which only
+// blips the LED (#234) — so the start path always uses this, even when the
+// readiness probe never answered.
+static void sendRunCamStartRecording()
+{
+    if (!config::USE_RUNCAM || !runcam_uart_ready)
+        return;
+    uint8_t rec[4] = {0xCC, 0x01, 0x03, 0x00};
+    rec[3] = runCamCrc8(rec, 3);
+    uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
 }
 
 // ── Generic camera start/stop (dispatches based on runtime_camera_type) ──
@@ -1922,16 +1908,19 @@ static void cameraStart(uint32_t now_ms)
     }
     else if (runtime_camera_type == CAM_TYPE_RUNCAM)
     {
-        // Power on, then hand the ~5s boot wait to serviceCameraStart so
-        // the flight task keeps feeding the watchdog (#146).  The RunCam
-        // auto-starts recording on power-up; the deferred GET_DEVICE_INFO
-        // probe just confirms the UART link once it has booted.
+        // Power on, then poll for UART readiness from serviceCameraStart so
+        // the flight task keeps feeding the watchdog (#146).  The camera boots
+        // to IDLE and does NOT auto-record (#234); serviceCameraStart commands
+        // START_RECORDING as soon as it answers GET_DEVICE_INFO.
         if (config::RUNCAM_PWR_PIN >= 0)
             gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 1);
         gopro_recording = true;
+        runcam_features = 0;  // re-probe each power cycle; don't trust a stale cache
+        camera_start_power_ms = now_ms;
         camera_start_phase = CameraStartPhase::WaitingForBoot;
-        camera_start_due_ms = now_ms + 5000U;  // RunCam boot time
-        ESP_LOGI(TAG, "Camera START (RunCam) — power ON, booting...");
+        camera_start_due_ms = now_ms + config::RUNCAM_BOOT_MIN_MS;
+        camera_probe_deadline_ms = now_ms + config::RUNCAM_BOOT_MAX_MS;
+        ESP_LOGI(TAG, "Camera START (RunCam) — power ON, polling for boot...");
     }
 }
 
@@ -1999,40 +1988,64 @@ static inline void serviceCameraStop(uint32_t now_ms)
     }
 }
 
-// Drives the deferred RunCam boot wait queued by cameraStart.  Once the
-// camera has had time to boot, fire the GET_DEVICE_INFO probe (#146) to
-// confirm the UART link and log the camera's feature set.  The probe's
-// brief blocking read (~2 ms typical, ~450 ms worst case on a dead RX)
-// is bounded and runs only on a manual start — unlike the old inline
-// delay_ms(5000), it can't stall the flight task into a watchdog reset.
+// Drives the deferred RunCam start queued by cameraStart, serviced from the
+// main loop so it can't stall the flight task into a watchdog reset (#146).
+// The camera cold-boots and only answers UART once ready, so from BOOT_MIN_MS
+// we poll GET_DEVICE_INFO every PROBE_INTERVAL_MS and command START_RECORDING
+// the instant it answers (typically sooner than the old fixed 5 s wait).  If
+// it never answers by BOOT_MAX_MS we record blind — the camera supports
+// START_RECORDING, so that beats the record-less power toggle the old code
+// fell back to.  START_RECORDING is fire-and-forget (no ACK), so we resend it
+// a few times.  Each probe's RX read is bounded by RUNCAM_PROBE_READ_MS.
 static inline void serviceCameraStart(uint32_t now_ms)
 {
     if (camera_start_phase == CameraStartPhase::Idle) return;
     if ((int32_t)(now_ms - camera_start_due_ms) < 0) return;
-    // WaitingForBoot elapsed — camera should now accept UART.
-    ESP_LOGI(TAG, "RunCam boot wait elapsed — probing over UART");
-    const bool alive = runCamQueryDeviceInfo();
-    // The camera boots to IDLE — it does not auto-record on a clean power-up
-    // (the old assumption only held because the UART-idle glitch kept it
-    // powered continuously; see #234).  So explicitly command record start.
-    // Prefer the deterministic START_RECORDING command when the camera advertises
-    // it (feature 0x40): the power-button toggle only blips the LED without
-    // holding record on the bench unit.  Fall back to the toggle otherwise.
-    if (runcam_features & RUNCAM_FEAT_START_RECORDING)
+
+    if (camera_start_phase == CameraStartPhase::WaitingForBoot)
     {
-        uint8_t rec[4] = {0xCC, 0x01, 0x03, 0x00};  // CAMERA_CONTROL: START_RECORDING
-        rec[3] = runCamCrc8(rec, 3);
-        uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
-        ESP_LOGI(TAG, "RunCam START_RECORDING sent (probe OK, feat 0x%04X)",
-                 runcam_features);
+        ESP_LOGI(TAG, "RunCam boot grace elapsed — polling for UART readiness");
+        camera_start_phase = CameraStartPhase::Probing;
+        // fall through and probe immediately (due is already <= now)
     }
+
+    if (camera_start_phase == CameraStartPhase::Probing)
+    {
+        const bool alive = runCamProbeOnce();
+        const bool deadline = (int32_t)(now_ms - camera_probe_deadline_ms) >= 0;
+        if (!alive && !deadline)
+        {
+            camera_start_due_ms = now_ms + config::RUNCAM_PROBE_INTERVAL_MS;
+            return;  // keep polling
+        }
+        if (alive)
+            ESP_LOGI(TAG, "RunCam ready %lu ms after power-on (feat 0x%04X%s)",
+                     (unsigned long)(now_ms - camera_start_power_ms), runcam_features,
+                     (runcam_features & RUNCAM_FEAT_START_RECORDING)
+                         ? "" : " — START_RECORDING not advertised!");
+        else
+            ESP_LOGW(TAG, "RunCam: no GET_DEVICE_INFO reply in %lu ms — recording "
+                          "blind (check RX wire to FC pin %d and the camera's "
+                          "UART-control menu)",
+                     (unsigned long)(now_ms - camera_start_power_ms),
+                     (int)config::RUNCAM_RX_PIN);
+        // Command record start deterministically — never the blip-only toggle.
+        sendRunCamStartRecording();
+        ESP_LOGI(TAG, "RunCam START_RECORDING sent (%s)", alive ? "probe OK" : "blind");
+        camera_record_resends_left = config::RUNCAM_RECORD_RESENDS;
+        camera_start_phase = CameraStartPhase::ResendRecord;
+        camera_start_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
+        return;
+    }
+
+    // ResendRecord: re-issue START_RECORDING a few times (fire-and-forget).
+    sendRunCamStartRecording();
+    ESP_LOGI(TAG, "RunCam START_RECORDING resent (%u remaining)",
+             (unsigned)(camera_record_resends_left - 1));
+    if (--camera_record_resends_left == 0)
+        camera_start_phase = CameraStartPhase::Idle;
     else
-    {
-        sendRunCamToggle();
-        ESP_LOGI(TAG, "RunCam record toggle sent (probe %s, no explicit-record feature)",
-                 alive ? "OK" : "no-reply");
-    }
-    camera_start_phase = CameraStartPhase::Idle;
+        camera_start_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
 }
 
 static inline void startBootReadyChirp(uint32_t now_ms, uint32_t now_us)
