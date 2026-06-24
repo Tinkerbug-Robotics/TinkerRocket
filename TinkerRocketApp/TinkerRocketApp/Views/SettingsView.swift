@@ -663,7 +663,7 @@ struct SettingsView: View {
                     .focused($focusedField, equals: .guidTargetAlt)
                 Text("m").foregroundColor(.secondary)
             }
-            Text("Aim-point altitude above the pad. Set above expected apogee so guidance steers up-and-over the pad through the whole coast.")
+            Text("Aim-point altitude above the pad. Set near (or modestly above) expected apogee \u{2014} aiming far above weakens guidance (it reaches closest-approach early).")
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {
