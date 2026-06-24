@@ -47,6 +47,13 @@ struct SettingsView: View {
     @State private var sRateCapDps = ""
     @State private var sKpAngle = ""
     @State private var sIntegralSep = ""
+    @State private var sPnTargetAlt = ""
+    @State private var sPnNavGain = ""
+    @State private var sPnMaxAccel = ""
+    @State private var sPnAccelToFin = ""
+    @State private var sPnMaxFin = ""
+    @State private var sPnMinSpeed = ""
+    @State private var sPnCoastDelay = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
@@ -58,6 +65,7 @@ struct SettingsView: View {
     @State private var servoApplied = false
     @State private var pidApplied = false
     @State private var rollControlApplied = false
+    @State private var guidanceApplied = false
     @State private var pyroApplied = false
 
     // LoRa TX power (BS only) — hydrated from rocketConfig, debounced send.
@@ -115,17 +123,19 @@ struct SettingsView: View {
         case rateCap
         case kpAngle
         case integralSep
+        case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed, guidCoastDelay
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
     }
 
-    private enum EditGroup { case servo, pid, rollControl, rollWaypoints, pyro }
+    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finMin, .finMax: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
+        case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed, .guidCoastDelay: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case nil: return nil
@@ -137,6 +147,7 @@ struct SettingsView: View {
         case .servo: applyServoConfig()
         case .pid: applyPIDConfig()
         case .rollControl: applyRollControlConfig()
+        case .guidance: applyGuidanceConfig()
         case .rollWaypoints: applyRollProfile()
         case .pyro: applyPyroConfig()
         }
@@ -373,6 +384,7 @@ struct SettingsView: View {
         }
 
         rollControlSection
+        guidanceSection
     }
 
     @ViewBuilder
@@ -637,6 +649,74 @@ struct SettingsView: View {
         }
     }
 
+    private var guidanceSection: some View {
+        Section(header: configHeader("PN Guidance", applied: guidanceApplied)) {
+            Toggle("Enable Guidance", isOn: bind(\.guidanceEnabled) { _ in applyGuidanceConfig() })
+            Text("Proportional-navigation steering during coast. Phase 1 target: directly over the launch pad (overhead).")
+                .font(.caption).foregroundColor(.secondary)
+
+            HStack {
+                Text("Target Altitude")
+                Spacer()
+                TextField("600", text: $sPnTargetAlt)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidTargetAlt)
+                Text("m").foregroundColor(.secondary)
+            }
+            Text("Aim-point altitude above the pad. Set above expected apogee so guidance steers up-and-over the pad through the whole coast.")
+                .font(.caption).foregroundColor(.secondary)
+
+            HStack {
+                Text("Nav Gain (N)")
+                Spacer()
+                TextField("5", text: $sPnNavGain)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidNavGain)
+            }
+            HStack {
+                Text("Max Accel")
+                Spacer()
+                TextField("20", text: $sPnMaxAccel)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidMaxAccel)
+                Text("m/s\u{00B2}").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Accel\u{2192}Fin")
+                Spacer()
+                TextField("4", text: $sPnAccelToFin)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidAccelToFin)
+            }
+            HStack {
+                Text("Max Fin")
+                Spacer()
+                TextField("15", text: $sPnMaxFin)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidMaxFin)
+                Text("deg").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Min Speed")
+                Spacer()
+                TextField("15", text: $sPnMinSpeed)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidMinSpeed)
+                Text("m/s").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Coast Delay")
+                Spacer()
+                TextField("0", text: $sPnCoastDelay)
+                    .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidCoastDelay)
+                Text("ms").foregroundColor(.secondary)
+            }
+            Text("Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority; coast delay waits after burnout before engaging. Stored in the rocket profile.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
     @ViewBuilder
     private var rollWaypointEditor: some View {
         Text("Each waypoint defines the START of a segment. Angle interpolates the target roll angle to the next waypoint; Null Rate holds zero roll rate (angle ignored) for the segment.")
@@ -798,6 +878,13 @@ struct SettingsView: View {
         sRateCapDps = formatInt(Double(p.rateCapDps))
         sKpAngle = formatDecimal(Double(p.kpAngle))
         sIntegralSep = formatInt(Double(p.integralSepThreshold))
+        sPnTargetAlt = formatInt(Double(p.pnTargetAltM))
+        sPnNavGain = formatDecimal(Double(p.pnNavGain))
+        sPnMaxAccel = formatDecimal(Double(p.pnMaxAccel))
+        sPnAccelToFin = formatDecimal(Double(p.pnAccelToFin))
+        sPnMaxFin = formatDecimal(Double(p.pnMaxFinDeg))
+        sPnMinSpeed = formatDecimal(Double(p.pnMinSpeed))
+        sPnCoastDelay = formatInt(Double(p.pnCoastDelayMs))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg), mode: $0.mode.rawValue)
         }
@@ -987,6 +1074,30 @@ struct SettingsView: View {
                                          kpAngle: kpAngle, integralSepThreshold: iwind)
         }
         showApplied($rollControlApplied)
+    }
+
+    private func applyGuidanceConfig() {
+        let navGain    = max(0, Float(sPnNavGain)    ?? profile.pnNavGain)
+        let maxAccel   = max(0, Float(sPnMaxAccel)   ?? profile.pnMaxAccel)
+        let accelToFin = max(0, Float(sPnAccelToFin) ?? profile.pnAccelToFin)
+        let maxFin     = max(0, Float(sPnMaxFin)     ?? profile.pnMaxFinDeg)
+        let minSpeed   = max(0, Float(sPnMinSpeed)   ?? profile.pnMinSpeed)
+        let coastDelay = UInt16(clamping: Int(Double(sPnCoastDelay) ?? Double(profile.pnCoastDelayMs)))
+        let targetAlt  = max(0, Float(sPnTargetAlt)  ?? profile.pnTargetAltM)
+        updateProfile {
+            $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
+            $0.pnMaxFinDeg = maxFin; $0.pnMinSpeed = minSpeed; $0.pnCoastDelayMs = coastDelay
+            $0.pnTargetAltM = targetAlt
+        }
+        if device.isConnected {
+            device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
+                                      navGain: navGain, maxAccel: maxAccel, accelToFin: accelToFin,
+                                      maxFinDeg: maxFin, minSpeed: minSpeed, coastDelayMs: coastDelay,
+                                      targetMode: profile.pnTargetMode,
+                                      targetE: profile.pnTargetE, targetN: profile.pnTargetN,
+                                      targetAlt: targetAlt)
+        }
+        showApplied($guidanceApplied)
     }
 
     private func applyRollProfile() {

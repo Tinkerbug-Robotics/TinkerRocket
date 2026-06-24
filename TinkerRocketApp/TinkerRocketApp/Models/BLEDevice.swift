@@ -737,6 +737,29 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(32, payload: Data([enabled ? 0x01 : 0x00]))
     }
 
+    /// Full PN guidance config (GuidanceConfigData = 36 bytes, cmd 65). Floats
+    /// LE in struct order, then coast_delay(u16), enable(u8), target_mode(u8).
+    func sendGuidanceConfig(enabled: Bool, navGain: Float, maxAccel: Float, accelToFin: Float,
+                            maxFinDeg: Float, minSpeed: Float, coastDelayMs: UInt16,
+                            targetMode: UInt8, targetE: Float, targetN: Float, targetAlt: Float) {
+        var payload = Data()
+        var ng = navGain, ma = maxAccel, a2f = accelToFin, mf = maxFinDeg, ms = minSpeed
+        var te = targetE, tn = targetN, ta = targetAlt
+        payload.append(Data(bytes: &ng,  count: 4))
+        payload.append(Data(bytes: &ma,  count: 4))
+        payload.append(Data(bytes: &a2f, count: 4))
+        payload.append(Data(bytes: &mf,  count: 4))
+        payload.append(Data(bytes: &ms,  count: 4))
+        payload.append(Data(bytes: &te,  count: 4))
+        payload.append(Data(bytes: &tn,  count: 4))
+        payload.append(Data(bytes: &ta,  count: 4))
+        var cd = coastDelayMs; payload.append(Data(bytes: &cd, count: 2))
+        payload.append(enabled ? 0x01 : 0x00)
+        payload.append(targetMode)
+        sendRawCommand(65, payload: payload)   // GuidanceConfigData = 36 bytes
+        if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
+    }
+
     func sendCameraConfig(cameraType: UInt8) {
         sendRawCommand(33, payload: Data([cameraType]))
     }

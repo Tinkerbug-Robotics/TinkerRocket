@@ -87,6 +87,18 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var rateCapDps: Float = 60          // outer-loop angle→rate cap (deg/s)
     var kpAngle: Float = 2.0            // outer angle-loop P-gain (cascaded angle control)
     var guidanceEnabled: Bool = false
+    // PN guidance params. Defaults MUST equal config.h (PN_*); pushed on connect,
+    // they override the FC, so a mismatch silently re-tunes guidance.
+    var pnNavGain: Float = 5.0          // config::PN_NAV_GAIN
+    var pnMaxAccel: Float = 20.0        // config::PN_MAX_ACCEL_MPS2
+    var pnAccelToFin: Float = 4.0       // config::PN_ACCEL_TO_FIN_DEG
+    var pnMaxFinDeg: Float = 15.0       // config::PN_MAX_FIN_DEG
+    var pnMinSpeed: Float = 15.0        // config::PN_MIN_SPEED_MPS
+    var pnCoastDelayMs: UInt16 = 0      // config::PN_COAST_DELAY_MS
+    var pnTargetAltM: Float = 600.0     // config::PN_TARGET_ALT_M
+    var pnTargetMode: UInt8 = 0         // GUIDE_TARGET_OVERHEAD (Phase 1: locked)
+    var pnTargetE: Float = 0
+    var pnTargetN: Float = 0
     var cameraType: UInt8 = 2          // 0=None, 1=GoPro, 2=RunCam
     /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
     /// manual board→rocket code. Manual fixes the roll clocking the control
@@ -200,6 +212,16 @@ extension RocketProfile {
         rateCapDps = try c.decodeIfPresent(Float.self, forKey: .rateCapDps) ?? defaults.rateCapDps
         kpAngle = try c.decodeIfPresent(Float.self, forKey: .kpAngle) ?? defaults.kpAngle
         guidanceEnabled = try c.decodeIfPresent(Bool.self, forKey: .guidanceEnabled) ?? defaults.guidanceEnabled
+        pnNavGain = try c.decodeIfPresent(Float.self, forKey: .pnNavGain) ?? defaults.pnNavGain
+        pnMaxAccel = try c.decodeIfPresent(Float.self, forKey: .pnMaxAccel) ?? defaults.pnMaxAccel
+        pnAccelToFin = try c.decodeIfPresent(Float.self, forKey: .pnAccelToFin) ?? defaults.pnAccelToFin
+        pnMaxFinDeg = try c.decodeIfPresent(Float.self, forKey: .pnMaxFinDeg) ?? defaults.pnMaxFinDeg
+        pnMinSpeed = try c.decodeIfPresent(Float.self, forKey: .pnMinSpeed) ?? defaults.pnMinSpeed
+        pnCoastDelayMs = try c.decodeIfPresent(UInt16.self, forKey: .pnCoastDelayMs) ?? defaults.pnCoastDelayMs
+        pnTargetAltM = try c.decodeIfPresent(Float.self, forKey: .pnTargetAltM) ?? defaults.pnTargetAltM
+        pnTargetMode = try c.decodeIfPresent(UInt8.self, forKey: .pnTargetMode) ?? defaults.pnTargetMode
+        pnTargetE = try c.decodeIfPresent(Float.self, forKey: .pnTargetE) ?? defaults.pnTargetE
+        pnTargetN = try c.decodeIfPresent(Float.self, forKey: .pnTargetN) ?? defaults.pnTargetN
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
         imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
 

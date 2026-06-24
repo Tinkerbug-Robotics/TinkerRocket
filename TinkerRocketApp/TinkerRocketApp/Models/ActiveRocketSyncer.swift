@@ -162,7 +162,13 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendRollProfile(waypoints: profile.rollWaypoints.map {
             (time: $0.timeSeconds, angle: $0.angleDeg, mode: $0.mode.rawValue)
         })
-        device.sendGuidanceConfig(enabled: profile.guidanceEnabled)
+        device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
+                                  navGain: profile.pnNavGain, maxAccel: profile.pnMaxAccel,
+                                  accelToFin: profile.pnAccelToFin, maxFinDeg: profile.pnMaxFinDeg,
+                                  minSpeed: profile.pnMinSpeed, coastDelayMs: profile.pnCoastDelayMs,
+                                  targetMode: profile.pnTargetMode,
+                                  targetE: profile.pnTargetE, targetN: profile.pnTargetN,
+                                  targetAlt: profile.pnTargetAltM)
         device.sendCameraConfig(cameraType: profile.cameraType)
         device.sendImuOrientationConfig(profile.imuOrientSetting)
         device.sendSoundConfig(enabled: profile.soundsEnabled)
