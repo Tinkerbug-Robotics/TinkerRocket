@@ -323,6 +323,12 @@ struct config
     static constexpr float PN_MIN_SPEED_MPS = 15.0f;
     // Delay after burnout before engaging guidance (ms)
     static constexpr uint16_t PN_COAST_DELAY_MS = 0;
+    // Guided-mode accel(m/s^2) -> fin(deg) scale (coast path; was an inline literal)
+    static constexpr float PN_ACCEL_TO_FIN_DEG = 4.0f;
+    // Target mode + point (ENU m rel. pad). OVERHEAD (0) = directly over pad (E=N=0).
+    static constexpr uint8_t PN_TARGET_MODE = 0;  // GUIDE_TARGET_OVERHEAD
+    static constexpr float   PN_TARGET_E_M  = 0.0f;
+    static constexpr float   PN_TARGET_N_M  = 0.0f;
 
     // ### Burnout Detection ###
     // Consecutive samples of negative body-X accel required to latch
