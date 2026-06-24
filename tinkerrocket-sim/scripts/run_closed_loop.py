@@ -97,6 +97,8 @@ GUIDANCE_MODE = 'pn'            # 'pn' = proportional nav, 'attitude' = point-at
 PN_NAV_GAIN = 5.0               # navigation constant (3-5 typical)
 PN_MAX_TILT_DEG = 15.0          # max body tilt command (deg)
 PN_MAX_ACCEL_MPS2 = 20.0        # max lateral accel command (m/s^2)
+PN_TARGET_ALT_M = 600.0         # OVERHEAD aim-point altitude above pad (matches FC)
+PN_ACCEL_TO_FIN_DEG = 4.0       # accel->fin scale (reconciled to FC config::PN_ACCEL_TO_FIN_DEG)
 PN_BLEND_RADIUS_M = 200.0       # PD blend radius (m) — large = always PD mode
 PN_KP_POS = 0.8                 # PD position gain (s^-2)
 PN_KD_VEL = 1.5                 # PD velocity gain (s^-1)
@@ -647,6 +649,8 @@ if __name__ == "__main__":
         pn_nav_gain=PN_NAV_GAIN,
         pn_max_tilt_deg=PN_MAX_TILT_DEG,
         pn_max_accel_mps2=PN_MAX_ACCEL_MPS2,
+        pn_target_alt_m=PN_TARGET_ALT_M,
+        pn_accel_to_fin_deg=PN_ACCEL_TO_FIN_DEG,
         pn_blend_radius_m=PN_BLEND_RADIUS_M,
         pn_kp_pos=PN_KP_POS,
         pn_kd_vel=PN_KD_VEL,
