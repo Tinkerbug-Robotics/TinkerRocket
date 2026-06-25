@@ -150,6 +150,8 @@ class SimConfig:
     pn_max_fin_deg: float = 15.0
     pn_min_speed_mps: float = 15.0
     pn_coast_delay_s: float = 0.0   # delay after burnout before guidance activates
+    pn_target_alt_m: float = 600.0      # OVERHEAD aim-point altitude above pad (matches FC config::PN_TARGET_ALT_M)
+    pn_accel_to_fin_deg: float = 4.0    # accel->fin scale; reconciled to the FC's config::PN_ACCEL_TO_FIN_DEG (was 5.0)
 
     # Gain scheduling for pitch/yaw (separate from roll)
     pn_gain_V_ref: float = 50.0
@@ -257,7 +259,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         guidance = GuidancePN()
         guidance.configure(
             config.pn_nav_gain, config.pn_max_accel_mps2,
-            600.0)  # target alt above apogee
+            config.pn_target_alt_m)  # OVERHEAD: aim straight up over the pad
 
         control_mixer = ControlMixer()
         control_mixer.configure(
@@ -633,7 +635,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         # 4. PN guidance via C++ library (TR_GuidancePN)
                         #    Same textbook 3D PN (Yanushevsky Ch.2, eq 1.11/2.23)
                         #    Library outputs ENU acceleration commands.
-                        target_alt = 600.0
+                        target_alt = config.pn_target_alt_m
 
                         guid_active = guidance.update(
                             [float(pos_e), float(pos_n), float(pos_u)],
@@ -696,7 +698,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
                             # Direct accel → fin deflection (bypass PID)
                             # Scale: deg of fin per m/s² of accel command
-                            accel_to_fin_deg = 5.0  # tunable
+                            accel_to_fin_deg = config.pn_accel_to_fin_deg  # reconciled to FC (was 5.0)
                             pitch_fin = accel_to_fin_deg * pitch_accel
                             yaw_fin = accel_to_fin_deg * yaw_accel
 

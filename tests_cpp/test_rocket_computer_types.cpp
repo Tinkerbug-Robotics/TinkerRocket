@@ -83,6 +83,30 @@ TEST(RocketComputerTypes, PyroConfigData_FourChannelLayout) {
     EXPECT_EQ(offsetof(PyroConfigData, ch4_trigger_value), 20u);
 }
 
+TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
+    // 8 floats (32) + u16 coast_delay (2) + 2 u8 (2) = 36, naturally aligned (no pad).
+    EXPECT_EQ(sizeof(GuidanceConfigData), 36u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, nav_gain),         0u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, max_accel_mps2),   4u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, accel_to_fin_deg), 8u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, max_fin_deg),      12u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, min_speed_mps),    16u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, target_e_m),       20u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, target_n_m),       24u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, target_alt_m),     28u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, coast_delay_ms),   32u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, enable),           34u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, target_mode),      35u);
+}
+
+TEST(RocketComputerTypes, FinConfigData_Layout) {
+    // Wire struct relayed app→OC→BS→FC; size is hardcoded in the relay paths.
+    EXPECT_EQ(sizeof(FinConfigData), 18u);
+    EXPECT_EQ(offsetof(FinConfigData, azimuth_deg),       0u);
+    EXPECT_EQ(offsetof(FinConfigData, reverse_mask),      16u);
+    EXPECT_EQ(offsetof(FinConfigData, roll_reverse_mask), 17u);
+}
+
 TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {
     // MAX_PAYLOAD must be >= every packed struct that can be a frame payload
     EXPECT_GE(MAX_PAYLOAD, sizeof(GNSSData));

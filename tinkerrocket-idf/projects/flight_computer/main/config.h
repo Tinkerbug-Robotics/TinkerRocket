@@ -319,10 +319,28 @@ struct config
     static constexpr float PN_YAW_KD = 0.0003f;
     // Max individual fin deflection in guided mode (deg)
     static constexpr float PN_MAX_FIN_DEG = 15.0f;
+    // Fin→servo layout (cruciform mix shared by roll / ground-test / guidance).
+    // FIN_AZIMUTH_n_DEG = control azimuth of servo n: deflection_n = sign_n·(roll
+    // + pitch·cos(az_n) + yaw·sin(az_n)).  Defaults reproduce the legacy "+"
+    // (servo 0 top/+pitch, 1 right/+yaw, 2 bottom, 3 left).  Bit n of
+    // FIN_REVERSE_MASK bit n negates servo n's pitch/yaw (tilt) response;
+    // FIN_ROLL_REVERSE_MASK bit n independently negates its roll response.
+    static constexpr float   FIN_AZIMUTH_0_DEG = 0.0f;
+    static constexpr float   FIN_AZIMUTH_1_DEG = 90.0f;
+    static constexpr float   FIN_AZIMUTH_2_DEG = 180.0f;
+    static constexpr float   FIN_AZIMUTH_3_DEG = 270.0f;
+    static constexpr uint8_t FIN_REVERSE_MASK      = 0;
+    static constexpr uint8_t FIN_ROLL_REVERSE_MASK = 0;
     // Minimum airspeed for guidance (below this, fins have no authority)
     static constexpr float PN_MIN_SPEED_MPS = 15.0f;
     // Delay after burnout before engaging guidance (ms)
     static constexpr uint16_t PN_COAST_DELAY_MS = 0;
+    // Guided-mode accel(m/s^2) -> fin(deg) scale (coast path; was an inline literal)
+    static constexpr float PN_ACCEL_TO_FIN_DEG = 4.0f;
+    // Target mode + point (ENU m rel. pad). OVERHEAD (0) = directly over pad (E=N=0).
+    static constexpr uint8_t PN_TARGET_MODE = 0;  // GUIDE_TARGET_OVERHEAD
+    static constexpr float   PN_TARGET_E_M  = 0.0f;
+    static constexpr float   PN_TARGET_N_M  = 0.0f;
 
     // ### Burnout Detection ###
     // Consecutive samples of negative body-X accel required to latch

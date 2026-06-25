@@ -349,6 +349,18 @@ static TR_ControlMixer control_mixer;
 static TR_PID roll_rate_pid_standalone(config::KP, config::KI, config::KD,
                                        config::MAX_CMD, config::MIN_CMD);
 static bool guidance_enabled = config::GUIDANCE_ENABLED;
+// Runtime-tunable PN guidance params (seeded from config::, overridden by NVS / the
+// app's GuidanceConfigData push). Phase 1 uses OVERHEAD (target_e/n forced 0).
+static float    pn_nav_gain       = config::PN_NAV_GAIN;
+static float    pn_max_accel      = config::PN_MAX_ACCEL_MPS2;
+static float    pn_accel_to_fin   = config::PN_ACCEL_TO_FIN_DEG;
+static float    pn_max_fin_deg    = config::PN_MAX_FIN_DEG;
+static float    pn_min_speed      = config::PN_MIN_SPEED_MPS;
+static uint16_t pn_coast_delay_ms = config::PN_COAST_DELAY_MS;
+static uint8_t  pn_target_mode    = config::PN_TARGET_MODE;
+static float    pn_target_e       = config::PN_TARGET_E_M;
+static float    pn_target_n       = config::PN_TARGET_N_M;
+static float    pn_target_alt     = config::PN_TARGET_ALT_M;
 static bool burnout_detected = false;
 static uint32_t burnout_time_ms = 0;
 // Consecutive-sample hysteresis for burnout detection (#197). Prevents
@@ -2354,6 +2366,25 @@ static void setup_fc()
     integral_sep_threshold_dps = prefs.getFloat("iwind", config::INTEGRAL_SEP_THRESHOLD_DPS);
     applyRollPidSepThreshold(integral_sep_threshold_dps);  // #268: both roll PIDs
     guidance_enabled        = prefs.getBool("guid_en", config::GUIDANCE_ENABLED);
+    pn_nav_gain       = prefs.getFloat("gng", config::PN_NAV_GAIN);
+    pn_max_accel      = prefs.getFloat("gma", config::PN_MAX_ACCEL_MPS2);
+    pn_accel_to_fin   = prefs.getFloat("gaf", config::PN_ACCEL_TO_FIN_DEG);
+    pn_max_fin_deg    = prefs.getFloat("gmf", config::PN_MAX_FIN_DEG);
+    pn_min_speed      = prefs.getFloat("gms", config::PN_MIN_SPEED_MPS);
+    pn_coast_delay_ms = prefs.getUShort("gcd", config::PN_COAST_DELAY_MS);
+    pn_target_mode    = prefs.getUChar("gtm", config::PN_TARGET_MODE);
+    pn_target_e       = prefs.getFloat("gte", config::PN_TARGET_E_M);
+    pn_target_n       = prefs.getFloat("gtn", config::PN_TARGET_N_M);
+    pn_target_alt     = prefs.getFloat("gta", config::PN_TARGET_ALT_M);
+    // Fin→servo layout (servo azimuth + reverse), shared by every mix site.
+    float fin_az[4] = {
+        prefs.getFloat("fa0", config::FIN_AZIMUTH_0_DEG),
+        prefs.getFloat("fa1", config::FIN_AZIMUTH_1_DEG),
+        prefs.getFloat("fa2", config::FIN_AZIMUTH_2_DEG),
+        prefs.getFloat("fa3", config::FIN_AZIMUTH_3_DEG),
+    };
+    uint8_t fin_rev  = prefs.getUChar("frv",  config::FIN_REVERSE_MASK);
+    uint8_t fin_rrev = prefs.getUChar("frrv", config::FIN_ROLL_REVERSE_MASK);
     prefs.end();
     ESP_LOGI(TAG, "Roll: kp_angle=%.2f rate_cap=%.0f iwindup=%.0f dps",
                   (double)kp_angle_outer, (double)kp_angle_rate_cap_dps,
@@ -2369,9 +2400,8 @@ static void setup_fc()
 #endif
 
     // Configure guidance and control mixer
-    guidance.configure(config::PN_NAV_GAIN,
-                       config::PN_MAX_ACCEL_MPS2,
-                       config::PN_TARGET_ALT_M);
+    // OVERHEAD: target = (0,0,pn_target_alt); the 3-arg form keeps horizontal at (0,0).
+    guidance.configure(pn_nav_gain, pn_max_accel, pn_target_alt);
     control_mixer.configure(config::PN_PITCH_KP, config::PN_PITCH_KI, config::PN_PITCH_KD,
                             config::PN_YAW_KP,   config::PN_YAW_KI,   config::PN_YAW_KD,
                             config::PN_MAX_FIN_DEG,
@@ -2381,6 +2411,10 @@ static void setup_fc()
         control_mixer.enableGainSchedule(config::GAIN_SCHEDULE_V_REF,
                                          config::GAIN_SCHEDULE_V_MIN);
     }
+    control_mixer.setFinLayout(fin_az, fin_rev, fin_rrev);
+    ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
+                  (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
+                  (unsigned)fin_rev, (unsigned)fin_rrev);
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -3192,7 +3226,11 @@ static void loop_fc()
             // horizontal prep self-corrects; latched by leaving READY/
             // PRELAUNCH at launch).  During boost, the thrust direction
             // cross-checks whatever was latched.
-            if (rocket_state == READY || rocket_state == PRELAUNCH)
+            // Tilting the board during a bench ground test must NOT re-trigger the
+            // pad orientation auto-detect — it would keep re-racking the board→rocket
+            // frame mid-test (the fins then chase a moving reference).  Freeze the
+            // estimator while ground_test_active; it resumes when the test stops.
+            if ((rocket_state == READY || rocket_state == PRELAUNCH) && !ground_test_active)
             {
                 if (orient_estimator.update(ism6_latest_si.time_us,
                                             acc_x, acc_y, acc_z,
@@ -4815,6 +4853,96 @@ static void loop_fc()
                     ESP_LOGW(TAG, "[ROLL CFG] readConfigFrame failed");
                 }
             }
+            else if (out_pending_command == GUIDANCE_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(GuidanceConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(GUIDANCE_CONFIG_MSG, sizeof(GuidanceConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(GuidanceConfigData))
+                {
+                    GuidanceConfigData g;
+                    memcpy(&g, cfg_payload, sizeof(g));
+                    guidance_enabled = (g.enable != 0);
+                    // Positive/sane values override; out-of-range leaves the default.
+                    if (g.nav_gain         > 0.0f && g.nav_gain         <= 20.0f)  pn_nav_gain     = g.nav_gain;
+                    if (g.max_accel_mps2   > 0.0f && g.max_accel_mps2   <= 200.0f) pn_max_accel    = g.max_accel_mps2;
+                    if (g.accel_to_fin_deg > 0.0f && g.accel_to_fin_deg <= 100.0f) pn_accel_to_fin = g.accel_to_fin_deg;
+                    if (g.max_fin_deg      > 0.0f && g.max_fin_deg      <= 60.0f)  pn_max_fin_deg  = g.max_fin_deg;
+                    if (g.min_speed_mps   >= 0.0f && g.min_speed_mps   <= 200.0f)  pn_min_speed    = g.min_speed_mps;
+                    if (g.target_alt_m     > 0.0f)                                 pn_target_alt   = g.target_alt_m;
+                    pn_coast_delay_ms = g.coast_delay_ms;
+                    pn_target_mode    = g.target_mode;
+                    // OVERHEAD forces horizontal (0,0) so a stale POINT push can't pollute it.
+                    pn_target_e = (g.target_mode == GUIDE_TARGET_POINT) ? g.target_e_m : 0.0f;
+                    pn_target_n = (g.target_mode == GUIDE_TARGET_POINT) ? g.target_n_m : 0.0f;
+                    // Phase 1: OVERHEAD via the 3-arg form (horizontal stays 0,0).
+                    guidance.configure(pn_nav_gain, pn_max_accel, pn_target_alt);
+                    ESP_LOGI(TAG, "[GUID CFG] en=%s N=%.1f maxA=%.0f a2f=%.1f maxFin=%.0f minV=%.0f mode=%u alt=%.0f",
+                                  guidance_enabled ? "ON" : "OFF", (double)pn_nav_gain,
+                                  (double)pn_max_accel, (double)pn_accel_to_fin, (double)pn_max_fin_deg,
+                                  (double)pn_min_speed, (unsigned)pn_target_mode, (double)pn_target_alt);
+                    prefs.begin("servo", false);
+                    prefs.putBool("guid_en", guidance_enabled);
+                    prefs.putFloat("gng", pn_nav_gain);
+                    prefs.putFloat("gma", pn_max_accel);
+                    prefs.putFloat("gaf", pn_accel_to_fin);
+                    prefs.putFloat("gmf", pn_max_fin_deg);
+                    prefs.putFloat("gms", pn_min_speed);
+                    prefs.putUShort("gcd", pn_coast_delay_ms);
+                    prefs.putUChar("gtm", pn_target_mode);
+                    prefs.putFloat("gte", pn_target_e);
+                    prefs.putFloat("gtn", pn_target_n);
+                    prefs.putFloat("gta", pn_target_alt);
+                    prefs.end();
+                    ESP_LOGI(TAG, "[GUID CFG] Saved to NVS");
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[GUID CFG] readConfigFrame failed");
+                }
+            }
+            else if (out_pending_command == FIN_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(FinConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(FIN_CONFIG_MSG, sizeof(FinConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(FinConfigData))
+                {
+                    FinConfigData f;
+                    memcpy(&f, cfg_payload, sizeof(f));
+                    // Reject garbage azimuths (range check also rejects NaN/Inf).
+                    bool ok = true;
+                    for (int i = 0; i < 4; ++i)
+                        if (!(f.azimuth_deg[i] >= -360.0f && f.azimuth_deg[i] <= 360.0f)) ok = false;
+                    if (ok) {
+                        control_mixer.setFinLayout(f.azimuth_deg, f.reverse_mask,
+                                                   f.roll_reverse_mask);
+                        ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
+                                      (double)f.azimuth_deg[0], (double)f.azimuth_deg[1],
+                                      (double)f.azimuth_deg[2], (double)f.azimuth_deg[3],
+                                      (unsigned)f.reverse_mask, (unsigned)f.roll_reverse_mask);
+                        prefs.begin("servo", false);
+                        prefs.putFloat("fa0", f.azimuth_deg[0]);
+                        prefs.putFloat("fa1", f.azimuth_deg[1]);
+                        prefs.putFloat("fa2", f.azimuth_deg[2]);
+                        prefs.putFloat("fa3", f.azimuth_deg[3]);
+                        prefs.putUChar("frv",  f.reverse_mask);
+                        prefs.putUChar("frrv", f.roll_reverse_mask);
+                        prefs.end();
+                        ESP_LOGI(TAG, "[FIN CFG] Saved to NVS");
+                    } else {
+                        ESP_LOGW(TAG, "[FIN CFG] rejected out-of-range azimuth");
+                    }
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[FIN CFG] readConfigFrame failed");
+                }
+            }
             else if (out_pending_command == SERVO_REPLAY_PENDING)
             {
                 if (isCommandLockoutState(rocket_state)) {
@@ -4980,13 +5108,10 @@ static void loop_fc()
                 // would stay zero otherwise.
                 last_external_roll_cmd_deg = roll_fin_cmd;
 
-                // 4-fin cruciform mixing
+                // 4-fin mix via the configured fin layout (servo→azimuth + reverse)
                 float max_fin = config::PN_MAX_FIN_DEG;
                 float deflections[4];
-                deflections[0] = constrain(+pitch_fin + roll_fin_cmd, -max_fin, max_fin); // top
-                deflections[1] = constrain(+yaw_fin   + roll_fin_cmd, -max_fin, max_fin); // right
-                deflections[2] = constrain(-pitch_fin + roll_fin_cmd, -max_fin, max_fin); // bottom
-                deflections[3] = constrain(-yaw_fin   + roll_fin_cmd, -max_fin, max_fin); // left
+                control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                 servo_control.setServoAngles(deflections);
 
                 // Periodic debug output (1 Hz)
@@ -5217,16 +5342,19 @@ static void loop_fc()
                             ekf_ctrl_healthy_prev = ekf_ctrl_healthy;
                         }
 
-                        // --- Guided coast mode (PN guidance) ---
-                        // Active only during coast when guidance is enabled and EKF is valid.
-                        // Stops at closest point of approach (CPA) or when speed drops.
+                        // --- Guided mode (PN guidance) ---
+                        // Shares roll-control initiation timing: this whole branch is
+                        // gated by t_since_launch_ms >= roll_delay_ms above, so guidance
+                        // engages WITH roll control (at the roll-control delay after
+                        // launch), NOT after burnout.  Set roll_delay_ms to ~burn time to
+                        // keep guidance post-boost.  Still needs a healthy EKF + airspeed
+                        // (pn_min_speed) and stops at closest point of approach (CPA).
+                        // (pn_coast_delay_ms / burnout are no longer gates here.)
                         const bool coast_guidance_active =
                             guidance_enabled &&
-                            burnout_detected &&
                             ekf_initialized &&
                             ekf_ctrl_healthy &&   // #265: don't fly guidance on a diverged EKF
-                            (now_ms - burnout_time_ms >= config::PN_COAST_DELAY_MS) &&
-                            (speed > config::PN_MIN_SPEED_MPS) &&
+                            (speed > pn_min_speed) &&
                             !guidance.isCpaReached();
 
                         if (coast_guidance_active)
@@ -5286,7 +5414,7 @@ static void loop_fc()
                             float pitch_accel = a_body_down;   // sign verified in sim
                             float yaw_accel   = a_body_right;
 
-                            float accel_to_fin_deg = 4.0f;  // tuned in sim
+                            float accel_to_fin_deg = pn_accel_to_fin;  // app/NVS-tunable (was inline 4.0)
                             float pitch_fin = accel_to_fin_deg * pitch_accel;
                             float yaw_fin   = accel_to_fin_deg * yaw_accel;
 
@@ -5294,13 +5422,10 @@ static void loop_fc()
                             float roll_fin_cmd = roll_rate_pid_standalone.computePID(
                                 config::ROLL_RATE_SET_POINT, -roll_rate_dps);
 
-                            // Mix to 4 fins: pitch differential + yaw differential + roll common
-                            float max_fin = config::PN_MAX_FIN_DEG;
+                            // 4-fin mix via the configured fin layout (servo→azimuth + reverse)
+                            float max_fin = pn_max_fin_deg;
                             float deflections[4];
-                            deflections[0] = constrain(+pitch_fin + roll_fin_cmd, -max_fin, max_fin);  // top
-                            deflections[1] = constrain(+yaw_fin   + roll_fin_cmd, -max_fin, max_fin);  // right
-                            deflections[2] = constrain(-pitch_fin + roll_fin_cmd, -max_fin, max_fin);  // bottom
-                            deflections[3] = constrain(-yaw_fin   + roll_fin_cmd, -max_fin, max_fin);  // left
+                            control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                             servo_control.setServoAngles(deflections);
                             guidance_active = true;
                         }

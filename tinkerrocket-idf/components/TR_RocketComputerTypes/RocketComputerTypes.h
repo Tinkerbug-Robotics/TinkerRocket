@@ -1544,6 +1544,10 @@ static constexpr uint8_t FC_IDENTITY         = 0xEC;
 // roll clocking survives power cycles without the app connected.
 static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload follows as ORIENT_CONFIG_MSG
 static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
+static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload follows as GUIDANCE_CONFIG_MSG
+static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 36-byte GuidanceConfigData
+static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
+static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
 
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
@@ -1646,6 +1650,47 @@ typedef struct __attribute__((packed))
     float max_cmd;
 } PIDConfigData;
 static_assert(sizeof(PIDConfigData) == 20, "PIDConfigData must be 20 bytes");
+
+// PN guidance target mode (which point the rocket steers toward).
+static constexpr uint8_t GUIDE_TARGET_OVERHEAD = 0;  // directly over the pad: (0,0,target_alt)
+static constexpr uint8_t GUIDE_TARGET_POINT    = 1;  // configured point: (target_e,target_n,target_alt)
+
+// App-configurable PN guidance.  Floats first so every field is naturally aligned
+// inside the packed struct (no internal padding) -> sizeof == 36.  ENU meters are
+// relative to the launch pad, matching the FC's imu_pos frame (no conversion).
+typedef struct __attribute__((packed))
+{
+    float    nav_gain;          // PN navigation constant N (3-5)
+    float    max_accel_mps2;    // lateral accel command clamp (m/s^2)
+    float    accel_to_fin_deg;  // accel (m/s^2) -> fin (deg) scale
+    float    max_fin_deg;       // per-fin deflection clamp in guided mode (deg)
+    float    min_speed_mps;     // airspeed gate below which guidance is inactive
+    float    target_e_m;        // POINT: East rel. pad (m); OVERHEAD: ignored (0)
+    float    target_n_m;        // POINT: North rel. pad (m); OVERHEAD: ignored (0)
+    float    target_alt_m;      // target altitude above pad (m), both modes
+    uint16_t coast_delay_ms;    // delay after burnout before guidance engages (ms)
+    uint8_t  enable;            // 0/1 runtime guidance master enable
+    uint8_t  target_mode;       // GUIDE_TARGET_OVERHEAD / _POINT
+} GuidanceConfigData;
+static_assert(sizeof(GuidanceConfigData) == 36, "GuidanceConfigData must be 36 bytes");
+
+// App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
+// driven by servo i:
+//   deflection_i = tilt_i·(pitch·cos(az_i) + yaw·sin(az_i)) + roll_i·roll
+// tilt_i = -1 if bit i of reverse_mask is set (flips that fin's pitch/yaw response);
+// roll_i = -1 if bit i of roll_reverse_mask is set (flips its roll response).  The two
+// are INDEPENDENT: a fin's tilt and roll directions don't always share a sign in real
+// hardware (e.g. a linkage that mirrors pitch/yaw but not the roll moment), so one bit
+// can't express both.  Both masks 0 + azimuths {0,90,180,270} reproduce the legacy
+// hardcoded "+" mix (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The
+// app derives all of this from the ring GUI.
+typedef struct __attribute__((packed))
+{
+    float   azimuth_deg[4];     // per-servo fin control azimuth (deg)
+    uint8_t reverse_mask;       // bit i ⇒ negate servo i pitch/yaw (tilt) response
+    uint8_t roll_reverse_mask;  // bit i ⇒ negate servo i roll response (independent)
+} FinConfigData;
+static_assert(sizeof(FinConfigData) == 18, "FinConfigData must be 18 bytes");
 
 typedef struct __attribute__((packed))
 {

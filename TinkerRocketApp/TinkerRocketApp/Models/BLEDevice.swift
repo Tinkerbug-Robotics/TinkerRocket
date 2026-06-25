@@ -737,6 +737,53 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(32, payload: Data([enabled ? 0x01 : 0x00]))
     }
 
+    /// Full PN guidance config (GuidanceConfigData = 36 bytes, cmd 65). Floats
+    /// LE in struct order, then coast_delay(u16), enable(u8), target_mode(u8).
+    func sendGuidanceConfig(enabled: Bool, navGain: Float, maxAccel: Float, accelToFin: Float,
+                            maxFinDeg: Float, minSpeed: Float, coastDelayMs: UInt16,
+                            targetMode: UInt8, targetE: Float, targetN: Float, targetAlt: Float) {
+        var payload = Data()
+        var ng = navGain, ma = maxAccel, a2f = accelToFin, mf = maxFinDeg, ms = minSpeed
+        var te = targetE, tn = targetN, ta = targetAlt
+        payload.append(Data(bytes: &ng,  count: 4))
+        payload.append(Data(bytes: &ma,  count: 4))
+        payload.append(Data(bytes: &a2f, count: 4))
+        payload.append(Data(bytes: &mf,  count: 4))
+        payload.append(Data(bytes: &ms,  count: 4))
+        payload.append(Data(bytes: &te,  count: 4))
+        payload.append(Data(bytes: &tn,  count: 4))
+        payload.append(Data(bytes: &ta,  count: 4))
+        var cd = coastDelayMs; payload.append(Data(bytes: &cd, count: 2))
+        payload.append(enabled ? 0x01 : 0x00)
+        payload.append(targetMode)
+        sendRawCommand(65, payload: payload)   // GuidanceConfigData = 36 bytes
+        if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
+    }
+
+    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's CONTROL
+    /// azimuth from the ring slot it occupies (slot azimuths {0,90,180,270} for "+"
+    /// or {45,135,225,315} for "×"), then sends 4 LE floats + a per-servo tilt-reverse
+    /// bitmask + an independent per-servo roll-reverse bitmask. The ring GUI's nose-down
+    /// view is a rendering choice and does not change these control-frame azimuths.
+    func sendFinConfig(ringMode: UInt8, servoAtSlot: [Int], reverse: [Bool], rollReverse: [Bool]) {
+        guard servoAtSlot.count == 4, reverse.count == 4, rollReverse.count == 4 else { return }
+        let slotAz: [Float] = ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]
+        var az: [Float] = [0, 90, 180, 270]            // per servo index (0=servo 1)
+        for slot in 0..<4 {
+            let servo = servoAtSlot[slot]              // 1-4
+            if servo >= 1 && servo <= 4 { az[servo - 1] = slotAz[slot] }
+        }
+        var payload = Data()
+        for i in 0..<4 { var a = az[i]; payload.append(Data(bytes: &a, count: 4)) }
+        var mask: UInt8 = 0
+        for i in 0..<4 where reverse[i] { mask |= (UInt8(1) << UInt8(i)) }
+        payload.append(mask)
+        var rollMask: UInt8 = 0
+        for i in 0..<4 where rollReverse[i] { rollMask |= (UInt8(1) << UInt8(i)) }
+        payload.append(rollMask)
+        sendRawCommand(66, payload: payload)           // FinConfigData = 18 bytes
+    }
+
     func sendCameraConfig(cameraType: UInt8) {
         sendRawCommand(33, payload: Data([cameraType]))
     }

@@ -44,9 +44,18 @@ struct SettingsView: View {
     @State private var sPidMinCmd = ""
     @State private var sPidMaxCmd = ""
     @State private var sRollDelayMs = ""
+    @State private var savedRollUsesAngle: Bool? = nil
+    @State private var savedOrientCode: UInt8? = nil
     @State private var sRateCapDps = ""
     @State private var sKpAngle = ""
     @State private var sIntegralSep = ""
+    @State private var sPnTargetAlt = ""
+    @State private var sPnNavGain = ""
+    @State private var sPnMaxAccel = ""
+    @State private var sPnAccelToFin = ""
+    @State private var sPnMaxFin = ""
+    @State private var sPnMinSpeed = ""
+    @State private var sPnCoastDelay = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
@@ -58,6 +67,8 @@ struct SettingsView: View {
     @State private var servoApplied = false
     @State private var pidApplied = false
     @State private var rollControlApplied = false
+    @State private var guidanceApplied = false
+    @State private var finApplied = false
     @State private var pyroApplied = false
 
     // LoRa TX power (BS only) — hydrated from rocketConfig, debounced send.
@@ -115,17 +126,19 @@ struct SettingsView: View {
         case rateCap
         case kpAngle
         case integralSep
+        case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed, guidCoastDelay
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
     }
 
-    private enum EditGroup { case servo, pid, rollControl, rollWaypoints, pyro }
+    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finMin, .finMax: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
+        case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed, .guidCoastDelay: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case nil: return nil
@@ -137,6 +150,7 @@ struct SettingsView: View {
         case .servo: applyServoConfig()
         case .pid: applyPIDConfig()
         case .rollControl: applyRollControlConfig()
+        case .guidance: applyGuidanceConfig()
         case .rollWaypoints: applyRollProfile()
         case .pyro: applyPyroConfig()
         }
@@ -372,7 +386,13 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
         }
 
-        rollControlSection
+        controlModeSection
+        if profile.guidanceEnabled {
+            guidanceSection
+        } else {
+            rollControlSection
+        }
+        finLayoutSection
     }
 
     @ViewBuilder
@@ -533,12 +553,30 @@ struct SettingsView: View {
         }
 
         Section("IMU Mounting") {
-            Picker("Orientation", selection: imuOrientBinding) {
-                Text("Auto-detect").tag(255)
-                ForEach(0..<24, id: \.self) { code in
-                    Text("Nose \(FlightSettingsData.b2rName(code: UInt8(code)))").tag(code)
-                }
+            Picker("Mode", selection: orientModeBinding) {
+                Text("Manual").tag(0)
+                Text("Pad auto-detect").tag(1)
             }
+            .pickerStyle(.segmented)
+
+            if profile.imuOrientSetting != 0xFF {
+                Picker("Nose axis", selection: noseAxisBinding) {
+                    ForEach(0..<6, id: \.self) { i in
+                        Text(["+X", "-X", "+Y", "-Y", "+Z", "-Z"][i]).tag(i)
+                    }
+                }
+                Picker("Fin clocking", selection: clockingBinding) {
+                    ForEach(0..<4, id: \.self) { i in
+                        Text(["0\u{00B0}", "90\u{00B0}", "180\u{00B0}", "270\u{00B0}"][i]).tag(i)
+                    }
+                }
+                Text("Which board axis points at the nose (up on the pad). Manual also fixes the fin clocking (quarter-turns about the nose) \u{2014} required for roll-controlled or guided flight.")
+                    .font(.caption).foregroundColor(.secondary)
+            } else {
+                Text("Detects the nose axis from gravity on the pad. It can\u{2019}t observe fin clocking, so this is fine only for non-controlled flights \u{2014} not roll or guidance.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
             if !device.imuOrientationName.isEmpty {
                 HStack {
                     Text("Active on rocket")
@@ -547,24 +585,62 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            Text(profile.imuOrientSetting == 0xFF
-                ? "Auto detects which board axis points at the nose from gravity on the pad. Fine for non-controlled flights."
-                : "Manual mounting also fixes the fin clocking (rNN = quarter-turns about the nose) — required for roll-controlled or guided flights when the board is mounted off-axis.")
-                .font(.caption).foregroundColor(.secondary)
         }
     }
 
-    private var imuOrientBinding: Binding<Int> {
+    // Board→rocket orientation: 0xFF = pad auto-detect, else code = axis*4 + clock.
+    private var orientModeBinding: Binding<Int> {
         Binding(
-            get: { Int(profile.imuOrientSetting) },
+            get: { profile.imuOrientSetting == 0xFF ? 1 : 0 },
             set: { newValue in
-                let v = UInt8(clamping: newValue)
+                let v: UInt8
+                if newValue == 1 {
+                    if profile.imuOrientSetting != 0xFF { savedOrientCode = profile.imuOrientSetting }
+                    v = 0xFF
+                } else {
+                    v = savedOrientCode ?? 0
+                }
                 updateProfile { $0.imuOrientSetting = v }
                 if device.isConnected { device.sendImuOrientationConfig(v) }
             })
     }
+    private var noseAxisBinding: Binding<Int> {
+        Binding(
+            get: { profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) / 4 },
+            set: { axis in
+                let clock = profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) % 4
+                setOrientCode(axis: axis, clock: clock)
+            })
+    }
+    private var clockingBinding: Binding<Int> {
+        Binding(
+            get: { profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) % 4 },
+            set: { clock in
+                let axis = profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) / 4
+                setOrientCode(axis: axis, clock: clock)
+            })
+    }
+    private func setOrientCode(axis: Int, clock: Int) {
+        let v = UInt8(clamping: axis * 4 + clock)
+        updateProfile { $0.imuOrientSetting = v }
+        if device.isConnected { device.sendImuOrientationConfig(v) }
+    }
 
     @ViewBuilder
+    private var controlModeSection: some View {
+        Section(header: Text("Control Mode")) {
+            Picker("Mode", selection: controlModeBinding) {
+                Text("Roll Control").tag(0)
+                Text("Guidance").tag(1)
+            }
+            .pickerStyle(.segmented)
+            Text(profile.guidanceEnabled
+                ? "PN guidance steers pitch/yaw toward the target. Roll is rate-nulled \u{2014} the profile is ignored."
+                : "The roll controller holds the airframe (null roll, or track a roll-angle profile). No guidance.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
     private var rollControlSection: some View {
         Section(header: configHeader("Roll Control", applied: rollControlApplied)) {
             Picker("Mode", selection: angleControlBinding) {
@@ -633,6 +709,94 @@ struct SettingsView: View {
             }
 
             Text("Stored in the rocket profile. Persists across reboots.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private var finLayoutSection: some View {
+        Section(header: configHeader("Fin Layout", applied: finApplied)) {
+            FinLayoutView(
+                device: device,
+                ringMode: profile.finRingMode,
+                servoAtSlot: profile.finServoAtSlot,
+                reverse: profile.finReverse,
+                rollReverse: profile.finRollReverse,
+                canJog: device.isConnected && !device.isBaseStation && device.telemetry.pwr_pin_on,
+                onSetRingMode: { m in updateProfile { $0.finRingMode = m }; applyFinConfig() },
+                onSetServoAtSlot: { s in updateProfile { $0.finServoAtSlot = s }; applyFinConfig() },
+                onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() },
+                onSetRollReverse: { r in updateProfile { $0.finRollReverse = r }; applyFinConfig() }
+            )
+            Text("Map each servo to its fin and set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}). If a fin's tilt is backwards in ground test, flip Reverse pitch/yaw; if its roll is backwards, flip Reverse roll. Jog each servo on the bench to confirm direction.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private var guidanceSection: some View {
+        Section(header: configHeader("PN Guidance", applied: guidanceApplied)) {
+            Text("Roll axis is rate-nulled (held at zero spin) \u{2014} the roll profile is not followed in Guidance mode.")
+                .font(.caption).foregroundColor(.secondary)
+            Text("Proportional-navigation steering toward the target. Engages with roll control at its initiation delay after launch (not after burnout). Phase 1 target: directly over the launch pad (overhead).")
+                .font(.caption).foregroundColor(.secondary)
+
+            HStack {
+                Text("Target Altitude")
+                Spacer()
+                TextField("600", text: $sPnTargetAlt)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidTargetAlt)
+                Text("m").foregroundColor(.secondary)
+            }
+            Text("Aim-point altitude above the pad. Set near (or modestly above) expected apogee \u{2014} aiming far above weakens guidance (it reaches closest-approach early).")
+                .font(.caption).foregroundColor(.secondary)
+
+            HStack {
+                Text("Nav Gain (N)")
+                Spacer()
+                TextField("5", text: $sPnNavGain)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidNavGain)
+            }
+            HStack {
+                Text("Max Accel")
+                Spacer()
+                TextField("20", text: $sPnMaxAccel)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidMaxAccel)
+                Text("m/s\u{00B2}").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Accel\u{2192}Fin")
+                Spacer()
+                TextField("4", text: $sPnAccelToFin)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidAccelToFin)
+            }
+            HStack {
+                Text("Max Fin")
+                Spacer()
+                TextField("15", text: $sPnMaxFin)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidMaxFin)
+                Text("deg").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Min Speed")
+                Spacer()
+                TextField("15", text: $sPnMinSpeed)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidMinSpeed)
+                Text("m/s").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Coast Delay")
+                Spacer()
+                TextField("0", text: $sPnCoastDelay)
+                    .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidCoastDelay)
+                Text("ms").foregroundColor(.secondary)
+            }
+            Text("Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority; coast delay waits after burnout before engaging. Stored in the rocket profile.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -755,6 +919,28 @@ struct SettingsView: View {
             })
     }
 
+    /// Top-level control mode: 0 = Roll Control, 1 = Guidance.  Derived from
+    /// guidanceEnabled.  Guidance forces useAngleControl=false so roll is rate-nulled
+    /// in every phase (the profile is never followed); switching back to Roll Control
+    /// restores the prior roll sub-mode (Null Roll / Track Profile).
+    private var controlModeBinding: Binding<Int> {
+        Binding(
+            get: { profile.guidanceEnabled ? 1 : 0 },
+            set: { newValue in
+                if newValue == 1 {
+                    savedRollUsesAngle = profile.useAngleControl
+                    updateProfile { $0.guidanceEnabled = true; $0.useAngleControl = false }
+                } else {
+                    updateProfile {
+                        $0.guidanceEnabled = false
+                        if let prev = savedRollUsesAngle { $0.useAngleControl = prev }
+                    }
+                }
+                applyGuidanceConfig()
+                applyRollControlConfig()
+            })
+    }
+
     // Pyro enable / mode apply immediately (like toggles); the trigger value
     // commits on focus loss via the .pyro EditGroup.
     private func pyroEnabledBinding(_ ch: Int) -> Binding<Bool> {
@@ -798,6 +984,13 @@ struct SettingsView: View {
         sRateCapDps = formatInt(Double(p.rateCapDps))
         sKpAngle = formatDecimal(Double(p.kpAngle))
         sIntegralSep = formatInt(Double(p.integralSepThreshold))
+        sPnTargetAlt = formatInt(Double(p.pnTargetAltM))
+        sPnNavGain = formatDecimal(Double(p.pnNavGain))
+        sPnMaxAccel = formatDecimal(Double(p.pnMaxAccel))
+        sPnAccelToFin = formatDecimal(Double(p.pnAccelToFin))
+        sPnMaxFin = formatDecimal(Double(p.pnMaxFinDeg))
+        sPnMinSpeed = formatDecimal(Double(p.pnMinSpeed))
+        sPnCoastDelay = formatInt(Double(p.pnCoastDelayMs))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg), mode: $0.mode.rawValue)
         }
@@ -987,6 +1180,40 @@ struct SettingsView: View {
                                          kpAngle: kpAngle, integralSepThreshold: iwind)
         }
         showApplied($rollControlApplied)
+    }
+
+    private func applyFinConfig() {
+        if device.isConnected {
+            device.sendFinConfig(ringMode: profile.finRingMode,
+                                 servoAtSlot: profile.finServoAtSlot,
+                                 reverse: profile.finReverse,
+                                 rollReverse: profile.finRollReverse)
+        }
+        showApplied($finApplied)
+    }
+
+    private func applyGuidanceConfig() {
+        let navGain    = max(0, Float(sPnNavGain)    ?? profile.pnNavGain)
+        let maxAccel   = max(0, Float(sPnMaxAccel)   ?? profile.pnMaxAccel)
+        let accelToFin = max(0, Float(sPnAccelToFin) ?? profile.pnAccelToFin)
+        let maxFin     = max(0, Float(sPnMaxFin)     ?? profile.pnMaxFinDeg)
+        let minSpeed   = max(0, Float(sPnMinSpeed)   ?? profile.pnMinSpeed)
+        let coastDelay = UInt16(clamping: Int(Double(sPnCoastDelay) ?? Double(profile.pnCoastDelayMs)))
+        let targetAlt  = max(0, Float(sPnTargetAlt)  ?? profile.pnTargetAltM)
+        updateProfile {
+            $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
+            $0.pnMaxFinDeg = maxFin; $0.pnMinSpeed = minSpeed; $0.pnCoastDelayMs = coastDelay
+            $0.pnTargetAltM = targetAlt
+        }
+        if device.isConnected {
+            device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
+                                      navGain: navGain, maxAccel: maxAccel, accelToFin: accelToFin,
+                                      maxFinDeg: maxFin, minSpeed: minSpeed, coastDelayMs: coastDelay,
+                                      targetMode: profile.pnTargetMode,
+                                      targetE: profile.pnTargetE, targetN: profile.pnTargetN,
+                                      targetAlt: targetAlt)
+        }
+        showApplied($guidanceApplied)
     }
 
     private func applyRollProfile() {

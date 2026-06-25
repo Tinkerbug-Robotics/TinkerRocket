@@ -53,6 +53,26 @@ public:
     float getPitchFinCmd() const { return pitch_fin_cmd_; }
     float getYawFinCmd()   const { return yaw_fin_cmd_; }
 
+    /// Configure the fin→servo mix from per-servo control azimuths (deg), a tilt
+    /// reverse bitmask (bit i ⇒ negate servo i pitch/yaw response) and a roll reverse
+    /// bitmask (bit i ⇒ negate its roll response, independently).  Recomputes the
+    /// pitch/yaw/roll mix coefficients used by both update() and mixToFins().  Defaults
+    /// {0,90,180,270} + masks 0 reproduce the cruciform "+".
+    void setFinLayout(const float azimuth_deg[4], uint8_t reverse_mask,
+                      uint8_t roll_reverse_mask);
+
+    /// Allocate a (roll,pitch,yaw) fin command to the 4 servos using the configured
+    /// fin layout, each clamped to ±max_fin_deg.  Stateless allocation (no PID state) —
+    /// the FC roll / ground-test / coast-guidance paths all call this so every mix
+    /// site shares one layout.
+    void mixToFins(float roll_cmd_deg, float pitch_fin_cmd, float yaw_fin_cmd,
+                   float max_fin_deg, float out_deflections[4]) const;
+
+    /// Flown fin layout — for the telemetry / flight-log snapshot.
+    float   getFinAzimuthDeg(int i) const { return (i >= 0 && i < 4) ? fin_azimuth_deg_[i] : 0.0f; }
+    uint8_t getFinReverseMask() const { return fin_reverse_mask_; }
+    uint8_t getFinRollReverseMask() const { return fin_roll_reverse_mask_; }
+
     /// Reset all PID internal state.
     void reset();
 
@@ -85,14 +105,19 @@ private:
 
     void applyGainSchedule(float speed_mps);
 
-    // Cruciform mixing coefficients (looking from rear, FRD body frame):
-    //   Servo 0 (top/0deg)    -> pitch +1, yaw  0, roll +1
-    //   Servo 1 (right/90deg) -> pitch  0, yaw +1, roll +1
-    //   Servo 2 (bottom/180deg)-> pitch -1, yaw  0, roll +1
-    //   Servo 3 (left/270deg) -> pitch  0, yaw -1, roll +1
-    static constexpr float PITCH_MIX[4] = { +1.0f,  0.0f, -1.0f,  0.0f };
-    static constexpr float YAW_MIX[4]   = {  0.0f, +1.0f,  0.0f, -1.0f };
-    static constexpr float ROLL_MIX[4]  = { +1.0f, +1.0f, +1.0f, +1.0f };
+    // Cruciform mixing coefficients (control/FRD body frame, looking from rear):
+    //   deflection_i = pitch_mix_[i]·pitch + yaw_mix_[i]·yaw + roll_mix_[i]·roll
+    // Default reproduces the legacy "+" (servo 0 top/+pitch, 1 right/+yaw, 2 bottom,
+    // 3 left).  Reconfigured at runtime by setFinLayout() from the rocket's fin
+    // azimuth + reverse config: pitch_mix_[i]=tilt·cos(az_i), yaw_mix_[i]=tilt·
+    // sin(az_i) (tilt=-1 if servo i tilt-reversed), roll_mix_[i]=roll (roll=-1 if
+    // servo i roll-reversed) — tilt and roll signs are independent.
+    float   pitch_mix_[4] = { +1.0f,  0.0f, -1.0f,  0.0f };
+    float   yaw_mix_[4]   = {  0.0f, +1.0f,  0.0f, -1.0f };
+    float   roll_mix_[4]  = { +1.0f, +1.0f, +1.0f, +1.0f };
+    float   fin_azimuth_deg_[4] = { 0.0f, 90.0f, 180.0f, 270.0f };
+    uint8_t fin_reverse_mask_ = 0;
+    uint8_t fin_roll_reverse_mask_ = 0;
 };
 
 #endif // TR_CONTROL_MIXER_H
