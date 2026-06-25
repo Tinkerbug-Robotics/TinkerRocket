@@ -384,9 +384,9 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
         }
 
-        finLayoutSection
         rollControlSection
         guidanceSection
+        finLayoutSection
     }
 
     @ViewBuilder
@@ -673,7 +673,7 @@ struct SettingsView: View {
     private var guidanceSection: some View {
         Section(header: configHeader("PN Guidance", applied: guidanceApplied)) {
             Toggle("Enable Guidance", isOn: bind(\.guidanceEnabled) { _ in applyGuidanceConfig() })
-            Text("Proportional-navigation steering during coast. Phase 1 target: directly over the launch pad (overhead).")
+            Text("Proportional-navigation steering. Engages with roll control at its initiation delay after launch (not after burnout). Phase 1 target: directly over the launch pad (overhead).")
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {

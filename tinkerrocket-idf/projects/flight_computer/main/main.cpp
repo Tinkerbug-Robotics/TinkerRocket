@@ -5342,15 +5342,18 @@ static void loop_fc()
                             ekf_ctrl_healthy_prev = ekf_ctrl_healthy;
                         }
 
-                        // --- Guided coast mode (PN guidance) ---
-                        // Active only during coast when guidance is enabled and EKF is valid.
-                        // Stops at closest point of approach (CPA) or when speed drops.
+                        // --- Guided mode (PN guidance) ---
+                        // Shares roll-control initiation timing: this whole branch is
+                        // gated by t_since_launch_ms >= roll_delay_ms above, so guidance
+                        // engages WITH roll control (at the roll-control delay after
+                        // launch), NOT after burnout.  Set roll_delay_ms to ~burn time to
+                        // keep guidance post-boost.  Still needs a healthy EKF + airspeed
+                        // (pn_min_speed) and stops at closest point of approach (CPA).
+                        // (pn_coast_delay_ms / burnout are no longer gates here.)
                         const bool coast_guidance_active =
                             guidance_enabled &&
-                            burnout_detected &&
                             ekf_initialized &&
                             ekf_ctrl_healthy &&   // #265: don't fly guidance on a diverged EKF
-                            (now_ms - burnout_time_ms >= pn_coast_delay_ms) &&
                             (speed > pn_min_speed) &&
                             !guidance.isCpaReached();
 
