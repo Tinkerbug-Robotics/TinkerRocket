@@ -213,7 +213,7 @@ TEST_F(ControlMixerTest, MixToFins_DefaultReproducesHardcodedPlus) {
 
 TEST_F(ControlMixerTest, SetFinLayout_DefaultAzimuthsMatchHardcode) {
     const float az[4] = {0.0f, 90.0f, 180.0f, 270.0f};
-    mixer.setFinLayout(az, 0);
+    mixer.setFinLayout(az, 0, 0);
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
     EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);
@@ -225,7 +225,7 @@ TEST_F(ControlMixerTest, SetFinLayout_DefaultAzimuthsMatchHardcode) {
 // "×" layout: every fin shares pitch AND yaw at cos/sin(45°)=±0.707.
 TEST_F(ControlMixerTest, SetFinLayout_CrossSharesPitchAndYaw) {
     const float az[4] = {45.0f, 135.0f, 225.0f, 315.0f};
-    mixer.setFinLayout(az, 0);
+    mixer.setFinLayout(az, 0, 0);
     const float k = 0.70710678f;
     float d[4];
     mixer.mixToFins(0.0f, 1.0f, 0.0f, MAX_FIN, d);          // pitch → cos(az)
@@ -244,18 +244,32 @@ TEST_F(ControlMixerTest, SetFinLayout_CrossSharesPitchAndYaw) {
     for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 2.0f, 1e-4f);
 }
 
-// A reverse bit negates that servo's whole deflection (mirrored mount).
-TEST_F(ControlMixerTest, SetFinLayout_ReverseNegatesFin) {
+// A tilt-reverse bit negates only that servo's pitch/yaw response; roll is untouched.
+TEST_F(ControlMixerTest, SetFinLayout_ReverseNegatesTiltOnly) {
     const float az[4] = {0.0f, 90.0f, 180.0f, 270.0f};
-    mixer.setFinLayout(az, 0x02);                            // reverse servo 1
+    mixer.setFinLayout(az, 0x02, 0);                         // tilt-reverse servo 1
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0],   2.0f + 1.0f,  1e-4f);                // unchanged
-    EXPECT_NEAR(d[1], -(3.0f + 1.0f), 1e-4f);                // fully negated
-    EXPECT_NEAR(d[2],  -2.0f + 1.0f,  1e-4f);                // unchanged
-    EXPECT_NEAR(d[3],  -3.0f + 1.0f,  1e-4f);                // unchanged
+    EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[1], -3.0f + 1.0f, 1e-4f);                  // yaw negated, roll kept (+1)
+    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_EQ(mixer.getFinReverseMask(), 0x02);
     EXPECT_NEAR(mixer.getFinAzimuthDeg(1), 90.0f, 1e-4f);
+}
+
+// A roll-reverse bit negates only that servo's roll response; pitch/yaw is untouched.
+// This is the #fin-roll fix: a servo can have its tilt and roll signs set independently.
+TEST_F(ControlMixerTest, SetFinLayout_RollReverseNegatesRollOnly) {
+    const float az[4] = {0.0f, 90.0f, 180.0f, 270.0f};
+    mixer.setFinLayout(az, 0, 0x02);                         // roll-reverse servo 1
+    float d[4];
+    mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
+    EXPECT_NEAR(d[0], 2.0f + 1.0f, 1e-4f);                   // unchanged
+    EXPECT_NEAR(d[1], 3.0f - 1.0f, 1e-4f);                   // yaw kept, roll negated (−1)
+    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_EQ(mixer.getFinRollReverseMask(), 0x02);
 }
 
 TEST_F(ControlMixerTest, MixToFins_Clamps) {

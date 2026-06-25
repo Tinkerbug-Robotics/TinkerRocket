@@ -1547,7 +1547,7 @@ static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfi
 static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload follows as GUIDANCE_CONFIG_MSG
 static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 36-byte GuidanceConfigData
 static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
-static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 17-byte FinConfigData
+static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
 
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
@@ -1675,17 +1675,22 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(GuidanceConfigData) == 36, "GuidanceConfigData must be 36 bytes");
 
 // App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
-// driven by servo i: deflection_i = sign_i · (roll + pitch·cos(az_i) + yaw·sin(az_i)),
-// where sign_i = -1 if bit i of reverse_mask is set (mirrored servo) else +1.  The
-// defaults {0,90,180,270} + mask 0 reproduce the legacy hardcoded "+" mix exactly
-// (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The app derives these
-// from the ring GUI (servo placement + +/× orientation + per-fin reverse).
+// driven by servo i:
+//   deflection_i = tilt_i·(pitch·cos(az_i) + yaw·sin(az_i)) + roll_i·roll
+// tilt_i = -1 if bit i of reverse_mask is set (flips that fin's pitch/yaw response);
+// roll_i = -1 if bit i of roll_reverse_mask is set (flips its roll response).  The two
+// are INDEPENDENT: a fin's tilt and roll directions don't always share a sign in real
+// hardware (e.g. a linkage that mirrors pitch/yaw but not the roll moment), so one bit
+// can't express both.  Both masks 0 + azimuths {0,90,180,270} reproduce the legacy
+// hardcoded "+" mix (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The
+// app derives all of this from the ring GUI.
 typedef struct __attribute__((packed))
 {
-    float   azimuth_deg[4];  // per-servo fin control azimuth (deg)
-    uint8_t reverse_mask;    // bit i set ⇒ servo i deflection negated (mirrored mount)
+    float   azimuth_deg[4];     // per-servo fin control azimuth (deg)
+    uint8_t reverse_mask;       // bit i ⇒ negate servo i pitch/yaw (tilt) response
+    uint8_t roll_reverse_mask;  // bit i ⇒ negate servo i roll response (independent)
 } FinConfigData;
-static_assert(sizeof(FinConfigData) == 17, "FinConfigData must be 17 bytes");
+static_assert(sizeof(FinConfigData) == 18, "FinConfigData must be 18 bytes");
 
 typedef struct __attribute__((packed))
 {

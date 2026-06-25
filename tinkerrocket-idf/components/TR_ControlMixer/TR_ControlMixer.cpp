@@ -118,20 +118,24 @@ void TR_ControlMixer::getFinDeflections(float deflections[4]) const
     }
 }
 
-void TR_ControlMixer::setFinLayout(const float azimuth_deg[4], uint8_t reverse_mask)
+void TR_ControlMixer::setFinLayout(const float azimuth_deg[4], uint8_t reverse_mask,
+                                   uint8_t roll_reverse_mask)
 {
     constexpr float DEG2RAD = 0.01745329252f;
-    fin_reverse_mask_ = reverse_mask;
+    fin_reverse_mask_      = reverse_mask;
+    fin_roll_reverse_mask_ = roll_reverse_mask;
     for (int i = 0; i < 4; ++i) {
         fin_azimuth_deg_[i] = azimuth_deg[i];
         float c = cosf(azimuth_deg[i] * DEG2RAD);
         float s = sinf(azimuth_deg[i] * DEG2RAD);
         if (fabsf(c) < 1e-6f) c = 0.0f;   // snap cardinal angles to exact 0 / ±1
         if (fabsf(s) < 1e-6f) s = 0.0f;
-        float sign = (reverse_mask & (1u << i)) ? -1.0f : 1.0f;
-        pitch_mix_[i] = sign * c;
-        yaw_mix_[i]   = sign * s;
-        roll_mix_[i]  = sign;
+        // Tilt (pitch/yaw) and roll signs are independent — see FinConfigData.
+        float tilt_sign = (reverse_mask      & (1u << i)) ? -1.0f : 1.0f;
+        float roll_sign = (roll_reverse_mask & (1u << i)) ? -1.0f : 1.0f;
+        pitch_mix_[i] = tilt_sign * c;
+        yaw_mix_[i]   = tilt_sign * s;
+        roll_mix_[i]  = roll_sign;
     }
 }
 

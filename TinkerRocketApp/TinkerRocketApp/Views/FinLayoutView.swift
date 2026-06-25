@@ -16,11 +16,13 @@ struct FinLayoutView: View {
     let device: BLEDevice
     let ringMode: UInt8            // 0 = "+", 1 = "×"
     let servoAtSlot: [Int]         // servo (1-4) at ring slot 0..3
-    let reverse: [Bool]            // per-servo (1-4) reverse
+    let reverse: [Bool]            // per-servo (1-4) tilt (pitch/yaw) reverse
+    let rollReverse: [Bool]        // per-servo (1-4) roll reverse (independent)
     let canJog: Bool
     let onSetRingMode: (UInt8) -> Void
     let onSetServoAtSlot: ([Int]) -> Void
     let onSetReverse: ([Bool]) -> Void
+    let onSetRollReverse: ([Bool]) -> Void
 
     @State private var selectedSlot: Int = 0
 
@@ -130,7 +132,8 @@ struct FinLayoutView: View {
                 .pickerStyle(.segmented).frame(width: 170)
             }
 
-            Toggle("Reverse (mirrored servo)", isOn: reverseBinding)
+            Toggle("Reverse pitch/yaw (tilt)", isOn: reverseBinding)
+            Toggle("Reverse roll", isOn: rollReverseBinding)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Jog servo \(selectedServo) to confirm direction")
@@ -173,6 +176,15 @@ struct FinLayoutView: View {
             onSetReverse(rev)
         })
     }
+    private var rollReverseBinding: Binding<Bool> {
+        Binding(get: { rollReverse.indices.contains(selectedServo - 1) ? rollReverse[selectedServo - 1] : false },
+                set: { newVal in
+            guard rollReverse.indices.contains(selectedServo - 1) else { return }
+            var rev = rollReverse
+            rev[selectedServo - 1] = newVal
+            onSetRollReverse(rev)
+        })
+    }
 
     // MARK: Jog (reuses the servo-test path)
 
@@ -200,11 +212,14 @@ struct FinLayoutView: View {
     }
     private func mixDescription(_ slot: Int) -> String {
         let th = slotAzimuths[slot] * .pi / 180
-        let c = cos(th), s = sin(th)
+        let servo = servoAtSlot.indices.contains(slot) ? servoAtSlot[slot] : slot + 1
+        let tilt = (reverse.indices.contains(servo - 1) && reverse[servo - 1]) ? -1.0 : 1.0
+        let rollS = (rollReverse.indices.contains(servo - 1) && rollReverse[servo - 1]) ? -1.0 : 1.0
+        let c = cos(th) * tilt, s = sin(th) * tilt
         var parts: [String] = []
         if abs(c) > 0.05 { parts.append("pitch \(c > 0 ? "+" : "−")") }
         if abs(s) > 0.05 { parts.append("yaw \(s > 0 ? "+" : "−")") }
-        parts.append("roll +")
+        parts.append("roll \(rollS > 0 ? "+" : "−")")
         return parts.joined(separator: " · ")
     }
 }

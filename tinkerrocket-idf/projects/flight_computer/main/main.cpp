@@ -2383,7 +2383,8 @@ static void setup_fc()
         prefs.getFloat("fa2", config::FIN_AZIMUTH_2_DEG),
         prefs.getFloat("fa3", config::FIN_AZIMUTH_3_DEG),
     };
-    uint8_t fin_rev = prefs.getUChar("frv", config::FIN_REVERSE_MASK);
+    uint8_t fin_rev  = prefs.getUChar("frv",  config::FIN_REVERSE_MASK);
+    uint8_t fin_rrev = prefs.getUChar("frrv", config::FIN_ROLL_REVERSE_MASK);
     prefs.end();
     ESP_LOGI(TAG, "Roll: kp_angle=%.2f rate_cap=%.0f iwindup=%.0f dps",
                   (double)kp_angle_outer, (double)kp_angle_rate_cap_dps,
@@ -2410,10 +2411,10 @@ static void setup_fc()
         control_mixer.enableGainSchedule(config::GAIN_SCHEDULE_V_REF,
                                          config::GAIN_SCHEDULE_V_MIN);
     }
-    control_mixer.setFinLayout(fin_az, fin_rev);
-    ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X",
+    control_mixer.setFinLayout(fin_az, fin_rev, fin_rrev);
+    ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                   (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
-                  (unsigned)fin_rev);
+                  (unsigned)fin_rev, (unsigned)fin_rrev);
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -3225,7 +3226,11 @@ static void loop_fc()
             // horizontal prep self-corrects; latched by leaving READY/
             // PRELAUNCH at launch).  During boost, the thrust direction
             // cross-checks whatever was latched.
-            if (rocket_state == READY || rocket_state == PRELAUNCH)
+            // Tilting the board during a bench ground test must NOT re-trigger the
+            // pad orientation auto-detect — it would keep re-racking the board→rocket
+            // frame mid-test (the fins then chase a moving reference).  Freeze the
+            // estimator while ground_test_active; it resumes when the test stops.
+            if ((rocket_state == READY || rocket_state == PRELAUNCH) && !ground_test_active)
             {
                 if (orient_estimator.update(ism6_latest_si.time_us,
                                             acc_x, acc_y, acc_z,
@@ -4914,17 +4919,19 @@ static void loop_fc()
                     for (int i = 0; i < 4; ++i)
                         if (!(f.azimuth_deg[i] >= -360.0f && f.azimuth_deg[i] <= 360.0f)) ok = false;
                     if (ok) {
-                        control_mixer.setFinLayout(f.azimuth_deg, f.reverse_mask);
-                        ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X",
+                        control_mixer.setFinLayout(f.azimuth_deg, f.reverse_mask,
+                                                   f.roll_reverse_mask);
+                        ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                                       (double)f.azimuth_deg[0], (double)f.azimuth_deg[1],
                                       (double)f.azimuth_deg[2], (double)f.azimuth_deg[3],
-                                      (unsigned)f.reverse_mask);
+                                      (unsigned)f.reverse_mask, (unsigned)f.roll_reverse_mask);
                         prefs.begin("servo", false);
                         prefs.putFloat("fa0", f.azimuth_deg[0]);
                         prefs.putFloat("fa1", f.azimuth_deg[1]);
                         prefs.putFloat("fa2", f.azimuth_deg[2]);
                         prefs.putFloat("fa3", f.azimuth_deg[3]);
-                        prefs.putUChar("frv", f.reverse_mask);
+                        prefs.putUChar("frv",  f.reverse_mask);
+                        prefs.putUChar("frrv", f.roll_reverse_mask);
                         prefs.end();
                         ESP_LOGI(TAG, "[FIN CFG] Saved to NVS");
                     } else {

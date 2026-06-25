@@ -132,7 +132,8 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     // +pitch, 2 right/+yaw, 3 bottom, 4 left) so an unconfigured rocket is unchanged.
     var finRingMode: UInt8 = 0                              // 0 = "+" on-axis, 1 = "×" 45°
     var finServoAtSlot: [Int] = [1, 2, 3, 4]               // servo (1-4) at slot 0..3
-    var finReverse: [Bool] = [false, false, false, false]  // per-servo (1-4) reverse
+    var finReverse: [Bool] = [false, false, false, false]  // per-servo (1-4) tilt (pitch/yaw) reverse
+    var finRollReverse: [Bool] = [false, false, false, false]  // per-servo (1-4) roll reverse (independent)
 
     // MARK: PID
     // Defaults match the FC factory config (#267): kp=0.12 reproduces the flown
@@ -249,6 +250,8 @@ extension RocketProfile {
         finServoAtSlot = finSlots.count == 4 ? finSlots : defaults.finServoAtSlot
         let finRev = try c.decodeIfPresent([Bool].self, forKey: .finReverse) ?? defaults.finReverse
         finReverse = finRev.count == 4 ? finRev : defaults.finReverse
+        let finRollRev = try c.decodeIfPresent([Bool].self, forKey: .finRollReverse) ?? defaults.finRollReverse
+        finRollReverse = finRollRev.count == 4 ? finRollRev : defaults.finRollReverse
 
         pidKp = try c.decodeIfPresent(Float.self, forKey: .pidKp) ?? defaults.pidKp
         pidKi = try c.decodeIfPresent(Float.self, forKey: .pidKi) ?? defaults.pidKi

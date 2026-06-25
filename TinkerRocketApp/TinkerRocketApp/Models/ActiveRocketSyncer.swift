@@ -171,7 +171,8 @@ final class ActiveRocketSyncer: ObservableObject {
                                   targetAlt: profile.pnTargetAltM)
         device.sendFinConfig(ringMode: profile.finRingMode,
                              servoAtSlot: profile.finServoAtSlot,
-                             reverse: profile.finReverse)
+                             reverse: profile.finReverse,
+                             rollReverse: profile.finRollReverse)
         device.sendCameraConfig(cameraType: profile.cameraType)
         device.sendImuOrientationConfig(profile.imuOrientSetting)
         device.sendSoundConfig(enabled: profile.soundsEnabled)

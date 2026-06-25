@@ -658,12 +658,14 @@ struct SettingsView: View {
                 ringMode: profile.finRingMode,
                 servoAtSlot: profile.finServoAtSlot,
                 reverse: profile.finReverse,
+                rollReverse: profile.finRollReverse,
                 canJog: device.isConnected && !device.isBaseStation && device.telemetry.pwr_pin_on,
                 onSetRingMode: { m in updateProfile { $0.finRingMode = m }; applyFinConfig() },
                 onSetServoAtSlot: { s in updateProfile { $0.finServoAtSlot = s }; applyFinConfig() },
-                onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() }
+                onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() },
+                onSetRollReverse: { r in updateProfile { $0.finRollReverse = r }; applyFinConfig() }
             )
-            Text("Map each servo to its fin, set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}), and reverse any mirrored servo. On the bench, jog each servo to confirm it deflects the way the ring shows.")
+            Text("Map each servo to its fin and set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}). If a fin's tilt is backwards in ground test, flip Reverse pitch/yaw; if its roll is backwards, flip Reverse roll. Jog each servo on the bench to confirm direction.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1099,7 +1101,8 @@ struct SettingsView: View {
         if device.isConnected {
             device.sendFinConfig(ringMode: profile.finRingMode,
                                  servoAtSlot: profile.finServoAtSlot,
-                                 reverse: profile.finReverse)
+                                 reverse: profile.finReverse,
+                                 rollReverse: profile.finRollReverse)
         }
         showApplied($finApplied)
     }

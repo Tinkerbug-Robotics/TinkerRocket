@@ -101,9 +101,10 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
 
 TEST(RocketComputerTypes, FinConfigData_Layout) {
     // Wire struct relayed app→OC→BS→FC; size is hardcoded in the relay paths.
-    EXPECT_EQ(sizeof(FinConfigData), 17u);
-    EXPECT_EQ(offsetof(FinConfigData, azimuth_deg),  0u);
-    EXPECT_EQ(offsetof(FinConfigData, reverse_mask), 16u);
+    EXPECT_EQ(sizeof(FinConfigData), 18u);
+    EXPECT_EQ(offsetof(FinConfigData, azimuth_deg),       0u);
+    EXPECT_EQ(offsetof(FinConfigData, reverse_mask),      16u);
+    EXPECT_EQ(offsetof(FinConfigData, roll_reverse_mask), 17u);
 }
 
 TEST(RocketComputerTypes, MaxPayload_CoversAllTypes) {
