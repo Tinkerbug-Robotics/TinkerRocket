@@ -119,12 +119,12 @@ final class TelemetryDataTests: XCTestCase {
 
     /// Pack a "h" bitfield from per-item states.  Shifts mirror
     /// RocketComputerTypes.h SH_*_SHIFT (baro 0, imu 2, ekf 4, mag 6, gnss 8,
-    /// batt 10, pyro1..4 at 12/14/16/18).
+    /// batt 10, pyro1..4 at 12/14/16/18, storage 20).
     private func pack(baro: SH = .na, imu: SH = .na, ekf: SH = .na, mag: SH = .na,
-                      gnss: SH = .na, batt: SH = .na,
+                      gnss: SH = .na, batt: SH = .na, storage: SH = .na,
                       p1: SH = .na, p2: SH = .na, p3: SH = .na, p4: SH = .na) -> Int {
         baro.rawValue | (imu.rawValue << 2) | (ekf.rawValue << 4) | (mag.rawValue << 6)
-            | (gnss.rawValue << 8) | (batt.rawValue << 10)
+            | (gnss.rawValue << 8) | (batt.rawValue << 10) | (storage.rawValue << 20)
             | (p1.rawValue << 12) | (p2.rawValue << 14) | (p3.rawValue << 16) | (p4.rawValue << 18)
     }
     private func decode(health: Int) throws -> TelemetryData {
@@ -142,6 +142,7 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(try decode(health: 1 << 8).gnssHealth, .ok)       // gnss
         XCTAssertEqual(try decode(health: 1 << 10).battHealth, .ok)      // battery
         XCTAssertEqual(try decode(health: 1 << 18).pyroHealth(channel: 4), .ok)  // pyro4
+        XCTAssertEqual(try decode(health: 1 << 20).storageHealth, .ok)   // storage (#281/#278)
         // A single field set leaves everything else N/A (no bleed).
         let onlyGnss = try decode(health: 1 << 8)
         XCTAssertEqual(onlyGnss.baroHealth, .na)
@@ -188,6 +189,27 @@ final class TelemetryDataTests: XCTestCase {
         // A configured-but-untested pyro is amber too.
         let pyro = try decode(health: pack(baro: .ok, imu: .ok, ekf: .ok, gnss: .ok, batt: .ok, p1: .deg))
         XCTAssertEqual(pyro.flightReadiness, .caution)
+    }
+
+    /// Flight-log storage (#281/#278): BAD (full/failing NAND) is a hard fault —
+    /// the silent log-loss that motivated the verdict must read "do not fly".
+    /// DEGRADED (low space) gates green down to amber; N/A (older firmware) is
+    /// ignored so it can't strand the go/no-go.  A reported state adds a card row.
+    func testReadiness_Storage() throws {
+        let full = try decode(health: pack(baro: .ok, imu: .ok, ekf: .ok, gnss: .ok, batt: .ok, storage: .bad))
+        XCTAssertEqual(full.storageHealth, .bad)
+        XCTAssertEqual(full.flightReadiness, .notReady)
+        let low = try decode(health: pack(baro: .ok, imu: .ok, ekf: .ok, gnss: .ok, batt: .ok, storage: .deg))
+        XCTAssertEqual(low.flightReadiness, .caution)
+        let ok = try decode(health: pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok, storage: .ok))
+        XCTAssertEqual(ok.flightReadiness, .ready)
+        XCTAssertEqual(ok.sensorHealthRows.count, 7)         // 6 core + Storage
+        XCTAssertTrue(ok.sensorHealthRows.contains { $0.name == "Storage" })
+        // N/A storage (older firmware / BS frame) is ignored: no row, still green.
+        let naStor = try decode(health: pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok))
+        XCTAssertEqual(naStor.storageHealth, .na)
+        XCTAssertEqual(naStor.flightReadiness, .ready)
+        XCTAssertFalse(naStor.sensorHealthRows.contains { $0.name == "Storage" })
     }
 
     /// Mag is advisory — BAD mag with everything else OK still recommends fly.

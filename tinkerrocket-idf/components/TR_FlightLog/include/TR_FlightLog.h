@@ -19,7 +19,11 @@ namespace tr_flightlog {
 class TR_FlightLog {
 public:
     struct Config {
-        uint16_t prealloc_blocks     = 256;   // 32 MB
+        // ~10 MB (~2.7 min at the ~64 KB/s log rate) covers the vast majority of
+        // flights without an overflow extend.  Was 256 (32 MB / ~8.5 min): with
+        // recovered flights now trimmed (scanForBrownoutRecovery) that headroom
+        // is pure waste/fragmentation, and a brownout flight no longer keeps it.
+        uint16_t prealloc_blocks     = 80;    // ~10 MB
         uint16_t extend_blocks       = 64;    // overflow step (~200 ms stall)
         uint16_t flight_region_start = 32;    // first block owned by this layer
         uint16_t flight_region_end   = 1020;  // one past last flight block

@@ -154,6 +154,7 @@ struct TelemetryData: Codable {
     var magHealth:  SensorHealth { shState(6) }   // advisory only — never gates go/no-go
     var gnssHealth: SensorHealth { shState(8) }
     var battHealth: SensorHealth { shState(10) }
+    var storageHealth: SensorHealth { shState(20) }   // #281/#278: flight-log NAND — BAD = full/failing, won't record
     func pyroHealth(channel: Int) -> SensorHealth {   // channel 1...4; .na = not configured
         guard (1...4).contains(channel) else { return .na }
         return shState(12 + (channel - 1) * 2)
@@ -172,6 +173,9 @@ struct TelemetryData: Codable {
             SensorHealthRow(name: "Battery", state: battHealth),
             SensorHealthRow(name: "Mag",     state: magHealth),
         ]
+        if storageHealth != .na {   // OC-reported only; absent on older firmware / BS self-frames
+            rows.append(SensorHealthRow(name: "Storage", state: storageHealth))
+        }
         for ch in 1...4 where pyroHealth(channel: ch) != .na {
             rows.append(SensorHealthRow(name: "Pyro \(ch)", state: pyroHealth(channel: ch)))
         }
@@ -179,9 +183,11 @@ struct TelemetryData: Codable {
     }
 
     // Go/no-go rollup (#303).  Red = a hard fault waiting won't fix (baro/IMU/
-    // battery BAD, or a configured pyro with no continuity).  Green needs every
-    // required item OK — including EKF initialized/converged and a GNSS fix.
-    // Mag is advisory and never gates.  Amber = anything in between.
+    // battery BAD, a full/failing flight-log store, or a configured pyro with no
+    // continuity).  Green needs every required item OK — including EKF
+    // initialized/converged and a GNSS fix.  Mag is advisory and never gates.
+    // Storage is OC-reported: absent (N/A) on older firmware → ignored, not red.
+    // Amber = anything in between.
     enum FlightReadiness { case unknown, ready, caution, notReady
         var label: String {
             switch self { case .unknown:  return "Waiting for telemetry…"
@@ -192,10 +198,11 @@ struct TelemetryData: Codable {
     }
     var flightReadiness: FlightReadiness {
         guard hasSensorHealth else { return .unknown }
-        let hardFault = [baroHealth, imuHealth, battHealth].contains(.bad)
+        let hardFault = [baroHealth, imuHealth, battHealth, storageHealth].contains(.bad)
             || (1...4).contains { pyroHealth(channel: $0) == .bad }
         if hardFault { return .notReady }
         var mustBeOK = [baroHealth, imuHealth, battHealth, ekfHealth, gnssHealth]
+        if storageHealth != .na { mustBeOK.append(storageHealth) }   // #281/#278: low/full space gates green
         for ch in 1...4 where pyroHealth(channel: ch) != .na { mustBeOK.append(pyroHealth(channel: ch)) }
         return mustBeOK.allSatisfy { $0 == .ok } ? .ready : .caution
     }

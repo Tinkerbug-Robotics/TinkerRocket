@@ -181,8 +181,15 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
             continue;
         }
 
-        // Synthesize a partial flight entry. final_bytes tracks the logical
-        // byte count of the data that actually got flushed to NAND.
+        // Synthesize a partial flight entry. final_bytes is the logical PAYLOAD
+        // byte count actually flushed to NAND — #273: PAYLOAD_PER_PAGE (2032),
+        // NOT NAND_PAGE_SIZE (2048), or the downloader walks past the last real
+        // page into PageHeader/0xFF bytes (corrupt tail, size ~0.8% too large).
+        constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+        const uint32_t used_pages  = static_cast<uint32_t>(last_good_page_rel + 1);
+        uint32_t used_blocks = (used_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
+        if (used_blocks > run_len) used_blocks = run_len;
+
         FlightIndexEntry entry{};
         entry.magic       = FLGT_MAGIC;
         entry.flight_id   = last_flight_id;
@@ -190,13 +197,22 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                       "flight_recovered_%lu.bin",
                       static_cast<unsigned long>(last_flight_id));
         entry.start_block = static_cast<uint16_t>(run_start);
-        entry.n_blocks    = static_cast<uint16_t>(run_len);
-        entry.final_bytes = static_cast<uint32_t>(
-            (last_good_page_rel + 1) * static_cast<int32_t>(NAND_PAGE_SIZE));
+        entry.n_blocks    = static_cast<uint16_t>(used_blocks);  // trimmed; was run_len (full ~32 MB)
+        entry.final_bytes = used_pages * PAYLOAD_PER_PAGE;
 
         Status st = index_.append(entry);
         if (st != Status::Ok) return st;
         index_dirty = true;
+
+        // Trim the unused tail of the recovered range back to FREE, exactly like
+        // finalizeFlight. Without this a brownout flight permanently holds its
+        // full prealloc — ~4 such flights fill the chip despite <10 MB of real
+        // data each (the 2026-06-25 silent log-loss / #281 root cause).
+        const uint32_t free_count = run_len - used_blocks;
+        if (free_count > 0) {
+            bitmap_.markFreeRange(run_start + used_blocks, free_count);
+            bitmap_dirty = true;
+        }
     }
 
     if (index_dirty) {

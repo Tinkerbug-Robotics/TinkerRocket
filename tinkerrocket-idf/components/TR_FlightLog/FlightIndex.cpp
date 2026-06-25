@@ -3,6 +3,8 @@
 #include "CRC.h"
 
 #include <cstring>
+#include <memory>
+#include <new>
 
 namespace tr_flightlog {
 
@@ -10,6 +12,21 @@ namespace {
 
 constexpr size_t serialized_size(size_t entry_count) {
     return sizeof(MetadataHeader) + entry_count * sizeof(FlightIndexEntry);
+}
+
+// Whole-page-aligned scratch for a full serialized snapshot, rounded up to a
+// NAND page so readPage/programPage (which always touch a full NAND_PAGE_SIZE)
+// never run past the buffer. Allocated on the HEAP per call (#281): the snapshot
+// is ~6 KB at MAX_ENTRIES=128 — too large for the 4 KB main-task stack — and the
+// callers (main at boot, flush task at finalize, BLE task at delete) each get
+// their own buffer, so there's no stack pressure and no cross-task shared-buffer
+// race. Returns a zero-filled buffer (pads the last page deterministically), or
+// nullptr on OOM (caller degrades gracefully — the data stays on NAND).
+constexpr size_t SNAPSHOT_BUF_BYTES =
+    ((FlightIndex::MAX_SERIALIZED_BYTES + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE) * NAND_PAGE_SIZE;
+
+inline std::unique_ptr<uint8_t[]> allocSnapshotBuf() {
+    return std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[SNAPSHOT_BUF_BYTES]());
 }
 
 // CRC32 over everything after the crc32 field of MetadataHeader, through the
@@ -82,30 +99,29 @@ void FlightIndex::clear() {
 
 FlightIndex::SnapshotInfo FlightIndex::inspect(TR_NandBackend& nand, uint32_t block) const {
     SnapshotInfo info;
-    uint8_t page[NAND_PAGE_SIZE];
-    if (!nand.readPage(block, 0, page)) return info;
+    auto buf = allocSnapshotBuf();
+    if (!buf) return info;
+    if (!nand.readPage(block, 0, buf.get())) return info;
 
     MetadataHeader hdr;
-    std::memcpy(&hdr, page, sizeof(hdr));
+    std::memcpy(&hdr, buf.get(), sizeof(hdr));
     if (hdr.magic != META_MAGIC) return info;
     if (hdr.entry_count > MAX_ENTRIES) return info;
 
     const size_t total_bytes = serialized_size(hdr.entry_count);
     if (total_bytes > MAX_SERIALIZED_BYTES) return info;
 
-    // Read the full serialized blob, page by page.
-    uint8_t buf[MAX_SERIALIZED_BYTES];
-    size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
-    std::memcpy(buf, page, NAND_PAGE_SIZE);
+    // Read the remaining pages of the serialized blob (page 0 already in buf).
+    const size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
     for (size_t p = 1; p < pages_needed; ++p) {
         if (!nand.readPage(block, static_cast<uint32_t>(p),
-                           buf + p * NAND_PAGE_SIZE)) {
+                           buf.get() + p * NAND_PAGE_SIZE)) {
             return info;
         }
     }
 
     const uint32_t want_crc = hdr.crc32;
-    const uint32_t got_crc  = compute_crc(buf, total_bytes);
+    const uint32_t got_crc  = compute_crc(buf.get(), total_bytes);
     if (want_crc != got_crc) return info;
 
     info.valid       = true;
@@ -116,11 +132,12 @@ FlightIndex::SnapshotInfo FlightIndex::inspect(TR_NandBackend& nand, uint32_t bl
 
 Status FlightIndex::readSnapshot(TR_NandBackend& nand, uint32_t block) {
     clear();
-    uint8_t buf[MAX_SERIALIZED_BYTES];
-    if (!nand.readPage(block, 0, buf)) return Status::BackendFailed;
+    auto buf = allocSnapshotBuf();
+    if (!buf) return Status::BackendFailed;
+    if (!nand.readPage(block, 0, buf.get())) return Status::BackendFailed;
 
     MetadataHeader hdr;
-    std::memcpy(&hdr, buf, sizeof(hdr));
+    std::memcpy(&hdr, buf.get(), sizeof(hdr));
     if (hdr.magic != META_MAGIC) return Status::CrcMismatch;
     if (hdr.entry_count > MAX_ENTRIES) return Status::Error;
 
@@ -128,15 +145,15 @@ Status FlightIndex::readSnapshot(TR_NandBackend& nand, uint32_t block) {
     const size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
     for (size_t p = 1; p < pages_needed; ++p) {
         if (!nand.readPage(block, static_cast<uint32_t>(p),
-                           buf + p * NAND_PAGE_SIZE)) {
+                           buf.get() + p * NAND_PAGE_SIZE)) {
             return Status::BackendFailed;
         }
     }
-    if (compute_crc(buf, total_bytes) != hdr.crc32) return Status::CrcMismatch;
+    if (compute_crc(buf.get(), total_bytes) != hdr.crc32) return Status::CrcMismatch;
 
     count_         = hdr.entry_count;
     last_sequence_ = hdr.sequence;
-    std::memcpy(entries_, buf + sizeof(MetadataHeader),
+    std::memcpy(entries_, buf.get() + sizeof(MetadataHeader),
                 count_ * sizeof(FlightIndexEntry));
     return Status::Ok;
 }
@@ -162,7 +179,8 @@ Status FlightIndex::load(TR_NandBackend& nand,
 
 Status FlightIndex::writeSnapshot(TR_NandBackend& nand,
                                   uint32_t block, uint32_t sequence) const {
-    uint8_t buf[MAX_SERIALIZED_BYTES] = {};
+    auto buf = allocSnapshotBuf();   // zero-filled: pads the last page deterministically
+    if (!buf) return Status::BackendFailed;
     const size_t total_bytes = serialized_size(count_);
 
     MetadataHeader hdr;
@@ -170,17 +188,17 @@ Status FlightIndex::writeSnapshot(TR_NandBackend& nand,
     hdr.magic       = META_MAGIC;
     hdr.sequence    = sequence;
     hdr.entry_count = static_cast<uint32_t>(count_);
-    std::memcpy(buf, &hdr, sizeof(hdr));
-    std::memcpy(buf + sizeof(hdr), entries_,
+    std::memcpy(buf.get(), &hdr, sizeof(hdr));
+    std::memcpy(buf.get() + sizeof(hdr), entries_,
                 count_ * sizeof(FlightIndexEntry));
 
-    const uint32_t crc = compute_crc(buf, total_bytes);
-    std::memcpy(buf, &crc, sizeof(crc));
+    const uint32_t crc = compute_crc(buf.get(), total_bytes);
+    std::memcpy(buf.get(), &crc, sizeof(crc));
 
     const size_t pages_needed = (total_bytes + NAND_PAGE_SIZE - 1) / NAND_PAGE_SIZE;
     for (size_t p = 0; p < pages_needed; ++p) {
         if (!nand.programPage(block, static_cast<uint32_t>(p),
-                              buf + p * NAND_PAGE_SIZE)) {
+                              buf.get() + p * NAND_PAGE_SIZE)) {
             return Status::BackendFailed;
         }
     }

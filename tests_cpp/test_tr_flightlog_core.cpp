@@ -176,7 +176,7 @@ TEST(TRFlightLogScaffold, BeginAcceptsDefaultConfig) {
     TR_FlightLog::Config cfg;
     EXPECT_EQ(fl.begin(nand, cfg), Status::Ok);
     EXPECT_TRUE(fl.isInitialized());
-    EXPECT_EQ(fl.config().prealloc_blocks, 256);
+    EXPECT_EQ(fl.config().prealloc_blocks, 80);
 }
 
 TEST(TRFlightLogScaffold, BeginRejectsInvertedRegion) {
@@ -524,6 +524,34 @@ TEST(FlightIndexPersist, SaveThenLoadRoundTrip) {
     EXPECT_STREQ(loaded.at(1).filename, "flight_002.bin");
 }
 
+TEST(FlightIndexPersist, FullIndexRoundTripsAcrossPages) {
+    // At MAX_ENTRIES=128 the serialized snapshot is ~6.2 KB — several NAND pages
+    // — and is built in a heap buffer off the 4 KB stack (#281). Fill the index
+    // to capacity and confirm save/load round-trips every entry, including the
+    // last one (which lives on a later page).
+    FakeNandBackend nand;
+    FlightIndex idx;
+    for (size_t i = 0; i < FlightIndex::MAX_ENTRIES; ++i) {
+        char name[24];
+        std::snprintf(name, sizeof(name), "flight_%03zu.bin", i);
+        ASSERT_EQ(idx.append(makeEntry(static_cast<uint32_t>(i + 1), name,
+                                       static_cast<uint16_t>(32 + i), 1,
+                                       static_cast<uint32_t>(1000 + i))),
+                  Status::Ok);
+    }
+    ASSERT_EQ(idx.save(nand, META_A, META_B), Status::Ok);
+
+    FlightIndex loaded;
+    ASSERT_EQ(loaded.load(nand, META_A, META_B), Status::Ok);
+    ASSERT_EQ(loaded.size(), FlightIndex::MAX_ENTRIES);
+    EXPECT_EQ(loaded.at(0).flight_id, 1u);
+    EXPECT_STREQ(loaded.at(0).filename, "flight_000.bin");
+    EXPECT_EQ(loaded.at(FlightIndex::MAX_ENTRIES - 1).flight_id,
+              static_cast<uint32_t>(FlightIndex::MAX_ENTRIES));
+    EXPECT_EQ(loaded.at(FlightIndex::MAX_ENTRIES - 1).final_bytes,
+              static_cast<uint32_t>(1000 + FlightIndex::MAX_ENTRIES - 1));
+}
+
 TEST(FlightIndexPersist, SequenceIncrementsOnEachSave) {
     FakeNandBackend nand;
     FlightIndex idx;
@@ -666,7 +694,7 @@ TEST(TRFlightLogPrepare, FreshChipPicksRangeStart) {
     FakeNandBackend nand;
     MemoryBitmapStore store;
     TR_FlightLog fl;
-    TR_FlightLog::Config cfg;  // default prealloc_blocks = 256
+    TR_FlightLog::Config cfg;  // default prealloc_blocks = 80
     ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
 
     uint32_t flight_id = 0;
@@ -697,22 +725,23 @@ TEST(TRFlightLogPrepare, SkipsKnownBadBlocksWhenPicking) {
     MemoryBitmapStore store;
     TR_FlightLog fl;
     TR_FlightLog::Config cfg;
-    // Factory-bad a block partway through the first natural 256-block range.
-    nand.injectFactoryBadBlock(cfg.flight_region_start + 100);
+    // Factory-bad a block partway through the first natural prealloc-block range
+    // (must be < prealloc_blocks so it actually breaks the first candidate run).
+    nand.injectFactoryBadBlock(cfg.flight_region_start + 50);
 
     ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
     uint32_t flight_id = 0;
     ASSERT_EQ(fl.prepareFlight(flight_id), Status::Ok);
 
-    // The chosen start must be >= flight_region_start + 101 (first fresh free
+    // The chosen start must be >= flight_region_start + 51 (first fresh free
     // run after the bad block).
     // Walk the bitmap to find the chosen range.
     uint32_t first_alloc = 0;
     for (uint32_t b = 0; b < NAND_BLOCK_COUNT; ++b) {
         if (fl.bitmap().get(b) == BLOCK_ALLOCATED) { first_alloc = b; break; }
     }
-    EXPECT_EQ(first_alloc, cfg.flight_region_start + 101);
-    EXPECT_EQ(fl.bitmap().get(cfg.flight_region_start + 100), BLOCK_BAD);
+    EXPECT_EQ(first_alloc, cfg.flight_region_start + 51);
+    EXPECT_EQ(fl.bitmap().get(cfg.flight_region_start + 50), BLOCK_BAD);
 }
 
 TEST(TRFlightLogPrepare, NoSpaceWhenInsufficientContiguousFree) {
@@ -1489,9 +1518,16 @@ TEST(TRFlightLogBrownout, RecoversPartialFlightWithValidHeaders) {
 
     const auto& e = fl2.index().at(0);
     EXPECT_EQ(e.flight_id, expected_flight_id);
-    EXPECT_EQ(e.n_blocks, 256u);
-    // Last valid seq was 49; final_bytes = (49+1) * NAND_PAGE_SIZE.
-    EXPECT_EQ(e.final_bytes, 50u * NAND_PAGE_SIZE);
+    // 50 single-page frames -> 50 pages -> 1 block. The recovered entry is now
+    // TRIMMED to the blocks actually used (was the full prealloc), and the
+    // reserved-but-unused tail is returned to FREE — so a brownout flight no
+    // longer permanently holds its whole prealloc (#281 root cause).
+    EXPECT_EQ(e.n_blocks, 1u);
+    EXPECT_EQ(fl2.bitmap().get(e.start_block), BLOCK_ALLOCATED);
+    EXPECT_EQ(fl2.bitmap().get(e.start_block + e.n_blocks), BLOCK_FREE);  // tail freed
+    // #273: final_bytes uses PAYLOAD_PER_PAGE (2032), not NAND_PAGE_SIZE (2048),
+    // so the downloader stops at the last real page (clean tail, correct size).
+    EXPECT_EQ(e.final_bytes, 50u * (NAND_PAGE_SIZE - sizeof(PageHeader)));
     // Filename is synthesized — caller can rename later.
     EXPECT_NE(std::strstr(e.filename, "recovered"), nullptr);
 }
@@ -1553,8 +1589,9 @@ TEST(TRFlightLogBrownout, TornLastPageReverts) {
     TR_FlightLog fl2;
     ASSERT_EQ(fl2.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
     ASSERT_EQ(fl2.index().size(), 1u);
-    // Recovery should stop at seq=8 (last intact page); final_bytes = 9 pages.
-    EXPECT_EQ(fl2.index().at(0).final_bytes, 9u * NAND_PAGE_SIZE);
+    // Recovery should stop at seq=8 (last intact page); final_bytes = 9 pages
+    // of PAYLOAD_PER_PAGE (#273), not NAND_PAGE_SIZE.
+    EXPECT_EQ(fl2.index().at(0).final_bytes, 9u * (NAND_PAGE_SIZE - sizeof(PageHeader)));
 }
 
 // ================================================================
