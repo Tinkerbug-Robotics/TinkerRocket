@@ -99,10 +99,14 @@ def _parse_profile(rc: dict) -> list[tuple[float, float, bool]]:
 
 
 def _profile_target(wps: list[tuple[float, float, bool]], t: float) -> tuple[float, bool]:
-    """Replicate firmware `roll_profile_query` (main.cpp): returns (target_angle_deg, is_angle_mode)
-    at flight time `t` (seconds since launch). Segment mode = mode of the waypoint that STARTS it;
-    the angle is linearly interpolated between consecutive waypoints. Holds the first / last
-    waypoint outside the profile span."""
+    """Replicate firmware `roll_profile_query` (main.cpp:1008) EXACTLY: returns
+    (target_angle_deg, is_angle_mode) at flight time `t` (seconds since launch).
+    Inside the profile the controller commands the segment's DESTINATION — the
+    NEXT waypoint's absolute angle, as a STEP (no interpolation) — using the
+    CURRENT waypoint's mode, and lets controlAngle take the shortest path to it.
+    Holds the first / last waypoint outside the profile span.
+    (Was previously interpolating a0→a1, which mislabels the target during
+    multi-waypoint angle segments — the firmware does not ramp.)"""
     if not wps:
         return 0.0, False
     if t <= wps[0][0]:
@@ -111,12 +115,7 @@ def _profile_target(wps: list[tuple[float, float, bool]], t: float) -> tuple[flo
         return wps[-1][1], not wps[-1][2]
     for i in range(len(wps) - 1):
         if t < wps[i + 1][0]:
-            t0, a0, null0 = wps[i]
-            t1, a1, _ = wps[i + 1]
-            if t1 <= t0:
-                return a0, not null0
-            frac = (t - t0) / (t1 - t0)
-            return a0 + frac * (a1 - a0), not null0
+            return wps[i + 1][1], not wps[i][2]  # NEXT angle (step), CURRENT mode
     return wps[-1][1], not wps[-1][2]
 
 
