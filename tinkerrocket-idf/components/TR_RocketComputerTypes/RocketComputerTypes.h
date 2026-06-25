@@ -1070,7 +1070,8 @@ typedef struct __attribute__((packed))
 
     // Sensor health scorecard (#303): 2 bits per item (SensorHealthState), see
     // the SH_*_SHIFT positions below — incl. a state per pyro channel.  FC fills
-    // baro/IMU/EKF/mag/GNSS/pyro×4; the OC ORs in the battery bits before relay.
+    // baro/IMU/EKF/mag/GNSS/pyro×4; the OC ORs in battery + flight-log storage
+    // before relay (both OC-owned — the FC reads neither).
     uint32_t sensor_health;
 
 } NonSensorData;
@@ -1095,7 +1096,11 @@ static constexpr uint8_t SH_BATT_SHIFT = 10;  // set by the OC from POWERData
 // the operator's go/no-go); OK = continuity present; DEGRADED = configured but
 // continuity not yet tested; BAD = configured, tested, no continuity.
 static constexpr uint8_t SH_PYRO_SHIFT[4] = { 12, 14, 16, 18 };
-// bits 20-31 reserved
+// Flight-log storage (#281 no-eviction / #278 silent drop): OC-owned, like
+// battery.  BAD = a full or write-failing NAND that will NOT record the flight
+// — the silent failure mode that lost the 2026-06-25 guided flight.
+static constexpr uint8_t SH_STORAGE_SHIFT = 20;
+// bits 22-31 reserved
 static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st) {
     return (field & ~(uint32_t)(0x3u << shift)) | ((uint32_t)st << shift);
 }
@@ -1110,6 +1115,24 @@ static inline SensorHealthState shBatteryState(float voltage) {
     if (voltage >= 7.0f) return SH_OK;
     if (voltage >= 6.6f) return SH_DEGRADED;
     return SH_BAD;
+}
+// Flight-log storage verdict (#281/#278).  The OC owns the NAND flight log; the
+// FC has no visibility, so the OC classifies here and ORs the bits into
+// sensor_health before relay (mirrors shBatteryState).  A full or write-failing
+// store silently dropped the 2026-06-25 flight — this surfaces it pre-launch.
+//   free_blocks     : BlockStateBitmap::countInState(BLOCK_FREE)
+//   prealloc_blocks : blocks one flight reserves (TR_FlightLog::Config)
+//   write_fail      : NAND program failures this session (nand_prog_fail)
+// BAD = won't record (writes failing, or no room for the next flight);
+// DEGRADED = room for fewer than 2 more flights; OK = ample room + healthy writes.
+static inline SensorHealthState shStorageState(uint32_t free_blocks,
+                                               uint32_t prealloc_blocks,
+                                               uint32_t write_fail) {
+    if (prealloc_blocks == 0) return SH_NA;          // logger not configured
+    if (write_fail > 0) return SH_BAD;               // NAND writes failing now
+    if (free_blocks < prealloc_blocks) return SH_BAD;        // no room for a flight
+    if (free_blocks < 2u * prealloc_blocks) return SH_DEGRADED;  // low space
+    return SH_OK;
 }
 
 static constexpr uint8_t NSF_ALT_LANDED   = (1u << 0);

@@ -119,6 +119,20 @@ static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload
     return fl->writeFrame(payload, payload_len) == tr_flightlog::Status::Ok;
 }
 
+// #281/#278: classify flight-log storage for the #303 scorecard.  A full or
+// write-failing NAND silently dropped the 2026-06-25 guided flight (recovery
+// surfaced the previous day's data); folding a verdict into sensor_health makes
+// it visible on the pre-launch go/no-go and the live downlink instead.
+static SensorHealthState ocStorageHealth()
+{
+    if (!flightlog.isInitialized()) return SH_NA;
+    TR_LogToFlashStats s = {};
+    logger.getStats(s);
+    const uint32_t free_blocks = flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
+    const uint32_t prealloc    = flightlog.config().prealloc_blocks;
+    return shStorageState(free_blocks, prealloc, s.nand_prog_fail);
+}
+
 // Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
 // Fills up to `max_bytes` of the downloader's scratch buffer by issuing
 // successive readFlightPage calls (each one returns at most 2032 payload
@@ -2380,6 +2394,15 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         lora.sensor_health = shSet(sh, SH_BATT_SHIFT, shBatteryState(power_si.voltage));
     }
 
+    // #281/#278: fold in the OC-owned flight-log storage verdict regardless of
+    // power validity, so a full/failing NAND surfaces even before the pack reads.
+    // Seed from the bits already assembled above (battery, when power was valid).
+    {
+        uint32_t sh = latest_power_valid ? lora.sensor_health
+                     : (latest_non_sensor_valid ? latest_non_sensor.sensor_health : 0u);
+        lora.sensor_health = shSet(sh, SH_STORAGE_SHIFT, ocStorageHealth());
+    }
+
     lora.pressure_alt = pressure_alt_m;
     lora.altitude_rate = pressure_alt_rate_mps;
     lora.max_alt = max_alt_m;
@@ -3955,6 +3978,7 @@ static void printStats()
             sensor_converter.convertPowerData(latest_power_raw, p);
             sh = shSet(sh, SH_BATT_SHIFT, shBatteryState(p.voltage));
         }
+        sh = shSet(sh, SH_STORAGE_SHIFT, ocStorageHealth());  // #281/#278
         ble_telem.sensor_health = sh;
     }
     ble_telem.rssi = NAN;  // LoRa RSSI only meaningful on base station (continuous RX)

@@ -31,6 +31,37 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(Vec3i16),         6u);
 }
 
+// #281/#278: the flight-log storage verdict the OC folds into sensor_health.  A
+// full/failing NAND silently dropped the 2026-06-25 guided flight; these pin the
+// thresholds and the bit slot so the pre-launch go/no-go can trust them.
+TEST(RocketComputerTypes, StorageHealthVerdict) {
+    constexpr uint32_t PA = 256;  // prealloc_blocks — one flight's reservation
+    EXPECT_EQ(shStorageState(/*free=*/988, PA, /*write_fail=*/0), SH_OK);
+    EXPECT_EQ(shStorageState(2 * PA,       PA, 0), SH_OK);
+    EXPECT_EQ(shStorageState(2 * PA - 1,   PA, 0), SH_DEGRADED);  // room for <2 flights
+    EXPECT_EQ(shStorageState(PA,           PA, 0), SH_DEGRADED);
+    EXPECT_EQ(shStorageState(PA - 1,       PA, 0), SH_BAD);       // no room for next flight
+    EXPECT_EQ(shStorageState(0,            PA, 0), SH_BAD);
+    // A NAND write failure is BAD regardless of free space (full mid-flight /
+    // bad-block run) — even with the whole chip nominally free.
+    EXPECT_EQ(shStorageState(988,          PA, /*write_fail=*/1), SH_BAD);
+    EXPECT_EQ(shStorageState(0, /*prealloc=*/0, 0), SH_NA);       // logger not configured
+}
+
+TEST(RocketComputerTypes, StorageHealth_BitPosition) {
+    EXPECT_EQ(SH_STORAGE_SHIFT, 20u);
+    for (uint8_t other : {SH_BARO_SHIFT, SH_IMU_SHIFT, SH_EKF_SHIFT, SH_MAG_SHIFT,
+                          SH_GNSS_SHIFT, SH_BATT_SHIFT, SH_PYRO_SHIFT[0],
+                          SH_PYRO_SHIFT[1], SH_PYRO_SHIFT[2], SH_PYRO_SHIFT[3]}) {
+        EXPECT_NE(SH_STORAGE_SHIFT, other);   // clear of every other field
+    }
+    uint32_t f = shSet(0u, SH_STORAGE_SHIFT, SH_BAD);
+    EXPECT_EQ(shGet(f, SH_STORAGE_SHIFT), SH_BAD);
+    f = shSet(f, SH_PYRO_SHIFT[3], SH_OK);    // neighbouring field (shift 18) — no bleed
+    EXPECT_EQ(shGet(f, SH_STORAGE_SHIFT), SH_BAD);
+    EXPECT_EQ(shGet(f, SH_PYRO_SHIFT[3]), SH_OK);
+}
+
 TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
     // bits 0-6 used; bit 7 reserved post per-fire-arming refactor.
     uint8_t all = NSF_ALT_LANDED | NSF_ALT_APOGEE | NSF_VEL_APOGEE |
