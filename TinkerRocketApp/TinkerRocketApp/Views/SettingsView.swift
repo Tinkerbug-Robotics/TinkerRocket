@@ -45,6 +45,7 @@ struct SettingsView: View {
     @State private var sPidMaxCmd = ""
     @State private var sRollDelayMs = ""
     @State private var savedRollUsesAngle: Bool? = nil
+    @State private var savedOrientCode: UInt8? = nil
     @State private var sRateCapDps = ""
     @State private var sKpAngle = ""
     @State private var sIntegralSep = ""
@@ -552,12 +553,30 @@ struct SettingsView: View {
         }
 
         Section("IMU Mounting") {
-            Picker("Orientation", selection: imuOrientBinding) {
-                Text("Auto-detect").tag(255)
-                ForEach(0..<24, id: \.self) { code in
-                    Text("Nose \(FlightSettingsData.b2rName(code: UInt8(code)))").tag(code)
-                }
+            Picker("Mode", selection: orientModeBinding) {
+                Text("Manual").tag(0)
+                Text("Pad auto-detect").tag(1)
             }
+            .pickerStyle(.segmented)
+
+            if profile.imuOrientSetting != 0xFF {
+                Picker("Nose axis", selection: noseAxisBinding) {
+                    ForEach(0..<6, id: \.self) { i in
+                        Text(["+X", "-X", "+Y", "-Y", "+Z", "-Z"][i]).tag(i)
+                    }
+                }
+                Picker("Fin clocking", selection: clockingBinding) {
+                    ForEach(0..<4, id: \.self) { i in
+                        Text(["0\u{00B0}", "90\u{00B0}", "180\u{00B0}", "270\u{00B0}"][i]).tag(i)
+                    }
+                }
+                Text("Which board axis points at the nose (up on the pad). Manual also fixes the fin clocking (quarter-turns about the nose) \u{2014} required for roll-controlled or guided flight.")
+                    .font(.caption).foregroundColor(.secondary)
+            } else {
+                Text("Detects the nose axis from gravity on the pad. It can\u{2019}t observe fin clocking, so this is fine only for non-controlled flights \u{2014} not roll or guidance.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+
             if !device.imuOrientationName.isEmpty {
                 HStack {
                     Text("Active on rocket")
@@ -566,21 +585,45 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            Text(profile.imuOrientSetting == 0xFF
-                ? "Auto detects which board axis points at the nose from gravity on the pad. Fine for non-controlled flights."
-                : "Manual mounting also fixes the fin clocking (rNN = quarter-turns about the nose) — required for roll-controlled or guided flights when the board is mounted off-axis.")
-                .font(.caption).foregroundColor(.secondary)
         }
     }
 
-    private var imuOrientBinding: Binding<Int> {
+    // Board→rocket orientation: 0xFF = pad auto-detect, else code = axis*4 + clock.
+    private var orientModeBinding: Binding<Int> {
         Binding(
-            get: { Int(profile.imuOrientSetting) },
+            get: { profile.imuOrientSetting == 0xFF ? 1 : 0 },
             set: { newValue in
-                let v = UInt8(clamping: newValue)
+                let v: UInt8
+                if newValue == 1 {
+                    if profile.imuOrientSetting != 0xFF { savedOrientCode = profile.imuOrientSetting }
+                    v = 0xFF
+                } else {
+                    v = savedOrientCode ?? 0
+                }
                 updateProfile { $0.imuOrientSetting = v }
                 if device.isConnected { device.sendImuOrientationConfig(v) }
             })
+    }
+    private var noseAxisBinding: Binding<Int> {
+        Binding(
+            get: { profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) / 4 },
+            set: { axis in
+                let clock = profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) % 4
+                setOrientCode(axis: axis, clock: clock)
+            })
+    }
+    private var clockingBinding: Binding<Int> {
+        Binding(
+            get: { profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) % 4 },
+            set: { clock in
+                let axis = profile.imuOrientSetting == 0xFF ? 0 : Int(profile.imuOrientSetting) / 4
+                setOrientCode(axis: axis, clock: clock)
+            })
+    }
+    private func setOrientCode(axis: Int, clock: Int) {
+        let v = UInt8(clamping: axis * 4 + clock)
+        updateProfile { $0.imuOrientSetting = v }
+        if device.isConnected { device.sendImuOrientationConfig(v) }
     }
 
     @ViewBuilder

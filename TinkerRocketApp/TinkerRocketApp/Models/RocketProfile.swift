@@ -104,7 +104,7 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     /// manual board→rocket code. Manual fixes the roll clocking the control
     /// surfaces need — required for roll-controlled/guided flights with an
     /// off-axis board; optional for non-controlled flights.
-    var imuOrientSetting: UInt8 = 0xFF
+    var imuOrientSetting: UInt8 = 0   // default: manual identity (+X nose/up); 0xFF = pad auto-detect
 
     // MARK: Servo
     var servoBias1: Int16 = 85
