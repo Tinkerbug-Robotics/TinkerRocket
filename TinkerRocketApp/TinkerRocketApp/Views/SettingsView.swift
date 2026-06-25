@@ -55,7 +55,6 @@ struct SettingsView: View {
     @State private var sPnAccelToFin = ""
     @State private var sPnMaxFin = ""
     @State private var sPnMinSpeed = ""
-    @State private var sPnCoastDelay = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String, mode: UInt8)] = []
@@ -126,7 +125,7 @@ struct SettingsView: View {
         case rateCap
         case kpAngle
         case integralSep
-        case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed, guidCoastDelay
+        case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
     }
@@ -138,7 +137,7 @@ struct SettingsView: View {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finMin, .finMax: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
-        case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed, .guidCoastDelay: return .guidance
+        case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case nil: return nil
@@ -663,7 +662,7 @@ struct SettingsView: View {
                     .focused($focusedField, equals: .rollDelay)
                 Text("ms").foregroundColor(.secondary)
             }
-            Text("Milliseconds after launch before any roll control activates. Keeps fins neutral during initial boost.")
+            Text("Milliseconds after launch before control activates \u{2014} roll-rate-null and PN guidance both engage at this delay, keeping fins neutral through initial boost.")
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {
@@ -736,7 +735,7 @@ struct SettingsView: View {
         Section(header: configHeader("PN Guidance", applied: guidanceApplied)) {
             Text("Roll axis is rate-nulled (held at zero spin) \u{2014} the roll profile is not followed in Guidance mode.")
                 .font(.caption).foregroundColor(.secondary)
-            Text("Proportional-navigation steering toward the target. Engages with roll control at its initiation delay after launch (not after burnout). Phase 1 target: directly over the launch pad (overhead).")
+            Text("Proportional-navigation steering toward the target. Engages at the Activation Delay after launch (shared with roll control), not after burnout. Phase 1 target: directly over the launch pad (overhead).")
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {
@@ -789,14 +788,16 @@ struct SettingsView: View {
                 Text("m/s").foregroundColor(.secondary)
             }
             HStack {
-                Text("Coast Delay")
+                Text("Activation Delay")
                 Spacer()
-                TextField("0", text: $sPnCoastDelay)
+                TextField("0", text: $sRollDelayMs)
                     .keyboardType(.numberPad).multilineTextAlignment(.trailing).frame(width: 80)
-                    .focused($focusedField, equals: .guidCoastDelay)
+                    .focused($focusedField, equals: .rollDelay)
                 Text("ms").foregroundColor(.secondary)
             }
-            Text("Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority; coast delay waits after burnout before engaging. Stored in the rocket profile.")
+            Text("Milliseconds after launch before control activates \u{2014} roll-rate-null and PN guidance both engage at this delay, keeping fins neutral through initial boost.")
+                .font(.caption).foregroundColor(.secondary)
+            Text("Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority. Stored in the rocket profile.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -990,7 +991,6 @@ struct SettingsView: View {
         sPnAccelToFin = formatDecimal(Double(p.pnAccelToFin))
         sPnMaxFin = formatDecimal(Double(p.pnMaxFinDeg))
         sPnMinSpeed = formatDecimal(Double(p.pnMinSpeed))
-        sPnCoastDelay = formatInt(Double(p.pnCoastDelayMs))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg), mode: $0.mode.rawValue)
         }
@@ -1198,7 +1198,7 @@ struct SettingsView: View {
         let accelToFin = max(0, Float(sPnAccelToFin) ?? profile.pnAccelToFin)
         let maxFin     = max(0, Float(sPnMaxFin)     ?? profile.pnMaxFinDeg)
         let minSpeed   = max(0, Float(sPnMinSpeed)   ?? profile.pnMinSpeed)
-        let coastDelay = UInt16(clamping: Int(Double(sPnCoastDelay) ?? Double(profile.pnCoastDelayMs)))
+        let coastDelay = profile.pnCoastDelayMs  // inert in FW; guidance activation = rollDelayMs (Activation Delay)
         let targetAlt  = max(0, Float(sPnTargetAlt)  ?? profile.pnTargetAltM)
         updateProfile {
             $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
