@@ -44,6 +44,7 @@ struct SettingsView: View {
     @State private var sPidMinCmd = ""
     @State private var sPidMaxCmd = ""
     @State private var sRollDelayMs = ""
+    @State private var savedRollUsesAngle: Bool? = nil
     @State private var sRateCapDps = ""
     @State private var sKpAngle = ""
     @State private var sIntegralSep = ""
@@ -384,8 +385,12 @@ struct SettingsView: View {
                 .font(.caption).foregroundColor(.secondary)
         }
 
-        rollControlSection
-        guidanceSection
+        controlModeSection
+        if profile.guidanceEnabled {
+            guidanceSection
+        } else {
+            rollControlSection
+        }
         finLayoutSection
     }
 
@@ -579,6 +584,20 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var controlModeSection: some View {
+        Section(header: Text("Control Mode")) {
+            Picker("Mode", selection: controlModeBinding) {
+                Text("Roll Control").tag(0)
+                Text("Guidance").tag(1)
+            }
+            .pickerStyle(.segmented)
+            Text(profile.guidanceEnabled
+                ? "PN guidance steers pitch/yaw toward the target. Roll is rate-nulled \u{2014} the profile is ignored."
+                : "The roll controller holds the airframe (null roll, or track a roll-angle profile). No guidance.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
     private var rollControlSection: some View {
         Section(header: configHeader("Roll Control", applied: rollControlApplied)) {
             Picker("Mode", selection: angleControlBinding) {
@@ -672,8 +691,9 @@ struct SettingsView: View {
 
     private var guidanceSection: some View {
         Section(header: configHeader("PN Guidance", applied: guidanceApplied)) {
-            Toggle("Enable Guidance", isOn: bind(\.guidanceEnabled) { _ in applyGuidanceConfig() })
-            Text("Proportional-navigation steering. Engages with roll control at its initiation delay after launch (not after burnout). Phase 1 target: directly over the launch pad (overhead).")
+            Text("Roll axis is rate-nulled (held at zero spin) \u{2014} the roll profile is not followed in Guidance mode.")
+                .font(.caption).foregroundColor(.secondary)
+            Text("Proportional-navigation steering toward the target. Engages with roll control at its initiation delay after launch (not after burnout). Phase 1 target: directly over the launch pad (overhead).")
                 .font(.caption).foregroundColor(.secondary)
 
             HStack {
@@ -852,6 +872,28 @@ struct SettingsView: View {
             get: { profile.useAngleControl },
             set: { newValue in
                 updateProfile { $0.useAngleControl = newValue }
+                applyRollControlConfig()
+            })
+    }
+
+    /// Top-level control mode: 0 = Roll Control, 1 = Guidance.  Derived from
+    /// guidanceEnabled.  Guidance forces useAngleControl=false so roll is rate-nulled
+    /// in every phase (the profile is never followed); switching back to Roll Control
+    /// restores the prior roll sub-mode (Null Roll / Track Profile).
+    private var controlModeBinding: Binding<Int> {
+        Binding(
+            get: { profile.guidanceEnabled ? 1 : 0 },
+            set: { newValue in
+                if newValue == 1 {
+                    savedRollUsesAngle = profile.useAngleControl
+                    updateProfile { $0.guidanceEnabled = true; $0.useAngleControl = false }
+                } else {
+                    updateProfile {
+                        $0.guidanceEnabled = false
+                        if let prev = savedRollUsesAngle { $0.useAngleControl = prev }
+                    }
+                }
+                applyGuidanceConfig()
                 applyRollControlConfig()
             })
     }
