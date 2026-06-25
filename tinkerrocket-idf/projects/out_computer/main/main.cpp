@@ -130,7 +130,14 @@ static SensorHealthState ocStorageHealth()
     logger.getStats(s);
     const uint32_t free_blocks = flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
     const uint32_t prealloc    = flightlog.config().prealloc_blocks;
-    return shStorageState(free_blocks, prealloc, s.nand_prog_fail);
+    SensorHealthState st = shStorageState(free_blocks, prealloc, s.nand_prog_fail);
+    // The flight index is a second, independent capacity limit (#281): once it's
+    // full, finalize can't record the flight even with free blocks. Fold it in.
+    const size_t used = flightlog.index().size();
+    const size_t cap  = tr_flightlog::FlightIndex::MAX_ENTRIES;
+    if (used >= cap) st = SH_BAD;
+    else if (used + 4 >= cap && st == SH_OK) st = SH_DEGRADED;
+    return st;
 }
 
 // Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
