@@ -26,6 +26,10 @@ struct FileManagerView: View {
                     .foregroundColor(.secondary)
                     .padding()
             } else {
+                // Flash-space usage for this device's log storage (rocket NAND
+                // on a rocket link, base-station filesystem on a BS link).
+                StorageBarView(device: device)
+
                 // Header with refresh button
                 HStack {
                     VStack(alignment: .leading) {
@@ -194,6 +198,7 @@ struct FileManagerView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationTitle(device.isBaseStation ? "LoRa Logs" : "Flights")
         .brandedToolbar()
         .onAppear {

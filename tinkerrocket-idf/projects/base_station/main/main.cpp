@@ -774,6 +774,27 @@ static void renameOpenLogIfSequential()
 
 static uint32_t log_write_count = 0;  // Tracks calls for periodic flash check
 
+// Query the active log filesystem (SPIFFS or FAT) for total/used bytes.
+// Returns true if a backend is mounted and the query succeeded.
+static bool bsQueryStorage(uint64_t& total, uint64_t& used)
+{
+    total = 0; used = 0;
+    if (using_internal_flash)
+    {
+        size_t t = 0, u = 0;
+        if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &t, &u) != ESP_OK) return false;
+        total = t; used = u;
+        return true;
+    }
+    FATFS* fs = nullptr;
+    DWORD free_clust = 0;
+    if (f_getfree("0:", &free_clust, &fs) != FR_OK || fs == nullptr) return false;
+    total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
+    const uint64_t free_bytes = (uint64_t)free_clust * fs->csize * 512;
+    used = (total > free_bytes) ? (total - free_bytes) : 0;
+    return true;
+}
+
 static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                           double lat, double lon, double alt,
                           float rx_freq_mhz, int32_t observed_gap)
@@ -784,26 +805,7 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
     if (++log_write_count % 100 == 0)
     {
         uint64_t total = 0, used = 0;
-        if (using_internal_flash)
-        {
-            size_t t = 0, u = 0;
-            if (esp_spiffs_info(SPIFFS_PARTITION_LABEL, &t, &u) == ESP_OK)
-            {
-                total = t;
-                used  = u;
-            }
-        }
-        else
-        {
-            FATFS* fs;
-            DWORD free_clust;
-            if (f_getfree("0:", &free_clust, &fs) == FR_OK)
-            {
-                total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
-                uint64_t free_bytes = (uint64_t)free_clust * fs->csize * 512;
-                used = total - free_bytes;
-            }
-        }
+        bsQueryStorage(total, used);
         if (total > 0 && used > (total * 9 / 10))
         {
             ESP_LOGW(TAG, "[LOG] %s nearly full! %llu/%llu bytes (%.0f%%)",
@@ -3578,6 +3580,23 @@ static void loop_bs()
             }
             ble_app.sendTelemetry(ble_telem);
             maybeMarkOtaValid();
+
+            // Flash-space stats for the app's storage bar (every ~5 s).
+            static uint32_t last_bs_storage_ms = 0;
+            const uint32_t now_bs = millis();
+            if (now_bs - last_bs_storage_ms >= 5000U)
+            {
+                last_bs_storage_ms = now_bs;
+                BaseStationStorageStatsData bss = {};
+                uint64_t total = 0, used = 0;
+                const bool mounted = bsQueryStorage(total, used);
+                bss.total_bytes = total;
+                bss.used_bytes  = used;
+                bss.free_bytes  = (total > used) ? (total - used) : 0;
+                bss.backend = using_internal_flash ? 0 : (using_external_flash ? 2 : 1);
+                bss.flags   = mounted ? 0x01 : 0x00;
+                ble_app.sendStorageStats(0xCD, reinterpret_cast<const uint8_t*>(&bss), sizeof(bss));
+            }
         }
     }
 

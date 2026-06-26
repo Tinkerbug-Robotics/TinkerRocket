@@ -65,6 +65,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// the file_ops characteristic behind a 0xCB discriminator (#132).
     @Published var sensorCalStatus: SensorCalStatus?
 
+    /// Latest flash-space stats: rocketStorage on a direct rocket link (0xCC),
+    /// bsStorage on a base-station link (0xCD). Each is shown by its own bar.
+    @Published var rocketStorage: RocketStorageStats?
+    @Published var bsStorage: BaseStationStorageStats?
+
     /// Set once per connected-session after the first-time-seen base station
     /// has auto-picked and pushed a quiet channel.  Gates the auto-pick so it
     /// only runs once per session; cleared on disconnect so that a BS reboot
@@ -1311,6 +1316,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 case 0xAA: parseScanResult(data)
                 case 0xCA: parseMagCalStatus(data)     // issue #96
                 case 0xCB: parseSensorCalStatus(data)  // issue #132
+                case 0xCC: parseRocketStorageStats(data)
+                case 0xCD: parseBaseStationStorageStats(data)
                 case 0x7B:                              // '{' → JSON object
                     if let s = OTAStatusUpdate.parse(data) {
                         otaStatus = s
@@ -1557,6 +1564,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         sensorCalStatus = status
+    }
+
+    private func parseRocketStorageStats(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 15, bytes[0] == 0xCC,
+              let stats = RocketStorageStats.decode(Array(bytes[1...])) else { return }
+        rocketStorage = stats
+    }
+
+    private func parseBaseStationStorageStats(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 27, bytes[0] == 0xCD,
+              let stats = BaseStationStorageStats.decode(Array(bytes[1...])) else { return }
+        bsStorage = stats
     }
 
     private func parseScanResult(_ data: Data) {

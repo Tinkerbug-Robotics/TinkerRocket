@@ -3612,6 +3612,33 @@ static void printStats()
     TR_LogToFlashStats s = {};
     logger.getStats(s);
 
+    // Flash-space stats for the app's storage bar (every ~3 s on a live BLE
+    // link).  Same flightlog accounting as ocStorageHealth(); accurate on a
+    // direct rocket connection.
+    if (ble_app.isConnected())
+    {
+        static uint32_t last_storage_stats_ms = 0;
+        const uint32_t now_ss = millis();
+        if (now_ss - last_storage_stats_ms >= 3000U)
+        {
+            last_storage_stats_ms = now_ss;
+            RocketStorageStatsData rss = {};
+            if (flightlog.isInitialized())
+            {
+                const auto& fcfg = flightlog.config();
+                rss.flight_region_blocks = (uint16_t)(fcfg.flight_region_end - fcfg.flight_region_start);
+                rss.used_blocks   = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_ALLOCATED);
+                rss.free_blocks   = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
+                rss.bad_blocks    = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD);
+                rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
+                rss.flight_count  = (uint16_t)flightlog.index().size();
+                rss.block_size_kb = (uint8_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
+                rss.flags         = 0x01;  // initialized
+            }
+            ble_app.sendStorageStats(0xCC, reinterpret_cast<const uint8_t*>(&rss), sizeof(rss));
+        }
+    }
+
     // Capture GNSS timestamp for the active log file (when available)
     if (s.logging_active && latest_gnss_valid && latest_gnss_si.year > 2000)
     {

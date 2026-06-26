@@ -177,6 +177,11 @@ public:
     // Sibling discriminator to mag cal's 0xCA.
     void sendSensorCalStatus(const uint8_t* status_bytes, size_t len);
 
+    // Send a flash-space stats frame for the storage bar on the file-ops
+    // characteristic.  Format: [0]=marker (0xCC rocket / 0xCD base station)
+    // [1..]=packed struct LE bytes (RocketStorageStatsData / BaseStationStorageStatsData).
+    void sendStorageStats(uint8_t marker, const uint8_t* bytes, size_t len);
+
     // Get pending download filename (empty if none)
     // Clears the filename after reading
     String getDownloadFilename();
