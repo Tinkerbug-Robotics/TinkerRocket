@@ -5828,11 +5828,13 @@ static void loop_fc()
                                non_sensor_data_buffer,
                                SIZE_OF_NON_SENSOR_DATA);
 
-            // Send guidance telemetry at ~10 Hz during guided coast
+            // Send guidance telemetry during guided coast, at
+            // config::GUIDANCE_TELEM_RATE_HZ (500 = lockstep with NonSensor).
             if (guidance_active)
             {
                 static uint32_t guid_telem_counter = 0;
-                if (++guid_telem_counter >= (config::NON_SENSOR_UPDATE_RATE / 10))
+                if (++guid_telem_counter >=
+                    (config::NON_SENSOR_UPDATE_RATE / config::GUIDANCE_TELEM_RATE_HZ))
                 {
                     guid_telem_counter = 0;
                     GuidanceTelemData gtd = {};
