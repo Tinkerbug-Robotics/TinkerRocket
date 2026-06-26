@@ -66,8 +66,10 @@ def summarize(recs, stats, t_launch, meta):
         print("\nNO guidance frames in this log.")
         return
     tg = _arr(g, "time_us") / 1e6 - t_launch
+    dt = np.diff(tg)
+    rate_hz = (1.0 / np.median(dt)) if len(dt) and np.median(dt) > 0 else float("nan")
     print(f"\nGuidance active: T+{tg.min():.2f} .. T+{tg.max():.2f} s "
-          f"({tg.max()-tg.min():.2f} s, {len(g)} frames @ ~10 Hz)")
+          f"({tg.max()-tg.min():.2f} s, {len(g)} frames @ ~{rate_hz:.0f} Hz)")
     if meta:
         d = meta.get("settings", {}).get("roll_control", {}).get("delay_ms")
         if d is not None:
