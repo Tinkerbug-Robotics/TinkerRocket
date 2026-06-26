@@ -153,7 +153,25 @@ def analyze(flight: Flight) -> AnalysisResult:
     metrics["pn_accel_cmd_mps2"] = f"[{a_mag.min():.1f}, {a_mag.max():.1f}]"
     metrics["los_angle_deg"] = f"[{los.min():.1f}, {los.max():.1f}]"
     metrics["closing_vel_mps"] = f"[{vcl.min():.1f}, {vcl.max():.1f}]"
+    metrics["lateral_offset_m"] = f"{float(latoff[0]):.1f} → {float(latoff[-1]):.1f}"
     metrics["max_lateral_offset_m"] = round(float(np.max(np.abs(latoff))), 2)
+
+    # Lateral-drift effectiveness: slope of the offset over the first vs last
+    # 0.5 s of guidance. If the late rate < early rate, guidance is slowing the
+    # drift; if it grows, guidance is not arresting the lateral motion.
+    def _drift_rate(t_lo, t_hi):
+        m = (tg >= t_lo) & (tg <= t_hi)
+        if m.sum() >= 3:
+            return float(np.polyfit(tg[m], latoff[m], 1)[0])
+        return float("nan")
+    rate_early = _drift_rate(t_engage, t_engage + 0.5)
+    rate_late = _drift_rate(t_cutoff - 0.5, t_cutoff)
+    if np.isfinite(rate_early) and np.isfinite(rate_late):
+        verdict = ("slowing drift" if rate_late < rate_early - 0.2
+                   else "not arresting drift" if rate_late > 0.2
+                   else "drift held")
+        metrics["drift_rate_early_late_mps"] = (
+            f"{rate_early:+.1f} → {rate_late:+.1f}  ({verdict})")
     if rc.get("guidance_enabled") is not None:
         metrics["guidance_enabled"] = rc.get("guidance_enabled")
     result.metrics = metrics
@@ -225,20 +243,62 @@ def analyze(flight: Flight) -> AnalysisResult:
     fig.tight_layout()
     result.figures.append(fig)
 
-    # ── Figure 2: ground-track drift (what guidance was correcting) ──
+    # ── Figure 2: ground-track drift (was guidance arresting the lateral drift?) ──
     e_pos = get_array(ns, "e_pos")
     n_pos = get_array(ns, "n_pos")
     gmask = (t_ns >= t_engage) & (t_ns <= t_cutoff)
     if gmask.sum() > 5:
-        fig2, ax = plt.subplots(figsize=(7, 7))
-        ax.plot(e_pos[win], n_pos[win], color="0.7", lw=1.0, label="full window")
-        ax.plot(e_pos[gmask], n_pos[gmask], color="tab:green", lw=2.0,
+        # Sorted NonSensor series for interpolating position at tick times.
+        order = np.argsort(t_ns, kind="stable")
+        ts_s, es_s, ns_s = t_ns[order], e_pos[order], n_pos[order]
+
+        def _pos(tq):
+            return (float(np.interp(tq, ts_s, es_s)),
+                    float(np.interp(tq, ts_s, ns_s)))
+
+        fig2, ax = plt.subplots(figsize=(8, 8))
+        # Pre-guidance track (launch → guidance ON) then the guided segment, so
+        # you can see the drift that was already present when guidance engaged.
+        pre = (t_ns >= 0.0) & (t_ns <= t_engage)
+        if pre.sum() > 1:
+            ax.plot(e_pos[pre], n_pos[pre], color="0.7", lw=1.2,
+                    label="pre-guidance (launch→ON)")
+        ax.plot(e_pos[gmask], n_pos[gmask], color="tab:green", lw=2.2,
                 label="guidance active")
-        ax.scatter([0], [0], marker="+", s=120, color="k", label="pad / overhead target line")
-        ax.scatter([e_pos[gmask][0]], [n_pos[gmask][0]], color="tab:green", s=30, zorder=5)
+        # Overhead target is straight up over the pad → origin in the E-N plane.
+        ax.scatter([0], [0], marker="+", s=170, color="k", lw=1.6,
+                   label="pad / overhead target")
+
+        # 0.5 s ticks along the guided segment: tick SPACING = lateral drift
+        # speed, so even spacing ⇒ constant drift (guidance not arresting it),
+        # bunching ⇒ drift slowing.
+        first_tick = np.ceil(t_engage / 0.5) * 0.5
+        for tt in np.arange(first_tick, t_cutoff, 0.5):
+            ex, nx = _pos(tt)
+            ax.scatter([ex], [nx], color="tab:green", s=16, zorder=5)
+            ax.annotate(f"{tt:.1f}s", (ex, nx), fontsize=7, color="0.3",
+                        xytext=(4, 0), textcoords="offset points", va="center")
+
+        # ON / OFF annotations with the lateral offset at each end.
+        ex0, nx0 = _pos(t_engage)
+        ex1, nx1 = _pos(t_cutoff)
+        ax.annotate(
+            f"guidance ON\nT+{t_engage:.2f} s · offset {float(latoff[0]):.1f} m",
+            (ex0, nx0), xytext=(24, 12), textcoords="offset points", fontsize=8,
+            color="tab:green", ha="left",
+            arrowprops=dict(arrowstyle="->", color="tab:green"),
+            bbox=dict(boxstyle="round", fc="white", ec="tab:green", alpha=0.9))
+        ax.annotate(
+            f"guidance OFF\nT+{t_cutoff:.2f} s · offset {float(latoff[-1]):.1f} m",
+            (ex1, nx1), xytext=(24, -28), textcoords="offset points", fontsize=8,
+            color="tab:red", ha="left",
+            arrowprops=dict(arrowstyle="->", color="tab:red"),
+            bbox=dict(boxstyle="round", fc="white", ec="tab:red", alpha=0.9))
+
         ax.set_xlabel("East (m)")
         ax.set_ylabel("North (m)")
-        ax.set_title("Ground track — lateral drift during guided coast")
+        ax.set_title("Ground track — lateral drift during guided coast\n"
+                     "(0.5 s ticks; even spacing ⇒ drift not arrested)")
         ax.axis("equal")
         ax.legend(loc="best", fontsize=8)
         ax.grid(True, alpha=0.3)
