@@ -1594,6 +1594,128 @@ TEST(TRFlightLogBrownout, TornLastPageReverts) {
     EXPECT_EQ(fl2.index().at(0).final_bytes, 9u * (NAND_PAGE_SIZE - sizeof(PageHeader)));
 }
 
+TEST(TRFlightLogBrownout, BadBlockMidFlightRecoversOneCleanFlight) {
+    // #276: a flight that hits BOTH a runtime bad block and a brownout must
+    // recover as ONE flight with the correct length (count of valid pages, not
+    // the physical span of the highest-seq page) and read back with no interior
+    // 0xFF garbage — recovery spans the bad block, the read walks over it.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    uint32_t start_block = 0;
+
+    constexpr uint32_t BLOCK0_PAGES    = NAND_PAGES_PER_BLK;  // fills block 0
+    constexpr uint32_t AFTER_GAP_PAGES = 30;                  // lands in block 2
+    constexpr uint32_t VALID_PAGES = BLOCK0_PAGES + AFTER_GAP_PAGES;  // 94
+
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        start_block = fl.activeStartBlock();
+
+        std::vector<uint8_t> payload(PAYLOAD_PER_PAGE, 0xA5);
+        // Fill block 0 (seq 0..63).
+        for (uint32_t i = 0; i < BLOCK0_PAGES; ++i) {
+            ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+        }
+        // Poison the first page of block 1: the whole block is marked BAD and
+        // writePage skips to block 2 — a physical-page gap mid-flight.
+        nand.injectProgramFailOnce(start_block + 1, 0);
+        for (uint32_t i = 0; i < AFTER_GAP_PAGES; ++i) {
+            ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+        }
+        // No finalizeFlight() — simulate the brownout.
+    }
+    EXPECT_TRUE(nand.isBlockBad(start_block + 1));
+
+    // Reboot -> brownout recovery.
+    TR_FlightLog fl2;
+    ASSERT_EQ(fl2.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+
+    // ONE recovered flight spanning the bad block, not two split halves.
+    ASSERT_EQ(fl2.index().size(), 1u);
+    const auto& e = fl2.index().at(0);
+    EXPECT_EQ(e.start_block, start_block);
+    EXPECT_EQ(e.n_blocks, 3u);  // physical span blocks 0,1,2 (bad block kept)
+
+    // Length is the valid-page count (94), NOT the physical span (158) that
+    // would fold block 1's 64 skipped pages in as 0xFF garbage.
+    EXPECT_EQ(e.final_bytes, VALID_PAGES * PAYLOAD_PER_PAGE);
+
+    // Block states: 0 and 2 allocated, 1 bad, the reserved tail freed.
+    EXPECT_EQ(fl2.bitmap().get(start_block + 0), BLOCK_ALLOCATED);
+    EXPECT_EQ(fl2.bitmap().get(start_block + 1), BLOCK_BAD);
+    EXPECT_EQ(fl2.bitmap().get(start_block + 2), BLOCK_ALLOCATED);
+    EXPECT_EQ(fl2.bitmap().get(start_block + 3), BLOCK_FREE);
+
+    // Every logical page reads back the written 0xA5 with no 0xFF gap — the read
+    // walks over the bad block instead of hopping into it.
+    for (uint32_t p = 0; p < VALID_PAGES; ++p) {
+        std::vector<uint8_t> out(PAYLOAD_PER_PAGE, 0x00);
+        size_t out_len = 0;
+        ASSERT_EQ(fl2.readFlightPage(e.filename, p * PAYLOAD_PER_PAGE,
+                                     out.data(), out.size(), out_len),
+                  Status::Ok) << "page " << p;
+        ASSERT_EQ(out_len, PAYLOAD_PER_PAGE) << "page " << p;
+        for (uint8_t b : out) ASSERT_EQ(b, 0xA5u) << "garbage at page " << p;
+    }
+
+    // One past the last valid page is clean EOF (no trailing garbage).
+    std::vector<uint8_t> tail(PAYLOAD_PER_PAGE, 0x00);
+    size_t tail_len = 123;
+    ASSERT_EQ(fl2.readFlightPage(e.filename, VALID_PAGES * PAYLOAD_PER_PAGE,
+                                 tail.data(), tail.size(), tail_len),
+              Status::Ok);
+    EXPECT_EQ(tail_len, 0u);
+}
+
+TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {
+    // #276 sibling (finalize path): a finalized flight (no brownout) that hit a
+    // runtime bad block must size n_blocks from the physical span. Sizing the
+    // trim from the logical byte count frees the post-gap block (data loss) and
+    // shrinks the readable range — readFlightPage would EOF early.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t start_block = fl.activeStartBlock();
+
+    constexpr uint32_t BLOCK0_PAGES    = NAND_PAGES_PER_BLK;
+    constexpr uint32_t AFTER_GAP_PAGES = 30;
+    constexpr uint32_t VALID_PAGES = BLOCK0_PAGES + AFTER_GAP_PAGES;  // 94
+
+    std::vector<uint8_t> payload(PAYLOAD_PER_PAGE, 0x5A);
+    for (uint32_t i = 0; i < BLOCK0_PAGES; ++i)
+        ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+    nand.injectProgramFailOnce(start_block + 1, 0);
+    for (uint32_t i = 0; i < AFTER_GAP_PAGES; ++i)
+        ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+
+    ASSERT_EQ(fl.finalizeFlight("flight.bin", VALID_PAGES * PAYLOAD_PER_PAGE),
+              Status::Ok);
+
+    const FlightIndexEntry* e = fl.index().findByFilename("flight.bin");
+    ASSERT_NE(e, nullptr);
+    EXPECT_EQ(e->n_blocks, 3u);  // physical span (0,1,2), not ceil(94/64)=2
+    EXPECT_EQ(e->final_bytes, VALID_PAGES * PAYLOAD_PER_PAGE);
+    // The block holding post-gap data must NOT have been freed by the trim.
+    EXPECT_EQ(fl.bitmap().get(start_block + 2), BLOCK_ALLOCATED);
+
+    // All pages read back clean — no early EOF into the (would-be) freed region.
+    for (uint32_t p = 0; p < VALID_PAGES; ++p) {
+        std::vector<uint8_t> out(PAYLOAD_PER_PAGE, 0x00);
+        size_t out_len = 0;
+        ASSERT_EQ(fl.readFlightPage("flight.bin", p * PAYLOAD_PER_PAGE,
+                                    out.data(), out.size(), out_len),
+                  Status::Ok) << "page " << p;
+        ASSERT_EQ(out_len, PAYLOAD_PER_PAGE) << "page " << p;
+        for (uint8_t b : out) ASSERT_EQ(b, 0x5Au) << "garbage at page " << p;
+    }
+}
+
 // ================================================================
 // TR_NandBackend_esp — Stage 1 stub is not yet wired to real hardware.
 // These tests only verify the class satisfies the interface; Stage 2 will
