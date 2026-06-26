@@ -871,6 +871,90 @@ struct BatteryView: View {
     }
 }
 
+// Flash-space card: a segmented used / reserved / free bar for the connected
+// device — rocket NAND on a direct rocket link, base-station FS on a BS link
+// (v1: each device reports its own; no rocket-over-LoRa plumbing).
+struct StorageBarView: View {
+    @ObservedObject var device: BLEDevice
+
+    var body: some View {
+        Group {
+            if device.isBaseStation {
+                if let s = device.bsStorage, s.totalBytes > 0 {
+                    card(title: "Base Station Storage", subtitle: s.backendName,
+                         used: s.usedBytes, reserved: s.reservedBytes, free: s.freeBytes,
+                         total: s.totalBytes)
+                }
+            } else if let s = device.rocketStorage, s.initialized {
+                card(title: "Rocket Storage",
+                     subtitle: "\(s.flightCount) flight\(s.flightCount == 1 ? "" : "s")",
+                     used: s.usedBytes, reserved: s.reservedBytes, free: s.freeBytes,
+                     total: s.totalBytes)
+            }
+        }
+    }
+
+    private func card(title: String, subtitle: String,
+                      used: Int, reserved: Int, free: Int, total: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Text(subtitle).font(.caption).foregroundColor(.secondary)
+            }
+            StorageSegmentBar(used: used, reserved: reserved, free: free, total: total)
+            HStack(spacing: 14) {
+                legend(.orange, "Used", used)
+                if reserved > 0 { legend(Color(.systemGray2), "Reserved", reserved) }
+                legend(.green, "Free", free)
+                Spacer()
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
+    }
+
+    private func legend(_ color: Color, _ label: String, _ bytes: Int) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
+            Text("\(label) \(StorageBarView.fmt(bytes))")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    static func fmt(_ bytes: Int) -> String {
+        let f = ByteCountFormatter()
+        f.allowedUnits = [.useMB, .useGB]
+        f.countStyle = .binary
+        return f.string(fromByteCount: Int64(bytes))
+    }
+}
+
+struct StorageSegmentBar: View {
+    let used: Int
+    let reserved: Int
+    let free: Int
+    let total: Int
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let t = CGFloat(max(total, 1))
+            HStack(spacing: 0) {
+                Color.orange.frame(width: w * CGFloat(used) / t)
+                Color(.systemGray2).frame(width: w * CGFloat(reserved) / t)
+                Color.green.frame(width: w * CGFloat(free) / t)
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(height: 14)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color(.systemGray4), lineWidth: 0.5))
+    }
+}
+
 /// Stripped-down BatteryView used while the BS hasn't caught the rocket yet
 /// (#95).  Hides the rocket row entirely (its values would be empty/cached)
 /// and shows only the live BS battery row, so the operator still has a
