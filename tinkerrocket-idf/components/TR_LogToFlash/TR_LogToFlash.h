@@ -15,7 +15,6 @@ struct TR_LogToFlashConfig
     uint8_t spi_mode_nand = SPI_MODE0;
     uint32_t ring_buffer_size = 65536;  // RAM ring buffer size (bytes)
     bool debug = false;
-    bool force_format = false;  // Erase entire NAND before mount (recovery from corruption)
 
     // LittleFS block-count. Defaults to the full chip for backward compat.
     // When sharing the NAND with TR_FlightLog (issue #50 Stage 2c) the caller
@@ -51,6 +50,12 @@ struct TR_LogToFlashConfig
     uint32_t spi_hz_mram = 40'000'000;
     uint8_t spi_mode_mram = SPI_MODE0;
     uint32_t mram_size = 131072;        // 128 KB (MR25H10)
+
+    // #274: absolute MRAM address of the 4-byte sink-mode "dirty" marker, in the
+    // caller's reserved region above mram_size. 0 = disabled. When set, markDirty
+    // writes a magic here instead of the LittleFS marker (no superblock churn), so
+    // a dirty boot is detected and the surviving ring replayed through the sink.
+    uint32_t dirty_marker_addr = 0;
 };
 
 struct TR_LogToFlashStats
@@ -184,6 +189,14 @@ public:
     bool mramRawWrite(uint32_t addr, const uint8_t* data, uint32_t len);
     bool mramRawRead(uint32_t addr, uint8_t* out, uint32_t len);
     bool isMramEnabled() const { return use_mram_; }
+
+    // #274 MRAM-ring recovery (sink mode). begin() sets "pending" if the previous
+    // session was dirty and the non-volatile ring survived; the OC then opens a
+    // recovered flight, calls drainMramToSink() to replay the ring through the
+    // write_sink, and finishMramRecovery() to clear the ring + the dirty marker.
+    bool hasPendingMramRecovery() const { return pending_mram_recovery_; }
+    uint32_t drainMramToSink();   // dump the whole ring through write_sink; returns bytes sunk
+    void finishMramRecovery();    // clearRing() + clear the dirty marker
 
 private:
     // --- NAND ---
@@ -359,6 +372,7 @@ private:
     bool recovery_performed = false;
     uint32_t recovery_bytes = 0;
     char recovery_filename[64] = {};
+    bool pending_mram_recovery_ = false;  // #274: dirty sink-mode boot — ring preserved for deferred replay
 
     // LittleFS filesystem
     lfs_t lfs;
@@ -456,6 +470,7 @@ private:
     void markDirty();           // Write LittleFS marker file on log start
     void clearDirty();          // Remove LittleFS marker file on log close
     bool checkDirtyOnStartup(); // Check if previous session was dirty
+    bool checkMramDirty();      // #274: read the sink-mode MRAM dirty marker
     void clearRing();
     // Internal variant: caller holds push_mutex_. Used by ringPush()'s
     // drop-oldest fallback so it doesn't re-acquire the mutex it already

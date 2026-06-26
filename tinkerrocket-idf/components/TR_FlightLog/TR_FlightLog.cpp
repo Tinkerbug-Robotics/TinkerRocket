@@ -110,8 +110,16 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         }
         // Found the start of an orphaned run. Walk forward.
         const uint32_t run_start = b;
+        // Span BLOCK_BAD blocks as well as ALLOCATED ones. A block that failed
+        // to program mid-flight is marked BAD and skipped to the next block by
+        // writePage — it's an interior gap in ONE flight, not a boundary between
+        // flights. Stopping the run at it would split the flight into two
+        // same-named flight_recovered_<id>.bin entries with the data torn in
+        // half (#276). The bad block is skipped when scanning pages (below) and
+        // walked over on read (readFlightPage). Recovery runs every boot, so two
+        // distinct un-indexed flights never coexist to be wrongly merged here.
         while (b < cfg_.flight_region_end &&
-               bitmap_.get(b) == BLOCK_ALLOCATED &&
+               (bitmap_.get(b) == BLOCK_ALLOCATED || bitmap_.get(b) == BLOCK_BAD) &&
                !is_in_index(b)) {
             ++b;
         }
@@ -119,9 +127,10 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
 
         // Scan the run for pages with valid PageHeader CRC. Track the highest
         // seq_number + associated flight_id.
-        int32_t  last_good_page_rel = -1;   // logical page index within the run
+        int32_t  last_good_page_rel = -1;   // physical page index within the run
         uint32_t last_seq            = 0;
         uint32_t last_flight_id      = 0;
+        uint32_t valid_pages         = 0;   // #276: count of magic+CRC pages
         bool     saw_any             = false;
 
         for (uint32_t i = 0; i < run_len; ++i) {
@@ -145,6 +154,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                 // First page looked valid; handle it below along with the rest.
                 if (hdr0.crc32 == page_crc(page))
                 {
+                    ++valid_pages;
                     if (!saw_any || hdr0.seq_number > last_seq) {
                         last_seq           = hdr0.seq_number;
                         last_flight_id     = hdr0.flight_id;
@@ -161,6 +171,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                 std::memcpy(&hdr, page, sizeof(hdr));
                 if (hdr.magic != FPAG_MAGIC) continue;
                 if (hdr.crc32 != page_crc(page)) continue;
+                ++valid_pages;
 
                 if (!saw_any || hdr.seq_number > last_seq) {
                     last_seq           = hdr.seq_number;
@@ -186,6 +197,13 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         // NOT NAND_PAGE_SIZE (2048), or the downloader walks past the last real
         // page into PageHeader/0xFF bytes (corrupt tail, size ~0.8% too large).
         constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
+        // #276: length is the count of *valid* pages actually present, NOT the
+        // physical span of the highest-seq page. If the flight hit a bad block
+        // mid-write, writePage marked it BAD and skipped to the next block, so
+        // the span over-counts by the skipped block(s) — deriving bytes from it
+        // injects interior 0xFF garbage and the wrong length. The physical span
+        // (used_pages) still sizes the block range to keep allocated; the gap is
+        // walked on read (readFlightPage).
         const uint32_t used_pages  = static_cast<uint32_t>(last_good_page_rel + 1);
         uint32_t used_blocks = (used_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
         if (used_blocks > run_len) used_blocks = run_len;
@@ -198,7 +216,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
                       static_cast<unsigned long>(last_flight_id));
         entry.start_block = static_cast<uint16_t>(run_start);
         entry.n_blocks    = static_cast<uint16_t>(used_blocks);  // trimmed; was run_len (full ~32 MB)
-        entry.final_bytes = used_pages * PAYLOAD_PER_PAGE;
+        entry.final_bytes = valid_pages * PAYLOAD_PER_PAGE;
 
         Status st = index_.append(entry);
         if (st != Status::Ok) return st;
@@ -395,10 +413,19 @@ Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) 
     // shorter — without trimming, the bitmap caps out at floor(region / 32MB)
     // simultaneous flights regardless of their actual size. Round up to cover
     // any partial trailing page.
+    // Size the kept range to cover BOTH the logical length (final_bytes) AND the
+    // PHYSICAL span actually consumed (active_next_page_). They match for a
+    // normal flight; a runtime bad block makes the physical span larger
+    // (writePage marked it BAD and skipped ahead), so trimming by the logical
+    // count alone would free post-gap blocks that still hold data (silent loss +
+    // reuse) and shrink n_blocks below the span readFlightPage walks (#276).
+    // final_bytes stays the logical byte length.
     constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
-    const uint32_t used_pages = (final_bytes == 0) ? 0
+    const uint32_t logical_pages = (final_bytes == 0) ? 0
         : (final_bytes + PAYLOAD_PER_PAGE - 1) / PAYLOAD_PER_PAGE;
-    uint32_t used_blocks = (used_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
+    const uint32_t span_pages = (active_next_page_ > logical_pages)
+                                    ? active_next_page_ : logical_pages;
+    uint32_t used_blocks = (span_pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
     if (used_blocks > active_n_blocks_) used_blocks = active_n_blocks_;
 
     FlightIndexEntry entry{};
@@ -475,8 +502,25 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
 
     const uint32_t logical_page = offset / PAYLOAD_PER_PAGE;
     const uint32_t byte_in_pl   = offset % PAYLOAD_PER_PAGE;
-    const uint32_t abs_block    = entry->start_block + logical_page / NAND_PAGES_PER_BLK;
-    const uint32_t page_in_blk  = logical_page % NAND_PAGES_PER_BLK;
+
+    // Map the logical payload page to a physical (block, page). Pages are laid
+    // down sequentially, but a block that failed to program mid-flight was
+    // marked BLOCK_BAD and skipped whole at write time (writePage), leaving a
+    // physical gap. Walk the entry's blocks skipping BLOCK_BAD ones so logical
+    // page L lands on the L-th *valid* page instead of hopping into a 0xFF gap
+    // and returning interior garbage (#276). Gaps are block-aligned and recorded
+    // in the bitmap, so this stays O(blocks) with no extra NAND reads.
+    const uint32_t end_block = entry->start_block + entry->n_blocks;
+    uint32_t abs_block  = entry->start_block;
+    uint32_t pages_left = logical_page;
+    while (abs_block < end_block && bitmap_.get(abs_block) == BLOCK_BAD) ++abs_block;
+    while (pages_left >= NAND_PAGES_PER_BLK) {
+        pages_left -= NAND_PAGES_PER_BLK;
+        ++abs_block;
+        while (abs_block < end_block && bitmap_.get(abs_block) == BLOCK_BAD) ++abs_block;
+    }
+    if (abs_block >= end_block) return Status::Ok;  // logical page past the data
+    const uint32_t page_in_blk = pages_left;
 
     uint8_t page[NAND_PAGE_SIZE];
     if (!nand_->readPage(abs_block, page_in_blk, page)) return Status::BackendFailed;
