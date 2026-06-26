@@ -54,6 +54,12 @@ class SimConfig:
     pid_kd: float = 0.0003
     roll_setpoint_dps: float = 0.0  # desired roll rate in deg/s (constant mode)
     control_enabled: bool = True
+    # Activation delay (s after launch) before fin control engages. SHARED by
+    # roll control AND guidance, mirroring the firmware: both live in the same
+    # post-delay branch gated by `t_since_launch_ms >= roll_delay_ms` (FC
+    # main.cpp). This is the app's "Activation Delay" (BLE roll_delay_ms);
+    # guidance engages at launch+delay, NOT at burnout.
+    roll_delay_s: float = 0.25
 
     # Roll angle profile: list of (time_s, angle_deg) waypoints, or None
     # When set, a cascaded controller tracks angle → rate → fin tab
@@ -149,7 +155,10 @@ class SimConfig:
     # Guided mode limits
     pn_max_fin_deg: float = 15.0
     pn_min_speed_mps: float = 15.0
-    pn_coast_delay_s: float = 0.0   # delay after burnout before guidance activates
+    # LEGACY — no longer a guidance gate. The firmware dropped the post-burnout
+    # "coast delay" in favour of the shared activation delay (roll_delay_s); kept
+    # only so callers passing it don't break. See roll_delay_s above.
+    pn_coast_delay_s: float = 0.0
     pn_target_alt_m: float = 600.0      # OVERHEAD aim-point altitude above pad (matches FC config::PN_TARGET_ALT_M)
     pn_accel_to_fin_deg: float = 4.0    # accel->fin scale; reconciled to the FC's config::PN_ACCEL_TO_FIN_DEG (was 5.0)
 
@@ -596,17 +605,22 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         sim.rocket.roll_disturbance_torque = 0.0
 
                 # --- Determine if guided coast is active ---
+                # Mirrors the firmware: guidance engages once past the shared
+                # activation delay (launch+roll_delay_s), gated only by airspeed
+                # and not-yet-CPA — NOT by burnout (FC main.cpp comment: "burnout
+                # are no longer gates here").
                 guidance_active = False
                 if (config.guidance_enabled and guidance is not None and
-                        burnout_detected and
+                        t >= config.roll_delay_s and
                         not guidance_cpa_reached and
-                        t >= burnout_time + config.pn_coast_delay_s and
                         speed > config.pn_min_speed_mps):
                     guidance_active = True
 
-                # PID control: use EKF roll rate estimate
-                # Roll control starts at t=0.5s; full guidance after burnout
-                if config.control_enabled and speed > 5.0 and t > 0.5:
+                # Fin control (roll + guidance) engages after the shared
+                # activation delay, matching the firmware neutral-hold gate
+                # `t_since_launch_ms >= roll_delay_ms`. speed > 5 is a rail-
+                # clearance floor.
+                if config.control_enabled and speed > 5.0 and t >= config.roll_delay_s:
                     rot_rate = ekf.get_rot_rate_est()
                     roll_rate_dps = math.degrees(rot_rate[0])
 

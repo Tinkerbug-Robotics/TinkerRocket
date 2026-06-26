@@ -56,6 +56,10 @@ KP_ANGLE = 5.0             # outer angle loop gain: (deg/s rate cmd) per (deg an
 
 # --- Control ---
 CONTROL_ENABLED = True      # False = passive flight (no fin tab actuation)
+# Activation delay (ms after launch) before fin control engages — the app's
+# "Activation Delay" (firmware roll_delay_ms / BLE), SHARED by roll control and
+# guidance. Guidance engages at launch + this delay, NOT at burnout.
+ROLL_DELAY_MS = 250
 ROLL_DISTURBANCE_NM = 0.002  # constant roll torque disturbance (N-m)
 
 # --- Gain scheduling — V_ref=50 gives 1.73x at 38 m/s, 0.51x at 70 m/s ---
@@ -122,7 +126,7 @@ PN_YAW_KI = 0.002
 PN_YAW_KD = 0.0004
 PN_MAX_FIN_DEG = 20.0           # per-fin max deflection (deg)
 PN_MIN_SPEED_MPS = 10.0         # min speed for guidance (m/s)
-PN_COAST_DELAY_S = 0.0          # delay after burnout (s)
+PN_COAST_DELAY_S = 0.0          # LEGACY (no longer a gate); use ROLL_DELAY_MS
 PN_GAIN_V_REF = 50.0            # pitch/yaw gain-schedule V_ref (m/s)
 PN_GAIN_V_MIN = 25.0            # pitch/yaw gain-schedule V_min (m/s)
 
@@ -660,6 +664,7 @@ if __name__ == "__main__":
         mag_rate=MAG_RATE,
         gnss_rate=GNSS_RATE,
         control_enabled=CONTROL_ENABLED,
+        roll_delay_s=ROLL_DELAY_MS / 1000.0,
         pid_kp=KP,
         pid_ki=KI,
         pid_kd=KD,
