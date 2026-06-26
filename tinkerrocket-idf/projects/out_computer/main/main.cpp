@@ -4106,48 +4106,17 @@ void initPeripherals()
     // chunk the flush task drains from the ring is routed through
     // flightlogWriteSink → flightlog.writeFrame(), which wraps it in a
     // PageHeader (CRC32 + seq + flight_id) and programs one NAND page
-    // directly. First boot of this firmware under the shrunk layout force-
-    // formats (wipes any legacy flight_*.bin); subsequent boots skip the
-    // wipe via the NVS "lfs_shrunk" marker.
+    // directly.
     log_cfg.lfs_block_count = 32;
     log_cfg.write_sink = flightlogWriteSink;
     log_cfg.write_sink_ctx = &flightlog;
     log_cfg.flush_task_hook = flightlogFlushTaskHook;
     log_cfg.dirty_marker_addr = config::MRAM_DIRTY_MARKER_ADDR;  // #274: sink-mode dirty marker
 
-    bool lfs_wipe_pending = false;
-    {
-        Preferences fl_prefs;
-        bool already_shrunk = false;
-        if (fl_prefs.begin("flightlog", /*readOnly=*/true))
-        {
-            already_shrunk = fl_prefs.getBool("lfs_shrunk", false);
-            fl_prefs.end();
-        }
-        if (!already_shrunk)
-        {
-            log_cfg.force_format = true;
-            lfs_wipe_pending = true;
-            ESP_LOGW("FLIGHTLOG", "First boot of shrunk-LFS firmware — will wipe legacy flight files");
-        }
-    }
-
     if (!logger.begin(SPI, log_cfg))
     {
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
-    }
-
-    // Record the shrunk-layout marker so subsequent boots skip the force_format.
-    if (lfs_wipe_pending)
-    {
-        Preferences fl_prefs;
-        if (fl_prefs.begin("flightlog", /*readOnly=*/false))
-        {
-            fl_prefs.putBool("lfs_shrunk", true);
-            fl_prefs.end();
-            ESP_LOGI("FLIGHTLOG", "Recorded shrunk-LFS marker in NVS");
-        }
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------

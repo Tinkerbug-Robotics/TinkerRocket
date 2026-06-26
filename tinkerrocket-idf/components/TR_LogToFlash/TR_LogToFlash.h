@@ -15,7 +15,6 @@ struct TR_LogToFlashConfig
     uint8_t spi_mode_nand = SPI_MODE0;
     uint32_t ring_buffer_size = 65536;  // RAM ring buffer size (bytes)
     bool debug = false;
-    bool force_format = false;  // Erase entire NAND before mount (recovery from corruption)
 
     // LittleFS block-count. Defaults to the full chip for backward compat.
     // When sharing the NAND with TR_FlightLog (issue #50 Stage 2c) the caller
