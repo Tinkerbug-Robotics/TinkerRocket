@@ -67,6 +67,15 @@ struct config
     static constexpr uint16_t MMC5983MA_UPDATE_RATE = 200;
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 960;
     static constexpr uint16_t NON_SENSOR_UPDATE_RATE = 500;
+    // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.
+    // Emitted from inside the NonSensor TX block, so it must divide
+    // NON_SENSOR_UPDATE_RATE; 500 = lockstep with NonSensor/roll_cmd (frames
+    // time-aligned 1:1). The guidance law recomputes at ISM6HG256_UPDATE_RATE
+    // (960 Hz), so values are fresh at any rate up to NON_SENSOR_UPDATE_RATE.
+    static constexpr uint16_t GUIDANCE_TELEM_RATE_HZ = 500;
+    static_assert(GUIDANCE_TELEM_RATE_HZ >= 1 &&
+                  GUIDANCE_TELEM_RATE_HZ <= NON_SENSOR_UPDATE_RATE,
+                  "GUIDANCE_TELEM_RATE_HZ must be in [1, NON_SENSOR_UPDATE_RATE]");
     // ISM6 full-scale configuration used by SensorConverter (and shared to OUT).
     static constexpr uint8_t ISM6_LOW_G_FS_G = 16;
     static constexpr uint16_t ISM6_HIGH_G_FS_G = 256;
