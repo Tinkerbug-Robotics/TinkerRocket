@@ -12,6 +12,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from tinkerrocket_sim.rocket.definition import RocketDefinition, MotorConfig, from_ork
+from tinkerrocket_sim.rocket.motor_db import find_motor
 from tinkerrocket_sim.simulation.closed_loop_sim import run_closed_loop, SimConfig
 
 
@@ -21,9 +22,18 @@ from tinkerrocket_sim.simulation.closed_loop_sim import run_closed_loop, SimConf
 
 # --- Rocket source ---
 # Option 1: Load from OpenRocket .ork file (motor thrust data from motors/*.eng)
+# The 67mm Guidance Testbed IS RollyPolly III — 4 fins + 4 fin tabs, CFD-derived
+# aero — the same airframe flown for roll control.
 ORK_FILE = "rockets/67mm Guidance Testbed.ork"
 # Option 2: Set to None to use the manual definition in make_rocket() below
 # ORK_FILE = None
+
+# --- Motor override ---
+# When set, replace the .ork's default motor with this designation looked up
+# from motors/*.eng (RASP thrust curve). Set to None to keep the .ork motor.
+# F67C = AeroTech F67 (Classic); the "-4" ejection delay is irrelevant to the
+# powered+coast guidance sim (no ejection modeled), so the F67C curve is used.
+MOTOR_OVERRIDE = "F67C"
 
 # --- PID gains (inner rate loop) — flight-proven from Rolly Poly IV ---
 KP = 0.04                  # proportional gain
@@ -177,6 +187,25 @@ def load_rocket():
         print(f"  Motor: {rd.motor.designation} ({len(rd.motor.thrust_times)} thrust points)")
     else:
         rd = make_rocket_manual()
+
+    # --- Motor override (replace .ork default with a motors/*.eng curve) ---
+    if MOTOR_OVERRIDE:
+        eng = find_motor(MOTOR_OVERRIDE)
+        if eng is None:
+            raise SystemExit(f"MOTOR_OVERRIDE='{MOTOR_OVERRIDE}' not found in motors/*.eng")
+        rd.motor.thrust_times = np.array(eng.thrust_times, dtype=float)
+        rd.motor.thrust_forces = np.array(eng.thrust_forces, dtype=float)
+        rd.motor.total_mass = eng.total_mass
+        rd.motor.propellant_mass = eng.propellant_mass
+        rd.motor.designation = eng.designation
+        print(f"  Motor override: {eng.designation} "
+              f"(burn {rd.motor.burn_time:.2f}s, peak {max(eng.thrust_forces):.1f}N, "
+              f"prop {eng.propellant_mass*1e3:.0f}g)")
+
+    # RollyPolly III is a 4-TAB vehicle (4 fins × 1 tab); the FinTabConfig
+    # default is n_tabs=3 and the sim_config.yaml override isn't applied on this
+    # .ork load path, so set it explicitly for correct roll authority.
+    rd.fin_tabs.n_tabs = 4
 
     # Apply disturbance (not in .ork file)
     rd.roll_disturbance_torque = ROLL_DISTURBANCE_NM
