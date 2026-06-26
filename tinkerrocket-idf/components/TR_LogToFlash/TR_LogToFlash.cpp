@@ -1599,6 +1599,11 @@ void TR_LogToFlash::closeLogSession()
 // Dirty flag persistence (LittleFS marker file, replaces MRAM persist state)
 // ============================================================================
 
+// #274: sentinel written to the MRAM dirty marker (cfg.dirty_marker_addr) while a
+// sink-mode log session is open and cleared on a clean close. It lives in the
+// non-volatile MRAM, so a surviving copy on the next boot flags unflushed ring data.
+static constexpr uint32_t kMramDirtyMagic = 0x52443274u;
+
 void TR_LogToFlash::markDirty()
 {
     // Sink mode (issue #50 Stage 2c-3c): the "dirty" marker file exists so
@@ -1609,7 +1614,19 @@ void TR_LogToFlash::markDirty()
     // block 0/1 superblock metadata for no gain ("Bad block at 0x1 /
     // Superblock 0x1 has become unwritable" warnings on chips that have been
     // reformatted many times during development).
-    if (cfg.write_sink != nullptr) return;
+    if (cfg.write_sink != nullptr)
+    {
+        // #274: sink mode skips the LittleFS marker (superblock churn) but sets a
+        // non-volatile MRAM marker, so a dirty boot is still detected and the
+        // surviving ring can be replayed through the sink.
+        if (use_mram_ && cfg.dirty_marker_addr != 0)
+        {
+            const uint32_t magic = kMramDirtyMagic;
+            mramRawWrite(cfg.dirty_marker_addr,
+                         reinterpret_cast<const uint8_t*>(&magic), sizeof(magic));
+        }
+        return;
+    }
 
     lfs_file_t f;
     int err = lfs_file_open(&lfs, &f, "/.dirty",
@@ -1625,7 +1642,17 @@ void TR_LogToFlash::markDirty()
 void TR_LogToFlash::clearDirty()
 {
     // See markDirty() — symmetric skip in sink mode.
-    if (cfg.write_sink != nullptr) return;
+    if (cfg.write_sink != nullptr)
+    {
+        // #274: clear the non-volatile MRAM dirty marker on a clean close.
+        if (use_mram_ && cfg.dirty_marker_addr != 0)
+        {
+            const uint32_t zero = 0;
+            mramRawWrite(cfg.dirty_marker_addr,
+                         reinterpret_cast<const uint8_t*>(&zero), sizeof(zero));
+        }
+        return;
+    }
 
     lfs_remove(&lfs, "/.dirty");
 }
@@ -1634,6 +1661,45 @@ bool TR_LogToFlash::checkDirtyOnStartup()
 {
     struct lfs_info info;
     return (lfs_stat(&lfs, "/.dirty", &info) >= 0);
+}
+
+bool TR_LogToFlash::checkMramDirty()
+{
+    if (!use_mram_ || cfg.dirty_marker_addr == 0) return false;
+    uint32_t magic = 0;
+    if (!mramRawRead(cfg.dirty_marker_addr,
+                     reinterpret_cast<uint8_t*>(&magic), sizeof(magic)))
+        return false;
+    return magic == kMramDirtyMagic;
+}
+
+// #274: replay the entire surviving MRAM ring through the write_sink. The sink
+// consumes (NAND_PAGE_SIZE - 16)-byte chunks (it prepends a 16-byte PageHeader),
+// exactly like flushRingToNand; the ring is dumped raw and the downstream parser
+// handles SOF framing / CRC / stale + partial frames (parity with the legacy LFS
+// dump). The caller must have opened a destination flight on the sink first.
+// Returns the number of bytes handed to the sink.
+uint32_t TR_LogToFlash::drainMramToSink()
+{
+    if (!use_mram_ || cfg.write_sink == nullptr) return 0;
+    constexpr uint32_t kChunk = NAND_PAGE_SIZE - 16u;   // 2032; matches flushRingToNand
+    uint8_t buf[kChunk];
+    uint32_t total = 0;
+    for (uint32_t off = 0; off < ring_size_; off += kChunk)
+    {
+        const uint32_t n = (ring_size_ - off < kChunk) ? (ring_size_ - off) : kChunk;
+        if (!mramRawRead(off, buf, n)) break;
+        if (!cfg.write_sink(cfg.write_sink_ctx, buf, n)) break;  // sink full / failed
+        total += n;
+    }
+    return total;
+}
+
+void TR_LogToFlash::finishMramRecovery()
+{
+    clearRing();
+    clearDirty();   // clears the MRAM marker (sink mode)
+    pending_mram_recovery_ = false;
 }
 
 void TR_LogToFlash::clearRing()
@@ -1849,14 +1915,17 @@ uint32_t TR_LogToFlash::scanBadBlocksAtBoot()
 
 void TR_LogToFlash::runStartupRecovery()
 {
-    if (!checkDirtyOnStartup())
+    const bool lfs_dirty  = checkDirtyOnStartup();   // LittleFS marker (non-sink)
+    const bool mram_dirty = checkMramDirty();        // #274: MRAM marker (sink mode)
+
+    if (!lfs_dirty && !mram_dirty)
     {
         clearRing();
         if (cfg.debug) ESP_LOGI(TAG, "Clean startup, no recovery needed.");
         return;
     }
 
-    // Previous session was interrupted (dirty flag present).
+    // Previous session was interrupted (a dirty marker is present).
     if (!use_mram_)
     {
         // RAM ring is volatile — nothing to recover.
@@ -1864,6 +1933,18 @@ void TR_LogToFlash::runStartupRecovery()
         clearDirty();
         if (cfg.debug) ESP_LOGW(TAG, "Dirty startup — RAM ring volatile, data lost.");
         return;
+    }
+
+    // #274: in sink mode the unflushed MRAM ring must be replayed THROUGH the
+    // sink into a NAND flight — but the sink (TR_FlightLog) isn't initialized yet
+    // at begin() time. Defer: preserve the ring + marker and let the OC drive
+    // drainMramToSink() once flightlog.begin() has run.
+    if (cfg.write_sink != nullptr && mram_dirty)
+    {
+        pending_mram_recovery_ = true;
+        if (cfg.debug)
+            ESP_LOGW(TAG, "Dirty startup (sink) — MRAM ring preserved for deferred recovery.");
+        return;   // do NOT clearRing / clearDirty here
     }
 
     // MRAM ring survived the reset — drain it into a recovery file.

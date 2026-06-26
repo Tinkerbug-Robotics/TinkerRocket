@@ -4113,6 +4113,7 @@ void initPeripherals()
     log_cfg.write_sink = flightlogWriteSink;
     log_cfg.write_sink_ctx = &flightlog;
     log_cfg.flush_task_hook = flightlogFlushTaskHook;
+    log_cfg.dirty_marker_addr = config::MRAM_DIRTY_MARKER_ADDR;  // #274: sink-mode dirty marker
 
     bool lfs_wipe_pending = false;
     {
@@ -4169,6 +4170,31 @@ void initPeripherals()
             ESP_LOGE("FLIGHTLOG", "begin failed: %s",
                      tr_flightlog::to_string(st));
         }
+    }
+
+    // #274: if the previous session left unflushed frames in the non-volatile
+    // MRAM ring (dirty sink-mode boot), replay the surviving ring through the
+    // sink into a recovered flight so the touchdown data isn't wiped. Runs after
+    // flightlog.begin() (the sink needs an allocated flight) and before the flush
+    // task / normal logging start — the sink writes synchronously.
+    if (logger.hasPendingMramRecovery())
+    {
+        uint32_t fid = 0;
+        if (flightlog.prepareFlight(fid) == tr_flightlog::Status::Ok)
+        {
+            const uint32_t bytes = logger.drainMramToSink();
+            char name[40];
+            snprintf(name, sizeof(name), "flight_mram_recovered_%lu.bin",
+                     (unsigned long)fid);
+            const auto fst = flightlog.finalizeFlight(name, bytes);
+            ESP_LOGW("FLIGHTLOG", "#274: MRAM recovery -> %s (%lu B): %s",
+                     name, (unsigned long)bytes, tr_flightlog::to_string(fst));
+        }
+        else
+        {
+            ESP_LOGE("FLIGHTLOG", "#274: MRAM recovery — prepareFlight failed (no space?)");
+        }
+        logger.finishMramRecovery();
     }
 
     // -------------------------------------------------------------------

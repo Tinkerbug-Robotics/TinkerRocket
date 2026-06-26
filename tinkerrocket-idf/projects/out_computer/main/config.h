@@ -46,6 +46,11 @@ struct config
     // reads on the same mutex never observe a partial write).
     static constexpr uint32_t SNAPSHOT_REGION_SIZE = 1024;
     static constexpr uint32_t SNAPSHOT_REGION_BASE = MRAM_SIZE - SNAPSHOT_REGION_SIZE;
+    // #274: 4-byte sink-mode "dirty" marker, parked at the free top of the
+    // snapshot region (FlightSnapshot uses ~232 B up from SNAPSHOT_REGION_BASE).
+    // Set while a log session is open; a surviving magic on the next boot means
+    // an unclean shutdown left unflushed frames in the non-volatile MRAM ring.
+    static constexpr uint32_t MRAM_DIRTY_MARKER_ADDR = MRAM_SIZE - 16;
 
     // --- SPI speeds/modes ---
     static constexpr uint32_t SPI_HZ_NAND = 40'000'000;
