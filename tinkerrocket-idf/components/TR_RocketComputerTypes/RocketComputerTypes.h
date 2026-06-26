@@ -1930,18 +1930,26 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(LogBufferStatsData) == 28,
               "LogBufferStatsData must be 28 bytes");
 
-// --- Guidance Telemetry Data (sent at ~10 Hz during coast) ---
+// --- Guidance Telemetry Data (sent at ~10 Hz during guided coast) ---
+// Logged to the flight log as GUIDANCE_TELEM_MSG (0xCA). NOTE: the field
+// names prior to this struct's extension were misleading — pitch_cmd/yaw_cmd
+// actually held PN acceleration commands and pitch_fin/yaw_fin held the LOS
+// angle and closing velocity, NOT fin deflections. Fields are now named for
+// their true contents, and the genuinely-commanded pitch/yaw fin deflections
+// (the guidance analogue of NonSensorData.roll_cmd) are logged explicitly.
 typedef struct __attribute__((packed))
 {
-    uint32_t time_us;
-    int16_t  pitch_cmd_cdeg;    // guidance pitch command (centi-deg)
-    int16_t  yaw_cmd_cdeg;      // guidance yaw command (centi-deg)
-    int16_t  lateral_offset_cm; // lateral distance from pad vertical (cm)
-    int16_t  pitch_fin_cdeg;    // pitch fin command after PID (centi-deg)
-    int16_t  yaw_fin_cdeg;      // yaw fin command after PID (centi-deg)
-    uint8_t  guid_flags;        // bit 0: guidance_active, bit 1: burnout_detected
+    uint32_t time_us;            // FC monotonic time (us)
+    int16_t  accel_cmd_n_cmps2;  // PN acceleration command, North (m/s^2 x100)
+    int16_t  accel_cmd_e_cmps2;  // PN acceleration command, East  (m/s^2 x100)
+    int16_t  lateral_offset_cm;  // lateral distance from pad vertical (cm)
+    int16_t  los_angle_cdeg;     // line-of-sight angle to target (deg x100)
+    int16_t  closing_vel_cmps;   // closing velocity to target (m/s x100)
+    int16_t  pitch_fin_cmd_cdeg; // commanded pitch fin deflection, pre-mix (deg x100)
+    int16_t  yaw_fin_cmd_cdeg;   // commanded yaw fin deflection, pre-mix (deg x100)
+    uint8_t  guid_flags;         // bit 0: guidance_active, bit 1: burnout_detected
 } GuidanceTelemData;
-static_assert(sizeof(GuidanceTelemData) == 15, "GuidanceTelemData must be 15 bytes");
+static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 bytes");
 
 // --- Flight snapshot (#104 follow-up) ---
 // Periodic snapshot of FC flight state for crash recovery.  Sent FC→OC

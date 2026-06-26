@@ -130,6 +130,20 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
     EXPECT_EQ(offsetof(GuidanceConfigData, target_mode),      35u);
 }
 
+TEST(RocketComputerTypes, GuidanceTelemData_Layout) {
+    // Logged as GUIDANCE_TELEM_MSG (0xCA): u32 + 7 i16 + u8 = 19, packed.
+    EXPECT_EQ(sizeof(GuidanceTelemData), 19u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, time_us),            0u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, accel_cmd_n_cmps2),  4u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, accel_cmd_e_cmps2),  6u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, lateral_offset_cm),  8u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, los_angle_cdeg),     10u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, closing_vel_cmps),   12u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, pitch_fin_cmd_cdeg), 14u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, yaw_fin_cmd_cdeg),   16u);
+    EXPECT_EQ(offsetof(GuidanceTelemData, guid_flags),         18u);
+}
+
 TEST(RocketComputerTypes, FinConfigData_Layout) {
     // Wire struct relayed app→OC→BS→FC; size is hardcoded in the relay paths.
     EXPECT_EQ(sizeof(FinConfigData), 18u);

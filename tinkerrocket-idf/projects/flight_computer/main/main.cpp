@@ -361,6 +361,11 @@ static uint8_t  pn_target_mode    = config::PN_TARGET_MODE;
 static float    pn_target_e       = config::PN_TARGET_E_M;
 static float    pn_target_n       = config::PN_TARGET_N_M;
 static float    pn_target_alt     = config::PN_TARGET_ALT_M;
+// Last commanded pre-mix fin deflections from guidance, carried from the
+// guidance compute block to the ~10 Hz GuidanceTelemData emit. Only meaningful
+// while guidance_active (the only condition under which they are logged).
+static float    pn_last_pitch_fin_deg = 0.0f;
+static float    pn_last_yaw_fin_deg   = 0.0f;
 static bool burnout_detected = false;
 static uint32_t burnout_time_ms = 0;
 // Consecutive-sample hysteresis for burnout detection (#197). Prevents
@@ -5418,6 +5423,10 @@ static void loop_fc()
                             float pitch_fin = accel_to_fin_deg * pitch_accel;
                             float yaw_fin   = accel_to_fin_deg * yaw_accel;
 
+                            // Stash for the ~10 Hz GuidanceTelemData log frame.
+                            pn_last_pitch_fin_deg = pitch_fin;
+                            pn_last_yaw_fin_deg   = yaw_fin;
+
                             // Roll control: standalone PID
                             float roll_fin_cmd = roll_rate_pid_standalone.computePID(
                                 config::ROLL_RATE_SET_POINT, -roll_rate_dps);
@@ -5827,12 +5836,14 @@ static void loop_fc()
                 {
                     guid_telem_counter = 0;
                     GuidanceTelemData gtd = {};
-                    gtd.time_us = logic_now_us;
-                    gtd.pitch_cmd_cdeg    = (int16_t)lroundf(guidance.getAccelNorthCmd() * 100.0f);
-                    gtd.yaw_cmd_cdeg      = (int16_t)lroundf(guidance.getAccelEastCmd() * 100.0f);
-                    gtd.lateral_offset_cm = (int16_t)lroundf(guidance.getLateralOffset() * 100.0f);
-                    gtd.pitch_fin_cdeg    = (int16_t)lroundf(guidance.getLosAngleDeg() * 100.0f);
-                    gtd.yaw_fin_cdeg      = (int16_t)lroundf(guidance.getClosingVelocity() * 100.0f);
+                    gtd.time_us            = logic_now_us;
+                    gtd.accel_cmd_n_cmps2  = (int16_t)lroundf(guidance.getAccelNorthCmd() * 100.0f);
+                    gtd.accel_cmd_e_cmps2  = (int16_t)lroundf(guidance.getAccelEastCmd() * 100.0f);
+                    gtd.lateral_offset_cm  = (int16_t)lroundf(guidance.getLateralOffset() * 100.0f);
+                    gtd.los_angle_cdeg     = (int16_t)lroundf(guidance.getLosAngleDeg() * 100.0f);
+                    gtd.closing_vel_cmps   = (int16_t)lroundf(guidance.getClosingVelocity() * 100.0f);
+                    gtd.pitch_fin_cmd_cdeg = (int16_t)lroundf(pn_last_pitch_fin_deg * 100.0f);
+                    gtd.yaw_fin_cmd_cdeg   = (int16_t)lroundf(pn_last_yaw_fin_deg * 100.0f);
                     gtd.guid_flags = (guidance_active ? 1u : 0u) | (burnout_detected ? 2u : 0u);
                     uint8_t gtd_buf[sizeof(GuidanceTelemData)];
                     memcpy(gtd_buf, &gtd, sizeof(GuidanceTelemData));

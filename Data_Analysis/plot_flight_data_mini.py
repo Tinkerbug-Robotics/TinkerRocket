@@ -77,6 +77,7 @@ MSG_END_FLIGHT        = 0xA8
 MSG_IIS2MDC           = 0xD1  # new-PCB IIS2MDC magnetometer raw frame
 MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
+MSG_GUIDANCE_TELEM    = 0xCA  # GuidanceTelemData, ~10 Hz during guided coast
 
 MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
@@ -91,6 +92,7 @@ MSG_NAMES = {
     MSG_END_FLIGHT:       "EndFlight",
     MSG_LOG_BUFFER_STATS: "LogBufferStats",
     MSG_LORA:             "LoRa",
+    MSG_GUIDANCE_TELEM:   "Guidance",
 }
 
 # Expected payload sizes for validation.  A tuple lists every valid size
@@ -108,6 +110,7 @@ MSG_EXPECTED_LEN = {
     MSG_END_FLIGHT:        None,
     MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
     MSG_LORA:              49,
+    MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }
 
 # Struct formats (little-endian, packed)
@@ -133,6 +136,15 @@ FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
+# GuidanceTelemData (GUIDANCE_TELEM_MSG 0xCA). Current 19-byte layout:
+#   time_us, accel_cmd_n/e (m/s² ×100), lateral_offset (cm), los_angle (deg ×100),
+#   closing_vel (m/s ×100), pitch_fin_cmd/yaw_fin_cmd (deg ×100), guid_flags.
+# Legacy 15-byte logs have the same first five i16 (under misleading old names)
+# but NO fin-command fields — they are decoded as None.
+FMT_GUIDANCE_19 = '<I hhhhhhh B'
+FMT_GUIDANCE_15 = '<I hhhhh B'  # legacy: time, accel_n, accel_e, lateral, los, closing, flags
+GUID_FLAG_ACTIVE  = (1 << 0)
+GUID_FLAG_BURNOUT = (1 << 1)
 
 SYNC = b'\xAA\x55\xAA\x55'
 
@@ -291,6 +303,7 @@ def parse_binary_file(filepath):
         "NonSensor":      [],
         "POWER":          [],
         "LogBufferStats": [],
+        "Guidance":       [],
     }
 
     config = {
@@ -557,6 +570,32 @@ def parse_binary_file(filepath):
                     "ring_overruns":          fields[4],
                     "ring_drop_oldest_bytes": fields[5],
                     "ring_bad_sof_clears":    fields[6],
+                })
+
+            elif msg_type == MSG_GUIDANCE_TELEM and msg_len in (15, 19):
+                # PN guidance telemetry, ~10 Hz during guided coast.
+                # See GuidanceTelemData in RocketComputerTypes.h.
+                if msg_len == 19:
+                    fields = struct.unpack(FMT_GUIDANCE_19, payload)
+                    pitch_fin_cmd = fields[6] / 100.0  # deg
+                    yaw_fin_cmd   = fields[7] / 100.0  # deg
+                    gflags        = fields[8]
+                else:  # 15-byte legacy log (no fin-command fields)
+                    fields = struct.unpack(FMT_GUIDANCE_15, payload)
+                    pitch_fin_cmd = None
+                    yaw_fin_cmd   = None
+                    gflags        = fields[6]
+                records["Guidance"].append({
+                    "time_us":        fields[0],
+                    "accel_cmd_n":    fields[1] / 100.0,  # m/s²
+                    "accel_cmd_e":    fields[2] / 100.0,  # m/s²
+                    "lateral_offset": fields[3] / 100.0,  # cm → m
+                    "los_angle":      fields[4] / 100.0,  # deg
+                    "closing_vel":    fields[5] / 100.0,  # m/s
+                    "pitch_fin_cmd":  pitch_fin_cmd,      # deg (None on legacy)
+                    "yaw_fin_cmd":    yaw_fin_cmd,        # deg (None on legacy)
+                    "active":         bool(gflags & GUID_FLAG_ACTIVE),
+                    "burnout":        bool(gflags & GUID_FLAG_BURNOUT),
                 })
 
         except struct.error:
@@ -1265,6 +1304,65 @@ def plot_roll_cmd_gyro(records, t0_global):
     return fig
 
 
+def plot_guidance(records, t0_global):
+    """PN guidance telemetry (GUIDANCE_TELEM_MSG, ~10 Hz during guided coast).
+
+    Top: commanded pre-mix fin deflections (pitch/yaw) — the guidance analogue
+    of roll_cmd — plus the roll command from NonSensor for context.
+    Bottom: guidance internals (LOS angle, lateral offset, closing velocity).
+    """
+    g = records["Guidance"]
+    if not g:
+        return None
+
+    t = (get_array(g, "time_us") - t0_global) / 1e6
+    has_fin = g[0].get("pitch_fin_cmd") is not None
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 9), sharex=True)
+
+    # --- Top: commanded fin deflections ---
+    if has_fin:
+        ax1.scatter(t, get_array(g, "pitch_fin_cmd"), s=DOT_SIZE, alpha=0.6,
+                    color='tab:red', label="Pitch fin cmd (deg)")
+        ax1.scatter(t, get_array(g, "yaw_fin_cmd"), s=DOT_SIZE, alpha=0.6,
+                    color='tab:green', label="Yaw fin cmd (deg)")
+    else:
+        ax1.text(0.5, 0.5, "No fin-command fields (legacy 15-byte log)",
+                 transform=ax1.transAxes, ha='center', va='center',
+                 color='gray', fontsize=11)
+    ns = records["NonSensor"]
+    if ns:
+        t_ns = (get_array(ns, "time_us") - t0_global) / 1e6
+        ax1.scatter(t_ns, get_array(ns, "roll_cmd"), s=8, alpha=0.3,
+                    color='tab:orange', label="Roll cmd (deg)")
+    ax1.set_ylabel("Commanded deflection (deg)")
+    ax1.set_title("Guidance commanded fin deflections")
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+
+    # --- Bottom: guidance internals ---
+    ax2.scatter(t, get_array(g, "los_angle"), s=DOT_SIZE, alpha=0.6,
+                color='tab:blue', label="LOS angle (deg)")
+    ax2.scatter(t, get_array(g, "lateral_offset"), s=DOT_SIZE, alpha=0.6,
+                color='tab:purple', label="Lateral offset (m)")
+    ax2.set_xlabel("Time (s)")
+    ax2.set_ylabel("LOS angle (deg) / offset (m)")
+    ax2.grid(True, alpha=0.3)
+    # Closing velocity on a separate right-hand axis (different scale).
+    ax2b = ax2.twinx()
+    ax2b.scatter(t, get_array(g, "closing_vel"), s=8, alpha=0.3,
+                 color='tab:gray', label="Closing vel (m/s)")
+    ax2b.set_ylabel("Closing velocity (m/s)", color='tab:gray')
+    ax2b.tick_params(axis='y', labelcolor='tab:gray')
+    l1, lab1 = ax2.get_legend_handles_labels()
+    l2, lab2 = ax2b.get_legend_handles_labels()
+    ax2.legend(l1 + l2, lab1 + lab2, loc='upper right')
+    ax2.set_title("Guidance internals (LOS / offset / closing velocity)")
+
+    fig.tight_layout()
+    return fig
+
+
 def plot_nav_altitude(records, t0_global):
     """Nav filter altitude (u_pos) and baro alt rate."""
     ns = records["NonSensor"]
@@ -1623,6 +1721,7 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
         # --- Nav filter ---
         ("attitude",         lambda: plot_attitude(records, t0_global)),
         ("roll_cmd_gyro",    lambda: plot_roll_cmd_gyro(records, t0_global)),
+        ("guidance",         lambda: plot_guidance(records, t0_global)),
         ("nav_altitude",     lambda: plot_nav_altitude(records, t0_global)),
         ("nav_velocity",     lambda: plot_nav_velocity(records, t0_global)),
         ("rocket_state",     lambda: plot_rocket_state(records, t0_global)),
