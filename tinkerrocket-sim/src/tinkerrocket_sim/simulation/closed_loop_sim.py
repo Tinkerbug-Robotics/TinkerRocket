@@ -118,6 +118,12 @@ class SimConfig:
     # (removes AHRS convergence error, isolates pure IMU integration drift)
     inject_truth_orientation_at_ignition: bool = False
 
+    # Heading-bias injection: at ignition, rotate the EKF attitude by this many
+    # degrees about the world vertical (NED-down). Mimics a corrupted pad-mag
+    # heading (e.g. steel launch rail) seeding a fixed heading error. Used to
+    # test whether the in-flight magnetometer update recovers it.
+    inject_heading_bias_deg: float = 0.0
+
     # Pad heading initialization: when set (not None), the EKF quaternion is
     # initialized from the accelerometer (pitch/roll) + this known heading.
     # Simulates real hardware where the board Z-axis points in a known direction
@@ -155,6 +161,11 @@ class SimConfig:
     # Guided mode limits
     pn_max_fin_deg: float = 15.0
     pn_min_speed_mps: float = 15.0
+    # Tilt-limit safety gate (mirrors FC config::GUIDANCE_TILT_LIMIT_*): if the
+    # off-vertical tilt from EKF attitude exceeds the phase limit, guidance is
+    # LATCHED off (roll-only) for the rest of the flight.
+    guidance_tilt_limit_boost_deg: float = 15.0
+    guidance_tilt_limit_coast_deg: float = 20.0
     # LEGACY — no longer a guidance gate. The firmware dropped the post-burnout
     # "coast delay" in favour of the shared activation delay (roll_delay_s); kept
     # only so callers passing it don't break. See roll_delay_s above.
@@ -266,9 +277,13 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         from tinkerrocket_sim._mixer import ControlMixer
 
         guidance = GuidancePN()
-        guidance.configure(
-            config.pn_nav_gain, config.pn_max_accel_mps2,
-            config.pn_target_alt_m)  # OVERHEAD: aim straight up over the pad
+        if config.guidance_mode == 'station_keep':
+            guidance.configure_station_keep(
+                config.pn_kp_pos, config.pn_kd_vel, config.pn_max_accel_mps2)
+        else:
+            guidance.configure(
+                config.pn_nav_gain, config.pn_max_accel_mps2,
+                config.pn_target_alt_m)  # OVERHEAD: aim straight up over the pad
 
         control_mixer = ControlMixer()
         control_mixer.configure(
@@ -319,6 +334,8 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     fin_cmds = np.zeros(4)
     fin_actuals = np.zeros(4)
     guidance_active = False
+    guidance_tilt_inhibited = False  # tilt-limit safety latch (FC: guidance_tilt_inhibited)
+    guidance_tilt_trip_t = None      # time the latch tripped (for reporting/plots)
     burnout_detected = False
     burnout_time = None
     guidance_cpa_reached = False  # closest point of approach — stop guidance
@@ -327,6 +344,7 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     ekf_initialized = False
     gnss_time_counter = 0
     truth_quat_injected = False
+    heading_bias_injected = False
 
     # Logging
     log_rows = []
@@ -575,6 +593,20 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                     ekf.set_velocity(vel[1], vel[0], -vel[2])
                     truth_quat_injected = True
 
+                # --- Heading-bias injection at ignition (rail-mag mimic) ---
+                if (config.inject_heading_bias_deg != 0.0 and
+                        not heading_bias_injected and t >= 0.0):
+                    dpsi = math.radians(config.inject_heading_bias_deg)
+                    qd = (math.cos(dpsi / 2.0), 0.0, 0.0, math.sin(dpsi / 2.0))  # about NED-down
+                    qe = ekf.get_quaternion()  # (w,x,y,z), FRD→NED
+                    # q_new = qd ⊗ qe (rotate body azimuth by dpsi in the world)
+                    w = qd[0]*qe[0] - qd[1]*qe[1] - qd[2]*qe[2] - qd[3]*qe[3]
+                    x = qd[0]*qe[1] + qd[1]*qe[0] + qd[2]*qe[3] - qd[3]*qe[2]
+                    y = qd[0]*qe[2] - qd[1]*qe[3] + qd[2]*qe[0] + qd[3]*qe[1]
+                    z = qd[0]*qe[3] + qd[1]*qe[2] - qd[2]*qe[1] + qd[3]*qe[0]
+                    ekf.set_quaternion(w, x, y, z)
+                    heading_bias_injected = True
+
                 # --- Baro measurement + Mach lockout ---
                 a_sound = atm.speed_of_sound(alt + config.ref_alt_m)
                 latest_mach = speed / a_sound if a_sound > 0 else 0.0
@@ -609,9 +641,30 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 # activation delay (launch+roll_delay_s), gated only by airspeed
                 # and not-yet-CPA — NOT by burnout (FC main.cpp comment: "burnout
                 # are no longer gates here").
+                # Tilt-limit safety gate (mirrors FC main.cpp): off-vertical tilt
+                # of the nose from EKF attitude. Latched — once tripped, guidance
+                # stays roll-only for the rest of the flight. Only checked after
+                # launch+activation delay (the FC checks it inside the post-launch
+                # control block), so a pad-init attitude transient can't trip it.
+                if (config.guidance_enabled and not guidance_tilt_inhibited
+                        and t >= config.roll_delay_s):
+                    eq = ekf.get_quaternion()  # (q0,q1,q2,q3) body->NED
+                    nose_up = -2.0 * (eq[1]*eq[3] - eq[0]*eq[2])
+                    nose_up = max(-1.0, min(1.0, nose_up))
+                    tilt_deg = math.degrees(math.acos(nose_up))
+                    tilt_limit = (config.guidance_tilt_limit_coast_deg if burnout_detected
+                                  else config.guidance_tilt_limit_boost_deg)
+                    if tilt_deg > tilt_limit:
+                        guidance_tilt_inhibited = True
+                        guidance_tilt_trip_t = t
+                        print(f"  [GUID] tilt {tilt_deg:.1f} deg > {tilt_limit:.0f} "
+                              f"limit ({'coast' if burnout_detected else 'boost'}) "
+                              f"@t={t:.2f}s — guidance LATCHED off, roll-only")
+
                 guidance_active = False
                 if (config.guidance_enabled and guidance is not None and
                         t >= config.roll_delay_s and
+                        not guidance_tilt_inhibited and
                         not guidance_cpa_reached and
                         speed > config.pn_min_speed_mps):
                     guidance_active = True

@@ -206,6 +206,16 @@ private:
     void measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]);
     void accelMeasUpdate(const float aMeas[3]);
     void magMeasUpdate(const float aMeas[3], const float magMeas[3]);
+    // Heading update from the GNSS velocity course (direction of travel ≈ nose
+    // heading at low AoA). Independent of mag/attitude tilt-comp (no
+    // circularity). Caller gates on sufficient horizontal speed.
+    void velCourseHeadingUpdate(const float vMeas_NED[3]);
+    // Heading update by matching the body-frame lateral specific force (aero
+    // side force from AoA/fins) against the GNSS-derived world horizontal
+    // acceleration. The rotation between the two frames IS the roll, so unlike
+    // the velocity course this observes the roll DOF directly — strongest near
+    // vertical with an active lateral force. aWorldHoriz = [aN, aE] (m/s²).
+    void accelMatchHeadingUpdate(const float aMeas[3], const float aWorldHoriz[2]);
 
     // Numerical safety net: floor P diagonals at a tiny positive value and
     // cap them at the per-state P_MAX_* values. Call after every path that
@@ -237,8 +247,19 @@ private:
     float wMarkovTau_s = 50.0f;
     float pNoiseSigma_NE_m = 3.0f;
     float pNoiseSigma_D_m = 6.0f;
-    float vNoiseSigma_NE_mps = 0.5f;
-    float vNoiseSigma_D_mps = 1.0f;
+    // GNSS Doppler velocity is better than the old values implied. Measured
+    // sample noise in benign coast: horizontal ~0.2 m/s, vertical ~0.28 m/s.
+    // The old 0.5 / 1.0 under-trusted it ~6×/13× in variance, so the filter
+    // dead-reckoned instead of using a good measurement. Tighten both to ~0.3
+    // (matched to the clean-case noise). The boost failure mode is NOT a uniform
+    // 1 m/s degradation and NOT loss of fix (stays 3D, 13 sats) — it is a large
+    // *systematic* corruption (~6 m/s vertical). That is exactly what the
+    // per-axis NIS gate in measUpdate() rejects (horizontal 2-DOF, vertical
+    // 1-DOF independently), so tight nominal R + the gate is the right model:
+    // trust the clean measurement, reject the corrupted one. Vertical position
+    // is also baro-anchored, so over-trusting vertical velocity is low risk.
+    float vNoiseSigma_NE_mps = 0.3f;
+    float vNoiseSigma_D_mps  = 0.3f;
 
     // Initial covariance
     static constexpr float pErrSigma_Init_m = 10.0f;
@@ -260,6 +281,14 @@ private:
     uint32_t timeWeekPrev_;
     uint32_t baroTimePrev_ = 0;
     float euler_BL_rad_[3];
+
+    // GNSS-acceleration estimate for accelMatchHeadingUpdate: previous GNSS
+    // velocity + sample time to difference, and a low-pass on the result
+    // (differencing 25 Hz velocity is noisy).
+    float    prevGnssVel_NED_[3] = {0,0,0};
+    uint32_t prevGnssSampleUs_   = 0;
+    bool     haveGnssAccel_      = false;
+    float    gnssAccelLP_NE_[2]  = {0,0};   // low-passed world horizontal accel
 
     // #257/#265 health: counts down (one per timeUpdate) after stabilizeP()
     // repairs a non-finite covariance — a genuine divergence — keeping

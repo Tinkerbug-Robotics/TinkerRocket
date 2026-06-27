@@ -375,6 +375,10 @@ static uint16_t burnout_neg_count = 0;
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool guidance_active = false;
+// Tilt-limit safety latch: set true once the off-vertical tilt exceeds the
+// phase limit (config::GUIDANCE_TILT_LIMIT_*); guidance then stays roll-only
+// for the rest of the flight. Reset at re-arm alongside guidance.reset().
+static bool guidance_tilt_inhibited = false;
 static bool ground_test_active = false;
 // Last roll fin command (deg) produced by the ground-test / guidance paths
 // that bypass servo_control's internal PID. Used to populate
@@ -4527,6 +4531,7 @@ static void loop_fc()
             {
                 guidance_enabled = false;
                 guidance_active = false;
+                guidance_tilt_inhibited = false;   // clear tilt-limit latch
                 guidance.reset();
                 control_mixer.reset();
                 roll_rate_pid_standalone.reset();
@@ -5235,6 +5240,7 @@ static void loop_fc()
                     burnout_time_ms = 0;
                     burnout_neg_count = 0;
                     guidance_active = false;
+                    guidance_tilt_inhibited = false;   // clear tilt-limit latch
                     // Reset pyro channels on launch. ARM stays LOW until a
                     // channel's trigger fires (per-fire arming on new PCB).
                     pyro_apogee_detected = false;
@@ -5355,10 +5361,37 @@ static void loop_fc()
                         // keep guidance post-boost.  Still needs a healthy EKF + airspeed
                         // (pn_min_speed) and stops at closest point of approach (CPA).
                         // (pn_coast_delay_ms / burnout are no longer gates here.)
+                        // Tilt-limit safety gate: off-vertical angle of the nose
+                        // (body-X) from EKF attitude. Tilt is well-observed even
+                        // when heading is degraded (it's the gravity-aligned part
+                        // of the attitude), so the FC can trust its own estimate.
+                        // Latched: once tripped, guidance stays off for the flight.
+                        {
+                            float gq[4];
+                            ekf.getQuaternion(gq);
+                            // cos(tilt) = up-component of the nose in NED = -D row.
+                            float nose_up = -2.0f * (gq[1]*gq[3] - gq[0]*gq[2]);
+                            if (nose_up >  1.0f) nose_up =  1.0f;
+                            if (nose_up < -1.0f) nose_up = -1.0f;
+                            float tilt_deg = acosf(nose_up) * (180.0f / (float)M_PI);
+                            float tilt_limit = burnout_detected
+                                ? config::GUIDANCE_TILT_LIMIT_COAST_DEG
+                                : config::GUIDANCE_TILT_LIMIT_BOOST_DEG;
+                            if (guidance_enabled && !guidance_tilt_inhibited &&
+                                tilt_deg > tilt_limit) {
+                                guidance_tilt_inhibited = true;
+                                ESP_LOGW(TAG, "[GUID] tilt %.1f deg > %.0f limit (%s) "
+                                         "— guidance LATCHED off, roll-only for flight",
+                                         (double)tilt_deg, (double)tilt_limit,
+                                         burnout_detected ? "coast" : "boost");
+                            }
+                        }
+
                         const bool coast_guidance_active =
                             guidance_enabled &&
                             ekf_initialized &&
                             ekf_ctrl_healthy &&   // #265: don't fly guidance on a diverged EKF
+                            !guidance_tilt_inhibited &&  // tilt-limit safety latch
                             (speed > pn_min_speed) &&
                             !guidance.isCpaReached();
 

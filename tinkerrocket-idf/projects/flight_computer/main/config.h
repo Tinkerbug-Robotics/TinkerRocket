@@ -328,6 +328,15 @@ struct config
     static constexpr float PN_YAW_KD = 0.0003f;
     // Max individual fin deflection in guided mode (deg)
     static constexpr float PN_MAX_FIN_DEG = 15.0f;
+    // Tilt-limit safety gate: if the off-vertical angle of the nose (from EKF
+    // attitude) exceeds the phase limit, guidance is LATCHED off and the
+    // vehicle falls back to roll-only for the rest of the flight. Guidance has
+    // little authority once badly tilted (lateral accel ∝ q ∝ V², collapsing
+    // in coast) and a heading-error could push the wrong way, so a hard tilt
+    // ceiling is a safety floor. Boost limit is tighter (a vertical boost
+    // should stay near-vertical); coast allows more before giving up.
+    static constexpr float GUIDANCE_TILT_LIMIT_BOOST_DEG = 15.0f;
+    static constexpr float GUIDANCE_TILT_LIMIT_COAST_DEG = 20.0f;
     // Fin→servo layout (cruciform mix shared by roll / ground-test / guidance).
     // FIN_AZIMUTH_n_DEG = control azimuth of servo n: deflection_n = sign_n·(roll
     // + pitch·cos(az_n) + yaw·sin(az_n)).  Defaults reproduce the legacy "+"

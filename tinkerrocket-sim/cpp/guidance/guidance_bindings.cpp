@@ -12,6 +12,12 @@ PYBIND11_MODULE(_guidance, m) {
         .def("configure", &TR_GuidancePN::configure,
              py::arg("nav_gain"), py::arg("max_accel_mps2"),
              py::arg("target_alt_m"))
+        .def("configure_station_keep", &TR_GuidancePN::configureStationKeep,
+             py::arg("kp_pos_per_s2"), py::arg("kd_vel_per_s"),
+             py::arg("max_accel_mps2"))
+        .def("get_mode", [](const TR_GuidancePN& self) {
+            return static_cast<int>(self.getMode());
+        })
         .def("update", [](TR_GuidancePN& self,
                           std::array<float, 3> pos_enu,
                           std::array<float, 3> vel_ned,
