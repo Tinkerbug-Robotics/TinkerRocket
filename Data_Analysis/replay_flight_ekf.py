@@ -279,30 +279,19 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
             if not ekf_initialized:
                 ekf.init_lla(imu_d, gnss_d, mag_d)
-
-                # Pad heading init from accel + known heading
-                g_mag = math.sqrt(imu_d.acc_x**2 + imu_d.acc_y**2 +
-                                  imu_d.acc_z**2)
-                if g_mag > 0.1:
-                    pitch_rad = math.asin(max(-1, min(1, imu_d.acc_x / g_mag)))
-                    if abs(pitch_rad) > math.radians(80.0):
-                        roll_rad = 0.0
-                    else:
-                        roll_rad = math.atan2(-imu_d.acc_y, -imu_d.acc_z)
-                    # Use 0° heading (north) as default — we don't know actual heading
-                    yaw_rad = 0.0
-                    cy = math.cos(yaw_rad/2); sy = math.sin(yaw_rad/2)
-                    cp = math.cos(pitch_rad/2); sp = math.sin(pitch_rad/2)
-                    cr = math.cos(roll_rad/2); sr = math.sin(roll_rad/2)
-                    qw = cr*cp*cy + sr*sp*sy
-                    qx = sr*cp*cy - cr*sp*sy
-                    qy = cr*sp*cy + sr*cp*sy
-                    qz = cr*cp*sy - sr*sp*cy
-                    ekf.set_quaternion(qw, qx, qy, qz)
-
+                # FIDELITY FIX: pad attitude (INCLUDING heading) now comes from
+                # init_lla, which derives heading from the magnetometer — exactly
+                # as the firmware does. Previously this overrode it with yaw=0
+                # ("we don't know actual heading"), which discarded the mag-based
+                # pad heading and made the replay structurally unable to reproduce
+                # the firmware's rail-heading error (the root cause of the guided
+                # miss). With this removed the replay starts where the vehicle
+                # actually started.
                 ekf_initialized = True
-                print(f"  EKF initialized at t={t_rel:.2f}s  "
-                      f"pitch={math.degrees(pitch_rad):.1f}°")
+                q = ekf.get_quaternion()
+                yaw0 = math.degrees(math.atan2(2*(q[0]*q[3]+q[1]*q[2]),
+                                               1 - 2*(q[2]**2 + q[3]**2)))
+                print(f"  EKF initialized at t={t_rel:.2f}s  yaw(mag)={yaw0:.0f}°")
                 continue
 
             # Determine use_ahrs_acc based on flight phase
@@ -551,6 +540,10 @@ def replay(binary_file, plot_dir=None, align_baro=True):
         "accel_bias": accel_bias,
         "pad_alt": pad_alt,
         "ekf_alt_range": (float(ekf_u.min()), float(ekf_u.max())),
+        # Horizontal velocity / position / heading for fusion-tuning analysis.
+        "ekf_vn": ekf_vn, "ekf_ve": ekf_ve, "ekf_lat": ekf_lat, "ekf_lon": ekf_lon,
+        "ekf_yaw": ekf_yaw,
+        "g_vn": g_vn, "g_ve": g_ve, "g_lat": g_lat, "g_lon": g_lon,
         "boost_start_rel": (boost_start - t0_us) / 1e6 if boost_start else None,
         "apogee_rel": (apogee_us - t0_us) / 1e6 if apogee_us else None,
         "plots": plots,
