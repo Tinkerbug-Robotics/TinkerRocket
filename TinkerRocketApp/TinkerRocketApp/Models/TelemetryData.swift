@@ -51,9 +51,13 @@ struct TelemetryData: Codable {
         guard let w = q0, let x = q1, let y = q2, let z = q3 else { return nil }
         let norm = w*w + x*x + y*y + z*z
         guard norm > 0.1 && norm < 2.0 else { return nil }
-        let sinr = 2.0 * (w * x + y * z)
-        let cosr = 1.0 - 2.0 * (x * x + y * y)
-        return atan2(sinr, cosr) * 180.0 / .pi
+        // Body-Z roll, matching the FC roll controller (flight_computer/main.cpp:
+        // actual_roll_deg = -atan2(z_east, z_north)). Stays well-defined when the
+        // rocket is vertical, unlike the ZYX-Euler roll which gimbal-locks and
+        // cycles near pitch ±90°. Keep in sync with SensorConverter.convertNonSensor.
+        let zNorth = 2.0 * (x * z + w * y)
+        let zEast  = 2.0 * (y * z - w * x)
+        return -atan2(zEast, zNorth) * 180.0 / .pi
     }
     var pitch: Float? {
         guard let w = q0, let x = q1, let y = q2, let z = q3 else { return nil }

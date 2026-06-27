@@ -405,12 +405,21 @@ nonisolated class SensorConverter {
     // MARK: - Mini NonSensor Conversion
 
     func convertNonSensor(_ raw: NonSensorData) -> NonSensorDataSI {
-        // Quaternion int16*10000 -> float, then derive Euler (ZYX convention)
+        // Quaternion int16*10000 -> float, then derive angles.
         let q0 = Double(raw.q0) / 10000.0
         let q1 = Double(raw.q1) / 10000.0
         let q2 = Double(raw.q2) / 10000.0
         let q3 = Double(raw.q3) / 10000.0
-        let roll  = atan2(2*(q0*q1 + q2*q3), 1 - 2*(q1*q1 + q2*q2)) * 180.0 / .pi
+        // Roll: body-Z definition matching the FC roll controller
+        // (flight_computer/main.cpp: actual_roll_deg = -atan2(z_east, z_north)).
+        // Stays well-defined when the rocket is vertical, unlike the ZYX-Euler
+        // roll which gimbal-locks and cycles near pitch ±90°. Keep in sync with
+        // TelemetryData.roll.
+        let zNorth = 2*(q1*q3 + q0*q2)
+        let zEast  = 2*(q2*q3 - q0*q1)
+        let roll  = -atan2(zEast, zNorth) * 180.0 / .pi
+        // Pitch/yaw stay ZYX-Euler: asin pitch is robust; yaw is the heading and
+        // is inherently undefined when vertical (no formula avoids that).
         let pitch = asin(max(-1, min(1, 2*(q0*q2 - q3*q1)))) * 180.0 / .pi
         let yaw   = atan2(2*(q0*q3 + q1*q2), 1 - 2*(q2*q2 + q3*q3)) * 180.0 / .pi
         let roll_cmd = Double(raw.roll_cmd) / 100.0
