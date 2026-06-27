@@ -261,9 +261,36 @@ void TR_I2C_Interface::slaveTxTask(void *arg)
             len = 1;
         }
 
+        // #279: flush any residue left in the driver TX FIFO by a previous
+        // short/aborted read before staging this response. Otherwise a 232 B
+        // snapshot read that the FC cuts short can leave bytes the next 96 B
+        // status poll clocks out as stale — and the FC status path has no SOF
+        // rescan to recover. All driver TX-FIFO ops stay in this one task, so no
+        // lock is needed; the reset must precede the write (after it would wipe
+        // the response we just staged).
+        i2c_slave_reset_tx_fifo(self->_slave_dev);
+
         uint32_t written = 0;
-        i2c_slave_write(self->_slave_dev, local, static_cast<uint32_t>(len),
-                        &written, SLAVE_TX_WRITE_TIMEOUT_MS);
+        esp_err_t werr = i2c_slave_write(self->_slave_dev, local,
+                                         static_cast<uint32_t>(len), &written,
+                                         SLAVE_TX_WRITE_TIMEOUT_MS);
+        // #280: surface a chronically failing serve. The status was discarded,
+        // so a TX that timed out every poll looked identical to a healthy one.
+        self->_tx_writes++;
+        if (werr != ESP_OK || written != len)
+        {
+            const uint32_t fails = ++self->_tx_write_fails;
+            // Rate-limit on the per-poll TX path: shout on the first failure,
+            // then every 256th, so a stuck serve stays visible without flooding.
+            if (fails == 1 || (fails % 256) == 0)
+            {
+                ESP_LOGW(TAG, "slave TX write failed: %s, wrote %lu/%lu B "
+                              "(fails=%lu of %lu serves)",
+                         esp_err_to_name(werr), (unsigned long)written,
+                         (unsigned long)len, (unsigned long)fails,
+                         (unsigned long)self->_tx_writes);
+            }
+        }
     }
 }
 

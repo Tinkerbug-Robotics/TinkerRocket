@@ -367,6 +367,7 @@ private:
     uint64_t bytes_received = 0;
     uint32_t frames_received = 0;
     uint32_t frames_dropped = 0;
+    bool     drop_warned_ = false;  // #278: one-shot loud warning on first in-flight drop
 
     // startup recovery
     bool recovery_performed = false;

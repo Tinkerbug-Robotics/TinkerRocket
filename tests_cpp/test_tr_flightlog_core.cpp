@@ -1670,6 +1670,45 @@ TEST(TRFlightLogBrownout, BadBlockMidFlightRecoversOneCleanFlight) {
     EXPECT_EQ(tail_len, 0u);
 }
 
+TEST(TRFlightLogBrownout, RecoveryDefersWhenTimeBudgetExceeded) {
+    // #277: an over-budget recovery pass stops at a run boundary, leaving the
+    // orphaned range for the next boot rather than scanning to completion and
+    // risking the app's 180 s power-on watchdog. Exercised with an injected clock.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+
+    {  // Crash a flight -> one orphaned ALLOCATED run at flight_region_start.
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        uint8_t payload[64] = {0};
+        for (int i = 0; i < 10; ++i)
+            ASSERT_EQ(fl.writeFrame(payload, sizeof(payload)), Status::Ok);
+        // no finalizeFlight() — leaves the range orphaned
+    }
+
+    // Reboot with a clock that advances past the budget on the first check.
+    static uint32_t fake_now;
+    fake_now = 0;
+    {
+        TR_FlightLog fl2;
+        TR_FlightLog::Config cfg;
+        cfg.recovery_budget_ms = 1000;
+        cfg.now_ms = []() -> uint32_t { fake_now += 2000; return fake_now; };
+        ASSERT_EQ(fl2.begin(nand, cfg, &store), Status::Ok);
+        EXPECT_EQ(fl2.index().size(), 0u);  // budget hit before any run -> deferred
+        EXPECT_EQ(fl2.bitmap().get(TR_FlightLog::Config{}.flight_region_start),
+                  BLOCK_ALLOCATED);                 // run left orphaned for next boot
+    }
+
+    // Reboot within budget (default now_ms -> 0 on host) -> recovers normally.
+    TR_FlightLog fl3;
+    ASSERT_EQ(fl3.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    ASSERT_EQ(fl3.index().size(), 1u);
+    EXPECT_NE(std::strstr(fl3.index().at(0).filename, "recovered"), nullptr);
+}
+
 TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {
     // #276 sibling (finalize path): a finalized flight (no brownout) that hit a
     // runtime bad block must size n_blocks from the physical span. Sizing the
