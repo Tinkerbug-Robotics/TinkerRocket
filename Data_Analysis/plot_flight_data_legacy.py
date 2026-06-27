@@ -438,9 +438,18 @@ def gnss_to_enu(gnss_records):
 
     # First valid point as origin
     i0 = int(np.argmax(valid))
-    E = x - x[i0]
-    N = y - y[i0]
-    U = z - z[i0]
+    dx, dy, dz = x - x[i0], y - y[i0], z - z[i0]
+
+    # Rotate the ECEF delta into the local ENU frame at the reference fix.
+    # Without this rotation the raw ECEF X/Y/Z deltas are not E/N/U, and
+    # vertical motion (apogee altitude) leaks into the horizontal ground track.
+    lat0 = np.deg2rad(lat[i0])
+    lon0 = np.deg2rad(lon[i0])
+    sla, cla = np.sin(lat0), np.cos(lat0)
+    slo, clo = np.sin(lon0), np.cos(lon0)
+    E = -slo * dx + clo * dy
+    N = -sla * clo * dx - sla * slo * dy + cla * dz
+    U = cla * clo * dx + cla * slo * dy + sla * dz
 
     # NaN-out invalid points
     E[~valid] = np.nan
