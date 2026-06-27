@@ -57,7 +57,7 @@ MSG_EXPECTED_LEN = {
     MSG_ISM6HG256:        22,
     MSG_BMP585:           12,
     MSG_MMC5983MA:        16,
-    MSG_NON_SENSOR:       40,
+    MSG_NON_SENSOR:       (42, 43, 44, 48),
     MSG_POWER:            10,
     MSG_START_LOGGING:    None,
     MSG_END_FLIGHT:       None,
@@ -66,7 +66,12 @@ MSG_EXPECTED_LEN = {
 
 FMT_ISM6       = '<I hhh hhh hhh'
 FMT_BMP585     = '<I i I'
-FMT_NONSENSOR  = '<I hhhh iii iii BB h'
+# Mirror the central parser (plot_flight_data_mini): 5 leading int16 are the
+# quaternion q0..q3 + roll_cmd, NOT Euler roll/pitch/yaw (#295). Per-length FMTs.
+FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'
+FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'
+FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'
+FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'
 FMT_STATUS_QUERY = '<B H H hh B hhh'
 
 ROCKET_STATES = {
@@ -218,23 +223,42 @@ def parse_file(filepath):
                 })
 
             elif msg_type == MSG_NON_SENSOR:
-                fields = struct.unpack(FMT_NONSENSOR, payload)
-                flags = fields[11]
+                # #295: 5 leading int16 are the quaternion q0..q3 + roll_cmd
+                # (centideg); the old layout's 4 Euler int16 are gone. Pick the
+                # FMT by length and derive Euler from the quaternion, mirroring
+                # plot_flight_data_mini.parse_binary_file.
+                if msg_len == 48:
+                    fields = struct.unpack(FMT_NONSENSOR_48, payload)
+                elif msg_len == 44:
+                    fields = struct.unpack(FMT_NONSENSOR_44, payload)
+                elif msg_len == 43:
+                    fields = struct.unpack(FMT_NONSENSOR_43, payload)
+                else:
+                    fields = struct.unpack(FMT_NONSENSOR_42, payload)
+                q0, q1, q2, q3 = (fields[1] / 10000.0, fields[2] / 10000.0,
+                                  fields[3] / 10000.0, fields[4] / 10000.0)
+                roll  = math.degrees(math.atan2(2*(q0*q1 + q2*q3),
+                                                1 - 2*(q1*q1 + q2*q2)))
+                pitch = math.degrees(math.asin(max(-1.0, min(1.0,
+                                                2*(q0*q2 - q3*q1)))))
+                yaw   = math.degrees(math.atan2(2*(q0*q3 + q1*q2),
+                                                1 - 2*(q2*q2 + q3*q3)))
+                flags = fields[12]
                 nonsensor.append({
                     "time_us":       fields[0],
-                    "roll":          fields[1] / 100.0,
-                    "pitch":         fields[2] / 100.0,
-                    "yaw":           fields[3] / 100.0,
-                    "roll_cmd":      fields[4] / 100.0,
-                    "e_pos":         fields[5] / 100.0,
-                    "n_pos":         fields[6] / 100.0,
-                    "u_pos":         fields[7] / 100.0,
-                    "e_vel":         fields[8] / 100.0,
-                    "n_vel":         fields[9] / 100.0,
-                    "u_vel":         fields[10] / 100.0,
+                    "roll":          roll,
+                    "pitch":         pitch,
+                    "yaw":           yaw,
+                    "roll_cmd":      fields[5] / 100.0,
+                    "e_pos":         fields[6] / 100.0,
+                    "n_pos":         fields[7] / 100.0,
+                    "u_pos":         fields[8] / 100.0,
+                    "e_vel":         fields[9] / 100.0,
+                    "n_vel":         fields[10] / 100.0,
+                    "u_vel":         fields[11] / 100.0,
                     "flags":         flags,
-                    "rocket_state":  fields[12],
-                    "baro_alt_rate": fields[13] * 0.1,
+                    "rocket_state":  fields[13],
+                    "baro_alt_rate": fields[14] * 0.1,
                     "alt_landed":    bool(flags & NSF_ALT_LANDED),
                     "alt_apogee":    bool(flags & NSF_ALT_APOGEE),
                     "vel_apogee":    bool(flags & NSF_VEL_APOGEE),
@@ -298,11 +322,12 @@ def print_section(title):
 
 
 def main():
-    filepath = (
-        "/Users/christianpedersen/Documents/Hobbies/Model Rockets/"
-        "TestFlights/2026_03_08/Raw Downloads/Goblin Flight 2 F52/"
-        "flight_20260308_190239.bin"
-    )
+    # Take the log path from the CLI (the old hardcoded path was dead, so the
+    # tool couldn't be run on a real file).
+    if len(sys.argv) < 2:
+        print(f"usage: {sys.argv[0]} <flight_log.bin>", file=sys.stderr)
+        sys.exit(1)
+    filepath = sys.argv[1]
 
     print(f"Parsing: {filepath}")
     ism6, bmp585, nonsensor, stats, config = parse_file(filepath)
