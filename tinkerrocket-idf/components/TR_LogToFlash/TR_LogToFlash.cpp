@@ -104,6 +104,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     bytes_received = 0;
     frames_received = 0;
     frames_dropped = 0;
+    drop_warned_ = false;
     recovery_performed = false;
     recovery_bytes = 0;
     file_open = false;
@@ -274,6 +275,19 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
     if (!ringPush(frame, static_cast<uint32_t>(len)))
     {
         frames_dropped++;
+        // #278: the ring rejected the NEWEST frame (in-flight drop-newest). It's
+        // counted in frames_dropped / telemetry frames_drop, but warn loudly the
+        // first time so a truncated flight can't look healthy in the moment.
+        if (!drop_warned_)
+        {
+            drop_warned_ = true;
+            ESP_LOGW(TAG, "RING FULL in flight: dropped NEWEST frame (%lu B); log "
+                          "truncates at the tail (received=%lu, highwater=%lu). "
+                          "Further drops counted in frames_dropped.",
+                     static_cast<unsigned long>(len),
+                     static_cast<unsigned long>(frames_received),
+                     static_cast<unsigned long>(rb_highwater));
+        }
         return false;
     }
     return true;
