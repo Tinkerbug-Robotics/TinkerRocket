@@ -261,6 +261,15 @@ void TR_I2C_Interface::slaveTxTask(void *arg)
             len = 1;
         }
 
+        // #279: flush any residue left in the driver TX FIFO by a previous
+        // short/aborted read before staging this response. Otherwise a 232 B
+        // snapshot read that the FC cuts short can leave bytes the next 96 B
+        // status poll clocks out as stale — and the FC status path has no SOF
+        // rescan to recover. All driver TX-FIFO ops stay in this one task, so no
+        // lock is needed; the reset must precede the write (after it would wipe
+        // the response we just staged).
+        i2c_slave_reset_tx_fifo(self->_slave_dev);
+
         uint32_t written = 0;
         esp_err_t werr = i2c_slave_write(self->_slave_dev, local,
                                          static_cast<uint32_t>(len), &written,
