@@ -781,9 +781,8 @@ static inline float pyroChValue(int ch_idx)
 // New PCB inverts continuity sense vs the old board: with the shared
 // arming FET enabled, the channel's CONT line idles HIGH when the squib
 // loop is OPEN and gets pulled LOW when a load (closed circuit) is
-// present. Old PCB had the opposite polarity. (TODO: verify on bench
-// once a populated rev-A board is in hand — if wrong, flip this one
-// spot.)
+// present. Old PCB had the opposite polarity. Bench-verified on a populated
+// board (#264): raw 0 == continuity present.
 static inline bool pyroContFromRaw(int raw) { return raw == 0; }
 
 // Reset a pyro OUTPUT pad to a known LOW-driven state WITHOUT going through
@@ -2182,13 +2181,18 @@ static void setup_fc()
         }
     }
 
-    // The flight task runs continuously and starves IDLE tasks on CPU 1.
-    // Reconfigure WDT to not monitor IDLE cores (the flight task itself
-    // never hangs — it completes each iteration in ~1 ms).
+    // The flight task runs continuously and starves IDLE tasks on CPU 1, so we
+    // stop the WDT monitoring IDLE cores (idle_core_mask = 0) — IDLE starvation
+    // here is normal, not a fault. The flight task itself IS subscribed
+    // (esp_task_wdt_add) and resets the WDT each ~1 ms iteration.
+    // #261: trigger_panic = true so that if loop_fc() ever stalls past the 5 s
+    // timeout (deadlock, wedged peripheral), the WDT panics → reboot → snapshot
+    // / reboot-recovery, instead of only logging and leaving the highest-priority
+    // core-1 task hung and the vehicle dead.
     esp_task_wdt_config_t wdt_cfg = {
         .timeout_ms = 5000,
         .idle_core_mask = 0,       // don't monitor any IDLE tasks
-        .trigger_panic = false,
+        .trigger_panic = true,     // #261: hung flight loop -> reboot + recovery
     };
     esp_task_wdt_reconfigure(&wdt_cfg);
 
@@ -4690,24 +4694,15 @@ static void loop_fc()
 
                         esp_gpio_revoke(1ULL << arm_pin);
                         esp_gpio_revoke(1ULL << fire_pin);
-                        gpio_reset_pin(arm_pin);
-                        gpio_reset_pin(fire_pin);
-
-                        gpio_config_t pin_cfg = {};
-                        pin_cfg.pin_bit_mask = (1ULL << arm_pin) | (1ULL << fire_pin);
-                        pin_cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
-                        pin_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-                        pin_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-                        gpio_config(&pin_cfg);
-
-                        // Force IO MUX back to plain GPIO. gpio_iomux_out()
-                        // was removed in ESP-IDF 6.0; gpio_func_sel(.., PIN_FUNC_GPIO)
-                        // is the supported replacement and matches the canonical
-                        // safePyroOutputInit() path above.
-                        esp_rom_gpio_connect_out_signal(arm_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_func_sel(arm_pin, PIN_FUNC_GPIO);
-                        esp_rom_gpio_connect_out_signal(fire_pin, SIG_GPIO_OUT_IDX, false, false);
-                        gpio_func_sel(fire_pin, PIN_FUNC_GPIO);
+                        // #263: bring the ARM/FIRE pads up through the canonical
+                        // safe-init — NOT gpio_reset_pin(), which transiently
+                        // enables the internal pull-up and twitches the DTC123J
+                        // gate driver (the exact boot-fire hazard initPyroPins
+                        // guards against). esp_gpio_revoke() above frees the pads
+                        // from any prior reservation first. OUTPUT (not
+                        // INPUT_OUTPUT) is enough — the test only drives the pins.
+                        safePyroOutputInit(arm_pin);
+                        safePyroOutputInit(fire_pin);
 
                         // ARM → settle → FIRE pulse → disarm (synchronous; ground only)
                         portENTER_CRITICAL(&pyro_spinlock);
@@ -4727,6 +4722,11 @@ static void loop_fc()
                         pyro_ch[idx].state          = PyroChState::Done;
                         pyro_ch[idx].phase_start_ms = 0;
                         portEXIT_CRITICAL(&pyro_spinlock);
+
+                        // #263: restore the canonical low-driven safe state (the
+                        // old path left the pads in INPUT_OUTPUT after the pulse).
+                        safePyroOutputInit(arm_pin);
+                        safePyroOutputInit(fire_pin);
 
                         ESP_LOGI(TAG, "[PYRO FIRE TEST] CH%u fired for %u ms",
                                  ch, (unsigned)config::PYRO_FIRE_DURATION_MS);
