@@ -131,6 +131,12 @@ FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
 FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'  # +uint32 sensor_health (#303)
+# #296: lengths we know how to decode. An unrecognized NonSensor length means the
+# struct grew without updating this parser — warn loudly (once each) below instead
+# of silently dropping every record (the #227 failure shape). Add the new length
+# + a FMT_NONSENSOR_<len> when NonSensorData grows.
+NONSENSOR_KNOWN_LENS = (42, 43, 44, 48)
+_warned_nonsensor_lens = set()
 # OutStatusQueryData: 16 bytes (v2) / 26 bytes (v3, +b2r orientation)
 FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
@@ -470,7 +476,7 @@ def parse_binary_file(filepath):
                     "raw_z":    fields[3],
                 })
 
-            elif msg_type == MSG_NON_SENSOR and msg_len in (42, 43, 44, 48):
+            elif msg_type == MSG_NON_SENSOR and msg_len in NONSENSOR_KNOWN_LENS:
                 if msg_len == 48:
                     fields = struct.unpack(FMT_NONSENSOR_48, payload)
                     pyro_status = fields[15]
@@ -547,6 +553,19 @@ def parse_binary_file(filepath):
                     "reboot_recovery":    bool(apogee_flags_b & NSF2_REBOOT_RECOVERY),
                     "guidance_enabled":   bool(apogee_flags_b & NSF2_GUIDANCE_ENABLED),
                 })
+
+            elif msg_type == MSG_NON_SENSOR:
+                # #296: NonSensor frame with an unrecognized length — the struct
+                # grew and NONSENSOR_KNOWN_LENS / FMT_NONSENSOR_* weren't updated.
+                # Warn loudly (once per length) rather than silently dropping every
+                # record like #227.
+                if msg_len not in _warned_nonsensor_lens:
+                    _warned_nonsensor_lens.add(msg_len)
+                    sys.stderr.write(
+                        f"WARNING: NonSensor frame length {msg_len} B not in "
+                        f"{NONSENSOR_KNOWN_LENS} — records dropped. Update "
+                        f"NONSENSOR_KNOWN_LENS + add FMT_NONSENSOR_{msg_len} after a "
+                        f"NonSensorData struct change.\n")
 
             elif msg_type == MSG_POWER:
                 fields = struct.unpack(FMT_POWER, payload)
