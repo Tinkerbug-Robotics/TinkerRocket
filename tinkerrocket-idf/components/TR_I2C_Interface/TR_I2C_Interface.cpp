@@ -262,8 +262,26 @@ void TR_I2C_Interface::slaveTxTask(void *arg)
         }
 
         uint32_t written = 0;
-        i2c_slave_write(self->_slave_dev, local, static_cast<uint32_t>(len),
-                        &written, SLAVE_TX_WRITE_TIMEOUT_MS);
+        esp_err_t werr = i2c_slave_write(self->_slave_dev, local,
+                                         static_cast<uint32_t>(len), &written,
+                                         SLAVE_TX_WRITE_TIMEOUT_MS);
+        // #280: surface a chronically failing serve. The status was discarded,
+        // so a TX that timed out every poll looked identical to a healthy one.
+        self->_tx_writes++;
+        if (werr != ESP_OK || written != len)
+        {
+            const uint32_t fails = ++self->_tx_write_fails;
+            // Rate-limit on the per-poll TX path: shout on the first failure,
+            // then every 256th, so a stuck serve stays visible without flooding.
+            if (fails == 1 || (fails % 256) == 0)
+            {
+                ESP_LOGW(TAG, "slave TX write failed: %s, wrote %lu/%lu B "
+                              "(fails=%lu of %lu serves)",
+                         esp_err_to_name(werr), (unsigned long)written,
+                         (unsigned long)len, (unsigned long)fails,
+                         (unsigned long)self->_tx_writes);
+            }
+        }
     }
 }
 

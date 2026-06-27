@@ -114,6 +114,12 @@ private:
     static constexpr size_t SLAVE_TX_BUF_SIZE = 256;
     uint8_t _tx_buf[SLAVE_TX_BUF_SIZE];
     volatile size_t _tx_len;
+
+    // #280: slave-TX serve diagnostics. i2c_slave_write's status was discarded,
+    // so a serve that timed out every poll was indistinguishable from a healthy
+    // one. Counted in slaveTxTask, surfaced via a rate-limited ESP_LOGW.
+    uint32_t _tx_writes      = 0;  // total i2c_slave_write calls
+    uint32_t _tx_write_fails = 0;  // non-OK or short writes
 };
 
 #endif
