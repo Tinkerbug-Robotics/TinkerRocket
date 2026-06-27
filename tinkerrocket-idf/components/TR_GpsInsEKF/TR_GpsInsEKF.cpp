@@ -207,6 +207,30 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     if ((gnss_time_us - timeWeekPrev_) > 0) {
         timeWeekPrev_ = gnss_time_us;
         measUpdate(pMeas_D_rrm, vMeas_NED);
+        // 10b. GNSS course-over-ground heading aiding — only with enough
+        //      horizontal speed for a well-defined course (else it's noise).
+        const float vh_sq = vMeas_NED[0]*vMeas_NED[0] + vMeas_NED[1]*vMeas_NED[1];
+        if (vh_sq > (3.0f*3.0f)) velCourseHeadingUpdate(vMeas_NED);
+
+        // 10c. Accel-match heading aiding — differentiate the GNSS velocity to
+        //      a world horizontal acceleration (low-passed), then match it to
+        //      the body lateral specific force to observe the roll DOF.
+        if (haveGnssAccel_ && prevGnssSampleUs_ != 0) {
+            const float dtg = (float)(t_us - prevGnssSampleUs_) * 1e-6f;
+            if (dtg > 0.005f && dtg < 0.5f) {
+                const float aN_raw = (vMeas_NED[0] - prevGnssVel_NED_[0]) / dtg;
+                const float aE_raw = (vMeas_NED[1] - prevGnssVel_NED_[1]) / dtg;
+                const float lp = 0.3f;
+                gnssAccelLP_NE_[0] += lp * (aN_raw - gnssAccelLP_NE_[0]);
+                gnssAccelLP_NE_[1] += lp * (aE_raw - gnssAccelLP_NE_[1]);
+                accelMatchHeadingUpdate(aMeas, gnssAccelLP_NE_);
+            }
+        }
+        prevGnssVel_NED_[0] = vMeas_NED[0];
+        prevGnssVel_NED_[1] = vMeas_NED[1];
+        prevGnssVel_NED_[2] = vMeas_NED[2];
+        prevGnssSampleUs_   = t_us;
+        haveGnssAccel_      = true;
     }
 
     // 11. Recompute estimates with post-update quaternion and biases
@@ -792,6 +816,169 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     stabilizeP();
 }
 
+// ─── Heading update from GNSS velocity course ───────────────────────
+// Treats the horizontal velocity direction (course over ground) as a heading
+// measurement: at low angle of attack the velocity vector ≈ the nose direction.
+// Same scalar-heading Kalman as magMeasUpdate (H ∝ body-down d), but the
+// measurement comes from the GNSS velocity — independent of the mag and of the
+// attitude tilt-comp, so it has none of the in-flight circularity that
+// destabilized the mag update. NOTE: it observes the NOSE direction, so near
+// vertical it sees only ~sin(tilt) of an azimuth/roll error — weak when vertical.
+void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
+    float T_NED2B[3][3];
+    Quat2DCM(T_NED2B, quat_BL_);
+    const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
+
+    const float psi_meas = std::atan2(vMeas_NED[1], vMeas_NED[0]);     // course (E,N)
+    const float psi_pred = std::atan2(T_NED2B[0][1], T_NED2B[0][0]);   // nose azimuth
+
+    float y = psi_meas - psi_pred;
+    while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
+    while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
+
+    const float R_course = 0.05f;   // ~13° course noise (rad²)
+    const float H6 = 2.0f*d[0], H7 = 2.0f*d[1], H8 = 2.0f*d[2];
+
+    float HP[15];
+    for (int j = 0; j < 15; j++)
+        HP[j] = H6*P_[6][j] + H7*P_[7][j] + H8*P_[8][j];
+    const float S = HP[6]*H6 + HP[7]*H7 + HP[8]*H8 + R_course;
+    if (!(S > 1e-9f)) return;
+    const float S_inv = 1.0f / S;
+
+    float K[15];
+    for (int i = 0; i < 15; i++)
+        K[i] = (P_[i][6]*H6 + P_[i][7]*H7 + P_[i][8]*H8) * S_inv;
+
+    float xk[15];
+    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
+
+    double Rew, Rns;
+    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
+    pEst_D_rrm_[2] -= xk[2];
+    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
+    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
+    for (int i = 0; i < 3; i++) {
+        vEst_NED_mps_[i] += xk[i + 3];
+        aBias_mps2_[i]   += xk[i + 9];
+        wBias_rps_[i]    += xk[i + 12];
+    }
+
+    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
+    normalizeQuaternion(quatDelta, quatDelta);
+    float qTemp[4];
+    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
+    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
+
+    float Hrow[15] = {}; Hrow[6] = H6; Hrow[7] = H7; Hrow[8] = H8;
+    float I_KH[15][15];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * Hrow[j];
+    float P_new[15][15] = {};
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            for (int k = 0; k < 15; k++)
+                P_new[i][j] += I_KH[i][k] * P_[k][j];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++) {
+            float sum = 0;
+            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
+            P_[i][j] = sum + K[i] * R_course * K[j];
+        }
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j <= i; j++) {
+            float s = 0.5f * (P_[i][j] + P_[j][i]);
+            P_[i][j] = s; P_[j][i] = s;
+        }
+    stabilizeP();
+}
+
+// ─── Heading update by body↔world lateral-acceleration matching ─────
+// The aero side force (AoA + fins) is measured in the BODY frame (accelerometer
+// lateral components) and in the WORLD frame (GNSS-derived horizontal accel).
+// They are the same force, so the azimuth between them IS the roll/heading —
+// the one DOF the velocity course cannot see near vertical (rolling the body
+// does not move the nose, but it does rotate the lateral force in the world).
+// Only the LATERAL body force is used (axial/nose component zeroed) so boost
+// thrust doesn't dominate; caller gates on a clear lateral force in both frames.
+void GpsInsEKF::accelMatchHeadingUpdate(const float aMeas[3], const float aWorldHoriz[2]) {
+    float T_NED2B[3][3];
+    Quat2DCM(T_NED2B, quat_BL_);
+    const float d[3] = { T_NED2B[0][2], T_NED2B[1][2], T_NED2B[2][2] };
+
+    // Rotate the body LATERAL specific force (0, a_y, a_z) into NED.
+    const float ay = aMeas[1], az = aMeas[2];
+    const float a_pred_N = T_NED2B[1][0]*ay + T_NED2B[2][0]*az;
+    const float a_pred_E = T_NED2B[1][1]*ay + T_NED2B[2][1]*az;
+    const float pred_h = std::sqrt(a_pred_N*a_pred_N + a_pred_E*a_pred_E);
+    const float meas_h = std::sqrt(aWorldHoriz[0]*aWorldHoriz[0] + aWorldHoriz[1]*aWorldHoriz[1]);
+    if (pred_h < 0.5f || meas_h < 0.5f) return;   // need a clear lateral force
+
+    const float psi_pred = std::atan2(a_pred_E, a_pred_N);
+    const float psi_meas = std::atan2(aWorldHoriz[1], aWorldHoriz[0]);
+    float y = psi_meas - psi_pred;
+    while (y >  (float)M_PI) y -= 2.0f * (float)M_PI;
+    while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
+
+    const float R_am = 0.20f;   // ~26° (rad²) — GNSS-derived accel is noisy
+    const float H6 = 2.0f*d[0], H7 = 2.0f*d[1], H8 = 2.0f*d[2];
+
+    float HP[15];
+    for (int j = 0; j < 15; j++)
+        HP[j] = H6*P_[6][j] + H7*P_[7][j] + H8*P_[8][j];
+    const float S = HP[6]*H6 + HP[7]*H7 + HP[8]*H8 + R_am;
+    if (!(S > 1e-9f)) return;
+    const float S_inv = 1.0f / S;
+
+    float K[15];
+    for (int i = 0; i < 15; i++)
+        K[i] = (P_[i][6]*H6 + P_[i][7]*H7 + P_[i][8]*H8) * S_inv;
+
+    float xk[15];
+    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
+
+    double Rew, Rns;
+    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
+    pEst_D_rrm_[2] -= xk[2];
+    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
+    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
+    for (int i = 0; i < 3; i++) {
+        vEst_NED_mps_[i] += xk[i + 3];
+        aBias_mps2_[i]   += xk[i + 9];
+        wBias_rps_[i]    += xk[i + 12];
+    }
+
+    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
+    normalizeQuaternion(quatDelta, quatDelta);
+    float qTemp[4];
+    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
+    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
+
+    float Hrow[15] = {}; Hrow[6] = H6; Hrow[7] = H7; Hrow[8] = H8;
+    float I_KH[15][15];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * Hrow[j];
+    float P_new[15][15] = {};
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            for (int k = 0; k < 15; k++)
+                P_new[i][j] += I_KH[i][k] * P_[k][j];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++) {
+            float sum = 0;
+            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
+            P_[i][j] = sum + K[i] * R_am * K[j];
+        }
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j <= i; j++) {
+            float s = 0.5f * (P_[i][j] + P_[j][i]);
+            P_[i][j] = s; P_[j][i] = s;
+        }
+    stabilizeP();
+}
+
 // ─── Measurement Update (GNSS correction) ───────────────────────────
 
 void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
@@ -844,14 +1031,19 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
     // vertical velocity lagging during high-g boost — reject the ENTIRE
     // pos+vel update, discarding the good horizontal-velocity correction so
     // horizontal velocity dead-reckons and runs away.  Test the position
-    // (3-DOF) and velocity (3-DOF) blocks independently; on a trip de-weight
-    // only that block (inflate its R) rather than dropping the whole
-    // measurement.  The marginal precision of each block is the inverse of
-    // that block of S.  chi²(3, 0.001) ≈ 16.27.
+    // (3-DOF) and velocity blocks independently; on a trip de-weight only that
+    // block (inflate its R) rather than dropping the whole measurement.  The
+    // velocity block is split further into horizontal (2-DOF) and vertical
+    // (1-DOF): the boost vertical-velocity lag is exactly the inconsistency
+    // that must not be allowed to de-weight the GOOD horizontal velocity — else
+    // horizontal velocity dead-reckons and snaps to GNSS position each fix (the
+    // sawtooth seen in guidance).  Marginal precision of each block is the
+    // inverse of that block of S.  chi²(0.001): 3-DOF≈16.27, 2≈13.82, 1≈10.83.
     {
-        static constexpr float CHI2_GATE_3DOF = 16.27f;
+        static constexpr float CHI2_GATE_3DOF = 16.27f;  // χ²(3, 0.001) — position
+        static constexpr float CHI2_GATE_2DOF = 13.82f;  // χ²(2, 0.001) — horiz velocity
+        static constexpr float CHI2_GATE_1DOF = 10.83f;  // χ²(1, 0.001) — vert  velocity
         float Spp[9] = { S[0],  S[1],  S[2],  S[6],  S[7],  S[8],  S[12], S[13], S[14] };
-        float Svv[9] = { S[21], S[22], S[23], S[27], S[28], S[29], S[33], S[34], S[35] };
         float Sinv3[9];
         // Huber-style soft de-weight: when a block's NIS exceeds the gate,
         // inflate that block's R by (NIS/gate) instead of rejecting it.  An
@@ -860,20 +1052,36 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         // fully discarded — so the filter can still recover after it has
         // drifted (e.g. a large reacquired-GNSS velocity innovation following
         // a GNSS gap keeps pulling the estimate back).
-        float infl_pos = 1.0f, infl_vel = 1.0f;
+        float infl_pos = 1.0f, infl_vh = 1.0f, infl_vd = 1.0f;
         if (invertMatrix3x3(Spp, Sinv3)) {
             float nis = 0.0f;
             for (int i=0;i<3;i++){ float r=0; for(int j=0;j<3;j++) r+=Sinv3[i*3+j]*y[j]; nis+=y[i]*r; }
             if (nis > CHI2_GATE_3DOF) infl_pos = nis / CHI2_GATE_3DOF;
         }
-        if (invertMatrix3x3(Svv, Sinv3)) {
-            float nis = 0.0f;
-            for (int i=0;i<3;i++){ float r=0; for(int j=0;j<3;j++) r+=Sinv3[i*3+j]*y[3+j]; nis+=y[3+i]*r; }
-            if (nis > CHI2_GATE_3DOF) infl_vel = nis / CHI2_GATE_3DOF;
+        // Horizontal velocity (vN, vE) — 2×2 innovation block, indices 3,4.
+        {
+            const float a = S[21], b = S[22], c = S[27], d = S[28];  // [[vN-vN,vN-vE],[vE-vN,vE-vE]]
+            const float det = a*d - b*c;
+            if (fabsf(det) > 1e-12f) {
+                const float yN = y[3], yE = y[4];
+                // NIS = yᵀ Sₕ⁻¹ y, with Sₕ⁻¹ = (1/det)[[d,-b],[-c,a]].
+                const float nis = (yN*(d*yN - b*yE) + yE*(a*yE - c*yN)) / det;
+                if (nis > CHI2_GATE_2DOF) infl_vh = nis / CHI2_GATE_2DOF;
+            }
         }
-        if (infl_pos > 1.0f || infl_vel > 1.0f) {
+        // Vertical velocity (vD) — 1×1 block, index 5. This is the term that
+        // lags in high-g boost; isolating it keeps that lag from de-weighting
+        // the horizontal velocity above.
+        {
+            const float Svd = S[35];
+            if (Svd > 1e-12f) {
+                const float nis = (y[5]*y[5]) / Svd;
+                if (nis > CHI2_GATE_1DOF) infl_vd = nis / CHI2_GATE_1DOF;
+            }
+        }
+        if (infl_pos > 1.0f || infl_vh > 1.0f || infl_vd > 1.0f) {
             R_scaled[0][0]*=infl_pos; R_scaled[1][1]*=infl_pos; R_scaled[2][2]*=infl_pos;
-            R_scaled[3][3]*=infl_vel; R_scaled[4][4]*=infl_vel; R_scaled[5][5]*=infl_vel;
+            R_scaled[3][3]*=infl_vh;  R_scaled[4][4]*=infl_vh;  R_scaled[5][5]*=infl_vd;
             for (int i=0;i<6;i++) for (int j=0;j<6;j++) {
                 float s=0.0f; for (int k=0;k<15;k++) s+=H_P[i][k]*H_T[k][j];
                 S[i*6+j]=s+R_scaled[i][j];
