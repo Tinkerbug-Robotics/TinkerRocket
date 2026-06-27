@@ -5,6 +5,13 @@
 #ifdef ESP_PLATFORM
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <esp_timer.h>
+#include <esp_log.h>
+#define FL_LOGW(...) ESP_LOGW("FLTLOG", __VA_ARGS__)
+#define FL_LOGI(...) ESP_LOGI("FLTLOG", __VA_ARGS__)
+#else
+#define FL_LOGW(...) ((void)0)
+#define FL_LOGI(...) ((void)0)
 #endif
 
 #include <cstdio>
@@ -33,6 +40,17 @@ bool page_is_all_ones(const uint8_t* page) {
 inline void yield_to_scheduler() {
 #ifdef ESP_PLATFORM
     vTaskDelay(1);  // ~10 ms; allows IDLE to run and resets the watchdog
+#endif
+}
+
+// Monotonic milliseconds since boot for the recovery time budget (#277). On
+// host / in tests there is no wall clock, so this returns 0 and the budget is
+// inert unless a test injects a clock via Config::now_ms.
+inline uint32_t monotonic_ms() {
+#ifdef ESP_PLATFORM
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+#else
+    return 0;
 #endif
 }
 
@@ -102,8 +120,27 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
     bool index_dirty  = false;
     bool bitmap_dirty = false;
 
+    // #277: progress + a wall-clock budget so a near-full chip's scan is visible
+    // and can't approach the app's 180 s power-on watchdog.
+    auto now = [&]() -> uint32_t { return cfg_.now_ms ? cfg_.now_ms() : monotonic_ms(); };
+    const uint32_t t0            = now();
+    const uint32_t region_blocks = static_cast<uint32_t>(cfg_.flight_region_end -
+                                                          cfg_.flight_region_start);
+    uint32_t blocks_scanned = 0;
+
     uint32_t b = cfg_.flight_region_start;
     while (b < cfg_.flight_region_end) {
+        // Budget is checked only at run boundaries: each run is scanned to
+        // completion (a partial scan would synthesize a wrong-length entry), so
+        // an over-budget pass leaves the remaining orphaned runs for next boot.
+        if (cfg_.recovery_budget_ms != 0 && now() - t0 > cfg_.recovery_budget_ms) {
+            FL_LOGW("recovery: %lu ms budget hit at block %lu/%lu — deferring the "
+                    "rest to next boot",
+                    (unsigned long)cfg_.recovery_budget_ms,
+                    (unsigned long)(b - cfg_.flight_region_start),
+                    (unsigned long)region_blocks);
+            break;
+        }
         if (bitmap_.get(b) != BLOCK_ALLOCATED || is_in_index(b)) {
             ++b;
             continue;
@@ -134,6 +171,11 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         bool     saw_any             = false;
 
         for (uint32_t i = 0; i < run_len; ++i) {
+            if (++blocks_scanned % 256 == 0) {
+                FL_LOGI("recovery: scanned %lu/%lu blocks (%lu ms)",
+                        (unsigned long)blocks_scanned, (unsigned long)region_blocks,
+                        (unsigned long)(now() - t0));
+            }
             const uint32_t blk = run_start + i;
             if (bitmap_.get(blk) == BLOCK_BAD) continue;
 

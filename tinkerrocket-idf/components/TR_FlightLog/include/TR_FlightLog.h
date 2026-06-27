@@ -28,6 +28,14 @@ public:
         uint16_t flight_region_start = 32;    // first block owned by this layer
         uint16_t flight_region_end   = 1020;  // one past last flight block
         uint16_t metadata_blocks[4]  = {1020, 1021, 1022, 1023};
+        // #277: wall-clock cap on one brownout-recovery pass so a chip with many
+        // large orphaned ranges can't scan for minutes and look hung past the
+        // app's 180 s power-on watchdog. Checked at run boundaries (never
+        // mid-run), so any unscanned runs simply defer to the next boot. 0 = off.
+        uint32_t recovery_budget_ms  = 90000;  // 90 s, comfortably under 180 s
+        // Monotonic-ms source for the budget; nullptr uses the built-in source
+        // (esp_timer on hardware, 0 on host so the budget is inert in tests).
+        uint32_t (*now_ms)()         = nullptr;
     };
 
     TR_FlightLog() = default;
