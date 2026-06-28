@@ -261,15 +261,16 @@ void TR_I2C_Interface::slaveTxTask(void *arg)
             len = 1;
         }
 
-        // #279: flush any residue left in the driver TX FIFO by a previous
-        // short/aborted read before staging this response. Otherwise a 232 B
-        // snapshot read that the FC cuts short can leave bytes the next 96 B
-        // status poll clocks out as stale — and the FC status path has no SOF
-        // rescan to recover. All driver TX-FIFO ops stay in this one task, so no
-        // lock is needed; the reset must precede the write (after it would wipe
-        // the response we just staged).
-        i2c_slave_reset_tx_fifo(self->_slave_dev);
-
+        // Do NOT i2c_slave_reset_tx_fifo() here. On the ESP32-S3 that call goes
+        // through i2c_ll_master_fsm_rst(), which resets the I2C peripheral FSM.
+        // on_request fires *inside* an active read — the V2 driver has already
+        // stretched SCL waiting for our i2c_slave_write — so resetting the FSM
+        // mid-transaction destroys the in-flight read: the master then clocks out
+        // nothing and the FC logs "[I2C] read FAIL dur~2400us", query ok/fail=0/N.
+        // #279 added a per-serve reset to flush short-read residue and it broke
+        // 100% of FC<-OC reads on the bench (regression of the bench-validated
+        // on_request model). If TX residue ever resurfaces, flush ONCE at a
+        // between-transaction point (begin()/post-recovery), never per serve.
         uint32_t written = 0;
         esp_err_t werr = i2c_slave_write(self->_slave_dev, local,
                                          static_cast<uint32_t>(len), &written,
