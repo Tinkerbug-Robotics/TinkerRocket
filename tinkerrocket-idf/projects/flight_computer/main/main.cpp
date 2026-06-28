@@ -235,6 +235,12 @@ static bool bmp_new_for_kf = false; // Set when new BMP sample arrives, cleared 
 
 // --- Flight logic state ---
 static RocketState rocket_state = INITIALIZATION;
+// #317: latched true once a flight reaches LANDED. Makes LANDED terminal until a
+// hardware reboot — no re-arm, no second flight cycle, no re-armed pyros, and the
+// OC won't open a new log. Matches the real-world use case (you don't re-fly
+// immediately) and prevents ever re-arming anything dangerous unexpectedly.
+// Cleared only at boot (static init) and on sim-completion re-arm.
+static bool post_flight_lockout = false;
 
 // Issue #216 — predicate used to gate ground-test / pyro-fire / servo-test
 // BLE commands.  We reject these from INFLIGHT (a launched rocket should
@@ -870,6 +876,9 @@ static void initPyroPins()
 // Caller MUST hold pyro_spinlock.
 static void pyroSetArmLocked(bool want_high)
 {
+    // #317: once a flight has landed, never re-arm the pyro rail until a hardware
+    // reboot — only disarm requests are honored.
+    if (post_flight_lockout) want_high = false;
     if (pyro_arm_pin_state == want_high) return;
     gpio_set_level((gpio_num_t)config::PYRO_ARM_PIN, want_high ? 1 : 0);
     pyro_arm_pin_state = want_high;
@@ -5155,6 +5164,12 @@ static void loop_fc()
             // Servo replay: driven by I2C command handler, skip state machine
         }
         else
+        {
+        // #317: once a flight has landed, the computer is terminal until a
+        // hardware reboot. Force LANDED so any transition a command or a
+        // ground-handling re-trigger of launch-detect tries to make is overridden
+        // (no re-arm, no second flight).
+        if (post_flight_lockout) rocket_state = LANDED;
         switch (rocket_state)
         {
             case INITIALIZATION:
@@ -5569,6 +5584,7 @@ static void loop_fc()
                 if (!landed_actions_done)
                 {
                     landed_actions_done = true;
+                    post_flight_lockout = true;  // #317: LANDED is terminal until reboot
                     pyroSafeAll();
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     if (servo_enabled)
@@ -5629,6 +5645,7 @@ static void loop_fc()
                 break;
             }
         }
+        }
 
         // ---- Auto-return to READY after sim completes ----
         {
@@ -5641,6 +5658,7 @@ static void loop_fc()
                 // READY -> PRELAUNCH transition on stale data.
                 pyroSafeAll();
                 rocket_state = READY;
+                post_flight_lockout = false;  // #317: sim re-arm is legitimate
                 ground_pressure_found = false;
                 out_ready = false;
                 end_flight_sent = false;

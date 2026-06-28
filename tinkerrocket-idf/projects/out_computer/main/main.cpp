@@ -4819,9 +4819,16 @@ static void loop_oc()
         // Launch-triggered logging: start when NSF_LAUNCH appears in NonSensorData
         {
             static bool prev_ns_launch = false;
+            // #317: once the vehicle has reported LANDED, refuse to start a new
+            // flight log until a reboot. Post-flight ground handling can re-trip
+            // the FC launch-detect and would otherwise open a bogus session that
+            // only closes on power-off (-> a junk recovered_*.bin full of ground
+            // data). Reset only by an OC reboot.
+            static bool oc_landed_lockout = false;
+            if (latest_rocket_state == LANDED) oc_landed_lockout = true;
             const bool ns_launch = latest_non_sensor_valid &&
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
-            if (ns_launch && !prev_ns_launch)
+            if (ns_launch && !prev_ns_launch && !oc_landed_lockout)
             {
                 // Mirror the cmd 23 lifecycle so a launch detected without a
                 // prior PRELAUNCH transition still gets a flightlog flight
