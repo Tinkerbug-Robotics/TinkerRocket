@@ -74,7 +74,7 @@ class BLEFleet: NSObject, ObservableObject {
 
     // Reconnection state
     private var reconnectAttempts: Int = 0
-    private let maxReconnectAttempts = 3
+    private let maxReconnectAttempts = 8   // #291: was 3 (~7 s); raised for flight dropouts
     private var lastPeripheralIdentifier: UUID?
     private var userInitiatedDisconnect = false
     private var reconnectingPeripheral: CBPeripheral?
@@ -202,6 +202,11 @@ extension BLEFleet: CBCentralManagerDelegate {
             if let p = reconnectingPeripheral, p.state == .connected {
                 print("[BLE] Restored peripheral still connected — resuming")
                 let device = BLEDevice(peripheral: p, name: p.name ?? "Restored")
+                // #290: mirror the didConnect path. Without the fleet backref,
+                // fleet?.recordRocketFix() no-ops, so lastValidRocketFix never
+                // populates and the map marker / direction arrow / landing anchor
+                // stay blank for the whole restored session.
+                device.fleet = self
                 device.onConnect()
                 devices.append(device)
                 activeDeviceID = p.identifier
@@ -308,7 +313,8 @@ extension BLEFleet: CBCentralManagerDelegate {
         if reconnectAttempts < maxReconnectAttempts {
             reconnectAttempts += 1
             statusMessage = "Reconnecting (\(reconnectAttempts)/\(maxReconnectAttempts))..."
-            let delay = pow(2.0, Double(reconnectAttempts - 1))
+            // #291: cap the backoff — 2^(n-1) blows up fast once the cap is raised.
+            let delay = min(8.0, pow(2.0, Double(reconnectAttempts - 1)))
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self, self.device(for: peripheral) == nil else { return }
                 // Retain across the reconnect attempt too (#173).
@@ -316,12 +322,16 @@ extension BLEFleet: CBCentralManagerDelegate {
                 self.centralManager.connect(peripheral, options: nil)
             }
         } else {
+            // #291: don't abandon the flight after a handful of tries. CB
+            // connect() has no timeout — it completes whenever the peripheral
+            // returns to range — so leave a connect pending AND fall back to
+            // scanning so a returning device re-pairs automatically, instead of
+            // the old dead-end ("Disconnected" + cleared list).
             reconnectAttempts = 0
-            statusMessage = "Disconnected"
-            discoveredDevices = []
-            if devices.isEmpty {
-                UIApplication.shared.isIdleTimerDisabled = false
-            }
+            statusMessage = "Searching for \(peripheral.name ?? "rocket")…"
+            connectingPeripherals[peripheral.identifier] = peripheral
+            centralManager.connect(peripheral, options: nil)
+            startScanning()
         }
     }
 
