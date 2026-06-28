@@ -260,6 +260,19 @@ struct TelemetryData: Codable {
     // Custom decoder: non-optional fields with defaults need decodeIfPresent
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        // #293: tolerate a high-value field emitted as a float or string instead
+        // of an int — firmware-contract drift on one field would otherwise throw
+        // and the catch discards the WHOLE telemetry frame. Mirrors the defensive
+        // config decode. Float fields already accept int JSON, so only the ints
+        // below need this.
+        func flexInt(_ key: CodingKeys) -> Int? {
+            if let i = try? c.decodeIfPresent(Int.self, forKey: key) { return i }
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(d) }
+            if let s = try? c.decodeIfPresent(String.self, forKey: key) {
+                return Int(s) ?? Double(s).map { Int($0) }
+            }
+            return nil
+        }
         soc = try c.decodeIfPresent(Float.self, forKey: .soc)
         current = try c.decodeIfPresent(Float.self, forKey: .current)
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
@@ -297,15 +310,15 @@ struct TelemetryData: Codable {
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
         bs_log_silence_remaining_s = try c.decodeIfPresent(UInt16.self, forKey: .bs_log_silence_remaining_s)
-        flight_status_bits = try c.decodeIfPresent(Int.self, forKey: .flight_status_bits) ?? 0
-        pyro_status_bits = try c.decodeIfPresent(Int.self, forKey: .pyro_status_bits) ?? 0
+        flight_status_bits = flexInt(.flight_status_bits) ?? 0   // #293: tolerant
+        pyro_status_bits = flexInt(.pyro_status_bits) ?? 0       // #293: tolerant
         sensor_health = try c.decodeIfPresent(Int.self, forKey: .sensor_health) ?? 0
         source_rocket_id = try c.decodeIfPresent(Int.self, forKey: .source_rocket_id)
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
         // #95: missing "ds" → .live (older firmware doesn't emit it)
         let dsRaw = try c.decodeIfPresent(Int.self, forKey: .data_status) ?? 0
         data_status = DataStatus(rawValue: dsRaw) ?? .live
-        data_age_ms = try c.decodeIfPresent(UInt32.self, forKey: .data_age_ms) ?? 0
+        data_age_ms = UInt32(clamping: flexInt(.data_age_ms) ?? 0)   // #293: tolerant
     }
 
     // Default memberwise init (for creating empty telemetry)

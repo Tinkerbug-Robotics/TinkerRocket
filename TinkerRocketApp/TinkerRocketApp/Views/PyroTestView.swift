@@ -112,6 +112,16 @@ struct PyroTestView: View {
                 }
                 // Fire at T-0
                 if secondsRemaining <= 0 {
+                    // #292: re-check the link at the fire instant. sendPyroFire
+                    // silently no-ops when disconnected, so without this the UI
+                    // would advance to recording and report success for a command
+                    // that was never sent.
+                    guard device.isConnected else {
+                        errorMessage = "Link lost before fire — no fire command sent"
+                        state = .done
+                        ticker.stop()
+                        return
+                    }
                     device.sendPyroFire(channel: UInt8(channel))
                     state = .recording
                     recordSecondsRemaining = 5
