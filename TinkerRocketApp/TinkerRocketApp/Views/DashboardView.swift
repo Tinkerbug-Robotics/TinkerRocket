@@ -1530,50 +1530,6 @@ struct StatusBadge: View {
     }
 }
 
-struct RocketDirectionView: View {
-    let telemetry: TelemetryData
-    @ObservedObject var locationManager: LocationManager
-    @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
-
-    var body: some View {
-        if let rocketLat = telemetry.latitude,
-           let rocketLon = telemetry.longitude,
-           !rocketLat.isNaN && !rocketLon.isNaN,
-           let phoneLoc = locationManager.userLocation {
-
-            let dist = LocationManager.haversineDistance(
-                lat1: phoneLoc.latitude, lon1: phoneLoc.longitude,
-                lat2: rocketLat, lon2: rocketLon
-            )
-            let bear = LocationManager.bearing(
-                lat1: phoneLoc.latitude, lon1: phoneLoc.longitude,
-                lat2: rocketLat, lon2: rocketLon
-            )
-            // Arrow rotation: bearing relative to phone's compass heading
-            let arrowAngle = bear - locationManager.heading
-
-            VStack(spacing: 8) {
-                Text("Rocket Direction")
-                    .font(.headline)
-
-                Image(systemName: "location.north.fill")
-                    .font(.system(size: 64))
-                    .foregroundColor(.blue)
-                    .rotationEffect(.degrees(arrowAngle))
-                    .animation(.easeOut(duration: 0.3), value: arrowAngle)
-
-                Text(UnitFormatter.distance(dist, system: unitSystem))
-                    .font(.title2)
-                    .fontWeight(.semibold)
-            }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(Color(.systemGray6))
-            .cornerRadius(10)
-        }
-    }
-}
-
 // MARK: - Pyro Channels
 
 struct PyroChannelsView: View {
