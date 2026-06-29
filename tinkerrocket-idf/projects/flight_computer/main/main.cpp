@@ -5647,18 +5647,24 @@ static void loop_fc()
         }
         }
 
-        // ---- Auto-return to READY after sim completes ----
+        // ---- Re-arm on a NEW sim run, NOT when a sim ends (#317) ----
+        // A sim flight that reaches LANDED must STAY landed — terminal, exactly
+        // like real hardware — so the sim faithfully reproduces and can validate
+        // the post-flight lockout. Re-arm on the RISING edge of sim-active (the
+        // deliberate start of a new run, the sim's equivalent of a reboot), never
+        // on the falling edge. When a sim ends we do nothing: the FC holds the
+        // state it reached (LANDED if it flew) and the lockout stays in force.
         {
             const bool curr_sim_active = sensor_collector.isSimActive();
-            if (prev_sim_active && !curr_sim_active)
+            if (!prev_sim_active && curr_sim_active)
             {
-                // Sim just finished — reset state machine so user can run another sim.
-                // Must also reset GNSS state: the sim injected synthetic GNSS
-                // (fix=3, sats=12) which would otherwise cause an immediate
-                // READY -> PRELAUNCH transition on stale data.
+                // New sim run — reset state machine for a fresh flight. Also
+                // resets GNSS state: the sim injects synthetic GNSS (fix=3,
+                // sats=12); a stale copy would otherwise immediately re-trip
+                // READY -> PRELAUNCH on the new run.
                 pyroSafeAll();
                 rocket_state = READY;
-                post_flight_lockout = false;  // #317: sim re-arm is legitimate
+                post_flight_lockout = false;  // #317: a deliberate new sim run re-arms
                 ground_pressure_found = false;
                 out_ready = false;
                 end_flight_sent = false;
@@ -5687,7 +5693,7 @@ static void loop_fc()
                 reboot_recovery = false;
                 reboot_recovery_telem = false;
                 clearFlightSnapshot();
-                ESP_LOGI(TAG, "[STATE] Sim complete -> READY");
+                ESP_LOGI(TAG, "[STATE] Sim start -> READY (re-armed for new run)");
             }
             prev_sim_active = curr_sim_active;
         }
