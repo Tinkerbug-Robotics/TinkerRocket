@@ -206,7 +206,14 @@ public:
     // auto-push on this so the notifies aren't dropped (#224 — the faster idle
     // loop from #221 made the old fixed delay(500) race the MTU + subscribe).
     bool isReadyForNotify() const {
-        return device_connected_ && negotiated_mtu_ > 0 && telem_notify_subscribed_;
+        // #283: gate on the LIVE ATT MTU (effectiveMtu), not the cached
+        // negotiated_mtu_.  Some iOS reconnect paths reuse the prior MTU
+        // without re-firing BLE_GAP_EVENT_MTU, leaving negotiated_mtu_ stuck
+        // at 0 even though the link MTU is already large — which would block
+        // the connect-time config push forever.  "> 23" (the default ATT MTU)
+        // means the MTU actually grew, preserving the #224 "wait for MTU
+        // before pushing" intent.
+        return device_connected_ && effectiveMtu() > 23 && telem_notify_subscribed_;
     }
 
     // Get max data bytes per BLE chunk (MTU - ATT overhead - our header)
@@ -248,6 +255,18 @@ private:
     uint16_t command_val_handle_;
     uint16_t file_ops_val_handle_;
     uint16_t file_transfer_val_handle_;
+
+    // Authoritative current ATT MTU for this connection (#283).  Reads the live
+    // NimBLE value (ble_att_mtu) so a missed BLE_GAP_EVENT_MTU callback can't
+    // strand us at the stale cached negotiated_mtu_; falls back to the cache if
+    // the stack query fails.  Returns 0 when disconnected, 23 before the
+    // exchange completes, the negotiated value after.
+    uint16_t effectiveMtu() const;
+
+    // Max payload bytes for one GATT notification = effectiveMtu() - ATT(3),
+    // with a defensive 20-byte floor.  Single source of truth for every
+    // notify-size check (telemetry / config / OTA status / build cap).
+    size_t maxNotifyBytes() const;
 
     // Helper to build JSON string
     String buildTelemetryJSON(const TelemetryData& data);

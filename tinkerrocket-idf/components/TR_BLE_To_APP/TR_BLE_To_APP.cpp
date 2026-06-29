@@ -12,6 +12,7 @@
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
 #include <host/ble_hs.h>
+#include <host/ble_att.h>          // ble_att_mtu — authoritative live MTU (#283)
 #include <host/util/util.h>
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
@@ -701,15 +702,36 @@ void TR_BLE_To_APP::loop()
     }
 }
 
+// #283: authoritative current ATT MTU.  BLE_GAP_EVENT_MTU populates the
+// cached negotiated_mtu_, but some iOS reconnect paths reuse the prior MTU
+// without re-firing that event — leaving the cache at 0 while the link MTU is
+// actually 185/512.  ble_att_mtu() reads the stack's true per-connection MTU
+// (locks ble_hs internally, safe from the loop task) so every notify-size
+// decision uses reality, not a possibly-missed callback.  Returns 0 when
+// disconnected; falls back to the cache only if the stack query fails.
+uint16_t TR_BLE_To_APP::effectiveMtu() const
+{
+    if (!device_connected_) return 0;
+    uint16_t live = ble_att_mtu(conn_handle_);
+    return live ? live : negotiated_mtu_;
+}
+
+size_t TR_BLE_To_APP::maxNotifyBytes() const
+{
+    const uint16_t mtu = effectiveMtu();
+    return (mtu > 3) ? (size_t)(mtu - 3) : 20;
+}
+
 size_t TR_BLE_To_APP::getMaxChunkDataSize() const
 {
     const size_t HEADER_SIZE = 7;   // offset(4) + length(2) + flags(1)
     const size_t ATT_OVERHEAD = 3;  // ATT notification header
 
-    if (negotiated_mtu_ > (HEADER_SIZE + ATT_OVERHEAD + 20))
+    const uint16_t mtu = effectiveMtu();  // #283: live MTU, not the stale cache
+    if (mtu > (HEADER_SIZE + ATT_OVERHEAD + 20))
     {
         // Use negotiated MTU for chunk size
-        return negotiated_mtu_ - ATT_OVERHEAD - HEADER_SIZE;
+        return mtu - ATT_OVERHEAD - HEADER_SIZE;
     }
 
     // Fallback: conservative 170 bytes (fits in iOS default 185-byte MTU)
@@ -797,7 +819,7 @@ void TR_BLE_To_APP::sendTelemetry(const TelemetryData& data)
     String json = buildTelemetryJSON(data);
 
     // Check if JSON exceeds MTU — truncated notifications produce unparseable JSON
-    size_t max_notify = (negotiated_mtu_ > 3) ? (negotiated_mtu_ - 3) : 20;
+    size_t max_notify = maxNotifyBytes();  // #283: live MTU, 20-B floor
     if (json.length() > max_notify)
     {
         static uint32_t last_warn_ms = 0;
@@ -805,7 +827,7 @@ void TR_BLE_To_APP::sendTelemetry(const TelemetryData& data)
         {
             ESP_LOGW(BLE_TAG, "Telemetry JSON %u bytes > MTU limit %u (mtu=%u), SKIPPING",
                      (unsigned)json.length(), (unsigned)max_notify,
-                     (unsigned)negotiated_mtu_);
+                     (unsigned)effectiveMtu());
             last_warn_ms = millis();
         }
         return;
@@ -865,7 +887,7 @@ void TR_BLE_To_APP::sendConfigJSON(const String& json)
     if (!device_connected_) return;
 
     // Guard against MTU truncation
-    size_t max_notify = (negotiated_mtu_ > 3) ? (negotiated_mtu_ - 3) : 20;
+    size_t max_notify = maxNotifyBytes();  // #283: live MTU, 20-B floor
     if (json.length() > max_notify)
     {
         ESP_LOGW(BLE_TAG, "Config JSON %u bytes > MTU limit %u, SKIPPING",
@@ -1087,14 +1109,13 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Fields are ordered below recovery/dashboard-critical first → least
     // important last, so the tail that drops is the data the operator can
     // most afford to lose live.
-    // Only constrain the build once an MTU has actually been negotiated; before
-    // then negotiated_mtu_ is 0 and the pre-negotiation path (#283) is left to
-    // the post-build send check, so fall back to the full buffer here.
-    const bool mtu_known = negotiated_mtu_ > 3;
-    const size_t max_notify = mtu_known ? (size_t)(negotiated_mtu_ - 3) : 20;
-    const size_t cap = mtu_known
-        ? ((max_notify + 1 < sizeof(buf)) ? (max_notify + 1) : sizeof(buf))
-        : sizeof(buf);
+    // #283: budget against the live ATT MTU (maxNotifyBytes reads ble_att_mtu,
+    // so a missed BLE_GAP_EVENT_MTU callback can't strand us at the 0 cache).
+    // Before the exchange completes the window is the 23-B default → only the
+    // top-priority fields fit, which is correct (a larger frame can't physically
+    // go out); once the link MTU is up, full frames flow, callback or not.
+    const size_t max_notify = maxNotifyBytes();
+    const size_t cap = (max_notify + 1 < sizeof(buf)) ? (max_notify + 1) : sizeof(buf);
 
     // Reserve trailing bytes: closing '}' + '\0' (2) plus a worst-case
     // ',"tr":1' trim flag (7) so that flag can always be appended at the end
@@ -1389,7 +1410,7 @@ void TR_BLE_To_APP::sendOtaStatusJSON(const char* state, const char* err,
     }
     if (n < 0 || (size_t)n >= sizeof(buf)) return;
 
-    size_t max_notify = (negotiated_mtu_ > 3) ? (negotiated_mtu_ - 3) : 20;
+    size_t max_notify = maxNotifyBytes();  // #283: live MTU, 20-B floor
     if ((size_t)n > max_notify) return;  // silent skip per the project-wide MTU guard
 
     notify_data(conn_handle_, file_ops_val_handle_, (const uint8_t*)buf, n);
