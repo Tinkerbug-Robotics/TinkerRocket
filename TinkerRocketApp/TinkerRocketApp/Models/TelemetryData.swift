@@ -114,6 +114,14 @@ struct TelemetryData: Codable {
     var data_status: DataStatus = .live
     var data_age_ms: UInt32 = 0      // only meaningful when .stale
 
+    // #282: base station sets "tr":1 when a worst-case in-flight frame was
+    // trimmed to fit the BLE MTU window — low-priority tail fields (link
+    // stats, unit name, active filename, some IMU detail) were dropped so the
+    // recovery/dashboard-critical fields still got through.  The frame is
+    // still valid; this just flags that it's partial so the absence of those
+    // fields reads as "trimmed for bandwidth", not "sensor offline".
+    var fields_trimmed: Bool = false
+
     // Pyro channel status (packed bitfield from "ps" JSON key, decoded in init).
     // New PCB: bit 0 = global armed (single shared ARM FET), then per-channel
     // (cont, fired) pairs for channels 1..4. 9 bits total.
@@ -255,6 +263,7 @@ struct TelemetryData: Codable {
         case source_unit_name = "run"
         case data_status = "ds"        // #95
         case data_age_ms = "age"       // #95
+        case fields_trimmed = "tr"     // #282: frame trimmed to fit MTU
     }
 
     // Custom decoder: non-optional fields with defaults need decodeIfPresent
@@ -319,6 +328,7 @@ struct TelemetryData: Codable {
         let dsRaw = try c.decodeIfPresent(Int.self, forKey: .data_status) ?? 0
         data_status = DataStatus(rawValue: dsRaw) ?? .live
         data_age_ms = UInt32(clamping: flexInt(.data_age_ms) ?? 0)   // #293: tolerant
+        fields_trimmed = (flexInt(.fields_trimmed) ?? 0) != 0        // #282
     }
 
     // Default memberwise init (for creating empty telemetry)

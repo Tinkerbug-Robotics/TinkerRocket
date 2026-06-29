@@ -229,4 +229,22 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertTrue(two.sensorHealthRows.contains { $0.name == "Pyro 3" })
         XCTAssertFalse(two.sensorHealthRows.contains { $0.name == "Pyro 2" })
     }
+
+    // MARK: - MTU trim flag (#282)
+
+    /// The base station sets "tr":1 when a worst-case in-flight frame was
+    /// trimmed to fit the BLE MTU window.  Absent "tr" must read as not-trimmed
+    /// (older firmware never emits it); a present "tr":1 flips the flag without
+    /// disturbing the fields that did make it through.
+    func testTrimFlag_DecodesAndDefaultsFalse() throws {
+        let plain = try JSONDecoder().decode(
+            TelemetryData.self, from: #"{"st":"INFLIGHT"}"#.data(using: .utf8)!)
+        XCTAssertFalse(plain.fields_trimmed)
+
+        let trimmed = try JSONDecoder().decode(
+            TelemetryData.self, from: #"{"st":"INFLIGHT","fs":7,"tr":1}"#.data(using: .utf8)!)
+        XCTAssertTrue(trimmed.fields_trimmed)
+        XCTAssertEqual(trimmed.state, "INFLIGHT")
+        XCTAssertTrue(trimmed.launch_flag)   // tail trim must not corrupt earlier fields
+    }
 }
