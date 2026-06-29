@@ -1074,14 +1074,39 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     char buf[640];
     size_t pos = 0;
     bool first = true;
-    // Reserve trailing bytes for closing '}' + '\0'.
-    const size_t kReserve = 2;
+    bool dropped = false;   // set when a field is skipped for lack of MTU room (#282)
+
+    // #282: budget the build against the *actual* BLE send window, not just the
+    // backing buffer.  sendTelemetry() drops the WHOLE notification when the
+    // finished JSON exceeds (negotiated_mtu_ - 3), so building past that window
+    // silently blacks out the live dashboard during the highest-information
+    // phase of flight (boost/apogee with GPS fix, armed pyro, rid+run, af).
+    // Cap the logical JSON at the send window (still bounded by the 640 B
+    // buffer) and let the low-priority tail fall off instead, so a
+    // trimmed-but-valid frame always goes out rather than a silent blackout.
+    // Fields are ordered below recovery/dashboard-critical first → least
+    // important last, so the tail that drops is the data the operator can
+    // most afford to lose live.
+    // Only constrain the build once an MTU has actually been negotiated; before
+    // then negotiated_mtu_ is 0 and the pre-negotiation path (#283) is left to
+    // the post-build send check, so fall back to the full buffer here.
+    const bool mtu_known = negotiated_mtu_ > 3;
+    const size_t max_notify = mtu_known ? (size_t)(negotiated_mtu_ - 3) : 20;
+    const size_t cap = mtu_known
+        ? ((max_notify + 1 < sizeof(buf)) ? (max_notify + 1) : sizeof(buf))
+        : sizeof(buf);
+
+    // Reserve trailing bytes: closing '}' + '\0' (2) plus a worst-case
+    // ',"tr":1' trim flag (7) so that flag can always be appended at the end
+    // even on a fully-packed frame.
+    const size_t kReserve = 2 + 7;
 
     buf[pos++] = '{';
 
-    // Returns true if `n` more bytes (plus the reserved tail) still fit.
+    // Returns true if `n` more bytes (plus the reserved tail) still fit within
+    // the MTU-derived budget.
     auto room = [&](size_t n) -> bool {
-        return pos + n + kReserve <= sizeof(buf);
+        return pos + n + kReserve <= cap;
     };
 
     // Comma separator helper.  Bytes accounted for in each caller's fit check.
@@ -1110,7 +1135,7 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Optional float — skips NaN values entirely to save BLE payload bytes.
     auto addFloat = [&](const char* key, float value, int decimals) {
         if (std::isnan(value)) return;
-        if (!room(keyBytes(key) + kNumMax)) return;
+        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%.*f", decimals, (double)value);
     };
@@ -1118,25 +1143,25 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Optional double — skips NaN values
     auto addDouble = [&](const char* key, double value, int decimals) {
         if (std::isnan(value)) return;
-        if (!room(keyBytes(key) + kNumMax)) return;
+        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%.*f", decimals, value);
     };
 
     auto addInt = [&](const char* key, int value) {
-        if (!room(keyBytes(key) + kNumMax)) return;
+        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%d", value);
     };
     auto addUint = [&](const char* key, uint32_t value) {
-        if (!room(keyBytes(key) + kNumMax)) return;
+        if (!room(keyBytes(key) + kNumMax)) { dropped = true; return; }
         appendKey(key);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%lu", (unsigned long)value);
     };
     auto addString = [&](const char* key, const char* value) {
         size_t vlen = value ? strlen(value) : 0;
         // 2 extra for the value's surrounding quotes.
-        if (!room(keyBytes(key) + 2 + vlen)) return;
+        if (!room(keyBytes(key) + 2 + vlen)) { dropped = true; return; }
         appendKey(key);
         buf[pos++] = '"';
         if (value) {
@@ -1147,76 +1172,26 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     };
     // (addBool removed — every bool now lives in the "fs" bitfield.)
 
-    // Battery
-    addFloat("soc", data.soc, 1);
-    addFloat("cur", data.current, 1);
-    addFloat("vol", data.voltage, 2);
+    // Fields are emitted in priority order (#282): recovery- and
+    // dashboard-critical first, diagnostics last.  When a worst-case frame
+    // exceeds the MTU window, `room()` drops fields from the tail — so the
+    // operator keeps state, flight-phase/pyro/health flags, position, altitude,
+    // and battery live, and only loses low-value extras (filename, link
+    // stats, unit name) during the brief peak-payload window.
 
-    // GPS — 5 decimals = ~1.1 m precision, plenty for tracking and saves
-    // ~4 B/frame vs 7 decimals.  iOS decodes as Double regardless.
-    addDouble("lat", data.latitude, 5);
-    addDouble("lon", data.longitude, 5);
-    addInt("nsat", data.num_sats);
+    // ── Tier 1: recovery + dashboard-critical (never sacrificed) ──────────
 
     // State
     addString("st", data.state);
 
-    // Logging filename (camera/log/bslog flags now packed into "fs" below).
-    addString("af", data.active_file);
-
-    // Data rates
-    addFloat("rxk", data.rx_kbs, 1);
-    addFloat("wrk", data.wr_kbs, 1);
-    addUint("frx", data.frames_rx);
-    addUint("fdr", data.frames_drop);
-
-    // Max values
-    addFloat("malt", data.max_alt_m, 1);
-    addFloat("mspd", data.max_speed_mps, 1);
-
-    // Altitude
-    addFloat("palt", data.pressure_alt, 1);
-    addFloat("arate", data.altitude_rate, 1);
-    addFloat("galt", data.gnss_alt, 1);
-
-    // IMU - Low-G accelerometer (m/s^2)
-    addFloat("lx", data.low_g_x, 1);
-    addFloat("ly", data.low_g_y, 1);
-    addFloat("lz", data.low_g_z, 1);
-
-    // IMU - High-G accelerometer (NaN on base station — will be omitted)
-    addFloat("hx", data.high_g_x, 1);
-    addFloat("hy", data.high_g_y, 1);
-    addFloat("hz", data.high_g_z, 1);
-
-    // IMU - Gyroscope (deg/s)
-    addFloat("gx", data.gyro_x, 1);
-    addFloat("gy", data.gyro_y, 1);
-    addFloat("gz", data.gyro_z, 1);
-
-    // Roll command + quaternion — quat at 3 decimals gives ~0.06° angle
-    // error in the derived Euler display, well under the dashboard's
-    // %.1f° formatting.  Saves ~4 B per frame vs 4 decimals.
-    addFloat("rcmd", data.roll_cmd, 1);
-    addFloat("q0", data.q0, 3);
-    addFloat("q1", data.q1, 3);
-    addFloat("q2", data.q2, 3);
-    addFloat("q3", data.q3, 3);
-
-    // LoRa signal quality (NaN on direct connection — will be omitted)
-    addFloat("rssi", data.rssi, 0);
-    addFloat("snr", data.snr, 1);
-
-    // Base station
-    addFloat("bsoc", data.bs_soc, 1);
-    addFloat("bvol", data.bs_voltage, 2);
-    addFloat("bcur", data.bs_current, 0);
-    // Countdown to the silence-timeout close — only emitted while the log
-    // is actually open (saves ~10 B per telemetry packet when idle).  iOS
-    // renders this next to the Base Stn Log badge so the operator can see
-    // the auto-close approaching during a long quiet stretch.
-    if (data.bs_logging_active && data.bs_log_silence_remaining_s != 0xFFFF) {
-        addUint("slrm", data.bs_log_silence_remaining_s);
+    // #95: data freshness status.  LIVE is the default and is omitted
+    // entirely to save bytes — the iOS app treats "ds" absent as LIVE.
+    // Kept up front so a stale frame is always *flagged* as stale.
+    if (data.data_status != TelemetryData::DataStatus::LIVE) {
+        addInt("ds", (int)data.data_status);
+        if (data.data_status == TelemetryData::DataStatus::STALE) {
+            addUint("age", data.data_age_ms);
+        }
     }
 
     // Packed flight-status bits (saves ~90 B vs 8 separate JSON booleans).
@@ -1257,21 +1232,96 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Omitted when zero (nothing reported) to save MTU; iOS unpacks per SH_*_SHIFT.
     if (data.sensor_health != 0) { addInt("h", (int)data.sensor_health); }
 
-    // Source rocket identity (base station relay only)
+    // GPS — 5 decimals = ~1.1 m precision, plenty for tracking and saves
+    // ~4 B/frame vs 7 decimals.  iOS decodes as Double regardless.
+    addDouble("lat", data.latitude, 5);
+    addDouble("lon", data.longitude, 5);
+    addInt("nsat", data.num_sats);
+
+    // Altitude / vertical rate — apogee tracking, recovery-critical.
+    addFloat("palt", data.pressure_alt, 1);
+    addFloat("arate", data.altitude_rate, 1);
+    addFloat("galt", data.gnss_alt, 1);
+
+    // Max values
+    addFloat("malt", data.max_alt_m, 1);
+    addFloat("mspd", data.max_speed_mps, 1);
+
+    // Battery
+    addFloat("soc", data.soc, 1);
+    addFloat("cur", data.current, 1);
+    addFloat("vol", data.voltage, 2);
+
+    // ── Tier 2: attitude + IMU detail (dropped only under MTU pressure) ───
+
+    // Source rocket identity (numeric id; base station relay only).  The
+    // longer unit-name string ("run") is deferred to the droppable tail.
     if (data.source_rocket_id > 0) {
         addInt("rid", data.source_rocket_id);
-        if (data.source_unit_name && data.source_unit_name[0]) {
-            addString("run", data.source_unit_name);
-        }
     }
 
-    // #95: data freshness status.  LIVE is the default and is omitted
-    // entirely to save bytes — the iOS app treats "ds" absent as LIVE.
-    if (data.data_status != TelemetryData::DataStatus::LIVE) {
-        addInt("ds", (int)data.data_status);
-        if (data.data_status == TelemetryData::DataStatus::STALE) {
-            addUint("age", data.data_age_ms);
-        }
+    // Roll command + quaternion — quat at 3 decimals gives ~0.06° angle
+    // error in the derived Euler display, well under the dashboard's
+    // %.1f° formatting.  Saves ~4 B per frame vs 4 decimals.
+    addFloat("rcmd", data.roll_cmd, 1);
+    addFloat("q0", data.q0, 3);
+    addFloat("q1", data.q1, 3);
+    addFloat("q2", data.q2, 3);
+    addFloat("q3", data.q3, 3);
+
+    // IMU - Gyroscope (deg/s)
+    addFloat("gx", data.gyro_x, 1);
+    addFloat("gy", data.gyro_y, 1);
+    addFloat("gz", data.gyro_z, 1);
+
+    // IMU - Low-G accelerometer (m/s^2)
+    addFloat("lx", data.low_g_x, 1);
+    addFloat("ly", data.low_g_y, 1);
+    addFloat("lz", data.low_g_z, 1);
+
+    // ── Tier 3: diagnostics / link / base station (first to drop) ─────────
+
+    // LoRa signal quality (NaN on direct connection — will be omitted)
+    addFloat("rssi", data.rssi, 0);
+    addFloat("snr", data.snr, 1);
+
+    // Base station
+    addFloat("bsoc", data.bs_soc, 1);
+    addFloat("bvol", data.bs_voltage, 2);
+    addFloat("bcur", data.bs_current, 0);
+    // Countdown to the silence-timeout close — only emitted while the log
+    // is actually open (saves ~10 B per telemetry packet when idle).  iOS
+    // renders this next to the Base Stn Log badge so the operator can see
+    // the auto-close approaching during a long quiet stretch.
+    if (data.bs_logging_active && data.bs_log_silence_remaining_s != 0xFFFF) {
+        addUint("slrm", data.bs_log_silence_remaining_s);
+    }
+
+    // Data rates
+    addFloat("rxk", data.rx_kbs, 1);
+    addFloat("wrk", data.wr_kbs, 1);
+    addUint("frx", data.frames_rx);
+    addUint("fdr", data.frames_drop);
+
+    // IMU - High-G accelerometer (NaN on base station — will be omitted)
+    addFloat("hx", data.high_g_x, 1);
+    addFloat("hy", data.high_g_y, 1);
+    addFloat("hz", data.high_g_z, 1);
+
+    // Unit name + active log filename — variable-length and not needed live;
+    // these are the first real bytes to fall off the tail under MTU pressure
+    // (#282 explicitly calls out af/run as in-flight-droppable).
+    if (data.source_rocket_id > 0 && data.source_unit_name && data.source_unit_name[0]) {
+        addString("run", data.source_unit_name);
+    }
+    addString("af", data.active_file);
+
+    // #282: if any field was dropped to stay under the MTU window, tell the
+    // app so the partial frame isn't a silent blackout.  Space for this tag
+    // is held back in kReserve, so it always fits.
+    if (dropped) {
+        appendKey("tr");
+        buf[pos++] = '1';
     }
 
     buf[pos++] = '}';
