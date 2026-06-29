@@ -789,8 +789,11 @@ static bool bsQueryStorage(uint64_t& total, uint64_t& used)
     FATFS* fs = nullptr;
     DWORD free_clust = 0;
     if (f_getfree("0:", &free_clust, &fs) != FR_OK || fs == nullptr) return false;
-    total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
-    const uint64_t free_bytes = (uint64_t)free_clust * fs->csize * 512;
+    // Use the real sector size (fs->ssize), NOT a hardcoded 512: the external
+    // NAND mounts FAT with 4096-byte sectors (CONFIG_FATFS_SECTOR_4096), so a
+    // hardcoded 512 under-reported total/free/used by 8x (512 MB read as ~57 MB).
+    total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
+    const uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
     used = (total > free_bytes) ? (total - free_bytes) : 0;
     return true;
 }
@@ -2717,8 +2720,8 @@ static void setup_bs()
             DWORD free_clust;
             if (f_getfree("0:", &free_clust, &fs) == FR_OK)
             {
-                uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * 512;
-                uint64_t free_bytes = (uint64_t)free_clust * fs->csize * 512;
+                uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
+                uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
                 uint64_t used = total - free_bytes;
                 ESP_LOGI(TAG, "SD card mounted: %llu MB total, %llu MB used, %llu MB free",
                          (unsigned long long)(total / (1024 * 1024)),
