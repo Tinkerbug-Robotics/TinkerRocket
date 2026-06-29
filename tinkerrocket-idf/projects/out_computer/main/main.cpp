@@ -4823,9 +4823,22 @@ static void loop_oc()
             // flight log until a reboot. Post-flight ground handling can re-trip
             // the FC launch-detect and would otherwise open a bogus session that
             // only closes on power-off (-> a junk recovered_*.bin full of ground
-            // data). Reset only by an OC reboot.
+            // data). Reset by an OC reboot, or by a sim re-arm — the FC leaving
+            // LANDED, which is impossible in a real flight (terminal lockout).
             static bool oc_landed_lockout = false;
-            if (latest_rocket_state == LANDED) oc_landed_lockout = true;
+            static RocketState prev_rs_lockout = INITIALIZATION;
+            if (latest_rocket_state == LANDED)
+            {
+                oc_landed_lockout = true;
+            }
+            else if (prev_rs_lockout == LANDED)
+            {
+                // #317 sim re-arm: the FC only leaves LANDED on a deliberate new
+                // sim run (real flight is terminal), so clear the lockout to match
+                // the FC's sim-start re-arm and let the new sim flight log.
+                oc_landed_lockout = false;
+            }
+            prev_rs_lockout = latest_rocket_state;
             const bool ns_launch = latest_non_sensor_valid &&
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
             if (ns_launch && !prev_ns_launch && !oc_landed_lockout)
