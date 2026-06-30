@@ -3,15 +3,17 @@
 //  TinkerRocketApp
 //
 //  Decoded form of the FC's MagCalStatusData binary frame (issue #96).
-//  The wire frame is 26 bytes, little-endian, prefixed with a 0xCA byte
-//  on the BLE file_ops characteristic (sibling of the 0xAA scan-results
-//  prefix).  Field layout is mirrored from
+//  The current wire payload is 36 bytes, little-endian, prefixed with a
+//  0xCA byte on the BLE file_ops characteristic (sibling of the 0xAA
+//  scan-results prefix).  Field layout is mirrored from
 //  tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h
-//  — keep both in sync if the wire format ever changes.
+//  (MagCalStatusData, static_assert sizeof == 36) — keep both in sync if
+//  the wire format ever changes.
 //
-//  Older firmware ships a 22-byte payload (no coverage_mask trailer);
-//  the decoder accepts both and defaults coverageMask to 0 on old FC
-//  builds so the UI degrades to timer-based prompts.
+//  The format grew over time (22-byte → +coverage_mask → 36-byte
+//  +partial_mask); the decoder accepts the shorter legacy payloads and
+//  defaults the missing mask trailers to 0, so older FC builds degrade to
+//  timer-based prompts.
 //
 
 import Foundation
@@ -56,9 +58,9 @@ struct MagCalStatus: Equatable {
     /// shows a one-shot success banner, ABORTED dismisses to settings.
     let subType: MagCalSubType
 
-    /// Number of distinct directional wedges populated, out of 26 (3³ - 1
-    /// — the (0,0,0) center cell is unreachable for a unit vector so we
-    /// only count the 26 reachable wedges).  Hits ~26 on a clean tumble.
+    /// Number of distinct directional wedges populated, out of 32
+    /// (truncated-icosahedron tessellation, see #148 / RocketComputerTypes.h:
+    /// coverage_bins == popcount(coverage_mask)).  Hits ~32 on a clean tumble.
     let coverageBins: UInt8
 
     /// Total raw samples accumulated this run, capped at MAX_SAMPLES.
@@ -155,10 +157,11 @@ struct MagCalStatus: Equatable {
     }
 
     /// Decode the wire payload (bytes *after* the 0xCA discriminator).
-    /// Accepts both the original 22-byte layout and the 26-byte layout
-    /// that trails a uint32 coverage_mask — old firmware → coverageMask=0
-    /// and UI falls back to a timer-only prompt cycle.  Returns nil if
-    /// the buffer is too short to be the original payload.
+    /// Accepts the legacy 22-byte layout, the +coverage_mask layout, and the
+    /// current 36-byte layout (coverage_mask + partial_mask trailers); missing
+    /// trailers default to 0, so old firmware → coverageMask/partialMask = 0 and
+    /// the UI falls back to a timer-only prompt cycle.  Returns nil if the
+    /// buffer is too short to be even the original 22-byte payload.
     static func decode(_ bytes: [UInt8]) -> MagCalStatus? {
         guard bytes.count >= 22 else { return nil }
 
