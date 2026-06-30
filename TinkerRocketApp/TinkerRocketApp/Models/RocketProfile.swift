@@ -13,6 +13,15 @@
 //  factory defaults, so a freshly-created profile matches an out-of-the-box
 //  rocket.  Keep them in sync if the firmware defaults change.
 //
+//  Config export (#297): the export deliberately mirrors this full
+//  RocketProfile — the complete GUI-editable set — NOT the flight
+//  FlightSettingsData snapshot.  The two are non-overlapping supersets by
+//  design: app-only recovery fields (drogueRateFps, mainRateFps,
+//  mainDeployAltAglFt, ballisticDragK, notes, waypoint metadata) never reach
+//  the flight .bin, and snapshot-only fields (d_lpf_hz, gain-schedule params,
+//  roll_rate_set_point, IMU full-scales) aren't part of the editable profile.
+//  So a field "missing from the export" is intended, not an omission.
+//
 
 import Foundation
 
