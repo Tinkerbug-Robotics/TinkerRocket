@@ -256,6 +256,7 @@ static uint32_t launch_time_millis = 0;
 static uint32_t prelaunch_time_millis = 0;
 static uint32_t valid_gnss_start_millis = 0;
 static uint32_t landed_candidate_start_millis = 0;
+static bool landed_candidate_active = false;  // #297: explicit flag (0 collided with now_ms==0)
 static bool gnss_started = false;
 static bool ground_pressure_found = false;
 static bool out_ready = false;
@@ -3302,6 +3303,24 @@ static void loop_fc()
             ekf_imu.gyro_y = -(double)ism6_latest_si.gyro_y;
             ekf_imu.gyro_z = -(double)ism6_latest_si.gyro_z;
 
+            // #297: collect a short recent window of EKF-frame gyro so the EKF
+            // bias seed (wBias = mean gyro, valid because the pad is stationary)
+            // averages a few samples instead of one noisy sample — shrinks the
+            // pad gyro-bias startup transient.  Small window so it reflects the
+            // stationary-at-init state, not earlier pad handling.
+            static constexpr int kInitGyroWin = 16;
+            static double initGyroRing[3][kInitGyroWin] = {};
+            static int initGyroHead = 0;
+            static int initGyroN = 0;
+            if (!ekf_initialized)
+            {
+                initGyroRing[0][initGyroHead] = ekf_imu.gyro_x;
+                initGyroRing[1][initGyroHead] = ekf_imu.gyro_y;
+                initGyroRing[2][initGyroHead] = ekf_imu.gyro_z;
+                initGyroHead = (initGyroHead + 1) % kInitGyroWin;
+                if (initGyroN < kInitGyroWin) initGyroN++;
+            }
+
             // ── Build EKF input: Magnetometer in FRD body frame ──
             // Prefer IIS2MDC (new PCB) when its samples are flowing, fall
             // back to MMC5983MA on legacy boards. Only one is populated on
@@ -3443,6 +3462,21 @@ static void loop_fc()
                 // can't trigger an init.  EKF init resumes naturally after
                 // the cal session ends and rocket_state returns to READY.
                 if (have_ref_pos && gnss_gate3_init) {
+                    // #297: seed wBias off the recent-window gyro average rather
+                    // than the single live sample (see the ring above).
+                    if (initGyroN >= 8)
+                    {
+                        double gsum[3] = {0.0, 0.0, 0.0};
+                        for (int k = 0; k < initGyroN; k++)
+                        {
+                            gsum[0] += initGyroRing[0][k];
+                            gsum[1] += initGyroRing[1][k];
+                            gsum[2] += initGyroRing[2][k];
+                        }
+                        ekf_imu.gyro_x = gsum[0] / initGyroN;
+                        ekf_imu.gyro_y = gsum[1] / initGyroN;
+                        ekf_imu.gyro_z = gsum[2] / initGyroN;
+                    }
                     ekf.init(ekf_imu, ekf_gnss, ekf_mag);
 
                     // Pad attitude initialization: quaternion from measured
@@ -5245,11 +5279,17 @@ static void loop_fc()
                         ESP_LOGI(TAG, "[EKF] Ref pos frozen (launch): n=%lu",
                                       (unsigned long)ref_pos_count);
                     }
-                    ground_pressure_pa = have_bmp_si ? bmp_latest_si.pressure : ground_pressure_pa;
+                    // #297: do NOT re-capture ground pressure here.  launch_flag
+                    // lags real liftoff, so bmp_latest_si is already a few m up and
+                    // would bias AGL (and the ALTITUDE_ON_DESCENT main-deploy height)
+                    // low for the whole flight.  Keep the reference frozen from
+                    // READY/PRELAUNCH — the baro path stops updating ground_pressure_pa
+                    // once state leaves INIT/READY/MAG_CAL, so it's already the last
+                    // on-pad value here.
                     max_alt_m = 0.0f;
                     max_speed_mps = 0.0f;
                     landed_actions_done = false;
-                    landed_candidate_start_millis = 0;
+                    landed_candidate_active = false;   // #297
                     // Clear apogee/landing flags so they start clean at launch.
                     // launch_flag is intentionally preserved (it got us here).
                     // Per #142/#143: the original reset cleared only baro and
@@ -5573,9 +5613,10 @@ static void loop_fc()
                     kinematics.alt_landed_flag && (fabsf(roll_rate_dps) < 30.0f);
                 if (landing_conditions)
                 {
-                    if (landed_candidate_start_millis == 0U)
+                    if (!landed_candidate_active)   // #297: bool, not a now_ms==0 sentinel
                     {
                         landed_candidate_start_millis = now_ms;
+                        landed_candidate_active = true;
                     }
                     if (now_ms - landed_candidate_start_millis > 2000U)
                     {
@@ -5583,13 +5624,13 @@ static void loop_fc()
                         ESP_LOGI(TAG, "[STATE] INFLIGHT -> LANDED");
                     }
                 }
-                else if (landed_candidate_start_millis != 0U &&
+                else if (landed_candidate_active &&
                          (now_ms - landed_candidate_start_millis > 2500U))
                 {
                     // Only reset debounce timer if conditions have been false
                     // for >500ms beyond the 2s window — prevents single-frame
                     // noise from restarting the entire landing countdown.
-                    landed_candidate_start_millis = 0U;
+                    landed_candidate_active = false;
                 }
 
                 // Safety timeout: force LANDED if flight exceeds 10 minutes
@@ -5699,7 +5740,7 @@ static void loop_fc()
                 out_ready = false;
                 end_flight_sent = false;
                 landed_actions_done = false;
-                landed_candidate_start_millis = 0;
+                landed_candidate_active = false;   // #297
                 kinematics.reset();
                 ekf_initialized = false;
                 have_ref_pos = false;
