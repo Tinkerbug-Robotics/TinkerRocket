@@ -5144,8 +5144,11 @@ static void loop_fc()
             }
             else if (servo_enabled)
             {
-                // EKF not yet initialized — hold neutral and log why
-                servo_control.control(0.0f);
+                // EKF not yet initialized — hold neutral and log why.  #270:
+                // centre the fins (no PID) and reset the integral, so nothing
+                // leaks into the "neutral" output or into control once it starts.
+                servo_control.stowControl();
+                servo_control.resetPID();
                 static uint32_t gt_wait_print_ms = 0;
                 if (now_ms - gt_wait_print_ms >= 2000U)
                 {
@@ -5353,8 +5356,12 @@ static void loop_fc()
                     // Delay roll control activation after launch if configured
                     if (reboot_recovery || t_since_launch_ms < roll_delay_ms)
                     {
-                        // Hold fins neutral until delay/settle elapses
-                        servo_control.control(0.0f);
+                        // Hold fins neutral until delay/settle elapses.  #270:
+                        // centre the fins (no PID) and reset the integral — the
+                        // pre-roll_delay window must not accumulate an offset that
+                        // would jerk the fins when roll control activates.
+                        servo_control.stowControl();
+                        servo_control.resetPID();
                     }
                     else if (ism6_fresh)   // #259: stale IMU -> neutral-hold branch below
                     {
@@ -5554,8 +5561,12 @@ static void loop_fc()
                     }
                     else
                     {
-                        // IMU data lost mid-flight — hold fins at neutral (0° command)
-                        servo_control.control(0.0f);
+                        // IMU data lost mid-flight — hold fins at neutral.  #270:
+                        // centre the fins (no PID) and reset the integral, so a
+                        // stale pre-loss integral can't deflect them and control
+                        // resumes clean if the IMU recovers.
+                        servo_control.stowControl();
+                        servo_control.resetPID();
                     }
                 }
                 const bool landing_conditions =
