@@ -35,6 +35,12 @@ constexpr uint8_t  GPS_APOGEE_COUNT_HI      = 4;
 // *velocity* is real-time; GPS *position* lags ~4 s and dives during boost
 // (#237/#242), so the old altitude-below-peak test fired wildly off.
 constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
+// Max age of the last GPS fix for GPS to count as an apogee voter (#262).
+// Deliberately tight — boost-to-apogee is only ~6-8 s and GPS runs ~18 Hz
+// (~55 ms/fix, worst observed gap ~136 ms), so a fix older than this is stale
+// for an apogee decision (a 5 s-old fix would be from the launch rail).  Much
+// tighter than the landing vote's 5 s gate, which is a slower ground event.
+constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 
 // Launch accel-only fallback (#258): when the baro is INVALID, latch launch on
 // sustained high-G alone.  Deliberately a much higher bar than the baro-
@@ -513,12 +519,22 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 if (alt_apogee_flag) passed++;
             }
 
-            // GPS — NOT a voter (#237/#242).  GPS apogee is unreliable during
-            // boost on this hardware (RP III: position AND Doppler velocity
-            // corrupted — vel_u noise to -38 m/s while climbing — at fix=3 with
-            // good reported accuracy), so it false-fires.  gps_apogee_flag is
-            // still computed + logged as a diagnostic, just excluded from the
-            // vote so it can't move pyro timing.
+            // GPS (Doppler) — non-EKF voter, available on a FRESH fix (#262).
+            // Re-enabled after the GNSS dynamic-model change fixed the boost
+            // corruption that originally forced its exclusion (#237/#242): the
+            // detector is post-burnout only, velocity-based (no laggy-altitude
+            // gate), and requires GPS_APOGEE_COUNT_HI sustained descending
+            // samples, so a transient can't fire it.  Being non-EKF, it restores
+            // voter diversity exactly when the EKF voters and/or baro are at
+            // risk — baro mach-locked-out (the #262 common-mode case) or a
+            // degraded EKF.  Same 5 s freshness gate as the landing vote.
+            const bool gps_fresh = gps_available_ &&
+                                   (millis() - last_gps_time_ms_) < GPS_APOGEE_FRESH_MS;
+            if (gps_fresh)
+            {
+                available++;
+                if (gps_apogee_flag) passed++;
+            }
 
             // Pitch (EKF) — available only when the EKF is healthy
             if (ekf_healthy)
@@ -527,9 +543,17 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 if (pitch_apogee_flag) passed++;
             }
 
-            // N-1 of N, floor of 2 concurring.  3 healthy → need 2; 2 healthy
-            // → need both; < 2 healthy → cannot fire (see Layer-2 backstop).
-            if (available >= 2 && passed >= 2 && passed >= (available - 1))
+            // Quorum: a floor of 2 concurring voters, then N-1 of N — but relax
+            // to N-2 once there are > 3 voters (#262).  Adding GPS as a 4th voter
+            // under a strict N-1 would turn the nominal 2-of-3 into 3-of-4 and
+            // *delay* apogee (observed +0.56 s in flight replay); N-2-when-N>3
+            // keeps 4-voter sensitivity at 2-of-4 (== the old 2-of-3) while the
+            // 2-concurring floor still bars any single-sensor trigger.  Three or
+            // fewer voters (incl. the mach-lockout case: vel+gps+pitch) stay at
+            // N-1 → 2-of-3, with GPS supplying the non-EKF diversity.
+            const uint8_t need = (available > 3) ? (uint8_t)(available - 2)
+                                                 : (uint8_t)(available - 1);
+            if (available >= 2 && passed >= 2 && passed >= need)
             {
                 apogee_flag = true;
             }

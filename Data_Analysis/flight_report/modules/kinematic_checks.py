@@ -96,11 +96,14 @@ def _replay(records):
     latest_vel = (0.0, 0.0, 0.0)
     latest_roll_rate = 0.0
     latest_gps_alt = 0.0
+    latest_gps_vel_u = 0.0
     latest_pitch_rad = math.pi / 2
     burnout = False
     mach_locked_out = False
     new_baro = False
     new_gps = False
+    gvu_t: list[float] = []   # GNSS Doppler vert-velocity (for true-apogee xing)
+    gvu_v: list[float] = []
 
     sim_fires: dict[str, float] = {}
     raw_palt_t: list[float] = []
@@ -127,8 +130,11 @@ def _replay(records):
             continue
         if kind == "gnss":
             latest_gps_alt = float(r["alt_m"])
+            latest_gps_vel_u = float(r["vel_u"])
             new_gps = True
             gps_pass_t.append((t_us - t0_us) / 1e6)
+            gvu_t.append((t_us - t0_us) / 1e6)
+            gvu_v.append(latest_gps_vel_u)
             continue
         if kind == "ns":
             latest_pos = (r["e_pos"], r["n_pos"], r["u_pos"])
@@ -157,6 +163,7 @@ def _replay(records):
             roll_rate=latest_roll_rate,
             new_baro=new_baro,
             gps_altitude=latest_gps_alt,
+            gps_vel_u=latest_gps_vel_u,
             new_gps=new_gps,
             pitch_rad=latest_pitch_rad,
             burnout_detected=burnout,
@@ -205,7 +212,32 @@ def _replay(records):
         "gps_periods":   _periods(gps_pass_t, gps_pass_v),
         "max_altitude":  float(kc.max_altitude),
         "max_speed":     float(kc.max_speed),
+        # True apogee = GNSS Doppler vertical-velocity zero-crossing (after
+        # ascent).  Trusted over the raw-baro peak, which lags GNSS by 0.3-1.3 s
+        # and is spike-prone (#112).  None when there is no usable GNSS.
+        "true_apogee_t": _gnss_vel_zero_apogee(gvu_t, gvu_v),
     }
+
+
+def _gnss_vel_zero_apogee(t, vu):
+    """Apogee = descending GNSS Doppler vert-velocity zero-crossing, gated to
+    after the vehicle clearly ascended (vu>10 m/s) so on-pad noise is skipped.
+    A 5-sample median de-spikes vu first."""
+    if len(t) < 6:
+        return None
+    half = 2
+    sm = [sorted(vu[max(0, i - half):min(len(vu), i + half + 1)])[
+              (min(len(vu), i + half + 1) - max(0, i - half)) // 2]
+          for i in range(len(vu))]
+    ascended = False
+    for i in range(1, len(sm)):
+        if sm[i - 1] > 10.0:
+            ascended = True
+        if ascended and sm[i - 1] >= 0.0 and sm[i] < 0.0:
+            denom = sm[i - 1] - sm[i]
+            f = (sm[i - 1] / denom) if denom else 0.0
+            return float(t[i - 1] + f * (t[i] - t[i - 1]))
+    return None
 
 
 # Map sim flag name -> logged flag name produced by logged_flag_times()
@@ -252,11 +284,19 @@ def _plot_apogee_voting(res, title_suffix=""):
         ax_alt.plot(t_raw, v_raw, color="lightgray", lw=0.7, label="raw palt")
     ax_alt.plot(t_sim, v_sim, color="black", lw=0.9, label="KF alt_est")
 
-    # True apogee = peak of raw palt
+    # True apogee = GNSS Doppler vel=0 (trusted).  Fall back to the raw-baro
+    # peak only when there is no GNSS; show the baro peak separately so its
+    # lag vs GNSS (#112) is visible rather than mistaken for the truth.
+    true_t = res.get("true_apogee_t")
+    if true_t is not None:
+        ax_alt.axvline(true_t, color="black", ls=":", lw=1.4,
+                       label=f"true apogee (GNSS v=0) {true_t:.2f}s")
     if v_raw:
         peak_idx = max(range(len(v_raw)), key=lambda i: v_raw[i])
-        ax_alt.axvline(t_raw[peak_idx], color="dimgray", ls=":", lw=0.8,
-                       label=f"true apogee {t_raw[peak_idx]:.2f}s")
+        baro_pk_t = t_raw[peak_idx]
+        ax_alt.axvline(baro_pk_t, color="dimgray", ls=":", lw=0.8,
+                       label=("baro peak (lags)" if true_t is not None
+                              else "true apogee") + f" {baro_pk_t:.2f}s")
 
     # Sub-detector fire markers
     fire_marker = {"vel": "s", "baro": "^", "gps": "o", "pitch": "*"}
