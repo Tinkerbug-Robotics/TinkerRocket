@@ -10,6 +10,11 @@ on:
       - 'tinkerrocket-idf/**'
       - '.github/workflows/firmware-build.yml'
 
+# The `secrets` context isn't available in step-level `if:`, so surface the
+# private-submodule token as a boolean here for the force-checkout step below.
+env:
+  HAS_GUIDANCE_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,13 +30,28 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          # TR_GuidancePN is a private submodule. Recurse only when the
-          # TR_GUIDANCEPN_TOKEN repo secret is present. Without it, the
-          # submodule is skipped and flight_computer's CMakeLists picks
-          # up the TR_GuidancePN_Stub component instead (no-op API).
-          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
-          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
+
+      # TR_GuidancePN is a private submodule marked `update = none` in
+      # .gitmodules so recursive clones (Xcode Cloud, casual
+      # `--recurse-submodules`) skip the private repo instead of failing on it
+      # (#255). On trusted branches the TR_GUIDANCEPN_TOKEN secret is present
+      # and we DO want real guidance coverage, so force the checkout here,
+      # overriding the `none` update mode. Forks / PRs without the token skip
+      # this step and flight_computer's CMakeLists picks up the
+      # TR_GuidancePN_Stub component instead (no-op API).
+      - name: Check out private TR_GuidancePN (trusted branches only)
+        if: ${{ env.HAS_GUIDANCE_TOKEN == 'true' }}
+        env:
+          TR_GUIDANCEPN_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN }}
+        run: |
+          # actions/checkout marks the workspace safe for its own git calls;
+          # this manual submodule call needs the same exception because the
+          # espressif container runs git as a different uid than the workspace
+          # owner ("detected dubious ownership" otherwise).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${TR_GUIDANCEPN_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
+            submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
 
       - name: Build ${{ matrix.project }}
         working-directory: tinkerrocket-idf/projects/${{ matrix.project }}

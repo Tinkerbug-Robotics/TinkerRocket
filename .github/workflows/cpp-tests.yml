@@ -28,9 +28,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
-          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
+
+      # TR_GuidancePN is marked `update = none` in .gitmodules so recursive
+      # clones (Xcode Cloud, casual `--recurse-submodules`) skip the private
+      # repo instead of failing on it (#255). On trusted branches the token is
+      # present and we want guidance coverage, so force the checkout here,
+      # overriding the `none` update mode. Forks / PRs without the token skip
+      # this step and guidance tests are simply not discovered
+      # (tests_cpp/CMakeLists.txt handles that gracefully).
+      - name: Check out private TR_GuidancePN (trusted branches only)
+        if: ${{ env.HAS_GUIDANCE_TOKEN == 'true' }}
+        env:
+          TR_GUIDANCEPN_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN }}
+        run: |
+          # Match actions/checkout's safe.directory exception for this manual
+          # submodule call (harmless on the non-container runner).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${TR_GUIDANCEPN_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
+            submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
 
       - name: Configure
         run: cmake -S tests_cpp -B tests_cpp/build -DCMAKE_BUILD_TYPE=Debug
@@ -46,9 +62,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: ${{ secrets.TR_GUIDANCEPN_TOKEN != '' && 'recursive' || 'false' }}
-          token: ${{ secrets.TR_GUIDANCEPN_TOKEN || github.token }}
+
+      # See the cpp-tests job above — same private-submodule handling (#255).
+      - name: Check out private TR_GuidancePN (trusted branches only)
+        if: ${{ env.HAS_GUIDANCE_TOKEN == 'true' }}
+        env:
+          TR_GUIDANCEPN_TOKEN: ${{ secrets.TR_GUIDANCEPN_TOKEN }}
+        run: |
+          # Match actions/checkout's safe.directory exception for this manual
+          # submodule call (harmless on the non-container runner).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global url."https://x-access-token:${TR_GUIDANCEPN_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
+            submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
 
       - uses: actions/setup-python@v5
         with:
