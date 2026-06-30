@@ -317,7 +317,16 @@ struct ConnectedDashboardView: View {
             )
         }
 
-        if !device.isBaseStation && !device.telemetry.pwr_pin_on {
+        if device.deviceType == .unknown {
+            // --- Role not yet known (#330): neutral "identifying" state.
+            //     The connected-device view used to fail *open* to the rocket
+            //     Power-On screen for anything not positively a base station,
+            //     so `.unknown` (name parse miss, or the window before
+            //     config_identity "dt" resolves) wrongly showed a rocket UI.
+            //     Drive the screen off a *positive* role instead, with an
+            //     explicit identifying state for the unresolved case.
+            IdentifyingDeviceView(deviceName: device.displayName)
+        } else if device.deviceType == .rocket && !device.telemetry.pwr_pin_on {
             // --- Powered OFF (rocket only): show battery + power on button ---
             BatteryView(telemetry: device.telemetry, isBaseStation: false)
 
@@ -468,6 +477,35 @@ struct ConnectedDashboardView: View {
 }
 
 // MARK: - Component Views
+
+/// Neutral placeholder shown while a connected device's role is still
+/// `.unknown` (#330) — i.e. its advertised name didn't parse to a role and
+/// the `config_identity` "dt" readback hasn't arrived yet.  This replaces the
+/// old fail-open behaviour where any non-base-station device (including the
+/// not-yet-identified state) landed on the rocket "Power On" screen.  As soon
+/// as the role resolves to .rocket or .baseStation the parent re-renders into
+/// the appropriate screen, so this is normally only visible for a beat.
+struct IdentifyingDeviceView: View {
+    let deviceName: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle())
+            Text("Identifying device…")
+                .font(.headline)
+            if !deviceName.isEmpty {
+                Text(deviceName)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(10)
+    }
+}
 
 struct ConnectionStatusView: View {
     let isConnected: Bool
