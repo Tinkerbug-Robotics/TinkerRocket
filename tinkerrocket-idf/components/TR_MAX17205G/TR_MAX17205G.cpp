@@ -28,7 +28,7 @@ bool TR_MAX17205G::readReg(uint8_t reg, uint16_t& value)
     if (_dev == nullptr) return false;
     uint8_t buf[2] = {};
     esp_err_t err = i2c_master_transmit_receive(_dev, &reg, 1, buf, 2,
-                                                pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+                                                I2C_TIMEOUT_MS /* #297: IDF-v6 i2c_master_* takes ms, not ticks */);
     if (err != ESP_OK) return false;
     value = ((uint16_t)buf[1] << 8) | buf[0];  // Little-endian on the wire
     return true;
@@ -40,7 +40,7 @@ bool TR_MAX17205G::writeReg(uint8_t reg, uint16_t value)
     uint8_t buf[3] = { reg,
                        (uint8_t)(value & 0xFF),
                        (uint8_t)((value >> 8) & 0xFF) };
-    return i2c_master_transmit(_dev, buf, 3, pdMS_TO_TICKS(I2C_TIMEOUT_MS)) == ESP_OK;
+    return i2c_master_transmit(_dev, buf, 3, I2C_TIMEOUT_MS /* #297: IDF-v6 i2c_master_* takes ms, not ticks */) == ESP_OK;
 }
 
 // ---------------------------------------------------------------------------

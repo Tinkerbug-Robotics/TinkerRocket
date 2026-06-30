@@ -1028,6 +1028,7 @@ static constexpr size_t CMD_RING_SIZE = 1024;
 static uint8_t cmd_ring[CMD_RING_SIZE];
 static size_t cmd_head = 0;
 static size_t cmd_tail = 0;
+static uint32_t cmd_ring_drop_count = 0;  // #297: bytes dropped-oldest on overflow (visibility; CRC still rejects the corrupted result)
 
 static inline size_t cmdLen()
 {
@@ -1039,7 +1040,10 @@ static inline void cmdPush(uint8_t b)
     cmd_ring[cmd_head] = b;
     cmd_head = (cmd_head + 1U) % CMD_RING_SIZE;
     if (cmd_head == cmd_tail)
-        cmd_tail = (cmd_tail + 1U) % CMD_RING_SIZE;
+    {
+        cmd_tail = (cmd_tail + 1U) % CMD_RING_SIZE;  // drop oldest on overflow
+        cmd_ring_drop_count++;                       // #297
+    }
 }
 static inline uint8_t cmdPeek(size_t i)
 {
@@ -3779,9 +3783,10 @@ static void printStats()
     ESP_LOGI("OC", "i2c raw reads/bytes=%lu/%llu",
                   (unsigned long)raw_i2c_reads,
                   (unsigned long long)raw_i2c_bytes);
-    ESP_LOGI("OC", "i2c raw_rx=%.1f KB/s | ring_drops=%lu | parser_drops resync/len/crc=%llu/%llu/%lu",
+    ESP_LOGI("OC", "i2c raw_rx=%.1f KB/s | ring_drops=%lu | cmd_drops=%lu | parser_drops resync/len/crc=%llu/%llu/%lu",
                   (double)raw_rx_kbs,
                   (unsigned long)rx_ring_overflow_drops,
+                  (unsigned long)cmd_ring_drop_count,
                   (unsigned long long)parser_resync_drops,
                   (unsigned long long)parser_len_drops,
                   (unsigned long)frames_bad_crc);
@@ -4684,10 +4689,19 @@ static void setup_oc()
                                 INA230_ConvTime::CT_332us,
                                 INA230_ConvTime::CT_332us,
                                 INA230_Mode::POWER_DOWN);
-        ina230.calibrate(INA230_R_SHUNT_OHM, INA230_CURRENT_LSB_A);
-        ina230.enableConversionReadyAlert(true);  // enable CVRF bit for polling
-        ina230_ok = true;
-        ESP_LOGI("PWR", "INA230 OK (triggered mode, CVRF polling)");
+        // #297: gate ina230_ok on a successful calibrate so a bad calibration
+        // (guarded divide returns ERROR) can't leave us reading a flat 0 A with
+        // an "OK" status.
+        if (ina230.calibrate(INA230_R_SHUNT_OHM, INA230_CURRENT_LSB_A) == TR_INA230_OK)
+        {
+            ina230.enableConversionReadyAlert(true);  // enable CVRF bit for polling
+            ina230_ok = true;
+            ESP_LOGI("PWR", "INA230 OK (triggered mode, CVRF polling)");
+        }
+        else
+        {
+            ESP_LOGW("PWR", "INA230 calibrate failed — battery monitoring disabled");
+        }
     }
     else
     {

@@ -104,6 +104,11 @@ TR_INA230Status TR_INA230::setCalibration(uint16_t cal)
 
 TR_INA230Status TR_INA230::calibrate(float r_shunt_ohm, float current_lsb_A)
 {
+    // #297: guard the divide — a zero/negative LSB or shunt yields inf/NaN and a
+    // bogus calibration that would read a flat 0 A while still reporting OK.
+    if (current_lsb_A <= 0.0f || r_shunt_ohm <= 0.0f)
+        return TR_INA230_ERROR;
+
     _current_lsb_A = current_lsb_A;
 
     // CAL = 0.00512 / (Current_LSB * R_SHUNT)   (Equation 1)
@@ -245,7 +250,7 @@ TR_INA230Status TR_INA230::writeRegister(uint8_t reg, uint16_t value)
     buf[1] = (uint8_t)(value >> 8);    // MSByte
     buf[2] = (uint8_t)(value & 0xFF);  // LSByte
 
-    esp_err_t err = i2c_master_transmit(_dev, buf, 3, pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+    esp_err_t err = i2c_master_transmit(_dev, buf, 3, I2C_TIMEOUT_MS /* #297: IDF-v6 i2c_master_* takes ms, not ticks */);
     return (err == ESP_OK) ? TR_INA230_OK : TR_INA230_ERROR;
 }
 
@@ -253,7 +258,7 @@ TR_INA230Status TR_INA230::readRegister(uint8_t reg, uint16_t *value)
 {
     uint8_t data[2] = {0, 0};
     esp_err_t err = i2c_master_transmit_receive(_dev, &reg, 1, data, 2,
-                                                 pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+                                                 I2C_TIMEOUT_MS /* #297: IDF-v6 i2c_master_* takes ms, not ticks */);
     if (err != ESP_OK) return TR_INA230_ERROR;
     *value = ((uint16_t)data[0] << 8) | data[1];
     return TR_INA230_OK;
