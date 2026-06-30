@@ -245,7 +245,7 @@ struct SettingsView: View {
 
         if let p = store.activeProfile {
             Section(header: Text("Summary")) {
-                summaryRow("Control mode", p.useAngleControl ? "Track Profile" : "Null Roll")
+                summaryRow("Control mode", p.controlModeLabel)
                 summaryRow("Camera", cameraLabel(p.cameraType))
                 summaryRow("IMU mounting", p.imuOrientSetting == 0xFF
                     ? "Auto" : "Nose \(FlightSettingsData.b2rName(code: p.imuOrientSetting))")

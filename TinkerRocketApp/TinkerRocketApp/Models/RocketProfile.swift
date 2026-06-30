@@ -197,6 +197,19 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var magCal: MagCalData? = nil
     var sensorCal: SensorCalData? = nil
 
+    // MARK: Summary helpers
+
+    /// Human label for the active control mode, shown in the dashboard header
+    /// and the settings summary.  Guidance is the *top-level* mode (it
+    /// rate-nulls roll and ignores the roll profile, so the Null Roll /
+    /// Track Profile sub-mode is moot); otherwise it's Roll Control, whose
+    /// sub-mode is angle-track vs null-rate.  Mirrors `controlModeBinding` /
+    /// the Control Mode picker in SettingsView so summaries can't drift from it.
+    var controlModeLabel: String {
+        if guidanceEnabled { return "Guidance" }
+        return useAngleControl ? "Track Profile" : "Null Roll"
+    }
+
     /// A profile with all firmware factory defaults and the given name.
     static func makeDefault(name: String) -> RocketProfile {
         RocketProfile(name: name)
