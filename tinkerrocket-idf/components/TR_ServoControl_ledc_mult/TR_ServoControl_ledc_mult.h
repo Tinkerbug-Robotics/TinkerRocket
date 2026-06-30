@@ -121,6 +121,9 @@ public:
 private:
     // update all four servos to a single nominal pulse
     void setPulse(int base_pulse_us);
+    // drive ONE servo channel to a nominal pulse (bias applied); used by
+    // setPulse() and by wiggle() to sequence the servos one at a time
+    void setPulseChannel(int channel, int base_pulse_us);
     int  saturateCommand(int command);
     // Map a physical fin angle (deg) to a servo pulse (us) via the fin
     // calibration (fin_min_deg_->servo_min_us, fin_max_deg_->servo_max_us). #267

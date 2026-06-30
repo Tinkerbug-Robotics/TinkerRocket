@@ -112,16 +112,23 @@ void TR_ServoControl::setFinCalibration(float finMinDeg, float finMaxDeg) {
 }
 
 void TR_ServoControl::wiggle() {
-    // sweep through min/mid/max for all servos
-    //for (int i = 0; i < 4; ++i) {
-        setPulse(((servo_min_us + servo_max_us) / 2)); // mid
-        delay(1250);
-        setPulse(servo_min_us); // min
-        delay(1500);
-        setPulse(servo_max_us); // max
-        delay(1500);
-        setPulse(((servo_min_us + servo_max_us) / 2)); // back to mid
-    //}
+    // Boot "servos alive" check.  Wiggle each servo individually, in order
+    // 0->1->2->3, so only ONE servo draws movement (inrush) current at a time.
+    // Sweeping all four at once stacked four inrush spikes on the shared rail,
+    // which could sag it enough to brown out the camera on the pad — a
+    // bandaid for that, until the next PCB's servo-power MOSFET.  Each servo
+    // returns to centre before the next begins; the others hold their
+    // begin()-set centre while one sweeps.
+    const int mid = (servo_min_us + servo_max_us) / 2;
+    constexpr int kSettleMs = 350;  // ample for an 8 g servo to traverse + be seen
+    for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
+        setPulseChannel(i, servo_min_us);  // min
+        delay(kSettleMs);
+        setPulseChannel(i, servo_max_us);  // max
+        delay(kSettleMs);
+        setPulseChannel(i, mid);           // back to centre
+        delay(kSettleMs);
+    }
 }
 
 void TR_ServoControl::stowControl() {
@@ -167,28 +174,34 @@ int TR_ServoControl::saturateCommand(int command) {
     return command;
 }
 
-void TR_ServoControl::setPulse(int base_pulse_us) {
-    // base_pulse_us is computed from control(), 0 means “centre”
+void TR_ServoControl::setPulseChannel(int channel, int base_pulse_us) {
+    // Drive a single servo channel.  base_pulse_us is the nominal pulse, 0
+    // meaning “centre”; the per-servo bias is applied here exactly as setPulse
+    // does, so driving one channel matches driving all.
+    if (channel < 0 || channel >= LEDC_CHANNEL_COUNT) return;
     is_idle_ = false;  // commanding a pulse resumes PWM after idle()
+
+    int pulse_us = (base_pulse_us == 0) ? servo_mid_us_[channel]
+                                        : base_pulse_us + servo_bias_us_[channel];
+    pulse_us = saturateCommand(pulse_us);
+
+    uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
+    uint32_t duty     = (static_cast<uint32_t>(pulse_us)
+                        * static_cast<uint32_t>(servo_hz)
+                        * max_duty) / 1000000u;
+    ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[channel], duty);
+    ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[channel]);
+
+    // record last command from servo0’s perspective
+    if (channel == 0) roll_cmd_us = pulse_us;
+}
+
+void TR_ServoControl::setPulse(int base_pulse_us) {
+    // base_pulse_us is computed from control(), 0 means “centre”.  Drive all
+    // four channels (intentionally simultaneous — the flight control path
+    // updates every servo each tick).
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        // compute final pulse for this servo by adding its bias
-        int pulse_us;
-        if (base_pulse_us == 0) {
-            pulse_us = servo_mid_us_[i];
-        } else {
-            pulse_us = base_pulse_us + servo_bias_us_[i];
-        }
-        pulse_us = saturateCommand(pulse_us);
-
-        uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
-        uint32_t duty     = (static_cast<uint32_t>(pulse_us)
-                            * static_cast<uint32_t>(servo_hz)
-                            * max_duty) / 1000000u;
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], duty);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
-
-        // record last command from servo0’s perspective
-        if (i == 0) roll_cmd_us = pulse_us;
+        setPulseChannel(i, base_pulse_us);
     }
 }
 
