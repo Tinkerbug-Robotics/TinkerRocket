@@ -1377,13 +1377,23 @@ static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payloa
                               uint8_t target_rid = 0xFF,
                               uint8_t retries = config::UPLINK_RETRIES)
 {
+    // #286: reject (do NOT truncate) an oversized payload.  Truncating would
+    // send a malformed command with a wrong-but-consistent length and no error
+    // surfaced.  Checked first so a rejected command also leaves any
+    // already-pending uplink untouched.
+    constexpr size_t kMaxUplinkPayload = sizeof(uplink_buf) - 6 - 1;  // header + 1 B slack = 33
+    if (payload_len > kMaxUplinkPayload)
+    {
+        ESP_LOGE(TAG, "[UPLINK] cmd=%u payload %u B exceeds max %u — REJECTED, not queued",
+                 cmd, (unsigned)payload_len, (unsigned)kMaxUplinkPayload);
+        return;
+    }
+
     if (uplink_pending)
     {
         ESP_LOGW(TAG, "[UPLINK] Discarding pending cmd=%u, replacing with cmd=%u",
                  uplink_buf[4], cmd);
     }
-
-    if (payload_len > 33) payload_len = 33;  // 40-byte buf − 6-byte header − 1 byte slack
     // Uplink format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
     uplink_buf[0] = config::UPLINK_SYNC_BYTE;  // 0xCA
     uplink_buf[1] = network_id;
