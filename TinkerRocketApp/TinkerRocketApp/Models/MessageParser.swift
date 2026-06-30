@@ -28,13 +28,16 @@ nonisolated class MessageParser {
 
     /// Parse a binary log file and extract all valid message frames
     func parseLogFile(_ url: URL) throws -> [MessageFrame] {
-        let data = try Data(contentsOf: url)
+        // #297: index a [UInt8] copy, not the Data directly — a Data slice is
+        // NOT zero-based, so raw data[i] indexing is fragile.  [UInt8] is always
+        // zero-based (matches the hardened scan/cal decoders).
+        let bytes = [UInt8](try Data(contentsOf: url))
         var frames: [MessageFrame] = []
         var index = 0
 
-        while index < data.count {
+        while index < bytes.count {
             // 1. Find preamble
-            guard let preambleIndex = findPreamble(in: data, startingAt: index) else {
+            guard let preambleIndex = findPreamble(in: bytes, startingAt: index) else {
                 // No more preambles found
                 break
             }
@@ -42,29 +45,29 @@ nonisolated class MessageParser {
             index = preambleIndex + MessageParser.PREAMBLE_SIZE
 
             // 2. Check if we have enough data for type, length, and CRC
-            guard index + 3 < data.count else {
+            guard index + 3 < bytes.count else {
                 break
             }
 
             // 3. Extract type and length
-            let type = data[index]
-            let length = Int(data[index + 1])
+            let type = bytes[index]
+            let length = Int(bytes[index + 1])
             index += 2
 
             // 4. Validate frame size
             let expectedFrameEnd = index + length + 2  // payload + CRC
-            guard expectedFrameEnd <= data.count else {
+            guard expectedFrameEnd <= bytes.count else {
                 // Incomplete frame at end of data — stop parsing
                 break
             }
 
             // 5. Extract payload
-            let payload = data.subdata(in: index..<(index + length))
+            let payload = Data(bytes[index..<(index + length)])
             index += length
 
             // 6. Extract and verify CRC
-            let crcMSB = data[index]
-            let crcLSB = data[index + 1]
+            let crcMSB = bytes[index]
+            let crcLSB = bytes[index + 1]
             let receivedCRC = (UInt16(crcMSB) << 8) | UInt16(crcLSB)
             index += 2
 
@@ -99,14 +102,14 @@ nonisolated class MessageParser {
     }
 
     /// Find the next preamble [0xAA 0x55 0xAA 0x55] starting at the given index
-    private func findPreamble(in data: Data, startingAt: Int) -> Int? {
+    private func findPreamble(in bytes: [UInt8], startingAt: Int) -> Int? {
         let preamble = MessageParser.PREAMBLE
         var index = startingAt
 
-        while index <= data.count - preamble.count {
+        while index <= bytes.count - preamble.count {
             var match = true
             for i in 0..<preamble.count {
-                if data[index + i] != preamble[i] {
+                if bytes[index + i] != preamble[i] {
                     match = false
                     break
                 }

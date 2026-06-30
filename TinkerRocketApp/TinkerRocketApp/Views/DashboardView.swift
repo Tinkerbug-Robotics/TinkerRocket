@@ -1591,7 +1591,12 @@ struct PyroChannelsView: View {
             channel: ch,
             enabled: cfg.enabled,
             armed: device.telemetry.pyro_armed,
-            continuity: device.telemetry.pyroCont(channel: ch),
+            // #297: only trust continuity from a LIVE frame.  After the
+            // stale/auto-hide window a held-over frame would otherwise keep
+            // showing green "CONT" from old data; gate to .live so a stale
+            // frame reads NO CONT (fail-safe).
+            continuity: device.telemetry.pyroCont(channel: ch)
+                        && device.telemetry.data_status == .live,
             fired: device.telemetry.pyroFired(channel: ch),
             mode: cfg.mode,
             value: cfg.value)
