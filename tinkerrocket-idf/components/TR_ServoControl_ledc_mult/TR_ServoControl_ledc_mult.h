@@ -35,6 +35,15 @@ public:
     void wiggle();
     // return servos to centre
     void stowControl();
+    // Relax the servos by stopping the PWM pulse train (0% duty -> output held
+    // low, no servo pulses).  A digital servo that honours signal loss goes
+    // limp and stops drawing holding current; one that latches keeps holding.
+    // Idempotent — only touches the hardware on the first call after a drive.
+    // Any drive command (control*/setServoAngles/stowControl/setPulse) resumes
+    // PWM automatically, so call wake() implicitly just by commanding a pulse.
+    void idle();
+    // True while the pulse train is stopped via idle().
+    bool isIdle() const { return is_idle_; }
     // set each servo to an individual angle (degrees), bypassing PID
     void setServoAngles(const float angles[4]);
     // last computed roll command (deg)
@@ -155,6 +164,11 @@ private:
 
     // Previous gain schedule scale factor (for I-term reset on large changes)
     float prev_gain_scale_ = 1.0f;
+
+    // True while idle() has stopped the pulse train.  Cleared by any drive
+    // (setPulse/setServoAngles), which re-asserts a real duty and so resumes
+    // PWM without an explicit wake step.
+    bool is_idle_ = false;
 
     // LEDC channels/timers for four servos
     static constexpr int LEDC_CHANNEL_COUNT = 4;

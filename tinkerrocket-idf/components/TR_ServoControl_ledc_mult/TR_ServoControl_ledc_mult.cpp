@@ -128,7 +128,22 @@ void TR_ServoControl::stowControl() {
     setPulse(0);
 }
 
+void TR_ServoControl::idle() {
+    // Already relaxed — don't re-issue the duty writes every loop tick.
+    if (is_idle_) return;
+    // 0% duty holds the GPIO low for the whole period: no rising edge, so the
+    // servo sees no pulse train and (if it honours signal loss) relaxes.  We
+    // stay inside the normal LEDC duty API rather than ledc_stop(), so the next
+    // setPulse()/setServoAngles() resumes pulses through the identical path.
+    for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNELS[i], 0);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNELS[i]);
+    }
+    is_idle_ = true;
+}
+
 void TR_ServoControl::setServoAngles(const float angles[4]) {
+    is_idle_ = false;  // commanding a pulse resumes PWM after idle()
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
         // Clamp to the command limit (max deflection), then map via the physical
         // fin calibration (#267) so the fin reaches the commanded *physical* angle
@@ -154,6 +169,7 @@ int TR_ServoControl::saturateCommand(int command) {
 
 void TR_ServoControl::setPulse(int base_pulse_us) {
     // base_pulse_us is computed from control(), 0 means “centre”
+    is_idle_ = false;  // commanding a pulse resumes PWM after idle()
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
         // compute final pulse for this servo by adding its bias
         int pulse_us;

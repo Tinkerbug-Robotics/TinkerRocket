@@ -5188,6 +5188,13 @@ static void loop_fc()
             }
             case READY:
             {
+                // Relax the servos on the pad: cut the pulse train so the
+                // digital servos stop drawing ~150 mA of holding current while
+                // we wait for GNSS/launch.  Re-asserted each tick (idempotent);
+                // PWM resumes automatically when INFLIGHT first commands a pulse.
+                if (servo_enabled && config::SERVO_RELAX_ON_PAD)
+                    servo_control.idle();
+
                 const bool gnss_ready = gnss_started &&
                                         (now_ms > valid_gnss_start_millis + 3000U) &&
                                         have_gnss_si &&
@@ -5206,6 +5213,12 @@ static void loop_fc()
             }
             case PRELAUNCH:
             {
+                // Stay relaxed through the pad wait; the INFLIGHT control path
+                // re-drives (and so re-energises) the servos the instant
+                // launch_flag flips below.
+                if (servo_enabled && config::SERVO_RELAX_ON_PAD)
+                    servo_control.idle();
+
                 if (kinematics.launch_flag)
                 {
                     rocket_state = INFLIGHT;
@@ -5589,7 +5602,13 @@ static void loop_fc()
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     if (servo_enabled)
                     {
-                        servo_control.stowControl();
+                        // Relax post-flight to stop the idle holding current
+                        // (the MOSFET-less interim of the pad relax); otherwise
+                        // hold centre as before.
+                        if (config::SERVO_RELAX_ON_PAD)
+                            servo_control.idle();
+                        else
+                            servo_control.stowControl();
                     }
                     // Reset guidance state
                     guidance.reset();
