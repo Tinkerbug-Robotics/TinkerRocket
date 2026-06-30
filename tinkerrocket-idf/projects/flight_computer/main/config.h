@@ -232,6 +232,17 @@ struct config
     static constexpr bool USE_SERVO_CONTROL = true;
     static constexpr bool SERVO_WIGGLE_ON_BOOT = true;
 
+    // Relax the servos (stop the PWM pulse train) whenever we're sitting on the
+    // pad in READY/PRELAUNCH and after LANDED.  The digital PTK 7308 servos hold
+    // position stiffly and draw ~150 mA each while a valid pulse train is
+    // present; cutting the pulses lets them go limp so the pad/post-flight idle
+    // draw collapses to the servos' quiescent current.  PWM (and full holding
+    // torque) resumes automatically the instant control commands them at launch.
+    // NOTE: only saves current if the servo actually relaxes on signal loss —
+    // some digital servos latch their last position regardless.  The future
+    // servo-power MOSFET is the guaranteed fix; this is the interim lever.
+    static constexpr bool SERVO_RELAX_ON_PAD = true;
+
     // EKF pad heading: compass heading of board Z+ (deg, 0=North, 90=East)
     static constexpr float PAD_HEADING_DEG = 0.0f;
 
