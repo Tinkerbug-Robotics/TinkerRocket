@@ -3073,6 +3073,12 @@ static void setup_bs()
 
 static void loop_bs()
 {
+    // #289: set when the RX path sends a (fresh) telemetry notification this
+    // iteration, so the periodic battery push below can skip a redundant second
+    // notify — two back-to-back sends double the notify pressure exactly when
+    // the queue may be full, making an RX-path drop more likely.
+    bool rx_sent_telem_this_iter = false;
+
     // Service LoRa (complete any pending TX before checking for RX)
     lora_comms.service();
     lora_comms.pollDio1();          // Fallback if DIO1 interrupt doesn't fire
@@ -3464,6 +3470,7 @@ static void loop_bs()
                     ble_telem.source_unit_name = tracked_rockets[slot].unit_name;
                 }
                 ble_app.sendTelemetry(ble_telem);
+                rx_sent_telem_this_iter = true;   // #289
                 maybeMarkOtaValid();
             }
         }
@@ -3571,8 +3578,15 @@ static void loop_bs()
                 buildBLETelemetry(empty, NAN, NAN, NAN, NAN, NAN, ble_telem);
                 ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
             }
-            ble_app.sendTelemetry(ble_telem);
-            maybeMarkOtaValid();
+            // #289: skip this push if the RX path already sent a fresher frame
+            // this iteration — the periodic push exists to keep BS stats/liveness
+            // current when no packet arrived, so it's redundant right after a
+            // fresh decode.  The battery read above still runs every period.
+            if (!rx_sent_telem_this_iter)
+            {
+                ble_app.sendTelemetry(ble_telem);
+                maybeMarkOtaValid();
+            }
 
             // Flash-space stats for the app's storage bar (every ~5 s).
             static uint32_t last_bs_storage_ms = 0;
