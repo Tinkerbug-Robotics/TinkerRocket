@@ -1278,10 +1278,11 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
+             (unsigned long)ls.rx_len_drop,
              (unsigned long)lora_low_snr_drops,
              (unsigned long)ls.isr_count,
              (int)ls.rx_mode,
