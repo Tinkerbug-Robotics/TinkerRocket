@@ -181,26 +181,125 @@ TEST_F(KinematicChecksTest, Apogee_WithBurnout_DetectsApogee) {
     EXPECT_TRUE(kc.apogee_flag);
 }
 
-// #237/#242: GPS apogee is computed + logged but is NOT a voter — on RP III the
-// GPS solution is corrupted during boost (vel_u noise to -38 m/s while climbing,
-// fix=3), so a GPS-only "apogee" must never fire the master.
-TEST_F(KinematicChecksTest, Apogee_GPSExcludedFromVote) {
+// #262: GPS is now a voter (re-enabled after the GNSS dynamic-model fix), but a
+// single concurring sensor must still never fire the master — the floor-of-2
+// quorum holds.  Drive ONLY GPS descending (others say still-ascending): the
+// flag is computed, but apogee must not latch on one voter.
+TEST_F(KinematicChecksTest, Apogee_GPSAlone_BelowQuorumFloor) {
     for (int i = 0; i < 80; i++) {           // launch
         setMockMillis(i * 2);
         callFlight(0.5f * i, 25.0f, 10.0f);
     }
     ASSERT_TRUE(kc.launch_flag);
 
-    // Post-burnout, drive ONLY GPS "descending" (gps_vel_u = -10) while the real
-    // detectors say still-ascending: EKF velocity +10, altitude climbing, nose up.
     for (int i = 0; i < 60; i++) {
         setMockMillis(200 + i * 2);
         callFlight(/*alt*/100.0f + i, /*acc*/5.0f, /*vel_u*/10.0f, /*roll*/0.0f,
                    /*gps_alt*/0.0f, /*new_gps*/true, /*pitch*/1.0f, /*burnout*/true,
                    /*baro_lockout*/false, /*gps_vel_u*/-10.0f);
     }
-    EXPECT_TRUE(kc.gps_apogee_flag)  << "GPS apogee flag should still be computed";
-    EXPECT_FALSE(kc.apogee_flag)     << "GPS must NOT vote the master apogee (#237)";
+    EXPECT_TRUE(kc.gps_apogee_flag)  << "GPS apogee flag should be computed";
+    EXPECT_FALSE(kc.apogee_flag)     << "one voter (GPS) must not meet the 2-concurring floor";
+}
+
+// #262: N-2-when-N>3 quorum.  With all four voters available, exactly TWO
+// concurring must fire (== the old 2-of-3) — NOT three.  Isolate the quorum
+// arithmetic with deterministic voters: vel (EKF v<0) and GPS (Doppler descent)
+// pass; pitch is held nose-up and baro is held at constant altitude (so it is
+// AVAILABLE — not locked, healthy — but never < peak-5, so it does not pass).
+// Under the old strict N-1 this 2-of-4 would have demanded a 3rd voter.
+TEST_F(KinematicChecksTest, Apogee_N2Quorum_TwoOfFourFires) {
+    for (int i = 0; i < 80; i++) {           // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callFlight(/*alt*/100.0f /*constant → baro available, not passing*/, 5.0f,
+                   /*vel_u*/-10.0f /*descending → vel passes*/, 0.0f,
+                   /*gps_alt*/100.0f, /*new_gps*/true,
+                   /*pitch*/1.0f /*nose-up → NOT passing*/, /*burnout*/true,
+                   /*baro_lockout*/false, /*gps_vel_u*/-10.0f /*GPS passes*/);
+    }
+    EXPECT_TRUE(kc.vel_u_apogee_flag);
+    EXPECT_TRUE(kc.gps_apogee_flag);
+    EXPECT_FALSE(kc.alt_apogee_flag) << "constant-alt baro is available but must not pass";
+    EXPECT_FALSE(kc.pitch_apogee_flag);
+    EXPECT_TRUE(kc.apogee_flag) << "2 of 4 concurring must fire under N-2 (would need 3 under N-1)";
+}
+
+// #262 CORE: during mach-lockout (baro excluded) a single EKF-voter fault would
+// sink the old 2-of-2 {vel,pitch}.  With GPS restored as a non-EKF voter the
+// vote becomes 2-of-3 {vel,gps,pitch}, so pitch+GPS carry it.  Here EKF velocity
+// is faulted (reads +5 while truly descending), pitch + GPS agree on descent.
+TEST_F(KinematicChecksTest, Apogee_GPSRescuesMachLockout_OneEKFFault) {
+    for (int i = 0; i < 80; i++) {           // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 60; i++) {           // mach-locked descent, faulted vel
+        setMockMillis(200 + i * 2);
+        callFlight(/*alt*/100.0f, 5.0f, /*vel_u*/+5.0f /*FAULT: says ascending*/,
+                   0.0f, /*gps_alt*/100.0f, /*new_gps*/true,
+                   /*pitch*/-0.5f /*descending*/, /*burnout*/true,
+                   /*baro_lockout*/true, /*gps_vel_u*/-10.0f /*descending*/);
+    }
+    EXPECT_FALSE(kc.vel_u_apogee_flag) << "faulted EKF velocity must not pass";
+    EXPECT_TRUE(kc.gps_apogee_flag);
+    EXPECT_TRUE(kc.pitch_apogee_flag);
+    EXPECT_TRUE(kc.apogee_flag) << "GPS+pitch (2-of-3) must carry during lockout (#262)";
+}
+
+// Companion: identical lockout + faulted-vel scenario but with NO GPS fix — the
+// vote falls back to 2-of-2 {vel,pitch} and CANNOT fire (the pre-#262 failure).
+TEST_F(KinematicChecksTest, Apogee_MachLockout_OneEKFFault_NoGPS_DoesNotFire) {
+    for (int i = 0; i < 80; i++) {           // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    for (int i = 0; i < 60; i++) {           // same as above, but new_gps=false
+        setMockMillis(200 + i * 2);
+        callFlight(/*alt*/100.0f, 5.0f, /*vel_u*/+5.0f, 0.0f, /*gps_alt*/0.0f,
+                   /*new_gps*/false, /*pitch*/-0.5f, /*burnout*/true,
+                   /*baro_lockout*/true, /*gps_vel_u*/0.0f);
+    }
+    EXPECT_TRUE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "without GPS, lockout+vel-fault leaves 1-of-2 — no fire";
+}
+
+// #262 freshness gate: a GPS apogee flag latched from earlier fixes must NOT
+// keep voting once the fix goes stale (> GPS_APOGEE_FRESH_MS).  Phase 1 latches
+// gps_apogee_flag (pitch not yet passing → no fire).  Phase 2 stops GPS updates
+// and lets the clock pass the freshness window while pitch starts passing: GPS
+// is now stale, so the vote is only {vel,pitch}=1 and must not fire.
+TEST_F(KinematicChecksTest, Apogee_StaleGPS_DoesNotVote) {
+    for (int i = 0; i < 80; i++) {           // launch
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    int t = 200;
+    for (int i = 0; i < 40; i++) {           // Phase 1: latch GPS (pitch nose-up)
+        setMockMillis(t); t += 2;
+        callFlight(/*alt*/100.0f, 5.0f, /*vel_u*/+5.0f, 0.0f, /*gps_alt*/100.0f,
+                   /*new_gps*/true, /*pitch*/1.0f, /*burnout*/true,
+                   /*baro_lockout*/true, /*gps_vel_u*/-10.0f);
+    }
+    ASSERT_TRUE(kc.gps_apogee_flag);
+    ASSERT_FALSE(kc.apogee_flag);
+    // Phase 2: no more GPS; jump past the freshness window; pitch now passes.
+    t += 700;                                 // > GPS_APOGEE_FRESH_MS (500) since last fix
+    for (int i = 0; i < 40; i++) {
+        setMockMillis(t); t += 2;
+        callFlight(/*alt*/100.0f, 5.0f, /*vel_u*/+5.0f, 0.0f, /*gps_alt*/0.0f,
+                   /*new_gps*/false, /*pitch*/-0.5f /*now descending*/, /*burnout*/true,
+                   /*baro_lockout*/true, /*gps_vel_u*/0.0f);
+    }
+    EXPECT_TRUE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "stale GPS must not count — only pitch passes (1-of-2)";
 }
 
 TEST_F(KinematicChecksTest, Landing_StableAlt) {
