@@ -1358,42 +1358,11 @@ static void sendCurrentConfig()
     ESP_LOGI(TAG, "[CFG] Sent identity readback (%u bytes)", (unsigned)id_json.length());
 }
 
-static void cacheServoConfig(const uint8_t* payload, size_t len)
-{
-    if (len < 14) return;
-    ServoConfigData sc;
-    memcpy(&sc, payload, std::min((size_t)len, sizeof(sc)));
-    cfg_servo_bias1 = sc.bias_us[0];
-    cfg_servo_hz    = sc.hz;
-    cfg_servo_min   = sc.min_us;
-    cfg_servo_max   = sc.max_us;
-    prefs.begin("servo", false);
-    prefs.putShort("b1",  sc.bias_us[0]);
-    prefs.putShort("hz",  sc.hz);
-    prefs.putShort("min", sc.min_us);
-    prefs.putShort("max", sc.max_us);
-    prefs.end();
-    ESP_LOGI(TAG, "[CFG] Servo config cached: bias=%d hz=%d min=%d max=%d",
-             sc.bias_us[0], sc.hz, sc.min_us, sc.max_us);
-}
-
-static void cachePIDConfig(const uint8_t* payload, size_t len)
-{
-    if (len < 20) return;
-    PIDConfigData pc;
-    memcpy(&pc, payload, std::min((size_t)len, sizeof(pc)));
-    cfg_pid_kp = pc.kp; cfg_pid_ki = pc.ki; cfg_pid_kd = pc.kd;
-    cfg_pid_min = pc.min_cmd; cfg_pid_max = pc.max_cmd;
-    prefs.begin("pid", false);
-    prefs.putFloat("kp", pc.kp);
-    prefs.putFloat("ki", pc.ki);
-    prefs.putFloat("kd", pc.kd);
-    prefs.putFloat("mn", pc.min_cmd);
-    prefs.putFloat("mx", pc.max_cmd);
-    prefs.end();
-    ESP_LOGI(TAG, "[CFG] PID config cached: Kp=%.4f Ki=%.4f Kd=%.4f [%.1f,%.1f]",
-             pc.kp, pc.ki, pc.kd, pc.min_cmd, pc.max_cmd);
-}
+// #285: cacheServoConfig() / cachePIDConfig() were removed along with the
+// servo/PID config-relay handlers that were their only callers.  The cfg_servo_*
+// / cfg_pid_* globals remain as a read-only readback (loaded from NVS at boot,
+// surfaced via sendCurrentConfig) but are no longer written from a relay path,
+// consistent with the base station never configuring the rocket.
 
 // ============================================================================
 // LoRa Uplink (relay BLE commands to OutComputer)
@@ -1440,10 +1409,18 @@ static void serviceUplink()
     {
         if (uplink_pending)
         {
-            // All retries done — service() already auto-entered RX after
-            // the last TX.  Do NOT call startReceive() here: it would reset
-            // rx_done_ and drop any downlink packet that arrived between
-            // the TX completion and this point.
+            // #285: the uplink is blind fire-and-retry — the rocket sends no
+            // command ACK, so completing all retries is NOT proof of delivery.
+            // Log it honestly so the operator does not read retry completion as
+            // success.  (Safety-relevant rocket state — pyro armed/fired,
+            // camera, logging — is confirmed separately via the rocket's own
+            // telemetry echo, not via this path.)
+            ESP_LOGW(TAG, "[UPLINK] cmd=%u: blind retries exhausted — delivery "
+                          "UNCONFIRMED (rocket sends no ACK)",
+                     (unsigned)uplink_buf[4]);
+            // service() already auto-entered RX after the last TX.  Do NOT call
+            // startReceive() here: it would reset rx_done_ and drop any downlink
+            // packet that arrived between the TX completion and this point.
             uplink_pending = false;
         }
         return;
@@ -1468,7 +1445,9 @@ static void serviceUplink()
     {
         uplink_retries_left--;
         uplink_last_tx_ms = now;
-        ESP_LOGI(TAG, "[UPLINK] TX attempt (%u remaining)", uplink_retries_left);
+        // #285: "blind" + "unconfirmed" so the log is not mistaken for an ACK.
+        ESP_LOGI(TAG, "[UPLINK] blind TX, %u attempt(s) left (unconfirmed, no ACK)",
+                 uplink_retries_left);
     }
     else
     {
@@ -3766,65 +3745,15 @@ static void loop_bs()
             startLoRaTransaction(new_freq, new_bw, new_sf, new_cr, new_pwr);
         }
     }
-    else if (ble_cmd == 12)
-    {
-        // Servo config: cache locally + relay to OutComputer via LoRa uplink
-        const uint8_t* payload = ble_app.getCommandPayload();
-        size_t payload_len = ble_app.getCommandPayloadLength();
-        if (payload_len >= sizeof(ServoConfigData))
-        {
-            cacheServoConfig(payload, payload_len);
-            buildUplinkPacket(12, payload, sizeof(ServoConfigData));
-            ESP_LOGI(TAG, "[BLE->UPLINK] Servo config relayed");
-        }
-    }
-    else if (ble_cmd == 65)
-    {
-        // Full guidance config: relay to OutComputer via LoRa uplink
-        const uint8_t* payload = ble_app.getCommandPayload();
-        size_t payload_len = ble_app.getCommandPayloadLength();
-        if (payload_len >= sizeof(GuidanceConfigData))
-        {
-            buildUplinkPacket(65, payload, sizeof(GuidanceConfigData));
-            ESP_LOGI(TAG, "[BLE->UPLINK] Guidance config relayed");
-        }
-    }
-    else if (ble_cmd == 66)
-    {
-        // Full fin layout: relay to OutComputer via LoRa uplink
-        const uint8_t* payload = ble_app.getCommandPayload();
-        size_t payload_len = ble_app.getCommandPayloadLength();
-        if (payload_len >= sizeof(FinConfigData))
-        {
-            buildUplinkPacket(66, payload, sizeof(FinConfigData));
-            ESP_LOGI(TAG, "[BLE->UPLINK] Fin layout relayed");
-        }
-    }
-    else if (ble_cmd == 13)
-    {
-        // PID config: cache locally + relay to OutComputer via LoRa uplink
-        const uint8_t* payload = ble_app.getCommandPayload();
-        size_t payload_len = ble_app.getCommandPayloadLength();
-        if (payload_len >= 20)
-        {
-            cachePIDConfig(payload, payload_len);
-            buildUplinkPacket(13, payload, 20);
-            ESP_LOGI(TAG, "[BLE->UPLINK] PID config relayed");
-        }
-    }
-    else if (ble_cmd == 14)
-    {
-        // Servo control enable/disable: cache + relay
-        const uint8_t* payload = ble_app.getCommandPayload();
-        size_t payload_len = ble_app.getCommandPayloadLength();
-        if (payload_len >= 1)
-        {
-            cfg_servo_enabled = (payload[0] != 0);
-            buildUplinkPacket(14, payload, 1);
-            ESP_LOGI(TAG, "[BLE->UPLINK] Servo control: %s",
-                     cfg_servo_enabled ? "ENABLE" : "DISABLE");
-        }
-    }
+    // #285: ble_cmd 12/13/14/65/66 (servo / PID / servo-enable / guidance /
+    // fin-layout config relay to the rocket) were removed.  The base station
+    // is a read-only display of the active rocket and never configures it: the
+    // iOS app gates all config editing to a direct rocket connection
+    // (SettingsView renders base stations read-only; ActiveRocketSyncer never
+    // pushes a profile to a BS).  These relays were therefore unreachable dead
+    // paths — and a foot-gun if a future app build ever sent config to a BS —
+    // so they are intentionally absent.  Rocket config flows app->rocket over
+    // a direct BLE link only.
     else if (ble_cmd == LORA_CMD_SET_HOP_DISABLED)
     {
         // BS-controlled hop enable/disable (#106).  Persist locally,
