@@ -171,16 +171,20 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             Form {
+                // Firmware update is device-level (not profile-level). BS and
+                // no-profile devices have no tab bar, so they each carry a
+                // single firmwareSection here. For rocket profiles it lives
+                // inside generalSections so it shows on the General tab only,
+                // not duplicated across every rocket tab (#314).
                 if device.isBaseStation {
                     baseStationSections
+                    firmwareSection
                 } else if store.activeProfile == nil {
                     noProfileSection
+                    firmwareSection
                 } else {
                     rocketSettingsSections
                 }
-                // Firmware update is device-level (not profile-level), so it
-                // sits outside the branch above and shows for BS + OC alike.
-                firmwareSection
             }
             .navigationTitle(navTitle)
             .overlay { if isInitializing { initializingOverlay } }
@@ -585,6 +589,9 @@ struct SettingsView: View {
                 }
             }
         }
+
+        // Device-level firmware update lives on the General tab only (#314).
+        firmwareSection
     }
 
     // Board→rocket orientation: 0xFF = pad auto-detect, else code = axis*4 + clock.
