@@ -67,7 +67,7 @@ struct ActiveRocketHeader: View {
     }
 
     private func keyline(_ p: RocketProfile) -> String {
-        let mode = p.useAngleControl ? "Track Profile" : "Null Roll"
+        let mode = p.controlModeLabel
         let cam: String = {
             switch p.cameraType { case 1: return "GoPro"; case 2: return "RunCam"; default: return "No cam" }
         }()
