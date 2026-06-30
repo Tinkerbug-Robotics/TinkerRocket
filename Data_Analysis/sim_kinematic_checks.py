@@ -61,6 +61,9 @@ GPS_APOGEE_COUNT_HI  = 4
 # GPS apogee now fires on sustained Doppler descent faster than this m/s
 # (#237/#242): GPS velocity is real-time, GPS position lags ~4 s.
 GPS_VEL_APOGEE_DESCENT_MPS = 1.0
+# Max age of the last GPS fix for GPS to count as an apogee voter (#262) —
+# tight, because boost-to-apogee is ~6-8 s and GPS runs ~18 Hz; mirrors firmware.
+GPS_APOGEE_FRESH_MS = 500
 
 # CHANGED (5): Landing sub-detector hysteresis thresholds.
 # Slow detectors evaluated at 1 Hz inside the existing landing_check_dt
@@ -445,7 +448,10 @@ class KinematicChecks:
             elif self.pitch_apogee_count_ == 0:
                 self.pitch_apogee_flag = False
 
-            # N-1 of N voting (TRKC.cpp:264) — master still latches once true.
+            # Dynamic vote (TRKC.cpp) — master latches once true.  NOTE: this
+            # port does not model the firmware's ekf_healthy/baro_healthy quorum
+            # (#237/#257) nor the Layer-2 baro backstop; voters are always
+            # "available" here, which matches the firmware on a healthy flight.
             if not self.apogee_flag:
                 available = 0
                 passed = 0
@@ -457,13 +463,23 @@ class KinematicChecks:
                     available += 1
                     if self.alt_apogee_flag: passed += 1
 
-                # GPS — NOT a voter (#237/#242): unreliable during boost on
-                # this hardware; gps_apogee_flag is computed + logged, excluded.
+                # GPS (Doppler) — non-EKF voter on a fresh fix (#262).  Re-added
+                # after the GNSS dynamic-model change fixed the boost corruption
+                # that forced its exclusion; restores non-EKF diversity during
+                # mach lockout / degraded EKF.  5 s freshness gate, as firmware.
+                if (self.gps_available_
+                        and (self._now_ms - self.last_gps_time_ms_) < GPS_APOGEE_FRESH_MS):
+                    available += 1
+                    if self.gps_apogee_flag: passed += 1
 
                 available += 1
                 if self.pitch_apogee_flag: passed += 1
 
-                if available >= 2 and passed >= 2 and passed >= (available - 1):
+                # Floor of 2 concurring, then N-1 of N, relaxed to N-2 once > 3
+                # voters so adding GPS as a 4th voter keeps 2-of-4 (== old 2-of-3)
+                # instead of demanding 3-of-4 and delaying apogee (#262).
+                need = (available - 2) if available > 3 else (available - 1)
+                if available >= 2 and passed >= 2 and passed >= need:
                     self.apogee_flag = True
 
         # ── Apogee rising edge: reset landing sub-flag counters (#192) ──
