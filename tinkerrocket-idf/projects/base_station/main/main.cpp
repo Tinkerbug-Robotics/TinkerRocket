@@ -3604,19 +3604,19 @@ static void loop_bs()
     }
 
     uint8_t ble_cmd = ble_app.getCommand();
-    if (ble_cmd == 2)
+    if (ble_cmd == BLE_BS_CMD_FILE_LIST)
     {
         handleFileListCommand();
     }
-    else if (ble_cmd == 3)
+    else if (ble_cmd == BLE_BS_CMD_FILE_DELETE)
     {
         handleDeleteCommand();
     }
-    else if (ble_cmd == 4)
+    else if (ble_cmd == BLE_BS_CMD_FILE_DOWNLOAD)
     {
         handleDownloadCommand();
     }
-    else if (ble_cmd == 1)
+    else if (ble_cmd == BLE_BS_CMD_CAMERA_TOGGLE)
     {
         // Camera toggle: send desired state (inverse of last known) so LoRa
         // retries are idempotent — won't toggle back and forth on the rocket.
@@ -3624,7 +3624,7 @@ static void loop_bs()
         buildUplinkPacket(1, &desired, 1);
         ESP_LOGI(TAG, "[BLE->UPLINK] Camera %s", desired ? "START" : "STOP");
     }
-    else if (ble_cmd == 23)
+    else if (ble_cmd == BLE_BS_CMD_LOGGING_TOGGLE)
     {
         // Logging toggle: starts/stops BOTH rocket flash recording (via LoRa
         // uplink) and base station SD card logging simultaneously.
@@ -3659,7 +3659,7 @@ static void loop_bs()
             }
         }
     }
-    else if (ble_cmd == 24)
+    else if (ble_cmd == BLE_BS_CMD_SERVO_TEST_ANGLES)
     {
         // Servo test angles: relay 8-byte payload to OutComputer via LoRa uplink
         const uint8_t* payload = ble_app.getCommandPayload();
@@ -3670,13 +3670,13 @@ static void loop_bs()
             ESP_LOGI(TAG, "[BLE->UPLINK] Servo test angles");
         }
     }
-    else if (ble_cmd == 25)
+    else if (ble_cmd == BLE_BS_CMD_SERVO_TEST_STOP)
     {
         // Servo test stop: relay to OutComputer via LoRa uplink
         buildUplinkPacket(25, nullptr, 0);
         ESP_LOGI(TAG, "[BLE->UPLINK] Servo test stop");
     }
-    else if (ble_cmd == 5)
+    else if (ble_cmd == BLE_BS_CMD_SIM_CONFIG)
     {
         // Sim config: relay to OutComputer via LoRa uplink
         // Payload is 16 bytes: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4]
@@ -3700,17 +3700,17 @@ static void loop_bs()
                      (double)mass_g, (double)thrust_n, (double)burn_s, (double)descent);
         }
     }
-    else if (ble_cmd == 6)
+    else if (ble_cmd == BLE_BS_CMD_SIM_START)
     {
         buildUplinkPacket(6, nullptr, 0);
         ESP_LOGI(TAG, "[BLE->UPLINK] Sim start");
     }
-    else if (ble_cmd == 7)
+    else if (ble_cmd == BLE_BS_CMD_SIM_STOP)
     {
         buildUplinkPacket(7, nullptr, 0);
         ESP_LOGI(TAG, "[BLE->UPLINK] Sim stop");
     }
-    else if (ble_cmd == 9)
+    else if (ble_cmd == BLE_BS_CMD_TIME_SYNC)
     {
         // Time sync from phone: [year_lo][year_hi][month][day][hour][minute][second]
         const uint8_t* payload = ble_app.getCommandPayload();
@@ -3735,7 +3735,7 @@ static void loop_bs()
             renameOpenLogIfSequential();
         }
     }
-    else if (ble_cmd == 10)
+    else if (ble_cmd == BLE_BS_CMD_LORA_RECONFIG)
     {
         // LoRa reconfiguration — transactional (issue #71).  The base
         // station relays the new config to every rocket on the OLD channel,
@@ -3794,13 +3794,13 @@ static void loop_bs()
             sendCurrentConfig();
         }
     }
-    else if (ble_cmd == 20)
+    else if (ble_cmd == BLE_BS_CMD_CONFIG_READBACK)
     {
         // Config readback request
         sendCurrentConfig();
     }
     // ---- Device Identity Commands ----
-    else if (ble_cmd == 40)
+    else if (ble_cmd == BLE_BS_CMD_SET_UNIT_NAME)
     {
         // Set unit name — payload is UTF-8 string, max 20 bytes
         const uint8_t* payload = ble_app.getCommandPayload();
@@ -3821,7 +3821,7 @@ static void loop_bs()
             ESP_LOGI(TAG, "[BLE] Unit name set: %s", unit_name);
         }
     }
-    else if (ble_cmd == 41)
+    else if (ble_cmd == BLE_BS_CMD_SET_NETWORK_ID)
     {
         // Set network_id — payload: [nid:1]
         const uint8_t* payload = ble_app.getCommandPayload();
@@ -3837,7 +3837,7 @@ static void loop_bs()
             ESP_LOGI(TAG, "[BLE] Network ID set: %u", (unsigned)network_id);
         }
     }
-    else if (ble_cmd == 50)
+    else if (ble_cmd == BLE_BS_CMD_RELAY_TO_ROCKET)
     {
         // Relay command to a specific rocket via LoRa uplink
         // Payload: [target_rid:1][inner_cmd:1][inner_payload:0..18]
@@ -3854,7 +3854,7 @@ static void loop_bs()
                      inner_cmd, target_rid, (unsigned)inner_len);
         }
     }
-    else if (ble_cmd == 60)
+    else if (ble_cmd == BLE_BS_CMD_FREQ_SCAN)
     {
         // Frequency scan (base-station radio, pre-launch collision avoidance).
         // Payload: [start_mhz f32][stop_mhz f32][step_khz u16][dwell_ms u16]

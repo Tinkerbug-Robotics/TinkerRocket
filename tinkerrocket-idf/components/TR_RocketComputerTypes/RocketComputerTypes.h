@@ -229,6 +229,34 @@ static constexpr uint8_t LORA_CMD_HOP_PAUSE       = 16;   // uplink cmd: park on
 static constexpr uint16_t LORA_HOP_PAUSE_MAX_MS   = 60000; // server-side cap on cmd 16 duration
 static constexpr uint8_t LORA_CMD_SET_HOP_DISABLED = 17;  // uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics, #106)
 
+// ── App ↔ Base Station BLE command IDs (#287) ─────────────────────────────
+// The command byte the iOS app sends to the *base station* on the BLE command
+// characteristic.  Promoted from bare literals in the BS dispatch so a renumber
+// is greppable and tools/check_ble_command_ids.py resolves them to numbers.
+// This is the BS command space; the app↔Out-Computer space is INDEPENDENT and
+// may reuse the same number for a different meaning (e.g. 50 = relay-to-rocket
+// here, but mag-cal-start on the OC — that overlap is correct).  Some are
+// relayed verbatim to the rocket (camera/logging/sim/servo-test); their value
+// happens to equal the OC's inner command number.  LORA_CMD_SET_HOP_DISABLED
+// (17, above) doubles as the BS hop-disable BLE command and is reused as-is.
+static constexpr uint8_t BLE_BS_CMD_CAMERA_TOGGLE     = 1;
+static constexpr uint8_t BLE_BS_CMD_FILE_LIST         = 2;
+static constexpr uint8_t BLE_BS_CMD_FILE_DELETE       = 3;
+static constexpr uint8_t BLE_BS_CMD_FILE_DOWNLOAD     = 4;
+static constexpr uint8_t BLE_BS_CMD_SIM_CONFIG        = 5;
+static constexpr uint8_t BLE_BS_CMD_SIM_START         = 6;
+static constexpr uint8_t BLE_BS_CMD_SIM_STOP          = 7;
+static constexpr uint8_t BLE_BS_CMD_TIME_SYNC         = 9;
+static constexpr uint8_t BLE_BS_CMD_LORA_RECONFIG     = 10;
+static constexpr uint8_t BLE_BS_CMD_CONFIG_READBACK   = 20;
+static constexpr uint8_t BLE_BS_CMD_LOGGING_TOGGLE    = 23;
+static constexpr uint8_t BLE_BS_CMD_SERVO_TEST_ANGLES = 24;
+static constexpr uint8_t BLE_BS_CMD_SERVO_TEST_STOP   = 25;
+static constexpr uint8_t BLE_BS_CMD_SET_UNIT_NAME     = 40;
+static constexpr uint8_t BLE_BS_CMD_SET_NETWORK_ID    = 41;
+static constexpr uint8_t BLE_BS_CMD_RELAY_TO_ROCKET   = 50;
+static constexpr uint8_t BLE_BS_CMD_FREQ_SCAN         = 60;
+
 // Minimum SNR (dB) for an RX packet to be considered trustworthy at the
 // given spreading factor.  Bench-confirmed in #90 follow-up: a CRC-
 // passing decode at -12.8 dB SNR on SF8 (sensitivity -10 dB) was a
