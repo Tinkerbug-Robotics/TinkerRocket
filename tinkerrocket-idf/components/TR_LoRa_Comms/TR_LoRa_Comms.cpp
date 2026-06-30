@@ -251,6 +251,15 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
     const size_t pkt_len = radio_->getPacketLength();
     if (pkt_len == 0 || pkt_len > maxLen)
     {
+        // #288: count the drop so a stuck/garbage length field is visible in
+        // [STATS] instead of vanishing silently.  Implausible in practice
+        // (maxLen 256 vs ~62 B real packets), so a nonzero count is a signal.
+        stats_.rx_len_drop++;
+        if (debug_)
+        {
+            ESP_LOGW(TAG, "LoRa RX bad length %u (max %u), dropped",
+                     (unsigned)pkt_len, (unsigned)maxLen);
+        }
         // Restart RX for next packet
         (void)radio_->startReceive();
         return false;

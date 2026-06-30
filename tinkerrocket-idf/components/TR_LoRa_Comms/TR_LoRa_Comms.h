@@ -39,6 +39,7 @@ public:
         uint32_t tx_fail = 0;
         uint32_t rx_count = 0;
         uint32_t rx_crc_fail = 0;
+        uint32_t rx_len_drop = 0;  // #288: RX dropped for bad length (0 or > maxLen)
         uint32_t isr_count = 0;
         uint32_t tx_watchdog_fires = 0;  // tx_ongoing_ force-cleared by watchdog (#105)
         float last_rssi = 0.0f;
