@@ -62,6 +62,13 @@ struct SettingsView: View {
     // Pyro trigger values edited as strings (seconds or meters by mode).
     @State private var sPyroValue: [String] = ["", "", "", ""]
 
+    // Pyro continuity / test-fire, brought into the Pyro tab so all pyro
+    // controls live with the rocket's settings.  contTestChannel latches which
+    // channel's continuity readout to show after a Test Continuity press (0 =
+    // none); pyroTestChannel drives the full-screen test-fire flow.
+    @State private var pyroContTestChannel: Int = 0
+    @State private var pyroTestChannel: Int?
+
     // "Sent" feedback in section headers.
     @State private var servoApplied = false
     @State private var pidApplied = false
@@ -202,6 +209,14 @@ struct SettingsView: View {
                 }
             }
             .onAppear { loadFromProfile() }
+            // Test Pyro Channel (from the Pyro tab) presents the same full-screen
+            // test-fire flow the dashboard uses.
+            .fullScreenCover(item: Binding<IdentifiableInt?>(
+                get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
+                set: { pyroTestChannel = $0?.value }
+            )) { item in
+                PyroTestView(device: device, channel: item.value)
+            }
             .onChange(of: store.activeId) { _ in loadFromProfile() }
             // Leaving a tab commits its pending text edit; reloading then snaps
             // any unparseable input back to the last saved (valid) value.
@@ -451,6 +466,51 @@ struct SettingsView: View {
                     ? "Fires this many seconds after apogee is detected."
                     : "Fires when the rocket descends through this altitude (AGL).")
                     .font(.caption).foregroundColor(.secondary)
+            }
+            pyroTestControls(ch)
+        }
+    }
+
+    /// Continuity readout + Test Continuity / Test Pyro Channel controls,
+    /// brought in from the dashboard pyro tile so the Pyro settings tab is the
+    /// single place for all pyro controls, obviously tied to the active rocket.
+    /// Only meaningful on a live rocket link; the actuating buttons hide once
+    /// armed / fired / in flight.
+    @ViewBuilder
+    private func pyroTestControls(_ ch: Int) -> some View {
+        if device.isConnected && !device.isBaseStation {
+            // Continuity is only valid while the shared ARM FET is engaged —
+            // i.e. right after a Test Continuity pulse, or when armed.  Gate to
+            // a LIVE frame so a held-over stale frame fails safe to NO CONT
+            // (#297), matching the dashboard tile.
+            if device.telemetry.pyro_armed || pyroContTestChannel == ch {
+                let cont = device.telemetry.pyroCont(channel: ch)
+                    && device.telemetry.data_status == .live
+                HStack {
+                    Text("Continuity")
+                    Spacer()
+                    Circle().fill(cont ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(cont ? "CONT" : "NO CONT")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(cont ? .green : .red)
+                }
+            }
+
+            let blocked = device.telemetry.pyro_armed
+                || device.telemetry.pyroFired(channel: ch)
+                || device.telemetry.state == "INFLIGHT"
+            if !blocked {
+                Button("Test Continuity") {
+                    device.sendPyroContTest(channel: UInt8(ch))
+                    pyroContTestChannel = ch
+                    // Auto-hide the readout after 5s, matching the dashboard.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        if pyroContTestChannel == ch { pyroContTestChannel = 0 }
+                    }
+                }
+                Button("Test Pyro Channel") { pyroTestChannel = ch }
+                    .foregroundColor(.orange)
             }
         }
     }
