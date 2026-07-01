@@ -62,11 +62,8 @@ struct SettingsView: View {
     // Pyro trigger values edited as strings (seconds or meters by mode).
     @State private var sPyroValue: [String] = ["", "", "", ""]
 
-    // Pyro continuity / test-fire, brought into the Pyro tab so all pyro
-    // controls live with the rocket's settings.  contTestChannel latches which
-    // channel's continuity readout to show after a Test Continuity press (0 =
-    // none); pyroTestChannel drives the full-screen test-fire flow.
-    @State private var pyroContTestChannel: Int = 0
+    // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
+    // readout state lives in the PyroChannelTestControls child view.)
     @State private var pyroTestChannel: Int?
 
     // "Sent" feedback in section headers.
@@ -467,51 +464,13 @@ struct SettingsView: View {
                     : "Fires when the rocket descends through this altitude (AGL).")
                     .font(.caption).foregroundColor(.secondary)
             }
-            pyroTestControls(ch)
-        }
-    }
-
-    /// Continuity readout + Test Continuity / Test Pyro Channel controls,
-    /// brought in from the dashboard pyro tile so the Pyro settings tab is the
-    /// single place for all pyro controls, obviously tied to the active rocket.
-    /// Only meaningful on a live rocket link; the actuating buttons hide once
-    /// armed / fired / in flight.
-    @ViewBuilder
-    private func pyroTestControls(_ ch: Int) -> some View {
-        if device.isConnected && !device.isBaseStation {
-            // Continuity is only valid while the shared ARM FET is engaged —
-            // i.e. right after a Test Continuity pulse, or when armed.  Gate to
-            // a LIVE frame so a held-over stale frame fails safe to NO CONT
-            // (#297), matching the dashboard tile.
-            if device.telemetry.pyro_armed || pyroContTestChannel == ch {
-                let cont = device.telemetry.pyroCont(channel: ch)
-                    && device.telemetry.data_status == .live
-                HStack {
-                    Text("Continuity")
-                    Spacer()
-                    Circle().fill(cont ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(cont ? "CONT" : "NO CONT")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(cont ? .green : .red)
-                }
-            }
-
-            let blocked = device.telemetry.pyro_armed
-                || device.telemetry.pyroFired(channel: ch)
-                || device.telemetry.state == "INFLIGHT"
-            if !blocked {
-                Button("Test Continuity") {
-                    device.sendPyroContTest(channel: UInt8(ch))
-                    pyroContTestChannel = ch
-                    // Auto-hide the readout after 5s, matching the dashboard.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                        if pyroContTestChannel == ch { pyroContTestChannel = 0 }
-                    }
-                }
-                Button("Test Pyro Channel") { pyroTestChannel = ch }
-                    .foregroundColor(.orange)
-            }
+            // Telemetry-driven controls live in a child view so this Section's
+            // child list stays structurally stable and telemetry-independent.
+            // Inlining them read device.telemetry in SettingsView's body, so the
+            // continuity dot and buttons appeared/disappeared as siblings of the
+            // focused Delay TextField on every live frame — which disrupted
+            // keyboard layout on first focus (negative TUIKeyplane width → hang).
+            PyroChannelTestControls(device: device, channel: ch) { pyroTestChannel = $0 }
         }
     }
 
@@ -1324,5 +1283,63 @@ struct SettingsView: View {
         guard device.isConnected else { return }
         flag.wrappedValue = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { flag.wrappedValue = false }
+    }
+}
+
+// MARK: - Pyro live controls
+
+/// Continuity readout + Test Continuity / Test Pyro Channel for one channel,
+/// factored out of SettingsView's pyro Section so the section that holds the
+/// focused Delay TextField stays telemetry-independent and structurally stable.
+/// Inlined, these read live telemetry in SettingsView's body, so the continuity
+/// dot and buttons appeared/disappeared *in the same Section as the focused
+/// TextField* on every frame — which disrupted keyboard layout on the first
+/// Delay focus (negative TUIKeyplane width → hang).  Isolating them in a child
+/// keeps that telemetry churn out of the config Section entirely.
+///
+/// Mirrors the dashboard pyro tile: continuity shows only while the shared ARM
+/// FET is engaged (after a Test Continuity pulse or when armed) and is gated to
+/// a LIVE frame so a stale frame fails safe to NO CONT (#297); the actuating
+/// buttons hide once armed / fired / in flight.
+private struct PyroChannelTestControls: View {
+    @ObservedObject var device: BLEDevice
+    let channel: Int
+    /// Open the full-screen test-fire cover for this channel (parent state).
+    let onTestFire: (Int) -> Void
+
+    @State private var contTestActive = false
+
+    var body: some View {
+        if device.isConnected && !device.isBaseStation {
+            if device.telemetry.pyro_armed || contTestActive {
+                let cont = device.telemetry.pyroCont(channel: channel)
+                    && device.telemetry.data_status == .live
+                HStack {
+                    Text("Continuity")
+                    Spacer()
+                    Circle().fill(cont ? Color.green : Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(cont ? "CONT" : "NO CONT")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(cont ? .green : .red)
+                }
+            }
+
+            let blocked = device.telemetry.pyro_armed
+                || device.telemetry.pyroFired(channel: channel)
+                || device.telemetry.state == "INFLIGHT"
+            if !blocked {
+                Button("Test Continuity") {
+                    device.sendPyroContTest(channel: UInt8(channel))
+                    contTestActive = true
+                    // Auto-hide the readout after 5s, matching the dashboard.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        contTestActive = false
+                    }
+                }
+                Button("Test Pyro Channel") { onTestFire(channel) }
+                    .foregroundColor(.orange)
+            }
+        }
     }
 }
