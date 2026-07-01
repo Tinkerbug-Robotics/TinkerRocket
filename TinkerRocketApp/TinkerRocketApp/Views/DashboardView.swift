@@ -1576,7 +1576,6 @@ struct PyroChannelsView: View {
     @State private var showPyroSheet = false
     @State private var editingChannel: Int = 1
     @State private var contTestChannel: Int = 0   // 0 = none, 1 = CH1, 2 = CH2
-    @State private var pyroTestChannel: Int?       // nil = hidden, 1 or 2 = show test view
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1602,12 +1601,6 @@ struct PyroChannelsView: View {
         .cornerRadius(10)
         .sheet(isPresented: $showPyroSheet) {
             PyroConfigSheet(device: device, channel: editingChannel)
-        }
-        .fullScreenCover(item: Binding<IdentifiableInt?>(
-            get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
-            set: { pyroTestChannel = $0?.value }
-        )) { item in
-            PyroTestView(device: device, channel: item.value)
         }
     }
 
@@ -1695,15 +1688,8 @@ struct PyroChannelsView: View {
                         .foregroundColor(.blue)
                 }
                 .buttonStyle(.plain)
-
-                Button {
-                    pyroTestChannel = channel
-                } label: {
-                    Text("Test Pyro Channel")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                }
-                .buttonStyle(.plain)
+                // Test Pyro Channel (test-fire) lives on the detailed Pyro
+                // settings screen only — kept off the main dashboard tile.
             }
         }
         .padding(10)
