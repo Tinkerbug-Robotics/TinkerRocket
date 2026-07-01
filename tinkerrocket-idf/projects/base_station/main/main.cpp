@@ -89,6 +89,12 @@ static uint32_t last_packet_ms = 0;
 // motivating example.)
 static uint32_t lora_low_snr_drops = 0;
 
+// #329: telemetry packets dropped by the network_id filter.  Otherwise fully
+// silent (no CSV row, no counter) — a top suspect for a base-station log that
+// stays empty while the rocket is clearly transmitting, if the rocket's nid
+// drifts from the BS default (forced to 0 at boot, see #136).
+static uint32_t lora_netid_mismatch_drops = 0;
+
 // Base station battery (MAX17205G fuel gauge via I2C)
 static float bs_voltage = NAN;
 static float bs_soc = NAN;
@@ -774,6 +780,12 @@ static void renameOpenLogIfSequential()
 
 static uint32_t log_write_count = 0;  // Tracks calls for periodic flash check
 
+// #329: CSV writes/flushes that failed.  fprintf() usually buffers a row and
+// returns OK even on a full card, so a full disk surfaces only at fflush/fsync
+// (ENOSPC) — counting both makes otherwise-silent row loss visible instead of
+// vanishing with no warning.
+static uint32_t log_write_fail_count = 0;
+
 // Query the active log filesystem (SPIFFS or FAT) for total/used bytes.
 // Returns true if a backend is mounted and the query succeeded.
 static bool bsQueryStorage(uint64_t& total, uint64_t& used)
@@ -849,7 +861,9 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
 
     if (written <= 0)
     {
-        ESP_LOGW(TAG, "[LOG] fprintf() failed (write returned <= 0)");
+        log_write_fail_count++;
+        ESP_LOGW(TAG, "[LOG] fprintf() failed (ret=%d, errno=%d %s)",
+                 written, errno, strerror(errno));
     }
 
     log_last_write_ms = millis();
@@ -1278,12 +1292,14 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | low-SNR drop: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | low-SNR drop: %lu | netid drop: %lu | log wr-fail: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
              (unsigned long)ls.rx_len_drop,
              (unsigned long)lora_low_snr_drops,
+             (unsigned long)lora_netid_mismatch_drops,
+             (unsigned long)log_write_fail_count,
              (unsigned long)ls.isr_count,
              (int)ls.rx_mode,
              (unsigned long)ls.tx_watchdog_fires,
@@ -3207,7 +3223,19 @@ static void loop_bs()
             // Filter by network_id
             if (decoded.network_id != network_id)
             {
-                // Not our network — ignore
+                // Not our network — drop.  Previously fully silent (#329): if
+                // the rocket's nid drifts from the BS default (0, #136), every
+                // packet lands here and the flight log stays empty with no
+                // clue why.  Count it + a throttled warning so it's attributable.
+                lora_netid_mismatch_drops++;
+                if (lora_netid_mismatch_drops == 1 ||
+                    lora_netid_mismatch_drops % 100 == 0)
+                {
+                    ESP_LOGW(TAG, "[RX] Drop: network_id %u != ours %u "
+                                  "(%lu dropped) — rocket on a different network?",
+                             (unsigned)decoded.network_id, (unsigned)network_id,
+                             (unsigned long)lora_netid_mismatch_drops);
+                }
             }
             else
             {
@@ -3521,8 +3549,18 @@ static void loop_bs()
     {
         if (log_file)
         {
-            fflush(log_file);
-            if (!using_internal_flash) fsync(fileno(log_file));
+            // #329: check the return values.  A full card typically doesn't
+            // fail at fprintf() (it buffers) — it fails HERE, when fflush/fsync
+            // push the buffered rows to FATFS (ENOSPC).  Ignoring these returns
+            // is exactly how a flight's telemetry can vanish with no warning.
+            bool ok = (fflush(log_file) == 0);
+            if (ok && !using_internal_flash && fsync(fileno(log_file)) != 0) ok = false;
+            if (!ok)
+            {
+                log_write_fail_count++;
+                ESP_LOGE(TAG, "[LOG] flush/fsync failed (errno=%d %s) — buffered "
+                              "rows may be lost (card full?)", errno, strerror(errno));
+            }
         }
         log_last_flush_ms = millis();
     }
