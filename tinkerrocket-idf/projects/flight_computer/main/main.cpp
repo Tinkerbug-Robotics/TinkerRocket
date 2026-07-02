@@ -3366,6 +3366,18 @@ static void loop_fc()
             //   Gate 1: fix >= 3, sats >= MIN, h_acc < MAX, new timestamp
             //   Gate 3: init requires h_acc < INIT_MAX and vel < INIT_MAX_VEL
             // Gate 2 (chi-squared innovation test) lives inside EKF::measUpdate.
+            //
+            // EKF decimation gate, computed up-front: the GNSS consume/dedup
+            // below must know whether the EKF will actually process the fix this
+            // tick.  Marking a fix consumed on a decimation-"off" tick loses it
+            // (gnss_gate1 goes false before any EKF tick sees it) and makes the
+            // else-branch inject a zeroed measurement with a never-processed
+            // timestamp — corrupting position/velocity/heading aiding (#367).
+            static uint8_t ekf_decim_ctr = 0;
+            const bool run_ekf_this_tick =
+                (++ekf_decim_ctr >= config::EKF_DECIMATION) && !fc_ota_data_mode;
+            if (run_ekf_this_tick) ekf_decim_ctr = 0;
+
             EkfGNSSDataLLA ekf_gnss = {};
             const bool gnss_fix_is_new =
                 (gnss_latest_si.second != last_gnss_fix_second) ||
@@ -3403,9 +3415,20 @@ static void loop_fc()
                 ekf_gnss.vel_n_mps = (float)gnss_latest_si.vel_n;
                 ekf_gnss.vel_e_mps = (float)gnss_latest_si.vel_e;
                 ekf_gnss.vel_d_mps = -(float)gnss_latest_si.vel_u; // ENU U→NED D
-                last_gnss_time_us_for_ekf = gnss_latest_si.time_us;
-                last_gnss_fix_second     = gnss_latest_si.second;
-                last_gnss_fix_ms         = gnss_latest_si.milli_second;
+                // #367: only mark the fix consumed when the EKF actually runs
+                // this tick.  Advancing these markers on a decimation-"off" tick
+                // would drop the fix (gnss_gate1 false on the next EKF tick) and
+                // inject a zeroed measurement carrying this (never-processed)
+                // timestamp.  Left un-advanced, the same fix survives to the next
+                // EKF tick and is used for real; and the else-branch below only
+                // ever replays an already-processed timestamp, which the EKF
+                // correctly skips.
+                if (run_ekf_this_tick)
+                {
+                    last_gnss_time_us_for_ekf = gnss_latest_si.time_us;
+                    last_gnss_fix_second     = gnss_latest_si.second;
+                    last_gnss_fix_ms         = gnss_latest_si.milli_second;
+                }
 
                 // Scale GNSS noise by h_acc — inflate R when receiver is uncertain.
                 // Nominal R assumes h_acc ≈ 3 m, so scale = max(1, h_acc / 3).
@@ -3448,11 +3471,7 @@ static void loop_fc()
             // so no IMU samples are lost — only the expensive EKF math is
             // skipped on the "off" ticks.  The EKF's internal dt tracking
             // (tPrev_us_) automatically accounts for the longer interval.
-            static uint8_t ekf_decim_ctr = 0;
-            const bool run_ekf_this_tick =
-                (++ekf_decim_ctr >= config::EKF_DECIMATION) && !fc_ota_data_mode;
-            if (run_ekf_this_tick) ekf_decim_ctr = 0;
-
+            // (run_ekf_this_tick is computed above, before the GNSS gate — #367.)
             if (!ekf_initialized && rocket_state != MAG_CALIBRATION)
             {
                 // Gate 3: only init with high-quality GNSS (tight h_acc + low vel)
@@ -3681,7 +3700,13 @@ static void loop_fc()
                     {
                         query_ok = true;
                         if (resp_payload[0] != 0) { out_ready = true; }
-                        if (resp_payload_len >= 2 && resp_payload[1] != 0)
+                        // Reflect the OC's reported pending command every poll,
+                        // INCLUDING 0 (idle).  The OC repeats each command for
+                        // CMD_REPEAT_LIMIT polls then reports 0; holding the value
+                        // across the poll interval lets last_processed_cmd dedup the
+                        // repeats to a single execution, and seeing 0 afterwards
+                        // resets the dedup so the same command can be issued again.
+                        if (resp_payload_len >= 2)
                         {
                             out_pending_command = resp_payload[1];
                         }
@@ -3738,7 +3763,13 @@ static void loop_fc()
         }
 
         // Dedup: OutComputer repeats each command for 5 polls for I2C
-        // reliability.  Process only the first delivery.
+        // reliability.  Process only the first delivery.  out_pending_command
+        // mirrors the OC's reported command (set every poll above, including 0),
+        // so it stays non-zero for the whole repeat window — we must NOT clear
+        // it at dispatch, or the reset below would fire between polls and every
+        // repeat would re-execute.  last_processed_cmd resets only when the OC
+        // actually reports 0 (repeat window done), freeing the same command to
+        // be issued again later.
         if (out_pending_command == 0U)
         {
             last_processed_cmd = 0U;  // reset once OutComputer clears
@@ -5041,7 +5072,9 @@ static void loop_fc()
             {
                 ESP_LOGW(TAG, "[I2C RX] Unknown pending command: 0x%02X", (unsigned)out_pending_command);
             }
-            out_pending_command = 0U;
+            // NOTE: do NOT clear out_pending_command here — it mirrors the OC's
+            // reported command and is cleared by the next poll when the OC
+            // reports 0.  Clearing it here would defeat the dedup (see above).
         }
 
         // Release exclusive bus access now that the query exchange and any
@@ -5097,6 +5130,25 @@ static void loop_fc()
         pressure_alt_rate_mps = kinematics.d_alt_est_;
         max_alt_m = kinematics.max_altitude;
         max_speed_mps = kinematics.max_speed;
+
+        // #363 SAFETY: the state machine (and servicePyroChannels) live in the
+        // `else` of the test-mode chain below, so a ground/servo/replay test
+        // left active at launch would suppress PRELAUNCH->INFLIGHT and pyro
+        // servicing for the ENTIRE flight -> no drogue/main, ballistic return.
+        // kinematicChecks() still latches launch_flag while a test runs, so if
+        // launch is detected with any test mode active, force the test off (and
+        // stow) here as a failsafe so the flight logic takes over. A bench false
+        // positive merely exits the test into READY/PRELAUNCH, which is safe.
+        if (kinematics.launch_flag &&
+            (ground_test_active || servo_test_active || servo_replay_active))
+        {
+            ESP_LOGW(TAG, "[SAFETY] Launch detected with a test mode active -- "
+                          "clearing test mode so flight logic runs (#363)");
+            ground_test_active  = false;
+            servo_test_active   = false;
+            servo_replay_active = false;
+            if (servo_enabled) servo_control.stowControl();
+        }
 
         if (ground_test_active)
         {
