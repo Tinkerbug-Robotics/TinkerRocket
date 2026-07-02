@@ -1170,6 +1170,7 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == GUIDANCE_CONFIG_PENDING ||
            cmd == FIN_CONFIG_PENDING ||
            cmd == PYRO_CONFIG_PENDING ||
+           cmd == CAMERA_CONFIG_PENDING ||     // FC needs the CameraConfigData frame appended
            cmd == ORIENT_CONFIG_PENDING ||
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
@@ -1617,6 +1618,7 @@ static bool isKnownMessageType(uint8_t type)
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
+        case SENSOR_CAL_STATUS_MSG:  // FC→OC over I2S — sensor-cal readback (#132)
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
@@ -2719,7 +2721,8 @@ static void cachePIDConfig(const uint8_t* payload, size_t len)
 // Cache roll control config to NVS
 static void cacheRollControlConfig(const uint8_t* payload, size_t len)
 {
-    if (len < 4) return;
+    // memcpy reads the full struct, so the caller must supply the full struct.
+    if (len < sizeof(RollControlConfigData)) return;
     RollControlConfigData rc;
     memcpy(&rc, payload, sizeof(rc));
     cfg_use_angle_ctrl = (rc.use_angle_control != 0);
@@ -2963,11 +2966,13 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         setPendingCommand(enabled ? GAIN_SCHED_ENABLE : GAIN_SCHED_DISABLE);
         ESP_LOGI("LORA", "UPLINK Gain schedule: %s", enabled ? "ENABLE" : "DISABLE");
     }
-    else if (cmd == 31 && payload_len >= 4)
+    else if (cmd == 31 && payload_len >= sizeof(RollControlConfigData))
     {
-        // Roll control config from BaseStation
-        memcpy(pending_config_data, payload, 4);
-        pending_config_data_len = 4;
+        // Roll control config from BaseStation. Relay the FULL struct: the FC
+        // rejects any frame shorter than sizeof(RollControlConfigData) (16 B),
+        // so a truncated copy silently drops every roll-control setting.
+        memcpy(pending_config_data, payload, sizeof(RollControlConfigData));
+        pending_config_data_len = sizeof(RollControlConfigData);
         pending_config_msg_type = ROLL_CTRL_CONFIG_MSG;
         setPendingCommand(ROLL_CTRL_CONFIG_PENDING);
         cacheRollControlConfig(payload, payload_len);
@@ -5557,13 +5562,18 @@ static void loop_oc()
         }
         else if (ble_cmd == 31)
         {
-            // Roll control config: [use_angle_control:1][pad:1][roll_delay_ms:2]
+            // Roll control config (RollControlConfigData, 16 B):
+            // [use_angle_control:1][pad:1][roll_delay_ms:2]
+            // [kp_angle_rate_cap_dps:4][kp_angle:4][integral_sep_threshold_dps:4]
+            // Relay the FULL struct: the FC rejects anything shorter than
+            // sizeof(RollControlConfigData), so a truncated copy silently drops
+            // every roll-control setting.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
-            if (plen >= 4)
+            if (plen >= sizeof(RollControlConfigData))
             {
-                memcpy(pending_config_data, payload, 4);
-                pending_config_data_len = 4;
+                memcpy(pending_config_data, payload, sizeof(RollControlConfigData));
+                pending_config_data_len = sizeof(RollControlConfigData);
                 pending_config_msg_type = ROLL_CTRL_CONFIG_MSG;
                 setPendingCommand(ROLL_CTRL_CONFIG_PENDING);
                 cacheRollControlConfig(payload, plen);
