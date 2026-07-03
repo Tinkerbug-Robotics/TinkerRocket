@@ -2940,6 +2940,48 @@ static void setup_fc()
 
 }
 
+// #393: reset the flight state machine for a sim run.  Used on the sim START
+// edge (fresh run — the sim's equivalent of a reboot) and on an explicit sim
+// STOP (SIM_STOP_CMD → abort back to READY).  Deliberately NOT called on the
+// sim's natural completion (SIM_LANDED → SIM_IDLE auto-stop), so a flown-out sim
+// still holds LANDED to validate the post-flight lockout.  `edge` labels the log.
+static void resetFlightStateForSim(const char* edge)
+{
+    // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
+    // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
+    pyroSafeAll();
+    rocket_state = READY;
+    post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
+    ground_pressure_found = false;
+    out_ready = false;
+    end_flight_sent = false;
+    landed_actions_done = false;
+    landed_candidate_active = false;   // #297
+    kinematics.reset();
+    ekf_initialized = false;
+    have_ref_pos = false;
+    ref_pos_frozen = false;
+    ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
+    ref_pos_count = 0;
+    ref_pos_first_time_ms = 0;
+    last_gnss_time_us_for_ekf = 0;
+    last_gnss_fix_second = 0xFF;
+    last_gnss_fix_ms     = 0xFFFF;
+    gnss_started = false;
+    have_gnss_si = false;
+    guidance.reset();
+    control_mixer.reset();
+    roll_rate_pid_standalone.reset();
+    burnout_detected = false;
+    burnout_time_ms = 0;
+    burnout_neg_count = 0;
+    guidance_active = false;
+    reboot_recovery = false;
+    reboot_recovery_telem = false;
+    clearFlightSnapshot();
+    ESP_LOGI(TAG, "[STATE] Sim %s -> READY", edge);
+}
+
 // Loop is responsible for reading sensor data
 static void loop_fc()
 {
@@ -3671,12 +3713,19 @@ static void loop_fc()
         // processed mid-flight.  I2C is now command-only (telemetry uses I2S)
         // Mutex protects the I2C bus from the sender task.
         //
+        // #393 exception: keep polling during a SIM flight so SIM_STOP can be
+        // delivered mid-flight (a sim is a test, never a real flight — the
+        // isSimActive() guard means real INFLIGHT still skips the poll).
+        // Without this the sim runs the whole trajectory before the stop is
+        // even seen.
+        //
         // Pipelined protocol: READ first (response from previous query),
         // then SEND the next query.  This gives the OutComputer a full
         // 250 ms poll interval to process each query and pre-load its
         // response into the slave TX FIFO, avoiding the race where the
         // OC hasn't called i2c_slave_transmit() yet.
-        if (rocket_state != INFLIGHT && (now_ms - out_ready_request_time_ms) > 250U)
+        if ((rocket_state != INFLIGHT || sensor_collector.isSimActive())
+            && (now_ms - out_ready_request_time_ms) > 250U)
         {
             out_ready_request_time_ms = now_ms;
 
@@ -3991,8 +4040,14 @@ static void loop_fc()
             }
             else if (out_pending_command == SIM_STOP_CMD)
             {
+                // #393: an explicit Stop aborts the sim flight back to READY.
+                // Reset here (not on the isSimActive falling edge) so it fires
+                // only for a real user Stop, never a naturally-completed sim.
+                // Works whether the sim is still airborne (delivered mid-flight
+                // via the #393 INFLIGHT-poll exception) or already LANDED.
                 sensor_collector.stopSim();
-                ESP_LOGI(TAG, "[SIM] Stop cmd received");
+                resetFlightStateForSim("stop");
+                ESP_LOGI(TAG, "[SIM] Stop cmd received — flight state reset (#393)");
             }
             else if (out_pending_command == GROUND_TEST_START)
             {
@@ -5797,49 +5852,17 @@ static void loop_fc()
         // A sim flight that reaches LANDED must STAY landed — terminal, exactly
         // like real hardware — so the sim faithfully reproduces and can validate
         // the post-flight lockout. Re-arm on the RISING edge of sim-active (the
-        // deliberate start of a new run, the sim's equivalent of a reboot), never
-        // on the falling edge. When a sim ends we do nothing: the FC holds the
-        // state it reached (LANDED if it flew) and the lockout stays in force.
+        // deliberate start of a new run, the sim's equivalent of a reboot).  We
+        // do NOT reset on the falling edge: the sim drops to SIM_IDLE on its
+        // NATURAL completion too (SIM_LANDED auto-stop), and there we want the FC
+        // to hold LANDED so the lockout stays validated.  An explicit Stop is
+        // handled in the SIM_STOP_CMD handler instead (#393), which is the only
+        // way to distinguish a user abort from a flown-out sim.
         {
             const bool curr_sim_active = sensor_collector.isSimActive();
             if (!prev_sim_active && curr_sim_active)
             {
-                // New sim run — reset state machine for a fresh flight. Also
-                // resets GNSS state: the sim injects synthetic GNSS (fix=3,
-                // sats=12); a stale copy would otherwise immediately re-trip
-                // READY -> PRELAUNCH on the new run.
-                pyroSafeAll();
-                rocket_state = READY;
-                post_flight_lockout = false;  // #317: a deliberate new sim run re-arms
-                ground_pressure_found = false;
-                out_ready = false;
-                end_flight_sent = false;
-                landed_actions_done = false;
-                landed_candidate_active = false;   // #297
-                kinematics.reset();
-                ekf_initialized = false;
-                have_ref_pos = false;
-                ref_pos_frozen = false;
-                ref_lat_sum = ref_lon_sum = ref_alt_sum = 0.0;
-                ref_pos_count = 0;
-                ref_pos_first_time_ms = 0;
-                last_gnss_time_us_for_ekf = 0;
-                last_gnss_fix_second = 0xFF;
-                last_gnss_fix_ms     = 0xFFFF;
-                gnss_started = false;
-                have_gnss_si = false;
-                // Reset guidance state for next sim run
-                guidance.reset();
-                control_mixer.reset();
-                roll_rate_pid_standalone.reset();
-                burnout_detected = false;
-                burnout_time_ms = 0;
-                burnout_neg_count = 0;
-                guidance_active = false;
-                reboot_recovery = false;
-                reboot_recovery_telem = false;
-                clearFlightSnapshot();
-                ESP_LOGI(TAG, "[STATE] Sim start -> READY (re-armed for new run)");
+                resetFlightStateForSim("start");
             }
             prev_sim_active = curr_sim_active;
         }
