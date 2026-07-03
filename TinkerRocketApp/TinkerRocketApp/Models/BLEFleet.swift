@@ -16,6 +16,12 @@ class BLEFleet: NSObject, ObservableObject {
     // MARK: - Published state
 
     @Published var isScanning = false
+    // #394: true only when the user explicitly asked to add a device (the "Add"
+    // button), false for automatic/background scans (reconnect fallback,
+    // auto-scan-on-disconnect, session restore). The dashboard's "Add Device"
+    // sheet gates on this so a returning unit re-pairing silently doesn't pop
+    // an unsolicited modal.
+    @Published var userInitiatedScan = false
     @Published var statusMessage = "Not connected"
     @Published var discoveredDevices: [DiscoveredDevice] = []
 
@@ -101,7 +107,7 @@ class BLEFleet: NSObject, ObservableObject {
 
     // MARK: - Scanning
 
-    func startScanning() {
+    func startScanning(userInitiated: Bool = false) {
         guard centralManager.state == .poweredOn else {
             statusMessage = "Bluetooth not ready"
             return
@@ -109,6 +115,7 @@ class BLEFleet: NSObject, ObservableObject {
         discoveredDevices = []
         statusMessage = "Scanning..."
         isScanning = true
+        userInitiatedScan = userInitiated  // #394: only the "Add" button drives the sheet
         centralManager.scanForPeripherals(withServices: [serviceUUID], options: nil)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
@@ -128,6 +135,7 @@ class BLEFleet: NSObject, ObservableObject {
     func stopScanning() {
         centralManager.stopScan()
         isScanning = false
+        userInitiatedScan = false  // #394
     }
 
     // MARK: - Connection

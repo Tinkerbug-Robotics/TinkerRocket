@@ -251,7 +251,10 @@ struct DashboardView: View {
             }
         }
         .sheet(isPresented: Binding(
-            get: { fleet.isScanning && fleet.isConnected },
+            // #394: only present the "Add Device" sheet for an explicit user
+            // scan, not for a background reconnect/auto-scan that happens to
+            // land while connected (which popped the sheet unsolicited).
+            get: { fleet.userInitiatedScan && fleet.isConnected },
             set: { if !$0 { fleet.stopScanning() } }
         )) {
             NavigationView {
@@ -612,7 +615,7 @@ struct DeviceChipBar: View {
 
                 // Scan button in chip bar
                 Button {
-                    fleet.startScanning()
+                    fleet.startScanning(userInitiated: true)  // #394: explicit "Add" opens the sheet
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "plus")
