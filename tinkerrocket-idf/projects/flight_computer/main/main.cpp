@@ -4985,9 +4985,13 @@ static void loop_fc()
                         }
                         servo_test_active = true;
                         servo_control.setServoAngles(servo_test_angles);
-                        ESP_LOGI(TAG, "[SERVO TEST] Angles: [%.1f, %.1f, %.1f, %.1f] deg",
+                        // Pulses = LEDC ground truth (angle -> fin cal -> +bias
+                        // -> clamp): shows whether each command reached its pin.
+                        ESP_LOGI(TAG, "[SERVO TEST] Angles: [%.1f, %.1f, %.1f, %.1f] deg -> pulses [%d, %d, %d, %d] us",
                                       (double)servo_test_angles[0], (double)servo_test_angles[1],
-                                      (double)servo_test_angles[2], (double)servo_test_angles[3]);
+                                      (double)servo_test_angles[2], (double)servo_test_angles[3],
+                                      servo_control.getServoPulseUs(0), servo_control.getServoPulseUs(1),
+                                      servo_control.getServoPulseUs(2), servo_control.getServoPulseUs(3));
                     }
                     else
                     {

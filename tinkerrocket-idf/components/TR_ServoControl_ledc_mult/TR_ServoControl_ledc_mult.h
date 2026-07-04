@@ -99,6 +99,12 @@ public:
     int getServoHz() const { return servo_hz; }
     int getServoMinUs() const { return servo_min_us; }
     int getServoMaxUs() const { return servo_max_us; }
+    // Last pulse (µs) actually written to a channel's LEDC duty — diagnostic
+    // ground truth for "did the command reach the pin", per servo (the legacy
+    // getRollCmdUs only reports servo 0).  0 until first driven.
+    int getServoPulseUs(int servoIndex) const {
+        return (servoIndex >= 0 && servoIndex < 4) ? last_pulse_us_[servoIndex] : 0;
+    }
     // update PWM outputs with velocity-based gain scaling
     void controlWithGainSchedule(float roll_rate, float velocity_ms);
 
@@ -133,6 +139,8 @@ private:
     uint8_t servo_pin_[4];
     int     servo_bias_us_[4];
     int     servo_mid_us_[4];
+    // last pulse written per channel (diagnostics; see getServoPulseUs)
+    int     last_pulse_us_[4] = {0, 0, 0, 0};
 
     // shared config
     int   servo_hz;
