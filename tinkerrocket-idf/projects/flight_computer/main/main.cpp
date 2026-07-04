@@ -643,8 +643,16 @@ static bool readConfigFrame(uint8_t expected_type,
     // The "inner" part of the frame: [type:1][len:1][payload:N][CRC:2]
     const size_t inner_size = 1 + 1 + expected_payload_len + 2;
     const size_t frame_size = 4 + inner_size;  // with SOF
-    // Read extra bytes to account for up to 20 bytes of misalignment
-    const size_t read_size  = frame_size + 20;
+    // #399: retry reads MUST clock exactly COMBINED_READ_SIZE — the size the
+    // OC's slave stages (and pushes per on_request) on the status/config path.
+    // The old "frame_size + 20" (e.g. 44 B for a 16 B config) read FEWER bytes
+    // than the 96 pushed, leaving residue in the V2 slave's TX ringbuffer; one
+    // mismatched read permanently misaligned every subsequent 96-byte poll
+    // read (bench 2026-07-03: 100% read failures for the rest of the flight).
+    // Reading the full staged size keeps the ring drained; the SOF scan below
+    // finds the config frame anywhere within it (every config frame fits —
+    // the OC's fit-check guarantees status+config <= COMBINED_READ_SIZE).
+    const size_t read_size  = COMBINED_READ_SIZE;
 
     for (int attempt = 0; attempt < 3; attempt++)
     {
@@ -3720,10 +3728,25 @@ static void loop_fc()
                 if (gor_us > i2c_gor_max_us) { i2c_gor_max_us = gor_us; }
                 if (query_ok) { i2c_query_ok++; } else { i2c_query_fail++; }
 
-                if (!query_ok) {
+                // #399: a run of consecutive unpack failures with the transfer
+                // completing (bytes clocked, framing garbage) is the signature
+                // of OC slave TX-ring desync — every read misaligned until
+                // reboot.  Shout once at the threshold so the bench log shows
+                // one loud diagnosis instead of a wall of identical FAILs.
+                static uint32_t consec_read_fails = 0;
+                if (query_ok) {
+                    consec_read_fails = 0;
+                } else {
+                    consec_read_fails++;
                     ESP_LOGW(TAG, "[I2C] read FAIL cmd=0x%02X dur=%lu us",
                                   (unsigned)out_pending_command,
                                   (unsigned long)gor_us);
+                    if (consec_read_fails == 8) {
+                        ESP_LOGE(TAG, "[I2C] 8 consecutive read failures — likely OC "
+                                      "slave TX-ring desync (#399: a size-mismatched "
+                                      "read left residue). Command channel is dead "
+                                      "until the OC reboots.");
+                    }
                 }
             }
 

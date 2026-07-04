@@ -220,11 +220,18 @@ bool IRAM_ATTR TR_I2C_Interface::slaveRequestISR(
 //  read still completes and the bus is released promptly instead of hanging
 //  until the hardware stretch-protect timer.
 //
-//  Wire-alignment note: i2c_slave_write() pushes exactly _tx_len bytes; the FC
-//  reads a fixed size and resyncs on the SOF marker, so a small size mismatch
-//  is tolerated. Watch for cumulative drift on the bench — if the staged size
-//  and the master read size differ, leftover TX bytes can accumulate in the
-//  ringbuffer across polls.
+//  Wire-alignment INVARIANT (#399): i2c_slave_write() pushes exactly _tx_len
+//  bytes per master read.  Every master read MUST clock exactly that many
+//  bytes — a read of FEWER bytes leaves the remainder in the V2 driver's TX
+//  ringbuffer, which is clocked out FIRST on the next read, permanently
+//  misaligning every subsequent transfer (bench 2026-07-03: one 44-byte
+//  readConfigFrame retry against a 96-byte stage -> 100% read failures for
+//  the rest of the flight; the master's SOF scan cannot recover a persistent
+//  off-cycle drift).  There is no safe in-band flush (see the #279 note
+//  below), so the invariant is enforced on the MASTER side: the FC reads
+//  COMBINED_READ_SIZE on the status/config path and the exact staged frame
+//  size on the snapshot path.  Any new slave exchange must keep the master
+//  read size equal to the staged size.
 // ---------------------------------------------------------------------------
 void TR_I2C_Interface::slaveTxTask(void *arg)
 {
