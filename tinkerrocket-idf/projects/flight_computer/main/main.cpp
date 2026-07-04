@@ -395,6 +395,9 @@ static float last_external_roll_cmd_deg = 0.0f;
 static bool servo_test_active = false;
 static float servo_test_angles[4] = {0, 0, 0, 0};
 static bool servo_replay_active = false;
+// #345 follow-up: while now_ms < this, READY/PRELAUNCH skip the per-tick
+// servo idle() so a just-applied trim stays driven and visible on the pad.
+static uint32_t servo_pad_wake_until_ms = 0;
 static bool prev_sim_active = false;
 // Roll profile: (time, angle) waypoints for cascaded angle controller
 static RollProfileData roll_profile = {};  // zeroed → num_waypoints = 0 (rate-only)
@@ -3946,6 +3949,21 @@ static void loop_fc()
                         ESP_LOGW(TAG, "[SERVO CFG] Hz/min/max/fin deferred (INFLIGHT)");
                     }
 
+                    // #345 follow-up: make trim live on the pad.  Drive the
+                    // servos to the freshly-trimmed centre and arm the wake
+                    // window so READY/PRELAUNCH stop relaxing them for a few
+                    // seconds — otherwise setBias just updates offsets and the
+                    // next idle() strips the pulse train, so the operator never
+                    // sees the fin move.  Skipped while a test/replay owns the
+                    // servos (they suppress idle already and drive their own
+                    // angles) and while INFLIGHT (never relax in flight).
+                    if (servo_enabled && rocket_state != INFLIGHT &&
+                        !servo_test_active && !ground_test_active && !servo_replay_active)
+                    {
+                        servo_control.stowControl();  // centre = (min+max)/2 + new bias
+                        servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+                    }
+
                     prefs.begin("servo", false);
                     prefs.putShort("b1", cfg.bias_us[0]);
                     prefs.putShort("b2", cfg.bias_us[1]);
@@ -5392,7 +5410,10 @@ static void loop_fc()
                 // digital servos stop drawing ~150 mA of holding current while
                 // we wait for GNSS/launch.  Re-asserted each tick (idempotent);
                 // PWM resumes automatically when INFLIGHT first commands a pulse.
-                if (servo_enabled && config::SERVO_RELAX_ON_PAD)
+                // Held off during the pad-trim wake window (#345 follow-up) so a
+                // just-applied trim stays driven long enough to see.
+                if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
+                    (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 
                 const bool gnss_ready = gnss_started &&
@@ -5415,8 +5436,10 @@ static void loop_fc()
             {
                 // Stay relaxed through the pad wait; the INFLIGHT control path
                 // re-drives (and so re-energises) the servos the instant
-                // launch_flag flips below.
-                if (servo_enabled && config::SERVO_RELAX_ON_PAD)
+                // launch_flag flips below.  Held off during the pad-trim wake
+                // window (#345 follow-up) so a just-applied trim stays visible.
+                if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
+                    (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
                     servo_control.idle();
 
                 if (kinematics.launch_flag)

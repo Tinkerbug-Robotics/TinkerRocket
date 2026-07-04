@@ -243,6 +243,16 @@ struct config
     // servo-power MOSFET is the guaranteed fix; this is the interim lever.
     static constexpr bool SERVO_RELAX_ON_PAD = true;
 
+    // #345 follow-up: pad-trim wake window (ms).  With SERVO_RELAX_ON_PAD the
+    // servos are relaxed every tick on the pad, so a live trim/servo-config
+    // change would be invisible — setBias only updates offsets, and the next
+    // idle() strips the pulse train.  When a servo-config command lands on the
+    // pad we drive the servos to the freshly-trimmed centre and hold them
+    // energised for this long so the fin visibly moves to the new trim; each
+    // further change re-arms the window, and it relaxes again once the operator
+    // stops adjusting.  Only spent while actively trimming on the bench.
+    static constexpr uint32_t SERVO_PAD_TRIM_WAKE_MS = 6000;
+
     // EKF pad heading: compass heading of board Z+ (deg, 0=North, 90=East)
     static constexpr float PAD_HEADING_DEG = 0.0f;
 
