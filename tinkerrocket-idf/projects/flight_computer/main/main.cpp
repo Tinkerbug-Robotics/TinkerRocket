@@ -2639,8 +2639,15 @@ static void setup_fc()
     delay_ms(10); // let OutComputer process query and queue 96-byte response
     {
         uint8_t init_buf[COMBINED_READ_SIZE] = {};
+        // 50 ms timeout (was 10): an ABORTED read leaves residue in the OC's
+        // V2 slave TX ring and permanently desyncs the channel (#399's
+        // residual hazard — seen on the bench at the LANDED transition, where
+        // the OC's finalize churn delayed the serve past 10 ms: one
+        // "i2c.master: I2C software timeout" then 100% read failures until
+        // reboot).  Waiting longer and completing the transfer is strictly
+        // safer than aborting; normal serves finish in ~2.5 ms.
         esp_err_t read_err = i2c_interface.masterRead(
-            init_buf, COMBINED_READ_SIZE, 10);
+            init_buf, COMBINED_READ_SIZE, 50);
         if (read_err == ESP_OK)
         {
             uint8_t resp_type = 0;
@@ -3740,8 +3747,14 @@ static void loop_fc()
             {
                 const uint32_t gor_start = time_us();
                 uint8_t combined_buf[COMBINED_READ_SIZE] = {};
+                // 50 ms timeout (was 10) — an aborted read permanently desyncs
+                // the OC's slave TX ring (#399 residual hazard; hit on the
+                // bench at LANDED when the OC's finalize churn delayed the
+                // serve past 10 ms).  Completing late beats aborting; normal
+                // serves take ~2.5 ms, and real-flight INFLIGHT never polls,
+                // so the worst case is a rare bounded stall in ground states.
                 esp_err_t read_err = i2c_interface.masterRead(
-                    combined_buf, COMBINED_READ_SIZE, 10);
+                    combined_buf, COMBINED_READ_SIZE, 50);
 
                 if (read_err == ESP_OK)
                 {
