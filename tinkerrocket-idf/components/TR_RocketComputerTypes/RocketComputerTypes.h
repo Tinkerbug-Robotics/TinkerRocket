@@ -1206,7 +1206,10 @@ static constexpr uint8_t NSF_GUIDANCE     = (1u << 5);
 // New-PCB pyro: single shared arming FET drives all four channels, so
 // only one global "armed" bit is reported. Live-mirrors the ARM pin.
 static constexpr uint8_t NSF_PYRO_ARMED   = (1u << 6);
-// bit 7 reserved
+// Simulated flight in progress (#393): reported so the app's sim banner /
+// Stop-sim control is driven by the rocket's actual state instead of a
+// client-side latch that dies on BLE reconnect (BLEDevice is recreated).
+static constexpr uint8_t NSF_SIM_ACTIVE   = (1u << 7);
 
 // NonSensorData.apogee_flags bit masks (appended in #142/#143).
 static constexpr uint8_t NSF2_GPS_APOGEE       = (1u << 0);

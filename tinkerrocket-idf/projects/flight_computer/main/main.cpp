@@ -5950,6 +5950,9 @@ static void loop_fc()
         }
         portEXIT_CRITICAL(&pyro_spinlock);
         if (arm_now) non_sensor_data.flags |= NSF_PYRO_ARMED;
+        // #393: report sim-active so the app's Stop-sim control survives BLE
+        // reconnects (its local latch dies with the recreated BLEDevice).
+        if (sensor_collector.isSimActive()) non_sensor_data.flags |= NSF_SIM_ACTIVE;
         non_sensor_data.rocket_state = (uint8_t)rocket_state;
         // 4-channel pyro status byte: bit pairs (cont, fired) per channel.
         // CONT bits reflect the last known reading (set during a CONT test

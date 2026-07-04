@@ -102,6 +102,10 @@ struct TelemetryData: Codable {
     var camera_recording: Bool  { (flight_status_bits & 0x20) != 0 }
     var logging_active: Bool    { (flight_status_bits & 0x40) != 0 }
     var bs_logging_active: Bool { (flight_status_bits & 0x80) != 0 }
+    // #393: simulated flight in progress, reported by the rocket (NSF_SIM_ACTIVE
+    // -> fs bit 8).  Drives the sim banner / Stop-sim control so it survives BLE
+    // reconnects, unlike the client-side simLaunched latch.
+    var sim_active: Bool        { (flight_status_bits & 0x100) != 0 }
 
     // Source rocket identity (base station relay only, nil for direct BLE)
     var source_rocket_id: Int?        // rocket_id from LoRa header

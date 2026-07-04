@@ -1216,20 +1216,23 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     }
 
     // Packed flight-status bits (saves ~90 B vs 8 separate JSON booleans).
-    // The pyro flags use the same trick via "ps" — same pattern.
+    // The pyro flags use the same trick via "ps" — same pattern.  "fs" is a
+    // JSON int, so bits past 7 are fine (older app builds just mask them off).
     //   b0  launch_flag           b4  pwr_pin_on
     //   b1  vel_u_apogee_flag     b5  camera_recording
     //   b2  alt_apogee_flag       b6  logging_active
     //   b3  alt_landed_flag       b7  bs_logging_active
+    //   b8  sim_active (#393)
     {
-        uint8_t fs = (data.launch_flag        ? 0x01 : 0)
-                   | (data.vel_u_apogee_flag  ? 0x02 : 0)
-                   | (data.alt_apogee_flag    ? 0x04 : 0)
-                   | (data.alt_landed_flag    ? 0x08 : 0)
-                   | (data.pwr_pin_on         ? 0x10 : 0)
-                   | (data.camera_recording   ? 0x20 : 0)
-                   | (data.logging_active     ? 0x40 : 0)
-                   | (data.bs_logging_active  ? 0x80 : 0);
+        uint16_t fs = (data.launch_flag        ? 0x001 : 0)
+                    | (data.vel_u_apogee_flag  ? 0x002 : 0)
+                    | (data.alt_apogee_flag    ? 0x004 : 0)
+                    | (data.alt_landed_flag    ? 0x008 : 0)
+                    | (data.pwr_pin_on         ? 0x010 : 0)
+                    | (data.camera_recording   ? 0x020 : 0)
+                    | (data.logging_active     ? 0x040 : 0)
+                    | (data.bs_logging_active  ? 0x080 : 0)
+                    | (data.sim_active         ? 0x100 : 0);
         addInt("fs", fs);
     }
 
