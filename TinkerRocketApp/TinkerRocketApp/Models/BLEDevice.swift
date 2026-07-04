@@ -1354,7 +1354,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.gainScheduleEnabled = dict["gs"] as? Bool ?? cfg.gainScheduleEnabled
             cfg.useAngleControl = dict["ac"] as? Bool ?? cfg.useAngleControl
             cfg.rollDelayMs = UInt16(dict["rdly"] as? Int ?? Int(cfg.rollDelayMs))
-            cfg.rateCapDps = parseFloat(dict["rcap"]) ?? cfg.rateCapDps
+            // #253: roll-control gain readback. The device reports sentinels
+            // (rcap/kpang <= 0, iwind < 0) for "firmware default" — keep the
+            // local value in that case rather than displaying the sentinel.
+            if let rcap = parseFloat(dict["rcap"]), rcap > 0 { cfg.rateCapDps = rcap }
+            if let kpa = parseFloat(dict["kpang"]), kpa > 0 { cfg.kpAngle = kpa }
+            if let iw = parseFloat(dict["iwind"]), iw >= 0 { cfg.integralSepThreshold = iw }
             cfg.guidanceEnabled = dict["ge"] as? Bool ?? cfg.guidanceEnabled
             cfg.cameraType = UInt8(dict["camt"] as? Int ?? Int(cfg.cameraType))
             cfg.loraFreqMHz = parseFloat(dict["lf"])

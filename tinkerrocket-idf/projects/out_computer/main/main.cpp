@@ -591,6 +591,14 @@ static bool    cfg_servo_enabled = true;
 static bool    cfg_gain_sched   = true;
 static bool    cfg_use_angle_ctrl = false;
 static uint16_t cfg_roll_delay_ms  = 0;
+// #253: cached roll-control gains for config readback.  <=0 means "firmware
+// default" (mirrors the FC's apply semantics for these fields) — the app shows
+// its own default in that case.  Written by cacheRollControlConfig on every
+// cmd-31 push (the full 16-byte struct passes through since #387), persisted
+// in the "roll" NVS namespace, surfaced via sendCurrentConfig.
+static float   cfg_rate_cap_dps  = 0.0f;
+static float   cfg_kp_angle      = 0.0f;
+static float   cfg_iwind_dps     = -1.0f;  // <0 = firmware default (0 means "disabled")
 static bool    cfg_guidance_en  = false;
 static uint8_t cfg_camera_type  = CAM_TYPE_RUNCAM;  // default: RunCam
 
@@ -2619,6 +2627,11 @@ static void sendCurrentConfig()
     j += ",\"gs\":";  j += cfg_gain_sched ? "true" : "false";
     j += ",\"ac\":";  j += cfg_use_angle_ctrl ? "true" : "false";
     j += ",\"rdly\":"; j += itos(cfg_roll_delay_ms);
+    // #253: roll-control gain readback (sentinels — rcap/kpang <=0, iwind <0 —
+    // mean "firmware default"; the app keeps its local value in that case).
+    j += ",\"rcap\":";  j += fmtf(cfg_rate_cap_dps, 1);
+    j += ",\"kpang\":"; j += fmtf(cfg_kp_angle, 2);
+    j += ",\"iwind\":"; j += fmtf(cfg_iwind_dps, 1);
     j += ",\"ge\":";  j += cfg_guidance_en ? "true" : "false";
     j += ",\"camt\":"; j += itos(cfg_camera_type);
     // LoRa settings
@@ -2727,12 +2740,22 @@ static void cacheRollControlConfig(const uint8_t* payload, size_t len)
     memcpy(&rc, payload, sizeof(rc));
     cfg_use_angle_ctrl = (rc.use_angle_control != 0);
     cfg_roll_delay_ms  = rc.roll_delay_ms;
+    // #253: cache the gains too so the config readback echoes what was pushed
+    // (sentinels — cap/kp <=0, iwind <0 — mean "firmware default", matching
+    // the FC's apply semantics).
+    cfg_rate_cap_dps = rc.kp_angle_rate_cap_dps;
+    cfg_kp_angle     = rc.kp_angle;
+    cfg_iwind_dps    = rc.integral_sep_threshold_dps;
     prefs.begin("roll", false);
     prefs.putBool("ac", cfg_use_angle_ctrl);
     prefs.putUShort("rdly", cfg_roll_delay_ms);
+    prefs.putFloat("rcap", cfg_rate_cap_dps);
+    prefs.putFloat("kpang", cfg_kp_angle);
+    prefs.putFloat("iwind", cfg_iwind_dps);
     prefs.end();
-    ESP_LOGI("CFG", "Roll control cached: angle_ctrl=%s delay=%u ms",
-        cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms);
+    ESP_LOGI("CFG", "Roll control cached: angle_ctrl=%s delay=%u ms rcap=%.1f kpang=%.2f iwind=%.1f",
+        cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms,
+        (double)cfg_rate_cap_dps, (double)cfg_kp_angle, (double)cfg_iwind_dps);
 }
 
 // ============================================================================
@@ -4319,9 +4342,13 @@ void initPeripherals()
         prefs.begin("roll", false);
         cfg_use_angle_ctrl = prefs.getBool("ac", cfg_use_angle_ctrl);
         cfg_roll_delay_ms  = prefs.getUShort("rdly", cfg_roll_delay_ms);
+        cfg_rate_cap_dps   = prefs.getFloat("rcap", cfg_rate_cap_dps);   // #253
+        cfg_kp_angle       = prefs.getFloat("kpang", cfg_kp_angle);      // #253
+        cfg_iwind_dps      = prefs.getFloat("iwind", cfg_iwind_dps);     // #253
         prefs.end();
-        ESP_LOGI("CFG", "NVS Roll control: angle_ctrl=%s delay=%u ms",
-            cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms);
+        ESP_LOGI("CFG", "NVS Roll control: angle_ctrl=%s delay=%u ms rcap=%.1f kpang=%.2f iwind=%.1f",
+            cfg_use_angle_ctrl ? "ON" : "OFF", (unsigned)cfg_roll_delay_ms,
+            (double)cfg_rate_cap_dps, (double)cfg_kp_angle, (double)cfg_iwind_dps);
 
         // Load cached guidance config from NVS
         prefs.begin("guid", false);
@@ -4623,6 +4650,9 @@ static void setup_oc()
         prefs.begin("roll", false);
         cfg_use_angle_ctrl = prefs.getBool("ac", false);
         cfg_roll_delay_ms  = prefs.getUShort("rdly", 0);
+        cfg_rate_cap_dps   = prefs.getFloat("rcap", 0.0f);   // #253 (<=0 = fw default)
+        cfg_kp_angle       = prefs.getFloat("kpang", 0.0f);  // #253 (<=0 = fw default)
+        cfg_iwind_dps      = prefs.getFloat("iwind", -1.0f); // #253 (<0 = fw default)
         prefs.end();
 
         // Early identity load (so config readback on first connect is correct)
