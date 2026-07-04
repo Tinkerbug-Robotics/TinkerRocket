@@ -118,7 +118,10 @@ def ism6_scales(low_g_fs, high_g_fs, gyro_fs):
     denom = 32768.0
     acc_low  = (low_g_fs  * 1000.0 / denom) * 1e-3 * G_MS2
     acc_high = (high_g_fs * 1000.0 / denom) * 1e-3 * G_MS2
-    gyro     = (gyro_fs   * 1000.0 / denom) * 1e-3
+    # #369: ST gyro uses a fixed per-FS sensitivity (8.75 mdps/LSB @ ±250,
+    # doubling each step -> 140 @ ±4000), i.e. FS*0.035 mdps/LSB, NOT FS/32768
+    # (which under-reads by ~12.8%). Accel really is FS/32768.
+    gyro     = (gyro_fs   * 0.035) * 1e-3
     return acc_low, acc_high, gyro
 
 def pressure_to_altitude(p_pa, p0=101325.0):
