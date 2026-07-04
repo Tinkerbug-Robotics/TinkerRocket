@@ -2,8 +2,11 @@
 //  ServoTestView.swift
 //  TinkerRocketApp
 //
-//  Manual servo test mode. Presents sliders for each servo (-20° to +20°).
-//  Angles are sent to the rocket in real time. On dismiss, servos return
+//  Manual servo test mode. Presents a slider per servo spanning the active
+//  profile's fin calibration (servo_min_us<->finMinDeg, servo_max_us<->
+//  finMaxDeg), so the test can command the full mechanical travel — different
+//  models use different servos/cals, so the range is per-profile, not a fixed
+//  ±20. Angles are sent to the rocket in real time. On dismiss, servos return
 //  to their midpoints.
 //
 
@@ -13,9 +16,18 @@ struct ServoTestView: View {
     @ObservedObject var device: BLEDevice
     @Environment(\.dismiss) var dismiss
 
+    // Fin-angle endpoints the test may command, from the active profile's fin
+    // calibration. Falls back to ±20° when no calibration is available.
+    var finMinDeg: Double = -20
+    var finMaxDeg: Double = 20
+
     @State private var angles: [Double] = [0, 0, 0, 0]
 
-    private let range: ClosedRange<Double> = -20...20
+    private var range: ClosedRange<Double> {
+        let lo = Swift.min(finMinDeg, finMaxDeg)
+        let hi = Swift.max(finMinDeg, finMaxDeg)
+        return lo < hi ? lo...hi : -20...20
+    }
     private let step: Double = 0.5
 
     var body: some View {

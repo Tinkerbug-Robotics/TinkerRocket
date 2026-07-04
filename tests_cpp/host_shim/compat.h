@@ -14,6 +14,10 @@
 #pragma once
 
 #include "Arduino.h"
+// The device compat.h includes <esp_log.h>, so components reach ESP_LOG*
+// through <compat.h> alone (e.g. TR_ServoControl's begin() error check).
+// Mirror that with the host no-op stub.
+#include "esp_log.h"
 
 // Mirror the real TR_Compat compat.h on the device, which defines
 // `constrain` as a macro but does NOT poison `min`/`max`/`abs`.

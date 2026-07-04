@@ -62,7 +62,7 @@ void TR_ServoControl::begin() {
         timer_conf.timer_num       = LEDC_TIMERS[i];
         timer_conf.freq_hz         = static_cast<uint32_t>(servo_hz);
         timer_conf.clk_cfg         = LEDC_AUTO_CLK;
-        ledc_timer_config(&timer_conf);
+        esp_err_t terr = ledc_timer_config(&timer_conf);
 
         ledc_channel_config_t channel_conf = {};
         channel_conf.gpio_num   = servo_pin_[i];
@@ -72,7 +72,15 @@ void TR_ServoControl::begin() {
         channel_conf.timer_sel  = LEDC_TIMERS[i];
         channel_conf.duty       = 0;
         channel_conf.hpoint     = 0;
-        ledc_channel_config(&channel_conf);
+        esp_err_t cerr = ledc_channel_config(&channel_conf);
+
+        // A silent failure here leaves one servo dead with everything else
+        // healthy (command path fine, no pulse on the pad) — make it loud.
+        if (terr != ESP_OK || cerr != ESP_OK) {
+            ESP_LOGE("SERVO", "begin: servo %d (pin %d) LEDC config FAILED timer=%s channel=%s",
+                     i + 1, (int)servo_pin_[i],
+                     esp_err_to_name(terr), esp_err_to_name(cerr));
+        }
     }
     // centre all servos
     setPulse(0);
@@ -152,12 +160,21 @@ void TR_ServoControl::idle() {
 void TR_ServoControl::setServoAngles(const float angles[4]) {
     is_idle_ = false;  // commanding a pulse resumes PWM after idle()
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        // Clamp to the command limit (max deflection), then map via the physical
-        // fin calibration (#267) so the fin reaches the commanded *physical* angle
-        // — no longer truncated to / scaled by the roll-PID clamp.
-        float angle = constrain(angles[i], min_cmd, max_cmd);
+        // Clamp the commanded fin angle to the physical fin-calibration range
+        // (fin_min_deg_..fin_max_deg_), then map via that calibration (#267) so
+        // the fin reaches the commanded *physical* angle.  Clamp to the fin
+        // range — NOT the roll/guidance command authority (min_cmd/max_cmd):
+        // this path drives both the flight mixer (already pre-clamped to its own
+        // authority upstream) and the manual servo test, and the test must be
+        // able to sweep to the calibrated endpoints so servo_min_us<->fin_min_deg
+        // and servo_max_us<->fin_max_deg are honoured per model instead of being
+        // capped at the (narrower, model-varying) flight authority.  Fin cal
+        // defaults to [min_cmd,max_cmd] until configured, so behaviour is
+        // unchanged until a real fin calibration is set.
+        float angle = constrain(angles[i], fin_min_deg_, fin_max_deg_);
         int pulse_us = usFromFinDeg(angle) + servo_bias_us_[i];
         pulse_us = saturateCommand(pulse_us);
+        last_pulse_us_[i] = pulse_us;
 
         uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
         uint32_t duty = (static_cast<uint32_t>(pulse_us)
@@ -184,6 +201,7 @@ void TR_ServoControl::setPulseChannel(int channel, int base_pulse_us) {
     int pulse_us = (base_pulse_us == 0) ? servo_mid_us_[channel]
                                         : base_pulse_us + servo_bias_us_[channel];
     pulse_us = saturateCommand(pulse_us);
+    last_pulse_us_[channel] = pulse_us;
 
     uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
     uint32_t duty     = (static_cast<uint32_t>(pulse_us)

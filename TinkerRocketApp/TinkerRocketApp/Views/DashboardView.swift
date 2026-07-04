@@ -237,7 +237,11 @@ struct DashboardView: View {
                 case .settings:
                     if let device = fleet.activeDevice { SettingsView(device: device) }
                 case .servoTest:
-                    if let device = fleet.activeDevice { ServoTestView(device: device) }
+                    if let device = fleet.activeDevice {
+                        ServoTestView(device: device,
+                                      finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
+                                      finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
+                    }
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject

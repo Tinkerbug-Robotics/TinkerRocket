@@ -60,10 +60,20 @@ typedef struct {
     int              hpoint;
 } ledc_channel_config_t;
 
-// No-op stubs (host has no PWM peripheral). Return 0 == ESP_OK; callers ignore it.
-static inline int ledc_timer_config(const ledc_timer_config_t*)        { return 0; }
-static inline int ledc_channel_config(const ledc_channel_config_t*)    { return 0; }
-static inline int ledc_set_duty(ledc_mode_t, ledc_channel_t, uint32_t) { return 0; }
-static inline int ledc_update_duty(ledc_mode_t, ledc_channel_t)        { return 0; }
+// Minimal esp_err surface — TR_ServoControl::begin() checks the LEDC config
+// results (esp_err_t / ESP_OK / esp_err_to_name).  Guarded: other shim headers
+// (or a future esp_err.h shim) may define these too.
+#ifndef ESP_OK
+typedef int esp_err_t;
+#define ESP_OK 0
+static inline const char* esp_err_to_name(esp_err_t) { return "ESP_OK"; }
+#endif
+
+// No-op stubs (host has no PWM peripheral). Return ESP_OK; the servo
+// controller checks these in begin() and logs (no-op on host) on failure.
+static inline esp_err_t ledc_timer_config(const ledc_timer_config_t*)        { return ESP_OK; }
+static inline esp_err_t ledc_channel_config(const ledc_channel_config_t*)    { return ESP_OK; }
+static inline esp_err_t ledc_set_duty(ledc_mode_t, ledc_channel_t, uint32_t) { return ESP_OK; }
+static inline esp_err_t ledc_update_duty(ledc_mode_t, ledc_channel_t)        { return ESP_OK; }
 
 #endif  // HOST_SHIM_DRIVER_LEDC_H
