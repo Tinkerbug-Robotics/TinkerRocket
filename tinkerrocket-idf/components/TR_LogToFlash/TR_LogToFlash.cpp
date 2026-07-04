@@ -367,6 +367,8 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.activate_max_us = activate_max_us_;
     out.clear_ring_max_us = clear_ring_max_us_;
     out.flush_iter_max_us = flush_iter_max_us_;
+    out.spi_wait_max_us = spi_wait_max_us_;   // #398
+    out.spi_hold_max_us = spi_hold_max_us_;   // #398
     out.syncs_performed = syncs_performed_;
 
     out.known_bad_blocks = countBadBlocks();
@@ -383,6 +385,8 @@ void TR_LogToFlash::resetIntervalTimings()
     activate_max_us_ = 0;
     clear_ring_max_us_ = 0;
     flush_iter_max_us_ = 0;
+    spi_wait_max_us_ = 0;   // #398
+    spi_hold_max_us_ = 0;   // #398
 }
 
 void TR_LogToFlash::getRecoveryInfo(TR_LogToFlashRecoveryInfo& out) const
@@ -620,12 +624,24 @@ bool TR_LogToFlash::isLoggingActive() const
 
 void TR_LogToFlash::spiAcquire()
 {
-    if (spi_mutex_) xSemaphoreTake(spi_mutex_, portMAX_DELAY);
+    if (!spi_mutex_) return;
+    // #398: measure time blocked acquiring + hold duration, so the stats
+    // window shows exactly which flush-side work starves the parser's MRAM
+    // pushes (the multi-second parser_max mystery).
+    const int64_t t0 = esp_timer_get_time();
+    xSemaphoreTake(spi_mutex_, portMAX_DELAY);
+    const int64_t now = esp_timer_get_time();
+    const uint32_t waited = (uint32_t)(now - t0);
+    if (waited > spi_wait_max_us_) spi_wait_max_us_ = waited;
+    spi_hold_start_us_ = now;
 }
 
 void TR_LogToFlash::spiRelease()
 {
-    if (spi_mutex_) xSemaphoreGive(spi_mutex_);
+    if (!spi_mutex_) return;
+    const uint32_t held = (uint32_t)(esp_timer_get_time() - spi_hold_start_us_);
+    if (held > spi_hold_max_us_) spi_hold_max_us_ = held;
+    xSemaphoreGive(spi_mutex_);
 }
 
 // ============================================================================

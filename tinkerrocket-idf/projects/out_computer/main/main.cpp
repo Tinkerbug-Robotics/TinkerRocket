@@ -3399,7 +3399,13 @@ static constexpr uint32_t RENDEZVOUS_SAVED_MS           = 20000;  // back on sav
 // BW125).  Both sides need to agree on every modulation parameter to
 // decode each other; the rendezvous mode is the shared known-good
 // fallback.
-static void rendezvousHopToRendezvousMode()
+// #398: returns success so the state machine only advances when the radio
+// actually retuned.  Passes wait_for_tx=false — a mid-TX hop returns busy
+// immediately instead of spin-waiting out the packet's 100-200 ms airtime
+// inside loop_oc; the rendezvous service simply retries next iteration.
+// (Previously the state advanced even on failure, leaving the state machine
+// and the radio on different modes until the next window boundary.)
+static bool rendezvousHopToRendezvousMode()
 {
     // All five values are compile-time constants in RocketComputerTypes.h
     // so the BS and OC are guaranteed to agree on the meeting place even
@@ -3408,38 +3414,43 @@ static void rendezvousHopToRendezvousMode()
                                 LORA_FACTORY_RENDEZVOUS_SF,
                                 LORA_FACTORY_RENDEZVOUS_BW_KHZ,
                                 LORA_FACTORY_RENDEZVOUS_CR,
-                                LORA_FACTORY_RENDEZVOUS_TX_DBM))
+                                LORA_FACTORY_RENDEZVOUS_TX_DBM,
+                                /*wait_for_tx=*/false))
     {
         lora_comms.startReceive();
         lora_in_rx_mode = true;
+        return true;
     }
-    else
-    {
-        ESP_LOGE("OC", "[RENDEZVOUS] reconfigure to rendezvous mode failed");
-    }
+    // Busy (mid-TX) or failed — caller retries next loop iteration.
+    return false;
 }
 
 // Hop the radio back to whatever NVS says — i.e. the working config the
 // user picked (or factory defaults if NVS empty).  Called when exiting
 // rendezvous and at the end of each ON_RENDEZVOUS window.
-static void rendezvousHopToSavedMode()
+static bool rendezvousHopToSavedMode()
 {
     if (lora_comms.reconfigure(lora_freq_mhz, lora_sf, lora_bw_khz,
-                                lora_cr, lora_tx_power))
+                                lora_cr, lora_tx_power,
+                                /*wait_for_tx=*/false))
     {
         lora_comms.startReceive();
         lora_in_rx_mode = true;
+        return true;
     }
-    else
-    {
-        ESP_LOGE("OC", "[RENDEZVOUS] reconfigure to saved mode failed");
-    }
+    return false;
 }
 
 static void rendezvousExit(const char* why)
 {
     if (rendezvous_state == RocketRendezvousState::IDLE) return;
-    rendezvousHopToSavedMode();
+    if (!rendezvousHopToSavedMode())
+    {
+        // Radio busy/failed — stay in the current state; the silence-broke
+        // check at the top of serviceRocketRendezvous re-runs this exit on
+        // the next loop iteration.
+        return;
+    }
     rendezvous_state = RocketRendezvousState::IDLE;
     ESP_LOGI("OC", "[RENDEZVOUS] Exit (%s); back on saved mode %.2f MHz SF%u",
              why, (double)lora_freq_mhz, (unsigned)lora_sf);
@@ -3491,32 +3502,41 @@ static void serviceRocketRendezvous()
         case RocketRendezvousState::IDLE:
             if (silent_for >= trigger_ms)
             {
-                rendezvousHopToRendezvousMode();
-                rendezvous_phase_start_ms = now;
-                rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
-                ESP_LOGW("OC", "[RENDEZVOUS] Silent %u s; hop to rendezvous mode %.2f MHz SF%u BW%.0f",
-                         (unsigned)(silent_for / 1000),
-                         (double)LORA_FACTORY_RENDEZVOUS_MHZ,
-                         (unsigned)LORA_FACTORY_RENDEZVOUS_SF,
-                         (double)LORA_FACTORY_RENDEZVOUS_BW_KHZ);
+                // #398: advance only when the retune actually happened; a
+                // busy radio (mid-TX) retries next loop iteration instead of
+                // stalling loop_oc for the packet's airtime.
+                if (rendezvousHopToRendezvousMode())
+                {
+                    rendezvous_phase_start_ms = now;
+                    rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
+                    ESP_LOGW("OC", "[RENDEZVOUS] Silent %u s; hop to rendezvous mode %.2f MHz SF%u BW%.0f",
+                             (unsigned)(silent_for / 1000),
+                             (double)LORA_FACTORY_RENDEZVOUS_MHZ,
+                             (unsigned)LORA_FACTORY_RENDEZVOUS_SF,
+                             (double)LORA_FACTORY_RENDEZVOUS_BW_KHZ);
+                }
             }
             break;
 
         case RocketRendezvousState::ON_RENDEZVOUS:
             if ((now - rendezvous_phase_start_ms) >= RENDEZVOUS_WINDOW_MS)
             {
-                rendezvousHopToSavedMode();
-                rendezvous_phase_start_ms = now;
-                rendezvous_state = RocketRendezvousState::ON_SAVED;
+                if (rendezvousHopToSavedMode())
+                {
+                    rendezvous_phase_start_ms = now;
+                    rendezvous_state = RocketRendezvousState::ON_SAVED;
+                }
             }
             break;
 
         case RocketRendezvousState::ON_SAVED:
             if ((now - rendezvous_phase_start_ms) >= RENDEZVOUS_SAVED_MS)
             {
-                rendezvousHopToRendezvousMode();
-                rendezvous_phase_start_ms = now;
-                rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
+                if (rendezvousHopToRendezvousMode())
+                {
+                    rendezvous_phase_start_ms = now;
+                    rendezvous_state = RocketRendezvousState::ON_RENDEZVOUS;
+                }
             }
             break;
     }
@@ -4087,7 +4107,7 @@ static void printStats()
              "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
              "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
              "bad_blocks=%lu skips=%lu  "
-             "rx_ovf=%lu rx_peak=%lu parser_max=%lu us",
+             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us",
              (unsigned long)s.write_max_us,
              (unsigned long)s.sync_max_us,
              (unsigned long)s.erase_max_us,
@@ -4103,7 +4123,9 @@ static void printStats()
              (unsigned long)s.bad_block_skips,
              (unsigned long)d_rx_ovf,
              (unsigned long)cur_rx_peak,
-             (unsigned long)cur_parser);
+             (unsigned long)cur_parser,
+             (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
+             (unsigned long)s.spi_hold_max_us);  // #398
     logger.resetIntervalTimings();
 
     // Send telemetry to BLE app

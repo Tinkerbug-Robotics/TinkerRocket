@@ -394,7 +394,8 @@ void TR_LoRa_Comms::serviceTxWatchdog()
 // Runtime reconfiguration
 // ============================================================================
 
-bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power)
+bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power,
+                                bool wait_for_tx)
 {
     if (!enabled_ || radio_ == nullptr)
     {
@@ -405,9 +406,21 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     // logs even before any per-step warning fires.
     const int64_t _reconf_t0 = esp_timer_get_time();
 
-    // Wait for any in-progress TX to complete (up to 2 s).
-    // Without this, reconfigure silently fails ~18% of the time when
-    // the radio happens to be mid-transmit, and NVS never gets updated.
+    // A retune mid-TX corrupts the in-flight packet, so an ongoing TX must
+    // finish first.  Two modes (#398):
+    //   wait_for_tx=true  — block up to 2 s.  For user-initiated config paths
+    //                       that won't retry (without this, reconfigure
+    //                       silently failed ~18% of the time mid-transmit and
+    //                       NVS never got updated).
+    //   wait_for_tx=false — return busy immediately.  For main-loop service
+    //                       paths (rendezvous): a packet's airtime is
+    //                       100-200 ms at SF8/BW250 and the spin-wait stalled
+    //                       loop_oc for all of it; the caller retries next
+    //                       iteration instead.
+    if (tx_ongoing_ && !wait_for_tx)
+    {
+        return false;  // busy — caller retries
+    }
     if (tx_ongoing_)
     {
         const int64_t _wait_t0 = esp_timer_get_time();
@@ -421,9 +434,8 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
         const int64_t _wait_dt = esp_timer_get_time() - _wait_t0;
         if (_wait_dt > LORA_STALL_THRESHOLD_US) {
             ESP_LOGW(TAG, "STALL: reconfigure wait-for-TX took %lld us "
-                          "(tx_ongoing=%d, hit_deadline=%d)",
-                     (long long)_wait_dt, tx_ongoing_ ? 1 : 0,
-                     tx_ongoing_ ? 1 : 0);
+                          "(hit_deadline=%d)",
+                     (long long)_wait_dt, tx_ongoing_ ? 1 : 0);
         }
         if (tx_ongoing_) { return false; }  // TX stuck -- give up
     }
