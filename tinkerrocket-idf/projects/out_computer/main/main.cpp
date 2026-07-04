@@ -376,28 +376,116 @@ static bool ina_continuous = false;         // INA230 in continuous-averaging mo
 // Shunt resistor and current LSB
 static constexpr float INA230_R_SHUNT_OHM = 0.002f;     // 2 mOhm
 static constexpr float INA230_CURRENT_LSB_A = 0.001f;    // 1 mA/bit
-static volatile uint8_t pending_out_command = 0U;
+static volatile uint8_t pending_out_command = 0U;  // command currently being SERVED to the FC
 static uint8_t  pending_config_data[sizeof(RollProfileData)] = {};
 static volatile size_t   pending_config_data_len = 0;
 static volatile uint8_t  pending_config_msg_type = 0;
 
-// Helper: sets pending_out_command with a full memory barrier so that all
-// prior writes (config data, len, msg_type) are visible to the other core
-// before the command flag.  BLE callbacks run on core 0 but the main loop
-// (which reads these in queueOutStatusResponse) runs on core 1.
-static inline void setPendingCommand(uint8_t cmd)
+// ---- FC command queue (#366) -----------------------------------------------
+// The old single pending slot meant every setPendingCommand() overwrote the
+// previous one — the app's connect-time profile sync bursts ~13 commands
+// 60-90 ms apart while the FC drains one per 250 ms poll (or none at all with
+// the rail off), so most of the burst was silently lost; even the sim's
+// config+start pair raced (SIM_START stomped SIM_CONFIG → sims flew default
+// motor params, reproduced on the bench 2026-07-03/04).  Commands (with a
+// SNAPSHOT of their config payload) now queue FIFO and are served one at a
+// time:
+//   - snapshot-at-enqueue: a later staging can't clobber an in-flight payload
+//   - dedupe by command id: a re-push replaces the queued payload in place
+//     (latest wins) instead of flooding the queue — self-applying settings
+//     sliders stay bounded
+//   - PYRO_FIRE_TEST / PYRO_CONT_TEST jump to the FRONT: a manual pyro test
+//     keeps its immediacy instead of waiting ~15 s behind a profile sync
+//   - one idle (cmd=0) poll is served between commands so the FC's dedup
+//     (#368: last_processed_cmd resets only when the OC reports 0) sees a
+//     reset edge even between back-to-back identical command ids
+// With the rail off the queue simply holds; powering on drains the whole
+// sync in order — connecting before power-on now works by design.
+struct QueuedCommand
 {
-    __sync_synchronize();  // release barrier: flush all prior writes
-    pending_out_command = cmd;
+    uint8_t cmd;
+    uint8_t cfg_type;
+    uint8_t cfg_len;
+    uint8_t cfg[sizeof(RollProfileData)];
+};
+static constexpr size_t CMD_QUEUE_DEPTH = 16;   // sync burst is ~13-15 commands
+static QueuedCommand cmd_queue[CMD_QUEUE_DEPTH];
+static size_t cmd_queue_head  = 0;   // index of next entry to pop
+static size_t cmd_queue_count = 0;
+static portMUX_TYPE cmd_queue_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t cmd_queue_drops = 0;            // overflow drops (surfaced in stats)
+// Serving copy — queueOutStatusResponse reads ONLY these, never the staging
+// globals, so a new enqueue can't tear the frame being repeated to the FC.
+static uint8_t serving_cfg_type = 0;
+static uint8_t serving_cfg_len  = 0;
+static uint8_t serving_cfg[sizeof(RollProfileData)] = {};
+static bool    cmd_idle_gap_pending = false;    // serve one cmd=0 poll between commands
+
+// Enqueue a command for the FC, snapshotting the staging globals
+// (pending_config_data/len/msg_type — written by the caller just before this
+// call, same task, so the snapshot is coherent).  Callers' API is unchanged.
+// BLE callbacks run on core 0, the LoRa/main loop on core 1 — the critical
+// section covers both enqueue and pop.
+static void setPendingCommand(uint8_t cmd)
+{
+    if (cmd == 0U)   // legacy "clear serving slot" (internal use only)
+    {
+        pending_out_command = 0U;
+        return;
+    }
+
+    QueuedCommand entry;
+    entry.cmd      = cmd;
+    entry.cfg_type = pending_config_msg_type;
+    size_t len = pending_config_data_len;
+    if (len > sizeof(entry.cfg)) len = sizeof(entry.cfg);
+    entry.cfg_len = (uint8_t)len;
+    if (len > 0) memcpy(entry.cfg, pending_config_data, len);
+
+    const bool front = (cmd == PYRO_FIRE_TEST || cmd == PYRO_CONT_TEST);
+
+    portENTER_CRITICAL(&cmd_queue_mux);
+    // Dedupe: replace the payload of an already-queued entry with the same
+    // command id (latest value wins, position preserved).
+    for (size_t i = 0; i < cmd_queue_count; i++)
+    {
+        QueuedCommand& q = cmd_queue[(cmd_queue_head + i) % CMD_QUEUE_DEPTH];
+        if (q.cmd == cmd)
+        {
+            q.cfg_type = entry.cfg_type;
+            q.cfg_len  = entry.cfg_len;
+            if (entry.cfg_len > 0) memcpy(q.cfg, entry.cfg, entry.cfg_len);
+            portEXIT_CRITICAL(&cmd_queue_mux);
+            return;
+        }
+    }
+    if (cmd_queue_count >= CMD_QUEUE_DEPTH)
+    {
+        cmd_queue_drops++;
+        portEXIT_CRITICAL(&cmd_queue_mux);
+        ESP_LOGW("OC", "FC cmd queue FULL — dropped cmd 0x%02X (drops=%lu)",
+                 (unsigned)cmd, (unsigned long)cmd_queue_drops);
+        return;
+    }
+    if (front)
+    {
+        cmd_queue_head = (cmd_queue_head + CMD_QUEUE_DEPTH - 1) % CMD_QUEUE_DEPTH;
+        cmd_queue[cmd_queue_head] = entry;
+    }
+    else
+    {
+        cmd_queue[(cmd_queue_head + cmd_queue_count) % CMD_QUEUE_DEPTH] = entry;
+    }
+    cmd_queue_count++;
+    portEXIT_CRITICAL(&cmd_queue_mux);
 }
-// Command retry: the ESP32 I2C slave driver's compound-transaction bug
-// can garble the response on the wire even though writeToSlave succeeds
-// (it only puts bytes into the TX FIFO, not onto the bus).  Repeat each
-// command for CMD_REPEAT_LIMIT polls so the FlightComputer has multiple
-// chances to receive it.
-static const uint8_t CMD_REPEAT_LIMIT = 5;   // ~1.25s at 250ms poll
+// Command repeat: each served command is repeated for CMD_REPEAT_LIMIT polls.
+// Was 5 as insurance against the lossy pre-#399 channel; with the TX-ring
+// desync fixed the link runs 100% clean on the bench (311/0 reads through a
+// full flight), so 3 keeps plenty of margin while a queued 13-command profile
+// sync drains in ~13 s instead of ~20 s ((3+1 idle) x 250 ms per command).
+static const uint8_t CMD_REPEAT_LIMIT = 3;
 static uint8_t cmd_delivery_count = 0;
-static uint8_t cmd_delivery_id = 0;           // tracks which command the counter belongs to
 static bool camera_recording_requested = false;
 static volatile bool flash_op_active = false;   // set during blocking NAND ops (file list/delete/download)
 // Set alongside flash_op_active. Gates the I2S DMA recv callback so FC
@@ -1216,20 +1304,41 @@ static constexpr size_t I2C_TX_SIZE = FC_COMBINED_READ_SIZE + I2C_TX_PAD;
 
 static void queueOutStatusResponse(bool ready)
 {
-    const uint8_t cmd = pending_out_command;  // snapshot (volatile)
-    __sync_synchronize();  // acquire: see config data written before the command
+    // #366: serving-slot lifecycle.  When idle, first serve one cmd=0 poll
+    // (the FC's dedup reset edge — #368), then pop the next queued command
+    // into the serving copy.
+    if (pending_out_command == 0U)
+    {
+        if (cmd_idle_gap_pending)
+        {
+            cmd_idle_gap_pending = false;   // this poll reports cmd=0
+        }
+        else
+        {
+            portENTER_CRITICAL(&cmd_queue_mux);
+            if (cmd_queue_count > 0)
+            {
+                const QueuedCommand& q = cmd_queue[cmd_queue_head];
+                serving_cfg_type = q.cfg_type;
+                serving_cfg_len  = q.cfg_len;
+                if (q.cfg_len > 0) memcpy(serving_cfg, q.cfg, q.cfg_len);
+                pending_out_command = q.cmd;
+                cmd_queue_head = (cmd_queue_head + 1) % CMD_QUEUE_DEPTH;
+                cmd_queue_count--;
+                cmd_delivery_count = 0;
+            }
+            portEXIT_CRITICAL(&cmd_queue_mux);
+        }
+    }
+
+    const uint8_t cmd = pending_out_command;
 
     if (cmd != 0U)
     {
-        // Detect new command (different from what we were repeating)
-        if (cmd != cmd_delivery_id)
-        {
-            cmd_delivery_count = 0;
-            cmd_delivery_id = cmd;
-        }
-        ESP_LOGI("OC", "I2C TX StatusResponse: ready=%d cmd=0x%02X attempt=%u/%u",
+        ESP_LOGI("OC", "I2C TX StatusResponse: ready=%d cmd=0x%02X attempt=%u/%u (queued=%u)",
                       ready ? 1 : 0, (unsigned)cmd,
-                      (unsigned)(cmd_delivery_count + 1), (unsigned)CMD_REPEAT_LIMIT);
+                      (unsigned)(cmd_delivery_count + 1), (unsigned)CMD_REPEAT_LIMIT,
+                      (unsigned)cmd_queue_count);
     }
 
     // Build a single padded buffer: FC_COMBINED_READ_SIZE of real data
@@ -1252,15 +1361,16 @@ static void queueOutStatusResponse(bool ready)
     }
     tx_pos = frame_len;
 
-    // Append config data for config commands
-    if (cmd != 0U && pending_config_data_len > 0
+    // Append config data for config commands (#366: from the SERVING snapshot,
+    // never the staging globals — a concurrent enqueue can't tear this frame)
+    if (cmd != 0U && serving_cfg_len > 0
         && isConfigCommand(cmd))
     {
         uint8_t cfg_frame[MAX_FRAME];
         size_t  cfg_frame_len = 0;
-        if (TR_I2C_Interface::packMessage(pending_config_msg_type,
-                                           pending_config_data,
-                                           pending_config_data_len,
+        if (TR_I2C_Interface::packMessage(serving_cfg_type,
+                                           serving_cfg,
+                                           serving_cfg_len,
                                            cfg_frame,
                                            sizeof(cfg_frame),
                                            cfg_frame_len))
@@ -1271,17 +1381,17 @@ static void queueOutStatusResponse(bool ready)
                 tx_pos += cfg_frame_len;
             }
             ESP_LOGI("OC", "I2C TX Config frame type=0x%02X len=%u",
-                          (unsigned)pending_config_msg_type,
+                          (unsigned)serving_cfg_type,
                           (unsigned)cfg_frame_len);
         }
         else
         {
             ESP_LOGE("OC", "I2C TX Config pack FAILED type=0x%02X data_len=%u",
-                          (unsigned)pending_config_msg_type,
-                          (unsigned)pending_config_data_len);
+                          (unsigned)serving_cfg_type,
+                          (unsigned)serving_cfg_len);
         }
     }
-    else if (cmd != 0U && isConfigCommand(cmd) && pending_config_data_len == 0)
+    else if (cmd != 0U && isConfigCommand(cmd) && serving_cfg_len == 0)
     {
         ESP_LOGW("OC", "I2C TX config cmd=0x%02X but data_len=0",
                       (unsigned)cmd);
@@ -1292,19 +1402,21 @@ static void queueOutStatusResponse(bool ready)
     i2c_interface.writeToSlave(tx_buf, I2C_TX_SIZE, 0);
 
     // Repeat each command for CMD_REPEAT_LIMIT polls so the FlightComputer
-    // has multiple chances to receive it.
+    // has multiple chances to receive it; then clear the serving slot and
+    // schedule one idle poll before the next queued command (#366/#368).
     if (cmd != 0U)
     {
         cmd_delivery_count++;
         if (cmd_delivery_count >= CMD_REPEAT_LIMIT)
         {
-            ESP_LOGI("OC", "I2C TX Cmd 0x%02X cleared after %u deliveries",
-                          (unsigned)cmd, (unsigned)cmd_delivery_count);
-            setPendingCommand(0U);
-            pending_config_data_len = 0;
-            pending_config_msg_type = 0;
+            ESP_LOGI("OC", "I2C TX Cmd 0x%02X cleared after %u deliveries (queued=%u)",
+                          (unsigned)cmd, (unsigned)cmd_delivery_count,
+                          (unsigned)cmd_queue_count);
+            pending_out_command = 0U;
+            serving_cfg_len = 0;
+            serving_cfg_type = 0;
             cmd_delivery_count = 0;
-            cmd_delivery_id = 0;
+            cmd_idle_gap_pending = true;
         }
     }
 }
