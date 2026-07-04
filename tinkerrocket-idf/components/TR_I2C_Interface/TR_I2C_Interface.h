@@ -26,6 +26,15 @@ public:
                          size_t tx_buffer_len = 256,
                          bool enable_internal_pullups = false);
 
+    // #402: flush the slave TX path after a desync (an aborted master read
+    // leaves residue in the V2 driver's TX ring that misaligns every later
+    // read).  Deletes and re-creates the slave device with the parameters
+    // saved by beginSlave() and re-registers the callbacks; the ISR->task
+    // queues, TX task, and staged response survive.  MUST only be called at a
+    // guaranteed bus-idle point (the master suspends polling around it) —
+    // resetting mid-transaction destroys the in-flight read (#279).
+    esp_err_t resetSlaveTx();
+
     esp_err_t sendMessage(uint8_t type,
                           const uint8_t *payload,
                           size_t len,
@@ -89,6 +98,10 @@ private:
     // TX service task: blocks on _tx_req_queue, writes the staged response.
     static void slaveTxTask(void *arg);
 
+    // #402: build the slave device from the saved init parameters and register
+    // the ISR callbacks.  Shared by beginSlave() and resetSlaveTx().
+    esp_err_t createSlaveDevice();
+
     uint8_t device_address;
 
     // Master mode handles
@@ -120,6 +133,16 @@ private:
     // one. Counted in slaveTxTask, surfaced via a rate-limited ESP_LOGW.
     uint32_t _tx_writes      = 0;  // total i2c_slave_write calls
     uint32_t _tx_write_fails = 0;  // non-OK or short writes
+
+    // #402: slave device lifetime guard + saved init parameters so
+    // resetSlaveTx() can recreate the device.  _dev_mux serializes
+    // slaveTxTask's i2c_slave_write against del/re-create in resetSlaveTx.
+    SemaphoreHandle_t _dev_mux = nullptr;
+    int    _slave_sda = -1;
+    int    _slave_scl = -1;
+    size_t _slave_rx_len = 0;
+    size_t _slave_tx_len_cfg = 0;
+    bool   _slave_pullups = false;
 };
 
 #endif

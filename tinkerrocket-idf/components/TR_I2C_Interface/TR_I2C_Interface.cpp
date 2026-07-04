@@ -97,44 +97,41 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
 {
     (void)clock_hz;  // slave clock is driven by master
 
+    // #402: save the init parameters so resetSlaveTx() can recreate the device.
+    _slave_sda        = sda_pin;
+    _slave_scl        = scl_pin;
+    _slave_rx_len     = rx_buffer_len;
+    _slave_tx_len_cfg = tx_buffer_len;
+    _slave_pullups    = enable_internal_pullups;
+
     // ISR -> task signals: _rx_queue carries each received frame's byte count;
     // _tx_req_queue carries one token per master-read request. _tx_mux guards
     // the staged TX response shared between writeToSlave() and slaveTxTask().
+    // _dev_mux (#402) serializes slaveTxTask's i2c_slave_write against the
+    // del/re-create in resetSlaveTx().
     _rx_queue     = xQueueCreate(4, sizeof(size_t));
     _tx_req_queue = xQueueCreate(4, sizeof(uint8_t));
     _tx_mux       = xSemaphoreCreateMutex();
-    if (_rx_queue == nullptr || _tx_req_queue == nullptr || _tx_mux == nullptr)
+    _dev_mux      = xSemaphoreCreateMutex();
+    if (_rx_queue == nullptr || _tx_req_queue == nullptr ||
+        _tx_mux == nullptr || _dev_mux == nullptr)
     {
         ESP_LOGE(TAG, "Failed to create slave queues/mutex");
         return ESP_ERR_NO_MEM;
     }
     _tx_len = 0;
 
-    i2c_slave_config_t slave_cfg = {};
-    slave_cfg.i2c_port = I2C_NUM_0;
-    slave_cfg.sda_io_num = static_cast<gpio_num_t>(sda_pin);
-    slave_cfg.scl_io_num = static_cast<gpio_num_t>(scl_pin);
-    slave_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    slave_cfg.send_buf_depth = tx_buffer_len;     // TX ringbuffer depth
-    slave_cfg.receive_buf_depth = rx_buffer_len;  // driver-owned RX ring
-    slave_cfg.slave_addr = device_address;
-    slave_cfg.addr_bit_len = I2C_ADDR_BIT_LEN_7;
-    slave_cfg.intr_priority = 0;
-    slave_cfg.flags.enable_internal_pullup = enable_internal_pullups;
-
-    esp_err_t err = i2c_new_slave_device(&slave_cfg, &_slave_dev);
+    esp_err_t err = createSlaveDevice();
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "i2c_new_slave_device failed: %s", esp_err_to_name(err));
         return err;
     }
 
     memset(_slave_rx_buf, 0, SLAVE_RX_BUF_SIZE);
 
-    // Start the TX service task before registering callbacks so the consumer
-    // is ready the instant on_request can fire. Pin it to the core this runs
-    // on — the slave ISR is allocated on the same core, so on_request -> task
-    // wakeups stay on-core and clear the SCL stretch with minimal latency.
+    // Start the TX service task. Pin it to the core this runs on — the slave
+    // ISR is allocated on the same core, so on_request -> task wakeups stay
+    // on-core and clear the SCL stretch with minimal latency.
     BaseType_t task_ok = xTaskCreatePinnedToCore(slaveTxTask, "i2c_slv_tx",
                                                  SLAVE_TX_TASK_STACK, this,
                                                  SLAVE_TX_TASK_PRIO, &_tx_task,
@@ -145,10 +142,37 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
         return ESP_ERR_NO_MEM;
     }
 
-    // Register both halves of the V2 slave protocol: on_receive (master writes
-    // land in our RX ring) and on_request (master reads -> wake the TX task).
-    // The V2 driver auto-receives, so there is no i2c_slave_receive() arming
-    // call as in V1.
+    return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+//  #402: create (or re-create) the V2 slave device from the saved parameters
+//  and register both ISR callbacks.  on_receive: master writes land in our RX
+//  ring.  on_request: master reads -> wake the TX task (the V2 driver
+//  auto-receives, so there is no i2c_slave_receive() arming call as in V1).
+// ---------------------------------------------------------------------------
+esp_err_t TR_I2C_Interface::createSlaveDevice()
+{
+    i2c_slave_config_t slave_cfg = {};
+    slave_cfg.i2c_port = I2C_NUM_0;
+    slave_cfg.sda_io_num = static_cast<gpio_num_t>(_slave_sda);
+    slave_cfg.scl_io_num = static_cast<gpio_num_t>(_slave_scl);
+    slave_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    slave_cfg.send_buf_depth = _slave_tx_len_cfg;   // TX ringbuffer depth
+    slave_cfg.receive_buf_depth = _slave_rx_len;    // driver-owned RX ring
+    slave_cfg.slave_addr = device_address;
+    slave_cfg.addr_bit_len = I2C_ADDR_BIT_LEN_7;
+    slave_cfg.intr_priority = 0;
+    slave_cfg.flags.enable_internal_pullup = _slave_pullups;
+
+    esp_err_t err = i2c_new_slave_device(&slave_cfg, &_slave_dev);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "i2c_new_slave_device failed: %s", esp_err_to_name(err));
+        _slave_dev = nullptr;
+        return err;
+    }
+
     i2c_slave_event_callbacks_t cbs = {};
     cbs.on_receive = slaveReceiveISR;
     cbs.on_request = slaveRequestISR;
@@ -156,12 +180,50 @@ esp_err_t TR_I2C_Interface::beginSlave(int sda_pin,
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG, "i2c_slave_register_event_callbacks failed: %s", esp_err_to_name(err));
-        vTaskDelete(_tx_task);
-        _tx_task = nullptr;
+        i2c_del_slave_device(_slave_dev);
+        _slave_dev = nullptr;
         return err;
     }
 
     return ESP_OK;
+}
+
+// ---------------------------------------------------------------------------
+//  #402: flush the slave TX path after an aborted-read desync by deleting and
+//  re-creating the slave device (the V2 driver exposes no TX-ring flush).
+//  The ISR->task queues, TX task, and staged response survive; stale serve
+//  tokens are drained so the fresh device doesn't answer a request that died
+//  with the old one.  Caller guarantees bus idle — the FC suspends ALL
+//  polling for its RESYNC grace window before we run (#279: a reset racing an
+//  in-flight read destroys that read).
+// ---------------------------------------------------------------------------
+esp_err_t TR_I2C_Interface::resetSlaveTx()
+{
+    if (_slave_dev == nullptr || _dev_mux == nullptr)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+    xSemaphoreTake(_dev_mux, portMAX_DELAY);
+
+    uint8_t tok;
+    while (xQueueReceive(_tx_req_queue, &tok, 0) == pdTRUE) {}
+
+    esp_err_t err = i2c_del_slave_device(_slave_dev);
+    _slave_dev = nullptr;
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "resetSlaveTx: del failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(_dev_mux);
+        return err;
+    }
+
+    err = createSlaveDevice();
+    xSemaphoreGive(_dev_mux);
+    if (err == ESP_OK)
+    {
+        ESP_LOGW(TAG, "slave TX path reset (desync recovery, #402)");
+    }
+    return err;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,12 +338,24 @@ void TR_I2C_Interface::slaveTxTask(void *arg)
         // nothing and the FC logs "[I2C] read FAIL dur~2400us", query ok/fail=0/N.
         // #279 added a per-serve reset to flush short-read residue and it broke
         // 100% of FC<-OC reads on the bench (regression of the bench-validated
-        // on_request model). If TX residue ever resurfaces, flush ONCE at a
-        // between-transaction point (begin()/post-recovery), never per serve.
+        // on_request model). Residue DID resurface (#402: aborted master read);
+        // the sanctioned flush lives in resetSlaveTx(), which runs only at a
+        // master-guaranteed bus-idle point — never per serve.
+        //
+        // _dev_mux (#402): serializes this write against del/re-create in
+        // resetSlaveTx(); skip the serve if the device is mid-reset.
         uint32_t written = 0;
-        esp_err_t werr = i2c_slave_write(self->_slave_dev, local,
-                                         static_cast<uint32_t>(len), &written,
-                                         SLAVE_TX_WRITE_TIMEOUT_MS);
+        esp_err_t werr = ESP_ERR_INVALID_STATE;
+        if (xSemaphoreTake(self->_dev_mux, portMAX_DELAY) == pdTRUE)
+        {
+            if (self->_slave_dev != nullptr)
+            {
+                werr = i2c_slave_write(self->_slave_dev, local,
+                                       static_cast<uint32_t>(len), &written,
+                                       SLAVE_TX_WRITE_TIMEOUT_MS);
+            }
+            xSemaphoreGive(self->_dev_mux);
+        }
         // #280: surface a chronically failing serve. The status was discarded,
         // so a TX that timed out every poll looked identical to a healthy one.
         self->_tx_writes++;

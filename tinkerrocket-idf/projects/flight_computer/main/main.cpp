@@ -3731,8 +3731,14 @@ static void loop_fc()
         // 250 ms poll interval to process each query and pre-load its
         // response into the slave TX FIFO, avoiding the race where the
         // OC hasn't called i2c_slave_transmit() yet.
+        // #402: after sending I2C_TX_RESYNC we suspend ALL bus traffic for a
+        // grace window so the OC can reset its slave device with zero risk of
+        // racing an in-flight transaction (the #279 constraint).
+        static uint32_t i2c_resync_grace_until_ms = 0;
+        static bool     i2c_resync_active = false;
         if ((rocket_state != INFLIGHT || sensor_collector.isSimActive())
-            && (now_ms - out_ready_request_time_ms) > 250U)
+            && (now_ms - out_ready_request_time_ms) > 250U
+            && (int32_t)(now_ms - i2c_resync_grace_until_ms) >= 0)
         {
             out_ready_request_time_ms = now_ms;
 
@@ -3792,11 +3798,18 @@ static void loop_fc()
 
                 // #399: a run of consecutive unpack failures with the transfer
                 // completing (bytes clocked, framing garbage) is the signature
-                // of OC slave TX-ring desync — every read misaligned until
-                // reboot.  Shout once at the threshold so the bench log shows
-                // one loud diagnosis instead of a wall of identical FAILs.
+                // of OC slave TX-ring desync — every read misaligned.
+                // #402: recover in-band.  Master WRITES still work during a
+                // desync, so send I2C_TX_RESYNC (the OC resets its slave
+                // device) and suspend ALL polling for a grace window so the
+                // reset can't race a transaction.  Re-attempt every 8 further
+                // failures until the channel recovers.
                 static uint32_t consec_read_fails = 0;
                 if (query_ok) {
+                    if (i2c_resync_active) {
+                        i2c_resync_active = false;
+                        ESP_LOGW(TAG, "[I2C] channel RECOVERED after RESYNC (#402)");
+                    }
                     consec_read_fails = 0;
                 } else {
                     consec_read_fails++;
@@ -3804,10 +3817,17 @@ static void loop_fc()
                                   (unsigned)out_pending_command,
                                   (unsigned long)gor_us);
                     if (consec_read_fails == 8) {
-                        ESP_LOGE(TAG, "[I2C] 8 consecutive read failures — likely OC "
-                                      "slave TX-ring desync (#399: a size-mismatched "
-                                      "read left residue). Command channel is dead "
-                                      "until the OC reboots.");
+                        ESP_LOGE(TAG, "[I2C] 8 consecutive read failures — OC slave "
+                                      "TX-ring desync (aborted read left residue, "
+                                      "#402). Sending RESYNC + suspending polls.");
+                    }
+                    if (consec_read_fails >= 8 && (consec_read_fails % 8) == 0) {
+                        (void)i2c_interface.sendMessage(I2C_TX_RESYNC, nullptr, 0, 10);
+                        i2c_resync_grace_until_ms = now_ms + config::I2C_RESYNC_GRACE_MS;
+                        i2c_resync_active = true;
+                        query_pending = false;  // pipeline state is stale after the quiet window
+                        ESP_LOGW(TAG, "[I2C] RESYNC sent — bus quiet for %u ms",
+                                      (unsigned)config::I2C_RESYNC_GRACE_MS);
                     }
                 }
             }

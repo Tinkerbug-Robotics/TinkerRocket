@@ -993,6 +993,13 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // Board->rocket mounting orientation setting (app->OC->FC).
         MT(ORIENT_CONFIG_PENDING),    MT(ORIENT_CONFIG_MSG),
         MT(LORA_MSG),
+        // Guidance + fin-layout config (were missing from this registry —
+        // the pre-flight review's #386 gap; a colliding new code would have
+        // passed the guard silently).
+        MT(GUIDANCE_CONFIG_PENDING),  MT(GUIDANCE_CONFIG_MSG),
+        MT(FIN_CONFIG_PENDING),       MT(FIN_CONFIG_MSG),
+        // #402: FC->OC slave TX-ring desync recovery trigger.
+        MT(I2C_TX_RESYNC),
     };
 #undef MT
 
@@ -1012,7 +1019,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // Tripwire: keep the registry above exhaustive.  If you add or remove a
     // message type in RocketComputerTypes.h, update this list AND this count
     // -- the uniqueness check is only as strong as the list it walks.
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 80u)
+    // 85 = 80 prior + guidance/fin config pair codes (were missing, #386 gap)
+    //    + I2C_TX_RESYNC (#402).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 85u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
