@@ -1742,6 +1742,7 @@ static bool isKnownMessageType(uint8_t type)
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
+        case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
             return true;
         default:
             return false;
@@ -2192,6 +2193,20 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
+        }
+    }
+    else if (type == I2C_TX_RESYNC)
+    {
+        // #402: the FC detected a slave TX-ring desync (aborted read left
+        // residue) and has suspended ALL polling for its grace window — the
+        // bus is guaranteed idle, so resetting the slave device here is safe
+        // (the #279 constraint).  The next poll after the grace window gets a
+        // freshly staged, aligned response.
+        ESP_LOGW("OC", "[I2C] RESYNC from FC — resetting slave TX path (#402)");
+        const esp_err_t rerr = i2c_interface.resetSlaveTx();
+        if (rerr != ESP_OK)
+        {
+            ESP_LOGE("OC", "[I2C] slave TX reset FAILED: %s", esp_err_to_name(rerr));
         }
     }
     else

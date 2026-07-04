@@ -1637,6 +1637,13 @@ static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 36-byte GuidanceCon
 static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
 static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
 
+// #402: FC→OC over I2C, sent as a master WRITE (writes still work while the
+// slave TX ring is desynced by an aborted read).  On receipt the OC resets its
+// V2 slave device to flush the residue; the FC guarantees a bus-idle window by
+// suspending ALL polling for I2C_RESYNC_GRACE_MS after sending, so the reset
+// can never race an in-flight read (the #279 constraint).  No payload.
+static constexpr uint8_t I2C_TX_RESYNC           = 0xF4;
+
 // I2S sample rate for the Layer 3 image pump.  BCLK = rate * 32 (16-bit stereo).
 // Counter-intuitively this wants to be SLOW, not fast.  BLE (~6-16 KB/s) is the
 // real bottleneck, and the FC writes each received frame to flash (~2-3 ms/frame)

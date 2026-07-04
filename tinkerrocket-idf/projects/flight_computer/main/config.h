@@ -414,6 +414,12 @@ struct config
     static constexpr uint8_t ESP_SCL_PIN = 42;
     static constexpr uint32_t ESP_I2C_FREQ_HZ = 400'000; // Reduced — only commands now
     static constexpr uint16_t I2S_TX_QUEUE_LEN = 512;    // Must handle ~2160 frames/sec burst rate
+    // #402: after sending I2C_TX_RESYNC the FC suspends ALL I2C polling for
+    // this window so the OC can reset its slave device at guaranteed bus-idle
+    // (a reset racing an in-flight read destroys it — #279).  Sized to cover
+    // the OC's observed loop-stall worst cases (#398, ~1.2 s) with margin; the
+    // detector re-sends every 8 further failures if the OC lagged past it.
+    static constexpr uint32_t I2C_RESYNC_GRACE_MS = 2000;
 
     // ### I2S Parameters (high-frequency telemetry FC→OC) ###
     static constexpr int I2S_BCLK_PIN  = 27;
