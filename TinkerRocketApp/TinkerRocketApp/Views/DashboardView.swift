@@ -377,7 +377,11 @@ struct ConnectedDashboardView: View {
                     .opacity(staleOpacity)
             }
 
-            if device.simLaunched {
+            // #393: gate on the rocket's REPORTED sim state (fs bit 8) OR the
+            // local launch latch.  The latch alone dies on BLE reconnect
+            // (BLEDevice is recreated), which made the Stop-sim control vanish
+            // mid-sim; telemetry keeps the banner up as long as the sim runs.
+            if device.simLaunched || device.telemetry.sim_active {
                 SimModeBannerView {
                     device.sendCommand(7)
                     device.clearSimBanner()

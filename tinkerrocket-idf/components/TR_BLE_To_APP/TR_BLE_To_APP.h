@@ -79,6 +79,7 @@ public:
         bool vel_u_apogee_flag; // Velocity apogee (vertical vel crossed zero)
         bool alt_apogee_flag;   // Altitude apogee (alt started decreasing)
         bool alt_landed_flag;   // Landing detected
+        bool sim_active;        // #393: simulated flight in progress (NSF_SIM_ACTIVE)
 
         // Power rail state
         bool pwr_pin_on;        // true = FlightComputer + sensors powered on

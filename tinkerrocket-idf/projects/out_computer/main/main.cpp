@@ -4058,6 +4058,7 @@ static void printStats()
     ble_telem.vel_u_apogee_flag = nsFlagSet(latest_non_sensor.flags, NSF_VEL_APOGEE);
     ble_telem.alt_apogee_flag   = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
     ble_telem.alt_landed_flag   = nsFlagSet(latest_non_sensor.flags, NSF_ALT_LANDED);
+    ble_telem.sim_active        = nsFlagSet(latest_non_sensor.flags, NSF_SIM_ACTIVE);  // #393
     ble_telem.pwr_pin_on        = pwr_pin_on;
     // Pyro channel status from NonSensorData (single shared armed bit
     // mirrors the live ARM pin; 4 per-channel cont/fired bits).
