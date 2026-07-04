@@ -34,7 +34,8 @@ FIGURE_DPI = 150
 
 # ---------- Sensor conversion constants ----------
 # ISM6HG256: configurable full-scale.  Defaults match FlightComputer config.h
-# Sensitivity: value = raw * (full_scale / 32768)
+# Sensitivity: accel = raw * (full_scale / 32768).  Gyro is DIFFERENT — ST uses
+# a fixed per-FS sensitivity (140 mdps/LSB @ ±4000, = FS*0.035), NOT FS/32768 (#369).
 G_MS2 = 9.80665
 
 # Default full-scale settings (updated from OUT_STATUS_QUERY if present)
@@ -51,7 +52,7 @@ def ism6_scales(low_g_fs=ISM6_LOW_G_FS_G, high_g_fs=ISM6_HIGH_G_FS_G,
     denom = 32768.0
     acc_low  = (low_g_fs  * 1000.0 / denom) * 1e-3 * G_MS2
     acc_high = (high_g_fs * 1000.0 / denom) * 1e-3 * G_MS2
-    gyro     = (gyro_fs   * 1000.0 / denom) * 1e-3
+    gyro     = (gyro_fs   * 0.035) * 1e-3  # #369: FS*0.035 mdps/LSB, NOT FS/32768
     return acc_low, acc_high, gyro
 
 # MMC5983MA: 18-bit centered, Gauss = centered * (8 / 131072), uT = Gauss * 100

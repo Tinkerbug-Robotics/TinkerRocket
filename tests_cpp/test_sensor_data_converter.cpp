@@ -217,7 +217,7 @@ TEST_F(SensorConverterB2RTest, ZNose_MovesBoardZToRocketX_AllChannels) {
     ISM6HG256Data raw{};
     raw.acc_low_raw.z  = 16384;  // +8g
     raw.acc_high_raw.z = 1024;   // +8g at 256g FS
-    raw.gyro_raw.z     = 8192;   // +1000 dps at 4000 FS
+    raw.gyro_raw.z     = 8192;   // 8192 LSB × 0.140 mdps/LSB = 1146.88 dps (±4000 FS, #369)
     ISM6HG256DataSI si{};
     conv.convertISM6HG256Data(raw, si);
 
@@ -226,7 +226,7 @@ TEST_F(SensorConverterB2RTest, ZNose_MovesBoardZToRocketX_AllChannels) {
     EXPECT_NEAR(si.low_g_acc_y, 0.0, 1e-6);
     EXPECT_NEAR(si.low_g_acc_z, 0.0, 1e-6);
     EXPECT_NEAR(si.high_g_acc_x, exp_lg, 0.2);
-    EXPECT_NEAR(si.gyro_x, 1000.0, 0.5);
+    EXPECT_NEAR(si.gyro_x, 1146.88, 0.5);  // #369: 8192 × 0.140 mdps/LSB
     EXPECT_NEAR(si.gyro_z, 0.0, 1e-6);
 }
 

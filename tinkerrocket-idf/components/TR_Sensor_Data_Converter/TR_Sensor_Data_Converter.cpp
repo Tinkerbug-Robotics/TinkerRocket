@@ -17,13 +17,14 @@ void SensorConverter::configureISM6HG256FullScale(
                                 ISM6HighGFullScale high_g_fs,
                                 ISM6GyroFullScale gyro_fs)
 {
-    // Sensitivity mapping assumption:
-    // ISM6HG256X outputs 16-bit two's-complement samples:
-    //   value = raw * (full_scale / 32768)
-    // Therefore:
-    //   accel: mg/LSB   = FS[g] * 1000 / 32768
-    //   gyro : mdps/LSB = FS[dps] * 1000 / 32768
-    //
+    // Sensitivity mapping (per ISM6HG256X datasheet / ST ism6hg256x_reg.c):
+    //   accel: the full ±32768 LSB span maps to the full scale, so
+    //          mg/LSB = FS[g] * 1000 / 32768  (16g -> 0.488, 256g -> 7.81).
+    //   gyro : ST gyros use a FIXED per-FS sensitivity, NOT FS/32768.  It is
+    //          8.75 mdps/LSB at ±250 dps and DOUBLES each FS step (…70 @ ±2000,
+    //          140 @ ±4000 dps) — i.e. mdps/LSB = FS[dps] * (8.75/250) = FS*0.035.
+    //          Full scale is FS/sensitivity ≈ ±28571 LSB, not ±32768; the old
+    //          FS/32768 form under-reported every gyro reading by ~12.8% (#369).
 
     const float denom = 32768.0f;
 
@@ -33,7 +34,8 @@ void SensorConverter::configureISM6HG256FullScale(
 
     const float low_mg_per_lsb = (low_fs_g  * 1000.0f) / denom;
     const float high_mg_per_lsb = (high_fs_g * 1000.0f) / denom;
-    const float gyro_mdps_per_lsb = (gyro_fs_dps * 1000.0f) / denom;
+    // #369: fixed ST gyro sensitivity (0.035 mdps/LSB per dps of FS), NOT FS/32768.
+    const float gyro_mdps_per_lsb = gyro_fs_dps * 0.035f;
 
     // mg/LSB -> m/s^2 per LSB
     acc_low_ms2_per_lsb  = (low_mg_per_lsb  * 1e-3f) * g_ms2;
