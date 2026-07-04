@@ -2741,6 +2741,23 @@ static void setup_fc()
         {
             servo_control.wiggle();
         }
+        if (servo_enabled)
+        {
+            // #345 follow-up: settle at the *commanded* neutral (0deg -> the
+            // physical fin-neutral incl. trim, via the fin calibration), NOT the
+            // raw pulse-midpoint the wiggle returns to.  Those two only coincide
+            // for a symmetric fin cal; with a per-model/asymmetric cal the wiggle
+            // leaves the tabs off the trimmed straight position.  Drive through
+            // the same setServoAngles() path the flight/servo-test neutral uses
+            // so the boot rest position matches exactly what was trimmed.
+            const float neutral[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            servo_control.setServoAngles(neutral);
+            // Hold that trimmed neutral briefly before the pad relax kicks in, so
+            // the operator can see/verify the tabs sit straight on boot instead
+            // of going limp the instant READY starts.
+            if (config::SERVO_RELAX_ON_PAD)
+                servo_pad_wake_until_ms = time_ms() + config::SERVO_PAD_TRIM_WAKE_MS;
+        }
         ESP_LOGI(TAG, "Servo control %s, gain schedule %s (hardware ready)",
                       servo_enabled ? "enabled" : "disabled",
                       gain_sched_enabled ? "ON" : "OFF");
@@ -3960,7 +3977,13 @@ static void loop_fc()
                     if (servo_enabled && rocket_state != INFLIGHT &&
                         !servo_test_active && !ground_test_active && !servo_replay_active)
                     {
-                        servo_control.stowControl();  // centre = (min+max)/2 + new bias
+                        // Drive to the commanded neutral (0deg incl. the new trim,
+                        // via the fin calibration) — the same path the boot-settle
+                        // and flight neutral use — so the preview shows the tab
+                        // exactly where a 0-command holds it, not the raw pulse
+                        // midpoint (which differs under an asymmetric fin cal).
+                        const float neutral[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                        servo_control.setServoAngles(neutral);
                         servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
                     }
 
