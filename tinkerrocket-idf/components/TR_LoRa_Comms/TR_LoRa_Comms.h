@@ -77,8 +77,17 @@ public:
     // pollDio1).  Cheap when not stuck (one millis() compare).
     void serviceTxWatchdog();
 
-    // Runtime reconfiguration (LLCC68: must set BW before SF)
-    bool reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power);
+    // Runtime reconfiguration (LLCC68: must set BW before SF).
+    // wait_for_tx (#398): when true (default), blocks up to 2 s for an
+    // in-flight TX to finish before retuning — needed on user-initiated
+    // config paths where the caller won't retry.  Pass FALSE from main-loop
+    // service paths (rendezvous enter/exit): a packet's airtime at SF8/BW250
+    // is 100-200 ms and the spin-wait stalled loop_oc for all of it (bench:
+    // "wait-for-TX took 115-215 ms"); a busy return lets the caller simply
+    // retry next iteration, mirroring hopToFrequencyMHz's can't-retune-mid-TX
+    // contract.
+    bool reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power,
+                     bool wait_for_tx = true);
 
     // Lightweight frequency-only retune for per-packet hopping (#40 / #41).
     // Unlike reconfigure(), this does not touch BW/SF/CR/power — those

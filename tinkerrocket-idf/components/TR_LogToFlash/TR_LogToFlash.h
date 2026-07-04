@@ -97,6 +97,13 @@ struct TR_LogToFlashStats
     uint32_t activate_max_us = 0;      // max activateLogging() wall time
     uint32_t clear_ring_max_us = 0;    // max clearRing() wall time
     uint32_t flush_iter_max_us = 0;    // max single flushTaskLoop iteration
+    // #398: shared NAND/MRAM SPI-bus mutex contention.  spi_wait is the max
+    // time any task spent BLOCKED acquiring the mutex (the I2S parser's MRAM
+    // pushes starving behind flush-side work shows up here); spi_hold is the
+    // max single hold.  Together they pinpoint which window causes the
+    // multi-second parser_max stalls.
+    uint32_t spi_wait_max_us = 0;      // max time blocked acquiring spi_mutex_
+    uint32_t spi_hold_max_us = 0;      // max single spi_mutex_ hold
     uint32_t syncs_performed = 0;      // cumulative lfs_file_sync calls since begin()
 
     // Persistent bad-block avoidance (#47): once a NAND block is known bad,
@@ -322,6 +329,13 @@ private:
     uint32_t activate_max_us_ = 0;
     uint32_t clear_ring_max_us_ = 0;
     uint32_t flush_iter_max_us_ = 0;
+    // #398: spi_mutex_ contention peaks.  Written from multiple tasks; the
+    // read-modify-write max update is unsynchronized (a lost update is
+    // acceptable for diagnostics).  hold_start is only touched by the
+    // current mutex holder, so it needs no extra guard.
+    volatile uint32_t spi_wait_max_us_ = 0;
+    volatile uint32_t spi_hold_max_us_ = 0;
+    int64_t  spi_hold_start_us_ = 0;
     uint32_t syncs_performed_ = 0;
 
     // Cumulative LFS-callback op counters (#47 follow-up).  Used to break
