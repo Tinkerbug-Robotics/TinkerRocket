@@ -152,10 +152,18 @@ void TR_ServoControl::idle() {
 void TR_ServoControl::setServoAngles(const float angles[4]) {
     is_idle_ = false;  // commanding a pulse resumes PWM after idle()
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
-        // Clamp to the command limit (max deflection), then map via the physical
-        // fin calibration (#267) so the fin reaches the commanded *physical* angle
-        // — no longer truncated to / scaled by the roll-PID clamp.
-        float angle = constrain(angles[i], min_cmd, max_cmd);
+        // Clamp the commanded fin angle to the physical fin-calibration range
+        // (fin_min_deg_..fin_max_deg_), then map via that calibration (#267) so
+        // the fin reaches the commanded *physical* angle.  Clamp to the fin
+        // range — NOT the roll/guidance command authority (min_cmd/max_cmd):
+        // this path drives both the flight mixer (already pre-clamped to its own
+        // authority upstream) and the manual servo test, and the test must be
+        // able to sweep to the calibrated endpoints so servo_min_us<->fin_min_deg
+        // and servo_max_us<->fin_max_deg are honoured per model instead of being
+        // capped at the (narrower, model-varying) flight authority.  Fin cal
+        // defaults to [min_cmd,max_cmd] until configured, so behaviour is
+        // unchanged until a real fin calibration is set.
+        float angle = constrain(angles[i], fin_min_deg_, fin_max_deg_);
         int pulse_us = usFromFinDeg(angle) + servo_bias_us_[i];
         pulse_us = saturateCommand(pulse_us);
 
