@@ -290,9 +290,17 @@ private:
     uint32_t nand_erase_ops = 0;
     uint16_t file_index = 0;
     char filename[64] = {};
-    bool logging_active = false;
-    bool start_logging_requested = false;
-    bool end_flight_requested = false;
+    // Cross-core flags (#365): logging_active is written by the Core-0 flush
+    // task and read per-frame on Core 1; the request flags are set on Core 1
+    // (launch/land edges, BLE) and consumed on Core 0.  volatile so neither
+    // side caches a stale value.  Requests are CONSUME-ON-OBSERVE: the
+    // servicing side may clear one only after reading it true — a blind
+    // else-clear destroys a request that lands between the load and the
+    // store (ns window per ~1 ms flush iteration), which for the start
+    // request means the entire flight never logs.
+    volatile bool logging_active = false;
+    volatile bool start_logging_requested = false;
+    volatile bool end_flight_requested = false;
     uint32_t log_start_block = 1;
     uint32_t log_curr_block = 1;
     bool log_block_erased = false;

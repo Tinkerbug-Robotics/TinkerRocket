@@ -325,17 +325,22 @@ void TR_LogToFlash::service()
         return;
     }
 
-    // Single-threaded fallback (flush task not started yet — startup/recovery)
-    if (start_logging_requested && !logging_active)
+    // Single-threaded fallback (flush task not started yet — startup/recovery).
+    // #365: same consume-on-observe shape as flushTaskLoop — the launch edge
+    // is raised from another task, so even this path must not blind-clear.
+    if (start_logging_requested)
     {
-        if (!file_open)
+        if (!logging_active)
         {
-            openLogSession();
-            markDirty();
+            if (!file_open)
+            {
+                openLogSession();
+                markDirty();
+            }
+            activateLogging();
         }
-        activateLogging();
+        start_logging_requested = false;
     }
-    start_logging_requested = false;
     flushRingToNand();
 }
 
@@ -914,6 +919,21 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
 
 uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
 {
+    // #370: serialize against ringPush's prelaunch drop-oldest path, which
+    // advances rb_tail and stores rb_count ABSOLUTELY under push_mutex_.
+    // At the logging-activation edge a Core-1 push that sampled
+    // logging_active==false microseconds before the flush task flipped it
+    // can still be inside that loop while this pop (Core 0) advances the
+    // same rb_tail — rewinding the tail into consumed data and clobbering
+    // the count, which garbles the prelaunch + early-boost drain into the
+    // bad-SOF -> clearRing path.  #74 covered push-vs-push and
+    // push-vs-clearRing; this closes push-vs-pop.  Lock order matches the
+    // push side (push_mutex_ -> spi_mutex_ inside the MRAM access), so no
+    // inversion.  Cost: a push can block for one pop's MRAM read (<= one
+    // page) — the two already serialize on spi_mutex_ per transaction, so
+    // the added wait is the same order of magnitude.
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+
     // Read count under spinlock
     portENTER_CRITICAL(&ring_mux_);
     const uint32_t count_now = rb_count;
@@ -921,6 +941,7 @@ uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
 
     if (len == 0 || len > count_now)
     {
+        if (push_mutex_) xSemaphoreGive(push_mutex_);
         return 0;
     }
 
@@ -958,6 +979,7 @@ uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
 
     ringpop_bytes_ += len;
 
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
     return len;
 }
 
@@ -2194,16 +2216,21 @@ void TR_LogToFlash::flushTaskLoop()
     {
         const int64_t iter_t0 = esp_timer_get_time();
 
-        // Handle deferred pre-create request (from PRELAUNCH state)
-        if (prepare_file_requested_ && !file_open && !logging_active)
+        // Handle deferred pre-create request (from PRELAUNCH state).
+        // #365: consume the request ONLY after observing it set.  The old
+        // unconditional else-clear could destroy a request that landed
+        // between the condition load and the store — the pre-create would
+        // silently vanish and openLogSession would instead run at launch
+        // detect, right in the busiest window.
+        if (prepare_file_requested_)
         {
-            openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
-            markDirty();
-            prepare_file_requested_ = false;
-            if (cfg.debug) ESP_LOGI(TAG, "Log file pre-created for launch");
-        }
-        else
-        {
+            if (!file_open && !logging_active)
+            {
+                openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
+                markDirty();
+                if (cfg.debug) ESP_LOGI(TAG, "Log file pre-created for launch");
+            }
+            // else: file already open / logging — request is moot; consume it.
             prepare_file_requested_ = false;
         }
 
@@ -2217,20 +2244,27 @@ void TR_LogToFlash::flushTaskLoop()
             cfg.flush_task_hook(cfg.flush_task_hook_ctx);
         }
 
-        // Handle deferred start-logging request (launch detected)
-        if (start_logging_requested && !logging_active)
+        // Handle deferred start-logging request (launch detected).
+        // #365: consume ONLY after observing the request.  The old blind
+        // else-clear raced the Core-1 setter: a launch edge landing between
+        // the condition load and the else-store was destroyed with no retry
+        // — logging_active never set, and the whole flight was reduced to
+        // the last ~63 KB MRAM remnant.  A duplicate request set while we
+        // service this one is absorbed harmlessly (logging_active is already
+        // true by the time we clear).
+        if (start_logging_requested)
         {
-            if (!file_open)
+            if (!logging_active)
             {
-                // File not pre-created — create now (legacy path)
-                openLogSession();
-                markDirty();
+                if (!file_open)
+                {
+                    // File not pre-created — create now (legacy path)
+                    openLogSession();
+                    markDirty();
+                }
+                activateLogging();  // Fast — just flips flags, no NAND I/O
             }
-            activateLogging();  // Fast — just flips flags, no NAND I/O
-            start_logging_requested = false;
-        }
-        else
-        {
+            // else: already logging — duplicate request; consume it.
             start_logging_requested = false;
         }
 
