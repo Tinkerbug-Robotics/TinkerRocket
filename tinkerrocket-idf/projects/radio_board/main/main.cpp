@@ -14,6 +14,7 @@
 
 #include <cstring>
 
+#include <driver/gpio.h>
 #include <esp_app_desc.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -54,6 +55,50 @@ struct InFlight
     uint32_t ok_before = 0;
 };
 static InFlight in_flight;
+
+// ---- Indicator LEDs ----------------------------------------------------------
+// TX LED tracks the transmission (airtime-length flash); RX LED pulses
+// LED_RX_PULSE_MS per received air packet.
+
+static uint32_t rx_led_off_at_ms = 0;
+
+static uint32_t uptimeMs()
+{
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
+
+static void ledWrite(int pin, bool lit)
+{
+    gpio_set_level(static_cast<gpio_num_t>(pin),
+                   lit ? config::LED_ACTIVE_LEVEL : !config::LED_ACTIVE_LEVEL);
+}
+
+static void initLeds()
+{
+    gpio_config_t io = {};
+    io.pin_bit_mask = (1ULL << config::LED_RX_PIN) |
+                      (1ULL << config::LED_TX_PIN);
+    io.mode = GPIO_MODE_OUTPUT;
+    gpio_config(&io);
+    ledWrite(config::LED_RX_PIN, false);
+    ledWrite(config::LED_TX_PIN, false);
+}
+
+static void pulseRxLed()
+{
+    ledWrite(config::LED_RX_PIN, true);
+    rx_led_off_at_ms = uptimeMs() + config::LED_RX_PULSE_MS;
+}
+
+static void serviceLeds()
+{
+    if (rx_led_off_at_ms != 0 &&
+        static_cast<int32_t>(uptimeMs() - rx_led_off_at_ms) >= 0)
+    {
+        ledWrite(config::LED_RX_PIN, false);
+        rx_led_off_at_ms = 0;
+    }
+}
 
 static void sendTxResult(uint8_t seq, bool ok)
 {
@@ -116,6 +161,7 @@ static TR_LoRa_Comms::Config radioConfigFromMsg(const RadioConfigData& d)
     cfg.dio1_pin = config::LORA_DIO1_PIN;
     cfg.rst_pin = config::LORA_RST_PIN;
     cfg.busy_pin = config::LORA_BUSY_PIN;
+    cfg.rxen_pin = config::LORA_RXEN_PIN;
     cfg.spi_sck = config::LORA_SPI_SCK;
     cfg.spi_miso = config::LORA_SPI_MISO;
     cfg.spi_mosi = config::LORA_SPI_MOSI;
@@ -269,6 +315,7 @@ static void serviceTx()
         radio.getStats(rs);
         sendTxResult(in_flight.seq, rs.tx_ok > in_flight.ok_before);
         in_flight.active = false;
+        ledWrite(config::LED_TX_PIN, false);
     }
 
     if (!in_flight.active && txq_used > 0 && radio.canSend() &&
@@ -282,6 +329,7 @@ static void serviceTx()
             in_flight.active = true;
             in_flight.seq = e.seq;
             in_flight.ok_before = rs.tx_ok;
+            ledWrite(config::LED_TX_PIN, true);
         }
         else
         {
@@ -310,6 +358,7 @@ static void serviceRx()
     RxFrameHeader hdr = {rs.last_rssi, rs.last_snr};
     memcpy(out, &hdr, sizeof(hdr));
     uart_link.sendFrame(MSG_RX_FRAME, out, sizeof(hdr) + air_len);
+    pulseRxLed();
 }
 
 static void serviceScanResult()
@@ -344,6 +393,8 @@ extern "C" void app_main(void)
     const esp_app_desc_t* app = esp_app_get_description();
     ESP_LOGI(TAG, "radio_board fw %s (protocol v%u)", app->version,
              PROTOCOL_VERSION);
+
+    initLeds();
 
     TR_UART_Link::Config ucfg = {};
     ucfg.port = config::HOST_UART_PORT;
@@ -399,6 +450,7 @@ extern "C" void app_main(void)
         serviceTx();
         serviceRx();
         serviceScanResult();
+        serviceLeds();
 
         vTaskDelay(1);  // 1 ms at CONFIG_FREERTOS_HZ=1000
     }

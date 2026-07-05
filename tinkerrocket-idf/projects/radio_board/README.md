@@ -20,8 +20,10 @@ idf.py build
 idf.py -p <port> flash monitor
 ```
 
-Pins in [main/config.h](main/config.h) are **devkit bench wiring** until the
-V8 daughterboard schematic lands.
+LoRa, RXEN, and indicator-LED pins in [main/config.h](main/config.h) are the
+V8 daughterboard schematic values; the **host-link UART pins are still
+placeholders** (TODO in config.h). The TX LED lights for the duration of each
+transmission; the RX LED pulses per received air packet.
 
 ## UART link
 
