@@ -69,6 +69,29 @@ target_include_directories(test_crc16_compat PRIVATE
 target_link_libraries(test_crc16_compat GTest::gtest_main)
 gtest_discover_tests(test_crc16_compat)
 
+# ---------- test_uart_link_codec ----------
+# UART radio-modem link (#409): tr_msg codec + deframer + protocol layouts.
+# TR_MsgCodec.cpp is deliberately IDF-free so it compiles on the host; the
+# CRC sources come along for calcCRC16 (same shim note as test_crc16_compat).
+add_executable(test_uart_link_codec test_uart_link_codec.cpp
+    ${LIB_DIR}/TR_UART_Link/TR_MsgCodec.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_uart_link_codec PRIVATE
+    ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
+    ${LIB_DIR}/TR_UART_Link
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_uart_link_codec GTest::gtest_main)
+gtest_discover_tests(test_uart_link_codec)
+
 # ============================================================
 # Phase 2: Safety-Critical Tests
 # ============================================================
