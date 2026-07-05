@@ -733,12 +733,15 @@ nonisolated struct RollControlSettings: Codable, Sendable {
     let profile: [RollWaypointJSON]
 
     init(from raw: FlightSettingsData) {
-        if raw.num_waypoints > 0 {
-            mode = "angle_profile"
-        } else if raw.useAngleControl {
-            mode = "angle"
-        } else {
+        // The firmware only runs the angle cascade when use_angle_control is
+        // set (Null Roll / Track Profile toggle) — a stored waypoint profile
+        // alone is inert, so it must not decide the exported mode.
+        if !raw.useAngleControl {
             mode = "rate"
+        } else if raw.num_waypoints > 0 {
+            mode = "angle_profile"
+        } else {
+            mode = "angle"
         }
         kp = sigFig(raw.kp)
         ki = sigFig(raw.ki)
