@@ -4701,8 +4701,11 @@ static void setup_oc()
 
     pinMode(config::PWR_PIN, OUTPUT);
     digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
-    pinMode(config::GPS_PWR_PIN, OUTPUT);
-    digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
+    if (config::GPS_PWR_PIN >= 0)  // -1: board has no separate GPS rail (#411)
+    {
+        pinMode(config::GPS_PWR_PIN, OUTPUT);
+        digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
+    }
     pwr_pin_on = false;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
@@ -5476,7 +5479,10 @@ static void loop_oc()
                 // same time so the receiver can start its cold-start
                 // acquisition concurrently with FC boot.
                 digitalWrite(config::PWR_PIN, HIGH);
-                digitalWrite(config::GPS_PWR_PIN, HIGH);
+                if (config::GPS_PWR_PIN >= 0)
+                {
+                    digitalWrite(config::GPS_PWR_PIN, HIGH);
+                }
                 vTaskDelay(pdMS_TO_TICKS(500));  // Allow power rail to stabilize
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
@@ -5518,7 +5524,10 @@ static void loop_oc()
                 // hardware quirk exercises the same recovery path.
                 ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
                 digitalWrite(config::PWR_PIN, LOW);
-                digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
+                if (config::GPS_PWR_PIN >= 0)
+                {
+                    digitalWrite(config::GPS_PWR_PIN, LOW);  // drop GNSS rail in lockstep
+                }
 
                 // Drive every signal that goes from the OC to the switched-
                 // rail peripherals (LoRa, NAND, MRAM) LOW so back-feed current
@@ -5555,6 +5564,7 @@ static void loop_oc()
                     (gpio_num_t)config::I2S_FSYNC_PIN,
                 };
                 for (gpio_num_t pin : kSwitchedRailPins) {
+                    if ((int)pin < 0) continue;  // peripheral absent on this board (#411)
                     gpio_reset_pin(pin);
                     gpio_set_direction(pin, GPIO_MODE_OUTPUT);
                     gpio_set_pull_mode(pin, GPIO_FLOATING);

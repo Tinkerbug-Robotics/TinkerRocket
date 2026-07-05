@@ -1,0 +1,35 @@
+esp-idf/esp_hal_uart/CMakeFiles/__idf_esp_hal_uart.dir/uhci_hal.c.obj: \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_uart/uhci_hal.c \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_uart/include/hal/uhci_hal.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_uart/include/hal/uhci_types.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/stdint.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_libc/platform_include/sys/cdefs.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/cdefs.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/config.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/ieeefp.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/features.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/picolibc.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/float.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/_default_types.h \
+ /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/build_v8/bootloader/config/sdkconfig.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stddef.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_intsup.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_stdint.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stdbool.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32s3/include/soc/soc_caps.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/include/soc/soc_caps_eval.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_uart/esp32s3/include/hal/uhci_ll.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_libc/platform_include/stdio.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/stdio.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stdarg.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_libc/platform_include/sys/lock.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/lock.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_types.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/_types.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32s3/register/soc/uhci_struct.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32s3/register/soc/system_struct.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/hal/platform_port/include/hal/misc.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/string.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_locale.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/strings.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/string.h

@@ -1,0 +1,2 @@
+/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libTR_GNSSReceiverUBlox_Serial.a CMakeFiles/__idf_TR_GNSSReceiverUBlox_Serial.dir/TR_GNSSReceiverUBlox_Serial.cpp.obj "CMakeFiles/__idf_TR_GNSSReceiverUBlox_Serial.dir/u-blox_GNSS.cpp.obj" CMakeFiles/__idf_TR_GNSSReceiverUBlox_Serial.dir/sfe_bus.cpp.obj
+/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libTR_GNSSReceiverUBlox_Serial.a

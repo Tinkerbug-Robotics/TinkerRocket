@@ -1,0 +1,3 @@
+file(REMOVE_RECURSE
+  "libTR_IIS2MDC.a"
+)

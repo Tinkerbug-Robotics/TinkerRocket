@@ -1,0 +1,560 @@
+Command: make -j 12 all
+info: Default value for FREERTOS_ISR_STACKSIZE in sdkconfig is 2096 but it is 1536 according to Kconfig.
+Using default value from sdkconfig (2096).
+Configuration Report                                                            
+ ────────────────────────────────────────────────────────────────────────────── 
+   Parser Version: 1                                                            
+   Verbosity: default                                                           
+   Defaults policy: sdkconfig                                                   
+   Status: Finished with notifications                                          
+                                                                                
+  Default Value Mismatch                                                        
+   ──────────────────────────────────────────────────────────────────────────   
+    Using sdkconfig default values                                              
+    Config symbols with different default value between sdkconfig and           
+    Kconfig                                                                     
+    FREERTOS_ISR_STACKSIZE: Kconfig default value: 1536, sdkconfig              
+    default value: 2096                                                         
+   ──────────────────────────────────────────────────────────────────────────   
+  Disabled Symbols/Choices With User-Set Value                                  
+   ──────────────────────────────────────────────────────────────────────────   
+    * FREERTOS_USE_TICKLESS_IDLE (defined at                                    
+    /Users/christianpedersen/esp/esp-idf-v6.0/components/freertos/Kconfig:3…    
+    with user-set value y from                                                  
+    /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/wo…    
+    * FREERTOS_IDLE_TIME_BEFORE_SLEEP (defined at                               
+    /Users/christianpedersen/esp/esp-idf-v6.0/components/freertos/Kconfig:3…    
+    with user-set value 3 from                                                  
+    /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/wo…    
+   ──────────────────────────────────────────────────────────────────────────   
+ ────────────────────────────────────────────────────────────────────────────── 
+cc1: warning: command-line option '-Wno-reorder' is valid for C++/ObjC++ but not for C
+cc1: warning: command-line option '-Wno-reorder' is valid for C++/ObjC++ but not for C
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX1262.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/LLCC68.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/LLCC68.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1110.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1110.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1120.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1120.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1121.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1121.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp: In member function 'void TR_ServoControl::begin()':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp:71:22: warning: 'ledc_channel_config_t::intr_type' is deprecated [-Wdeprecated-declarations]
+   71 |         channel_conf.intr_type  = LEDC_INTR_DISABLE;
+      |                      ^~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.h:6,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp:1:
+/Users/christianpedersen/esp/esp-idf-v6.0/components/esp_driver_ledc/include/driver/ledc.h:40:22: note: declared here
+   40 |     ledc_intr_type_t intr_type __attribute__((deprecated));     /*!< @deprecated, no need to explicitly configure interrupt, handled in the driver */
+      |                      ^~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp:71:22: warning: 'ledc_channel_config_t::intr_type' is deprecated [-Wdeprecated-declarations]
+   71 |         channel_conf.intr_type  = LEDC_INTR_DISABLE;
+      |                      ^~~~~~~~~
+/Users/christianpedersen/esp/esp-idf-v6.0/components/esp_driver_ledc/include/driver/ledc.h:40:22: note: declared here
+   40 |     ledc_intr_type_t intr_type __attribute__((deprecated));     /*!< @deprecated, no need to explicitly configure interrupt, handled in the driver */
+      |                      ^~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp:71:22: warning: 'ledc_channel_config_t::intr_type' is deprecated [-Wdeprecated-declarations]
+   71 |         channel_conf.intr_type  = LEDC_INTR_DISABLE;
+      |                      ^~~~~~~~~
+/Users/christianpedersen/esp/esp-idf-v6.0/components/esp_driver_ledc/include/driver/ledc.h:40:22: note: declared here
+   40 |     ledc_intr_type_t intr_type __attribute__((deprecated));     /*!< @deprecated, no need to explicitly configure interrupt, handled in the driver */
+      |                      ^~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0_commands.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0_crypto.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0_gnss.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0_wifi.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:800:13: note:   by 'int16_t RF69::setSyncWord(const uint8_t*, size_t, uint8_t)'
+  800 |     int16_t setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits = 0);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:792:13: note:   by 'int16_t RF69::setOutputPower(int8_t, bool)'
+  792 |     int16_t setOutputPower(int8_t pwr, bool highPower = false);
+      |             ^~~~~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/RF69.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/SX1231.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/SX1231.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/RF69.h:800:13: note:   by 'int16_t RF69::setSyncWord(const uint8_t*, size_t, uint8_t)'
+  800 |     int16_t setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits = 0);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/RF69.h:792:13: note:   by 'int16_t RF69::setOutputPower(int8_t, bool)'
+  792 |     int16_t setOutputPower(int8_t pwr, bool highPower = false);
+      |             ^~~~~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/RF69.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/SX1233.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/SX1233.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/RF69.h:800:13: note:   by 'int16_t RF69::setSyncWord(const uint8_t*, size_t, uint8_t)'
+  800 |     int16_t setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits = 0);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX123x/../RF69/RF69.h:792:13: note:   by 'int16_t RF69::setOutputPower(int8_t, bool)'
+  792 |     int16_t setOutputPower(int8_t pwr, bool highPower = false);
+      |             ^~~~~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX1261.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX1261.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX1262.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX1262.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX1268.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX1268.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+cc1: warning: command-line option '-Wno-reorder' is valid for C++/ObjC++ but not for C
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x_commands.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x_LR_FHSS.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+cc1: warning: command-line option '-Wno-reorder' is valid for C++/ObjC++ but not for C
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x_config.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1272.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1273.h:8,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1273.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1272.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1272.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1278.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1276.h:8,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1276.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1278.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1277.h:8,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1277.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1278.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1278.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1278.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1279.h:8,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1279.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1280.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1280.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:723:13: note:   by 'int16_t SX128x::setSyncWord(const uint8_t*, uint8_t)'
+  723 |     int16_t setSyncWord(const uint8_t* syncWord, uint8_t len);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:493:13: note:   by 'virtual int16_t SX128x::standby()'
+  493 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1281.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1281.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:723:13: note:   by 'int16_t SX128x::setSyncWord(const uint8_t*, uint8_t)'
+  723 |     int16_t setSyncWord(const uint8_t* syncWord, uint8_t len);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:493:13: note:   by 'virtual int16_t SX128x::standby()'
+  493 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1282.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1282.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:723:13: note:   by 'int16_t SX128x::setSyncWord(const uint8_t*, uint8_t)'
+  723 |     int16_t setSyncWord(const uint8_t* syncWord, uint8_t len);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:493:13: note:   by 'virtual int16_t SX128x::standby()'
+  493 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:10,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:723:13: note:   by 'int16_t SX128x::setSyncWord(const uint8_t*, uint8_t)'
+  723 |     int16_t setSyncWord(const uint8_t* syncWord, uint8_t len);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:493:13: note:   by 'virtual int16_t SX128x::standby()'
+  493 |     int16_t standby() override;
+      |             ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/CC1101.h:7,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:76,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.h:4,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp:1:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX1262.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/LLCC68.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:77:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1110.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:78:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:82:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:800:13: note:   by 'int16_t RF69::setSyncWord(const uint8_t*, size_t, uint8_t)'
+  800 |     int16_t setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits = 0);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:792:13: note:   by 'int16_t RF69::setOutputPower(int8_t, bool)'
+  792 |     int16_t setOutputPower(int8_t pwr, bool highPower = false);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1272.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:94:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1280.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:100:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:723:13: note:   by 'int16_t SX128x::setSyncWord(const uint8_t*, uint8_t)'
+  723 |     int16_t setSyncWord(const uint8_t* syncWord, uint8_t len);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:493:13: note:   by 'virtual int16_t SX128x::standby()'
+  493 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp: In member function 'void TR_LoRa_Comms::pollDio1()':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp:324:9: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+  324 |         isr_count_++;
+      |         ^~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp: In member function 'bool TR_LoRa_Comms::reconfigure(float, uint8_t, float, uint8_t, int8_t, bool)':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp:452:19: warning: unused variable 'old_pwr' [-Wunused-variable]
+  452 |     const int8_t  old_pwr  = cfg_tx_power_;
+      |                   ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp: In static member function 'static void TR_LoRa_Comms::onDio1ISR()':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.cpp:708:20: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+  708 |         instance_->isr_count_++;
+      |         ~~~~~~~~~~~^~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/CC1101.h:7,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:76,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/TR_LoRa_Comms/TR_LoRa_Comms.h:4,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp:53:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX1262.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/LLCC68.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:77:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:822:13: note:   by 'int16_t SX126x::setOutputPower(int8_t, uint8_t, uint8_t, uint8_t)'
+  822 |     int16_t setOutputPower(int8_t power, uint8_t paDutyCycle, uint8_t hpMax, uint8_t deviceSel);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LLCC68/../SX126x/SX126x.h:206:13: note:   by 'virtual int16_t SX126x::standby()'
+  206 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR1110.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:78:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/LR11x0/LR11x0.h:171:13: note:   by 'virtual int16_t LR11x0::standby()'
+  171 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:82:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:800:13: note:   by 'int16_t RF69::setSyncWord(const uint8_t*, size_t, uint8_t)'
+  800 |     int16_t setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits = 0);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:499:21: warning: 'virtual int16_t PhysicalLayer::setOutputPower(int8_t)' was hidden [-Woverloaded-virtual=]
+  499 |     virtual int16_t setOutputPower(int8_t power);
+      |                     ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/RF69/RF69.h:792:13: note:   by 'int16_t RF69::setOutputPower(int8_t, bool)'
+  792 |     int16_t setOutputPower(int8_t pwr, bool highPower = false);
+      |             ^~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:553:19: warning: 'virtual float PhysicalLayer::getRSSI()' was hidden [-Woverloaded-virtual=]
+  553 |     virtual float getRSSI();
+      |                   ^~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX1272.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:94:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX127x/SX127x.h:1273:11: note:   by 'float SX127x::getRSSI(bool, bool, int16_t)'
+ 1273 |     float getRSSI(bool packet, bool skipReceive, int16_t offset);
+      |           ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:515:21: warning: 'virtual int16_t PhysicalLayer::setSyncWord(uint8_t*, size_t)' was hidden [-Woverloaded-virtual=]
+  515 |     virtual int16_t setSyncWord(uint8_t* sync, size_t len);
+      |                     ^~~~~~~~~~~
+In file included from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX1280.h:9,
+                 from /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/RadioLib.h:100:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:723:13: note:   by 'int16_t SX128x::setSyncWord(const uint8_t*, uint8_t)'
+  723 |     int16_t setSyncWord(const uint8_t* syncWord, uint8_t len);
+      |             ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/CC1101/../../protocols/PhysicalLayer/PhysicalLayer.h:343:21: warning: 'virtual int16_t PhysicalLayer::standby(uint8_t)' was hidden [-Woverloaded-virtual=]
+  343 |     virtual int16_t standby(uint8_t mode);
+      |                     ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/components/RadioLib/src/modules/SX128x/SX128x.h:493:13: note:   by 'virtual int16_t SX128x::standby()'
+  493 |     int16_t standby() override;
+      |             ^~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp: In function 'void rxPush(uint8_t)':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp:1216:9: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 1216 |         rx_ring_overflow_drops++;
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp: In function 'bool i2sRecvCallback(const uint8_t*, size_t, void*)':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp:2324:5: warning: '++' expression of 'volatile'-qualified type is deprecated [-Wvolatile]
+ 2324 |     dma_cb_count++;
+      |     ^~~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp: In function 'void printStats()':
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp:4012:42: warning: unused variable 'prev_parsed' [-Wunused-variable]
+ 4012 |                          prev_stale = 0, prev_parsed = 0;
+      |                                          ^~~~~~~~~~~
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp: At global scope:
+/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/main/main.cpp:1188:17: warning: 'prev_msg_count_iis2mdc' defined but not used [-Wunused-variable]
+ 1188 | static uint32_t prev_msg_count_iis2mdc = 0;
+      |                 ^~~~~~~~~~~~~~~~~~~~~~

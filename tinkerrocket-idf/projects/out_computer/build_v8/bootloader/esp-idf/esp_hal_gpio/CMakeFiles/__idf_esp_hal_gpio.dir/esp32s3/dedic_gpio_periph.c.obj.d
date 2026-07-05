@@ -1,0 +1,21 @@
+esp-idf/esp_hal_gpio/CMakeFiles/__idf_esp_hal_gpio.dir/esp32s3/dedic_gpio_periph.c.obj: \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_gpio/esp32s3/dedic_gpio_periph.c \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_gpio/include/hal/dedic_gpio_periph.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/stdint.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_libc/platform_include/sys/cdefs.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/cdefs.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/config.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/ieeefp.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/features.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/picolibc.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/float.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/_default_types.h \
+ /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/build_v8/bootloader/config/sdkconfig.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stddef.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_intsup.h \
+ /Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_stdint.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32s3/include/soc/interrupts.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32s3/include/soc/soc_caps.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/include/soc/soc_caps_eval.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_gpio/esp32s3/include/hal/dedic_gpio_caps.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32s3/include/soc/gpio_sig_map.h

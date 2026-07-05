@@ -1,0 +1,2 @@
+/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libTR_I2S_Stream.a CMakeFiles/__idf_TR_I2S_Stream.dir/TR_I2S_Stream.cpp.obj
+/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libTR_I2S_Stream.a

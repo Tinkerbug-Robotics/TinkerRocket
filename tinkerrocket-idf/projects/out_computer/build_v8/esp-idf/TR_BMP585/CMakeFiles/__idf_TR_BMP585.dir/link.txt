@@ -1,0 +1,2 @@
+/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libTR_BMP585.a CMakeFiles/__idf_TR_BMP585.dir/TR_BMP585.cpp.obj CMakeFiles/__idf_TR_BMP585.dir/bmp5.c.obj
+/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libTR_BMP585.a

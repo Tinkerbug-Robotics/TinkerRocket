@@ -1,0 +1,3 @@
+file(REMOVE_RECURSE
+  "libTR_ISM6HG256.a"
+)

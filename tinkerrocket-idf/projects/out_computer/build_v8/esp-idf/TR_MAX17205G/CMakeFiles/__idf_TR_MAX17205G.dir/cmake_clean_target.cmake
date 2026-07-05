@@ -1,0 +1,3 @@
+file(REMOVE_RECURSE
+  "libTR_MAX17205G.a"
+)
