@@ -1,0 +1,8 @@
+# Name,   Type, SubType, Offset,  Size,    Flags
+# Compact enough for a 4 MB flash part (daughterboard module TBD); OTA pair
+# kept so #412 (UART-tunneled update) needs no repartition later.
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+ota_0,    app,  ota_0,   0x10000, 0x180000,
+ota_1,    app,  ota_1,   0x190000,0x180000,
+coredump, data, coredump,0x310000,0x10000,
