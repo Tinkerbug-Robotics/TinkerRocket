@@ -919,6 +919,21 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
 
 uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
 {
+    // #370: serialize against ringPush's prelaunch drop-oldest path, which
+    // advances rb_tail and stores rb_count ABSOLUTELY under push_mutex_.
+    // At the logging-activation edge a Core-1 push that sampled
+    // logging_active==false microseconds before the flush task flipped it
+    // can still be inside that loop while this pop (Core 0) advances the
+    // same rb_tail — rewinding the tail into consumed data and clobbering
+    // the count, which garbles the prelaunch + early-boost drain into the
+    // bad-SOF -> clearRing path.  #74 covered push-vs-push and
+    // push-vs-clearRing; this closes push-vs-pop.  Lock order matches the
+    // push side (push_mutex_ -> spi_mutex_ inside the MRAM access), so no
+    // inversion.  Cost: a push can block for one pop's MRAM read (<= one
+    // page) — the two already serialize on spi_mutex_ per transaction, so
+    // the added wait is the same order of magnitude.
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+
     // Read count under spinlock
     portENTER_CRITICAL(&ring_mux_);
     const uint32_t count_now = rb_count;
@@ -926,6 +941,7 @@ uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
 
     if (len == 0 || len > count_now)
     {
+        if (push_mutex_) xSemaphoreGive(push_mutex_);
         return 0;
     }
 
@@ -963,6 +979,7 @@ uint32_t TR_LogToFlash::ringPop(uint8_t* out, uint32_t len)
 
     ringpop_bytes_ += len;
 
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
     return len;
 }
 
