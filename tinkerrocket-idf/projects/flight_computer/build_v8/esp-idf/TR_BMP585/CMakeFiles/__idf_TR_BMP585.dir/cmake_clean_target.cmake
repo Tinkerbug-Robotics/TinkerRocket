@@ -1,3 +1,0 @@
-file(REMOVE_RECURSE
-  "libTR_BMP585.a"
-)

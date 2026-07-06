@@ -1,2 +1,0 @@
-/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libTR_OTA.a CMakeFiles/__idf_TR_OTA.dir/TR_OTA_Receiver.cpp.obj CMakeFiles/__idf_TR_OTA.dir/TR_OTA_Backend_esp.cpp.obj
-/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libTR_OTA.a

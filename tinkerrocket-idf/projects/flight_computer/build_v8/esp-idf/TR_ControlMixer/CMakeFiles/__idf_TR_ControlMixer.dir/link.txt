@@ -1,2 +1,0 @@
-/Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-ar qc libTR_ControlMixer.a CMakeFiles/__idf_TR_ControlMixer.dir/TR_ControlMixer.cpp.obj
-/Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-ranlib libTR_ControlMixer.a

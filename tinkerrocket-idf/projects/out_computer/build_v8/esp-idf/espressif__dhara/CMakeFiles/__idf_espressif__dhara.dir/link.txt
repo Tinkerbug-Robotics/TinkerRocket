@@ -1,2 +1,0 @@
-/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libespressif__dhara.a CMakeFiles/__idf_espressif__dhara.dir/dhara/dhara/error.c.obj CMakeFiles/__idf_espressif__dhara.dir/dhara/dhara/journal.c.obj CMakeFiles/__idf_espressif__dhara.dir/dhara/dhara/map.c.obj
-/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libespressif__dhara.a

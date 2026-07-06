@@ -1,2 +1,0 @@
-/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ar qc libTR_IIS2MDC.a CMakeFiles/__idf_TR_IIS2MDC.dir/TR_IIS2MDC.cpp.obj
-/Users/christianpedersen/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin/xtensa-esp32s3-elf-ranlib libTR_IIS2MDC.a

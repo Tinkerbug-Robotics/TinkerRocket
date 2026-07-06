@@ -1,6 +1,0 @@
--mlongcalls
--fno-builtin-memcpy
--fno-builtin-memset
--fno-builtin-bzero
-"-specs=/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/out_computer/build_v8/specs/picolibc.specs"
--fno-rtti

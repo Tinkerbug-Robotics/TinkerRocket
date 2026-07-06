@@ -1,3 +1,0 @@
-file(REMOVE_RECURSE
-  "libTR_BQ27Z746.a"
-)
