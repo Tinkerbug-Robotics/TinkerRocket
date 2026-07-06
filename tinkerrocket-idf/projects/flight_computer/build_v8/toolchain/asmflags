@@ -1,0 +1,4 @@
+-mabi=ilp32f
+-march=rv32imafc_zicsr_zifencei_zaamo_zalrsc_xesploop_xespv2p1
+-mtune=esp-base
+"-specs=/Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/flight_computer/build_v8/specs/picolibc.specs"

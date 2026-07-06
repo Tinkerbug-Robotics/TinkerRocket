@@ -1,0 +1,29 @@
+esp-idf/esp_hal_dma/CMakeFiles/__idf_esp_hal_dma.dir/gdma_hal_top.c.obj: \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_dma/gdma_hal_top.c \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/stdlib.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_libc/platform_include/sys/cdefs.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/cdefs.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/config.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/machine/ieeefp.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/features.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/picolibc.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/lib/gcc/riscv32-esp-elf/15.2.0/include/float.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/machine/_default_types.h \
+ /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/flight_computer/build_v8/bootloader/config/sdkconfig.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/stdint.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/lib/gcc/riscv32-esp-elf/15.2.0/include/stddef.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/_intsup.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/_stdint.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/machine/stdlib.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/alloca.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/_locale.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/picolibc/include/sys/_wait.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/hal/platform_port/include/hal/assert.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_dma/include/hal/gdma_hal.h \
+ /Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/lib/gcc/riscv32-esp-elf/15.2.0/include/stdbool.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32p4/include/soc/soc_caps.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/include/soc/soc_caps_eval.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_dma/include/hal/gdma_types.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/esp_hal_dma/esp32p4/include/hal/gdma_channel.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32p4/register/hw_ver1/soc/ahb_dma_struct.h \
+ /Users/christianpedersen/esp/esp-idf-v6.0/components/soc/esp32p4/register/hw_ver1/soc/axi_dma_struct.h

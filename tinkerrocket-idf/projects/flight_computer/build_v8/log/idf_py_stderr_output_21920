@@ -1,0 +1,10 @@
+Command: cmake -G Unix Makefiles -B /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/flight_computer/build_v8 -DPYTHON_DEPS_CHECKED=1 -DPYTHON=/Users/christianpedersen/.espressif/python_env/idf6.0_py3.13_env/bin/python -DESP_PLATFORM=1 -DTR_BOARD_V8=1 -DCCACHE_ENABLE=False /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/flight_computer
+Loading defaults file /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/.claude/worktrees/oc-board-headers/tinkerrocket-idf/projects/flight_computer/sdkconfig.defaults...
+Configuration Report               
+ ───────────────────────────────── 
+   Parser Version: 1               
+   Verbosity: default              
+   Defaults policy: sdkconfig      
+   Status: Finished successfully   
+                                   
+ ───────────────────────────────── 

@@ -1,0 +1,2 @@
+/Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-ar qc libTR_Coordinates.a CMakeFiles/__idf_TR_Coordinates.dir/TR_Coordinates.cpp.obj
+/Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-ranlib libTR_Coordinates.a

@@ -1,0 +1,2 @@
+/Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-ar qc libTR_MAX17205G.a CMakeFiles/__idf_TR_MAX17205G.dir/TR_MAX17205G.cpp.obj
+/Users/christianpedersen/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin/riscv32-esp-elf-ranlib libTR_MAX17205G.a

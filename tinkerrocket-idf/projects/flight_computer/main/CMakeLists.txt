@@ -61,3 +61,10 @@ endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     FW_GIT_SHA="${FW_GIT_SHA}"
     FW_GIT_DIRTY=${FW_GIT_DIRTY})
+
+# Board revision selection (#411): `idf.py -B build_v8 -DTR_BOARD_V8=1 build`
+# compiles the V8 pin map (main/board/board_v8.h); default is V7. Use a
+# separate build dir per variant — the flag is cached by CMake.
+if(TR_BOARD_V8)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BOARD_V8=1)
+endif()

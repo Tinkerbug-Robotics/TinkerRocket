@@ -33,15 +33,15 @@ struct board_pins
     static constexpr int I2C_SCL_PIN = 6;    // ESP_SCL (CONFIRMED)
 
     // --- I2S slave RX (high-frequency telemetry from FlightComputer) ---
-    // The ESP_ nets are SPI-style names for the I2S link. Mapping below is
-    // inferred: SCLK=bit clock, CS=frame sync (V7 FSYNC also sat on OC pin
-    // 1), SDI=data into the OC, leaving SDO as word select.
-    // TODO: CONFIRM against the FC side of the schematic — which FC GPIO
-    // each ESP_* net lands on decides WS/FSYNC/DIN definitively.
-    static constexpr int I2S_BCLK_PIN  = 2;  // ESP_SCLK (inferred)
-    static constexpr int I2S_WS_PIN    = 3;  // ESP_SDO  (inferred — verify!)
-    static constexpr int I2S_DIN_PIN   = 4;  // ESP_SDI  (inferred)
-    static constexpr int I2S_FSYNC_PIN = 1;  // ESP_CS   (inferred — verify!)
+    // ESP_* net convention, fixed against the FC-side schematic (FC pins:
+    // ESP_SCLK=21, ESP_CS=18, ESP_SDO=19, ESP_SDI=20) and mirrored in the
+    // FC's board_v8.h — both ends must agree PER NET:
+    //   ESP_SCLK = bit clock, ESP_SDO = FC data out (our DIN),
+    //   ESP_CS = word select, ESP_SDI = frame sync.
+    static constexpr int I2S_BCLK_PIN  = 2;  // ESP_SCLK
+    static constexpr int I2S_WS_PIN    = 1;  // ESP_CS
+    static constexpr int I2S_DIN_PIN   = 3;  // ESP_SDO
+    static constexpr int I2S_FSYNC_PIN = 4;  // ESP_SDI
 
     // --- Radio topology: UART daughterboard (#409/#410) — no direct LLCC68.
     static constexpr bool USE_LORA_RADIO = false;

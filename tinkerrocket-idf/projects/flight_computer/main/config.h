@@ -3,56 +3,29 @@
 
 #include <stdint.h>
 
-struct config 
+// --- Board revision (#411, tracking #408) ---
+// Pins + part-presence flags live in the per-board headers; everything in
+// this file is board-independent policy and must not fork per revision.
+// Select the V8 map with: idf.py -B build_v8 -DTR_BOARD_V8=1 build
+// (default stays V7 until V8 bring-up completes).
+#ifndef TR_BOARD_V8
+#define TR_BOARD_V8 0
+#endif
+#if TR_BOARD_V8
+#include "board/board_v8.h"
+#else
+#include "board/board_v7.h"
+#endif
+
+struct config : board_pins
 {
 
-    // ### SPI Pins ###
-    static constexpr uint8_t SPI_SCK = 9;
-    static constexpr uint8_t SPI_SDO = 10;
-    static constexpr uint8_t SPI_SDI = 8;
+    // ### SPI parameters (pins in board header) ###
     static constexpr uint32_t SPI_SPEED = 10'000'000; // 10 MHz
 
-    // ### GNSS Serial Pins ###
-    // Schematic-labeled wiring. The driver auto-detects the RX/TX swap on
-    // boards where the labeling is reversed (current rocket-computer rev
-    // has them swapped) via a fast 9600-baud activity probe at boot.
-    static constexpr uint8_t GNSS_RX = 3;
-    static constexpr uint8_t GNSS_TX = 4;
-    // Optional GNSS control pins. Set to -1 if not wired.
-    static constexpr int8_t GNSS_RESET_N = -1;
-    static constexpr int8_t GNSS_SAFEBOOT_N = -1;
-
-    // ### Sensor Pins ###
-    static constexpr uint8_t MMC5983MA_CS = 13;
-    static constexpr uint8_t BMP585_CS = 6;
-    static constexpr uint8_t ISM6HG256_CS = 7;
-
-    // IIS2MDC magnetometer (replaces MMC5983MA on the new PCB rev).
-    // Pin 13 is shared with MMC5983MA_CS — only one of the two parts is
-    // populated on any given board.  Auto-detection at boot picks the
-    // right driver: probe IIS2MDC over I2C first; on no-ack, tear the
-    // bus down and fall through to MMC5983MA over SPI.
-    static constexpr uint8_t IIS2MDC_SDA = 13;
-    static constexpr uint8_t IIS2MDC_SCL = 20;
+    // ### IIS2MDC I2C parameters (pins in board header) ###
     static constexpr uint32_t IIS2MDC_I2C_FREQ_HZ = 400'000;
     static constexpr uint8_t IIS2MDC_I2C_ADDR = 0x1E;
-
-    // ### Sensors to use ###
-    static constexpr bool USE_BMP585 = true;
-    static constexpr bool USE_MMC5983MA = true;
-    static constexpr bool USE_GNSS = true;
-    static constexpr bool USE_ISM6HG256 = true;
-    // When USE_MMC5983MA is true, the magnetometer slot first probes for
-    // an IIS2MDC over I2C; if not detected, the MMC5983MA SPI path runs.
-    // Setting USE_IIS2MDC=false forces the legacy MMC5983MA path even on
-    // boards that have the IIS2MDC populated.
-    static constexpr bool USE_IIS2MDC = true;
-
-    // ### Sensor Interrupt Pins ###
-    static constexpr uint8_t ISM6HG256_INT = 21;
-    static constexpr uint8_t BMP585_INT = 11;
-    static constexpr uint8_t MMC5983MA_INT = 12;
-    static constexpr uint8_t IIS2MDC_INT = 12;  // shared with MMC5983MA_INT
 
     // ### Data Update Rates (Hz) ###
     static constexpr uint16_t FLIGHT_LOOP_UPDATE_RATE = 1000;
@@ -112,13 +85,8 @@ struct config
     static constexpr bool USE_GOPRO = (CAMERA_TYPE == 1);
     static constexpr bool USE_RUNCAM = (CAMERA_TYPE == 2);
 
-    // GoPro pins & timing.  DEAD on this PCB: USE_GOPRO is false (CAMERA_TYPE=2,
-    // RunCam) so the setup() block that drives these never runs.  J6 carries the
-    // camera power gate on pin 32 and the RunCam UART on 30/31 — there is no
-    // separate GoPro shutter line.  Revisit these numbers before ever setting
-    // CAMERA_TYPE=1 on this hardware.
-    static constexpr int8_t CAM_PWR_PIN = 30;        // powers on camera (GoPro path, unused)
-    static constexpr int8_t CAM_SHUTTER_PIN = 31;    // GoPro shutter pulse (unused)
+    // GoPro timing (pins in board header; GoPro path DEAD on this PCB —
+    // USE_GOPRO false. Revisit before ever setting CAMERA_TYPE=1.)
     static constexpr uint16_t GOPRO_PULSE_MS = 120;
 
     // Time to keep the camera rolling after LANDED before issuing the stop.
@@ -127,21 +95,8 @@ struct config
     // (which saturated i2s_tx_queue and dropped END_FLIGHT; see #141).
     static constexpr uint32_t CAMERA_STOP_DELAY_MS = 30000;  // 30 s
 
-    // RunCam UART + power pins.
-    //   pin 32 = CAM_ACT → PMPB14XNX gate = camera POWER (R42 holds it off when
-    //                      low) — CONFIRMED, camera powers on/off correctly.
-    // The UART pair (30/31) is under bench verification (#234).  The schematic's
-    // Camera_TX/RX labels were ambiguous as to FC side; the first orientation
-    // (RX=30/TX=31) powered fine but the GET_DEVICE_INFO probe got no reply and
-    // record was unreliable, so we are testing the swapped orientation:
-    //   pin 31 = FC receives (RX) ← Camera_TX
-    //   pin 30 = FC transmits (TX) → Camera_RX
-    // (The original firmware had the whole set rotated RX=31/TX=32/PWR=30, which
-    // put the UART TX on the power gate — idle-high auto-powered/-recorded the
-    // camera at boot: the root cause of #234.)
-    static constexpr int8_t RUNCAM_RX_PIN = 31;      // FC receives from RunCam (Camera_TX)
-    static constexpr int8_t RUNCAM_TX_PIN = 30;      // FC sends to RunCam (Camera_RX)
-    static constexpr int8_t RUNCAM_PWR_PIN = 32;     // camera power gate (CAM_ACT)
+    // RunCam UART baud (pins in board header; wiring history in board_v7.h
+    // and #234 — the bench-confirmed orientation is RX=31/TX=30/PWR=32).
     static constexpr uint32_t RUNCAM_BAUD = 115200;
 
     // RunCam record-start timing (serviceCameraStart poll loop, #251 follow-up).
@@ -157,31 +112,16 @@ struct config
     static constexpr uint8_t  RUNCAM_RECORD_RESENDS   = 2;     // extra START sends
     static constexpr uint32_t RUNCAM_RECORD_RESEND_MS = 150;   // resend spacing
 
-    // ### Pyro Channel Pins ###
-    // New PCB: one shared arming FET feeds all four squib drivers.
-    // ARM is raised only momentarily — for the PRELAUNCH continuity
-    // check and again during a fire pulse — never latched in flight.
-    static constexpr uint8_t PYRO_ARM_PIN   = 14;
-    static constexpr uint8_t PYRO1_CONT_PIN = 15;
-    static constexpr uint8_t PYRO1_FIRE_PIN = 16;
-    static constexpr uint8_t PYRO2_CONT_PIN = 18;
-    static constexpr uint8_t PYRO2_FIRE_PIN = 19;
-    static constexpr uint8_t PYRO3_CONT_PIN = 38;
-    static constexpr uint8_t PYRO3_FIRE_PIN = 34;
-    static constexpr uint8_t PYRO4_CONT_PIN = 51;
-    static constexpr uint8_t PYRO4_FIRE_PIN = 50;
+    // ### Pyro timing (pins in board header) ###
+    // One shared arming FET feeds all four squib drivers. ARM is raised
+    // only momentarily — for the PRELAUNCH continuity check and again
+    // during a fire pulse — never latched in flight.
     static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 500;
     // Time between raising ARM and reading CONT / pulsing FIRE, giving
     // the upstream arming FET its turn-on settle margin.
     static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
 
-    // ### Servo Controls (placeholder pins) ###
-    // Set these to valid GPIOs for your board.
-    static constexpr uint8_t SERVO_PIN_1 = 43;
-    static constexpr uint8_t SERVO_PIN_2 = 44;
-    static constexpr uint8_t SERVO_PIN_3 = 45;
-    static constexpr uint8_t SERVO_PIN_4 = 46;
-
+    // ### Servo Controls (pins in board header) ###
     static constexpr int SERVO_BIAS_1 = 0;
     static constexpr int SERVO_BIAS_2 = 0;
     static constexpr int SERVO_BIAS_3 = 0;
@@ -406,11 +346,8 @@ struct config
     // many tens of dps — 2 dps is well clear of noise and far below signal.
     static constexpr float GROUND_TEST_ROLL_RATE_DEADBAND_DPS = 2.0f;
 
-    // ### Indicators (Piezo and LED) ###
+    // ### Indicators (pins in board header) ###
     static constexpr bool ENABLE_SOUNDS = false;
-    static constexpr uint8_t PIEZO_PIN = 53;
-    static constexpr uint8_t RED_LED_PIN = 2;
-    static constexpr uint8_t BLUE_LED_PIN = 29;
     static constexpr uint16_t BLUE_LED_FLASH_MS = 40;
     static constexpr uint32_t HEARTBEAT_BEEP_INTERVAL_MS = 1000;
     static constexpr uint16_t HEARTBEAT_BEEP_FREQ_HZ = 2200;
@@ -418,10 +355,8 @@ struct config
     // Set true if you also want periodic beeps during INFLIGHT.
     static constexpr bool HEARTBEAT_BEEP_IN_FLIGHT = false;
 
-    // ### I2C Parameters (command/config channel only) ###
+    // ### I2C Parameters (command/config channel only; pins in board header) ###
     static constexpr uint8_t ESP_I2C_ADR = 0x42;
-    static constexpr uint8_t ESP_SDA_PIN = 41;
-    static constexpr uint8_t ESP_SCL_PIN = 42;
     static constexpr uint32_t ESP_I2C_FREQ_HZ = 400'000; // Reduced — only commands now
     static constexpr uint16_t I2S_TX_QUEUE_LEN = 512;    // Must handle ~2160 frames/sec burst rate
     // #402: after sending I2C_TX_RESYNC the FC suspends ALL I2C polling for
@@ -431,11 +366,8 @@ struct config
     // detector re-sends every 8 further failures if the OC lagged past it.
     static constexpr uint32_t I2C_RESYNC_GRACE_MS = 2000;
 
-    // ### I2S Parameters (high-frequency telemetry FC→OC) ###
-    static constexpr int I2S_BCLK_PIN  = 27;
-    static constexpr int I2S_WS_PIN    = 28;
-    static constexpr int I2S_DOUT_PIN  = 23;
-    static constexpr int I2S_FSYNC_PIN = 17;
+    // ### I2S Parameters (high-frequency telemetry FC→OC; pins in board
+    //     header) ###
     // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
     // Higher rate = faster DMA buffer turnover = less stale data.
     // 22050 Hz = 88 KB/s.  Lower rates cause more gaps from DMA replay.
