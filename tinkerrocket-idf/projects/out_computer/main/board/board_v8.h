@@ -44,7 +44,10 @@ struct board_pins
     static constexpr int I2S_FSYNC_PIN = 4;  // ESP_SDI
 
     // --- Radio topology: UART daughterboard (#409/#410) — no direct LLCC68.
-    static constexpr bool USE_LORA_RADIO = false;
+    // USE_LORA_RADIO=true: the radio paths run, through the UART-modem
+    // backend rather than the direct SPI driver.
+    static constexpr bool USE_LORA_RADIO = true;
+    static constexpr bool USE_UART_RADIO_MODEM = true;
     static constexpr int LORA_SPI_SCK = -1;
     static constexpr int LORA_SPI_MISO = -1;
     static constexpr int LORA_SPI_MOSI = -1;

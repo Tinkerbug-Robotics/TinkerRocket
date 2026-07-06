@@ -51,6 +51,9 @@ static inline std::string itos(int v)
 #include <TR_I2S_Stream.h>
 #include <TR_LogToFlash.h>
 #include <TR_LoRa_Comms.h>
+#include <IRadioLink.h>
+#include <LoRaDirectBackend.h>
+#include <UartModemBackend.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Orientation.h>
 #include <TR_Coordinates.h>
@@ -367,7 +370,16 @@ static void flightlogEndFlight()
     // operation (re-backed on TR_FlightLog in Stage 3).
 }
 static TR_BLE_To_APP ble_app("TinkerRocket");
-static TR_LoRa_Comms lora_comms;
+// Radio backend seam (#410): direct SPI LLCC68 (V7 boards) or the UART
+// radio-daughterboard modem (V8), selected by the board header. The
+// reference keeps the historical `lora_comms` name so every call site
+// below is untouched; the unused backend is never begun.
+static LoRaDirectBackend lora_direct_backend;
+static UartModemBackend lora_modem_backend;
+static IRadioLink& lora_comms =
+    config::USE_UART_RADIO_MODEM
+        ? static_cast<IRadioLink&>(lora_modem_backend)
+        : static_cast<IRadioLink&>(lora_direct_backend);
 static SensorConverter sensor_converter;
 static TR_Coordinates coord;
 
@@ -4555,26 +4567,48 @@ void initPeripherals()
 
     if (config::USE_LORA_RADIO)
     {
-        TR_LoRa_Comms::Config lora_cfg = {};
-        lora_cfg.enabled = config::USE_LORA_RADIO;
-        lora_cfg.cs_pin = config::LORA_CS_PIN;
-        lora_cfg.dio1_pin = config::LORA_DIO1_PIN;
-        lora_cfg.rst_pin = config::LORA_RST_PIN;
-        lora_cfg.busy_pin = config::LORA_BUSY_PIN;
-        lora_cfg.spi_sck = config::LORA_SPI_SCK;
-        lora_cfg.spi_miso = config::LORA_SPI_MISO;
-        lora_cfg.spi_mosi = config::LORA_SPI_MOSI;
-        lora_cfg.spi_host = SPI3_HOST;  // SPI2 used by NAND/MRAM
-        lora_cfg.freq_mhz = lora_freq_mhz;
-        lora_cfg.spreading_factor = lora_sf;
-        lora_cfg.bandwidth_khz = lora_bw_khz;
-        lora_cfg.coding_rate = lora_cr;
-        lora_cfg.preamble_len = config::LORA_PREAMBLE_LEN;
-        lora_cfg.tx_power_dbm = lora_tx_power;
-        lora_cfg.crc_on = config::LORA_CRC_ON;
-        lora_cfg.rx_boosted_gain = config::LORA_RX_BOOSTED_GAIN;
-        lora_cfg.syncword_private = config::LORA_SYNCWORD_PRIVATE;
-        if (!lora_comms.begin(lora_cfg, config::DEBUG))
+        bool radio_ok = false;
+        if (config::USE_UART_RADIO_MODEM)
+        {
+            // V8: LoRa daughterboard over UART (#409/#410). NVS-restored
+            // modulation params are pushed to the modem; pins/baud from the
+            // board header (baud must match projects/radio_board).
+            UartModemBackend::Config mcfg = {};
+            mcfg.uart.tx_pin = config::LORA_UART_TX_PIN;
+            mcfg.uart.rx_pin = config::LORA_UART_RX_PIN;
+            mcfg.act_pin = config::LORA_ACT_PIN;
+            mcfg.preamble_len = config::LORA_PREAMBLE_LEN;
+            mcfg.crc_on = config::LORA_CRC_ON;
+            mcfg.rx_boosted_gain = config::LORA_RX_BOOSTED_GAIN;
+            mcfg.syncword_private = config::LORA_SYNCWORD_PRIVATE;
+            radio_ok = lora_modem_backend.begin(mcfg, lora_freq_mhz, lora_sf,
+                                                lora_bw_khz, lora_cr,
+                                                lora_tx_power, config::DEBUG);
+        }
+        else
+        {
+            TR_LoRa_Comms::Config lora_cfg = {};
+            lora_cfg.enabled = config::USE_LORA_RADIO;
+            lora_cfg.cs_pin = config::LORA_CS_PIN;
+            lora_cfg.dio1_pin = config::LORA_DIO1_PIN;
+            lora_cfg.rst_pin = config::LORA_RST_PIN;
+            lora_cfg.busy_pin = config::LORA_BUSY_PIN;
+            lora_cfg.spi_sck = config::LORA_SPI_SCK;
+            lora_cfg.spi_miso = config::LORA_SPI_MISO;
+            lora_cfg.spi_mosi = config::LORA_SPI_MOSI;
+            lora_cfg.spi_host = SPI3_HOST;  // SPI2 used by NAND/MRAM
+            lora_cfg.freq_mhz = lora_freq_mhz;
+            lora_cfg.spreading_factor = lora_sf;
+            lora_cfg.bandwidth_khz = lora_bw_khz;
+            lora_cfg.coding_rate = lora_cr;
+            lora_cfg.preamble_len = config::LORA_PREAMBLE_LEN;
+            lora_cfg.tx_power_dbm = lora_tx_power;
+            lora_cfg.crc_on = config::LORA_CRC_ON;
+            lora_cfg.rx_boosted_gain = config::LORA_RX_BOOSTED_GAIN;
+            lora_cfg.syncword_private = config::LORA_SYNCWORD_PRIVATE;
+            radio_ok = lora_direct_backend.begin(lora_cfg, config::DEBUG);
+        }
+        if (!radio_ok)
         {
             ESP_LOGE("PWR", "LoRa init failed");
         }
