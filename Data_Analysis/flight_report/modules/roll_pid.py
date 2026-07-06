@@ -98,17 +98,35 @@ def _parse_profile(rc: dict) -> list[tuple[float, float, bool]]:
     return out
 
 
-def _profile_target(wps: list[tuple[float, float, bool]], t: float) -> tuple[float, bool]:
-    """Replicate firmware `roll_profile_query` (main.cpp:1008) EXACTLY: returns
+def _profile_target(wps: list[tuple[float, float, bool]], t: float,
+                    semantics: str = "step") -> tuple[float, bool]:
+    """Replicate firmware `roll_profile_query` EXACTLY: returns
     (target_angle_deg, is_angle_mode) at flight time `t` (seconds since launch).
-    Inside the profile the controller commands the segment's DESTINATION — the
+
+    semantics="step" (firmware pre-v4, sidecars without `profile_semantics`):
+    inside the profile the controller commands the segment's DESTINATION — the
     NEXT waypoint's absolute angle, as a STEP (no interpolation) — using the
-    CURRENT waypoint's mode, and lets controlAngle take the shortest path to it.
-    Holds the first / last waypoint outside the profile span.
-    (Was previously interpolating a0→a1, which mislabels the target during
-    multi-waypoint angle segments — the firmware does not ramp.)"""
+    CURRENT waypoint's per-waypoint mode; holds the first / last waypoint
+    outside the profile span.
+
+    semantics="ramp" (firmware v4+): pure (time, angle) waypoints — per-wp
+    modes ignored; NULL_RATE before the first waypoint; target linearly
+    interpolated along the shortest wrapped arc between waypoints; last angle
+    held after the profile."""
     if not wps:
         return 0.0, False
+    if semantics == "ramp":
+        if t < wps[0][0]:
+            return 0.0, False  # null-rate before the profile
+        if t >= wps[-1][0]:
+            return wps[-1][1], True
+        for i in range(len(wps) - 1):
+            (t0, a0, _), (t1, a1, _) = wps[i], wps[i + 1]
+            if t < t1:
+                frac = (t - t0) / (t1 - t0) if t1 - t0 > 1e-3 else 1.0
+                tgt = float(_wrap180(a0 + float(_wrap180(a1 - a0)) * frac))
+                return tgt, True
+        return wps[-1][1], True
     if t <= wps[0][0]:
         return wps[0][1], not wps[0][2]
     if t >= wps[-1][0]:
@@ -225,14 +243,81 @@ def _fine_time_axis(ax):
     ax.grid(True, which="minor", alpha=0.15)
 
 
-def _phase_label(wps, i):
+def _phase_label(wps, i, semantics="step"):
     """Short label for the control phase that STARTS at waypoint i."""
     wt, wa, wnull = wps[i]
+    if semantics == "ramp":
+        if i < len(wps) - 1:
+            a1 = wps[i + 1][1]
+            return f"hold {wa:g}°" if a1 == wa else f"ramp {wa:g}→{a1:g}°"
+        return f"hold {wa:g}°"
     if wnull:
         return "null-rate"
     if i < len(wps) - 1:
-        return f"angle ramp →{wps[i + 1][1]:g}°"
+        return f"cmd {wps[i + 1][1]:g}° (step)"
     return f"hold {wa:g}°"
+
+
+def _effective_plan(wps, semantics="step"):
+    """Human-readable EFFECTIVE command timeline as the firmware flies it.
+    step (pre-v4): inside segment [i, i+1) the controller commands waypoint
+    i+1's angle as a STEP, using waypoint i's mode — the raw waypoint list
+    reads misleadingly as \"reach angle X at time T\".
+    ramp (v4+): null-rate before the first waypoint, target lerps between
+    waypoints, last angle held."""
+    if not wps:
+        return "—"
+    parts = []
+    t_first, a_first, n_first = wps[0]
+    if semantics == "ramp":
+        if t_first > 0:
+            parts.append(f"<{t_first:g}s null-rate")
+        for i in range(len(wps) - 1):
+            (ta, a0, _), (tb, a1, _) = wps[i], wps[i + 1]
+            seg = f"hold {a0:g}°" if a1 == a0 else f"ramp {a0:g}→{a1:g}°"
+            parts.append(f"{ta:g}–{tb:g}s {seg}")
+        parts.append(f"≥{wps[-1][0]:g}s hold {wps[-1][1]:g}°")
+        return "; ".join(parts)
+    if t_first > 0:
+        parts.append(f"<{t_first:g}s {'null-rate' if n_first else f'cmd {a_first:g}°'}")
+    for i in range(len(wps) - 1):
+        (ta, _, n0), (tb, a1, _) = wps[i], wps[i + 1]
+        parts.append(f"{ta:g}–{tb:g}s {'null-rate' if n0 else f'cmd {a1:g}°'}")
+    t_last, a_last, n_last = wps[-1]
+    parts.append(f"≥{t_last:g}s {'null-rate' if n_last else f'hold {a_last:g}°'}")
+    return "; ".join(parts)
+
+
+def _fit_r2(x, y):
+    """R² of the least-squares line y ≈ kx + b (slope sign free), or NaN if x
+    is ~constant. Can go negative for fits worse than the mean."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if x.size < 10 or np.std(x) < 1e-9 or np.std(y) < 1e-9:
+        return float("nan")
+    k, b = np.polyfit(x, y, 1)
+    ss_res = float(np.sum((y - (k * x + b)) ** 2))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+
+def _gain_schedule_scale(rc_cfg, speed):
+    """Firmware gain-schedule multiplier per sample (TR_ServoControl::
+    controlWithGainSchedule): min((v_ref / max(|v|, v_min))², scale_cap).
+    Returns 1.0s when the schedule is disabled or unconfigured."""
+    gs = rc_cfg.get("gain_schedule") or {}
+    speed = np.asarray(speed, dtype=float)
+    if not gs.get("enabled"):
+        return np.ones_like(speed)
+    v_ref = _as_float(gs.get("v_ref"))
+    v_min = _as_float(gs.get("v_min"))
+    cap = _as_float(gs.get("scale_cap"))
+    if not v_ref or not v_min or not cap:
+        return np.ones_like(speed)
+    v = np.maximum(np.abs(speed), v_min)
+    return np.minimum((v_ref / v) ** 2, cap)
 
 
 def _baro_eject_time(flight, t0, launch_t, burnout_t, apogee_t):
@@ -377,7 +462,12 @@ def analyze(flight: Flight) -> AnalysisResult:
     # regulated, both exactly as the firmware computes them.
     rc_cfg = _roll_cfg(flight.sidecar)
     wps = _parse_profile(rc_cfg)
-    has_angle_profile = any(not null for (_, _, null) in wps)
+    claimed_mode = str(rc_cfg.get("mode", "")).lower()
+    # Profile semantics the FIRMWARE flew: "ramp" (v4+: lerp between waypoints,
+    # per-wp modes ignored) vs "step" (pre-v4: step to NEXT waypoint's angle,
+    # per-wp null_rate honored). Exports without the marker are pre-v4.
+    semantics = str(rc_cfg.get("profile_semantics", "step")).lower()
+    has_wp_angles = any(not null for (_, _, null) in wps)
 
     # Ejection ≈ apogee (end of roll authority), launch-relative.
     eject_t = None
@@ -416,16 +506,19 @@ def analyze(flight: Flight) -> AnalysisResult:
     for i in range(len(wps) - 1):
         (t0w, a0w, n0), (t1w, a1w, _) = wps[i], wps[i + 1]
         if not n0 and t1w > t0w:
-            profile_ramp = max(profile_ramp, abs(a1w - a0w) / (t1w - t0w))
+            d_ang = abs(float(_wrap180(a1w - a0w)))  # shortest-path arc
+            profile_ramp = max(profile_ramp, d_ang / (t1w - t0w))
 
     track_tw = track_tgt = track_act = track_err = track_is_ang = track_ratecmd = None
+    track_cmd = None
     angle_rms = angle_peak = float("nan")
-    if has_angle_profile:
+    if has_wp_angles:
         roll_act = _quat_roll_deg(*(get_array(ns, k) for k in ("q0", "q1", "q2", "q3")))
         wmask = (t_ns >= 0.0) & (t_ns <= win_end + 0.05) & np.isfinite(roll_act)
         track_tw = t_ns[wmask]
+        track_cmd = cmd[wmask]
         act_w = roll_act[wmask]
-        tq = [_profile_target(wps, float(tt)) for tt in track_tw]
+        tq = [_profile_target(wps, float(tt), semantics) for tt in track_tw]
         target_ang = np.array([x[0] for x in tq], dtype=float)
         track_is_ang = np.array([x[1] for x in tq], dtype=bool)
         # Wrapped shortest-path error, exactly like servo_control.controlAngle().
@@ -447,6 +540,58 @@ def analyze(flight: Flight) -> AnalysisResult:
         if kp_angle_cfg is not None and rate_cap_cfg is not None:
             rc_angle = np.clip(kp_angle_cfg * err, -rate_cap_cfg, rate_cap_cfg)
             track_ratecmd = np.where(track_is_ang, rc_angle, rate_setpt)
+
+    # ── Which roll mode actually FLEW? ──
+    # The sidecar `mode` can't be trusted on its own: app exports before
+    # 2026-07-05 labeled any flight with a *stored* waypoint profile
+    # "angle_profile" even when use_angle_control was off (Null Roll) — and the
+    # firmware ignores a stored profile in that case and flies pure rate-null.
+    # Cross-check against the log: the inner rate loop's error is
+    # (gyro − rate_cmd) if the angle cascade ran, vs (gyro − setpoint) if
+    # rate-null flew; the logged servo command is ~proportional to whichever
+    # error was real, so correlation over the angle segments separates them.
+    flown_mode_note = None
+    has_angle_profile = has_wp_angles and claimed_mode != "rate"
+    if has_wp_angles and claimed_mode != "rate" and track_ratecmd is not None:
+        gyro_w = np.interp(track_tw, t_imu, g)
+        # Only samples where the hypotheses actually differ are informative.
+        sel = track_is_ang & (np.abs(track_ratecmd - rate_setpt) > 10.0)
+        # The fin command is Kp_eff·error (+ small I/D); divide out the
+        # velocity gain schedule so the fit slope is ~constant over the window.
+        cmd_norm = track_cmd / _gain_schedule_scale(rc_cfg, speed[wmask])
+        if sel.sum() < 20:
+            flown_mode_note = ("undecidable from servo data (too few angle-segment "
+                               "samples) — trusting sidecar mode")
+        elif float(np.std(track_ratecmd[sel])) < 15.0:
+            # Outer-loop cmd railed ~constant: the two error series differ only
+            # by a constant, which the fit intercept absorbs — undecidable.
+            flown_mode_note = ("undecidable from servo data (outer-loop cmd "
+                               "~constant over angle segments) — trusting sidecar mode")
+        else:
+            r2_angle = _fit_r2(gyro_w[sel] - track_ratecmd[sel], cmd_norm[sel])
+            r2_null = _fit_r2(gyro_w[sel] - rate_setpt, cmd_norm[sel])
+            if not (np.isfinite(r2_null) and np.isfinite(r2_angle)):
+                # Typically the fin command pinned at the ± limit throughout.
+                flown_mode_note = ("undecidable from servo data (fin command "
+                                   "~constant/saturated over angle segments) — "
+                                   "trusting sidecar mode")
+            elif r2_null - r2_angle > 0.25 and r2_null > 0.3:
+                has_angle_profile = False
+                result.warnings.append(
+                    f"Sidecar claims roll mode '{claimed_mode}' but the servo "
+                    f"command fits pure rate-null (R²={r2_null:.2f}) far better "
+                    f"than the angle cascade (R²={r2_angle:.2f}) — the stored "
+                    f"profile was NOT followed (use_angle_control off; app exports "
+                    f"before 2026-07-05 mislabel this). Analyzing as rate-null."
+                )
+                flown_mode_note = (f"rate-null flew (servo fit R² {r2_null:.2f} "
+                                   f"vs angle-cascade {r2_angle:.2f})")
+            elif r2_angle - r2_null > 0.25 and r2_angle > 0.3:
+                flown_mode_note = (f"angle cascade confirmed (servo fit R² "
+                                   f"{r2_angle:.2f} vs rate-null {r2_null:.2f})")
+            else:
+                flown_mode_note = (f"inconclusive (servo fit R²: angle {r2_angle:.2f}, "
+                                   f"rate-null {r2_null:.2f}) — trusting sidecar mode")
 
     # ── Current gains (from sidecar if available) ──
     kp_flight, ki_flight, kd_flight = _gain_from_sidecar(flight.sidecar)
@@ -503,6 +648,8 @@ def analyze(flight: Flight) -> AnalysisResult:
     # Flown roll-control setup parameters (from the #165 settings snapshot).
     if rc_cfg:
         metrics["roll_mode"]      = rc_cfg.get("mode", "—")
+        if flown_mode_note:
+            metrics["flown_mode_check"] = flown_mode_note
         metrics["roll_delay_ms"]  = rc_cfg.get("delay_ms", "—")
         metrics["rate_cap_dps"]   = rc_cfg.get("rate_cap_dps", "—")
         metrics["cmd_limit_deg"]  = (f"[{rc_cfg.get('cmd_limit_min_deg', '?')}, "
@@ -514,8 +661,14 @@ def analyze(flight: Flight) -> AnalysisResult:
     if eject_baro is not None:
         metrics["baro_eject_s"] = round(eject_baro, 2)
     metrics["plot_window_s"] = f"[0, {win_end:.2f}]"
+    if wps:
+        metrics["profile_semantics"] = semantics
+    if has_wp_angles and not has_angle_profile:
+        # Profile stored on the FC but not followed (rate mode flew).
+        metrics["profile_stored_NOT_followed"] = _effective_plan(wps, semantics)
     if has_angle_profile:
-        metrics["profile_plan"] = "; ".join(
+        metrics["profile_commanded"] = _effective_plan(wps, semantics)
+        metrics["profile_waypoints"] = "; ".join(
             f"{wt:g}s→{'null-rate' if wn else f'{wa:g}°'}" for (wt, wa, wn) in wps)
         if profile_ramp > 0:
             feasible = (rate_cap_cfg is None) or (profile_ramp <= rate_cap_cfg + 1e-6)
@@ -525,6 +678,40 @@ def analyze(flight: Flight) -> AnalysisResult:
         # setpoint, not control performance — read alongside profile_ramp_dps.
         metrics["angle_track_rms_deg"]  = round(angle_rms, 1)  if np.isfinite(angle_rms)  else "—"
         metrics["angle_track_peak_deg"] = round(angle_peak, 1) if np.isfinite(angle_peak) else "—"
+
+        # Per-segment breakdown over the analysis window: what was commanded,
+        # how the angle error evolved, and the residual rate / fin activity.
+        bounds = [0.0] + [wt for (wt, _, _) in wps if 0.0 < wt < win_end] + [win_end]
+        for si in range(len(bounds) - 1):
+            a, b = bounds[si], bounds[si + 1]
+            if b - a < 0.05:
+                continue
+            mid = 0.5 * (a + b)
+            eps = min(0.02, 0.25 * (b - a))
+            tgt_a, is_ang_a = _profile_target(wps, a + eps, semantics)
+            tgt_b, _ = _profile_target(wps, b - eps, semantics)
+            _, is_ang_mid = _profile_target(wps, mid, semantics)
+            if abs(float(_wrap180(tgt_b - tgt_a))) < 0.5:
+                cmd_desc = f"cmd {tgt_a:g}°"
+            else:
+                cmd_desc = f"ramp {tgt_a:.0f}→{tgt_b:.0f}°"
+            mi = (t_imu >= a) & (t_imu <= b)
+            mc = (t_ns >= a) & (t_ns <= b)
+            rate_rms_seg = float(np.sqrt(np.mean(g[mi] ** 2))) if mi.any() else float("nan")
+            cmd_max_seg = float(np.max(np.abs(cmd[mc]))) if mc.any() else float("nan")
+            if is_ang_mid and track_tw is not None:
+                ms = (track_tw >= a) & (track_tw <= b) & track_is_ang
+                e_seg = track_err[ms] if ms.any() else np.array([])
+                e_seg = e_seg[np.isfinite(e_seg)]
+                if e_seg.size:
+                    desc = (f"{cmd_desc}: err {e_seg[0]:+.0f}→{e_seg[-1]:+.0f}° "
+                            f"(RMS {np.sqrt(np.mean(e_seg**2)):.0f}°), ")
+                else:
+                    desc = f"{cmd_desc}: "
+            else:
+                desc = "null-rate: "
+            desc += f"rate RMS {rate_rms_seg:.0f}°/s, |fin cmd| max {cmd_max_seg:.1f}°"
+            metrics[f"segment {a:.2g}–{b:.2g}s"] = desc
     result.metrics = metrics
 
     # ── Figures ──
@@ -571,7 +758,8 @@ def analyze(flight: Flight) -> AnalysisResult:
             if -0.2 <= wt <= win_end + 0.2:
                 # null-rate segments are already shown by the gray shading; only
                 # label the meaningful mode-change transitions (angle / hold).
-                evs.append((wt, None if wnull else _phase_label(wps, i), "gray", ":"))
+                lbl = _phase_label(wps, i, semantics)
+                evs.append((wt, None if (semantics != "ramp" and wnull) else lbl, "gray", ":"))
         return evs
 
     def _mark_events(ax, annotate=False):
@@ -630,11 +818,30 @@ def analyze(flight: Flight) -> AnalysisResult:
         axes[0].set_yticks([-180, -90, 0, 90, 180])
         axes[0].set_title("Roll angle tracking vs profile plan (launch → ejection)")
         axes[0].grid(True, alpha=0.3)
-        for (wt, wa, wn) in wps:
-            if not wn and 0 <= wt <= win_end:
-                axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
-                                 color="tab:orange", ha="left", va="bottom",
-                                 xytext=(2, 2), textcoords="offset points")
+        if semantics == "ramp":
+            # Ramp semantics: the target passes through each waypoint's
+            # (time, angle) exactly — annotate the waypoints themselves.
+            for (wt, wa, _) in wps:
+                if 0 <= wt <= win_end:
+                    axes[0].annotate(f"{wa:g}°", xy=(wt, _wrap180(wa)), fontsize=8,
+                                     color="tab:orange", ha="left", va="bottom",
+                                     xytext=(2, 2), textcoords="offset points")
+        else:
+            # Step semantics: label each ANGLE segment with its effective
+            # command (the NEXT waypoint's angle), centred on the visible part
+            # of the segment — not the waypoint angle at the waypoint time,
+            # which reads as "hold this from here" and is wrong.
+            seg_spans = [(wps[i][0], wps[i + 1][0], wps[i + 1][1], wps[i][2])
+                         for i in range(len(wps) - 1)]
+            if not wps[-1][2]:  # trailing hold segment if the last waypoint is angle-mode
+                seg_spans.append((wps[-1][0], win_end, wps[-1][1], False))
+            for (sa, sb, s_ang, s_null) in seg_spans:
+                sa, sb = max(sa, 0.0), min(sb, win_end)
+                if s_null or sb - sa < 0.05:
+                    continue
+                axes[0].annotate(f"cmd {s_ang:g}°", xy=(0.5 * (sa + sb), _wrap180(s_ang)),
+                                 fontsize=8, color="tab:orange", ha="center", va="bottom",
+                                 xytext=(0, 3), textcoords="offset points")
         _mark_events(axes[0], annotate=True)
         axes[0].legend(loc="upper left", fontsize=8)
 

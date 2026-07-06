@@ -730,15 +730,19 @@ nonisolated struct RollControlSettings: Codable, Sendable {
     let roll_rate_set_point: Double
     let guidance_enabled: Bool
     let gain_schedule: GainScheduleSettings
+    let profile_semantics: String  // "ramp" (fw v4+: lerp between waypoints) or "step" (pre-v4)
     let profile: [RollWaypointJSON]
 
     init(from raw: FlightSettingsData) {
-        if raw.num_waypoints > 0 {
-            mode = "angle_profile"
-        } else if raw.useAngleControl {
-            mode = "angle"
-        } else {
+        // The firmware only runs the angle cascade when use_angle_control is
+        // set (Null Roll / Track Profile toggle) — a stored waypoint profile
+        // alone is inert, so it must not decide the exported mode.
+        if !raw.useAngleControl {
             mode = "rate"
+        } else if raw.num_waypoints > 0 {
+            mode = "angle_profile"
+        } else {
+            mode = "angle"
         }
         kp = sigFig(raw.kp)
         ki = sigFig(raw.ki)
@@ -757,11 +761,17 @@ nonisolated struct RollControlSettings: Codable, Sendable {
             v_min: sigFig(raw.gs_v_min),
             scale_cap: sigFig(raw.gs_scale_cap)
         )
+        // v4+ firmware ramps the target linearly between waypoints and ignores
+        // the legacy per-waypoint mode bytes; pre-v4 stepped to the NEXT
+        // waypoint's angle honoring per-waypoint null_rate modes. Post-flight
+        // analysis branches on this marker, so it must reflect the FIRMWARE
+        // version that flew, not what this app version would send.
+        profile_semantics = raw.version >= 4 ? "ramp" : "step"
         profile = raw.waypoints.map {
             RollWaypointJSON(
                 time_s: sigFig($0.time_s),
                 angle_deg: sigFig($0.angle_deg),
-                mode: $0.mode == 1 ? "null_rate" : "angle"
+                mode: raw.version >= 4 ? nil : ($0.mode == 1 ? "null_rate" : "angle")
             )
         }
     }
@@ -777,7 +787,7 @@ nonisolated struct GainScheduleSettings: Codable, Sendable {
 nonisolated struct RollWaypointJSON: Codable, Sendable {
     let time_s: Double
     let angle_deg: Double
-    let mode: String   // "angle" or "null_rate"
+    let mode: String?  // pre-v4 only: "angle" or "null_rate"; omitted on ramp-semantics exports
 }
 
 nonisolated struct ServoSettings: Codable, Sendable {

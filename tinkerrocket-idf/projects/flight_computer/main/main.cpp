@@ -1030,21 +1030,30 @@ static void servicePyroChannels(uint32_t now_ms)
 
 // ── Roll profile lookup ─────────────────────────────────────────────────────
 // Returns the desired (angle, mode) for the current flight time.
-// Mode is the segment mode of the waypoint that STARTS the current segment.
-// Within a ROLL_SEG_ANGLE segment the controller is commanded straight to the
-// segment's DESTINATION (next waypoint's) absolute angle and takes the shortest
-// path there — no ramp. (Previously the setpoint was linearly interpolated
-// between waypoints, but sweeping it through intermediate angles flipped the
-// command direction at the ±180° error wrap mid-maneuver; see the roll-control
-// flight analysis.) ROLL_SEG_NULL_RATE segments null roll rate to 0 in the
-// inner loop and ignore the angle field. Before WP1 or after WPn we hold that
-// waypoint's mode and angle.
+// FlightSettingsData v4 semantics: the profile is pure (time, angle) waypoints —
+// per-waypoint mode bytes are IGNORED (legacy wire field, pre-v4).
+//   * before WP1:        NULL_RATE (fins hold zero roll rate through boost)
+//   * WPi..WPi+1:        ANGLE, target linearly interpolated WPi→WPi+1 along
+//                        the shortest wrapped arc
+//   * after WPn:         ANGLE, hold WPn's angle
+// To hold an angle (or "null roll") mid-profile, give two consecutive
+// waypoints the same angle. An earlier interpolation attempt was reverted
+// because it lerped the RAW angles, sweeping the long way round and flipping
+// the command at the ±180° error wrap; interpolating the WRAPPED delta keeps
+// the target on the shortest arc, so the target never jumps.
 // If no waypoints are loaded, defaults to NULL_RATE / 0 deg.
 struct RollProfileQuery
 {
     float   angle_deg;
     uint8_t mode;
 };
+
+static inline float wrap180f(float a)
+{
+    while (a > 180.0f)  a -= 360.0f;
+    while (a < -180.0f) a += 360.0f;
+    return a;
+}
 
 static RollProfileQuery roll_profile_query(float t_flight_s)
 {
@@ -1058,34 +1067,38 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
     }
     const uint8_t n = roll_profile.num_waypoints;
 
-    // Before first waypoint: hold first angle & mode
-    if (t_flight_s <= roll_profile.waypoints[0].time_s)
+    // Before first waypoint: null roll rate (safe boost behavior)
+    if (t_flight_s < roll_profile.waypoints[0].time_s)
     {
-        out.angle_deg = roll_profile.waypoints[0].angle_deg;
-        out.mode      = roll_profile.waypoints[0].mode;
         return out;
     }
-    // After last waypoint: hold last angle & mode
+    // After last waypoint: hold last angle
     if (t_flight_s >= roll_profile.waypoints[n - 1].time_s)
     {
         out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
-        out.mode      = roll_profile.waypoints[n - 1].mode;
+        out.mode      = ROLL_SEG_ANGLE;
         return out;
     }
-    // Inside profile -- find the active segment [i, i+1). No ramp: command the
-    // segment's DESTINATION (next waypoint's) absolute angle directly and let
-    // controlAngle take the shortest path to it.
+    // Inside profile -- find the active segment [i, i+1) and interpolate the
+    // target along the shortest wrapped arc from WPi to WPi+1.
     for (uint8_t i = 0; i < n - 1; ++i)
     {
-        if (t_flight_s < roll_profile.waypoints[i + 1].time_s)
+        const RollWaypoint &w0 = roll_profile.waypoints[i];
+        const RollWaypoint &w1 = roll_profile.waypoints[i + 1];
+        if (t_flight_s < w1.time_s)
         {
-            out.angle_deg = roll_profile.waypoints[i + 1].angle_deg;
-            out.mode      = roll_profile.waypoints[i].mode;
+            const float span = w1.time_s - w0.time_s;
+            const float frac = (span > 1e-3f)
+                                   ? (t_flight_s - w0.time_s) / span
+                                   : 1.0f;
+            out.angle_deg = wrap180f(w0.angle_deg +
+                                     wrap180f(w1.angle_deg - w0.angle_deg) * frac);
+            out.mode      = ROLL_SEG_ANGLE;
             return out;
         }
     }
     out.angle_deg = roll_profile.waypoints[n - 1].angle_deg;
-    out.mode      = roll_profile.waypoints[n - 1].mode;
+    out.mode      = ROLL_SEG_ANGLE;
     return out;
 }
 
@@ -2535,10 +2548,9 @@ static void setup_fc()
             ESP_LOGI(TAG, "NVS roll profile: %d waypoints", roll_profile.num_waypoints);
             for (uint8_t i = 0; i < roll_profile.num_waypoints; ++i)
             {
-                ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f° mode=%s", i,
+                ESP_LOGI(TAG, "  WP%d: t=%.1fs angle=%.1f°", i,
                               (double)roll_profile.waypoints[i].time_s,
-                              (double)roll_profile.waypoints[i].angle_deg,
-                              roll_profile.waypoints[i].mode == ROLL_SEG_NULL_RATE ? "NULL_RATE" : "ANGLE");
+                              (double)roll_profile.waypoints[i].angle_deg);
             }
         }
         else

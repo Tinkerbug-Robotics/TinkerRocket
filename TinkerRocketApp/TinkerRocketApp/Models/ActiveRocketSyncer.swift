@@ -159,8 +159,9 @@ final class ActiveRocketSyncer: ObservableObject {
                                      rateCapDps: profile.rateCapDps,
                                      kpAngle: profile.kpAngle,
                                      integralSepThreshold: profile.integralSepThreshold)
+        // mode byte is a legacy wire field (pre-v4 firmware); always send .angle
         device.sendRollProfile(waypoints: profile.rollWaypoints.map {
-            (time: $0.timeSeconds, angle: $0.angleDeg, mode: $0.mode.rawValue)
+            (time: $0.timeSeconds, angle: $0.angleDeg, mode: RollSegmentMode.angle.rawValue)
         })
         device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
                                   navGain: profile.pnNavGain, maxAccel: profile.pnMaxAccel,

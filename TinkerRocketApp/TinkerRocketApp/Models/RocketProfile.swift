@@ -25,16 +25,20 @@
 
 import Foundation
 
-/// Segment mode for a roll-profile waypoint.  Matches the firmware enum
-/// (ROLL_SEG_* in RocketComputerTypes.h): the mode applies to the segment
-/// *starting* at this waypoint.
+/// LEGACY segment mode (pre-v4 firmware; ROLL_SEG_* in RocketComputerTypes.h).
+/// Since firmware v4 the profile is pure (time, angle) waypoints — the target
+/// ramps linearly between them, null-rate flies before the first waypoint, and
+/// the last angle holds after it. The enum survives only for the wire byte
+/// (always sent as .angle) and for decoding old saved profiles.
 enum RollSegmentMode: UInt8, Codable, CaseIterable {
-    case angle    = 0   // interpolate target roll angle to the next waypoint
-    case nullRate = 1   // hold zero roll rate; the angle field is ignored
+    case angle    = 0
+    case nullRate = 1
 }
 
 /// One roll-profile waypoint.  `id` gives SwiftUI stable identity in the
 /// editor; it is persisted but otherwise carries no wire meaning.
+/// `mode` is legacy (see RollSegmentMode) — ignored by v4+ firmware and no
+/// longer editable; kept so old saved profiles still decode.
 struct RollWaypoint: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
     var timeSeconds: Float
