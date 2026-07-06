@@ -141,8 +141,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     gpio_set_level((gpio_num_t)(ISM6HG256_CS), 1);
     gpio_set_direction((gpio_num_t)(BMP585_CS), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(BMP585_CS), 1);
-    gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
+    if (use_mmc5983ma)  // part absent on V8 boards (#411): pin is not a CS
+    {
+        gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
+    }
     delay_ms(10);
     
     // Update periods calculated from frequencies
@@ -255,7 +258,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     // I2C first; only if WHO_AM_I returns 0x40 do we keep the I2C bus
     // alive. On miss we tear the bus down (freeing pin 13 for SPI CS use)
     // and fall through to the legacy MMC5983MA path.
-    if (use_iis2mdc && use_mmc5983ma)
+    // #411: gate on use_iis2mdc ALONE — on V8 boards there is no MMC5983MA
+    // (use_mmc5983ma=false) and the IIS2MDC is the only magnetometer, so the
+    // probe must run without the legacy part present. V7 (both flags true)
+    // behaves exactly as before.
+    if (use_iis2mdc)
     {
         ESP_LOGI(SC_TAG, "Probing for IIS2MDC on I2C SDA=%d SCL=%d addr=0x%02X...",
                  (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
@@ -321,16 +328,25 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
         else
         {
-            ESP_LOGI(SC_TAG, "IIS2MDC not detected — falling back to MMC5983MA");
-            // Tear down the bus so pin 13 is free for SPI CS.
+            if (use_mmc5983ma)
+            {
+                ESP_LOGI(SC_TAG, "IIS2MDC not detected — falling back to MMC5983MA");
+            }
+            else
+            {
+                ESP_LOGW(SC_TAG, "IIS2MDC not detected and this board has no "
+                                 "MMC5983MA fallback — NO MAGNETOMETER");
+            }
+            // Tear down the bus so the pins are released (on V7 this frees
+            // shared pin 13 for SPI CS use).
             (void)i2c_del_master_bus(iis2mdc_bus);
             iis2mdc_bus = nullptr;
         }
     }
 
-    ESP_LOGI(SC_TAG, "Initializing MMC5983MA...");
     if (use_mmc5983ma && !iis2mdc_active)
     {
+        ESP_LOGI(SC_TAG, "Initializing MMC5983MA...");
         // Pin 13 was potentially driven by the I2C probe above; restore CS high.
         gpio_set_direction((gpio_num_t)(MMC5983MA_CS), GPIO_MODE_OUTPUT);
         gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
