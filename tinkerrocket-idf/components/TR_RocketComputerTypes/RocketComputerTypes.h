@@ -1815,20 +1815,24 @@ static_assert(sizeof(ServoReplayData) == 4, "ServoReplayData must be 4 bytes");
 // Max 8 waypoints: fits in single BLE MTU with header
 static constexpr uint8_t MAX_ROLL_WAYPOINTS = 8;
 
-// Per-waypoint segment mode: how the controller should behave during the
-// segment that STARTS at this waypoint (and ends at the next waypoint, or
-// holds indefinitely if this is the last waypoint).
+// Controller behavior for a stretch of the profile (roll_profile_query result).
+// Since FlightSettingsData v4 this is NOT a per-waypoint choice anymore: the
+// profile is pure (time, angle) waypoints — the target ramps linearly
+// (shortest path) between them, null-rate flies before the first waypoint,
+// and the last angle holds after it. To hold an angle mid-profile, give two
+// consecutive waypoints the same angle.
 enum RollSegmentMode : uint8_t
 {
-    ROLL_SEG_ANGLE     = 0,  // hold next waypoint's absolute angle, shortest path (cascaded angle PID)
+    ROLL_SEG_ANGLE     = 0,  // track the profile's interpolated target angle (cascaded angle PID)
     ROLL_SEG_NULL_RATE = 1,  // hold roll rate = 0 (rate-only inner PID); angle field ignored
 };
 
 typedef struct __attribute__((packed))
 {
     float   time_s;     // seconds after launch
-    float   angle_deg;  // target roll angle (deg) -- ignored when mode==ROLL_SEG_NULL_RATE
-    uint8_t mode;       // RollSegmentMode for the segment starting at this waypoint
+    float   angle_deg;  // target roll angle (deg) at this time
+    uint8_t mode;       // LEGACY (pre-v4 per-waypoint RollSegmentMode); kept for wire
+                        // layout, ignored by firmware — always write ROLL_SEG_ANGLE
 } RollWaypoint;
 static_assert(sizeof(RollWaypoint) == 9, "RollWaypoint must be 9 bytes");
 
@@ -1869,7 +1873,12 @@ struct __attribute__((packed)) FlightSettingsData
 {
     // v2: appended board→rocket mounting orientation (b2r_* fields).
     // v3: appended fin-angle calibration (fin_min_deg/fin_max_deg, #267).
-    static constexpr uint8_t VERSION = 3;
+    // v4: NO layout change — marks the roll-profile semantics switch: the
+    //     target ramps linearly between waypoints, null-rate before the first
+    //     waypoint, hold after the last; per-waypoint mode bytes are ignored.
+    //     (Pre-v4 firmware stepped to the NEXT waypoint's angle and honored
+    //     per-waypoint null_rate modes — analysis must branch on this.)
+    static constexpr uint8_t VERSION = 4;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only

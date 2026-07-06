@@ -78,9 +78,11 @@ class SimConfig:
     d_lpf_hz: float = 0.0                      # servo PID derivative LPF cutoff Hz (0=off)
     integral_sep_threshold: float = 0.0        # PID integral-separation anti-windup; freeze I when |err|>thr (0=off)
     # Roll-profile targeting: "hold" = flown 6/14 firmware (hold the most-recent
-    # waypoint); "endpoint" = updated firmware (803d23f) — command the segment's
+    # waypoint); "endpoint" = pre-v4 firmware (803d23f) — command the segment's
     # END waypoint angle by the shortest path (no ramp), so a maneuver engages at
-    # the segment START, not its end.
+    # the segment START, not its end; "ramp" = v4 firmware — null-rate before the
+    # first waypoint, target lerped along the shortest wrapped arc between
+    # waypoints (per-waypoint modes ignored), last angle held after the profile.
     roll_targeting: str = "hold"
     # Impulsive roll-rate perturbation for the controller to null: add
     # roll_kick_dps to the body roll rate once at roll_kick_time_s (s after launch).
@@ -834,7 +836,33 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                         #    Waypoints are (time_s, angle_deg[, mode]), mode in
                         #    {"angle","null_rate"}.
                         _wps = config.roll_profile
-                        if config.roll_targeting == "endpoint" and len(_wps) > 1:
+                        if config.roll_targeting == "ramp":
+                            # v4 firmware (roll_profile_query): null-rate before
+                            # the first waypoint; lerp the target along the
+                            # shortest wrapped arc between waypoints (per-wp
+                            # modes ignored); hold the last angle afterwards.
+                            def _wrap180(a):
+                                while a > 180.0: a -= 360.0
+                                while a < -180.0: a += 360.0
+                                return a
+                            if t < _wps[0][0]:
+                                target_angle = 0.0
+                                seg_mode = "null_rate"
+                            elif t >= _wps[-1][0]:
+                                target_angle = _wps[-1][1]
+                                seg_mode = "angle"
+                            else:
+                                target_angle = _wps[-1][1]
+                                seg_mode = "angle"
+                                for i in range(len(_wps) - 1):
+                                    (t0w, a0w), (t1w, a1w) = _wps[i][:2], _wps[i + 1][:2]
+                                    if t < t1w:
+                                        frac = ((t - t0w) / (t1w - t0w)
+                                                if t1w - t0w > 1e-3 else 1.0)
+                                        target_angle = _wrap180(
+                                            a0w + _wrap180(a1w - a0w) * frac)
+                                        break
+                        elif config.roll_targeting == "endpoint" and len(_wps) > 1:
                             # Updated firmware (803d23f): command the END waypoint of
                             # the current segment; segment mode = the starting waypoint.
                             if t <= _wps[0][0]:
