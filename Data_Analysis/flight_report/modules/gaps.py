@@ -191,7 +191,14 @@ def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="gaps", title="Frame Gaps & Sample Rates")
     records = flight.records
 
-    all_ts = extract_all_timestamps(records)
+    # Exclude OC-clock frame types from the MERGED stream: LogBufferStats is
+    # stamped with the OutComputer's micros(), offset minutes from the FC
+    # clock, which would manufacture one giant fake gap. Its per-sensor
+    # cadence (against its own clock) is still analyzed below.
+    from .timestamps import OC_CLOCK_TYPES
+    merged_records = {k: v for k, v in records.items() if k not in OC_CLOCK_TYPES}
+
+    all_ts = extract_all_timestamps(merged_records)
     per_sensor = extract_per_sensor_timestamps(records)
     if len(all_ts) < 2:
         result.warnings.append("Not enough records to analyze.")
