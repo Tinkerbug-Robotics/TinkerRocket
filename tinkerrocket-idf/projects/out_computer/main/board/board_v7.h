@@ -50,4 +50,9 @@ struct board_pins
     static constexpr int LORA_DIO1_PIN = 9;
     static constexpr int LORA_RST_PIN = 17;
     static constexpr int LORA_BUSY_PIN = 13;
+
+    // --- Radio daughterboard host link (V8-only topology, #410) ---
+    static constexpr int LORA_UART_TX_PIN = -1;
+    static constexpr int LORA_UART_RX_PIN = -1;
+    static constexpr int LORA_ACT_PIN = -1;
 };
