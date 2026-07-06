@@ -23,3 +23,10 @@ idf_component_register(
         nvs_flash
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narrowing)
+
+# Board revision selection (#411): `idf.py -DTR_BOARD_V8=1 build` compiles the
+# V8 pin map (main/board/board_v8.h); default is V7. Use a separate build dir
+# per variant (e.g. -B build_v8) — the flag is cached by CMake.
+if(TR_BOARD_V8)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BOARD_V8=1)
+endif()

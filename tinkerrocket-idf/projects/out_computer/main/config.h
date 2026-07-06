@@ -4,37 +4,32 @@
 #include <stdint.h>
 #include <RocketComputerTypes.h>  // LORA_FACTORY_RENDEZVOUS_* (#105)
 
-struct config
+// --- Board revision (#411, tracking #408) ---
+// Pins + peripheral-presence/topology flags live in the per-board headers;
+// everything else in this file is board-independent policy and must not
+// fork per revision. Select the V8 map with: idf.py -DTR_BOARD_V8=1 build
+// (default stays V7 until V8 bring-up completes).
+#ifndef TR_BOARD_V8
+#define TR_BOARD_V8 0
+#endif
+#if TR_BOARD_V8
+#include "board/board_v8.h"
+#else
+#include "board/board_v7.h"
+#endif
+
+struct config : board_pins
 {
     // --- Debug ---
     static constexpr bool DEBUG = true;  // Re-enabled (needed for telemetry updates)
     static constexpr bool VERBOSE_DEBUG = false;  // Temporarily disabled to see BLE output
     static constexpr uint32_t STATS_PERIOD_MS = 1000;
 
-    // --- Power rail switch ---
-    static constexpr int PWR_PIN = 6;
-    // New PCB: dedicated GPS enable rail. Toggled in lockstep with PWR_PIN
-    // so the GNSS module powers up alongside the FlightComputer.
-    static constexpr int GPS_PWR_PIN = 33;
-
-    // --- Power Monitoring ---
-    static constexpr int PWR_SDA = 7;
-    static constexpr int PWR_SCL = 8;
-
-    // --- Memory Shared SPI bus pins ---
-    static constexpr int SPI_SCK = 37;
-    static constexpr int SPI_MISO = 35;
-    static constexpr int SPI_MOSI = 38;
-
-    // --- NAND chip select ---
-    static constexpr int NAND_CS = 36;
-
-    // --- MRAM chip select (MR25H10 on shared SPI bus) ---
+    // --- MRAM (MR25H10 on shared SPI bus; CS pin in board header) ---
     // Enabled: 128 KB non-volatile ring buffer survives hard resets.
     // SPI bus mutex prevents contention between Core 1 (ring push) and
     // Core 0 (NAND flush).  On dirty startup, MRAM is drained to a
-    // recovery file before clearing.  Set to -1 to fall back to RAM ring.
-    static constexpr int MRAM_CS = 34;
+    // recovery file before clearing.  MRAM_CS = -1 falls back to RAM ring.
     static constexpr uint32_t MRAM_SIZE = 131072;       // 128 KB
     static constexpr uint32_t SPI_HZ_MRAM = 40'000'000;
     static constexpr uint8_t SPI_MODE_MRAM = SPI_MODE0;
@@ -60,10 +55,8 @@ struct config
     // Fallback if MRAM not available. MRAM is preferred (128 KB, no heap cost).
     static constexpr uint32_t RAM_RING_SIZE = 65536;  // 64 KB fallback
 
-    // --- I2C from FlightComputer -> OutComputer ---
+    // --- I2C from FlightComputer -> OutComputer (pins in board header) ---
     static constexpr uint8_t I2C_ADDRESS = 0x42;
-    static constexpr int I2C_SDA_PIN = 4;
-    static constexpr int I2C_SCL_PIN = 5;
     static constexpr uint32_t I2C_CLOCK_HZ = 1'200'000;
     static constexpr size_t I2C_SLAVE_RX_BUF = 8192;
     static constexpr size_t I2C_SLAVE_TX_BUF = 256;
@@ -71,27 +64,15 @@ struct config
     static constexpr uint32_t I2C_INGRESS_BUDGET_US = 1500;
     static constexpr size_t I2C_INGRESS_BUDGET_BYTES = 8192;
 
-    // --- I2S (high-frequency telemetry RX from FlightComputer) ---
-    // Actual wiring: FC 27→OC 21, FC 28→OC 45, FC 23→OC 2, FC 17→OC 1
-    static constexpr int I2S_BCLK_PIN  = 21;
-    static constexpr int I2S_WS_PIN    = 45;
-    static constexpr int I2S_DIN_PIN   = 2;
-    static constexpr int I2S_FSYNC_PIN = 1;
+    // --- I2S (high-frequency telemetry RX from FlightComputer; pins in
+    //     board header) ---
     // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
     // Higher rate = faster DMA buffer turnover = less stale data.
     // 22050 Hz = 88 KB/s.  Lower rates cause more gaps from DMA replay.
     // IMPORTANT: If sensor rates increase, raise this proportionally.
     static constexpr uint32_t I2S_SAMPLE_RATE = 22050;  // Must match FC
 
-    // --- LoRa (LLCC68 via RadioLib) ---
-    static constexpr bool USE_LORA_RADIO = true;
-    static constexpr int LORA_SPI_SCK = 14;
-    static constexpr int LORA_SPI_MISO = 11;
-    static constexpr int LORA_SPI_MOSI = 12;
-    static constexpr int LORA_CS_PIN = 18;
-    static constexpr int LORA_DIO1_PIN = 9;
-    static constexpr int LORA_RST_PIN = 17;
-    static constexpr int LORA_BUSY_PIN = 13;
+    // --- LoRa RF parameters (radio presence + pins in board header) ---
     static constexpr float LORA_FREQ_MHZ = 915.0f;
     static constexpr uint8_t LORA_SF = 8;
     static constexpr float LORA_BW_KHZ = 250.0f;

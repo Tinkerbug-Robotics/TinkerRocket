@@ -2242,6 +2242,22 @@ static void setup_fc()
     // Pyro channels: safe pins FIRST, before any other peripheral init
     initPyroPins();
 
+    // Power gates (#411): on V8 the FC switches the GNSS + servo rails.
+    // Raised before any dependent init (the GNSS boot probe and the servo
+    // boot wiggle both need their rails up); -1 = rail not FC-switched.
+    // SERVO_ACT is the #345 servo-power MOSFET — held on for now;
+    // integrating it with SERVO_RELAX_ON_PAD is a follow-up.
+    if (config::GPS_ACT_PIN >= 0)
+    {
+        gpio_set_direction((gpio_num_t)config::GPS_ACT_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)config::GPS_ACT_PIN, 1);
+    }
+    if (config::SERVO_ACT_PIN >= 0)
+    {
+        gpio_set_direction((gpio_num_t)config::SERVO_ACT_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)config::SERVO_ACT_PIN, 1);
+    }
+
     ESP_LOGI(TAG, "Starting ....");
     gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
@@ -2249,7 +2265,10 @@ static void setup_fc()
     gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 0);
 
     // Disable all SPI chip-selects before bus init to avoid MISO contention.
-    gpio_set_direction((gpio_num_t)(config::MMC5983MA_CS), GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)(config::MMC5983MA_CS), 1);
+    if (config::MMC5983MA_CS >= 0)  // part absent on V8 (#411)
+    {
+        gpio_set_direction((gpio_num_t)(config::MMC5983MA_CS), GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)(config::MMC5983MA_CS), 1);
+    }
     gpio_set_direction((gpio_num_t)(config::BMP585_CS), GPIO_MODE_OUTPUT);    gpio_set_level((gpio_num_t)(config::BMP585_CS), 1);
     gpio_set_direction((gpio_num_t)(config::ISM6HG256_CS), GPIO_MODE_OUTPUT); gpio_set_level((gpio_num_t)(config::ISM6HG256_CS), 1);
     delay_ms(10);
@@ -6283,7 +6302,9 @@ static void loop_fc()
                               (unsigned long)(now_mmc_snap.cmm_lost_hits    - prev_mmc_snap.cmm_lost_hits),
                               (unsigned long)(now_mmc_snap.recovery_success - prev_mmc_snap.recovery_success),
                               (unsigned long)(now_mmc_snap.recovery_attempts- prev_mmc_snap.recovery_attempts),
-                              gpio_get_level((gpio_num_t)config::MMC5983MA_INT));
+                              config::MMC5983MA_INT >= 0
+                                  ? gpio_get_level((gpio_num_t)config::MMC5983MA_INT)
+                                  : -1);
                 prev_mmc_snap = now_mmc_snap;
             }
         }
