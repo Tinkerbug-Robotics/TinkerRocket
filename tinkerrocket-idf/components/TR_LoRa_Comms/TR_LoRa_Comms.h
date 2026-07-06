@@ -14,6 +14,11 @@ public:
         int dio1_pin = -1;
         int rst_pin = -1;
         int busy_pin = -1;
+        // RF-switch RX enable for modules with a discrete antenna switch
+        // (TX side is DIO2, see setDio2AsRfSwitch in begin()). RadioLib
+        // drives it HIGH in RX / LOW in TX+idle via setRfSwitchPins.
+        // -1 = not wired (existing V7 OC / original-BS boards).
+        int rxen_pin = -1;
         int spi_sck = -1;
         int spi_miso = -1;
         int spi_mosi = -1;

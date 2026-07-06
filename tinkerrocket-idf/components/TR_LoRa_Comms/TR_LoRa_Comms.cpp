@@ -62,6 +62,13 @@ bool TR_LoRa_Comms::begin(const Config& cfg, bool debug)
     hal_->delay(50);
 
     (void)radio_->setDio2AsRfSwitch(true);
+    if (cfg.rxen_pin >= 0)
+    {
+        // MCU-driven RX-enable half of the RF switch (TX half is DIO2,
+        // radio-driven). RadioLib toggles it on every mode transition.
+        module_->setRfSwitchPins(static_cast<uint32_t>(cfg.rxen_pin),
+                                 RADIOLIB_NC);
+    }
 
     int16_t st = radio_->begin();
     stats_.last_error = st;

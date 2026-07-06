@@ -1,0 +1,24 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash — devkit modules are >=8MB; partition table stays within 4MB in case
+# the final daughterboard uses a smaller part.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Interrupt WDT
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
+
+# Core dump to flash — retrieve after crash with:
+#   espcoredump.py info_corefile -t raw -c 0x310000 build/radio_board.elf
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# Partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Serial console on USB (the UART link owns the host pins)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

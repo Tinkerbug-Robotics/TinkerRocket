@@ -27,6 +27,7 @@ jobs:
           - out_computer
           - base_station
           - flight_computer
+          - radio_board
 
     steps:
       - uses: actions/checkout@v4

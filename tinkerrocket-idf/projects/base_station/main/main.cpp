@@ -3038,6 +3038,9 @@ static void setup_bs()
     lora_cfg.dio1_pin          = config::LORA_DIO1_PIN;
     lora_cfg.rst_pin           = config::LORA_RST_PIN;
     lora_cfg.busy_pin          = config::LORA_BUSY_PIN;
+    // V2 PCB: MCU-driven RX half of the RF switch (was defined but never
+    // driven — RXEN floated in RX). -1 on the original PCB (no switch).
+    lora_cfg.rxen_pin          = config::LORA_RXEN_PIN;
     lora_cfg.spi_sck           = config::LORA_SPI_SCK;
     lora_cfg.spi_miso          = config::LORA_SPI_MISO;
     lora_cfg.spi_mosi          = config::LORA_SPI_MOSI;
