@@ -599,13 +599,13 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // already programmed this boot and re-verified).  Returns false when the OTP
 // string was just written — the caller must hardware-reset the receiver and
 // reconnect, since the OTP config only applies at startup.
-// Auto-programming master switch.  Currently READ-ONLY: the boot check reads
-// and logs the module's OTP state (all four §2.1.5 keys individually) but
-// never writes.  The OTP config budget is 69 bytes TOTAL (§2.3) and the
-// high-perf config takes 18, so writes are a once-or-twice-per-module-
-// lifetime resource — flip this only after the read-only diagnostics of the
-// target module have been reviewed.
-static constexpr bool kOtpAutoProgram = false;
+// Auto-programming master switch.  When false the boot check is READ-ONLY:
+// it reads and logs the module's OTP state (all four §2.1.5 keys
+// individually) but never writes.  The OTP config budget is 69 bytes TOTAL
+// (§2.3) and the high-perf config takes 18, so writes are a once-or-twice-
+// per-module-lifetime resource; when enabled, writes only ever target a
+// module whose OTP reads fully BLANK, at most once per module (NVS guard).
+static constexpr bool kOtpAutoProgram = true;
 
 bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 {
