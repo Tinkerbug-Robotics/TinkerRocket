@@ -125,6 +125,14 @@ public:
     float getAngleControlKpAngle() const { return kp_angle_; }
 
 private:
+    // Inner rate loop against an explicit setpoint: PID -> clamp -> fin-cal
+    // pulse -> drive.  Shared by control() (persistent pid_setpoint) and
+    // controlAngle() (per-tick rate command); does NOT touch pid_setpoint.
+    void controlToSetpoint(float setpoint, float roll_rate);
+    // Scale the PID gains by (V_ref/V)² (capped) when the gain schedule is
+    // enabled; no-op otherwise.  Split out so controlAngle() can schedule
+    // gains without routing through the persistent-setpoint control() path.
+    void applyGainSchedule(float velocity_ms);
     // update all four servos to a single nominal pulse
     void setPulse(int base_pulse_us);
     // drive ONE servo channel to a nominal pulse (bias applied); used by
@@ -147,7 +155,9 @@ private:
     int   servo_min_us;
     int   servo_max_us;
 
-    // PID for roll‑rate control
+    // PID for roll‑rate control.  pid_setpoint is mutated ONLY by
+    // setSetpoint() — controlAngle()'s rate command is passed per-tick via
+    // controlToSetpoint() so it can never leak into a rate-null path (#372).
     float pid_setpoint;
     TR_PID pid;
     float roll_cmd_deg;

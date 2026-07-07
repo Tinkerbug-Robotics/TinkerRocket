@@ -38,6 +38,22 @@ target_include_directories(test_pid PRIVATE
 target_link_libraries(test_pid GTest::gtest_main)
 gtest_discover_tests(test_pid)
 
+# ---------- test_servo_control ----------
+# TR_ServoControl's LEDC calls resolve to the host_shim no-ops; the
+# controller math (controlAngle cascade, gain schedule, #372 setpoint
+# semantics) runs as on target.
+add_executable(test_servo_control test_servo_control.cpp
+    ${LIB_DIR}/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp
+    ${LIB_DIR}/TR_PID/TR_PID.cpp
+)
+target_include_directories(test_servo_control PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_ServoControl_ledc_mult
+    ${LIB_DIR}/TR_PID
+)
+target_link_libraries(test_servo_control GTest::gtest_main)
+gtest_discover_tests(test_servo_control)
+
 # ---------- test_rocket_computer_types ----------
 add_executable(test_rocket_computer_types test_rocket_computer_types.cpp)
 target_include_directories(test_rocket_computer_types PRIVATE
