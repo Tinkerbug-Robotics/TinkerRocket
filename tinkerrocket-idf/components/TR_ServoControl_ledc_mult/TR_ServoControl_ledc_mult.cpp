@@ -91,8 +91,12 @@ void TR_ServoControl::setSetpoint(float setpoint) {
 }
 
 void TR_ServoControl::control(float roll_rate) {
+    controlToSetpoint(pid_setpoint, roll_rate);
+}
+
+void TR_ServoControl::controlToSetpoint(float setpoint, float roll_rate) {
     // PID output (deg) within [min_cmd..max_cmd]
-    roll_cmd_deg = pid.computePID(pid_setpoint, roll_rate);
+    roll_cmd_deg = pid.computePID(setpoint, roll_rate);
     roll_cmd_deg = constrain(roll_cmd_deg, min_cmd, max_cmd);
 
     // Map the commanded fin angle (deg) to a servo pulse via the physical
@@ -301,25 +305,30 @@ void TR_ServoControl::disableGainSchedule() {
     pid.setKd(kd_base);
 }
 
-void TR_ServoControl::controlWithGainSchedule(float roll_rate, float velocity_ms) {
-    if (gain_schedule_enabled) {
-        float v = std::max(std::fabs(velocity_ms), gain_schedule_v_min);
-        float v_ratio = gain_schedule_v_ref / v;
-        float scale = v_ratio * v_ratio;
-        // Cap the scale factor so servo saturates at ~50 deg/s error, not gyro noise
-        scale = std::min(scale, GAIN_SCHEDULE_SCALE_CAP);
-
-        // Reset I-term when gain scale changes significantly to prevent
-        // accumulated integral from spiking the output after a step change in Ki.
-        if (fabs(scale - prev_gain_scale_) > 0.1f) {
-            pid.resetIntegral();
-        }
-        prev_gain_scale_ = scale;
-
-        pid.setKp(kp_base * scale);
-        pid.setKi(ki_base * scale);
-        pid.setKd(kd_base * scale);
+void TR_ServoControl::applyGainSchedule(float velocity_ms) {
+    if (!gain_schedule_enabled) {
+        return;
     }
+    float v = std::max(std::fabs(velocity_ms), gain_schedule_v_min);
+    float v_ratio = gain_schedule_v_ref / v;
+    float scale = v_ratio * v_ratio;
+    // Cap the scale factor so servo saturates at ~50 deg/s error, not gyro noise
+    scale = std::min(scale, GAIN_SCHEDULE_SCALE_CAP);
+
+    // Reset I-term when gain scale changes significantly to prevent
+    // accumulated integral from spiking the output after a step change in Ki.
+    if (fabs(scale - prev_gain_scale_) > 0.1f) {
+        pid.resetIntegral();
+    }
+    prev_gain_scale_ = scale;
+
+    pid.setKp(kp_base * scale);
+    pid.setKi(ki_base * scale);
+    pid.setKd(kd_base * scale);
+}
+
+void TR_ServoControl::controlWithGainSchedule(float roll_rate, float velocity_ms) {
+    applyGainSchedule(velocity_ms);
     control(roll_rate);
 }
 
@@ -347,6 +356,10 @@ void TR_ServoControl::controlAngle(float target_roll_deg,
     // ── Inner loop: PID on rate error with gain scheduling ──
     // roll_rate_dps is passed in negated (–gyro_x) to match servo sign
     // convention, so negate rate_cmd to keep setpoint in the same frame.
-    pid_setpoint = -rate_cmd;
-    controlWithGainSchedule(roll_rate_dps, velocity_ms);
+    // The angle-loop rate command applies to THIS tick only — pid_setpoint is
+    // never mutated here (#372), so a later rate-null tick (profile segment
+    // change or the #265 EKF-health fallback) nulls to the configured
+    // setpoint instead of holding the last angle-loop rate command.
+    applyGainSchedule(velocity_ms);
+    controlToSetpoint(-rate_cmd, roll_rate_dps);
 }
