@@ -71,6 +71,15 @@ private:
     bool gps_available_;
     uint32_t last_gps_time_ms_;
 
+    // Baro settle window after burnout (7/05 V2 F1): thrust tail-off can snap
+    // the bay pressure back from its boost-suction offset, dropping indicated
+    // altitude >10 m in ~0.25 s while still climbing — which satisfies the
+    // baro apogee test the instant its burnout gate opens.  The baro voter is
+    // ignored until BARO_BURNOUT_SETTLE_MS after burnout is first seen
+    // (apogee physically cannot be at burnout).
+    bool     burnout_seen_;
+    uint32_t burnout_seen_ms_;
+
     // Baro rate-gate state (rejects ejection / sensor spikes before they
     // reach the KF or the landing fast path).
     bool     baro_gate_init_;

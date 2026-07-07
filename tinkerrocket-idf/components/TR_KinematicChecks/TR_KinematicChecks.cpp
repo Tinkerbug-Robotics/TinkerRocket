@@ -51,6 +51,17 @@ constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
 constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 500;    // sustained samples
 
+// Baro settle window after burnout. Thrust tail-off can snap the bay pressure
+// back from its boost-suction offset (7/05 V2 F1: indicated altitude fell 15 m
+// in 0.25 s at burnout while climbing at 46 m/s), which satisfies the baro
+// apogee test the instant its burnout gate opens — the boost over-read has
+// already ratcheted max_altitude high.  Apogee physically cannot be at
+// burnout, so the baro voter is ignored for this long after burnout is first
+// seen.  The Layer-2 backstop below is NOT gated by this (its 30 m drop
+// threshold is far beyond the transient, and it must stay available in the
+// degraded case).
+constexpr uint32_t BARO_BURNOUT_SETTLE_MS  = 1000;
+
 // Layer-2 apogee backstop (#257). When the primary vote can't reach quorum
 // (e.g. an unhealthy EKF leaves < 2 healthy voters), a healthy + mach-unlocked
 // baro that has dropped this far below the running peak while still descending
@@ -114,6 +125,8 @@ TR_KinematicChecks::TR_KinematicChecks()
     gps_apogee_count_ = 0;
     gps_available_ = false;
     last_gps_time_ms_ = 0;
+    burnout_seen_ = false;
+    burnout_seen_ms_ = 0;
     baro_gate_init_ = false;
     palt_accepted_ = 0.0f;
     last_baro_gate_ms_ = 0;
@@ -176,6 +189,8 @@ void TR_KinematicChecks::reset()
     palt_accepted_ = 0.0f;
     last_baro_gate_ms_ = 0;
     consec_baro_rejects_ = 0;
+    burnout_seen_ = false;
+    burnout_seen_ms_ = 0;
     kf_init_ = false;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
@@ -435,6 +450,13 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // ================================================================
     if (launch_flag && burnout_detected)
     {
+        // Stamp the first time burnout is seen — starts the baro settle window.
+        if (!burnout_seen_)
+        {
+            burnout_seen_ = true;
+            burnout_seen_ms_ = millis();
+        }
+
         // --- Test 1: Velocity (EKF vertical velocity negative) ---
         const bool vel_pass = (position[2] > 15.0f && velocity[2] < 0.0f);
         if (vel_pass) {
@@ -449,7 +471,13 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         // Uses KF-smoothed alt_est rather than raw pressure_altitude — boost
         // noise on the raw signal was previously tripping this test during
         // ascent (#142). Velocity gate (d_alt_est_ < 20 m/s) is preserved.
-        const bool baro_pass = (alt_est > 15.0f &&
+        // Ignored during the post-burnout settle window (see
+        // BARO_BURNOUT_SETTLE_MS): the bay-pressure snap-back at thrust
+        // tail-off reads as a >10 m altitude drop and otherwise casts a false
+        // vote the moment this gate opens.
+        const bool baro_settled = (millis() - burnout_seen_ms_ >= BARO_BURNOUT_SETTLE_MS);
+        const bool baro_pass = (baro_settled &&
+                                alt_est > 15.0f &&
                                 alt_est < max_altitude - 5.0f &&
                                 d_alt_est_ < 20.0f);
         if (baro_pass) {

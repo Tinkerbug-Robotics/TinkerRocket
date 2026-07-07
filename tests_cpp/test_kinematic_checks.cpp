@@ -229,6 +229,46 @@ TEST_F(KinematicChecksTest, Apogee_N2Quorum_TwoOfFourFires) {
     EXPECT_TRUE(kc.apogee_flag) << "2 of 4 concurring must fire under N-2 (would need 3 under N-1)";
 }
 
+// Baro settle window after burnout (7/05 V2 F1 flight). At thrust tail-off the
+// bay pressure snaps back from its boost-suction offset: indicated altitude
+// fell 15 m in 0.25 s while the rocket climbed at 46 m/s — which satisfies the
+// baro apogee test (alt < ratcheted max − 5) the instant its burnout gate
+// opens.  The baro voter must stay silent through BARO_BURNOUT_SETTLE_MS, then
+// work normally on the real descent.
+TEST_F(KinematicChecksTest, Apogee_BurnoutBaroTransient_NoVoteInSettleWindow) {
+    for (int i = 0; i < 80; i++) {           // launch, climbing to ~40 m indicated
+        setMockMillis(i * 2);
+        callFlight(0.5f * i, 25.0f, 45.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+
+    // Burnout at t=160 ms: indicated altitude dives 40 → 22 m over 250 ms
+    // while EKF velocity says +45 m/s (still climbing hard).  Nose-up, no GPS.
+    for (int i = 0; i < 25; i++) {
+        setMockMillis(160 + i * 10);
+        callFlight(40.0f - 0.72f * i, 2.0f, 45.0f, 0.0f, 0.0f, false,
+                   /*pitch*/1.0f, /*burnout*/true);
+        EXPECT_FALSE(kc.alt_apogee_flag)
+            << "baro must not vote during the post-burnout settle window (i=" << i << ")";
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+
+    // Recovery + continued climb through the rest of the settle window.
+    for (int i = 0; i < 80; i++) {
+        setMockMillis(410 + i * 10);
+        callFlight(25.0f + 1.0f * i, 2.0f, 30.0f, 0.0f, 0.0f, false, 1.0f, true);
+    }
+    EXPECT_FALSE(kc.alt_apogee_flag);
+
+    // Well past the window (t≈1.2 s+ after burnout): genuine descent from the
+    // peak — the baro voter must work normally again.
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(1210 + i * 10);
+        callFlight(105.0f - 2.0f * i, 2.0f, -10.0f, 0.0f, 0.0f, false, 1.0f, true);
+    }
+    EXPECT_TRUE(kc.alt_apogee_flag) << "baro voter must recover after the settle window";
+}
+
 // #262 CORE: during mach-lockout (baro excluded) a single EKF-voter fault would
 // sink the old 2-of-2 {vel,pitch}.  With GPS restored as a non-EKF voter the
 // vote becomes 2-of-3 {vel,gps,pitch}, so pitch+GPS carry it.  Here EKF velocity
