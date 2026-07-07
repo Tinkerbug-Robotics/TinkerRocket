@@ -599,49 +599,79 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // already programmed this boot and re-verified).  Returns false when the OTP
 // string was just written — the caller must hardware-reset the receiver and
 // reconnect, since the OTP config only applies at startup.
+// Auto-programming master switch.  Currently READ-ONLY: the boot check reads
+// and logs the module's OTP state (all four §2.1.5 keys individually) but
+// never writes.  The OTP config budget is 69 bytes TOTAL (§2.3) and the
+// high-perf config takes 18, so writes are a once-or-twice-per-module-
+// lifetime resource — flip this only after the read-only diagnostics of the
+// target module have been reviewed.
+static constexpr bool kOtpAutoProgram = false;
+
 bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 {
-    // §2.1.5 step 5: VALGET (layer 0x04) of the OTP clock keys.  High CPU
-    // clock reads 0x0B71B000 at keys 0x40A40001/03/05 and 0x05B8D800 at
-    // 0x40A4000A; two keys (one of each expected value) are enough signal.
-    constexpr uint32_t KEY_CLK_A = 0x40A40003;
-    constexpr uint32_t KEY_CLK_B = 0x40A4000A;
-    constexpr uint32_t HI_CLK_A  = 0x0B71B000;
-    constexpr uint32_t HI_CLK_B  = 0x05B8D800;
-    constexpr uint8_t  OTP_LAYER = 0x04;  // layer byte from the manual's poll
+    // §2.1.5 step 5 verification keys.  The decision is made from the
+    // MODULE's own OTP contents (daughter boards move between main boards,
+    // so host-side records can't be the primary source of truth):
+    //   VERIFIED — all four keys read the high-clock values
+    //   PARTIAL  — some keys readable or values mismatch: something is in
+    //              the OTP already; NEVER auto-write over it (69-byte budget)
+    //   BLANK    — all keys NACK (the unprogrammed signature): the only
+    //              state eligible for programming
+    struct OtpKey { uint32_t key; uint32_t expect; };
+    static constexpr OtpKey kKeys[] = {
+        {0x40A40001, 0x0B71B000},
+        {0x40A40003, 0x0B71B000},
+        {0x40A40005, 0x0B71B000},
+        {0x40A4000A, 0x05B8D800},
+    };
+    constexpr uint8_t OTP_LAYER = 0x04;  // layer byte from the manual's poll
 
-    uint32_t a = 0, b = 0;
-    bool read_ok = false;
-    for (uint8_t i = 0; i < 4; i++)
+    uint8_t readable = 0, matching = 0;
+    for (const auto &k : kKeys)
     {
-        if (gnss.getVal32(KEY_CLK_A, &a, OTP_LAYER, 1100) &&
-            gnss.getVal32(KEY_CLK_B, &b, OTP_LAYER, 1100))
+        uint32_t v = 0;
+        bool ok = false;
+        for (uint8_t i = 0; i < 2 && !ok; i++)
         {
-            read_ok = true;
-            break;
+            ok = gnss.getVal32(k.key, &v, OTP_LAYER, 1100);
+            if (!ok) delay(100);
         }
-        delay(150);
+        if (ok)
+        {
+            readable++;
+            if (v == k.expect) matching++;
+            ESP_LOGI(TAG, "OTP key 0x%08lX = 0x%08lX (%s)",
+                     (unsigned long)k.key, (unsigned long)v,
+                     v == k.expect ? "expected" : "UNEXPECTED");
+        }
+        else
+        {
+            ESP_LOGI(TAG, "OTP key 0x%08lX: unreadable (NACK)", (unsigned long)k.key);
+        }
     }
 
-    if (read_ok && a == HI_CLK_A && b == HI_CLK_B)
+    if (matching == 4)
     {
-        ESP_LOGI(TAG, "High-performance clock OTP config verified "
-                      "(0x%08lX / 0x%08lX)",
-                 (unsigned long)a, (unsigned long)b);
+        ESP_LOGI(TAG, "High-performance clock OTP config VERIFIED (4/4 keys)");
         return true;
     }
-
-    if (read_ok)
+    if (readable > 0)
     {
-        ESP_LOGW(TAG, "OTP clock keys read 0x%08lX / 0x%08lX — NOT the "
-                      "high-performance configuration",
-                 (unsigned long)a, (unsigned long)b);
+        // Module memory says SOMETHING is programmed but not the expected
+        // full config (partial write, or different content).  Never gamble
+        // the remaining OTP budget on top of unknown content.
+        ESP_LOGE(TAG, "OTP state PARTIAL/MISMATCHED (%u/4 readable, %u/4 "
+                      "matching) — auto-programming refused; inspect with "
+                      "u-center", readable, matching);
+        return true;
     }
-    else
+    ESP_LOGW(TAG, "OTP state BLANK (all keys NACK) — module unprogrammed");
+
+    if (!kOtpAutoProgram)
     {
-        // An unprogrammed module NACKs the OTP-layer poll, so a persistent
-        // read failure is itself the "not programmed" signal.
-        ESP_LOGW(TAG, "OTP clock keys unreadable — treating as unprogrammed");
+        ESP_LOGW(TAG, "OTP auto-programming DISABLED in this build (read-only "
+                      "diagnostics) — running at default clock");
+        return true;
     }
 
     if (otp_program_attempted_)
