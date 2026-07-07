@@ -708,83 +708,101 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
                       "once-ever guard");
         return true;
     }
-    if (prefs.getUChar(nvs_key, 0) != 0)
+    // Targeted override for the 7/07 bench module: its first guarded attempt
+    // used per-frame sends (frame 1 ACKed, frame 2 NACKed — see burst comment
+    // below), so exactly ONE more attempt with the corrected burst method is
+    // allowed for this specific module.  Remove after the bench session.
+    static constexpr char kOtpGuardOverrideModule[] = "B9A8090FB454";
+    const uint8_t prior_attempts = prefs.getUChar(nvs_key, 0);
+    if (prior_attempts != 0)
     {
-        prefs.end();
-        ESP_LOGE(TAG, "OTP write was ALREADY attempted on module %s (NVS "
-                      "guard) but verify fails — NOT rewriting. Investigate "
-                      "manually (u-center) before clearing NVS key gnssotp/%s",
-                 uniq, nvs_key);
-        return true;
+        const bool override_ok =
+            (strcmp(uniq, kOtpGuardOverrideModule) == 0) && (prior_attempts < 2);
+        if (!override_ok)
+        {
+            prefs.end();
+            ESP_LOGE(TAG, "OTP write was ALREADY attempted on module %s (NVS "
+                          "guard) but verify fails — NOT rewriting. Investigate "
+                          "manually before clearing NVS key gnssotp/%s",
+                     uniq, nvs_key);
+            return true;
+        }
+        ESP_LOGW(TAG, "Guard override for bench module %s — one burst-method "
+                      "attempt allowed", uniq);
     }
     // Record the attempt BEFORE sending anything, so a crash/brownout
     // mid-write can never lead to a second automatic attempt.
-    prefs.putUChar(nvs_key, 1);
+    prefs.putUChar(nvs_key, (uint8_t)(prior_attempts + 1));
     prefs.end();
     otp_program_attempted_ = true;
 
-    // §2.1.5 Table 3 configuration string, byte-exact (two UBX-CFG 0x06/0x41
-    // frames; sendCommand recomputes the checksums).  PERMANENT.
+    // §2.1.5 Table 3 configuration string as ONE CONTIGUOUS BURST, byte-exact
+    // including sync chars and checksums (validated against the manual's own
+    // published checksum bytes).  Bench 7/07 established that the two frames
+    // sent as separate ACK-interleaved messages always fail: frame 1 ACKs but
+    // a standalone frame 2 is NACKed at ANY spacing (15 ms and 300–900 ms
+    // both tried) — CFG-OTP evidently treats the full string as one
+    // transaction, matching the manual's flow ("send the configuration
+    // string" ... "the device returns two UBX-ACK-ACK"): u-center transmits
+    // the whole string first, then both ACKs come back.  The library can only
+    // send one message per ACK round-trip, so this transaction bypasses it:
+    // write the burst raw on the UART and scan the RX stream for the two
+    // ACK-ACK sequences directly (NMEA chatter may interleave; the pattern
+    // matcher tolerates it).
     ESP_LOGW(TAG, "Programming high-performance clock into OTP of module %s "
-                  "(single attempt, one-time, permanent)", uniq);
+                  "(single burst attempt, one-time, permanent)", uniq);
 
-    static uint8_t otp1[16] = {0x03, 0x00, 0x04, 0x1F, 0x54, 0x5E, 0x79, 0xBF,
-                               0x28, 0xEF, 0x12, 0x05, 0xFD, 0xFF, 0xFF, 0xFF};
-    static uint8_t otp2[28] = {0x04, 0x01, 0xA4, 0x10, 0xBD, 0x34, 0xF9, 0x12,
-                               0x28, 0xEF, 0x12, 0x05, 0x05, 0x00, 0xA4, 0x40,
-                               0x00, 0xB0, 0x71, 0x0B, 0x0A, 0x00, 0xA4, 0x40,
-                               0x00, 0xD8, 0xB8, 0x05};
-
-    // Retry policy inside the single attempt (bench 7/07: frame 1 DATA_SENT,
-    // back-to-back frame 2 COMMAND_NACK — the module is briefly busy
-    // programming the previous frame's bits):
-    //   * COMMAND_NACK → the frame was REJECTED, nothing committed: safe to
-    //     retry after a settle delay.
-    //   * TIMEOUT (or anything else) → ambiguous: the frame may have been
-    //     committed with the ACK lost.  ABORT the attempt — never risk a
-    //     duplicate commit against finite OTP.
-    auto sendOtpFrame = [&](uint8_t *payload, uint16_t len, const char *which) -> bool
-    {
-        for (uint8_t i = 0; i < 3; i++)
-        {
-            ubxPacket pkt = {0x06, 0x41, len, 0, 0, payload, 0, 0,
-                             SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED,
-                             SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED};
-            const sfe_ublox_status_e s = gnss.sendCommand(&pkt, 1100);
-            if (s == SFE_UBLOX_STATUS_DATA_SENT || s == SFE_UBLOX_STATUS_DATA_RECEIVED)
-            {
-                ESP_LOGI(TAG, "CFG-OTP %s ACKed (attempt %u)", which, i + 1);
-                return true;
-            }
-            if (s != SFE_UBLOX_STATUS_COMMAND_NACK)
-            {
-                ESP_LOGE(TAG, "CFG-OTP %s attempt %u: status %d (not a NACK) "
-                              "— aborting, frame state ambiguous", which, i + 1, (int)s);
-                return false;
-            }
-            ESP_LOGW(TAG, "CFG-OTP %s attempt %u: NACK (module busy) — "
-                          "retrying after settle", which, i + 1);
-            delay(300);
-        }
-        return false;
+    static const uint8_t kOtpBurst[] = {
+        0xB5, 0x62, 0x06, 0x41, 0x10, 0x00,
+        0x03, 0x00, 0x04, 0x1F, 0x54, 0x5E, 0x79, 0xBF,
+        0x28, 0xEF, 0x12, 0x05, 0xFD, 0xFF, 0xFF, 0xFF,
+        0x8F, 0x0D,
+        0xB5, 0x62, 0x06, 0x41, 0x1C, 0x00,
+        0x04, 0x01, 0xA4, 0x10, 0xBD, 0x34, 0xF9, 0x12,
+        0x28, 0xEF, 0x12, 0x05, 0x05, 0x00, 0xA4, 0x40,
+        0x00, 0xB0, 0x71, 0x0B, 0x0A, 0x00, 0xA4, 0x40,
+        0x00, 0xD8, 0xB8, 0x05,
+        0xDE, 0xAE,
     };
+    // UBX-ACK-ACK / UBX-ACK-NAK for cls 0x06 id 0x41 (checksums recomputed
+    // and cross-checked against the manual's published ACK sequence).
+    static const uint8_t kAck[] = {0xB5, 0x62, 0x05, 0x01, 0x02, 0x00,
+                                   0x06, 0x41, 0x4F, 0x78};
+    static const uint8_t kNak[] = {0xB5, 0x62, 0x05, 0x00, 0x02, 0x00,
+                                   0x06, 0x41, 0x4E, 0x73};
 
-    const bool f1 = sendOtpFrame(otp1, sizeof(otp1), "frame 1");
-    bool f2 = false;
-    if (f1)
+    // Drain stale RX so the scan starts clean.
     {
-        delay(300);  // let frame-1 OTP programming settle before frame 2
-        f2 = sendOtpFrame(otp2, sizeof(otp2), "frame 2");
+        uint8_t tmp;
+        while (uart_read_bytes(_uartPort, &tmp, 1, 0) > 0) {}
     }
 
-    if (f1 && f2)
+    uart_write_bytes(_uartPort, kOtpBurst, sizeof(kOtpBurst));
+
+    uint8_t acks = 0, naks = 0;
+    size_t m_ack = 0, m_nak = 0;
+    const uint32_t scan_start = millis();
+    while ((millis() - scan_start) < 2500U && acks < 2)
     {
-        ESP_LOGW(TAG, "OTP high-clock config written — both frames ACKed");
+        uint8_t c;
+        if (uart_read_bytes(_uartPort, &c, 1, pdMS_TO_TICKS(20)) != 1)
+        {
+            continue;
+        }
+        m_ack = (c == kAck[m_ack]) ? m_ack + 1 : ((c == kAck[0]) ? 1 : 0);
+        if (m_ack == sizeof(kAck)) { acks++; m_ack = 0; }
+        m_nak = (c == kNak[m_nak]) ? m_nak + 1 : ((c == kNak[0]) ? 1 : 0);
+        if (m_nak == sizeof(kNak)) { naks++; m_nak = 0; }
+    }
+
+    if (acks == 2 && naks == 0)
+    {
+        ESP_LOGW(TAG, "OTP high-clock config written — both ACKs received");
         return false;  // caller resets the receiver and re-verifies once
     }
-    ESP_LOGE(TAG, "OTP write incomplete (frame1 %s, frame2 %s) — locked out "
-                  "by the NVS guard; complete manually via u-center",
-             f1 ? "ACKed" : "FAILED", f2 ? "ACKed" : "FAILED");
+    ESP_LOGE(TAG, "OTP burst result: %u ACK, %u NAK (need 2 ACK / 0 NAK) — "
+                  "locked out by the NVS guard; investigate before any retry",
+             acks, naks);
     return true;  // no reset loop; continue at current clock
 }
 
