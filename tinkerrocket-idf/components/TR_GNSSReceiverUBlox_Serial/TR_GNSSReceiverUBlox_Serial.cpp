@@ -2,6 +2,7 @@
 #include <esp_log.h>
 #include <driver/uart.h>
 #include <cstring>
+#include <TR_NVS.h>  // Preferences — once-ever OTP write guard
 
 static const char* TAG = "GNSS";
 
@@ -598,92 +599,227 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // already programmed this boot and re-verified).  Returns false when the OTP
 // string was just written — the caller must hardware-reset the receiver and
 // reconnect, since the OTP config only applies at startup.
+// Auto-programming master switch.  When false the boot check is READ-ONLY:
+// it reads and logs the module's OTP state (all four §2.1.5 keys
+// individually) but never writes.  The OTP config budget is 69 bytes TOTAL
+// (§2.3) and the high-perf config takes 18, so writes are a once-or-twice-
+// per-module-lifetime resource; when enabled, writes only ever target a
+// module whose OTP reads fully BLANK, at most once per module (NVS guard +
+// the blocklist below).
+static constexpr bool kOtpAutoProgram = true;
+
+// Modules that must NEVER be auto-programmed, by UBX-SEC-UNIQID unique chip
+// ID.  This travels with the FIRMWARE: the once-ever NVS guard lives on one
+// main board, but GNSS daughter boards migrate between main boards, and a
+// failed-attempt module READS BLANK — indistinguishable from factory-fresh
+// by its own memory.  Any module whose write attempt fails must be added
+// here so no other main board ever retries it.
+//   B9A8090FB454 — bench module, 7/07: frame 2 of the OTP config string is
+//   NAKed on content (per-frame AND contiguous-burst delivery, string
+//   byte-identical across three u-blox manuals); most likely the interrupted
+//   first attempt left its config region failing read-back.  Works normally
+//   at the default clock.
+static constexpr const char *kOtpNeverProgram[] = {
+    "B9A8090FB454",
+};
+
 bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 {
-    // §2.1.5 step 5: VALGET (layer 0x04) of the OTP clock keys.  High CPU
-    // clock reads 0x0B71B000 at keys 0x40A40001/03/05 and 0x05B8D800 at
-    // 0x40A4000A; two keys (one of each expected value) are enough signal.
-    constexpr uint32_t KEY_CLK_A = 0x40A40003;
-    constexpr uint32_t KEY_CLK_B = 0x40A4000A;
-    constexpr uint32_t HI_CLK_A  = 0x0B71B000;
-    constexpr uint32_t HI_CLK_B  = 0x05B8D800;
-    constexpr uint8_t  OTP_LAYER = 0x04;  // layer byte from the manual's poll
+    // §2.1.5 step 5 verification keys.  The decision is made from the
+    // MODULE's own OTP contents (daughter boards move between main boards,
+    // so host-side records can't be the primary source of truth):
+    //   VERIFIED — all four keys read the high-clock values
+    //   PARTIAL  — some keys readable or values mismatch: something is in
+    //              the OTP already; NEVER auto-write over it (69-byte budget)
+    //   BLANK    — all keys NACK (the unprogrammed signature): the only
+    //              state eligible for programming
+    struct OtpKey { uint32_t key; uint32_t expect; };
+    static constexpr OtpKey kKeys[] = {
+        {0x40A40001, 0x0B71B000},
+        {0x40A40003, 0x0B71B000},
+        {0x40A40005, 0x0B71B000},
+        {0x40A4000A, 0x05B8D800},
+    };
+    constexpr uint8_t OTP_LAYER = 0x04;  // layer byte from the manual's poll
 
-    uint32_t a = 0, b = 0;
-    bool read_ok = false;
-    for (uint8_t i = 0; i < 4; i++)
+    uint8_t readable = 0, matching = 0;
+    for (const auto &k : kKeys)
     {
-        if (gnss.getVal32(KEY_CLK_A, &a, OTP_LAYER, 1100) &&
-            gnss.getVal32(KEY_CLK_B, &b, OTP_LAYER, 1100))
+        uint32_t v = 0;
+        bool ok = false;
+        for (uint8_t i = 0; i < 2 && !ok; i++)
         {
-            read_ok = true;
-            break;
+            ok = gnss.getVal32(k.key, &v, OTP_LAYER, 1100);
+            if (!ok) delay(100);
         }
-        delay(150);
+        if (ok)
+        {
+            readable++;
+            if (v == k.expect) matching++;
+            ESP_LOGI(TAG, "OTP key 0x%08lX = 0x%08lX (%s)",
+                     (unsigned long)k.key, (unsigned long)v,
+                     v == k.expect ? "expected" : "UNEXPECTED");
+        }
+        else
+        {
+            ESP_LOGI(TAG, "OTP key 0x%08lX: unreadable (NACK)", (unsigned long)k.key);
+        }
     }
 
-    if (read_ok && a == HI_CLK_A && b == HI_CLK_B)
+    if (matching == 4)
     {
-        ESP_LOGI(TAG, "High-performance clock OTP config verified "
-                      "(0x%08lX / 0x%08lX)",
-                 (unsigned long)a, (unsigned long)b);
+        ESP_LOGI(TAG, "High-performance clock OTP config VERIFIED (4/4 keys)");
         return true;
     }
-
-    if (read_ok)
+    if (readable > 0)
     {
-        ESP_LOGW(TAG, "OTP clock keys read 0x%08lX / 0x%08lX — NOT the "
-                      "high-performance configuration",
-                 (unsigned long)a, (unsigned long)b);
+        // Module memory says SOMETHING is programmed but not the expected
+        // full config (partial write, or different content).  Never gamble
+        // the remaining OTP budget on top of unknown content.
+        ESP_LOGE(TAG, "OTP state PARTIAL/MISMATCHED (%u/4 readable, %u/4 "
+                      "matching) — auto-programming refused; inspect with "
+                      "u-center", readable, matching);
+        return true;
     }
-    else
+    ESP_LOGW(TAG, "OTP state BLANK (all keys NACK) — module unprogrammed");
+
+    if (!kOtpAutoProgram)
     {
-        // An unprogrammed module NACKs the OTP-layer poll, so a persistent
-        // read failure is itself the "not programmed" signal.
-        ESP_LOGW(TAG, "OTP clock keys unreadable — treating as unprogrammed");
+        ESP_LOGW(TAG, "OTP auto-programming DISABLED in this build (read-only "
+                      "diagnostics) — running at default clock");
+        return true;
     }
 
     if (otp_program_attempted_)
     {
-        return false;  // already wrote this boot; caller logs the failure
+        // Wrote earlier THIS boot and the post-reset verify still fails.
+        // Do not write again — the NVS record below also blocks future boots.
+        ESP_LOGE(TAG, "High-perf clock verify fails after this boot's OTP "
+                      "write — NOT retrying (finite OTP)");
+        return true;
     }
+
+    // ── Once-EVER-per-module write guard ─────────────────────────────────
+    // OTP capacity is a finite physical resource and u-blox does not
+    // document whether repeated CFG-OTP writes consume additional space.
+    // Policy: at most ONE programming attempt per physical module, tracked
+    // in FC NVS against the receiver's unique chip ID (UBX-SEC-UNIQID).
+    // No readable unique ID → no write, ever.
+    const char *uniq = gnss.getUniqueChipIdStr(nullptr, 1100);
+    if (uniq == nullptr || uniq[0] == '\0')
+    {
+        ESP_LOGE(TAG, "Cannot read module unique ID — refusing to write OTP "
+                      "(no way to enforce the once-ever guard)");
+        return true;
+    }
+    // Firmware-resident blocklist first: protects known failed/wedged modules
+    // on ANY main board (a failed module reads BLANK, like factory-fresh).
+    for (const char *blocked : kOtpNeverProgram)
+    {
+        if (strcmp(uniq, blocked) == 0)
+        {
+            ESP_LOGW(TAG, "Module %s is on the OTP never-program list — "
+                          "running at default clock", uniq);
+            return true;
+        }
+    }
+    // NVS keys max 15 chars: "o" + up to 14 hex chars of the unique ID.
+    char nvs_key[16] = {'o'};
+    strncpy(nvs_key + 1, uniq, sizeof(nvs_key) - 2);
+    nvs_key[sizeof(nvs_key) - 1] = '\0';
+
+    Preferences prefs;
+    if (!prefs.begin("gnssotp", false))
+    {
+        ESP_LOGE(TAG, "NVS unavailable — refusing to write OTP without the "
+                      "once-ever guard");
+        return true;
+    }
+    const uint8_t prior_attempts = prefs.getUChar(nvs_key, 0);
+    if (prior_attempts != 0)
+    {
+        prefs.end();
+        ESP_LOGE(TAG, "OTP write was ALREADY attempted on module %s (NVS "
+                      "guard) but verify fails — NOT rewriting. Investigate "
+                      "manually before clearing NVS key gnssotp/%s",
+                 uniq, nvs_key);
+        return true;
+    }
+    // Record the attempt BEFORE sending anything, so a crash/brownout
+    // mid-write can never lead to a second automatic attempt.
+    prefs.putUChar(nvs_key, (uint8_t)(prior_attempts + 1));
+    prefs.end();
     otp_program_attempted_ = true;
 
-    // §2.1.5 Table 3 configuration string, byte-exact (two UBX-CFG 0x06/0x41
-    // frames; sendCommand recomputes the checksums).  PERMANENT.
-    ESP_LOGW(TAG, "Programming high-performance clock into OTP "
-                  "(one-time, permanent, ~18 B of OTP)");
+    // §2.1.5 Table 3 configuration string as ONE CONTIGUOUS BURST, byte-exact
+    // including sync chars and checksums (validated against the manual's own
+    // published checksum bytes).  Bench 7/07 established that the two frames
+    // sent as separate ACK-interleaved messages always fail: frame 1 ACKs but
+    // a standalone frame 2 is NACKed at ANY spacing (15 ms and 300–900 ms
+    // both tried) — CFG-OTP evidently treats the full string as one
+    // transaction, matching the manual's flow ("send the configuration
+    // string" ... "the device returns two UBX-ACK-ACK"): u-center transmits
+    // the whole string first, then both ACKs come back.  The library can only
+    // send one message per ACK round-trip, so this transaction bypasses it:
+    // write the burst raw on the UART and scan the RX stream for the two
+    // ACK-ACK sequences directly (NMEA chatter may interleave; the pattern
+    // matcher tolerates it).
+    ESP_LOGW(TAG, "Programming high-performance clock into OTP of module %s "
+                  "(single burst attempt, one-time, permanent)", uniq);
 
-    static uint8_t otp1[16] = {0x03, 0x00, 0x04, 0x1F, 0x54, 0x5E, 0x79, 0xBF,
-                               0x28, 0xEF, 0x12, 0x05, 0xFD, 0xFF, 0xFF, 0xFF};
-    static uint8_t otp2[28] = {0x04, 0x01, 0xA4, 0x10, 0xBD, 0x34, 0xF9, 0x12,
-                               0x28, 0xEF, 0x12, 0x05, 0x05, 0x00, 0xA4, 0x40,
-                               0x00, 0xB0, 0x71, 0x0B, 0x0A, 0x00, 0xA4, 0x40,
-                               0x00, 0xD8, 0xB8, 0x05};
+    static const uint8_t kOtpBurst[] = {
+        0xB5, 0x62, 0x06, 0x41, 0x10, 0x00,
+        0x03, 0x00, 0x04, 0x1F, 0x54, 0x5E, 0x79, 0xBF,
+        0x28, 0xEF, 0x12, 0x05, 0xFD, 0xFF, 0xFF, 0xFF,
+        0x8F, 0x0D,
+        0xB5, 0x62, 0x06, 0x41, 0x1C, 0x00,
+        0x04, 0x01, 0xA4, 0x10, 0xBD, 0x34, 0xF9, 0x12,
+        0x28, 0xEF, 0x12, 0x05, 0x05, 0x00, 0xA4, 0x40,
+        0x00, 0xB0, 0x71, 0x0B, 0x0A, 0x00, 0xA4, 0x40,
+        0x00, 0xD8, 0xB8, 0x05,
+        0xDE, 0xAE,
+    };
+    // UBX-ACK-ACK / UBX-ACK-NAK for cls 0x06 id 0x41 (checksums recomputed
+    // and cross-checked against the manual's published ACK sequence).
+    static const uint8_t kAck[] = {0xB5, 0x62, 0x05, 0x01, 0x02, 0x00,
+                                   0x06, 0x41, 0x4F, 0x78};
+    static const uint8_t kNak[] = {0xB5, 0x62, 0x05, 0x00, 0x02, 0x00,
+                                   0x06, 0x41, 0x4E, 0x73};
 
-    ubxPacket pkt = {0x06, 0x41, 0, 0, 0, nullptr, 0, 0,
-                     SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED,
-                     SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED};
-
-    pkt.len = sizeof(otp1);
-    pkt.payload = otp1;
-    const sfe_ublox_status_e s1 = gnss.sendCommand(&pkt, 1100);
-    pkt.len = sizeof(otp2);
-    pkt.payload = otp2;
-    const sfe_ublox_status_e s2 = gnss.sendCommand(&pkt, 1100);
-
-    const bool acked =
-        (s1 == SFE_UBLOX_STATUS_DATA_SENT || s1 == SFE_UBLOX_STATUS_DATA_RECEIVED) &&
-        (s2 == SFE_UBLOX_STATUS_DATA_SENT || s2 == SFE_UBLOX_STATUS_DATA_RECEIVED);
-    if (acked)
+    // Drain stale RX so the scan starts clean.
     {
-        ESP_LOGW(TAG, "OTP high-clock config written and ACKed");
+        uint8_t tmp;
+        while (uart_read_bytes(_uartPort, &tmp, 1, 0) > 0) {}
     }
-    else
+
+    uart_write_bytes(_uartPort, kOtpBurst, sizeof(kOtpBurst));
+
+    uint8_t acks = 0, naks = 0;
+    size_t m_ack = 0, m_nak = 0;
+    const uint32_t scan_start = millis();
+    while ((millis() - scan_start) < 2500U && acks < 2)
     {
-        ESP_LOGE(TAG, "OTP write not ACKed (s1=%d s2=%d)", (int)s1, (int)s2);
+        uint8_t c;
+        if (uart_read_bytes(_uartPort, &c, 1, pdMS_TO_TICKS(20)) != 1)
+        {
+            continue;
+        }
+        m_ack = (c == kAck[m_ack]) ? m_ack + 1 : ((c == kAck[0]) ? 1 : 0);
+        if (m_ack == sizeof(kAck)) { acks++; m_ack = 0; }
+        m_nak = (c == kNak[m_nak]) ? m_nak + 1 : ((c == kNak[0]) ? 1 : 0);
+        if (m_nak == sizeof(kNak)) { naks++; m_nak = 0; }
     }
-    return false;  // reset + re-verify either way
+
+    if (acks == 2 && naks == 0)
+    {
+        ESP_LOGW(TAG, "OTP high-clock config written — both ACKs received");
+        return false;  // caller resets the receiver and re-verifies once
+    }
+    ESP_LOGE(TAG, "OTP burst result: %u ACK, %u NAK (need 2 ACK / 0 NAK) — "
+                  "locked out on this board by the NVS guard. ADD module %s "
+                  "to kOtpNeverProgram so no other main board retries it.",
+             acks, naks, uniq);
+    return true;  // no reset loop; continue at current clock
 }
 
 bool TR_GNSSReceiverUBloxSerial::pollNewPVT(GNSSData &gnss_data)
