@@ -262,6 +262,12 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         servo.set_pid_derivative_filter_cutoff_hz(config.d_lpf_hz)
     if config.integral_sep_threshold > 0.0:
         servo.set_pid_integral_separation_threshold(config.integral_sep_threshold)
+    # Seed the persistent rate setpoint ONCE, mirroring the firmware boot /
+    # SERVO_CTRL_ENABLE path (main.cpp:2768,4078 -> setSetpoint(ROLL_RATE_SET_POINT)).
+    # After this, the rate-null path never re-writes the setpoint — exactly like
+    # firmware — so a stale setpoint left by controlAngle (#372) would manifest
+    # here instead of being masked by a per-tick reset.
+    servo.set_setpoint(config.roll_setpoint_dps)
     servo_clock_us = 0
 
     # Initialize EKF
@@ -913,7 +919,13 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             servo_clock_us += int(round(imu_dt * 1e6))
                             _servo_set_micros(servo_clock_us)
                             if seg_mode == "null_rate":
-                                servo.set_setpoint(config.roll_setpoint_dps)
+                                # Firmware-faithful: the rate-null path is a bare
+                                # controlWithGainSchedule (main.cpp:5849). It does
+                                # NOT reset the setpoint — it relies on the
+                                # persistent ROLL_RATE_SET_POINT seeded at init.
+                                # Pre-#372-fix, controlAngle would have left a
+                                # residual rate command here, holding it instead
+                                # of nulling.
                                 servo.control_with_gain_schedule(
                                     -roll_rate_dps, speed)
                             else:
