@@ -604,8 +604,24 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // individually) but never writes.  The OTP config budget is 69 bytes TOTAL
 // (§2.3) and the high-perf config takes 18, so writes are a once-or-twice-
 // per-module-lifetime resource; when enabled, writes only ever target a
-// module whose OTP reads fully BLANK, at most once per module (NVS guard).
-static constexpr bool kOtpAutoProgram = false;
+// module whose OTP reads fully BLANK, at most once per module (NVS guard +
+// the blocklist below).
+static constexpr bool kOtpAutoProgram = true;
+
+// Modules that must NEVER be auto-programmed, by UBX-SEC-UNIQID unique chip
+// ID.  This travels with the FIRMWARE: the once-ever NVS guard lives on one
+// main board, but GNSS daughter boards migrate between main boards, and a
+// failed-attempt module READS BLANK — indistinguishable from factory-fresh
+// by its own memory.  Any module whose write attempt fails must be added
+// here so no other main board ever retries it.
+//   B9A8090FB454 — bench module, 7/07: frame 2 of the OTP config string is
+//   NAKed on content (per-frame AND contiguous-burst delivery, string
+//   byte-identical across three u-blox manuals); most likely the interrupted
+//   first attempt left its config region failing read-back.  Works normally
+//   at the default clock.
+static constexpr const char *kOtpNeverProgram[] = {
+    "B9A8090FB454",
+};
 
 bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 {
@@ -695,6 +711,17 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         ESP_LOGE(TAG, "Cannot read module unique ID — refusing to write OTP "
                       "(no way to enforce the once-ever guard)");
         return true;
+    }
+    // Firmware-resident blocklist first: protects known failed/wedged modules
+    // on ANY main board (a failed module reads BLANK, like factory-fresh).
+    for (const char *blocked : kOtpNeverProgram)
+    {
+        if (strcmp(uniq, blocked) == 0)
+        {
+            ESP_LOGW(TAG, "Module %s is on the OTP never-program list — "
+                          "running at default clock", uniq);
+            return true;
+        }
     }
     // NVS keys max 15 chars: "o" + up to 14 hex chars of the unique ID.
     char nvs_key[16] = {'o'};
@@ -789,8 +816,9 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
         return false;  // caller resets the receiver and re-verifies once
     }
     ESP_LOGE(TAG, "OTP burst result: %u ACK, %u NAK (need 2 ACK / 0 NAK) — "
-                  "locked out by the NVS guard; investigate before any retry",
-             acks, naks);
+                  "locked out on this board by the NVS guard. ADD module %s "
+                  "to kOtpNeverProgram so no other main board retries it.",
+             acks, naks, uniq);
     return true;  // no reset loop; continue at current clock
 }
 
