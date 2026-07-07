@@ -463,7 +463,9 @@ static bool     reboot_recovery_telem = false; // true for rest of flight (telem
 static uint32_t servo_settle_end_ms = 0;      // hold servos neutral until this time
 static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
 // Resend the flight settings snapshot (#165) on the first few INFLIGHT ticks
-// so a single dropped I2S frame at launch doesn't lose the record.
+// so a single dropped I2S frame at launch doesn't lose the record, plus one
+// late copy at launch+5 s, clear of the logging-activation edge (7/05 V2 F2
+// lost all three early copies to the pre-#418 races).
 static uint8_t  settings_emit_count = 0;
 
 static uint32_t computeSnapshotCRC(const FlightSnapshotData& snap)
@@ -5589,6 +5591,18 @@ static void loop_fc()
                     // dropped frame; values are stable in flight so all copies
                     // are identical and the app reads the first one.
                     if (settings_emit_count < 3) {
+                        sendFlightSettings();
+                        settings_emit_count++;
+                    }
+                    // One more copy well clear of the logging-activation edge:
+                    // the first three ride launch+0/100/200 ms, exactly the
+                    // window where the OC's ring drain is busiest and where the
+                    // pre-#418 races ate all three on the 7/05 V2 flight (its
+                    // .json has no settings block).  By launch+5 s the ring is
+                    // long drained, so this copy survives anything short of a
+                    // dead link.
+                    else if (settings_emit_count == 3 &&
+                             now_ms - launch_time_millis >= 5000U) {
                         sendFlightSettings();
                         settings_emit_count++;
                     }

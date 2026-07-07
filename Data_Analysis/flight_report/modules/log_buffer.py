@@ -118,15 +118,23 @@ def analyze(flight: Flight) -> AnalysisResult:
     # ring_highwater is monotonic since boot, so the *max* over samples is the
     # session peak.  ring_overruns / ring_drop_oldest_bytes likewise.
     peak_fill = max(s["ring_highwater"] for s in samples)
-    final_overruns = samples[-1]["ring_overruns"]
-    final_drop_oldest = samples[-1]["ring_drop_oldest_bytes"]
     final_bad_sof = samples[-1]["ring_bad_sof_clears"]
-    initial_overruns = samples[0]["ring_overruns"]
-    initial_drop_oldest = samples[0]["ring_drop_oldest_bytes"]
-    # In-flight deltas tell you whether overrun/drop happened *during this
-    # session* vs. carried over from a prior session on the same boot.
-    overruns_this_session = max(0, final_overruns - initial_overruns)
-    drop_oldest_this_session = max(0, final_drop_oldest - initial_drop_oldest)
+
+    # Counter deltas, split at the FIRST inter-sample interval.  The stats
+    # emitter starts with the log session, so samples[0]→samples[1] straddles
+    # logging activation: its delta is dominated by normal PRE-activation pad
+    # turnover (the rolling prelaunch window drop-oldests on every push while
+    # the ring sits at the pad cap — by design, not data loss).  Only deltas
+    # AFTER samples[1] are unambiguous in-flight events: the push path rejects
+    # the incoming frame when logging is active, so a post-activation overrun
+    # means live flight frames were actually discarded.
+    first = samples[0]
+    pivot = samples[1] if len(samples) > 1 else samples[-1]
+    last = samples[-1]
+    overruns_activation = max(0, pivot["ring_overruns"] - first["ring_overruns"])
+    drop_activation = max(0, pivot["ring_drop_oldest_bytes"] - first["ring_drop_oldest_bytes"])
+    overruns_inflight = max(0, last["ring_overruns"] - pivot["ring_overruns"])
+    drop_inflight = max(0, last["ring_drop_oldest_bytes"] - pivot["ring_drop_oldest_bytes"])
 
     pct = _peak_fill_pct(peak_fill, capacity) or 0.0
 
@@ -137,20 +145,26 @@ def analyze(flight: Flight) -> AnalysisResult:
         "peak_fill_bytes":               peak_fill,
         "peak_fill_kb":                  round(peak_fill / 1024.0, 1),
         "peak_fill_pct":                 round(pct, 1),
-        "ring_overruns_in_session":      overruns_this_session,
-        "ring_drop_oldest_bytes_session":drop_oldest_this_session,
+        # Pad cap is ring_size/2; activateLogging() raises the cap to the full
+        # ring so the reserved half absorbs the launch drain.
+        "overruns_activation_interval":  overruns_activation,
+        "drop_oldest_B_activation_interval": drop_activation,
+        "overruns_in_flight":            overruns_inflight,
+        "drop_oldest_B_in_flight":       drop_inflight,
         "ring_bad_sof_clears_final":     final_bad_sof,
     }
 
-    if overruns_this_session > 0:
+    if overruns_inflight > 0:
         result.warnings.append(
-            f"{overruns_this_session} ring overrun(s) during this session — "
-            "writer outpaced flush; some frames were dropped."
+            f"{overruns_inflight} ring overrun(s) AFTER activation — the push "
+            "path rejects incoming frames while logging, so live flight frames "
+            "were discarded (flush stalled or sustained inflow burst)."
         )
-    if drop_oldest_this_session > 0:
+    if drop_inflight > 0:
         result.warnings.append(
-            f"{drop_oldest_this_session:,} bytes dropped from ring tail "
-            "(drop-oldest path) — ring undersized for this load."
+            f"{drop_inflight:,} bytes drop-oldested AFTER activation — "
+            "unexpected: drop-oldest should only run pre-activation. Suspect "
+            "the log session (re)started mid-flight."
         )
     if pct >= 90.0:
         result.warnings.append(
