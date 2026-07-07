@@ -41,13 +41,33 @@ def analyze(flight: Flight) -> AnalysisResult:
     med_dt = float(np.median(dt)) if dt.size else 0
     big_gaps = int(np.sum(dt > max(0.5, 5 * med_dt))) if dt.size else 0
 
-    # Position freeze (consecutive identical lat/lon)
+    # Position freeze. Identical lat/lon alone is NOT staleness: a stationary
+    # receiver (pad / landed) legitimately re-quantizes to the same 1e-7 deg
+    # (~1 cm) coordinates between epochs — every pair flagged across the 7/05
+    # flights was exactly that (solution time-of-day advancing, fix 3D, 16-30
+    # sats). A fix only counts as FROZEN when the solution timestamp did not
+    # advance either — i.e. the receiver/driver repeated a stale solution,
+    # which the FC's gnss_fix_is_new EKF gate would also reject. Stationary
+    # repeats stay visible as a metric.
     frozen = 0
+    stationary_repeats = 0
     if "lat" in gnss[0]:
         lat = get_array(gnss, "lat")
         lon = get_array(gnss, "lon")
         if lat.size > 1:
-            frozen = int(np.sum((np.diff(lat) == 0) & (np.diff(lon) == 0)))
+            same_pos = (np.diff(lat) == 0) & (np.diff(lon) == 0)
+            if all(k in gnss[0] for k in ("hour", "minute", "second", "milli_sec")):
+                tod_ms = (get_array(gnss, "hour") * 3600000.0
+                          + get_array(gnss, "minute") * 60000.0
+                          + get_array(gnss, "second") * 1000.0
+                          + get_array(gnss, "milli_sec"))
+                same_tod = (np.diff(tod_ms) == 0)
+                frozen = int(np.sum(same_pos & same_tod))
+                stationary_repeats = int(np.sum(same_pos & ~same_tod))
+            else:
+                # Old logs without solution time-of-day: position-only count,
+                # reported as the softer metric.
+                stationary_repeats = int(np.sum(same_pos))
 
     # Fix-mode 0 (no fix) count
     fix_lost = 0
@@ -66,15 +86,19 @@ def analyze(flight: Flight) -> AnalysisResult:
         "gnss_rate_hz": round(rate_hz, 2),
         "median_dt_s": round(med_dt, 3),
         "big_gaps": big_gaps,
-        "frozen_positions": frozen,
+        "frozen_fixes_stale_tod": frozen,
+        "stationary_position_repeats": stationary_repeats,
         "fix_mode_zero_count": fix_lost,
         "sats_min/med/max": (
             f"{sat_min} / {sat_med} / {sat_max}" if sat_min is not None else "—"
         ),
     }
 
-    if frozen > 10:
-        result.warnings.append(f"{frozen} consecutive frames with identical lat/lon (frozen position).")
+    if frozen > 0:
+        result.warnings.append(
+            f"{frozen} FROZEN fix(es): identical lat/lon with a non-advancing "
+            "solution timestamp — receiver/driver repeated a stale solution."
+        )
     if fix_lost > 0:
         result.warnings.append(f"{fix_lost} frames with fix_mode=0 (no fix).")
     if big_gaps > 0:
