@@ -1,6 +1,7 @@
 #include "TR_GNSSReceiverUBlox_Serial.h"
 #include <esp_log.h>
 #include <driver/uart.h>
+#include <cstring>
 
 static const char* TAG = "GNSS";
 
@@ -350,6 +351,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
     ESP_LOGI(TAG, "Serial connected, verified runtime baud = %lu", (unsigned long)connected_baud);
 
+    bool module_is_m10 = false;
     if (gnss.getModuleInfo())
     {
         ESP_LOGI(TAG, "Module: %s", gnss.getModuleName());
@@ -358,6 +360,33 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
                  gnss.getFirmwareVersionHigh(), gnss.getFirmwareVersionLow());
         ESP_LOGI(TAG, "Protocol version: %d.%d",
                  gnss.getProtocolVersionHigh(), gnss.getProtocolVersionLow());
+        module_is_m10 = (strstr(gnss.getModuleName(), "M10") != nullptr);
+    }
+
+    // ── High performance navigation update rate (§2.1.5, UBX-22020019) ──
+    // The M10 defaults to a low CPU clock whose nav-rate ceiling (~10 Hz with
+    // 4 concurrent constellations) is below our configured GNSS_UPDATE_RATE.
+    // The high-clock configuration lives in OTP memory: programmed once,
+    // applied automatically at every startup, PERMANENT.  Verify it at every
+    // boot (new/replacement modules arrive unprogrammed) and program it —
+    // with the manual's exact byte strings — when absent.  Gated on a
+    // positively identified M10 so we can never burn OTP on a different part.
+    if (module_is_m10 && !ensureHighPerformanceClock())
+    {
+        // OTP just programmed: it only applies at startup, so hardware-reset
+        // the receiver and redo the whole connect+configure once.
+        if (!otp_reset_done_)
+        {
+            otp_reset_done_ = true;
+            ESP_LOGW(TAG, "Resetting receiver to apply OTP high-clock config");
+            pulseReset();
+            delay(500);
+            return begin(update_rate_hz_in, GNSS_RX, GNSS_TX,
+                         reset_n_pin, safeboot_n_pin);
+        }
+        ESP_LOGE(TAG, "High-performance clock still not verified after OTP "
+                      "write + reset — continuing at default clock (reduced "
+                      "nav-rate ceiling)");
     }
 
     auto configureReceiver = [&]() -> bool
@@ -556,6 +585,105 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     delay(100);
 
     return true;
+}
+
+// SAM-M10Q high performance navigation update rate (integration manual
+// UBX-22020019 §2.1.5).  The high-CPU-clock configuration lives in OTP
+// (one-time programmable) memory: written once, applied automatically at
+// every startup, permanent and irreversible.  Verification and programming
+// below use the manual's byte-exact sequences (keys/values are undocumented
+// M10 internals — do NOT invent values).
+//
+// Returns true when the high-performance clock is verified present (or was
+// already programmed this boot and re-verified).  Returns false when the OTP
+// string was just written — the caller must hardware-reset the receiver and
+// reconnect, since the OTP config only applies at startup.
+bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
+{
+    // §2.1.5 step 5: VALGET (layer 0x04) of the OTP clock keys.  High CPU
+    // clock reads 0x0B71B000 at keys 0x40A40001/03/05 and 0x05B8D800 at
+    // 0x40A4000A; two keys (one of each expected value) are enough signal.
+    constexpr uint32_t KEY_CLK_A = 0x40A40003;
+    constexpr uint32_t KEY_CLK_B = 0x40A4000A;
+    constexpr uint32_t HI_CLK_A  = 0x0B71B000;
+    constexpr uint32_t HI_CLK_B  = 0x05B8D800;
+    constexpr uint8_t  OTP_LAYER = 0x04;  // layer byte from the manual's poll
+
+    uint32_t a = 0, b = 0;
+    bool read_ok = false;
+    for (uint8_t i = 0; i < 4; i++)
+    {
+        if (gnss.getVal32(KEY_CLK_A, &a, OTP_LAYER, 1100) &&
+            gnss.getVal32(KEY_CLK_B, &b, OTP_LAYER, 1100))
+        {
+            read_ok = true;
+            break;
+        }
+        delay(150);
+    }
+
+    if (read_ok && a == HI_CLK_A && b == HI_CLK_B)
+    {
+        ESP_LOGI(TAG, "High-performance clock OTP config verified "
+                      "(0x%08lX / 0x%08lX)",
+                 (unsigned long)a, (unsigned long)b);
+        return true;
+    }
+
+    if (read_ok)
+    {
+        ESP_LOGW(TAG, "OTP clock keys read 0x%08lX / 0x%08lX — NOT the "
+                      "high-performance configuration",
+                 (unsigned long)a, (unsigned long)b);
+    }
+    else
+    {
+        // An unprogrammed module NACKs the OTP-layer poll, so a persistent
+        // read failure is itself the "not programmed" signal.
+        ESP_LOGW(TAG, "OTP clock keys unreadable — treating as unprogrammed");
+    }
+
+    if (otp_program_attempted_)
+    {
+        return false;  // already wrote this boot; caller logs the failure
+    }
+    otp_program_attempted_ = true;
+
+    // §2.1.5 Table 3 configuration string, byte-exact (two UBX-CFG 0x06/0x41
+    // frames; sendCommand recomputes the checksums).  PERMANENT.
+    ESP_LOGW(TAG, "Programming high-performance clock into OTP "
+                  "(one-time, permanent, ~18 B of OTP)");
+
+    static uint8_t otp1[16] = {0x03, 0x00, 0x04, 0x1F, 0x54, 0x5E, 0x79, 0xBF,
+                               0x28, 0xEF, 0x12, 0x05, 0xFD, 0xFF, 0xFF, 0xFF};
+    static uint8_t otp2[28] = {0x04, 0x01, 0xA4, 0x10, 0xBD, 0x34, 0xF9, 0x12,
+                               0x28, 0xEF, 0x12, 0x05, 0x05, 0x00, 0xA4, 0x40,
+                               0x00, 0xB0, 0x71, 0x0B, 0x0A, 0x00, 0xA4, 0x40,
+                               0x00, 0xD8, 0xB8, 0x05};
+
+    ubxPacket pkt = {0x06, 0x41, 0, 0, 0, nullptr, 0, 0,
+                     SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED,
+                     SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED};
+
+    pkt.len = sizeof(otp1);
+    pkt.payload = otp1;
+    const sfe_ublox_status_e s1 = gnss.sendCommand(&pkt, 1100);
+    pkt.len = sizeof(otp2);
+    pkt.payload = otp2;
+    const sfe_ublox_status_e s2 = gnss.sendCommand(&pkt, 1100);
+
+    const bool acked =
+        (s1 == SFE_UBLOX_STATUS_DATA_SENT || s1 == SFE_UBLOX_STATUS_DATA_RECEIVED) &&
+        (s2 == SFE_UBLOX_STATUS_DATA_SENT || s2 == SFE_UBLOX_STATUS_DATA_RECEIVED);
+    if (acked)
+    {
+        ESP_LOGW(TAG, "OTP high-clock config written and ACKed");
+    }
+    else
+    {
+        ESP_LOGE(TAG, "OTP write not ACKed (s1=%d s2=%d)", (int)s1, (int)s2);
+    }
+    return false;  // reset + re-verify either way
 }
 
 bool TR_GNSSReceiverUBloxSerial::pollNewPVT(GNSSData &gnss_data)
