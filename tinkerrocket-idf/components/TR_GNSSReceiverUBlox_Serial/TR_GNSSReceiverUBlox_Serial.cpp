@@ -605,7 +605,7 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 // (§2.3) and the high-perf config takes 18, so writes are a once-or-twice-
 // per-module-lifetime resource; when enabled, writes only ever target a
 // module whose OTP reads fully BLANK, at most once per module (NVS guard).
-static constexpr bool kOtpAutoProgram = true;
+static constexpr bool kOtpAutoProgram = false;
 
 bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 {
@@ -708,27 +708,15 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
                       "once-ever guard");
         return true;
     }
-    // Targeted override for the 7/07 bench module: its first guarded attempt
-    // used per-frame sends (frame 1 ACKed, frame 2 NACKed — see burst comment
-    // below), so exactly ONE more attempt with the corrected burst method is
-    // allowed for this specific module.  Remove after the bench session.
-    static constexpr char kOtpGuardOverrideModule[] = "B9A8090FB454";
     const uint8_t prior_attempts = prefs.getUChar(nvs_key, 0);
     if (prior_attempts != 0)
     {
-        const bool override_ok =
-            (strcmp(uniq, kOtpGuardOverrideModule) == 0) && (prior_attempts < 2);
-        if (!override_ok)
-        {
-            prefs.end();
-            ESP_LOGE(TAG, "OTP write was ALREADY attempted on module %s (NVS "
-                          "guard) but verify fails — NOT rewriting. Investigate "
-                          "manually before clearing NVS key gnssotp/%s",
-                     uniq, nvs_key);
-            return true;
-        }
-        ESP_LOGW(TAG, "Guard override for bench module %s — one burst-method "
-                      "attempt allowed", uniq);
+        prefs.end();
+        ESP_LOGE(TAG, "OTP write was ALREADY attempted on module %s (NVS "
+                      "guard) but verify fails — NOT rewriting. Investigate "
+                      "manually before clearing NVS key gnssotp/%s",
+                 uniq, nvs_key);
+        return true;
     }
     // Record the attempt BEFORE sending anything, so a crash/brownout
     // mid-write can never lead to a second automatic attempt.
