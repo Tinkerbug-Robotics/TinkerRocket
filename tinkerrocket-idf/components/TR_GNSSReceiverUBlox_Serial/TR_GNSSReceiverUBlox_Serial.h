@@ -40,6 +40,15 @@ class TR_GNSSReceiverUBloxSerial
 
         uint8_t update_rate_hz;
 
+        // SAM-M10Q "high performance navigation update rate" (integration
+        // manual UBX-22020019 §2.1.5): verify the high-CPU-clock OTP
+        // configuration is present; program it (permanent, one-time) if not.
+        // Returns false ONLY when the OTP was just programmed and the
+        // receiver needs a hardware reset + reconnect for it to apply.
+        bool ensureHighPerformanceClock();
+        bool otp_program_attempted_ = false;  // one write attempt per boot
+        bool otp_reset_done_ = false;         // one post-write reset/reconnect per boot
+
         // Helper: install/reconfigure the UART driver at a given baud rate and pins.
         // Tears down any existing driver first.
         void uartBegin(uint32_t baud, uint8_t rx_pin, uint8_t tx_pin);
