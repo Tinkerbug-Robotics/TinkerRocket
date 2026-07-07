@@ -2,6 +2,7 @@
 #include <esp_log.h>
 #include <driver/uart.h>
 #include <cstring>
+#include <TR_NVS.h>  // Preferences — once-ever OTP write guard
 
 static const char* TAG = "GNSS";
 
@@ -645,14 +646,57 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
 
     if (otp_program_attempted_)
     {
-        return false;  // already wrote this boot; caller logs the failure
+        // Wrote earlier THIS boot and the post-reset verify still fails.
+        // Do not write again — the NVS record below also blocks future boots.
+        ESP_LOGE(TAG, "High-perf clock verify fails after this boot's OTP "
+                      "write — NOT retrying (finite OTP)");
+        return true;
     }
+
+    // ── Once-EVER-per-module write guard ─────────────────────────────────
+    // OTP capacity is a finite physical resource and u-blox does not
+    // document whether repeated CFG-OTP writes consume additional space.
+    // Policy: at most ONE programming attempt per physical module, tracked
+    // in FC NVS against the receiver's unique chip ID (UBX-SEC-UNIQID).
+    // No readable unique ID → no write, ever.
+    const char *uniq = gnss.getUniqueChipIdStr(nullptr, 1100);
+    if (uniq == nullptr || uniq[0] == '\0')
+    {
+        ESP_LOGE(TAG, "Cannot read module unique ID — refusing to write OTP "
+                      "(no way to enforce the once-ever guard)");
+        return true;
+    }
+    // NVS keys max 15 chars: "o" + up to 14 hex chars of the unique ID.
+    char nvs_key[16] = {'o'};
+    strncpy(nvs_key + 1, uniq, sizeof(nvs_key) - 2);
+    nvs_key[sizeof(nvs_key) - 1] = '\0';
+
+    Preferences prefs;
+    if (!prefs.begin("gnssotp", false))
+    {
+        ESP_LOGE(TAG, "NVS unavailable — refusing to write OTP without the "
+                      "once-ever guard");
+        return true;
+    }
+    if (prefs.getUChar(nvs_key, 0) != 0)
+    {
+        prefs.end();
+        ESP_LOGE(TAG, "OTP write was ALREADY attempted on module %s (NVS "
+                      "guard) but verify fails — NOT rewriting. Investigate "
+                      "manually (u-center) before clearing NVS key gnssotp/%s",
+                 uniq, nvs_key);
+        return true;
+    }
+    // Record the attempt BEFORE sending anything, so a crash/brownout
+    // mid-write can never lead to a second automatic attempt.
+    prefs.putUChar(nvs_key, 1);
+    prefs.end();
     otp_program_attempted_ = true;
 
     // §2.1.5 Table 3 configuration string, byte-exact (two UBX-CFG 0x06/0x41
     // frames; sendCommand recomputes the checksums).  PERMANENT.
-    ESP_LOGW(TAG, "Programming high-performance clock into OTP "
-                  "(one-time, permanent, ~18 B of OTP)");
+    ESP_LOGW(TAG, "Programming high-performance clock into OTP of module %s "
+                  "(single attempt, one-time, permanent)", uniq);
 
     static uint8_t otp1[16] = {0x03, 0x00, 0x04, 0x1F, 0x54, 0x5E, 0x79, 0xBF,
                                0x28, 0xEF, 0x12, 0x05, 0xFD, 0xFF, 0xFF, 0xFF};
@@ -661,29 +705,57 @@ bool TR_GNSSReceiverUBloxSerial::ensureHighPerformanceClock()
                                0x00, 0xB0, 0x71, 0x0B, 0x0A, 0x00, 0xA4, 0x40,
                                0x00, 0xD8, 0xB8, 0x05};
 
-    ubxPacket pkt = {0x06, 0x41, 0, 0, 0, nullptr, 0, 0,
-                     SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED,
-                     SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED};
-
-    pkt.len = sizeof(otp1);
-    pkt.payload = otp1;
-    const sfe_ublox_status_e s1 = gnss.sendCommand(&pkt, 1100);
-    pkt.len = sizeof(otp2);
-    pkt.payload = otp2;
-    const sfe_ublox_status_e s2 = gnss.sendCommand(&pkt, 1100);
-
-    const bool acked =
-        (s1 == SFE_UBLOX_STATUS_DATA_SENT || s1 == SFE_UBLOX_STATUS_DATA_RECEIVED) &&
-        (s2 == SFE_UBLOX_STATUS_DATA_SENT || s2 == SFE_UBLOX_STATUS_DATA_RECEIVED);
-    if (acked)
+    // Retry policy inside the single attempt (bench 7/07: frame 1 DATA_SENT,
+    // back-to-back frame 2 COMMAND_NACK — the module is briefly busy
+    // programming the previous frame's bits):
+    //   * COMMAND_NACK → the frame was REJECTED, nothing committed: safe to
+    //     retry after a settle delay.
+    //   * TIMEOUT (or anything else) → ambiguous: the frame may have been
+    //     committed with the ACK lost.  ABORT the attempt — never risk a
+    //     duplicate commit against finite OTP.
+    auto sendOtpFrame = [&](uint8_t *payload, uint16_t len, const char *which) -> bool
     {
-        ESP_LOGW(TAG, "OTP high-clock config written and ACKed");
-    }
-    else
+        for (uint8_t i = 0; i < 3; i++)
+        {
+            ubxPacket pkt = {0x06, 0x41, len, 0, 0, payload, 0, 0,
+                             SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED,
+                             SFE_UBLOX_PACKET_VALIDITY_NOT_DEFINED};
+            const sfe_ublox_status_e s = gnss.sendCommand(&pkt, 1100);
+            if (s == SFE_UBLOX_STATUS_DATA_SENT || s == SFE_UBLOX_STATUS_DATA_RECEIVED)
+            {
+                ESP_LOGI(TAG, "CFG-OTP %s ACKed (attempt %u)", which, i + 1);
+                return true;
+            }
+            if (s != SFE_UBLOX_STATUS_COMMAND_NACK)
+            {
+                ESP_LOGE(TAG, "CFG-OTP %s attempt %u: status %d (not a NACK) "
+                              "— aborting, frame state ambiguous", which, i + 1, (int)s);
+                return false;
+            }
+            ESP_LOGW(TAG, "CFG-OTP %s attempt %u: NACK (module busy) — "
+                          "retrying after settle", which, i + 1);
+            delay(300);
+        }
+        return false;
+    };
+
+    const bool f1 = sendOtpFrame(otp1, sizeof(otp1), "frame 1");
+    bool f2 = false;
+    if (f1)
     {
-        ESP_LOGE(TAG, "OTP write not ACKed (s1=%d s2=%d)", (int)s1, (int)s2);
+        delay(300);  // let frame-1 OTP programming settle before frame 2
+        f2 = sendOtpFrame(otp2, sizeof(otp2), "frame 2");
     }
-    return false;  // reset + re-verify either way
+
+    if (f1 && f2)
+    {
+        ESP_LOGW(TAG, "OTP high-clock config written — both frames ACKed");
+        return false;  // caller resets the receiver and re-verifies once
+    }
+    ESP_LOGE(TAG, "OTP write incomplete (frame1 %s, frame2 %s) — locked out "
+                  "by the NVS guard; complete manually via u-center",
+             f1 ? "ACKed" : "FAILED", f2 ? "ACKed" : "FAILED");
+    return true;  // no reset loop; continue at current clock
 }
 
 bool TR_GNSSReceiverUBloxSerial::pollNewPVT(GNSSData &gnss_data)
