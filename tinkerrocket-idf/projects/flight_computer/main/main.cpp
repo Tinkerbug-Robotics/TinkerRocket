@@ -2311,6 +2311,8 @@ static void setup_fc()
     }
 
     ESP_LOGI(TAG, "Starting ....");
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (flash the other variant with/without -B build_v8 -DTR_BOARD_V8=1)",
+             TR_BOARD_V8 ? "V8" : "V7");
     gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
     gpio_set_direction((gpio_num_t)(config::BLUE_LED_PIN), GPIO_MODE_OUTPUT);
