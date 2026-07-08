@@ -1711,13 +1711,22 @@ struct PyroChannelsView: View {
                                 .background(Color.orange)
                                 .cornerRadius(4)
                         } else if armed || contTestChannel == channel {
-                            HStack(spacing: 4) {
-                                Circle()
-                                    .fill(continuity ? Color.green : Color.red)
-                                    .frame(width: 8, height: 8)
-                                Text(continuity ? "CONT" : "NO CONT")
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundColor(continuity ? .green : .red)
+                            if device.contTestPending(channel: UInt8(channel)) {
+                                HStack(spacing: 4) {
+                                    ProgressView().controlSize(.mini)
+                                    Text("TESTING")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundColor(.secondary)
+                                }
+                            } else {
+                                HStack(spacing: 4) {
+                                    Circle()
+                                        .fill(continuity ? Color.green : Color.red)
+                                        .frame(width: 8, height: 8)
+                                    Text(continuity ? "CONT" : "NO CONT")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundColor(continuity ? .green : .red)
+                                }
                             }
                         }
                     }

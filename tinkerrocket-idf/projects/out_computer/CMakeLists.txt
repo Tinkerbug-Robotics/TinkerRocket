@@ -28,7 +28,14 @@ if(NOT TR_GIT_DIRTY_CODE EQUAL 0)
     set(TR_GIT_SHA "${TR_GIT_SHA}-dirty")
 endif()
 string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
-set(PROJECT_VER "${TR_GIT_SHA}+${TR_BUILD_DATE}")
+# Board revision marker (#411): V8 builds are identifiable from the app
+# version string (BLE config_identity "fw" field, boot log, OTA metadata).
+if(TR_BOARD_V8)
+    set(TR_BOARD_SUFFIX "-v8")
+else()
+    set(TR_BOARD_SUFFIX "")
+endif()
+set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(out_computer)

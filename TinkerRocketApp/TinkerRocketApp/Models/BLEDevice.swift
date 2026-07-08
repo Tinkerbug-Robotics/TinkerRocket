@@ -836,8 +836,37 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(34, payload: payload)
     }
 
+    // Continuity-test pending window (#411 UX). A manual PYRO_CONT_TEST
+    // round-trips BLE -> OC -> I2C -> FC and back via a status frame (a few
+    // seconds). Until the fresh reading returns, the previously-cached
+    // CONT/NO-CONT value would misleadingly display as if it were the
+    // answer — the FC even re-reads the same pin, so an open channel can
+    // briefly show a stale "CONT" and a good one a stale "NO CONT". Track a
+    // per-channel deadline so the UI can show "TESTING" during the window
+    // instead of a value it can't yet trust.
+    @Published private(set) var contTestPendingUntil: [UInt8: Date] = [:]
+    static let contTestPendingWindow: TimeInterval = 2.5
+
+    /// True while a manual continuity test for `channel` is still round-
+    /// tripping — the UI shows "TESTING" rather than the (stale) reading.
+    func contTestPending(channel: UInt8) -> Bool {
+        guard let until = contTestPendingUntil[channel] else { return false }
+        return Date() < until
+    }
+
     func sendPyroContTest(channel: UInt8) {
         sendRawCommand(35, payload: Data([channel]))
+        // Open the "TESTING" window; clear it (a published mutation, so the
+        // UI re-renders the reveal) once the reading has had time to return.
+        contTestPendingUntil[channel] = Date().addingTimeInterval(Self.contTestPendingWindow)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.contTestPendingWindow) { [weak self] in
+            guard let self = self else { return }
+            // Only clear if a newer tap on this channel hasn't pushed the
+            // deadline out past now.
+            if let until = self.contTestPendingUntil[channel], until <= Date() {
+                self.contTestPendingUntil.removeValue(forKey: channel)
+            }
+        }
     }
 
     func sendPyroFire(channel: UInt8) {

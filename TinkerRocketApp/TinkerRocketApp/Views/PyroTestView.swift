@@ -159,12 +159,19 @@ struct PyroTestView: View {
                     .foregroundColor(.white)
 
                 HStack(spacing: 4) {
-                    Circle()
-                        .fill(continuity ? Color.green : Color.red)
-                        .frame(width: 10, height: 10)
-                    Text(continuity ? "CONT" : "NO CONT")
-                        .font(.caption.weight(.bold))
-                        .foregroundColor(continuity ? .green : .red)
+                    if device.contTestPending(channel: UInt8(channel)) {
+                        ProgressView().controlSize(.mini).tint(.white)
+                        Text("TESTING")
+                            .font(.caption.weight(.bold))
+                            .foregroundColor(.white)
+                    } else {
+                        Circle()
+                            .fill(continuity ? Color.green : Color.red)
+                            .frame(width: 10, height: 10)
+                        Text(continuity ? "CONT" : "NO CONT")
+                            .font(.caption.weight(.bold))
+                            .foregroundColor(continuity ? .green : .red)
+                    }
                 }
             }
 

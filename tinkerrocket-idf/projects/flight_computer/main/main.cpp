@@ -32,6 +32,7 @@
 #include <esp_private/gpio.h>      // gpio_func_sel
 #include <rom/gpio.h>              // esp_rom_gpio_connect_out_signal
 #include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
+#include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
 #include <soc/io_mux_reg.h>        // PIN_FUNC_GPIO
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -912,9 +913,10 @@ static void pyroSafeAll()
 }
 
 // PRELAUNCH continuity check. Sample all four CONT pins directly and cache
-// the result. Synchronous — no ARM pulse, no settle delay, no state machine.
-// The new PCB feeds the CONT divider from VPP (always on), so ARM is not
-// part of the cont sense path.
+// the result. Synchronous — no ARM pulse, no settle, no state machine.
+// VPP (flight-computer power, always on) feeds the CONT sense divider, so
+// ARM is not part of the sense path. Pyros are a V8+ feature, so there is
+// no earlier board to branch for.
 static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 {
     int  raw[4];
@@ -2261,6 +2263,8 @@ static void setup_fc()
     }
 
     ESP_LOGI(TAG, "Starting ....");
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (flash the other variant with/without -B build_v8 -DTR_BOARD_V8=1)",
+             TR_BOARD_V8 ? "V8" : "V7");
     gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
     gpio_set_direction((gpio_num_t)(config::BLUE_LED_PIN), GPIO_MODE_OUTPUT);
@@ -4887,10 +4891,10 @@ static void loop_fc()
             }
             else if (out_pending_command == PYRO_CONT_TEST)
             {
-                // Direct CONT read — no ARM pulse needed on the new PCB
-                // (CONT divider fed from VPP, independent of the ARM rail).
-                // Still rejected in flight to be conservative with the
-                // app's "ground tests are pad-only" UX guarantee.
+                // Direct CONT read. VPP (flight-computer power, always on)
+                // feeds the sense divider, so no ARM pulse is needed.
+                // Rejected in flight to honor the app's "ground tests are
+                // pad-only" UX guarantee.
                 if (isCommandLockoutState(rocket_state)) {
                     ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
                              (unsigned)rocket_state);
@@ -4912,8 +4916,7 @@ static void loop_fc()
 
                         // Defensive CONT-pad reclaim — peripheral defaults
                         // can re-grab the ESP32-P4 IO MUX between boot and
-                        // the test. (The ARM pad was set up safely at boot
-                        // via safePyroOutputInit; we don't touch it here.)
+                        // the test.
                         esp_gpio_revoke(1ULL << cont_pin);
                         gpio_reset_pin(cont_pin);
                         gpio_config_t cont_cfg = {};

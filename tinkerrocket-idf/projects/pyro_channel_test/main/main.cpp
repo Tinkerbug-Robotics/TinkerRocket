@@ -6,14 +6,16 @@
  * Walk the chain (ARM → upstream FET → channel FIRE → load → CONT readback)
  * one step at a time while probing with a multimeter.
  *
- * Pins (new PCB):
- *   PYRO_ARM = 14   (shared by all four channels)
- *   Channel 1: CONT=15  FIRE=16
- *   Channel 2: CONT=18  FIRE=19
- *   Channel 3: CONT=38  FIRE=34
- *   Channel 4: CONT=51  FIRE=50
+ * Pins are board-revision dependent (#411):
+ *   V7 (default):            ARM=14, CONT/FIRE = 15/16 18/19 38/34 51/50
+ *   V8 (-DTR_BOARD_V8=1):    ARM=5,  CONT/FIRE = 7/6 10/9 12/11 14/13
+ * Build the V8 map with:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
  *
- * Continuity polarity (new PCB, inverted vs old board): raw GPIO 0 = closed
+ * V8 NOTE: the CONT sense path is powered through the arming FET (test-board
+ * circuit) — use 'C' (momentary arm) or arm first; unarmed 'c'/'r' reads are
+ * meaningless on V8.
+ *
+ * Continuity polarity (both boards since V7): raw GPIO 0 = closed
  * (load present), raw 1 = open. The "cont" line in printouts shows the
  * logical bit (1 = good continuity); the raw GPIO level is also shown so
  * you can verify on the multimeter. TODO: confirm polarity on bench before
@@ -49,7 +51,9 @@
 
 static const char* TAG = "PYRO_DBG";
 
-static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_14;
+#ifndef TR_BOARD_V8
+#define TR_BOARD_V8 0
+#endif
 
 struct PyroChannel {
     const char*  name;
@@ -57,12 +61,25 @@ struct PyroChannel {
     gpio_num_t   cont;
 };
 
+#if TR_BOARD_V8
+// V8 rocket computer (P4): mirror of projects/flight_computer/main/board/board_v8.h
+static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_5;
+static PyroChannel ch[4] = {
+    { "PYRO1", GPIO_NUM_6,  GPIO_NUM_7  },
+    { "PYRO2", GPIO_NUM_9,  GPIO_NUM_10 },
+    { "PYRO3", GPIO_NUM_11, GPIO_NUM_12 },
+    { "PYRO4", GPIO_NUM_13, GPIO_NUM_14 },
+};
+#else
+// V7 rocket computer: mirror of .../board/board_v7.h
+static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_14;
 static PyroChannel ch[4] = {
     { "PYRO1", GPIO_NUM_16, GPIO_NUM_15 },
     { "PYRO2", GPIO_NUM_19, GPIO_NUM_18 },
     { "PYRO3", GPIO_NUM_34, GPIO_NUM_38 },
     { "PYRO4", GPIO_NUM_50, GPIO_NUM_51 },
 };
+#endif
 
 static int  active     = 0;      // 0..3
 static bool global_arm = false;  // mirrors PYRO_ARM_PIN level
@@ -70,36 +87,41 @@ static bool global_arm = false;  // mirrors PYRO_ARM_PIN level
 // New-PCB inverted continuity: raw 0 = closed (load present).
 static inline bool cont_from_raw(int raw) { return raw == 0; }
 
+#include <esp_private/gpio.h>      // gpio_func_sel
+#include <rom/gpio.h>              // esp_rom_gpio_connect_out_signal
+
+// Safe ARM/FIRE pad init — same recipe as the flight firmware's
+// safePyroOutputInit (see FC main.cpp / commit 421dd63): NEVER
+// gpio_reset_pin() an output pad wired to a DTC123J gate driver — its brief
+// internal pull-up twitches the driver hard enough to flash the pyro rail.
+// Stage 0 first, detach any peripheral matrix route, force plain GPIO mux,
+// then enable drive.
+static void safe_output_init(gpio_num_t pin)
+{
+    gpio_set_level(pin, 0);
+    esp_rom_gpio_connect_out_signal(pin, SIG_GPIO_OUT_IDX, false, false);
+    gpio_func_sel(pin, PIN_FUNC_GPIO);
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = 1ULL << pin;
+    // INPUT_OUTPUT lets gpio_get_level() read back the actual pad state —
+    // useful for "I set it high but multimeter shows 0V" diagnostics.
+    cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
+    cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    gpio_config(&cfg);
+    gpio_set_level(pin, 0);
+}
+
 static void init_pins()
 {
-    // gpio_reset_pin() forces IO MUX back to GPIO function — required on
-    // ESP32-P4 because pins 14-19 default to SPI2/SPI3 IO MUX. Without it,
-    // gpio_config() silently no-ops because the pad is stuck in its
-    // peripheral default function.
-    gpio_reset_pin(PYRO_ARM_PIN);
-    {
-        gpio_config_t cfg = {};
-        cfg.pin_bit_mask = 1ULL << PYRO_ARM_PIN;
-        // INPUT_OUTPUT lets gpio_get_level() read back the actual pad state —
-        // useful for "I set it high but multimeter shows 0V" diagnostics.
-        cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
-        cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-        cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        gpio_config(&cfg);
-        gpio_set_level(PYRO_ARM_PIN, 0);
-    }
+    safe_output_init(PYRO_ARM_PIN);
 
     for (auto& c : ch) {
-        gpio_reset_pin(c.fire);
-        gpio_reset_pin(c.cont);
+        safe_output_init(c.fire);
 
-        gpio_config_t out_cfg = {};
-        out_cfg.pin_bit_mask = 1ULL << c.fire;
-        out_cfg.mode         = GPIO_MODE_INPUT_OUTPUT;
-        out_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
-        out_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        gpio_config(&out_cfg);
-        gpio_set_level(c.fire, 0);
+        // CONT is an input pad (no gate driver downstream) — the brief
+        // pull-up from gpio_reset_pin() is harmless here.
+        gpio_reset_pin(c.cont);
 
         gpio_config_t in_cfg = {};
         in_cfg.pin_bit_mask  = 1ULL << c.cont;
@@ -126,14 +148,16 @@ static void disarm_all()
 
 static void print_help()
 {
-    printf("\n=== Pyro Channel Debug (new PCB, shared ARM) ===\n");
+    printf("\n=== Pyro Channel Debug (%s pin map, shared ARM) ===\n",
+           TR_BOARD_V8 ? "V8" : "V7");
     printf("  ?   help\n");
     printf("  s   show state\n");
-    printf("  1   select channel 1 (CONT=15 FIRE=16)\n");
-    printf("  2   select channel 2 (CONT=18 FIRE=19)\n");
-    printf("  3   select channel 3 (CONT=38 FIRE=34)\n");
-    printf("  4   select channel 4 (CONT=51 FIRE=50)\n");
-    printf("  a   toggle shared ARM (pin 14, affects ALL channels)\n");
+    for (int i = 0; i < 4; i++) {
+        printf("  %d   select channel %d (CONT=%d FIRE=%d)\n",
+               i + 1, i + 1, (int)ch[i].cont, (int)ch[i].fire);
+    }
+    printf("  a   toggle shared ARM (pin %d, affects ALL channels)\n",
+           (int)PYRO_ARM_PIN);
     printf("  f   pulse FIRE 500 ms on active channel (must be armed)\n");
     printf("  F   pulse FIRE 2 s    on active channel (must be armed)\n");
     printf("  c   read continuity on active channel\n");
