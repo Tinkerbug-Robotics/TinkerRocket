@@ -69,6 +69,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // Frequency scan state (base-station pre-launch collision avoidance)
     @Published var scanSamples: [FrequencyScanSample] = []
     @Published var isScanning: Bool = false
+    // #385: monotonically identifies the latest scan request so the wedge
+    // timeout can't clear a newer scan's spinner.
+    private var scanGeneration = 0
 
     // Magnetometer hard-iron calibration status (issue #96).  Latest frame
     // received from the FC over BLE on the file_ops characteristic with a
@@ -240,7 +243,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // state-restoration path that reuses one.
         hasReceivedTelemetry = false
         flightAnnouncer?.reset()
-        UIApplication.shared.isIdleTimerDisabled = false
+        // #385: only re-arm screen auto-lock when this was the last connected
+        // device — with BS + rocket both up, either one dropping used to
+        // re-enable sleep while telemetry still streamed on the other.
+        // (BLEFleet calls onDisconnect() before removing us from devices,
+        // so exclude self and check live connections.)
+        let anotherStillConnected =
+            fleet?.devices.contains { $0 !== self && $0.isConnected } ?? false
+        if !anotherStillConnected {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
 
     // MARK: - BLE RSSI Polling
@@ -475,6 +487,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         payload.append(Data(bytes: &dwell, count: 2))
         scanSamples = []
         isScanning = true
+        // #385: only a parsed 0xAA result cleared isScanning, so a lost result
+        // notification wedged the scan UI until reconnect. The BS runs 5
+        // passes (~10-45 s); if nothing arrived well past that, declare the
+        // result lost. The generation guard keeps a stale timeout from
+        // clearing a newer scan.
+        scanGeneration += 1
+        let gen = scanGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 75) { [weak self] in
+            guard let self, self.isScanning, self.scanGeneration == gen else { return }
+            print("[SCAN] result timeout — clearing stuck scan state")
+            self.isScanning = false
+        }
         sendRawCommand(60, payload: payload)
     }
 
