@@ -43,6 +43,7 @@ struct board_pins
     // --- Radio topology: direct LLCC68 on SPI ---
     // (V8 replaces this with the UART radio daughterboard, #410/#414.)
     static constexpr bool USE_LORA_RADIO = true;
+    static constexpr bool USE_UART_RADIO_MODEM = false;
     static constexpr int LORA_SPI_SCK = 14;
     static constexpr int LORA_SPI_MISO = 11;
     static constexpr int LORA_SPI_MOSI = 12;

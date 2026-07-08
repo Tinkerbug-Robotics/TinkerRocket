@@ -12,6 +12,7 @@ idf_component_register(
         TR_LogToFlash
         TR_FlightLog
         TR_LoRa_Comms
+        TR_RadioLink
         TR_Sensor_Data_Converter
         TR_Orientation
         TR_Coordinates
