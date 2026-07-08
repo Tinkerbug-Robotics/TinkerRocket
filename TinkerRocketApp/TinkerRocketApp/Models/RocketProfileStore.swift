@@ -16,6 +16,15 @@ import Foundation
 import Combine
 
 final class RocketProfileStore: ObservableObject {
+    // Workaround for swiftlang/swift#87316: with SWIFT_DEFAULT_ACTOR_ISOLATION
+    // = MainActor, the implicit isolated deinit routes through the runtime's
+    // back-deploy shim (swift_task_deinitOnExecutorMainActorBackDeploy), which
+    // aborts with "pointer being freed was not allocated" when the object is
+    // deallocated inside a synchronous XCTest. This class has no deinit-time
+    // logic, so skipping the executor hop is free — and it un-crashes every
+    // test that creates and tears down an instance.
+    nonisolated deinit {}
+
     @Published private(set) var profiles: [RocketProfile] = []
     @Published private(set) var activeId: UUID?
 
