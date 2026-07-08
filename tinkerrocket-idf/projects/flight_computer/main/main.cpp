@@ -32,6 +32,7 @@
 #include <esp_private/gpio.h>      // gpio_func_sel
 #include <rom/gpio.h>              // esp_rom_gpio_connect_out_signal
 #include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
+#include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX
 #include <soc/io_mux_reg.h>        // PIN_FUNC_GPIO
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -911,18 +912,43 @@ static void pyroSafeAll()
     ESP_LOGI(TAG, "[PYRO] All channels safed");
 }
 
-// PRELAUNCH continuity check. Sample all four CONT pins directly and cache
-// the result. Synchronous — no ARM pulse, no settle delay, no state machine.
-// The new PCB feeds the CONT divider from VPP (always on), so ARM is not
-// part of the cont sense path.
-static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
+// PRELAUNCH continuity check. Board-dependent (#411 bring-up):
+//  - V7 (PYRO_CONT_NEEDS_ARM=false): the CONT divider is fed from VPP
+//    (always on) — sample synchronously, no ARM involved.
+//  - V8 (PYRO_CONT_NEEDS_ARM=true): the sense path is powered through the
+//    arming FET (same circuit as the pyro test board), so CONT only means
+//    anything while ARM is high. Start a momentary arm→settle→read→disarm
+//    sequence, completed non-blocking by servicePyroChannels() over the
+//    next PYRO_CONT_ARM_SETTLE_MS of main-loop ticks — the original
+//    "momentary arm-disarm" design this call site always described.
+static bool     pyro_cont_test_active   = false;
+static uint32_t pyro_cont_test_start_ms = 0;
+
+static void pyroSampleAllCont(int raw[4], bool cont[4])
 {
-    int  raw[4];
-    bool cont[4];
     for (int i = 0; i < 4; ++i) {
         raw[i]  = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
         cont[i] = pyroContFromRaw(raw[i]);
     }
+}
+
+static void pyroPrelaunchContTest(uint32_t now_ms)
+{
+    if (config::PYRO_CONT_NEEDS_ARM) {
+        portENTER_CRITICAL(&pyro_spinlock);
+        pyro_cont_test_active   = true;
+        pyro_cont_test_start_ms = now_ms;
+        pyroSetArmLocked(true);   // no-op if post_flight_lockout (test then
+                                  // just reads open at the deadline)
+        portEXIT_CRITICAL(&pyro_spinlock);
+        ESP_LOGI(TAG, "[PYRO] Prelaunch CONT: momentary ARM raised, sampling in %u ms",
+                 (unsigned)config::PYRO_CONT_ARM_SETTLE_MS);
+        return;
+    }
+
+    int  raw[4];
+    bool cont[4];
+    pyroSampleAllCont(raw, cont);
     portENTER_CRITICAL(&pyro_spinlock);
     for (int i = 0; i < 4; ++i) {
         pyro_ch[i].cont       = cont[i];
@@ -1010,8 +1036,26 @@ static void servicePyroChannels(uint32_t now_ms)
         }
     }
 
-    // Compute ARM demand: any channel mid-fire keeps the pin HIGH.
-    bool any_demand = false;
+    // Momentary prelaunch CONT test (PYRO_CONT_NEEDS_ARM boards): once the
+    // arm settle elapses, sample all four channels and drop ARM (via the
+    // demand union below).
+    bool cont_test_done = false;
+    int  ct_raw[4]  = {0, 0, 0, 0};
+    bool ct_cont[4] = {false, false, false, false};
+    if (pyro_cont_test_active &&
+        (now_ms - pyro_cont_test_start_ms) >= config::PYRO_CONT_ARM_SETTLE_MS) {
+        pyroSampleAllCont(ct_raw, ct_cont);
+        for (int i = 0; i < 4; ++i) {
+            pyro_ch[i].cont       = ct_cont[i];
+            pyro_ch[i].cont_known = true;
+        }
+        pyro_cont_test_active = false;
+        cont_test_done = true;
+    }
+
+    // Compute ARM demand: any channel mid-fire (or an active momentary CONT
+    // test) keeps the pin HIGH.
+    bool any_demand = pyro_cont_test_active;
     for (int i = 0; i < 4; ++i) {
         if (pyro_ch[i].state == PyroChState::ArmSettle ||
             pyro_ch[i].state == PyroChState::Firing) {
@@ -1022,6 +1066,12 @@ static void servicePyroChannels(uint32_t now_ms)
     pyroSetArmLocked(any_demand);
 
     portEXIT_CRITICAL(&pyro_spinlock);
+
+    if (cont_test_done) {
+        ESP_LOGI(TAG, "[PYRO] Prelaunch CONT (momentary ARM): ch1 raw=%d cont=%d  ch2 raw=%d cont=%d  ch3 raw=%d cont=%d  ch4 raw=%d cont=%d",
+                 ct_raw[0], ct_cont[0], ct_raw[1], ct_cont[1],
+                 ct_raw[2], ct_cont[2], ct_raw[3], ct_cont[3]);
+    }
 
     for (int i = 0; i < 4; ++i) {
         if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d FIRED at alt=%.1f m",

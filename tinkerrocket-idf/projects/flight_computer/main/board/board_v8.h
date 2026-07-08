@@ -65,6 +65,10 @@ struct board_pins
     static constexpr uint8_t PYRO3_CONT_PIN = 12;  // PYRO3_CONT
     static constexpr uint8_t PYRO4_FIRE_PIN = 13;  // PYRO4_FIRE
     static constexpr uint8_t PYRO4_CONT_PIN = 14;  // PYRO4_CONT
+    // V8 uses the test-board continuity circuit: the CONT sense path is
+    // powered through the arming FET, so CONT is only valid while ARM is
+    // asserted -> the prelaunch test does a momentary arm-settle-read.
+    static constexpr bool PYRO_CONT_NEEDS_ARM = true;
 
     // ### Fin servos ###
     // TODO: CONFIRM which EXP_* nets carry the four fin-servo signals.

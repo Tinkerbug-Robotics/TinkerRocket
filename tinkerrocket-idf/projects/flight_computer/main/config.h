@@ -120,6 +120,12 @@ struct config : board_pins
     // Time between raising ARM and reading CONT / pulsing FIRE, giving
     // the upstream arming FET its turn-on settle margin.
     static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
+    // Settle between raising ARM and sampling CONT during the momentary
+    // prelaunch continuity test (boards with PYRO_CONT_NEEDS_ARM: the CONT
+    // divider is powered through the arming FET, so the line is meaningless
+    // until ARM is up).  200 ms is the bench-validated value from the
+    // pyro_channel_test tool's momentary-cont command.
+    static constexpr uint32_t PYRO_CONT_ARM_SETTLE_MS  = 200;
 
     // ### Servo Controls (pins in board header) ###
     static constexpr int SERVO_BIAS_1 = 0;
