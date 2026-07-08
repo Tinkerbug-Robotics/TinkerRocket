@@ -1100,54 +1100,39 @@ struct DriftCastView: View {
 // MARK: - Send-to-Unit Button
 
 /// Send-to-unit control for the drift cast result.  Split out so it can hold an
-/// `@ObservedObject` device — re-disabling itself the moment the BLE link drops
-/// — while the parent DriftCastView runs device-free (#42).  Only rendered when
-/// a device is present, so the standalone tool never shows a dead "Send" button.
+/// `@ObservedObject` device — while the parent DriftCastView runs device-free
+/// (#42).  Only rendered when a device is present.
+///
+/// #376: DISABLED pending firmware support (#435). The button used to send
+/// BLE cmd 28 — which no firmware handles (the OC dispatch doesn't include it
+/// and the BS doesn't relay it) — and then unconditionally reported
+/// "Guidance point sent". An operator would wind-compensate the aim point,
+/// see success, and fly believing the target moved, while the rocket guided
+/// to the profile's overhead target. Until cmd 28 exists end-to-end, show the
+/// computed point with an honest "not supported yet" note instead of a
+/// dangerous no-op button.
 private struct DriftCastSendButton: View {
     @ObservedObject var device: BLEDevice
     let result: GuidanceResult
     let unitSystem: UnitSystem
 
-    @State private var showSendConfirm = false
-    @State private var showSentAlert = false
-
-    private var canSend: Bool {
-        device.isConnected && result.feasible
-    }
-
     var body: some View {
-        Button(action: { showSendConfirm = true }) {
+        VStack(spacing: 6) {
             Label("Send to Unit", systemImage: "antenna.radiowaves.left.and.right")
                 .fontWeight(.bold)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(canSend ? Color.blue : Color.gray)
-                .foregroundColor(.white)
+                .background(Color.gray)
+                .foregroundColor(.white.opacity(0.7))
                 .cornerRadius(10)
+            Label("Not supported by the rocket firmware yet (#435) — the unit always guides to the profile's target. Use the computed point manually.",
+                  systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundColor(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .disabled(!canSend)
         .padding(.horizontal)
         .padding(.bottom, 20)
-        .alert("Send to Unit?", isPresented: $showSendConfirm) {
-            Button("Send", role: .none) { sendToUnit() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text(String(format: "Send guidance point (%.6f, %.6f) at ", result.guidanceLat, result.guidanceLon)
-                 + UnitFormatter.altitude(ftToM(result.apogeeFt), system: unitSystem)
-                 + String(format: " AGL to %@?", device.connectedDeviceName))
-        }
-        .alert("Guidance Sent", isPresented: $showSentAlert) {
-            Button("OK") { }
-        } message: {
-            Text(String(format: "Guidance point sent to unit:\n%.6f, %.6f\nAltitude: ", result.guidanceLat, result.guidanceLon)
-                 + UnitFormatter.altitude(ftToM(result.apogeeFt), system: unitSystem) + " AGL")
-        }
-    }
-
-    private func sendToUnit() {
-        let altM = Float(ftToM(result.apogeeFt))
-        device.sendGuidancePoint(lat: result.guidanceLat, lon: result.guidanceLon, altitudeM: altM)
-        showSentAlert = true
     }
 }
 

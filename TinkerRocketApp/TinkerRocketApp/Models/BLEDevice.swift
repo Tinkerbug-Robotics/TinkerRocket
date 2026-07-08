@@ -919,6 +919,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendCommand(23)
     }
 
+    /// #376/#435: cmd 28 is NOT handled by any firmware — the OC dispatch
+    /// doesn't include it and the BS doesn't relay it, so this vanishes
+    /// silently. The Drift-Cast "Send to Unit" button that called this is
+    /// disabled until #435 implements the handler end-to-end. Do not wire
+    /// this to UI again without gating success on a firmware readback echo.
     func sendGuidancePoint(lat: Double, lon: Double, altitudeM: Float) {
         var payload = Data()
         var latVal = lat
