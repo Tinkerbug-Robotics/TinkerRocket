@@ -38,6 +38,7 @@ final class ActiveRocketSyncer: ObservableObject {
 
     enum SyncState: Equatable {
         case idle              // not connected, or base station
+        case awaitingSync      // attached to a rocket; config readback not in yet (#375)
         case noProfile         // connected to a rocket but no active profile
         case syncing
         case synced
@@ -69,6 +70,13 @@ final class ActiveRocketSyncer: ObservableObject {
     // MARK: - Lifecycle
 
     func attach(device: BLEDevice, store: RocketProfileStore) {
+        // Idempotent for the same device+store pair (#375): the dashboard now
+        // re-attaches on every device-list / active-device change, and a
+        // redundant call must not tear down subscriptions or reset a .synced
+        // state back through the pipeline. A NEW device object (reconnects
+        // create one) intentionally falls through to a full re-attach.
+        if device === self.device && store === self.store { return }
+
         detach()
         self.device = device
         self.store = store
@@ -79,6 +87,11 @@ final class ActiveRocketSyncer: ObservableObject {
             syncState = .idle
             return
         }
+
+        // Visible from the first moment we're responsible for this rocket:
+        // "connected but not yet pushed" must not render as silent .idle
+        // (#375 — that silence is how an unsynced rocket reached the pad).
+        syncState = .awaitingSync
 
         // Sync once, when the first config readback AND the hardware id are
         // both in hand.  unitID arrives in a later readback message than the

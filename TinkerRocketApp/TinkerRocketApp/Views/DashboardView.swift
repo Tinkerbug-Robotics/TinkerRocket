@@ -203,26 +203,30 @@ struct DashboardView: View {
         }
         .navigationViewStyle(.stack)
         .onAppear {
-            fleet.activeDevice?.flightAnnouncer = flightAnnouncer
-            if fleet.isConnected, let dev = fleet.activeDevice {
-                syncer.attach(device: dev, store: profileStore)
-            }
+            attachActiveDevice()
         }
         .onChange(of: fleet.isConnected) { connected in
-            if connected {
-                fleet.activeDevice?.flightAnnouncer = flightAnnouncer
-                if let dev = fleet.activeDevice {
-                    syncer.attach(device: dev, store: profileStore)
-                }
-            } else {
-                syncer.detach()
-            }
+            attachActiveDevice()
             if !connected && !fleet.isScanning {
                 fleet.startScanning()
             }
             // Phone-location lifecycle is driven from ConnectedDashboardView,
             // which observes the device — fleet.isConnected flips before the
             // device's type resolves, so it's the wrong signal to gate on here.
+        }
+        // #375: the syncer/announcer used to attach only on the fleet's 0→1
+        // connection edge, but the real lifecycle is per-BLEDevice — every
+        // reconnect creates a NEW device object (BLEFleet.didConnect), and a
+        // rocket connecting while the base station is already up never flips
+        // isConnected. Re-attach whenever the device list changes (reconnect,
+        // second device, removal) or the operator switches the active chip.
+        // Redundant calls are safe: syncer.attach is idempotent for the same
+        // device object, and the announcer assignment is too.
+        .onChange(of: fleet.devices) { _ in
+            attachActiveDevice()
+        }
+        .onChange(of: fleet.activeDeviceID) { _ in
+            attachActiveDevice()
         }
         .sheet(item: $activeSheet) { sheet in
             Group {
@@ -285,6 +289,24 @@ struct DashboardView: View {
             showProvisioning = true
         }
     }
+
+    /// Point the profile syncer and the flight announcer at the current
+    /// active device (#375). Called from every lifecycle edge that can change
+    /// which BLEDevice object is active: appear, connect/disconnect, device
+    /// list changes (reconnects create a new object), and chip switches.
+    /// The announcer follows the active device only — it's cleared from the
+    /// others so a background rocket's telemetry can't interleave callouts.
+    private func attachActiveDevice() {
+        guard let dev = fleet.activeDevice else {
+            syncer.detach()
+            return
+        }
+        for other in fleet.devices where other !== dev {
+            other.flightAnnouncer = nil
+        }
+        dev.flightAnnouncer = flightAnnouncer
+        syncer.attach(device: dev, store: profileStore)
+    }
 }
 
 // MARK: - Connected device dashboard (observes the BLEDevice for live updates)
@@ -333,8 +355,30 @@ struct ConnectedDashboardView: View {
             //     Drive the screen off a *positive* role instead, with an
             //     explicit identifying state for the unresolved case.
             IdentifyingDeviceView(deviceName: device.displayName)
+        } else if device.deviceType == .rocket && !device.hasReceivedTelemetry {
+            // --- Power state unknown (#377): same fail-to-positive principle
+            //     as #330 above, applied to power. A fresh/reconnected
+            //     BLEDevice's zeroed TelemetryData reads pwr_pin_on == false,
+            //     so this screen used to show "Power On" for an already-on
+            //     rocket in the reconnect→first-frame window — and cmd 8 is a
+            //     blind toggle, so one tap killed the FC rail (and the 180 s
+            //     poweringOn spinner then masked it). Hold a neutral waiting
+            //     state until the first frame confirms the actual state; a
+            //     genuinely-off rocket still sends OC telemetry, so this
+            //     resolves within ~a second either way.
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Waiting for telemetry…")
+                    .font(.headline)
+                Text("Power state unknown until the first frame arrives.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
         } else if device.deviceType == .rocket && !device.telemetry.pwr_pin_on {
-            // --- Powered OFF (rocket only): show battery + power on button ---
+            // --- Powered OFF (rocket only, confirmed by telemetry): show
+            //     battery + power on button ---
             BatteryView(telemetry: device.telemetry, isBaseStation: false)
 
             Button {
