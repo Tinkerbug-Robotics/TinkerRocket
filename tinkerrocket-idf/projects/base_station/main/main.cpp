@@ -218,14 +218,11 @@ static uint32_t log_last_flush_ms = 0;
 // Reset to 0 by stopLogging() so the next flight can retry immediately
 // rather than waiting out the residual window.
 static uint32_t log_last_open_attempt_ms = 0;
-// INFLIGHT safety net (#107): tracks the moment the rocket first enters
-// INFLIGHT.  If we never see a LANDED transition (lost LoRa during descent,
-// rocket-side IMU stuck mid-flight, etc.) we close the log
-// LOG_INFLIGHT_SAFETY_MS after the entry so the file isn't unbounded.
-// Reset on any state change away from INFLIGHT and on safety fire.
-static uint32_t inflight_entry_ms = 0;
-static uint8_t  last_rocket_state = 0;  // Track state transitions
-static bool     have_seen_first_state = false;  // Detect very first packet so we don't false-trigger LANDED-close on boot
+// State-transition tracking (INFLIGHT safety arm time, last state, boot-edge
+// guard, per-rocket freq lock) lives per tracked rocket in
+// TrackedRocket::log_state (#381) — one global here made two interleaved
+// rockets read as a state transition on every packet, closing and reopening
+// the CSV once per interleave cycle. See bs_log_policy.h.
 // Sticky inhibit set by a manual cmd 23 stop so auto-start doesn't immediately
 // re-open on the next packet (#107).  Cleared on any rocket state change or
 // by a manual cmd 23 start, so a real next flight is still captured.
@@ -244,12 +241,13 @@ static bool     last_known_rocket_logging = false;    // Actual rocket logging s
 //     we refuse on the base station side too as belt-and-braces.
 // The transition logic is shared with the rocket side via
 // computeFreqLockForFlight() in RocketComputerTypes.h.
+//
+// #381: this is now the AGGREGATE across tracked rockets — locked while any
+// fresh rocket's per-rocket lock is latched (bs_log_policy::aggregateFreqLock,
+// recomputed after each packet). The old single global was overwritten by
+// whichever rocket's packet arrived last, so a second rocket's READY cleared
+// the lock mid-flight of the first, once per interleaved packet.
 static bool freq_locked_for_flight = false;
-
-static inline void updateFreqLockFromRocketState(uint8_t s)
-{
-    freq_locked_for_flight = computeFreqLockForFlight(freq_locked_for_flight, s);
-}
 
 // ----------------------------------------------------------------------------
 // Per-packet channel-hop state (issues #40 / #41, phase 2a — BS side)
@@ -378,6 +376,9 @@ struct TrackedRocket {
     // lora_tx_seq restarted at 0.  int32_t to hold the full uint16
     // range plus the -1 sentinel.
     int32_t    last_seq = -1;
+    // Per-rocket CSV/freq-lock transition state (#381) — replaces the old
+    // globals last_rocket_state / have_seen_first_state / inflight_entry_ms.
+    bs_log_policy::RocketLogState log_state = {};
 };
 static TrackedRocket tracked_rockets[MAX_TRACKED_ROCKETS];
 static uint8_t active_rocket_idx = 0;  // Which rocket the BLE telemetry currently shows
@@ -412,7 +413,40 @@ static int findOrAllocRocket(uint8_t rid) {
     tracked_rockets[oldest_idx].rocket_id = rid;
     tracked_rockets[oldest_idx].unit_name[0] = '\0';
     tracked_rockets[oldest_idx].last_seen_ms = millis();
+    tracked_rockets[oldest_idx].log_state = {};  // evicted slot: fresh transitions
     return oldest_idx;
+}
+
+// Snapshot the tracked slots for the aggregate log-close / freq-lock
+// decisions (#381). Pure data out; bs_log_policy does the reasoning.
+static void buildRocketViews(bs_log_policy::RocketView out[MAX_TRACKED_ROCKETS])
+{
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++) {
+        out[i].active            = tracked_rockets[i].active;
+        out[i].last_seen_ms      = tracked_rockets[i].last_seen_ms;
+        out[i].state             = tracked_rockets[i].log_state.last_state;
+        out[i].inflight_entry_ms = tracked_rockets[i].log_state.inflight_entry_ms;
+        out[i].freq_lock         = tracked_rockets[i].log_state.freq_lock;
+    }
+}
+
+// State of the most recently heard tracked rocket (0 = INITIALIZATION when
+// none). The single-rocket predecessor was the last_rocket_state global —
+// "state of whichever packet arrived last" — which matches the hop-follow
+// code's one-rocket-drives-the-hop semantics (#40/#41 caveat).
+static uint8_t lastSeenRocketState()
+{
+    uint32_t newest_ms = 0;
+    uint8_t  state     = 0;
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++) {
+        if (tracked_rockets[i].active &&
+            tracked_rockets[i].log_state.have_seen_first &&
+            tracked_rockets[i].last_seen_ms >= newest_ms) {
+            newest_ms = tracked_rockets[i].last_seen_ms;
+            state     = tracked_rockets[i].log_state.last_state;
+        }
+    }
+    return state;
 }
 static char log_filename[64] = "";
 
@@ -683,12 +717,16 @@ static void startLogging()
     // BS was actually tuned to, the rocket's free-running seq and the
     // BS-derived gap to the last RX, plus an `event` column populated
     // for non-telemetry rows (hop_active / hop_inactive / hop_silence).
+    // rocket_id (#381) attributes each telemetry row to its source rocket
+    // now that one file can interleave several; empty on EVENT rows (those
+    // are station-level, not per-rocket). All downstream consumers key
+    // columns by header name, so the trailing add is non-breaking.
     fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
                       "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
                       "pressure_alt,alt_rate,max_alt,max_speed,"
                       "voltage,current,soc,roll,pitch,yaw,speed,"
                       "launch,vel_apo,alt_apo,landed,rssi,snr,"
-                      "next_ch,rx_freq_mhz,seq,gap,event\n");
+                      "next_ch,rx_freq_mhz,seq,gap,event,rocket_id\n");
 
     logging_active = true;
     log_start_ms = millis();
@@ -705,6 +743,13 @@ static void stopLogging()
     if (log_file) { fclose(log_file); log_file = nullptr; }
     logging_active = false;
     log_last_open_attempt_ms = 0;  // allow the next packet to retry immediately (#107)
+
+    // Disarm every rocket's INFLIGHT safety timer with the file it bounds
+    // (#381) — a timer that expired while another rocket kept the log open
+    // must not instantly close the NEXT session's file.
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++) {
+        tracked_rockets[i].log_state.inflight_entry_ms = 0;
+    }
 
     ESP_LOGI(TAG, "[LOG] Closed log: %s", log_filename);
 }
@@ -839,7 +884,7 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     "%.1f,%.1f,%.1f,%.1f,"
                     "%.2f,%.0f,%.1f,%.1f,%.1f,%.1f,%.1f,"
                     "%d,%d,%d,%d,%.0f,%.1f,"
-                    "%u,%.3f,%u,%d,\n",   // trailing comma keeps `event` empty
+                    "%u,%.3f,%u,%d,,%u\n",  // empty `event`, then rocket_id (#381)
                     (unsigned long)time_ms,
                     rocketStateToString(data.rocket_state),
                     (unsigned)data.num_sats,
@@ -859,7 +904,8 @@ static void logLoRaPacket(const LoRaDataSI& data, float rssi, float snr,
                     data.alt_landed_flag ? 1 : 0,
                     (double)rssi, (double)snr,
                     (unsigned)data.next_channel_idx, (double)rx_freq_mhz,
-                    (unsigned)data.seq, (int)observed_gap);
+                    (unsigned)data.seq, (int)observed_gap,
+                    (unsigned)data.rocket_id);
 
     if (written <= 0)
     {
@@ -897,7 +943,7 @@ static void logHopEvent(const char* event_str, float rx_freq_mhz)
                     ",,,,,,,"                 // voltage..speed (7)
                     ",,,,,,"                  // launch, vel_apo, alt_apo, landed, rssi, snr
                     "%u,%.3f,,,"              // next_ch=255 sentinel, rx_freq_mhz, seq=, gap=
-                    "%s\n",
+                    "%s,\n",                  // event, rocket_id empty (station-level row, #381)
                     (unsigned long)time_ms,
                     (unsigned)LORA_NEXT_CH_NO_HOP,
                     (double)rx_freq_mhz,
@@ -3365,7 +3411,8 @@ static void loop_bs()
 
                 printTelemetry(decoded, ls.last_rssi, ls.last_snr, lat_deg, lon_deg, alt_m);
 
-                // Base station CSV logging policy (#107, refined in #168):
+                // Base station CSV logging policy (#107, refined in #168,
+                // multi-rocket in #381):
                 //   • Start a log whenever a non-LANDED packet arrives and
                 //     we aren't already logging.  Every flight state counts
                 //     — even READY pre-flight setup is worth keeping.
@@ -3377,9 +3424,12 @@ static void loop_bs()
                 //     the LANDED-only files in the 5/17/26 flight folders.
                 //     Operators can still capture LANDED telemetry via the
                 //     manual BLE cmd 23 start, which bypasses this gate.
-                //   • Close on LANDED transition so the flight's data is
-                //     committed to disk immediately; the next non-LANDED
-                //     packet (e.g., a re-flight) auto-opens a fresh file.
+                //   • Close on a rocket's LANDED transition ONLY when it is
+                //     the last fresh rocket flying (#381): state edges are
+                //     tracked per tracked_rockets slot, so a landed rocket's
+                //     repeat LANDED packets interleaved with another rocket's
+                //     READY no longer read as close/reopen transitions once
+                //     per packet pair (the one-file-per-second shred).
                 //   • Throttled by LOG_OPEN_RETRY_MS so a persistent
                 //     fopen() failure (wedged SD) doesn't log-spam.
                 if (!logging_active && !log_manual_inhibit &&
@@ -3400,54 +3450,70 @@ static void loop_bs()
                                   currentRxFreqMHz(), observed_gap);
                 }
 
-                // Arm / disarm the INFLIGHT safety timer on state edges.
-                // Skip the very first packet so a BS that boots while the
-                // rocket is already INFLIGHT doesn't immediately disarm
-                // (last_rocket_state defaults to 0 = INITIALIZATION).
-                if (have_seen_first_state)
+                if (slot >= 0)
                 {
-                    if (decoded.rocket_state == INFLIGHT && last_rocket_state != INFLIGHT)
+                    const uint32_t now_ms = millis();
+                    auto& rls = tracked_rockets[slot].log_state;
+                    const bool was_inflight_armed = (rls.inflight_entry_ms != 0);
+
+                    // Fold this packet into the rocket's own transition state:
+                    // detects edges, arms/disarms its INFLIGHT safety timer,
+                    // latches its freq lock (bs_log_policy #381).
+                    const auto edges =
+                        bs_log_policy::updateRocketLogState(rls,
+                                                            decoded.rocket_state,
+                                                            now_ms);
+                    if (!was_inflight_armed && rls.inflight_entry_ms != 0)
                     {
-                        inflight_entry_ms = millis();
-                        ESP_LOGI(TAG, "[LOG] INFLIGHT entry — safety timer armed (%u min)",
+                        ESP_LOGI(TAG, "[LOG] Rocket %u INFLIGHT entry — safety timer armed (%u min)",
+                                 (unsigned)decoded.rocket_id,
                                  (unsigned)(config::LOG_INFLIGHT_SAFETY_MS / 60000));
                     }
-                    else if (last_rocket_state == INFLIGHT && decoded.rocket_state != INFLIGHT)
+
+                    // Freshness for the aggregate decisions below uses
+                    // last_seen_ms; stamp it now (the tracker mirror further
+                    // down stamps it again — idempotent).
+                    tracked_rockets[slot].last_seen_ms = now_ms;
+
+                    bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
+                    buildRocketViews(views);
+                    freq_locked_for_flight = bs_log_policy::aggregateFreqLock(
+                        views, MAX_TRACKED_ROCKETS, now_ms,
+                        config::LOG_SILENCE_TIMEOUT_MS);
+
+                    // Close on LANDED transition — but only when no other
+                    // fresh rocket is still flying (#381). Boot edge is
+                    // handled inside updateRocketLogState (no edge on a
+                    // rocket's first packet), so a post-flight BS reboot
+                    // seeing LANDED first doesn't produce a zero-byte file.
+                    if (edges.landed_edge && logging_active)
                     {
-                        inflight_entry_ms = 0;
+                        if (bs_log_policy::noFreshRocketFlying(
+                                views, MAX_TRACKED_ROCKETS, now_ms,
+                                config::LOG_SILENCE_TIMEOUT_MS,
+                                config::LOG_INFLIGHT_SAFETY_MS))
+                        {
+                            ESP_LOGI(TAG, "[LOG] Rocket %u LANDED (last fresh rocket) — closing flight log",
+                                     (unsigned)decoded.rocket_id);
+                            stopLogging();
+                        }
+                        else
+                        {
+                            ESP_LOGI(TAG, "[LOG] Rocket %u LANDED — log stays open (another rocket still active)",
+                                     (unsigned)decoded.rocket_id);
+                        }
+                    }
+
+                    // This rocket changing state clears the manual stop
+                    // inhibit so the next flight gets logged automatically
+                    // (#107). Keyed per rocket: a second rocket's steady
+                    // stream no longer fabricates state changes.
+                    if (edges.state_changed && log_manual_inhibit)
+                    {
+                        log_manual_inhibit = false;
+                        ESP_LOGI(TAG, "[LOG] State change cleared manual stop inhibit");
                     }
                 }
-                else if (decoded.rocket_state == INFLIGHT)
-                {
-                    // First packet ever, and the rocket is already in flight.
-                    // Arm the safety timer so a stuck-INFLIGHT scenario still
-                    // bounds the log size, even though we missed the entry edge.
-                    inflight_entry_ms = millis();
-                }
-
-                // Close on LANDED transition so each flight is its own file
-                // and the data is on disk immediately.  Skip the boot edge
-                // so seeing LANDED as the first packet (post-flight reboot)
-                // doesn't generate a zero-byte file.
-                if (logging_active && have_seen_first_state &&
-                    decoded.rocket_state == LANDED && last_rocket_state != LANDED)
-                {
-                    ESP_LOGI(TAG, "[LOG] LANDED transition — closing flight log");
-                    stopLogging();
-                }
-
-                // Any rocket-state change clears the manual stop inhibit so
-                // the next flight gets logged automatically (#107).
-                if (have_seen_first_state && decoded.rocket_state != last_rocket_state &&
-                    log_manual_inhibit)
-                {
-                    log_manual_inhibit = false;
-                    ESP_LOGI(TAG, "[LOG] State change cleared manual stop inhibit");
-                }
-
-                have_seen_first_state = true;
-                last_rocket_state = decoded.rocket_state;
-                updateFreqLockFromRocketState(decoded.rocket_state);
 
                 // Hop state follow (#40 / #41 phase 2a, seq-anchored in
                 // #105 follow-up).  The rocket and the BS both compute
@@ -3593,21 +3659,30 @@ static void loop_bs()
         }
     }
 
-    // INFLIGHT safety timeout (#107): close the log if we've been in
-    // INFLIGHT for too long without seeing LANDED.  Catches lost-LoRa-
-    // during-descent and stuck-rocket-state-machine scenarios so the
-    // file isn't unbounded.  Disarmed (= 0) after firing; the next
-    // INFLIGHT entry re-arms.  Does NOT inhibit the auto-restart that
-    // fires on the next packet — if the rocket is genuinely stuck in
-    // INFLIGHT past the cap, we'll start a fresh file uncapped, and
-    // the operator will see two files instead of one.
-    if (logging_active && inflight_entry_ms > 0 &&
-        (millis() - inflight_entry_ms) >= config::LOG_INFLIGHT_SAFETY_MS)
+    // INFLIGHT safety timeout (#107, per-rocket in #381): close the log if a
+    // rocket has been in INFLIGHT too long without a LANDED — lost-LoRa-
+    // during-descent / stuck-rocket-state-machine — UNLESS another fresh
+    // rocket is still flying (its own flight keeps the file open; the expired
+    // rocket already counts as "presumed down" in that aggregate, so the log
+    // closes when the last fresh rocket lands). Timers disarm in
+    // stopLogging(). Does NOT inhibit the auto-restart on the next packet —
+    // a rocket genuinely stuck INFLIGHT past the cap starts a fresh file and
+    // the operator sees two files instead of one.
+    if (logging_active)
     {
-        ESP_LOGW(TAG, "[LOG] INFLIGHT safety timeout (%u min), closing log",
-                 (unsigned)(config::LOG_INFLIGHT_SAFETY_MS / 60000));
-        inflight_entry_ms = 0;
-        stopLogging();
+        const uint32_t now_ms = millis();
+        bs_log_policy::RocketView views[MAX_TRACKED_ROCKETS];
+        buildRocketViews(views);
+        if (bs_log_policy::anySafetyExpired(views, MAX_TRACKED_ROCKETS, now_ms,
+                                            config::LOG_INFLIGHT_SAFETY_MS) &&
+            bs_log_policy::noFreshRocketFlying(views, MAX_TRACKED_ROCKETS, now_ms,
+                                               config::LOG_SILENCE_TIMEOUT_MS,
+                                               config::LOG_INFLIGHT_SAFETY_MS))
+        {
+            ESP_LOGW(TAG, "[LOG] INFLIGHT safety timeout (%u min), closing log",
+                     (unsigned)(config::LOG_INFLIGHT_SAFETY_MS / 60000));
+            stopLogging();
+        }
     }
 
     // Silence timeout: close log if no packets for LOG_SILENCE_TIMEOUT_MS
@@ -3620,7 +3695,7 @@ static void loop_bs()
         (millis() - log_last_write_ms) >= config::LOG_SILENCE_TIMEOUT_MS)
     {
         ESP_LOGW(TAG, "[LOG] Silence timeout (state=%s), closing log file",
-                 rocketStateToString(last_rocket_state));
+                 rocketStateToString(lastSeenRocketState()));
         stopLogging();
     }
 
@@ -4024,7 +4099,7 @@ static void loop_bs()
 
             const bool need_coord = rocketLikelyHopping(
                 hop_active_, last_packet_ms, millis(),
-                last_rocket_state, COORD_HOP_RECENT_MS);
+                lastSeenRocketState(), COORD_HOP_RECENT_MS);
 
             if (!need_coord)
             {

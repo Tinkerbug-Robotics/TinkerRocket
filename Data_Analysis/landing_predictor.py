@@ -252,6 +252,17 @@ def actual_landing_enu(result: ReplayResult,
     if lora_csv is not None and lora_csv.exists():
         with open(lora_csv) as f:
             rows = list(csv.DictReader(f))
+        # Multi-rocket demux (#381): post-#381 BS CSVs can interleave several
+        # rockets (rocket_id column). Keep only the dominant rocket's rows so
+        # "the last landed row" is this flight's landing, not whichever other
+        # rocket happened to transmit last. No-op for pre-#381 CSVs.
+        rids = [r["rocket_id"] for r in rows
+                if r.get("rocket_id") not in (None, "") ]
+        if len(set(rids)) > 1:
+            from collections import Counter
+            dominant = Counter(rids).most_common(1)[0][0]
+            rows = [r for r in rows
+                    if r.get("rocket_id") in (None, "", dominant)]
         # Last row with landed flag set and a usable fix
         landed = [r for r in rows
                   if r.get("landed", "0") == "1"

@@ -304,6 +304,9 @@ add_executable(test_bs_log_policy test_bs_log_policy.cpp)
 target_include_directories(test_bs_log_policy PRIVATE
     ${SHIM_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    # bs_log_policy.h pulls the rocket-state enum + computeFreqLockForFlight
+    # from the shared types header (#381 multi-rocket transitions)
+    ${LIB_DIR}/TR_RocketComputerTypes
 )
 target_link_libraries(test_bs_log_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_log_policy)
