@@ -1430,7 +1430,7 @@ typedef struct
             launch_flag,            // bit          : bool
             camera_recording,       // bit 7        : bool
             logging_active;         // MSB of num_sats byte
-    uint8_t rocket_state;           // 3 bits       : states 0 through 4
+    uint8_t rocket_state;           // 3 bits       : states 0 through 5 (incl. MAG_CALIBRATION; field holds 0-7)
     float   acc_x;                  // 0.1 m/s2     : -400 to 400
     float   acc_y;                  // 0.1 m/s2     : -400 to 400
     float   acc_z;                  // 0.1 m/s2     : -400 to 400
@@ -2089,6 +2089,123 @@ static constexpr size_t SIZE_OF_MMC5983MA_DATA  = sizeof(MMC5983MAData);
 static constexpr size_t SIZE_OF_IIS2MDC_DATA    = sizeof(IIS2MDCData);
 static constexpr size_t SIZE_OF_POWER_DATA      = sizeof(POWERData);
 static constexpr size_t SIZE_OF_NON_SENSOR_DATA = sizeof(NonSensorData);
+// --- #386: wire-layout offset pins ------------------------------------
+// The cross-device structs are size-pinned, but a same-size field reorder
+// or type swap passes a size assert silently and scrambles every consumer
+// of the wire format. Pin every field offset so any layout change is a
+// loud compile error on firmware and host builds alike. Values were
+// derived from the declared layouts; the compiler proves each line.
+static_assert(sizeof(LoRaData) == 66, "LoRaData wire size");
+static_assert(offsetof(LoRaData, network_id) == 0, "LoRaData.network_id moved");
+static_assert(offsetof(LoRaData, rocket_id) == 1, "LoRaData.rocket_id moved");
+static_assert(offsetof(LoRaData, next_channel_idx) == 2, "LoRaData.next_channel_idx moved");
+static_assert(offsetof(LoRaData, seq) == 3, "LoRaData.seq moved");
+static_assert(offsetof(LoRaData, num_sats) == 5, "LoRaData.num_sats moved");
+static_assert(offsetof(LoRaData, pdop_u8) == 6, "LoRaData.pdop_u8 moved");
+static_assert(offsetof(LoRaData, ecef_x_m) == 7, "LoRaData.ecef_x_m moved");
+static_assert(offsetof(LoRaData, ecef_y_m) == 10, "LoRaData.ecef_y_m moved");
+static_assert(offsetof(LoRaData, ecef_z_m) == 13, "LoRaData.ecef_z_m moved");
+static_assert(offsetof(LoRaData, hacc_u8) == 16, "LoRaData.hacc_u8 moved");
+static_assert(offsetof(LoRaData, flags_state) == 17, "LoRaData.flags_state moved");
+static_assert(offsetof(LoRaData, acc_x_x10) == 18, "LoRaData.acc_x_x10 moved");
+static_assert(offsetof(LoRaData, acc_y_x10) == 20, "LoRaData.acc_y_x10 moved");
+static_assert(offsetof(LoRaData, acc_z_x10) == 22, "LoRaData.acc_z_x10 moved");
+static_assert(offsetof(LoRaData, gyro_x_x10) == 24, "LoRaData.gyro_x_x10 moved");
+static_assert(offsetof(LoRaData, gyro_y_x10) == 26, "LoRaData.gyro_y_x10 moved");
+static_assert(offsetof(LoRaData, gyro_z_x10) == 28, "LoRaData.gyro_z_x10 moved");
+static_assert(offsetof(LoRaData, temp_x10) == 30, "LoRaData.temp_x10 moved");
+static_assert(offsetof(LoRaData, voltage_u8) == 32, "LoRaData.voltage_u8 moved");
+static_assert(offsetof(LoRaData, current_ma) == 33, "LoRaData.current_ma moved");
+static_assert(offsetof(LoRaData, soc_i8) == 35, "LoRaData.soc_i8 moved");
+static_assert(offsetof(LoRaData, pressure_alt_m) == 36, "LoRaData.pressure_alt_m moved");
+static_assert(offsetof(LoRaData, altitude_rate) == 39, "LoRaData.altitude_rate moved");
+static_assert(offsetof(LoRaData, max_alt_m) == 41, "LoRaData.max_alt_m moved");
+static_assert(offsetof(LoRaData, max_speed) == 44, "LoRaData.max_speed moved");
+static_assert(offsetof(LoRaData, roll_cd) == 46, "LoRaData.roll_cd moved");
+static_assert(offsetof(LoRaData, pitch_cd) == 48, "LoRaData.pitch_cd moved");
+static_assert(offsetof(LoRaData, yaw_cd) == 50, "LoRaData.yaw_cd moved");
+static_assert(offsetof(LoRaData, q0) == 52, "LoRaData.q0 moved");
+static_assert(offsetof(LoRaData, q1) == 54, "LoRaData.q1 moved");
+static_assert(offsetof(LoRaData, q2) == 56, "LoRaData.q2 moved");
+static_assert(offsetof(LoRaData, q3) == 58, "LoRaData.q3 moved");
+static_assert(offsetof(LoRaData, speed) == 60, "LoRaData.speed moved");
+static_assert(offsetof(LoRaData, sensor_health) == 62, "LoRaData.sensor_health moved");
+
+static_assert(sizeof(GNSSData) == 42, "GNSSData wire size");
+static_assert(offsetof(GNSSData, time_us) == 0, "GNSSData.time_us moved");
+static_assert(offsetof(GNSSData, year) == 4, "GNSSData.year moved");
+static_assert(offsetof(GNSSData, month) == 6, "GNSSData.month moved");
+static_assert(offsetof(GNSSData, day) == 7, "GNSSData.day moved");
+static_assert(offsetof(GNSSData, hour) == 8, "GNSSData.hour moved");
+static_assert(offsetof(GNSSData, minute) == 9, "GNSSData.minute moved");
+static_assert(offsetof(GNSSData, second) == 10, "GNSSData.second moved");
+static_assert(offsetof(GNSSData, milli_second) == 11, "GNSSData.milli_second moved");
+static_assert(offsetof(GNSSData, fix_mode) == 13, "GNSSData.fix_mode moved");
+static_assert(offsetof(GNSSData, num_sats) == 14, "GNSSData.num_sats moved");
+static_assert(offsetof(GNSSData, pdop_x10) == 15, "GNSSData.pdop_x10 moved");
+static_assert(offsetof(GNSSData, lat_e7) == 16, "GNSSData.lat_e7 moved");
+static_assert(offsetof(GNSSData, lon_e7) == 20, "GNSSData.lon_e7 moved");
+static_assert(offsetof(GNSSData, alt_mm) == 24, "GNSSData.alt_mm moved");
+static_assert(offsetof(GNSSData, vel_e_mmps) == 28, "GNSSData.vel_e_mmps moved");
+static_assert(offsetof(GNSSData, vel_n_mmps) == 32, "GNSSData.vel_n_mmps moved");
+static_assert(offsetof(GNSSData, vel_u_mmps) == 36, "GNSSData.vel_u_mmps moved");
+static_assert(offsetof(GNSSData, h_acc_m) == 40, "GNSSData.h_acc_m moved");
+static_assert(offsetof(GNSSData, v_acc_m) == 41, "GNSSData.v_acc_m moved");
+
+static_assert(sizeof(NonSensorData) == 48, "NonSensorData wire size");
+static_assert(offsetof(NonSensorData, time_us) == 0, "NonSensorData.time_us moved");
+static_assert(offsetof(NonSensorData, q0) == 4, "NonSensorData.q0 moved");
+static_assert(offsetof(NonSensorData, q1) == 6, "NonSensorData.q1 moved");
+static_assert(offsetof(NonSensorData, q2) == 8, "NonSensorData.q2 moved");
+static_assert(offsetof(NonSensorData, q3) == 10, "NonSensorData.q3 moved");
+static_assert(offsetof(NonSensorData, roll_cmd) == 12, "NonSensorData.roll_cmd moved");
+static_assert(offsetof(NonSensorData, e_pos) == 14, "NonSensorData.e_pos moved");
+static_assert(offsetof(NonSensorData, n_pos) == 18, "NonSensorData.n_pos moved");
+static_assert(offsetof(NonSensorData, u_pos) == 22, "NonSensorData.u_pos moved");
+static_assert(offsetof(NonSensorData, e_vel) == 26, "NonSensorData.e_vel moved");
+static_assert(offsetof(NonSensorData, n_vel) == 30, "NonSensorData.n_vel moved");
+static_assert(offsetof(NonSensorData, u_vel) == 34, "NonSensorData.u_vel moved");
+static_assert(offsetof(NonSensorData, flags) == 38, "NonSensorData.flags moved");
+static_assert(offsetof(NonSensorData, rocket_state) == 39, "NonSensorData.rocket_state moved");
+static_assert(offsetof(NonSensorData, baro_alt_rate_dmps) == 40, "NonSensorData.baro_alt_rate_dmps moved");
+static_assert(offsetof(NonSensorData, pyro_status) == 42, "NonSensorData.pyro_status moved");
+static_assert(offsetof(NonSensorData, apogee_flags) == 43, "NonSensorData.apogee_flags moved");
+static_assert(offsetof(NonSensorData, sensor_health) == 44, "NonSensorData.sensor_health moved");
+
+static_assert(sizeof(OutStatusQueryData) == 28, "OutStatusQueryData wire size");
+static_assert(offsetof(OutStatusQueryData, ism6_low_g_fs_g) == 0, "OutStatusQueryData.ism6_low_g_fs_g moved");
+static_assert(offsetof(OutStatusQueryData, ism6_high_g_fs_g) == 1, "OutStatusQueryData.ism6_high_g_fs_g moved");
+static_assert(offsetof(OutStatusQueryData, ism6_gyro_fs_dps) == 3, "OutStatusQueryData.ism6_gyro_fs_dps moved");
+static_assert(offsetof(OutStatusQueryData, ism6_rot_z_cdeg) == 5, "OutStatusQueryData.ism6_rot_z_cdeg moved");
+static_assert(offsetof(OutStatusQueryData, mmc_rot_z_cdeg) == 7, "OutStatusQueryData.mmc_rot_z_cdeg moved");
+static_assert(offsetof(OutStatusQueryData, format_version) == 9, "OutStatusQueryData.format_version moved");
+static_assert(offsetof(OutStatusQueryData, hg_bias_x_cmss) == 10, "OutStatusQueryData.hg_bias_x_cmss moved");
+static_assert(offsetof(OutStatusQueryData, hg_bias_y_cmss) == 12, "OutStatusQueryData.hg_bias_y_cmss moved");
+static_assert(offsetof(OutStatusQueryData, hg_bias_z_cmss) == 14, "OutStatusQueryData.hg_bias_z_cmss moved");
+static_assert(offsetof(OutStatusQueryData, b2r_code) == 16, "OutStatusQueryData.b2r_code moved");
+static_assert(offsetof(OutStatusQueryData, b2r_mode) == 17, "OutStatusQueryData.b2r_mode moved");
+static_assert(offsetof(OutStatusQueryData, b2r_q) == 18, "OutStatusQueryData.b2r_q moved");
+static_assert(offsetof(OutStatusQueryData, iis2mdc_rot_z_cdeg) == 26, "OutStatusQueryData.iis2mdc_rot_z_cdeg moved");
+
+static_assert(sizeof(ServoConfigData) == 22, "ServoConfigData wire size");
+static_assert(offsetof(ServoConfigData, bias_us) == 0, "ServoConfigData.bias_us moved");
+static_assert(offsetof(ServoConfigData, hz) == 8, "ServoConfigData.hz moved");
+static_assert(offsetof(ServoConfigData, min_us) == 10, "ServoConfigData.min_us moved");
+static_assert(offsetof(ServoConfigData, max_us) == 12, "ServoConfigData.max_us moved");
+static_assert(offsetof(ServoConfigData, fin_min_deg) == 14, "ServoConfigData.fin_min_deg moved");
+static_assert(offsetof(ServoConfigData, fin_max_deg) == 18, "ServoConfigData.fin_max_deg moved");
+
+static_assert(sizeof(RollProfileData) == 76, "RollProfileData wire size");
+static_assert(offsetof(RollProfileData, num_waypoints) == 0, "RollProfileData.num_waypoints moved");
+static_assert(offsetof(RollProfileData, _pad) == 1, "RollProfileData._pad moved");
+static_assert(offsetof(RollProfileData, waypoints) == 4, "RollProfileData.waypoints moved");
+
+// LoRaChannelSetSelection is all-uint8_t (alignment 1, padding impossible),
+// so a size pin fully constrains the layout without adding packed (which
+// could have changed the in-memory layout for existing consumers).
+static_assert(sizeof(LoRaChannelSetSelection) == 1 + LORA_SKIP_MASK_MAX_BYTES,
+              "LoRaChannelSetSelection wire size");
+
 static constexpr size_t SIZE_OF_LORA_DATA       = sizeof(LoRaData);
 static constexpr size_t SIZE_OF_LORA_DATA_SI = sizeof(LoRaDataSI);
 
@@ -2101,7 +2218,7 @@ static constexpr size_t P5 = SIZE_OF_POWER_DATA;
 static constexpr size_t P6 = SIZE_OF_NON_SENSOR_DATA;
 static constexpr size_t P7 = SIZE_OF_LORA_DATA;
 static constexpr size_t P8 = sizeof(RollProfileData);
-static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (216 B)
+static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (224 B as of snapshot v3)
 
 static constexpr size_t M12   = (P1 > P2 ? P1 : P2);
 static constexpr size_t M34   = (P3 > P4 ? P3 : P4);

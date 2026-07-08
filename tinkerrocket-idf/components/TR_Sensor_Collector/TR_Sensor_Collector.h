@@ -92,9 +92,24 @@ public:
                     bool use_iis2mdc,
                     bool use_gnss,
                     bool use_ism6hg256,
-                    uint32_t spi_speed);
+                    uint32_t spi_speed,
+                    // #386: ISM6 full-scale settings. Were hardcoded 16/256/4000
+                    // literals in begin() while the converter scale + snapshots
+                    // read config::ISM6_*_FS — editing config.h silently
+                    // desynced chip FS from conversion scale (2x-8x data
+                    // error). Defaults preserve the flown values; the FC
+                    // passes its config constants so there is one source of
+                    // truth.
+                    uint8_t  ism6_low_g_fs_g   = 16,
+                    uint16_t ism6_high_g_fs_g  = 256,
+                    uint16_t ism6_gyro_fs_dps  = 4000);
 
     void begin(uint8_t imu_execution_core);
+
+    // #386: chip full-scale settings (see ctor comment).
+    const uint8_t  ism6_low_g_fs_g_;
+    const uint16_t ism6_high_g_fs_g_;
+    const uint16_t ism6_gyro_fs_dps_;
 
     volatile bool ism6hg256_data_ready;
     volatile bool bmp585_data_ready;

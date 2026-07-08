@@ -194,8 +194,11 @@ TEST_F(LoRaRoundtripTest, i24_SignExtension) {
 }
 
 TEST_F(LoRaRoundtripTest, RocketState_AllValues) {
-    // All 5 RocketState enum values must survive the 3-bit encoding
-    for (uint8_t state = 0; state <= 4; state++) {
+    // All RocketState enum values incl. MAG_CALIBRATION (5) must survive the
+    // 3-bit encoding — #386: the old pack clamp mangled 5 into LANDED (4), so
+    // a bench mag-cal with the BS listening displayed a fake LANDED and
+    // closed the BS log. The field holds 0..7.
+    for (uint8_t state = 0; state <= 5; state++) {
         LoRaDataSI in{};
         in.rocket_state = state;
 

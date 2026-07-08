@@ -51,8 +51,14 @@ SensorCollector::SensorCollector(
                            bool use_iis2mdc,
                            bool use_gnss,
                            bool use_ism6hg256,
-                           uint32_t spi_speed)
-    : ISM6HG256_CS(ISM6HG256_CS),
+                           uint32_t spi_speed,
+                           uint8_t  ism6_low_g_fs_g,
+                           uint16_t ism6_high_g_fs_g,
+                           uint16_t ism6_gyro_fs_dps)
+    : ism6_low_g_fs_g_(ism6_low_g_fs_g),
+      ism6_high_g_fs_g_(ism6_high_g_fs_g),
+      ism6_gyro_fs_dps_(ism6_gyro_fs_dps),
+      ISM6HG256_CS(ISM6HG256_CS),
       ISM6HG256_INT(ISM6HG256_INT),
       ISM6HG256_UPDATE_RATE(ISM6HG256_UPDATE_RATE),
       BMP585_CS(BMP585_CS),
@@ -443,10 +449,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_OutputDataRate((float)ISM6HG256_UPDATE_RATE));
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_OutputDataRate((float)ISM6HG256_UPDATE_RATE));
 
-        // Full-scale settings: low-g=16g, high-g=256g, gyro=4000 dps.
-        status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_FullScale(16));
-        status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_FullScale(256));
-        status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_FullScale(4000));
+        // Full-scale settings — from the ctor (config::ISM6_*_FS on the FC),
+        // the same constants the converter scale + snapshots read (#386).
+        status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_FullScale(ism6_low_g_fs_g_));
+        status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_FullScale(ism6_high_g_fs_g_));
+        status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_FullScale(ism6_gyro_fs_dps_));
 
         if (status != TR_ISM6HG256_OK)
         {

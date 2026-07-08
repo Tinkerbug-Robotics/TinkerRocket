@@ -388,7 +388,11 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     if (in.alt_apogee_flag)   packed |= LORA_ALT_APOGEE;
     if (in.alt_landed_flag)   packed |= LORA_ALT_LANDED;
     if (in.camera_recording)  packed |= LORA_CAMERA_REC;
-    uint8_t state = (uint8_t)(in.rocket_state > 4 ? 4 : in.rocket_state);
+    // #386: clamp to the 3-bit field's full 0..7 range, not 0..4 — the old
+    // clamp wire-mangled MAG_CALIBRATION (5) into LANDED (4), so a bench
+    // mag-cal with the BS listening showed a fake LANDED (and closed the BS
+    // log). The BS decoder already prints state 5 as MAG_CAL.
+    uint8_t state = (uint8_t)(in.rocket_state > 7 ? 7 : in.rocket_state);
     packed |= (state & 0x07u) << LORA_STATE_SHIFT; // b4..b6
     out.flags_state = packed;
 

@@ -95,7 +95,10 @@ SensorCollector sensor_collector_hw(config::ISM6HG256_CS,
                                     config::USE_IIS2MDC,
                                     config::USE_GNSS,
                                     config::USE_ISM6HG256,
-                                    config::SPI_SPEED);
+                                    config::SPI_SPEED,
+                                    config::ISM6_LOW_G_FS_G,
+                                    config::ISM6_HIGH_G_FS_G,
+                                    config::ISM6_GYRO_FS_DPS);
 
 // Sim wrapper: passthrough when sim inactive, replaces data when sim active
 SensorCollectorSim sensor_collector(sensor_collector_hw);
@@ -899,12 +902,34 @@ static void pyroSetArmLocked(bool want_high)
     pyro_arm_pin_state = want_high;
 }
 
+// #386: high-g bias -> cm/s² wire encode with an explicit int16 clamp. The
+// raw lroundf cast wrapped sign for |bias| > ~327 m/s², so the OC applied a
+// grossly wrong bias to its displayed/logged high-g stream (the FC control
+// path uses the float directly and was unaffected). Clamped, a huge bias
+// saturates instead of flipping sign.
+static inline int16_t encodeHgBiasCmss(float bias_mss)
+{
+    float v = bias_mss * 100.0f;
+    if (v >  32767.0f) v =  32767.0f;
+    if (v < -32768.0f) v = -32768.0f;
+    return (int16_t)lroundf(v);
+}
+
 static void pyroSafeAll()
 {
     portENTER_CRITICAL(&pyro_spinlock);
     for (int i = 0; i < 4; ++i) {
         gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 0);
-        pyro_ch[i].state          = PyroChState::Idle;
+        // #382: keep the Done latch — safing (incl. the LANDED transition)
+        // must not erase the record of a channel having fired, or post-flight
+        // pyro_status reads all-zeros and the app/logs misreport what
+        // deployed. No safety change: pins still drop, ARM still drops, Done
+        // never re-fires (auto-fire only starts from Idle), and the
+        // PRELAUNCH->INFLIGHT edge already resets channels for a new flight.
+        // Reboot recovery restores Done from the snapshot for the same reason.
+        if (pyro_ch[i].state != PyroChState::Done) {
+            pyro_ch[i].state = PyroChState::Idle;
+        }
         pyro_ch[i].phase_start_ms = 0;
     }
     pyroSetArmLocked(false);
@@ -999,8 +1024,10 @@ static void servicePyroChannels(uint32_t now_ms)
     }
 
     // While ARM is HIGH (only during a channel's fire window in flight),
-    // refresh its CONT bit. ARM=LOW leaves CONT floating, so the cached
-    // value from the last test stands.
+    // refresh its CONT bit. Outside a fire window the cached value from the
+    // last pad test stands. (#382 comment fix: on the current PCB the CONT
+    // divider is VPP-fed and always readable (#264) — ARM=LOW does NOT float
+    // CONT; we just don't bother re-sampling outside fire windows.)
     if (pyro_arm_pin_state) {
         for (int i = 0; i < 4; ++i) {
             if (pyro_ch[i].state == PyroChState::ArmSettle ||
@@ -2496,9 +2523,9 @@ static void setup_fc()
         float by = prefs.getFloat("hgby", 0.0f);
         float bz = prefs.getFloat("hgbz", 0.0f);
         sensor_converter.setHighGBias(bx, by, bz);
-        out_status_query_data.hg_bias_x_cmss = (int16_t)lroundf(bx * 100.0f);
-        out_status_query_data.hg_bias_y_cmss = (int16_t)lroundf(by * 100.0f);
-        out_status_query_data.hg_bias_z_cmss = (int16_t)lroundf(bz * 100.0f);
+        out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(bx);
+        out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(by);
+        out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(bz);
         ESP_LOGI(TAG, "NVS HG bias: %.3f, %.3f, %.3f m/s²",
                       (double)bx, (double)by, (double)bz);
     }
@@ -4195,9 +4222,9 @@ static void loop_fc()
                                               sensor_collector.hg_bias_y,
                                               sensor_collector.hg_bias_z);
                 // Propagate bias to OutComputer via status query payload
-                out_status_query_data.hg_bias_x_cmss = (int16_t)lroundf(sensor_collector.hg_bias_x * 100.0f);
-                out_status_query_data.hg_bias_y_cmss = (int16_t)lroundf(sensor_collector.hg_bias_y * 100.0f);
-                out_status_query_data.hg_bias_z_cmss = (int16_t)lroundf(sensor_collector.hg_bias_z * 100.0f);
+                out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_x);
+                out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_y);
+                out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(sensor_collector.hg_bias_z);
                 // Persist to NVS — high-g bias + gyro zero-rate bias (#132).
                 prefs.begin("cal", false);
                 prefs.putFloat("hgbx", sensor_collector.hg_bias_x);
@@ -4604,9 +4631,9 @@ static void loop_fc()
                         sensor_collector_hw.gyro_cal_y = ap.gyro_y;
                         sensor_collector_hw.gyro_cal_z = ap.gyro_z;
                         sensor_converter.setHighGBias(ap.hg_x, ap.hg_y, ap.hg_z);
-                        out_status_query_data.hg_bias_x_cmss = (int16_t)lroundf(ap.hg_x * 100.0f);
-                        out_status_query_data.hg_bias_y_cmss = (int16_t)lroundf(ap.hg_y * 100.0f);
-                        out_status_query_data.hg_bias_z_cmss = (int16_t)lroundf(ap.hg_z * 100.0f);
+                        out_status_query_data.hg_bias_x_cmss = encodeHgBiasCmss(ap.hg_x);
+                        out_status_query_data.hg_bias_y_cmss = encodeHgBiasCmss(ap.hg_y);
+                        out_status_query_data.hg_bias_z_cmss = encodeHgBiasCmss(ap.hg_z);
 
                         prefs.begin("cal", false);
                         prefs.putFloat("hgbx", ap.hg_x);
@@ -5405,8 +5432,11 @@ static void loop_fc()
                 // would stay zero otherwise.
                 last_external_roll_cmd_deg = roll_fin_cmd;
 
-                // 4-fin mix via the configured fin layout (servo→azimuth + reverse)
-                float max_fin = config::PN_MAX_FIN_DEG;
+                // 4-fin mix via the configured fin layout (servo→azimuth + reverse).
+                // #382: use the runtime clamp (app-tunable via guidance config,
+                // same as the in-flight path) — the compile-time constant made
+                // a bench ground test not match an app-tuned flight clamp.
+                float max_fin = pn_max_fin_deg;
                 float deflections[4];
                 control_mixer.mixToFins(roll_fin_cmd, pitch_fin, yaw_fin, max_fin, deflections);
                 servo_control.setServoAngles(deflections);
@@ -5488,8 +5518,9 @@ static void loop_fc()
                     rocket_state = PRELAUNCH;
                     prelaunch_time_millis = now_ms;
                     // Camera is manually controlled via app — no auto-start on prelaunch
-                    // Verify pyro continuity on the pad via momentary arm-disarm.
-                    // Non-blocking — runs over the next ~60 ms of main loop ticks.
+                    // Verify pyro continuity on the pad. (#382 comment fix:
+                    // this is a synchronous single read of the VPP-fed CONT
+                    // dividers (#264) — no arm pulse, no multi-tick sequence.)
                     pyroPrelaunchContTest(now_ms);
                     ESP_LOGI(TAG, "[STATE] READY -> PRELAUNCH");
                 }
@@ -5565,6 +5596,11 @@ static void loop_fc()
                     // channel's trigger fires (per-fire arming on new PCB).
                     pyro_apogee_detected = false;
                     pyro_apogee_time_ms  = 0;
+                    // #382: re-arm the per-flight settings snapshot (#165) —
+                    // without this only the first flight/sim per boot emitted
+                    // FlightSettingsData, so sim runs #2+ in one boot had no
+                    // settings block in their reports.
+                    settings_emit_count = 0;
                     portENTER_CRITICAL(&pyro_spinlock);
                     for (int i = 0; i < 4; ++i) {
                         pyro_ch[i].state          = PyroChState::Idle;
