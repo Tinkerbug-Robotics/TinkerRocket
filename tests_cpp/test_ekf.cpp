@@ -452,3 +452,94 @@ TEST_F(EKFTest, NoNaN_AfterManyUpdates) {
         EXPECT_FALSE(std::isnan(q[i])) << "q[" << i << "] is NaN";
     }
 }
+
+// ---------- #440: frozen IMU timestamp must hold, not drift ----------
+//
+// The dt floor used to rewrite a repeated timestamp's dt=0 to 2 ms, so a
+// stalled/wedged/replayed IMU stream re-integrated the same sample as if
+// time were passing — velocity and attitude drifted while isHealthy()
+// stayed true. The filter must HOLD its state through a stall and resume
+// cleanly when timestamps advance again.
+
+TEST_F(EKFTest, FrozenTimestamp_HoldsAttitudeAndVelocity) {
+    uint32_t t = 1000;
+    ekf.init(makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    for (int i = 0; i < 200; i++) {
+        t += 2000;
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+
+    float q_before[4], v_before[3];
+    ekf.getQuaternion(q_before);
+    ekf.getVelEst(v_before);
+
+    // IMU stalls at timestamp t while reporting a hard roll + a lateral
+    // specific-force error — the worst case for fabricated integration.
+    // 1000 frozen frames × the old fabricated 2 ms = 2 s of phantom time
+    // (≈ 200° of phantom roll pre-fix).
+    EkfIMUData frozen = makeStationaryIMU(t);
+    frozen.gyro_x = 100.0;   // dps
+    frozen.acc_y  = 3.0;     // m/s² lateral error
+    for (int i = 0; i < 1000; i++) {
+        ekf.update(true, frozen, makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+
+    float q_after[4], v_after[3];
+    ekf.getQuaternion(q_after);
+    ekf.getVelEst(v_after);
+
+    EXPECT_EQ(ekf.frozenDtSkips(), 1000u);
+    // Exact equality: a skipped tick touches NOTHING, so the state must be
+    // bit-identical. (A geodesic comparison is unusable here — the stored
+    // quaternion's norm sits one float-ulp under 1.0, so acos() reports
+    // ~0.04° even between identical values.)
+    for (int i = 0; i < 4; i++) {
+        EXPECT_EQ(q_after[i], q_before[i])
+            << "attitude must hold bit-exact through a stall (q[" << i << "])";
+    }
+    for (int i = 0; i < 3; i++) {
+        EXPECT_EQ(v_after[i], v_before[i])
+            << "velocity must hold bit-exact through a stall (axis " << i << ")";
+    }
+}
+
+TEST_F(EKFTest, FrozenTimestamp_ResumesCleanly) {
+    uint32_t t = 1000;
+    ekf.init(makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    for (int i = 0; i < 100; i++) {
+        t += 2000;
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+
+    // Brief stall, then the stream resumes with advancing timestamps.
+    for (int i = 0; i < 50; i++) {
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+    float q_stall[4]; ekf.getQuaternion(q_stall);
+
+    for (int i = 0; i < 200; i++) {
+        t += 2000;
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+    float q_resumed[4]; ekf.getQuaternion(q_resumed);
+
+    // Stationary data before, during, and after: the resumed filter should
+    // stay converged at the stationary attitude, not jump (a resume glitch
+    // would show as a large geodesic step).
+    EXPECT_LT(tqGeodesicDeg(q_stall, q_resumed), 1.0f)
+        << "filter must resume smoothly after a stall";
+    EXPECT_EQ(ekf.frozenDtSkips(), 50u);
+}
+
+TEST_F(EKFTest, AdvancingTimestamps_NeverTripTheSkip) {
+    // A healthy stream (the normal 500 Hz cadence every other test uses)
+    // must never hit the frozen-timestamp path — the fix is provably inert
+    // outside the anomaly it targets.
+    uint32_t t = 1000;
+    ekf.init(makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    for (int i = 0; i < 500; i++) {
+        t += 2000;
+        ekf.update(true, makeStationaryIMU(t), makeStationaryGNSS(t), makeStationaryMag(t));
+    }
+    EXPECT_EQ(ekf.frozenDtSkips(), 0u);
+}
