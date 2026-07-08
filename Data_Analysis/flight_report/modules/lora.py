@@ -281,6 +281,28 @@ def analyze(flight: Flight) -> AnalysisResult:
         result.warnings.append("LoRa CSV(s) found but contain no telemetry rows.")
         return result
 
+    # Multi-rocket demux (#381): post-#381 BS CSVs carry a rocket_id column
+    # because one file can interleave several rockets' telemetry (e.g. a
+    # landed rocket still transmitting while the next one preps). Analyze the
+    # dominant rocket and say so, rather than silently blending trajectories.
+    # Older CSVs without the column (or single-rocket files) are unaffected.
+    if "rocket_id" in df.columns:
+        rid = pd.to_numeric(df.rocket_id, errors="coerce")
+        ids = rid.dropna().unique()
+        if len(ids) > 1:
+            dominant = int(rid.value_counts().idxmax())
+            n_before = len(df)
+            df = df[rid == dominant].reset_index(drop=True)
+            others = sorted(int(i) for i in ids if int(i) != dominant)
+            result.warnings.append(
+                f"LoRa CSV contains {len(ids)} rockets; analyzing rocket_id="
+                f"{dominant} ({len(df)}/{n_before} rows) — other rocket(s) "
+                f"{others} excluded."
+            )
+        if df.empty:
+            result.warnings.append("No telemetry rows left after rocket_id demux.")
+            return result
+
     t_ms = df.time_ms.to_numpy()
     t = (t_ms - t_ms[0]) / 1000.0
 
