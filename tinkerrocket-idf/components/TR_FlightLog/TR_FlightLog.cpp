@@ -449,15 +449,81 @@ Status TR_FlightLog::writePageLocked(const uint8_t* page) {
             return Status::Ok;
         }
 
-        // Program failure: runtime bad-block discovery. Mark bad, skip to
-        // the next block, retry the same data.
-        bitmap_.set(abs_block, BLOCK_BAD);
-        nand_->markBlockBad(abs_block);
-        persistBitmap();
-        // Round up to the next block boundary.
-        active_next_page_ = (rel_block + 1) * NAND_PAGES_PER_BLK;
+        // Program failure: runtime bad-block discovery. Retire the block and
+        // relocate the `page_in_blk` pages already written in it (#371) so the
+        // reader's dense-page model stays correct and no logged data is
+        // orphaned. active_next_page_ is left just past the relocated pages, in
+        // a good block, so the loop retries `page` there.
+        if (!retireBlockAndSalvage(abs_block, rel_block, page_in_blk)) {
+            return Status::NoSpace;
+        }
     }
     return Status::BackendFailed;
+}
+
+bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
+                                         uint32_t valid_pages) {
+    bitmap_.set(bad_block, BLOCK_BAD);
+    nand_->markBlockBad(bad_block);
+    persistBitmap();
+    active_next_page_ = (rel_block + 1) * NAND_PAGES_PER_BLK;
+
+    // page-0 failure: nothing was written in the block, so it's a clean
+    // skip-ahead with nothing to relocate (the pre-#371 behavior).
+    if (valid_pages == 0) return true;
+    ++salvaged_block_count_;
+    FL_LOGW("bad block %lu mid-flight: relocating %lu already-written pages (#371)",
+            (unsigned long)bad_block, (unsigned long)valid_pages);
+
+    // Relocate pages [0, valid_pages) of the retired block to the write cursor.
+    // The retired block stays readable for its committed pages (the failure was
+    // on a *later* page), so each is re-read and reprogrammed densely into the
+    // next good block(s). If a destination block ALSO fails mid-relocation, it
+    // is retired and the relocation restarts from page 0 into the next block —
+    // the source is still readable, so no salvaged page is dropped. Restarts
+    // are bounded by the number of blocks available.
+    uint8_t buf[NAND_PAGE_SIZE];
+    const uint32_t max_restarts = active_n_blocks_ + cfg_.extend_blocks + 1;
+    uint32_t restarts = 0;
+    uint32_t i = 0;
+    while (i < valid_pages) {
+        const uint32_t rel = active_next_page_ / NAND_PAGES_PER_BLK;
+        if (rel >= active_n_blocks_) {
+            if (!extendActiveRange()) return false;
+            continue;
+        }
+        const uint32_t dst_block = active_start_block_ + rel;
+        const uint32_t dst_page  = active_next_page_ % NAND_PAGES_PER_BLK;
+
+        if (!nand_->readPage(bad_block, i, buf)) {
+            // A committed page that will not read back — genuinely
+            // unrecoverable. Write a zeroed placeholder so the stream stays
+            // aligned (one lost page beats orphaning + shifting everything
+            // after it) and flag it.
+            std::memset(buf, 0x00, sizeof(buf));
+            ++unrecoverable_page_count_;
+            FL_LOGW("salvage: page %lu of retired block %lu unreadable — wrote "
+                    "zeroed placeholder to keep the stream aligned (#371)",
+                    (unsigned long)i, (unsigned long)bad_block);
+        }
+
+        if (nand_->programPage(dst_block, dst_page, buf)) {
+            ++active_next_page_;
+            ++i;
+            continue;
+        }
+
+        // Destination is bad too. Retire it and restart the relocation from
+        // page 0 into the next block (partial copies in dst_block are abandoned
+        // — the reader skips the BAD block; the source is re-read intact).
+        bitmap_.set(dst_block, BLOCK_BAD);
+        nand_->markBlockBad(dst_block);
+        persistBitmap();
+        active_next_page_ = (rel + 1) * NAND_PAGES_PER_BLK;
+        i = 0;
+        if (++restarts > max_restarts) return false;
+    }
+    return true;
 }
 
 Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) {

@@ -1016,15 +1016,18 @@ TEST(TRFlightLogWrite, ProgramFailMarksBlockBadAndSkipsToNextBlock) {
     const uint32_t bad_page  = next_rel % NAND_PAGES_PER_BLK;
     nand.injectProgramFailOnce(bad_block, bad_page);
 
-    // Subsequent writePage should skip the now-bad block entirely and land at
-    // the start of the next block.
+    // Subsequent writePage retires the now-bad block. The page already written
+    // in it (page 0) is RELOCATED to the next block rather than orphaned (#371),
+    // and the current write lands right after the relocated page.
     ASSERT_EQ(fl.writePage(buf.data()), Status::Ok);
     EXPECT_EQ(fl.bitmap().get(bad_block), BLOCK_BAD);
     EXPECT_TRUE(nand.isBlockBad(bad_block));
+    EXPECT_EQ(fl.salvagedBlockCount(), 1u);  // one page relocated, not lost
 
-    // Next write position: next-block-page 1 (we just wrote page 0 of the new block).
+    // Next write position: next-block page 2 — page 0 holds the salvaged page,
+    // page 1 holds the write that hit the bad page, so the cursor is at page 2.
     const uint32_t next_written_rel = fl.activePagesWritten();
-    EXPECT_EQ(next_written_rel, (next_rel / NAND_PAGES_PER_BLK + 1) * NAND_PAGES_PER_BLK + 1);
+    EXPECT_EQ(next_written_rel, (next_rel / NAND_PAGES_PER_BLK + 1) * NAND_PAGES_PER_BLK + 2);
 }
 
 TEST(TRFlightLogWrite, OverflowExtendSucceedsWhenAdjacentFree) {
@@ -1756,6 +1759,140 @@ TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {
                   Status::Ok) << "page " << p;
         ASSERT_EQ(out_len, PAYLOAD_PER_PAGE) << "page " << p;
         for (uint8_t b : out) ASSERT_EQ(b, 0x5Au) << "garbage at page " << p;
+    }
+}
+
+// Helper for the #371 relocation tests: fill a page with a byte equal to its
+// logical index so a *shift* (not just a loss) is detectable on read-back.
+// Frame count is kept < 256 so the byte uniquely identifies the frame.
+namespace {
+void writeIndexedFrame(TR_FlightLog& fl, uint32_t idx) {
+    std::vector<uint8_t> payload(PAYLOAD_PER_PAGE, static_cast<uint8_t>(idx));
+    ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+}
+void expectIndexedReadback(TR_FlightLog& fl, const char* name, uint32_t total) {
+    for (uint32_t p = 0; p < total; ++p) {
+        std::vector<uint8_t> out(PAYLOAD_PER_PAGE, 0xEE);
+        size_t out_len = 0;
+        ASSERT_EQ(fl.readFlightPage(name, p * PAYLOAD_PER_PAGE, out.data(),
+                                    out.size(), out_len), Status::Ok)
+            << "page " << p;
+        ASSERT_EQ(out_len, PAYLOAD_PER_PAGE) << "early EOF at page " << p;
+        for (uint8_t b : out)
+            ASSERT_EQ(b, static_cast<uint8_t>(p))
+                << "misaligned/lost data at logical page " << p;
+    }
+}
+}  // namespace
+
+TEST(TRFlightLogFinalize, MidBlockFailureRelocatesSalvagedPagesInOrder) {
+    // #371: a program failure at page p>0 must relocate the p pages already
+    // written in the block (not orphan them + shift everything after). The
+    // pre-fix code marked the whole block BAD and skipped it, losing those p
+    // pages and misaligning the rest — undetectable with same-byte payloads,
+    // so this fills each page with its logical index.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t start_block = fl.activeStartBlock();
+
+    constexpr uint32_t BLOCK0 = NAND_PAGES_PER_BLK;  // 64 -> fills block 0
+    constexpr uint32_t P      = 10;                  // fail at page 10 of block 1
+    constexpr uint32_t TAIL   = 40;
+    constexpr uint32_t TOTAL  = BLOCK0 + P + TAIL;   // 114 frames (< 256)
+
+    // Frame (BLOCK0+P) is the write that hits the injected failure; the P
+    // frames before it (block 1 pages 0..P-1) are the salvaged ones.
+    nand.injectProgramFailOnce(start_block + 1, P);
+    for (uint32_t i = 0; i < TOTAL; ++i) writeIndexedFrame(fl, i);
+
+    EXPECT_EQ(fl.salvagedBlockCount(), 1u);       // block 1 relocated (p>0)
+    EXPECT_EQ(fl.unrecoverablePageCount(), 0u);   // every page re-read fine
+
+    ASSERT_EQ(fl.finalizeFlight("f.bin", TOTAL * PAYLOAD_PER_PAGE), Status::Ok);
+    const FlightIndexEntry* e = fl.index().findByFilename("f.bin");
+    ASSERT_NE(e, nullptr);
+    EXPECT_EQ(e->final_bytes, TOTAL * PAYLOAD_PER_PAGE);
+    EXPECT_EQ(fl.bitmap().get(start_block + 1), BLOCK_BAD);  // retired
+
+    expectIndexedReadback(fl, "f.bin", TOTAL);
+
+    // Survives a reboot (index + data reload) with the same alignment.
+    TR_FlightLog fl2;
+    ASSERT_EQ(fl2.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    expectIndexedReadback(fl2, "f.bin", TOTAL);
+}
+
+TEST(TRFlightLogFinalize, MidBlockFailureCascadesToSecondBadBlock) {
+    // Salvage destination ALSO fails mid-relocation: the relocation restarts
+    // into the next block, re-reading the (still-readable) source, so no
+    // salvaged page is dropped even across two bad blocks.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t start_block = fl.activeStartBlock();
+
+    constexpr uint32_t BLOCK0 = NAND_PAGES_PER_BLK;
+    constexpr uint32_t P      = 10;
+    constexpr uint32_t TAIL   = 40;
+    constexpr uint32_t TOTAL  = BLOCK0 + P + TAIL;
+
+    nand.injectProgramFailOnce(start_block + 1, P);       // block 1 page 10
+    nand.injectProgramFailOnce(start_block + 2, 5);       // block 2 page 5 (salvage dst)
+    for (uint32_t i = 0; i < TOTAL; ++i) writeIndexedFrame(fl, i);
+
+    EXPECT_EQ(fl.salvagedBlockCount(), 1u);       // one source block salvaged
+    EXPECT_EQ(fl.unrecoverablePageCount(), 0u);
+    EXPECT_EQ(fl.bitmap().get(start_block + 1), BLOCK_BAD);
+    EXPECT_EQ(fl.bitmap().get(start_block + 2), BLOCK_BAD);  // failed destination
+
+    ASSERT_EQ(fl.finalizeFlight("f.bin", TOTAL * PAYLOAD_PER_PAGE), Status::Ok);
+    expectIndexedReadback(fl, "f.bin", TOTAL);
+}
+
+TEST(TRFlightLogFinalize, MidBlockFailureUnreadableSalvagePageKeepsAlignment) {
+    // If a salvaged page cannot be re-read (a committed page that won't read
+    // back — genuinely unrecoverable), a zeroed placeholder is written so the
+    // stream stays ALIGNED (one lost page, not a shift of everything after).
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t start_block = fl.activeStartBlock();
+
+    constexpr uint32_t BLOCK0 = NAND_PAGES_PER_BLK;
+    constexpr uint32_t P      = 10;
+    constexpr uint32_t TAIL   = 20;
+    constexpr uint32_t TOTAL  = BLOCK0 + P + TAIL;
+    constexpr uint32_t LOST   = BLOCK0 + 3;  // salvage page 3 of block 1 won't read
+
+    nand.injectProgramFailOnce(start_block + 1, P);
+    nand.injectReadErrorPersistent(start_block + 1, 3);  // salvage re-read fails
+    for (uint32_t i = 0; i < TOTAL; ++i) writeIndexedFrame(fl, i);
+
+    EXPECT_EQ(fl.salvagedBlockCount(), 1u);
+    EXPECT_EQ(fl.unrecoverablePageCount(), 1u);  // exactly the one page
+
+    ASSERT_EQ(fl.finalizeFlight("f.bin", TOTAL * PAYLOAD_PER_PAGE), Status::Ok);
+
+    // Every page except the unrecoverable one reads its own index; the lost
+    // page reads as the zeroed placeholder — alignment preserved either way.
+    for (uint32_t p = 0; p < TOTAL; ++p) {
+        std::vector<uint8_t> out(PAYLOAD_PER_PAGE, 0xEE);
+        size_t out_len = 0;
+        ASSERT_EQ(fl.readFlightPage("f.bin", p * PAYLOAD_PER_PAGE, out.data(),
+                                    out.size(), out_len), Status::Ok) << "page " << p;
+        ASSERT_EQ(out_len, PAYLOAD_PER_PAGE) << "page " << p;
+        const uint8_t expect = (p == LOST) ? 0x00 : static_cast<uint8_t>(p);
+        for (uint8_t b : out) ASSERT_EQ(b, expect) << "page " << p;
     }
 }
 

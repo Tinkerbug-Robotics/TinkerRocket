@@ -267,9 +267,12 @@ static void flightlogServicePendingFinalize()
     if (st == tr_flightlog::Status::Ok)
     {
         ESP_LOGI("FLIGHTLOG",
-                 "finalizeFlight OK (deferred): %s (%u bytes, %u extensions)",
+                 "finalizeFlight OK (deferred): %s (%u bytes, %u extensions, "
+                 "%u salvaged bad blocks, %u unrecoverable pages)",
                  name_local, (unsigned)bytes,
-                 (unsigned)flightlog.overflowExtensionCount());
+                 (unsigned)flightlog.overflowExtensionCount(),
+                 (unsigned)flightlog.salvagedBlockCount(),
+                 (unsigned)flightlog.unrecoverablePageCount());
     }
     else
     {
