@@ -8,8 +8,12 @@
 #include "fakes/fake_nand_backend.h"
 #include "fakes/memory_bitmap_store.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 using tr_flightlog::BLOCK_ALLOCATED;
@@ -1856,4 +1860,178 @@ TEST(TRFlightLogRead, CapsReadAtFileEnd) {
     ASSERT_EQ(fl.readFlightPage("f.bin", 0, out, sizeof(out), out_len), Status::Ok);
     EXPECT_EQ(out_len, 100u);  // capped at final_bytes
     for (size_t i = 0; i < 100; ++i) EXPECT_EQ(out[i], 0x5A);
+}
+
+// ================================================================
+// #388 — cross-core locking. The single flightlog instance is mutated from
+// two pinned tasks: Core-0 flush (prepareFlight / writeFrame / finalizeFlight)
+// and Core-1 oc_loop BLE handler (deleteFlight, listFlights, readFlightPage).
+// Without a lock, a BLE delete concurrent with a flush-side finalize/prepare
+// interleaves two erase+program sequences on the dual index snapshot and can
+// tear BOTH copies -> next boot both CRC-fail and all flight metadata is lost.
+// The fix guards every flight-log entry point with one mutex, so at most one
+// operation touches the NAND / index / bitmap at a time.
+// ================================================================
+
+namespace {
+
+// Wraps a FakeNandBackend and measures how many threads are ever inside a NAND
+// op at once. TR_FlightLog only reaches the backend from inside a guarded
+// flight-log operation, so post-#388 the mutex serializes every caller and the
+// observed concurrency is 1. Pre-fix, the two cores reach the backend at the
+// same time and it climbs to 2.
+//
+// An internal io_mutex_ serializes the inner (non-thread-safe) fake so a
+// pre-fix data race can't segfault it before the assertion runs; concurrency
+// is sampled by an atomic counter taken BEFORE that mutex, with a short window
+// (only while `armed`) so the sample reflects true flight-log-level overlap.
+class SerializationProbeBackend : public tr_flightlog::TR_NandBackend {
+public:
+    explicit SerializationProbeBackend(FakeNandBackend& inner) : inner_(inner) {}
+
+    void arm()  { armed_.store(true); }
+    int  maxConcurrency() const { return max_concurrency_.load(); }
+
+    bool readPage(uint32_t b, uint32_t p, uint8_t* out) override {
+        ScopedProbe probe(*this);
+        std::lock_guard<std::mutex> lk(io_mutex_);
+        return inner_.readPage(b, p, out);
+    }
+    bool programPage(uint32_t b, uint32_t p, const uint8_t* d) override {
+        ScopedProbe probe(*this);
+        std::lock_guard<std::mutex> lk(io_mutex_);
+        return inner_.programPage(b, p, d);
+    }
+    bool eraseBlock(uint32_t b) override {
+        ScopedProbe probe(*this);
+        std::lock_guard<std::mutex> lk(io_mutex_);
+        return inner_.eraseBlock(b);
+    }
+    bool isBlockBad(uint32_t b) override {
+        ScopedProbe probe(*this);
+        std::lock_guard<std::mutex> lk(io_mutex_);
+        return inner_.isBlockBad(b);
+    }
+    bool markBlockBad(uint32_t b) override {
+        ScopedProbe probe(*this);
+        std::lock_guard<std::mutex> lk(io_mutex_);
+        return inner_.markBlockBad(b);
+    }
+
+private:
+    struct ScopedProbe {
+        SerializationProbeBackend& s;
+        explicit ScopedProbe(SerializationProbeBackend& self) : s(self) {
+            int now = s.active_.fetch_add(1) + 1;
+            int prev = s.max_concurrency_.load();
+            while (now > prev &&
+                   !s.max_concurrency_.compare_exchange_weak(prev, now)) {}
+            if (s.armed_.load())  // widen the overlap window during the race phase
+                std::this_thread::sleep_for(std::chrono::microseconds(40));
+        }
+        ~ScopedProbe() { s.active_.fetch_sub(1); }
+        ScopedProbe(const ScopedProbe&) = delete;
+        ScopedProbe& operator=(const ScopedProbe&) = delete;
+    };
+
+    FakeNandBackend& inner_;
+    std::mutex       io_mutex_;
+    std::atomic<int> active_{0};
+    std::atomic<int> max_concurrency_{0};
+    std::atomic<bool> armed_{false};
+};
+
+}  // namespace
+
+TEST(TRFlightLogConcurrency, FlushAndBleOpsAreSerialized) {
+    FakeNandBackend inner;
+    SerializationProbeBackend nand(inner);
+
+    // prealloc_blocks=1 lets us cycle many short flights without exhausting the
+    // region; bitmap_store=nullptr keeps the probe focused on the index path.
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks = 1;
+
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, cfg, nullptr), Status::Ok);
+
+    // Seed a pool of flights for the BLE thread to read and delete.
+    constexpr int kSeeds = 8;
+    for (int i = 0; i < kSeeds; ++i) {
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        std::vector<uint8_t> payload(64, static_cast<uint8_t>(i));
+        ASSERT_EQ(fl.writeFrame(payload.data(), payload.size()), Status::Ok);
+        char name[32];
+        std::snprintf(name, sizeof(name), "seed_%02d.bin", i);
+        ASSERT_EQ(fl.finalizeFlight(name, 64), Status::Ok);
+    }
+
+    constexpr int kRuns = 60;
+    std::atomic<bool> go{false};
+    std::atomic<int>  created{0};
+
+    // Core-0 role: create + finalize new flights (prepare erase, page write,
+    // index append + dual-copy save).
+    std::thread creator([&] {
+        while (!go.load()) { std::this_thread::yield(); }
+        for (int i = 0; i < kRuns; ++i) {
+            uint32_t id = 0;
+            if (fl.prepareFlight(id) != Status::Ok) continue;
+            std::vector<uint8_t> payload(64, 0xA5);
+            fl.writeFrame(payload.data(), payload.size());
+            char name[32];
+            std::snprintf(name, sizeof(name), "run_%03d.bin", i);
+            if (fl.finalizeFlight(name, 64) == Status::Ok) created.fetch_add(1);
+        }
+    });
+
+    // Core-1 role: read + delete seeded flights, then churn list/read against
+    // the creator's freshly finalized flights.
+    std::thread ble([&] {
+        while (!go.load()) { std::this_thread::yield(); }
+        for (int i = 0; i < kSeeds; ++i) {
+            char name[32];
+            std::snprintf(name, sizeof(name), "seed_%02d.bin", i);
+            uint8_t buf[64];
+            size_t got = 0;
+            fl.readFlightPage(name, 0, buf, sizeof(buf), got);
+            fl.deleteFlight(name);
+        }
+        for (int i = 0; i < kRuns; ++i) {
+            FlightIndexEntry out[4] = {};
+            fl.listFlights(out, 4, 0, 4);
+            char name[32];
+            std::snprintf(name, sizeof(name), "run_%03d.bin", i);
+            uint8_t buf[64];
+            size_t got = 0;
+            fl.readFlightPage(name, 0, buf, sizeof(buf), got);
+        }
+    });
+
+    nand.arm();
+    go.store(true);
+    creator.join();
+    ble.join();
+
+    // (1) The lock held: no two flight-log operations were ever in flight at
+    //     once on the NAND backend. Pre-#388 this reaches 2.
+    EXPECT_EQ(nand.maxConcurrency(), 1)
+        << "flight-log operations overlapped on the NAND backend — index/bitmap "
+           "mutation is not mutually exclusive (#388)";
+
+    // (2) The on-flash index survived intact: reload it and confirm no tear
+    //     (never the empty-both-copies catastrophe) and every surviving entry
+    //     is well-formed.
+    TR_FlightLog fl2;
+    ASSERT_EQ(fl2.begin(nand, cfg, nullptr), Status::Ok);
+    const size_t n = fl2.index().size();
+    EXPECT_GT(n, 0u) << "index reloaded empty — both snapshot copies torn (#388)";
+    for (size_t i = 0; i < n; ++i) {
+        const FlightIndexEntry& e = fl2.index().at(i);
+        EXPECT_EQ(e.magic, FLGT_MAGIC) << "torn/garbled index entry " << i;
+        EXPECT_GT(std::strlen(e.filename), 0u) << "empty filename at entry " << i;
+        EXPECT_LT(std::strlen(e.filename), sizeof(e.filename))
+            << "unterminated filename at entry " << i;
+    }
 }

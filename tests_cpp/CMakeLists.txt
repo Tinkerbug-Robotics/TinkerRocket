@@ -16,6 +16,10 @@ FetchContent_MakeAvailable(googletest)
 include(GoogleTest)
 enable_testing()
 
+# TR_FlightLog's cross-core lock (#388) is a std::mutex on the host build, which
+# needs pthread on Linux. Targets that compile TR_FlightLog.cpp link this.
+find_package(Threads REQUIRED)
+
 # ---------- Path shortcuts ----------
 # Component sources now live under the ESP-IDF tree. The libraries/
 # mirror is being removed in a follow-up; all paths below point at
@@ -265,7 +269,7 @@ target_include_directories(test_tr_flightlog_core PRIVATE
     ${LIB_DIR}/CRC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(test_tr_flightlog_core GTest::gtest_main)
+target_link_libraries(test_tr_flightlog_core GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_tr_flightlog_core)
 
 # ---------- test_tr_ota (#8 phase 2) ----------
