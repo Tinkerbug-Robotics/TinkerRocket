@@ -65,6 +65,16 @@ public:
     // Useful for post-flight log analysis to spot overflow events.
     uint32_t  overflowExtensionCount() const { return extension_count_; }
 
+    // #371 diagnostics. salvagedBlockCount(): runtime bad blocks that had
+    // already-written pages relocated to a good block (distinguishes a
+    // mid-block program failure — where data was preserved — from a clean
+    // page-0 skip-ahead, which relocates nothing). unrecoverablePageCount():
+    // salvaged pages that could not be re-read from the retired block and were
+    // replaced with a zeroed placeholder to keep the stream aligned (expected
+    // to stay 0; a non-zero value flags genuine, unavoidable loss).
+    uint32_t  salvagedBlockCount()    const { return salvaged_block_count_; }
+    uint32_t  unrecoverablePageCount() const { return unrecoverable_page_count_; }
+
     // Pre-launch: pick + erase a free contiguous range. May stall ~770 ms.
     // Writes the assigned flight_id to `flight_id_out` on success.
     //
@@ -136,6 +146,8 @@ private:
     uint32_t active_n_blocks_     = 0;
     uint32_t active_next_page_    = 0;  // absolute page index within the flight range
     uint32_t extension_count_     = 0;
+    uint32_t salvaged_block_count_    = 0;  // #371: bad blocks whose pages were relocated
+    uint32_t unrecoverable_page_count_ = 0; // #371: salvage pages that would not re-read
     bool     flight_active_       = false;
 
     // Single-producer (any task) / single-consumer (flush task) request flag
@@ -157,6 +169,17 @@ private:
     // twice on one thread.
     Status prepareFlightLocked(uint32_t& flight_id_out);
     Status writePageLocked(const uint8_t* page);
+
+    // On a mid-block program failure, retire `bad_block` (relative index
+    // `rel_block`) and relocate the `valid_pages` pages already written at its
+    // start to the next good block(s), advancing active_next_page_ to just past
+    // them so the caller can retry the failed write there. The retired block
+    // stays readable for its committed pages (the failure was on a later page),
+    // so each is re-read and reprogrammed; a destination that also fails is
+    // retired and the whole relocation restarts into the next block, so no
+    // salvaged page is dropped. Returns false only on NoSpace. (#371)
+    bool retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
+                               uint32_t valid_pages);
 
     void persistBitmap();
     void seedBitmapFromBackend();  // initial bad-block scan into the fresh bitmap
