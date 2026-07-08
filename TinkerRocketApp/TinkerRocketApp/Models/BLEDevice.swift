@@ -42,6 +42,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     @Published var isConnected = false
     @Published var telemetry = TelemetryData()
+    // #377: `telemetry` starts as TelemetryData() (all zeros), which reads as
+    // pwr_pin_on == false — indistinguishable from a genuinely-off rocket. In
+    // the (re)connect→first-frame window the power state is UNKNOWN, and UI
+    // must not offer the blind cmd-8 power toggle (one tap would power OFF an
+    // already-on rocket). False until the first decoded telemetry frame.
+    @Published private(set) var hasReceivedTelemetry = false
     @Published var connectedDeviceName: String = ""
     @Published var files: [FileInfo] = []
     @Published var currentPage: UInt8 = 0
@@ -229,6 +235,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // republishes IDLE on reconnect anyway.
         magCalStatus = nil
         sensorCalStatus = nil
+        // Power state is unknown again until the next session's first frame
+        // (#377). Reconnects build a new BLEDevice anyway; this covers the
+        // state-restoration path that reuses one.
+        hasReceivedTelemetry = false
         flightAnnouncer?.reset()
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -1464,6 +1474,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // Regular telemetry
         do {
             let newTelemetry = try jsonDecoder.decode(TelemetryData.self, from: data)
+
+            // #377: power state (and the rest of the flags) are now confirmed —
+            // the UI may trust telemetry.pwr_pin_on from here on. Guarded so we
+            // don't republish on every frame.
+            if !self.hasReceivedTelemetry {
+                self.hasReceivedTelemetry = true
+            }
 
             // If telemetry has a source_rocket_id, it's relayed via base station
             // → route to RemoteRocket instead of updating our own telemetry

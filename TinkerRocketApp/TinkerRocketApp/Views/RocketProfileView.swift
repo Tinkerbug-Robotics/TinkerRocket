@@ -199,6 +199,12 @@ struct SyncStatusRow: View {
         switch state {
         case .idle:
             EmptyView()
+        case .awaitingSync:
+            // #375: a connected-but-not-yet-synced rocket used to render as
+            // silent .idle/EmptyView — invisible, so an unsynced rocket could
+            // reach the pad on stale NVS settings. Amber until the push runs.
+            Label("Settings not yet applied to this rocket", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundColor(.orange)
         case .noProfile:
             Label("No active rocket — pick one to apply settings", systemImage: "questionmark.circle")
                 .font(.caption).foregroundColor(.secondary)
