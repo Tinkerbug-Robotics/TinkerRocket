@@ -4939,10 +4939,13 @@ static void loop_fc()
             }
             else if (out_pending_command == PYRO_CONT_TEST)
             {
-                // Direct CONT read — no ARM pulse needed on the new PCB
-                // (CONT divider fed from VPP, independent of the ARM rail).
-                // Still rejected in flight to be conservative with the
-                // app's "ground tests are pad-only" UX guarantee.
+                // On PYRO_CONT_NEEDS_ARM boards (V8) the CONT sense path is
+                // powered through the arming FET, so the read must be taken
+                // with a momentary ARM raised — the same requirement as the
+                // prelaunch test and the pyro test-board tool. On V7 the CONT
+                // divider is fed from always-on VPP, so a bare read is fine.
+                // Rejected in flight to honor the app's "ground tests are
+                // pad-only" UX guarantee.
                 if (isCommandLockoutState(rocket_state)) {
                     ESP_LOGW(TAG, "[PYRO CONT TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
                              (unsigned)rocket_state);
@@ -4964,8 +4967,7 @@ static void loop_fc()
 
                         // Defensive CONT-pad reclaim — peripheral defaults
                         // can re-grab the ESP32-P4 IO MUX between boot and
-                        // the test. (The ARM pad was set up safely at boot
-                        // via safePyroOutputInit; we don't touch it here.)
+                        // the test.
                         esp_gpio_revoke(1ULL << cont_pin);
                         gpio_reset_pin(cont_pin);
                         gpio_config_t cont_cfg = {};
@@ -4975,13 +4977,39 @@ static void loop_fc()
                         cont_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
                         gpio_config(&cont_cfg);
 
+                        // Momentary ARM around the read on V8. Synchronous is
+                        // safe: this runs in loop_fc, the same task as
+                        // servicePyroChannels, so nothing stomps ARM mid-read;
+                        // post_flight_lockout still forces ARM low inside
+                        // pyroSetArmLocked (#317). No FIRE pin is touched.
+                        const bool arm_for_cont = config::PYRO_CONT_NEEDS_ARM;
+                        if (arm_for_cont) {
+                            const gpio_num_t arm_pin = (gpio_num_t)config::PYRO_ARM_PIN;
+                            esp_gpio_revoke(1ULL << arm_pin);
+                            safePyroOutputInit(arm_pin);
+                            portENTER_CRITICAL(&pyro_spinlock);
+                            pyroSetArmLocked(true);
+                            portEXIT_CRITICAL(&pyro_spinlock);
+                            delay_ms(config::PYRO_CONT_ARM_SETTLE_MS);
+                        }
+
                         int raw = gpio_get_level(cont_pin);
+
+                        if (arm_for_cont) {
+                            portENTER_CRITICAL(&pyro_spinlock);
+                            pyroSetArmLocked(false);
+                            portEXIT_CRITICAL(&pyro_spinlock);
+                            // Restore the canonical low-driven safe state.
+                            safePyroOutputInit((gpio_num_t)config::PYRO_ARM_PIN);
+                        }
+
                         portENTER_CRITICAL(&pyro_spinlock);
                         pyro_ch[idx].cont       = pyroContFromRaw(raw);
                         pyro_ch[idx].cont_known = true;
                         portEXIT_CRITICAL(&pyro_spinlock);
-                        ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d",
-                                 ch, raw, pyroContFromRaw(raw) ? 1 : 0);
+                        ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d%s",
+                                 ch, raw, pyroContFromRaw(raw) ? 1 : 0,
+                                 arm_for_cont ? " (armed)" : "");
                     }
                 }
             }
