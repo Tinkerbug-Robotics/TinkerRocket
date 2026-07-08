@@ -29,6 +29,7 @@
 #include "config.h"
 #include "bs_log_policy.h"        // parseSequentialFilename() (#137)
 #include "bs_uplink_policy.h"     // mayTransmitUplink() scan gate (#379)
+#include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 
 #include <TR_LoRa_Comms.h>
 #include <TR_Sensor_Data_Converter.h>
@@ -1033,10 +1034,54 @@ static void handleDeleteCommand()
     handleFileListCommand();
 }
 
-static void handleDownloadCommand()
+// ---------------------------------------------------------------------------
+// Cooperative BLE file download (#380).
+//
+// The download used to run to completion inside the command dispatch — a
+// synchronous fread/sendFileChunk/delay(15 ms) loop on the single bs_loop
+// task. A 120 KB CSV blocked the loop ~11 s (a multi-MB log for minutes),
+// starving telemetry RX, uplink retries, heartbeats, the LoRa transaction /
+// recovery state machines, and CSV flushes; a >5 min download silence-closed
+// the active log. It is now a state machine serviced once per loop iteration
+// (mirroring coord_scan_state_): startDownload() opens the file and captures
+// state, serviceDownload() emits at most one chunk per pass, gated on the
+// same 15 ms wall-time spacing the BLE notify path needs to drain its mbufs
+// (bs_download_policy::mayEmitChunk — the loop runs ~1 ms, so pacing must be
+// wall-time, not loop cadence). Throughput is unchanged (~11 KB/s); the loop
+// keeps servicing everything else between chunks.
+static FILE*    dl_file_          = nullptr;
+static uint32_t dl_file_size_     = 0;
+static uint32_t dl_offset_        = 0;
+static uint32_t dl_last_chunk_ms_ = 0;
+static char     dl_name_[40]      = {0};  // for logging only
+
+static void finishDownload(const char* outcome)
 {
+    ESP_LOGI(TAG, "[BLE] Download %s: %s (%lu of %lu bytes sent)",
+             outcome, dl_name_, (unsigned long)dl_offset_,
+             (unsigned long)dl_file_size_);
+    if (dl_file_ != nullptr) fclose(dl_file_);
+    dl_file_          = nullptr;
+    dl_file_size_     = 0;
+    dl_offset_        = 0;
+    dl_last_chunk_ms_ = 0;
+    dl_name_[0]       = '\0';
+}
+
+static void startDownload()
+{
+    // getDownloadFilename() clears on read — capture everything now; the
+    // per-iteration service below must not touch the BLE pending slot.
     String filename = ble_app.getDownloadFilename();
     if (filename.length() == 0) return;
+
+    if (dl_file_ != nullptr)
+    {
+        // A new request supersedes an in-flight transfer (same "latest wins"
+        // semantics as the uplink slot). The app only runs one download UI.
+        ESP_LOGW(TAG, "[BLE] New download request supersedes active transfer");
+        finishDownload("superseded");
+    }
 
     char path[64];
     snprintf(path, sizeof(path), "%s/%s", SD_MOUNT_POINT, filename.c_str());
@@ -1048,41 +1093,68 @@ static void handleDownloadCommand()
         return;
     }
 
-    // Get file size
+    // Size measured at open bounds the whole transfer — a still-growing active
+    // log downloads the bytes that existed at request time and terminates.
     fseek(f, 0, SEEK_END);
-    uint32_t file_size = (uint32_t)ftell(f);
+    dl_file_size_ = (uint32_t)ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    uint32_t offset = 0;
-    uint8_t chunk_buf[config::BLE_FILE_CHUNK_SIZE];
+    dl_file_          = f;
+    dl_offset_        = 0;
+    dl_last_chunk_ms_ = 0;
+    snprintf(dl_name_, sizeof(dl_name_), "%s", filename.c_str());
 
     ESP_LOGI(TAG, "[BLE] Starting download: %s (%lu bytes)",
-             filename.c_str(), (unsigned long)file_size);
+             dl_name_, (unsigned long)dl_file_size_);
+}
 
-    while (!feof(f))
+static void serviceDownload()
+{
+    if (dl_file_ == nullptr) return;
+
+    if (!ble_app.isConnected())
     {
-        if (!ble_app.isConnected())
+        // Abort without an EOF chunk, matching the old behavior — the peer is
+        // gone, and a reconnecting app re-requests from scratch.
+        ESP_LOGW(TAG, "[BLE] Disconnected during download, aborting");
+        finishDownload("aborted");
+        return;
+    }
+
+    const uint32_t now = millis();
+    if (!bs_download_policy::mayEmitChunk(now, dl_last_chunk_ms_,
+                                          config::BLE_CHUNK_DELAY_MS))
+    {
+        return;  // BLE notify path still draining — try next iteration
+    }
+
+    const auto plan = bs_download_policy::nextChunk(
+        dl_file_size_, dl_offset_, config::BLE_FILE_CHUNK_SIZE);
+
+    uint8_t chunk_buf[config::BLE_FILE_CHUNK_SIZE];
+    size_t got = 0;
+    if (plan.read_len > 0)
+    {
+        got = fread(chunk_buf, 1, plan.read_len, dl_file_);
+        if (got == 0)
         {
-            ESP_LOGW(TAG, "[BLE] Disconnected during download, aborting");
-            break;
+            // Unexpected short read (SD error / file truncated underneath us).
+            // Terminate with an empty EOF chunk so the app doesn't hang — the
+            // old loop just stopped here without ever flagging EOF.
+            ESP_LOGE(TAG, "[BLE] Download read failed at offset %lu of %s",
+                     (unsigned long)dl_offset_, dl_name_);
+            ble_app.sendFileChunk(dl_offset_, nullptr, 0, true);
+            finishDownload("failed");
+            return;
         }
-        size_t got = fread(chunk_buf, 1, config::BLE_FILE_CHUNK_SIZE, f);
-        if (got == 0) break;
-        bool eof = feof(f);
-        ble_app.sendFileChunk(offset, chunk_buf, got, eof);
-        offset += got;
-        delay(config::BLE_CHUNK_DELAY_MS);
     }
 
-    // Handle empty file
-    if (file_size == 0)
-    {
-        ble_app.sendFileChunk(0, nullptr, 0, true);
-    }
+    const bool eof = plan.eof && (got == plan.read_len);
+    ble_app.sendFileChunk(dl_offset_, got ? chunk_buf : nullptr, got, eof);
+    dl_offset_ += got;
+    dl_last_chunk_ms_ = now;
 
-    fclose(f);
-    ESP_LOGI(TAG, "[BLE] Download complete: %s (%lu bytes sent)",
-             filename.c_str(), (unsigned long)offset);
+    if (eof) finishDownload("complete");
 }
 
 // ============================================================================
@@ -3679,7 +3751,10 @@ static void loop_bs()
     }
     else if (ble_cmd == BLE_BS_CMD_FILE_DOWNLOAD)
     {
-        handleDownloadCommand();
+        // #380: only STARTS the transfer (opens the file, captures state).
+        // Chunks go out one per loop pass via serviceDownload() below, so the
+        // RX/uplink/heartbeat/flush services keep running during the download.
+        startDownload();
     }
     else if (ble_cmd == BLE_BS_CMD_CAMERA_TOGGLE)
     {
@@ -4042,6 +4117,10 @@ static void loop_bs()
     // slow-rendezvous timer doesn't expire during normal idle operation.
     // Gates itself on recovery/transaction state internally.
     serviceHeartbeat();
+
+    // BLE file download — at most one 170 B chunk per pass, paced to the BLE
+    // notify drain interval. No-op unless a transfer is active (#380).
+    serviceDownload();
 
     printStats();
 
