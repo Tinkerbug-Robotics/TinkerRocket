@@ -691,10 +691,30 @@ struct DeviceChipBar: View {
 struct RocketStateView: View {
     let state: String
 
+    // #382 (display-only): the wire states READY and PRELAUNCH both mean "on
+    // the pad" — READY is still waiting on the OC/GNSS gates, PRELAUNCH means
+    // the gates are met (GNSS lock, OC link, EKF running: the fully-armed
+    // guided path). The raw names read backwards (READY sounds MORE ready
+    // than PRELAUNCH), and the old colors — READY green, PRELAUNCH orange —
+    // reinforced the inversion. Render ONE "PRELAUNCH" label for both pad
+    // states and carry the real distinction in a readiness badge. Wire
+    // strings, CSV columns, and the announcer's raw-state logic are untouched.
+    static func displayLabel(for state: String) -> String {
+        state == "READY" ? "PRELAUNCH" : state
+    }
+    /// Badge (text, isReady) for the pad states; nil elsewhere.
+    static func padBadge(for state: String) -> (String, Bool)? {
+        switch state {
+        case "PRELAUNCH": return ("EKF Ready", true)
+        case "READY":     return ("Acquiring — waiting for GNSS + OC link", false)
+        default:          return nil
+        }
+    }
+
     var stateColor: Color {
         switch state {
-        case "READY": return .green
-        case "PRELAUNCH": return .orange
+        case "READY": return .orange     // acquiring (was green — inverted)
+        case "PRELAUNCH": return .green  // fully ready (was orange)
         case "INFLIGHT": return .red
         case "COMPLETE": return .blue
         case "MAG_CAL": return .blue   // ground-only excursion (issue #96)
@@ -703,10 +723,15 @@ struct RocketStateView: View {
     }
 
     var body: some View {
-        VStack {
-            Text(state)
+        VStack(spacing: 4) {
+            Text(Self.displayLabel(for: state))
                 .font(.system(size: 36, weight: .bold))
                 .foregroundColor(stateColor)
+            if let (text, ready) = Self.padBadge(for: state) {
+                Label(text, systemImage: ready ? "checkmark.seal.fill" : "hourglass")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(ready ? .green : .orange)
+            }
             Text("Rocket State")
                 .font(.caption)
                 .foregroundColor(.secondary)
