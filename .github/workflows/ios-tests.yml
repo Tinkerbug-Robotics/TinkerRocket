@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - 'TinkerRocketApp/**'
+      - '.github/workflows/ios-tests.yml'
   pull_request:
     paths:
       - 'TinkerRocketApp/**'
+      - '.github/workflows/ios-tests.yml'
 
 jobs:
   test:
@@ -16,14 +18,27 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+        # The project is developed on the Xcode 26.x toolchain (deployment
+        # target 26.2, storyboards saved with IB toolsVersion 22505); the old
+        # 16.2 pin couldn't even compile LaunchScreen.storyboard. macos-15
+        # ships 26.3 with the iOS 26.2 simulator runtime.
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Build and test
         working-directory: TinkerRocketApp
+        # pipefail so xcodebuild's exit code survives the xcpretty pipe. The
+        # old `| xcpretty || true` reported green unconditionally — it masked
+        # runs where a deployment-target mismatch made xcodebuild error out
+        # before running a single test.
+        # Serial testing: parallel clone-per-test launches race the simulator's
+        # app-launch service and produce phantom launch-denied "failures" that
+        # move between runs — observed locally while validating this fix.
         run: |
+          set -o pipefail
           xcodebuild test \
             -project TinkerRocketApp.xcodeproj \
             -scheme TinkerRocketApp \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=26.2' \
+            -parallel-testing-enabled NO \
             -resultBundlePath TestResults \
-            | xcpretty || true
+            | xcpretty
