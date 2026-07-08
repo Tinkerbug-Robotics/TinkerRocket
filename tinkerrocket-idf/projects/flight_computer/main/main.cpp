@@ -912,43 +912,19 @@ static void pyroSafeAll()
     ESP_LOGI(TAG, "[PYRO] All channels safed");
 }
 
-// PRELAUNCH continuity check. Board-dependent (#411 bring-up):
-//  - V7 (PYRO_CONT_NEEDS_ARM=false): the CONT divider is fed from VPP
-//    (always on) — sample synchronously, no ARM involved.
-//  - V8 (PYRO_CONT_NEEDS_ARM=true): the sense path is powered through the
-//    arming FET (same circuit as the pyro test board), so CONT only means
-//    anything while ARM is high. Start a momentary arm→settle→read→disarm
-//    sequence, completed non-blocking by servicePyroChannels() over the
-//    next PYRO_CONT_ARM_SETTLE_MS of main-loop ticks — the original
-//    "momentary arm-disarm" design this call site always described.
-static bool     pyro_cont_test_active   = false;
-static uint32_t pyro_cont_test_start_ms = 0;
-
-static void pyroSampleAllCont(int raw[4], bool cont[4])
+// PRELAUNCH continuity check. Sample all four CONT pins directly and cache
+// the result. Synchronous — no ARM pulse, no settle, no state machine.
+// VPP (flight-computer power, always on) feeds the CONT sense divider, so
+// ARM is not part of the sense path. Pyros are a V8+ feature, so there is
+// no earlier board to branch for.
+static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 {
+    int  raw[4];
+    bool cont[4];
     for (int i = 0; i < 4; ++i) {
         raw[i]  = gpio_get_level((gpio_num_t)PYRO_CONT_PINS[i]);
         cont[i] = pyroContFromRaw(raw[i]);
     }
-}
-
-static void pyroPrelaunchContTest(uint32_t now_ms)
-{
-    if (config::PYRO_CONT_NEEDS_ARM) {
-        portENTER_CRITICAL(&pyro_spinlock);
-        pyro_cont_test_active   = true;
-        pyro_cont_test_start_ms = now_ms;
-        pyroSetArmLocked(true);   // no-op if post_flight_lockout (test then
-                                  // just reads open at the deadline)
-        portEXIT_CRITICAL(&pyro_spinlock);
-        ESP_LOGI(TAG, "[PYRO] Prelaunch CONT: momentary ARM raised, sampling in %u ms",
-                 (unsigned)config::PYRO_CONT_ARM_SETTLE_MS);
-        return;
-    }
-
-    int  raw[4];
-    bool cont[4];
-    pyroSampleAllCont(raw, cont);
     portENTER_CRITICAL(&pyro_spinlock);
     for (int i = 0; i < 4; ++i) {
         pyro_ch[i].cont       = cont[i];
@@ -1036,26 +1012,8 @@ static void servicePyroChannels(uint32_t now_ms)
         }
     }
 
-    // Momentary prelaunch CONT test (PYRO_CONT_NEEDS_ARM boards): once the
-    // arm settle elapses, sample all four channels and drop ARM (via the
-    // demand union below).
-    bool cont_test_done = false;
-    int  ct_raw[4]  = {0, 0, 0, 0};
-    bool ct_cont[4] = {false, false, false, false};
-    if (pyro_cont_test_active &&
-        (now_ms - pyro_cont_test_start_ms) >= config::PYRO_CONT_ARM_SETTLE_MS) {
-        pyroSampleAllCont(ct_raw, ct_cont);
-        for (int i = 0; i < 4; ++i) {
-            pyro_ch[i].cont       = ct_cont[i];
-            pyro_ch[i].cont_known = true;
-        }
-        pyro_cont_test_active = false;
-        cont_test_done = true;
-    }
-
-    // Compute ARM demand: any channel mid-fire (or an active momentary CONT
-    // test) keeps the pin HIGH.
-    bool any_demand = pyro_cont_test_active;
+    // Compute ARM demand: any channel mid-fire keeps the pin HIGH.
+    bool any_demand = false;
     for (int i = 0; i < 4; ++i) {
         if (pyro_ch[i].state == PyroChState::ArmSettle ||
             pyro_ch[i].state == PyroChState::Firing) {
@@ -1066,12 +1024,6 @@ static void servicePyroChannels(uint32_t now_ms)
     pyroSetArmLocked(any_demand);
 
     portEXIT_CRITICAL(&pyro_spinlock);
-
-    if (cont_test_done) {
-        ESP_LOGI(TAG, "[PYRO] Prelaunch CONT (momentary ARM): ch1 raw=%d cont=%d  ch2 raw=%d cont=%d  ch3 raw=%d cont=%d  ch4 raw=%d cont=%d",
-                 ct_raw[0], ct_cont[0], ct_raw[1], ct_cont[1],
-                 ct_raw[2], ct_cont[2], ct_raw[3], ct_cont[3]);
-    }
 
     for (int i = 0; i < 4; ++i) {
         if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d FIRED at alt=%.1f m",
@@ -4939,11 +4891,8 @@ static void loop_fc()
             }
             else if (out_pending_command == PYRO_CONT_TEST)
             {
-                // On PYRO_CONT_NEEDS_ARM boards (V8) the CONT sense path is
-                // powered through the arming FET, so the read must be taken
-                // with a momentary ARM raised — the same requirement as the
-                // prelaunch test and the pyro test-board tool. On V7 the CONT
-                // divider is fed from always-on VPP, so a bare read is fine.
+                // Direct CONT read. VPP (flight-computer power, always on)
+                // feeds the sense divider, so no ARM pulse is needed.
                 // Rejected in flight to honor the app's "ground tests are
                 // pad-only" UX guarantee.
                 if (isCommandLockoutState(rocket_state)) {
@@ -4977,39 +4926,13 @@ static void loop_fc()
                         cont_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
                         gpio_config(&cont_cfg);
 
-                        // Momentary ARM around the read on V8. Synchronous is
-                        // safe: this runs in loop_fc, the same task as
-                        // servicePyroChannels, so nothing stomps ARM mid-read;
-                        // post_flight_lockout still forces ARM low inside
-                        // pyroSetArmLocked (#317). No FIRE pin is touched.
-                        const bool arm_for_cont = config::PYRO_CONT_NEEDS_ARM;
-                        if (arm_for_cont) {
-                            const gpio_num_t arm_pin = (gpio_num_t)config::PYRO_ARM_PIN;
-                            esp_gpio_revoke(1ULL << arm_pin);
-                            safePyroOutputInit(arm_pin);
-                            portENTER_CRITICAL(&pyro_spinlock);
-                            pyroSetArmLocked(true);
-                            portEXIT_CRITICAL(&pyro_spinlock);
-                            delay_ms(config::PYRO_CONT_ARM_SETTLE_MS);
-                        }
-
                         int raw = gpio_get_level(cont_pin);
-
-                        if (arm_for_cont) {
-                            portENTER_CRITICAL(&pyro_spinlock);
-                            pyroSetArmLocked(false);
-                            portEXIT_CRITICAL(&pyro_spinlock);
-                            // Restore the canonical low-driven safe state.
-                            safePyroOutputInit((gpio_num_t)config::PYRO_ARM_PIN);
-                        }
-
                         portENTER_CRITICAL(&pyro_spinlock);
                         pyro_ch[idx].cont       = pyroContFromRaw(raw);
                         pyro_ch[idx].cont_known = true;
                         portEXIT_CRITICAL(&pyro_spinlock);
-                        ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d%s",
-                                 ch, raw, pyroContFromRaw(raw) ? 1 : 0,
-                                 arm_for_cont ? " (armed)" : "");
+                        ESP_LOGI(TAG, "[PYRO CONT TEST] CH%u raw=%d cont=%d",
+                                 ch, raw, pyroContFromRaw(raw) ? 1 : 0);
                     }
                 }
             }

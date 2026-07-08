@@ -69,9 +69,6 @@ struct board_pins
     static constexpr uint8_t PYRO3_FIRE_PIN = 34;
     static constexpr uint8_t PYRO4_CONT_PIN = 51;
     static constexpr uint8_t PYRO4_FIRE_PIN = 50;
-    // V7 feeds the CONT divider from VPP (always on): CONT is readable
-    // without raising ARM.
-    static constexpr bool PYRO_CONT_NEEDS_ARM = false;
 
     // ### Fin servos ###
     static constexpr uint8_t SERVO_PIN_1 = 43;
