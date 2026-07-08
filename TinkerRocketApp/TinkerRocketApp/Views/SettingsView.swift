@@ -1305,11 +1305,18 @@ private struct PyroChannelTestControls: View {
                 HStack {
                     Text("Continuity")
                     Spacer()
-                    Circle().fill(cont ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(cont ? "CONT" : "NO CONT")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(cont ? .green : .red)
+                    if device.contTestPending(channel: UInt8(channel)) {
+                        ProgressView().controlSize(.mini)
+                        Text("TESTING")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Circle().fill(cont ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(cont ? "CONT" : "NO CONT")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(cont ? .green : .red)
+                    }
                 }
             }
 
