@@ -3088,6 +3088,85 @@ static void resetFlightStateForSim(const char* edge)
 }
 
 // Loop is responsible for reading sensor data
+// INFLIGHT entry — everything that must happen exactly once at launch
+// (state flip, per-flight resets, EKF/guidance degraded-mode handling).
+// Factored out of the PRELAUNCH case so the #382 READY-launch fallback
+// promotes through the IDENTICAL path and the two can never drift.
+static void enterInflight(uint32_t now_ms, const char* from_state)
+{
+    rocket_state = INFLIGHT;
+    launch_time_millis = now_ms;
+    // Orientation is now latched (estimator only runs in
+    // READY/PRELAUNCH).  Start the boost-phase thrust-axis
+    // cross-check on what was latched.
+    orient_thrust_mismatch = false;
+    orient_thrust_check.start(time_us());
+    // Safety: warn and disable guidance if EKF never initialized
+    if (!ekf_initialized) {
+        ESP_LOGW(TAG, "[EKF] WARNING: Launching without EKF initialization!");
+        if (guidance_enabled) {
+            ESP_LOGW(TAG, "[GUIDANCE] Auto-disabled — EKF not initialized");
+            guidance_enabled = false;
+        }
+    }
+    // Freeze the ENU reference position at launch
+    if (!ref_pos_frozen && have_ref_pos) {
+        ref_pos_frozen = true;
+        ESP_LOGI(TAG, "[EKF] Ref pos frozen (launch): n=%lu",
+                      (unsigned long)ref_pos_count);
+    }
+    // #297: do NOT re-capture ground pressure here.  launch_flag
+    // lags real liftoff, so bmp_latest_si is already a few m up and
+    // would bias AGL (and the ALTITUDE_ON_DESCENT main-deploy height)
+    // low for the whole flight.  Keep the reference frozen from
+    // READY/PRELAUNCH — the baro path stops updating ground_pressure_pa
+    // once state leaves INIT/READY/MAG_CAL, so it's already the last
+    // on-pad value here.
+    max_alt_m = 0.0f;
+    max_speed_mps = 0.0f;
+    landed_actions_done = false;
+    landed_candidate_active = false;   // #297
+    // Clear apogee/landing flags so they start clean at launch.
+    // launch_flag is intentionally preserved (it got us here).
+    // Per #142/#143: the original reset cleared only baro and
+    // velocity flags, leaving stale gps_apogee, pitch_apogee,
+    // and master apogee_flag values that could survive a
+    // reboot-recovery into the next ascent.
+    kinematics.alt_apogee_flag = false;
+    kinematics.vel_u_apogee_flag = false;
+    kinematics.gps_apogee_flag = false;
+    kinematics.pitch_apogee_flag = false;
+    kinematics.apogee_flag = false;
+    kinematics.alt_landed_flag = false;
+    kinematics.max_speed = 0.0f;
+    // Reset guidance state for new flight
+    guidance.reset();
+    control_mixer.reset();
+    roll_rate_pid_standalone.reset();
+    burnout_detected = false;
+    burnout_time_ms = 0;
+    burnout_neg_count = 0;
+    guidance_active = false;
+    guidance_tilt_inhibited = false;   // clear tilt-limit latch
+    // Reset pyro channels on launch. ARM stays LOW until a
+    // channel's trigger fires (per-fire arming on new PCB).
+    pyro_apogee_detected = false;
+    pyro_apogee_time_ms  = 0;
+    // #382: re-arm the per-flight settings snapshot (#165) —
+    // without this only the first flight/sim per boot emitted
+    // FlightSettingsData, so sim runs #2+ in one boot had no
+    // settings block in their reports.
+    settings_emit_count = 0;
+    portENTER_CRITICAL(&pyro_spinlock);
+    for (int i = 0; i < 4; ++i) {
+        pyro_ch[i].state          = PyroChState::Idle;
+        pyro_ch[i].phase_start_ms = 0;
+    }
+    portEXIT_CRITICAL(&pyro_spinlock);
+    ESP_LOGI(TAG, "[STATE] %s -> INFLIGHT (ground_p=%.0f)",
+                  from_state, (double)ground_pressure_pa);
+}
+
 static void loop_fc()
 {
     fcMaybeMarkOtaValid();   // Layer 4: confirm a freshly OTA'd image after a stable run
@@ -5543,6 +5622,23 @@ static void loop_fc()
                     pyroPrelaunchContTest(now_ms);
                     ESP_LOGI(TAG, "[STATE] READY -> PRELAUNCH");
                 }
+                else if (kinematics.launch_flag)
+                {
+                    // #382: launch detected while the OC/GNSS gates were never
+                    // met (dead OC, <4 sats, boost before lock). Pre-fallback
+                    // the FC sat in READY for the whole flight: no deployment,
+                    // no control, no LANDED, no snapshots — only OC logging
+                    // survived (NSF_LAUNCH latches from any state). Promote
+                    // straight to INFLIGHT through the same entry path;
+                    // degraded modes are already handled there (guidance
+                    // auto-off without EKF init, ref-pos freeze skipped
+                    // without a fix, ground pressure frozen from the pad).
+                    ESP_LOGW(TAG, "[STATE] LAUNCH FROM READY — gates unmet "
+                                  "(out_ready=%d gnss_ready=%d); promoting to "
+                                  "INFLIGHT in degraded mode",
+                             (int)out_ready, (int)gnss_ready);
+                    enterInflight(now_ms, "READY");
+                }
                 break;
             }
             case PRELAUNCH:
@@ -5557,77 +5653,7 @@ static void loop_fc()
 
                 if (kinematics.launch_flag)
                 {
-                    rocket_state = INFLIGHT;
-                    launch_time_millis = now_ms;
-                    // Orientation is now latched (estimator only runs in
-                    // READY/PRELAUNCH).  Start the boost-phase thrust-axis
-                    // cross-check on what was latched.
-                    orient_thrust_mismatch = false;
-                    orient_thrust_check.start(time_us());
-                    // Safety: warn and disable guidance if EKF never initialized
-                    if (!ekf_initialized) {
-                        ESP_LOGW(TAG, "[EKF] WARNING: Launching without EKF initialization!");
-                        if (guidance_enabled) {
-                            ESP_LOGW(TAG, "[GUIDANCE] Auto-disabled — EKF not initialized");
-                            guidance_enabled = false;
-                        }
-                    }
-                    // Freeze the ENU reference position at launch
-                    if (!ref_pos_frozen && have_ref_pos) {
-                        ref_pos_frozen = true;
-                        ESP_LOGI(TAG, "[EKF] Ref pos frozen (launch): n=%lu",
-                                      (unsigned long)ref_pos_count);
-                    }
-                    // #297: do NOT re-capture ground pressure here.  launch_flag
-                    // lags real liftoff, so bmp_latest_si is already a few m up and
-                    // would bias AGL (and the ALTITUDE_ON_DESCENT main-deploy height)
-                    // low for the whole flight.  Keep the reference frozen from
-                    // READY/PRELAUNCH — the baro path stops updating ground_pressure_pa
-                    // once state leaves INIT/READY/MAG_CAL, so it's already the last
-                    // on-pad value here.
-                    max_alt_m = 0.0f;
-                    max_speed_mps = 0.0f;
-                    landed_actions_done = false;
-                    landed_candidate_active = false;   // #297
-                    // Clear apogee/landing flags so they start clean at launch.
-                    // launch_flag is intentionally preserved (it got us here).
-                    // Per #142/#143: the original reset cleared only baro and
-                    // velocity flags, leaving stale gps_apogee, pitch_apogee,
-                    // and master apogee_flag values that could survive a
-                    // reboot-recovery into the next ascent.
-                    kinematics.alt_apogee_flag = false;
-                    kinematics.vel_u_apogee_flag = false;
-                    kinematics.gps_apogee_flag = false;
-                    kinematics.pitch_apogee_flag = false;
-                    kinematics.apogee_flag = false;
-                    kinematics.alt_landed_flag = false;
-                    kinematics.max_speed = 0.0f;
-                    // Reset guidance state for new flight
-                    guidance.reset();
-                    control_mixer.reset();
-                    roll_rate_pid_standalone.reset();
-                    burnout_detected = false;
-                    burnout_time_ms = 0;
-                    burnout_neg_count = 0;
-                    guidance_active = false;
-                    guidance_tilt_inhibited = false;   // clear tilt-limit latch
-                    // Reset pyro channels on launch. ARM stays LOW until a
-                    // channel's trigger fires (per-fire arming on new PCB).
-                    pyro_apogee_detected = false;
-                    pyro_apogee_time_ms  = 0;
-                    // #382: re-arm the per-flight settings snapshot (#165) —
-                    // without this only the first flight/sim per boot emitted
-                    // FlightSettingsData, so sim runs #2+ in one boot had no
-                    // settings block in their reports.
-                    settings_emit_count = 0;
-                    portENTER_CRITICAL(&pyro_spinlock);
-                    for (int i = 0; i < 4; ++i) {
-                        pyro_ch[i].state          = PyroChState::Idle;
-                        pyro_ch[i].phase_start_ms = 0;
-                    }
-                    portEXIT_CRITICAL(&pyro_spinlock);
-                    ESP_LOGI(TAG, "[STATE] PRELAUNCH -> INFLIGHT (ground_p=%.0f)",
-                                  (double)ground_pressure_pa);
+                    enterInflight(now_ms, "PRELAUNCH");
                 }
                 break;
             }
