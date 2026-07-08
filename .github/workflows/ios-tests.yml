@@ -18,7 +18,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+        # The project is developed on the Xcode 26.x toolchain (deployment
+        # target 26.2, storyboards saved with IB toolsVersion 22505); the old
+        # 16.2 pin couldn't even compile LaunchScreen.storyboard. macos-15
+        # ships 26.3 with the iOS 26.2 simulator runtime.
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Build and test
         working-directory: TinkerRocketApp
@@ -34,7 +38,7 @@ jobs:
           xcodebuild test \
             -project TinkerRocketApp.xcodeproj \
             -scheme TinkerRocketApp \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'platform=iOS Simulator,name=iPhone 16,OS=26.2' \
             -parallel-testing-enabled NO \
             -resultBundlePath TestResults \
             | xcpretty
