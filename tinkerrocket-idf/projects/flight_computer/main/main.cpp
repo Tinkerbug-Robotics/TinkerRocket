@@ -137,6 +137,11 @@ static bool    pending_mag_apply = false;
 // mag_cal_verify_active: true between MAG_CAL_ACCEPT and the next
 // evaluateVerify() — drives the timer-based polling block.
 static int64_t mag_cal_verify_start_us = 0;
+// #382: explicit "evaluate on the next tick" request from MAG_CAL_VERIFY_DONE.
+// The old signal was mag_cal_verify_start_us = 0, relying on (now - 0) >= 60 s
+// — which is FALSE for the first 60 s of uptime, so a Done tap during a
+// right-after-boot bench cal silently did nothing until the safety timeout.
+static bool    mag_cal_verify_eval_now = false;
 static int16_t mag_cal_prior_cx = 0, mag_cal_prior_cy = 0, mag_cal_prior_cz = 0;
 static bool    mag_cal_session_active = false;
 static bool    mag_cal_verify_active  = false;
@@ -1804,7 +1809,13 @@ static inline void piezoStop()
     }
 }
 
-static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms, uint32_t now_us)
+// #382: no now_us parameter — every caller passed a 32-bit-truncated
+// time_us(), but piezoToggleCb compares against the full 64-bit
+// esp_timer_get_time(). Past ~71.6 min of uptime the truncated "now" wrapped
+// small, the computed end time sat in the 64-bit past, and every beep (and
+// its LED flash) terminated on the first toggle callback. Read the full
+// clock here so the mistake can't be reintroduced at a call site.
+static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms)
 {
     if (!piezo_pwm_ready || piezo_toggle_timer == nullptr || freq_hz == 0U || duration_ms == 0U)
     {
@@ -1816,11 +1827,15 @@ static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms, uint32_t n
     {
         piezo_half_period_us = 50U;
     }
-    piezo_wave_end_us = (int64_t)now_us + ((int64_t)duration_ms * 1000LL);
+    const int64_t now_us64 = esp_timer_get_time();
+    piezo_wave_end_us = now_us64 + ((int64_t)duration_ms * 1000LL);
     piezo_pin_high = false;
     piezo_wave_active = true;
     gpio_set_level((gpio_num_t)(config::PIEZO_PIN), 0);
-    triggerBlueLedFlash((uint32_t)(now_us / 1000ULL));
+    // Same wrapping-ms domain as serviceBlueLedFlash's now_ms (both derive
+    // (uint32_t)(esp_timer_get_time()/1000)), so the wrap-safe signed
+    // comparison there stays correct.
+    triggerBlueLedFlash((uint32_t)(now_us64 / 1000LL));
 
     (void)esp_timer_stop(piezo_toggle_timer);
     if (esp_timer_start_periodic(piezo_toggle_timer, piezo_half_period_us) != ESP_OK)
@@ -2133,18 +2148,18 @@ static inline void serviceCameraStart(uint32_t now_ms)
         camera_start_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
 }
 
-static inline void startBootReadyChirp(uint32_t now_ms, uint32_t now_us)
+static inline void startBootReadyChirp(uint32_t now_ms)
 {
     if (!enable_sounds || !piezo_pwm_ready)
     {
         return;
     }
-    piezoStart(2600, 90, now_us);
+    piezoStart(2600, 90);
     boot_chirp_phase = BootChirpPhase::GapAfterBeep1;
     boot_chirp_next_ms = now_ms + 150U; // 90ms beep + 60ms gap
 }
 
-static inline void serviceBootReadyChirp(uint32_t now_ms, uint32_t now_us)
+static inline void serviceBootReadyChirp(uint32_t now_ms)
 {
     switch (boot_chirp_phase)
     {
@@ -2153,7 +2168,7 @@ static inline void serviceBootReadyChirp(uint32_t now_ms, uint32_t now_us)
         case BootChirpPhase::GapAfterBeep1:
             if ((int32_t)(now_ms - boot_chirp_next_ms) >= 0)
             {
-                piezoStart(1900, 130, now_us);
+                piezoStart(1900, 130);
                 boot_chirp_phase = BootChirpPhase::WaitingBeep2End;
                 boot_chirp_next_ms = now_ms + 130U;
             }
@@ -2192,8 +2207,7 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
         return;
     }
     piezoStart(config::HEARTBEAT_BEEP_FREQ_HZ,
-               config::HEARTBEAT_BEEP_DURATION_MS,
-               time_us());
+               config::HEARTBEAT_BEEP_DURATION_MS);
 }
 
 // ── OTA rollback gate (#8 Phase 4 / Layer 4, #13) ─────────────────────────
@@ -3250,8 +3264,10 @@ static void loop_fc()
     if (mag_cal_verify_active)
     {
         const int64_t now = esp_timer_get_time();
-        if ((now - mag_cal_verify_start_us) >= MAG_CAL_VERIFY_DURATION_US)
+        if (mag_cal_verify_eval_now ||
+            (now - mag_cal_verify_start_us) >= MAG_CAL_VERIFY_DURATION_US)
         {
+            mag_cal_verify_eval_now = false;
             float worst_uT = 0.0f;
             const bool pass = mag_calibrator.evaluateVerify(worst_uT);
             mag_cal_verify_active = false;
@@ -3985,7 +4001,7 @@ static void loop_fc()
                 // Confirmation beep so the user knows it worked
                 if (piezo_pwm_ready)
                 {
-                    piezoStart(2600, 100, time_us());
+                    piezoStart(2600, 100);
                 }
             }
             else if (out_pending_command == SOUNDS_DISABLE)
@@ -4425,6 +4441,7 @@ static void loop_fc()
                     // below polls esp_timer_get_time() and calls
                     // evaluateVerify() after MAG_CAL_VERIFY_DURATION_US.
                     mag_cal_verify_start_us = esp_timer_get_time();
+                    mag_cal_verify_eval_now = false;  // fresh window — no stale Done (#382)
                     mag_cal_verify_active = true;
                     mag_cal_status_dirty = true;
                     ESP_LOGI(TAG, "[MAGCAL] accept: VERIFYING — user-driven (Done button) "
@@ -4446,10 +4463,11 @@ static void loop_fc()
                 }
                 else
                 {
-                    // Force the per-tick block below to dispatch on the
-                    // next iteration by zeroing the start timestamp —
-                    // (now - 0) is always >= MAG_CAL_VERIFY_DURATION_US.
-                    mag_cal_verify_start_us = 0;
+                    // #382: explicit flag — the old zero-the-timestamp trick
+                    // ((now - 0) >= 60 s) was a no-op for the first 60 s of
+                    // uptime, silently deferring an early Done tap to the
+                    // safety timeout.
+                    mag_cal_verify_eval_now = true;
                     ESP_LOGI(TAG, "[MAGCAL] verify_done: user requested evaluation");
                 }
             }
@@ -4537,6 +4555,7 @@ static void loop_fc()
                     // Restart the safety timer so the user gets another
                     // full window after a reset.
                     mag_cal_verify_start_us = esp_timer_get_time();
+                    mag_cal_verify_eval_now = false;  // fresh window — no stale Done (#382)
                     mag_cal_status_dirty = true;
                     ESP_LOGI(TAG, "[MAGCAL] verify_reset: accumulators cleared, timer restarted");
                 }
@@ -5490,7 +5509,7 @@ static void loop_fc()
                     rocket_state = READY;
                     if (!ready_chirp_played)
                     {
-                        startBootReadyChirp(now_ms, time_us());
+                        startBootReadyChirp(now_ms);
                         ready_chirp_played = true;
                     }
                     ESP_LOGI(TAG, "[STATE] INITIALIZATION -> READY");
@@ -6252,7 +6271,7 @@ static void loop_fc()
     }
     
     const uint32_t now_ms_for_sound = time_ms();
-    serviceBootReadyChirp(now_ms_for_sound, time_us());
+    serviceBootReadyChirp(now_ms_for_sound);
     serviceHeartbeatBeep(now_ms_for_sound);
     serviceBlueLedFlash(now_ms_for_sound);
     serviceGoProPulse(now_ms_for_sound);
