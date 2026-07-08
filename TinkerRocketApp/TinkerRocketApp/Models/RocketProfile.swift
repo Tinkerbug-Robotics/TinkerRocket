@@ -220,6 +220,16 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     }
 }
 
+extension RocketProfile {
+    /// Physical fin angle (deg) a servo pulse reaches on the 1:1 fin-to-servo-
+    /// arm line from #267: 1000 µs = −60°, 1500 µs = 0°, 2000 µs = +60°.
+    /// Used to migrate pre-#267 profiles whose JSON has pulse limits but no
+    /// fin-angle keys (#378) — static and pure so the migration is unit-tested.
+    static func finDegForPulse(_ us: Int16) -> Float {
+        (Float(us) - 1500.0) * (120.0 / 1000.0)
+    }
+}
+
 // MARK: - Backward-compatible decoding
 //
 // The synthesized Decodable conformance treats missing JSON keys as a hard
@@ -269,8 +279,20 @@ extension RocketProfile {
         servoHz = try c.decodeIfPresent(Int16.self, forKey: .servoHz) ?? defaults.servoHz
         servoMinUs = try c.decodeIfPresent(Int16.self, forKey: .servoMinUs) ?? defaults.servoMinUs
         servoMaxUs = try c.decodeIfPresent(Int16.self, forKey: .servoMaxUs) ?? defaults.servoMaxUs
-        finMinDeg = try c.decodeIfPresent(Float.self, forKey: .finMinDeg) ?? defaults.finMinDeg
-        finMaxDeg = try c.decodeIfPresent(Float.self, forKey: .finMaxDeg) ?? defaults.finMaxDeg
+        // #378: pre-#267 profiles carry pulse limits (e.g. the old 1250/1750
+        // defaults) but no fin-angle keys. Backfilling the angles with the new
+        // ±60° defaults paired old pulses with full-travel angles, so the FC's
+        // commanded-vs-physical fin mapping was off ~2× (~half roll/guidance
+        // authority, silently). Derive the missing angles from the pulses via
+        // the 1:1 servo-arm line instead (1000 µs = −60°, 2000 µs = +60°, per
+        // the #267 calibration above): the pair is then self-consistent and
+        // the hardware's actual travel is unchanged — 1250/1750 correctly
+        // becomes ±30°, and absent pulses still yield the ±60° defaults.
+        // Profiles that already carry angle keys are untouched.
+        finMinDeg = try c.decodeIfPresent(Float.self, forKey: .finMinDeg)
+            ?? RocketProfile.finDegForPulse(servoMinUs)
+        finMaxDeg = try c.decodeIfPresent(Float.self, forKey: .finMaxDeg)
+            ?? RocketProfile.finDegForPulse(servoMaxUs)
         finRingMode = try c.decodeIfPresent(UInt8.self, forKey: .finRingMode) ?? defaults.finRingMode
         let finSlots = try c.decodeIfPresent([Int].self, forKey: .finServoAtSlot) ?? defaults.finServoAtSlot
         finServoAtSlot = finSlots.count == 4 ? finSlots : defaults.finServoAtSlot
