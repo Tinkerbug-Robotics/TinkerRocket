@@ -218,6 +218,12 @@ static uint32_t log_last_flush_ms = 0;
 // Reset to 0 by stopLogging() so the next flight can retry immediately
 // rather than waiting out the residual window.
 static uint32_t log_last_open_attempt_ms = 0;
+// #329: CSV writes/flushes that failed.  fprintf() usually buffers a row and
+// returns OK even on a full card, so a full disk surfaces only at fflush/fsync
+// (ENOSPC) — counting both makes otherwise-silent row loss visible instead of
+// vanishing with no warning. (Declared here so startLogging/stopLogging can
+// count header-write and close failures too — the #384 gaps.)
+static uint32_t log_write_fail_count = 0;
 // State-transition tracking (INFLIGHT safety arm time, last state, boot-edge
 // guard, per-rocket freq lock) lives per tracked rocket in
 // TrackedRocket::log_state (#381) — one global here made two interleaved
@@ -721,12 +727,21 @@ static void startLogging()
     // now that one file can interleave several; empty on EVENT rows (those
     // are station-level, not per-rocket). All downstream consumers key
     // columns by header name, so the trailing add is non-breaking.
-    fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
+    int hdr_written = fprintf(log_file, "time_ms,state,num_sats,pdop,lat,lon,alt_m,h_acc,"
                       "acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z,"
                       "pressure_alt,alt_rate,max_alt,max_speed,"
                       "voltage,current,soc,roll,pitch,yaw,speed,"
                       "launch,vel_apo,alt_apo,landed,rssi,snr,"
                       "next_ch,rx_freq_mhz,seq,gap,event,rocket_id\n");
+    if (hdr_written <= 0)
+    {
+        // #384 (#329 residual): a full/wedged card at open used to fail the
+        // header silently; every later name-keyed consumer then sees a
+        // headerless CSV.
+        log_write_fail_count++;
+        ESP_LOGW(TAG, "[LOG] header fprintf() failed (ret=%d, errno=%d %s)",
+                 hdr_written, errno, strerror(errno));
+    }
 
     logging_active = true;
     log_start_ms = millis();
@@ -740,7 +755,18 @@ static void stopLogging()
 {
     if (!logging_active) return;
 
-    if (log_file) { fclose(log_file); log_file = nullptr; }
+    if (log_file)
+    {
+        // #384 (#329 residual): fclose flushes the final buffered rows — the
+        // LANDED-close tail of a flight. A card-full here was fully silent.
+        if (fclose(log_file) != 0)
+        {
+            log_write_fail_count++;
+            ESP_LOGW(TAG, "[LOG] fclose() failed — final buffered rows may be lost (errno=%d %s)",
+                     errno, strerror(errno));
+        }
+        log_file = nullptr;
+    }
     logging_active = false;
     log_last_open_attempt_ms = 0;  // allow the next packet to retry immediately (#107)
 
@@ -827,11 +853,6 @@ static void renameOpenLogIfSequential()
 
 static uint32_t log_write_count = 0;  // Tracks calls for periodic flash check
 
-// #329: CSV writes/flushes that failed.  fprintf() usually buffers a row and
-// returns OK even on a full card, so a full disk surfaces only at fflush/fsync
-// (ENOSPC) — counting both makes otherwise-silent row loss visible instead of
-// vanishing with no warning.
-static uint32_t log_write_fail_count = 0;
 
 // Query the active log filesystem (SPIFFS or FAT) for total/used bytes.
 // Returns true if a backend is mounted and the query succeeded.
@@ -949,6 +970,7 @@ static void logHopEvent(const char* event_str, float rx_freq_mhz)
                     (double)rx_freq_mhz,
                     event_str);
     if (written <= 0) {
+        log_write_fail_count++;  // #384: event rows now count toward #329 stats
         ESP_LOGW(TAG, "[LOG] fprintf(event) failed");
     }
     log_last_write_ms = millis();
@@ -3323,7 +3345,12 @@ static void loop_bs()
         last_packet_ms = millis();
 
         // --- Name beacon: [0xBE][network_id][rocket_id][unit_name...] ---
-        if (rx_len >= 3 && rx_buf[0] == LORA_BEACON_SYNC)
+        // #384: a telemetry frame whose first byte (network_id) happens to
+        // equal LORA_BEACON_SYNC (0xBE = nid 190) would otherwise parse as a
+        // beacon and shadow 100% of telemetry. Inert today (boot forces
+        // nid 0), so require the length to disambiguate: beacons are short,
+        // telemetry is exactly SIZE_OF_LORA_DATA.
+        if (rx_len >= 3 && rx_len != SIZE_OF_LORA_DATA && rx_buf[0] == LORA_BEACON_SYNC)
         {
             uint8_t bcn_nid = rx_buf[1];
             uint8_t bcn_rid = rx_buf[2];
@@ -3343,7 +3370,7 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: SIZE_OF_LORA_DATA (61) bytes ---
+        // --- Telemetry packet: SIZE_OF_LORA_DATA (66) bytes ---
         else if (rx_len == SIZE_OF_LORA_DATA)
         {
             // Decode the telemetry packet

@@ -2187,10 +2187,31 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // partial write.  ~700 us per write on the SPI bus.
         if (payload_len == sizeof(FlightSnapshotData))
         {
-            // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
-            // so the recovery path can hand the bytes straight back to FC.
-            (void)logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
-                                      frame, frame_len);
+            // #383: SNAPSHOT_MSG bypasses the sensor-frame dedup (its payload
+            // starts with the magic, not a timestamp — putting it in that
+            // switch would misread the constant magic as a ts and drop every
+            // snapshot after the first). Guard the MRAM slot here instead: an
+            // I2S DMA replay delivers a snapshot a few hundred ms OLDER than
+            // the one already stored, and overwriting would hand brownout
+            // recovery stale state. Reject slightly-older frames; a frame
+            // MUCH older (>10 s behind) can only be a new flight's near-zero
+            // clock — accept it and re-seed the baseline.
+            uint32_t elapsed_ms = 0;
+            memcpy(&elapsed_ms, payload + offsetof(FlightSnapshotData, flight_elapsed_ms),
+                   sizeof(elapsed_ms));
+            static uint32_t last_snap_elapsed_ms = 0;
+            constexpr uint32_t NEW_FLIGHT_BACKSTEP_MS = 10'000;
+            const bool stale_replay =
+                elapsed_ms < last_snap_elapsed_ms &&
+                (last_snap_elapsed_ms - elapsed_ms) <= NEW_FLIGHT_BACKSTEP_MS;
+            if (!stale_replay)
+            {
+                last_snap_elapsed_ms = elapsed_ms;
+                // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
+                // so the recovery path can hand the bytes straight back to FC.
+                (void)logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
+                                          frame, frame_len);
+            }
         }
     }
     else if (type == GET_FLIGHT_SNAPSHOT)
@@ -3151,15 +3172,12 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         setPendingCommand(enabled ? GUIDANCE_ENABLE : GUIDANCE_DISABLE);
         ESP_LOGI("LORA", "UPLINK Guidance: %s", enabled ? "ENABLE" : "DISABLE");
     }
-    else if (cmd == 65 && payload_len >= sizeof(GuidanceConfigData))
-    {
-        // Full guidance config from BaseStation: relay to FC
-        memcpy(pending_config_data, payload, sizeof(GuidanceConfigData));
-        pending_config_data_len = sizeof(GuidanceConfigData);
-        pending_config_msg_type = GUIDANCE_CONFIG_MSG;
-        setPendingCommand(GUIDANCE_CONFIG_PENDING);
-        ESP_LOGI("LORA", "UPLINK Guidance config queued for RocketComputer");
-    }
+    // #383: no cmd-65 (GuidanceConfigData) uplink branch — deliberately.
+    // The LoRa uplink rx_buf is 32 bytes, so a 36-byte GuidanceConfigData
+    // payload can never arrive here (the old branch was dead code), and the
+    // BS stopped relaying config entirely in #285 — guidance config reaches
+    // the FC over BLE (cmd 65 handler in the BLE dispatch above). If uplink
+    // config relay ever returns, the buffer needs resizing first.
     else if (cmd == 66 && payload_len >= sizeof(FinConfigData))
     {
         // Full fin layout from BaseStation: relay to FC

@@ -555,7 +555,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             // samples, so a transient can't fire it.  Being non-EKF, it restores
             // voter diversity exactly when the EKF voters and/or baro are at
             // risk — baro mach-locked-out (the #262 common-mode case) or a
-            // degraded EKF.  Same 5 s freshness gate as the landing vote.
+            // degraded EKF.  Gated on GPS_APOGEE_FRESH_MS freshness (500 ms
+            // since #262 — this comment used to claim 5 s).
             const bool gps_fresh = gps_available_ &&
                                    (millis() - last_gps_time_ms_) < GPS_APOGEE_FRESH_MS;
             if (gps_fresh)

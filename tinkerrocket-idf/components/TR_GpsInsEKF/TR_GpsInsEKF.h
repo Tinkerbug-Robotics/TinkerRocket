@@ -276,11 +276,15 @@ private:
     float vEst_NED_mps_[3];
     float aEst_B_mps2_[3];
     float wEst_B_rps_[3];
-    uint32_t tPrev_us_;
-    float dt_s_;
-    uint32_t timeWeekPrev_;
+    // #386: default-initialized — the FC path always runs init()/
+    // setQuaternion() first, but the sim/ECEF path could reach measUpdate()'s
+    // cos^4(pitch) gate with garbage euler_BL_rad_ (and dt math with garbage
+    // tPrev_us_/timeWeekPrev_) on its very first update.
+    uint32_t tPrev_us_ = 0;
+    float dt_s_ = 0.0f;
+    uint32_t timeWeekPrev_ = 0;
     uint32_t baroTimePrev_ = 0;
-    float euler_BL_rad_[3];
+    float euler_BL_rad_[3] = {0.0f, 0.0f, 0.0f};
 
     // GNSS-acceleration estimate for accelMatchHeadingUpdate: previous GNSS
     // velocity + sample time to difference, and a low-pass on the result
