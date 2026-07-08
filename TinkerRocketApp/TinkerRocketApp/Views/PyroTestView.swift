@@ -54,6 +54,7 @@ struct PyroTestView: View {
     @State private var secondsRemaining: Int = 10
     @State private var recordSecondsRemaining: Int = 10
     @State private var cameraRecording = false
+    @State private var startedLoggingForTest = false  // #385: only stop what we started
     @State private var videoSaved = false
     @State private var errorMessage: String?
 
@@ -96,7 +97,15 @@ struct PyroTestView: View {
                 // Start recording + logging at T-5
                 if secondsRemaining == 5 {
                     cameraRecording = true
-                    device.sendToggleLogging()
+                    // #385: cmd 23 is a TOGGLE — the blind send used to STOP
+                    // logging right before the fire when a session was already
+                    // running (fire event not recorded), then restart it after.
+                    // Only start if the rocket isn't logging, and only stop
+                    // afterwards if we were the ones who started it.
+                    if !device.telemetry.rocketLoggingActive {
+                        device.sendToggleLogging()
+                        startedLoggingForTest = true
+                    }
                     camera.startRecording { url, error in
                         if let url = url {
                             saveToPhotoLibrary(url: url)
@@ -130,7 +139,10 @@ struct PyroTestView: View {
                 recordSecondsRemaining -= 1
                 if recordSecondsRemaining <= 0 {
                     ticker.stop()
-                    device.sendToggleLogging()
+                    if startedLoggingForTest {
+                        device.sendToggleLogging()
+                        startedLoggingForTest = false
+                    }
                     camera.stopRecording()
                 }
             default:
