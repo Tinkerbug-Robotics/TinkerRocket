@@ -171,6 +171,15 @@ bool TR_LoRa_Comms::send(const uint8_t* payload, size_t len)
     {
         return false;
     }
+    // A scan owns the radio's tuning; transmitting now would go out on whatever
+    // channel it is dwelling on and corrupt the pass. Refuse, mirroring
+    // hopToFrequencyMHz's can't-retune-mid-scan guard (#379). Callers should
+    // gate on their own scan tracking too (see serviceUplink) — this is the
+    // driver-level backstop.
+    if (isScanActive())
+    {
+        return false;
+    }
 
     // Switch out of RX mode if active
     rx_mode_ = false;
@@ -198,7 +207,7 @@ bool TR_LoRa_Comms::send(const uint8_t* payload, size_t len)
 
 bool TR_LoRa_Comms::canSend() const
 {
-    return enabled_ && !tx_ongoing_;
+    return enabled_ && !tx_ongoing_ && !isScanActive();  // #379: not mid-scan
 }
 
 void TR_LoRa_Comms::getStats(Stats& out) const

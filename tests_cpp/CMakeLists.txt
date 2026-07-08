@@ -308,6 +308,18 @@ target_include_directories(test_bs_log_policy PRIVATE
 target_link_libraries(test_bs_log_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_log_policy)
 
+# ---------- test_bs_uplink_policy ----------
+# Host-side test for the base-station uplink transmit gate (#379): an uplink TX
+# during a LoRa frequency scan must be deferred, not sent on the scan channel.
+# bs_uplink_policy.h is pure, so the test just adds the base_station/main dir.
+add_executable(test_bs_uplink_policy test_bs_uplink_policy.cpp)
+target_include_directories(test_bs_uplink_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_uplink_policy GTest::gtest_main)
+gtest_discover_tests(test_bs_uplink_policy)
+
 # ---------- test_burnout_detector (#197/#256) ----------
 # Detector logic is shared with the firmware via
 # components/TR_KinematicChecks/BurnoutDetector.h — the test exercises the

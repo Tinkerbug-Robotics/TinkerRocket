@@ -28,6 +28,7 @@
 
 #include "config.h"
 #include "bs_log_policy.h"        // parseSequentialFilename() (#137)
+#include "bs_uplink_policy.h"     // mayTransmitUplink() scan gate (#379)
 
 #include <TR_LoRa_Comms.h>
 #include <TR_Sensor_Data_Converter.h>
@@ -1463,9 +1464,17 @@ static void serviceUplink()
         return;  // Wait between retries
     }
 
-    if (!lora_comms.canSend())
+    // #379: gate the transmit on radio-ready AND not-scanning. A TX during a
+    // frequency scan goes out on the scan's dwell channel (silently missing the
+    // rocket, no ACK to catch it) and corrupts that pass's RSSI — so defer.
+    // Returning here before send() preserves uplink_retries_left, so the command
+    // fires once the scan completes instead of being lost. Mirrors
+    // serviceHeartbeat's scan_passes_remaining_ gate.
+    if (!bs_uplink_policy::mayTransmitUplink(uplink_pending, uplink_retries_left,
+                                             scan_passes_remaining_,
+                                             lora_comms.canSend()))
     {
-        return;  // Previous TX still in progress
+        return;  // radio busy, or a scan owns the channel — retry next pass
     }
 
     if (lora_comms.send(uplink_buf, uplink_len))
