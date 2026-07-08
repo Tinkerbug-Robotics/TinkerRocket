@@ -150,6 +150,18 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
                            uint32_t gnss_time_us) {
     // 1. Compute dt
     uint32_t t_us = imu_data.time_us;
+    // #440: a repeated/frozen IMU timestamp means no new time has provably
+    // elapsed — a stalled sensor, a wedged I2C read, or a replayed frame.
+    // The floor below used to rewrite dt=0 to 2 ms, re-integrating the SAME
+    // sample as if time had passed: velocity/attitude drifted while
+    // isHealthy() stayed true, feeding control a confidently wrong state.
+    // Skip the tick entirely — the filter HOLDS its state through a stall
+    // (the caller's raw-gyro fallbacks own control when the IMU is stale,
+    // #262/#270). The floor below still handles small-but-real dts.
+    if (t_us == tPrev_us_) {
+        ++frozen_dt_skips_;
+        return;
+    }
     dt_s_ = ((float)(t_us - tPrev_us_)) / 1e6f;
     tPrev_us_ = t_us;
     if (dt_s_ > 0.1f) dt_s_ = 0.1f;

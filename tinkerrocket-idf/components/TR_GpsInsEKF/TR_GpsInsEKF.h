@@ -130,6 +130,9 @@ public:
     void getAccelBias(float (&r)[3]) const { r[0]=aBias_mps2_[0]; r[1]=aBias_mps2_[1]; r[2]=aBias_mps2_[2]; }
     void getRotRateEst(float (&r)[3]) const { r[0]=wEst_B_rps_[0]; r[1]=wEst_B_rps_[1]; r[2]=wEst_B_rps_[2]; }
     void getRotRateBias(float (&r)[3]) const { r[0]=wBias_rps_[0]; r[1]=wBias_rps_[1]; r[2]=wBias_rps_[2]; }
+    // #440 diagnostics: updates skipped on a frozen IMU timestamp.
+    uint32_t frozenDtSkips() const { return frozen_dt_skips_; }
+
     void getOrientEst(float (&r)[3]) const { r[0]=euler_BL_rad_[0]; r[1]=euler_BL_rad_[1]; r[2]=euler_BL_rad_[2]; }
     void getPosEst(double (&r)[3]) const { r[0]=pEst_D_rrm_[0]; r[1]=pEst_D_rrm_[1]; r[2]=pEst_D_rrm_[2]; }
     void getVelEst(float (&r)[3]) const { r[0]=vEst_NED_mps_[0]; r[1]=vEst_NED_mps_[1]; r[2]=vEst_NED_mps_[2]; }
@@ -280,6 +283,9 @@ private:
     // setQuaternion() first, but the sim/ECEF path could reach measUpdate()'s
     // cos^4(pitch) gate with garbage euler_BL_rad_ (and dt math with garbage
     // tPrev_us_/timeWeekPrev_) on its very first update.
+    // #440: updates skipped because the IMU timestamp didn't advance.
+    // A nonzero value in flight means the IMU stream stalled or replayed.
+    uint32_t frozen_dt_skips_ = 0;
     uint32_t tPrev_us_ = 0;
     float dt_s_ = 0.0f;
     uint32_t timeWeekPrev_ = 0;
