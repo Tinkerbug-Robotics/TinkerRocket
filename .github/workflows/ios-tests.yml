@@ -24,6 +24,35 @@ jobs:
         # ships 26.3 with the iOS 26.2 simulator runtime.
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
+      - name: Boot simulator
+        id: sim
+        # Pick the newest available iPhone simulator at runtime and pre-boot
+        # it, waiting for bootstatus. Two flakes this kills: (a) xcodebuild
+        # querying destinations before CoreSimulator has the device set ready
+        # ("Unable to find a device matching the provided destination
+        # specifier" while the echo shows the device exists — hit on the
+        # first #434 run), and (b) hard-pinned OS versions drifting across
+        # runner-image rollouts.
+        run: |
+          UDID=$(xcrun simctl list devices available --json | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)['devices']
+          phones = []
+          for runtime, devs in data.items():
+              if 'iOS' not in runtime:
+                  continue
+              ver = runtime.rsplit('iOS-', 1)[-1].replace('-', '.')
+              for d in devs:
+                  if d.get('isAvailable') and d['name'].startswith('iPhone'):
+                      phones.append((tuple(int(x) for x in ver.split('.')), d['name'], d['udid']))
+          phones.sort()
+          print(phones[-1][2])
+          ")
+          echo "Using simulator $UDID"
+          xcrun simctl boot "$UDID" 2>/dev/null || true
+          xcrun simctl bootstatus "$UDID" -b
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
       - name: Build and test
         working-directory: TinkerRocketApp
         # pipefail so xcodebuild's exit code survives the xcpretty pipe. The
@@ -38,7 +67,7 @@ jobs:
           xcodebuild test \
             -project TinkerRocketApp.xcodeproj \
             -scheme TinkerRocketApp \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=26.2' \
+            -destination 'platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}' \
             -parallel-testing-enabled NO \
             -resultBundlePath TestResults \
             | xcpretty
