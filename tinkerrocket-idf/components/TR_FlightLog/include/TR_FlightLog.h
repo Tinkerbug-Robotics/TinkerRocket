@@ -2,6 +2,7 @@
 
 #include "BlockStateBitmap.h"
 #include "FlightIndex.h"
+#include "FlightLogLock.h"
 #include "TR_BitmapStore.h"
 #include "TR_FlightLog_types.h"
 #include "TR_NandBackend.h"
@@ -142,6 +143,20 @@ private:
     // the consumer is idempotent: a missed clear at worst causes one extra
     // service call that no-ops via the flight_active_ check.
     volatile bool prepare_request_pending_ = false;
+
+    // Guards all mutation/read of index_ and bitmap_ across the two cores that
+    // touch this instance (#388). Held for the whole logical operation.
+    // requestPrepareFlight() deliberately does NOT take it — it only sets the
+    // volatile flag above, so the high-priority I2S task can never block on a
+    // ~770 ms prepareFlight erase that holds the lock.
+    FlightLogMutex mutex_;
+
+    // Lock-held implementations, called by the public wrappers and by the two
+    // internal call chains (servicePendingPrepareFlight -> prepareFlightLocked,
+    // writeFrame -> writePageLocked) so the non-recursive mutex is never taken
+    // twice on one thread.
+    Status prepareFlightLocked(uint32_t& flight_id_out);
+    Status writePageLocked(const uint8_t* page);
 
     void persistBitmap();
     void seedBitmapFromBackend();  // initial bad-block scan into the fresh bitmap

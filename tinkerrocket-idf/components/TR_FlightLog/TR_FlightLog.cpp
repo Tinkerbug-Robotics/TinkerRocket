@@ -284,6 +284,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
 }
 
 Status TR_FlightLog::markBlockBad(uint32_t block) {
+    FlightLogLockGuard guard(mutex_);
     if (!initialized_) return Status::NotInitialized;
     if (block >= NAND_BLOCK_COUNT) return Status::OutOfRange;
     bitmap_.set(block, BLOCK_BAD);
@@ -315,6 +316,7 @@ void TR_FlightLog::requestPrepareFlight() {
 }
 
 bool TR_FlightLog::servicePendingPrepareFlight(uint32_t& id_out, Status& status_out) {
+    FlightLogLockGuard guard(mutex_);
     if (!prepare_request_pending_) return false;
     // Always clear the flag — even when we won't run prepareFlight — so a
     // stale request can't fire on a later iteration after the flight has
@@ -322,11 +324,16 @@ bool TR_FlightLog::servicePendingPrepareFlight(uint32_t& id_out, Status& status_
     prepare_request_pending_ = false;
     if (flight_active_) return false;
 
-    status_out = prepareFlight(id_out);
+    status_out = prepareFlightLocked(id_out);
     return true;
 }
 
 Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
+    FlightLogLockGuard guard(mutex_);
+    return prepareFlightLocked(flight_id_out);
+}
+
+Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
     if (!initialized_) return Status::NotInitialized;
     if (flight_active_)  return Status::Error;  // already flying
 
@@ -390,6 +397,7 @@ bool TR_FlightLog::extendActiveRange() {
 }
 
 Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
+    FlightLogLockGuard guard(mutex_);
     if (!initialized_)   return Status::NotInitialized;
     if (!flight_active_) return Status::Error;
     if (payload == nullptr && payload_len != 0) return Status::OutOfRange;
@@ -409,10 +417,17 @@ Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
     const uint32_t crc = page_crc(page);
     std::memcpy(page, &crc, sizeof(crc));
 
-    return writePage(page);
+    // Lock already held; go straight to the locked impl (writePage would
+    // re-take the non-recursive mutex and deadlock).
+    return writePageLocked(page);
 }
 
 Status TR_FlightLog::writePage(const uint8_t* page) {
+    FlightLogLockGuard guard(mutex_);
+    return writePageLocked(page);
+}
+
+Status TR_FlightLog::writePageLocked(const uint8_t* page) {
     if (!initialized_)  return Status::NotInitialized;
     if (!flight_active_) return Status::Error;
     if (page == nullptr) return Status::OutOfRange;
@@ -446,6 +461,7 @@ Status TR_FlightLog::writePage(const uint8_t* page) {
 }
 
 Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) {
+    FlightLogLockGuard guard(mutex_);
     if (!initialized_)    return Status::NotInitialized;
     if (!flight_active_)  return Status::Error;
     if (filename == nullptr) return Status::OutOfRange;
@@ -512,6 +528,7 @@ Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) 
 
 size_t TR_FlightLog::listFlights(FlightIndexEntry* out, size_t max,
                                  size_t page, size_t per_page) {
+    FlightLogLockGuard guard(mutex_);
     if (!initialized_ || out == nullptr || max == 0 || per_page == 0) return 0;
     const size_t total = index_.size();
     const size_t start = page * per_page;
@@ -526,6 +543,7 @@ size_t TR_FlightLog::listFlights(FlightIndexEntry* out, size_t max,
 Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
                                     uint8_t* buf, size_t buf_len,
                                     size_t& out_len) {
+    FlightLogLockGuard guard(mutex_);
     out_len = 0;
     if (!initialized_)       return Status::NotInitialized;
     if (filename == nullptr) return Status::OutOfRange;
@@ -581,6 +599,7 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
 }
 
 Status TR_FlightLog::deleteFlight(const char* filename) {
+    FlightLogLockGuard guard(mutex_);
     if (!initialized_)       return Status::NotInitialized;
     if (filename == nullptr) return Status::OutOfRange;
 
@@ -603,6 +622,7 @@ Status TR_FlightLog::deleteFlight(const char* filename) {
 }
 
 Status TR_FlightLog::renameFlight(const char* old_name, const char* new_name) {
+    FlightLogLockGuard guard(mutex_);
     if (!initialized_)      return Status::NotInitialized;
     if (old_name == nullptr || new_name == nullptr) return Status::OutOfRange;
 
