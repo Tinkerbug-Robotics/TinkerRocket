@@ -201,12 +201,24 @@ private:
     // collect before the next DRDY — capping the LOGGED rate at the flight
     // loop rate (~980/s) no matter the chip ODR.  A short queue lets the loop
     // drain every sample (it logs each one; control uses the freshest), so
-    // the logged rate follows ISM6HG256_UPDATE_RATE.  Depth 8 ≈ 4 ms at
-    // 1920 Hz — far beyond any loop-iteration jitter observed ([GAP DIAG]
-    // iter_max ≈ 1.4 ms); overflow drops the OLDEST sample and counts it.
+    // the logged rate follows ISM6HG256_UPDATE_RATE.  Depth 32 ≈ 17 ms at
+    // 1920 Hz: loop jitter is ~1.4 ms, but blocking loop work (NVS commits on
+    // config saves) measured ~1-3 dropped samples per commit at depth 8 on
+    // the 2026-07-09 bench — 32 gives margin over the worst observed stall so
+    // in-session drops genuinely mean something is wrong.  Overflow drops the
+    // OLDEST sample and counts it (imu_q_drops in [GAP DIAG], zeroed by the
+    // consumer when it starts draining — the ~4 s of pre-loop boot produce
+    // thousands of meaningless pre-consumer drops otherwise).
     QueueHandle_t ism6Queue = nullptr;
-    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 8;
+    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 32;
     volatile uint32_t ism6_queue_drops = 0;
+
+public:
+    // Zero the drop counter (and nothing else).  Called once by the consumer
+    // when it begins draining, so the gauge counts only consumer-era drops.
+    void resetIsm6QueueDrops() { ism6_queue_drops = 0; }
+
+private:
 
     SemaphoreHandle_t bmp585DataSemaphore;
     SemaphoreHandle_t mmc5983maDataSemaphore;

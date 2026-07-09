@@ -3174,6 +3174,19 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
 
 static void loop_fc()
 {
+    // Zero the IMU-queue drop gauge on the first pass: the poll task starts
+    // ~4 s before this loop does (servo init holds setup), producing ~8k
+    // meaningless pre-consumer drops into an unconsumed queue.  From here on
+    // a nonzero [GAP DIAG] imu_q_drops means the consumer actually stalled.
+    {
+        static bool imu_drop_gauge_zeroed = false;
+        if (!imu_drop_gauge_zeroed)
+        {
+            imu_drop_gauge_zeroed = true;
+            sensor_collector_hw.resetIsm6QueueDrops();
+        }
+    }
+
     fcMaybeMarkOtaValid();   // Layer 4: confirm a freshly OTA'd image after a stable run
 
     // ── OTA image pump: yield the core to the OTA RX parser ──
