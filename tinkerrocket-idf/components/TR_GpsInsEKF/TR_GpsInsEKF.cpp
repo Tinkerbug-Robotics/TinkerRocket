@@ -1227,25 +1227,31 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
     multiplyQuaternions(quat_BL_, quatDelta, qTemp);
     for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
 
-    // Joseph form covariance: P = (I - K*H) * P * (I - K*H)^T + K*R*K^T
-    // H[2] = -1, so K*H row i col j = K[i] * (-1 if j==2, else 0)
-    float I_KH[15][15];
-    for (int i = 0; i < 15; i++)
+    // Joseph form covariance: P = (I - K*H) * P * (I - K*H)^T + K*R*K^T.
+    // H is a single row with one nonzero (H[2] = -1), so K*H is RANK-1:
+    // (I-KH)[i][j] = delta_ij + K[i]*delta_j2, and both matrix products
+    // collapse to outer-product updates against row/column 2 — ~700 MACs
+    // instead of the dense 2x15^3 (~6750) this used to cost (~1.1 ms per
+    // fusion on target, which tripled per-tick EKF cost when #450 restored
+    // every-sample fusion).  Same algebra, same Joseph symmetry/PSD
+    // robustness — only the float association differs.
+    //
+    //   A  = (I-KH)*P      -> A[i][j] = P[i][j] + K[i]*P[2][j]
+    //   B  = A*(I-KH)^T    -> B[i][j] = A[i][j] + A[i][2]*K[j]
+    //   P' = B + R*K*K^T
+    float Prow2[15];
+    for (int j = 0; j < 15; j++) Prow2[j] = P_[2][j];  // snapshot: row 2 is
+    for (int i = 0; i < 15; i++)                       // itself updated below
         for (int j = 0; j < 15; j++)
-            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * (j == 2 ? -1.0f : 0.0f);
+            P_[i][j] += K[i] * Prow2[j];
 
-    float P_new[15][15] = {};
-    for (int i = 0; i < 15; i++)
+    float Acol2[15];
+    for (int i = 0; i < 15; i++) Acol2[i] = P_[i][2];
+    for (int i = 0; i < 15; i++) {
+        const float KR_i = K[i] * R_baro_;
         for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 15; k++)
-                P_new[i][j] += I_KH[i][k] * P_[k][j];
-
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++) {
-            float sum = 0;
-            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
-            P_[i][j] = sum + K[i] * R_baro_ * K[j];
-        }
+            P_[i][j] += Acol2[i] * K[j] + KR_i * K[j];
+    }
 
     // Symmetrize P
     for (int i = 0; i < 15; i++)
