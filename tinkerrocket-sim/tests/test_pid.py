@@ -123,3 +123,36 @@ def test_properties_readable():
     assert pid.max_cmd == 5.0
     assert pid.cumulative_error == 0.0
     assert pid.last_error == 0.0
+
+
+def test_integrator_accumulator_clamped_after_long_saturation():
+    """#386: the accumulator (not just the I output) is clamped, so the
+    command releases promptly after a long saturated stretch reverses.
+    Mirrors PIDTest.IntegratorRecoversPromptlyAfterLongSaturation."""
+    pid = PIDController(0.0, 0.5, 0.0, -10.0, 10.0)
+    pid.compute(0.0, 0.0, DT)  # init
+
+    # 60 s of hard +10 error: unclamped accumulator would reach 6000;
+    # clamped it stops at max_cmd/Ki = 20.
+    for _ in range(6000):
+        pid.compute(10.0, 0.0, DT)
+    assert pid.cumulative_error <= 20.0 + 1e-3
+
+    # Reversal: output must leave the +10 rail immediately and cross zero
+    # within ~400 steps (pre-fix: ~59,800 steps pinned at the rail).
+    steps_to_negative = None
+    for i in range(1000):
+        out = pid.compute(-10.0, 0.0, DT)
+        if out < 0.0:
+            steps_to_negative = i
+            break
+    assert steps_to_negative is not None and steps_to_negative <= 450
+
+
+def test_accumulator_clamp_inert_below_saturation():
+    pid = PIDController(0.0, 0.5, 0.0, -10.0, 10.0)
+    pid.compute(0.0, 0.0, DT)
+    out = 0.0
+    for _ in range(100):
+        out = pid.compute(1.0, 0.0, DT)
+    assert math.isclose(out, 0.5, abs_tol=1e-4)

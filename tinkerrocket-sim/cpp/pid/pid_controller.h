@@ -27,8 +27,15 @@ public:
         // Proportional
         float P = Kp_ * error;
 
-        // Integral with anti-windup (clamp integral term)
+        // Integral with anti-windup.  #386: clamp the ACCUMULATOR, not just
+        // the I output — mirrors TR_PID.cpp.  With only the output clamped, a
+        // long saturated stretch grows cumulative_error_ unbounded and the
+        // command stays pinned long after the error reverses.
         cumulative_error_ += error * dt;
+        if (Ki_ > 0.0f) {
+            cumulative_error_ = std::clamp(cumulative_error_,
+                                           min_cmd_ / Ki_, max_cmd_ / Ki_);
+        }
         float I = std::clamp(Ki_ * cumulative_error_, min_cmd_, max_cmd_);
 
         // Derivative

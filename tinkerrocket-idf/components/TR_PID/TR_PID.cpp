@@ -75,6 +75,20 @@ float TR_PID::computePID(float setpoint, float actual, float dt_seconds)
     {
         cumulative_error += error * dt;
     }
+    // #386: clamp the ACCUMULATOR, not just the I output below.  With only
+    // the output clamped, a long saturated stretch grows cumulative_error far
+    // past the value that already pins I at max_cmd; after the error
+    // reverses, all that surplus must be integrated back down before I (and
+    // the command) moves at all — fins held hard-over long past reversal.
+    // Bounding the accumulator at exactly the output-saturating value keeps
+    // steady-state behavior identical and makes recovery begin on the first
+    // post-reversal sample.  Ki > 0 guard: with Ki == 0 the I term is inert
+    // (and min/max divided by Ki would be undefined); the clamp then applies
+    // on the first compute after a runtime setKi() enables the term.
+    if (Ki > 0.0f)
+    {
+        cumulative_error = constrain(cumulative_error, min_cmd / Ki, max_cmd / Ki);
+    }
     float I = constrain(Ki * cumulative_error, min_cmd, max_cmd);
 
     // Derivative-on-measurement to avoid kick on setpoint change.
