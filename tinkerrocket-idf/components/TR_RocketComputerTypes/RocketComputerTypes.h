@@ -1636,6 +1636,12 @@ static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload fo
 static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 36-byte GuidanceConfigData
 static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
 static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
+// IMU logging rate (user setting, BLE cmd 67): the ISM6HG256 ODR the FC
+// programs for all three channels (low-g XL / high-g XL / gyro) and logs
+// at. Whitelisted to 960/1920/3840 Hz — the chip's ODR ladder steps that
+// the 44100 Hz I2S link can carry (3840 ≈ 156 of 176 KB/s framed).
+static constexpr uint8_t IMU_RATE_CONFIG_PENDING = 0xF5;  // OC→FC: payload follows as IMU_RATE_CONFIG_MSG
+static constexpr uint8_t IMU_RATE_CONFIG_MSG     = 0xF6;  // 2-byte ImuRateConfigData
 
 // #402: FC→OC over I2C, sent as a master WRITE (writes still work while the
 // slave TX ring is desynced by an aborted read).  On receipt the OC resets its
@@ -1699,6 +1705,23 @@ typedef struct __attribute__((packed))
     uint8_t setting;  // IMU_ORIENT_AUTO or orientation code 0..23
 } ImuOrientConfigData;
 static_assert(sizeof(ImuOrientConfigData) == 1, "ImuOrientConfigData must be 1 byte");
+
+// IMU logging rate setting (IMU_RATE_CONFIG_MSG payload).
+static constexpr uint16_t IMU_RATE_OPTIONS_HZ[] = {960, 1920, 3840};
+typedef struct __attribute__((packed))
+{
+    uint16_t rate_hz;  // one of IMU_RATE_OPTIONS_HZ
+} ImuRateConfigData;
+static_assert(sizeof(ImuRateConfigData) == 2, "ImuRateConfigData must be 2 bytes");
+
+inline bool imuRateValid(uint16_t hz)
+{
+    for (uint16_t opt : IMU_RATE_OPTIONS_HZ)
+    {
+        if (hz == opt) return true;
+    }
+    return false;
+}
 
 // Pyro trigger modes
 enum PyroTriggerMode : uint8_t {
@@ -1878,7 +1901,8 @@ struct __attribute__((packed)) FlightSettingsData
     //     waypoint, hold after the last; per-waypoint mode bytes are ignored.
     //     (Pre-v4 firmware stepped to the NEXT waypoint's angle and honored
     //     per-waypoint null_rate modes — analysis must branch on this.)
-    static constexpr uint8_t VERSION = 4;
+    // v5: appended ism6_update_rate_hz (user-configurable IMU logging rate).
+    static constexpr uint8_t VERSION = 5;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -1950,8 +1974,11 @@ struct __attribute__((packed)) FlightSettingsData
     // deflection (deg) at servo_min_us / servo_max_us.
     float    fin_min_deg;
     float    fin_max_deg;
+
+    // IMU logging rate that actually flew (v5+): the ISM6HG256 ODR in Hz.
+    uint16_t ism6_update_rate_hz;
 };
-static_assert(sizeof(FlightSettingsData) == 208, "FlightSettingsData layout check");
+static_assert(sizeof(FlightSettingsData) == 210, "FlightSettingsData layout check");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the

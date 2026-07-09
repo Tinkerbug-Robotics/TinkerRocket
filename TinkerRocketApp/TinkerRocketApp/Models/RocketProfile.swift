@@ -119,6 +119,11 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     /// off-axis board; optional for non-controlled flights.
     var imuOrientSetting: UInt8 = 0   // default: manual identity (+X nose/up); 0xFF = pad auto-detect
 
+    /// IMU logging rate in Hz (ISM6HG256 ODR): 960, 1920, or 3840. Logged
+    /// samples follow this rate; the control loop always consumes the
+    /// freshest sample regardless.
+    var imuRateHz: UInt16 = 1920
+
     // MARK: Servo
     var servoBias1: Int16 = 85
     var servoBias2: Int16 = 0
@@ -271,6 +276,7 @@ extension RocketProfile {
         pnTargetN = try c.decodeIfPresent(Float.self, forKey: .pnTargetN) ?? defaults.pnTargetN
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
         imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
+        imuRateHz = try c.decodeIfPresent(UInt16.self, forKey: .imuRateHz) ?? defaults.imuRateHz
 
         servoBias1 = try c.decodeIfPresent(Int16.self, forKey: .servoBias1) ?? defaults.servoBias1
         servoBias2 = try c.decodeIfPresent(Int16.self, forKey: .servoBias2) ?? defaults.servoBias2

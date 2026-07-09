@@ -198,6 +198,7 @@ final class ActiveRocketSyncer: ObservableObject {
                              rollReverse: profile.finRollReverse)
         device.sendCameraConfig(cameraType: profile.cameraType)
         device.sendImuOrientationConfig(profile.imuOrientSetting)
+        device.sendImuRateConfig(profile.imuRateHz)
         device.sendSoundConfig(enabled: profile.soundsEnabled)
         device.sendPyroConfig(channels: [
             (profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),

@@ -1592,6 +1592,7 @@ static void buildFlightSettings(FlightSettingsData& s)
     s.ism6_low_g_fs_g  = config::ISM6_LOW_G_FS_G;
     s.ism6_high_g_fs_g = config::ISM6_HIGH_G_FS_G;
     s.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
+    s.ism6_update_rate_hz = sensor_collector_hw.ism6Rate();  // live (v5+)
 
     // Servo trim + timing (live values from servo_control).
     for (int i = 0; i < 4; ++i) {
@@ -2533,6 +2534,27 @@ static void setup_fc()
     ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                   (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
                   (unsigned)fin_rev, (unsigned)fin_rrev);
+
+    // Restore the user-selected IMU logging rate (BLE cmd 67, namespace
+    // "imu").  Staged into the collector BEFORE sensor_collector.begin()
+    // below, which programs the chip ODR from it.  Whitelist on read so a
+    // corrupted NVS value can't run the IMU at an unplanned rate.
+    prefs.begin("imu", false);
+    if (prefs.isKey("rate"))
+    {
+        const uint16_t nvs_rate = prefs.getUShort("rate", config::ISM6HG256_UPDATE_RATE);
+        if (imuRateValid(nvs_rate))
+        {
+            sensor_collector_hw.setIsm6Rate(nvs_rate);
+            ESP_LOGI(TAG, "NVS IMU logging rate: %u Hz", (unsigned)nvs_rate);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "NVS IMU logging rate %u invalid — using default %u",
+                     (unsigned)nvs_rate, (unsigned)config::ISM6HG256_UPDATE_RATE);
+        }
+    }
+    prefs.end();
 
     // Restore high-g accelerometer bias from NVS (namespace "cal")
     prefs.begin("cal", false);  // read-write (creates namespace on first boot)
@@ -5031,6 +5053,42 @@ static void loop_fc()
                         if (changed && ekf_initialized) ekf_initialized = false;
                         ESP_LOGI(TAG, "[CFG] IMU orientation: MANUAL %s",
                                  orientCodeName(setting));
+                    }
+                }
+            }
+            else if (out_pending_command == IMU_RATE_CONFIG_PENDING)
+            {
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(ImuRateConfigData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(IMU_RATE_CONFIG_MSG, sizeof(ImuRateConfigData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(ImuRateConfigData))
+                {
+                    uint16_t rate_hz;
+                    memcpy(&rate_hz, cfg_payload, sizeof(rate_hz));
+                    if (rocket_state == INFLIGHT)
+                    {
+                        // Never mid-flight: the ODR switch produces one
+                        // odd-length inter-sample gap and changes the log
+                        // cadence — fine on the pad, not during boost.
+                        ESP_LOGW(TAG, "[CFG] IMU rate change ignored INFLIGHT");
+                    }
+                    else if (imuRateValid(rate_hz))
+                    {
+                        if (sensor_collector_hw.setIsm6Rate(rate_hz))
+                        {
+                            prefs.begin("imu", false);
+                            prefs.putUShort("rate", rate_hz);
+                            prefs.end();
+                            ESP_LOGI(TAG, "[CFG] IMU logging rate: %u Hz (persisted)",
+                                     (unsigned)rate_hz);
+                        }
+                    }
+                    else
+                    {
+                        ESP_LOGW(TAG, "[CFG] IMU rate %u Hz rejected (not 960/1920/3840)",
+                                 (unsigned)rate_hz);
                     }
                 }
             }
