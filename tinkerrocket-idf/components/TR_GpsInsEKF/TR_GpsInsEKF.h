@@ -305,12 +305,20 @@ private:
     // isHealthy() false while the filter re-converges.
     uint16_t unhealthy_cooldown_ = 0;
 
+    // Shared scalar measurement update: 1-row H with hn nonzero entries
+    // (hval[m] at state index hidx[m]).  Computes the gain, applies the full
+    // state correction (pos/vel/bias/quat), and updates P in Joseph form
+    // exploiting the rank-1 structure of K*H.  Used by the baro-altitude and
+    // the three heading updates (mag, GNSS course, accel-match).
+    void applyScalarMeasUpdate(const int* hidx, const float* hval, int hn,
+                               float y, float R, float s_min);
+
     // Kalman matrices
     float quat_BL_[4];
     float T_B2NED[3][3];
     float x[15];
     float P_[15][15];
-    float H_[6][15];
+    // (GNSS H = [I6 | 0] is exploited structurally in measUpdate — no stored H.)
     float Rw_[12][12];
     float R_[6][6];
     float Gs_[15][12];
