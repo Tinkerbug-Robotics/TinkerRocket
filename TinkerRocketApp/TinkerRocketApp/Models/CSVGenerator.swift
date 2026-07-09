@@ -376,8 +376,10 @@ nonisolated class CSVGenerator {
         }()
 
         // Decode the flight settings snapshot (#165), if present. The FC emits
-        // it a few times right after launch for redundancy; all copies are
-        // identical, so take the first one that decodes.
+        // it a few times right after launch for redundancy, and (since #452)
+        // every 5 s outside of flight so command-started bench recordings get
+        // provenance too. Copies within one flight are identical; take the
+        // first one that decodes.
         let flightSettings: FlightSettings? = frames
             .first(where: { $0.type == MessageType.flightSettings.rawValue })
             .flatMap { try? FlightSettingsData(from: $0.payload) }

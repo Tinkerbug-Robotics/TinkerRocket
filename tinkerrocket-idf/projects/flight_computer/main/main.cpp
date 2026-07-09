@@ -5459,6 +5459,26 @@ static void loop_fc()
         max_alt_m = kinematics.max_altitude;
         max_speed_mps = kinematics.max_speed;
 
+        // #452: periodic pre-flight settings snapshot.  Command-started bench
+        // recordings never enter INFLIGHT, where the per-flight emissions
+        // (#165/#418) live, so their logs contained no FlightSettingsData and
+        // the exported .json had no fw sha / settings provenance.  The FC has
+        // no signal for when the OC starts a logging session, so emit a copy
+        // every 5 s outside INFLIGHT instead: any session picks one up within
+        // seconds, idle copies churn out of the pre-launch ring harmlessly
+        // (208 B per 5 s against an 86 KB/s link), and the in-flight schedule
+        // is untouched.  Runs at loop level (not in the state machine) so
+        // recordings made during ground/servo test modes get provenance too.
+        {
+            static uint32_t last_preflight_settings_ms = 0;
+            if (rocket_state != INFLIGHT &&
+                now_ms - last_preflight_settings_ms >= 5000U)
+            {
+                last_preflight_settings_ms = now_ms;
+                sendFlightSettings();
+            }
+        }
+
         // #363 SAFETY: the state machine (and servicePyroChannels) live in the
         // `else` of the test-mode chain below, so a ground/servo/replay test
         // left active at launch would suppress PRELAUNCH->INFLIGHT and pyro
