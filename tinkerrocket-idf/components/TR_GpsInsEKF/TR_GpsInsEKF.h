@@ -176,8 +176,16 @@ public:
         std::memcpy(P_,             s.P,           sizeof(P_));
         tPrev_us_ = s.t_prev_us;
         std::memcpy(euler_BL_rad_,  s.euler,       sizeof(euler_BL_rad_));
-        // Rebuild DCM from restored quaternion
-        Quat2DCM(T_B2NED, quat_BL_);
+        // Rebuild DCM from restored quaternion.  Quat2DCM produces T_NED2B;
+        // transpose into T_B2NED (#386: this used to store the inverse —
+        // latent because timeUpdate() recomputes the DCM every tick, but
+        // wrong for any consumer in the window between a reboot-recovery
+        // restore and the first EKF tick).  Same pattern as setQuaternion().
+        float T_NED2B[3][3];
+        Quat2DCM(T_NED2B, quat_BL_);
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                T_B2NED[j][i] = T_NED2B[i][j];
     }
 
     /// Add offset to covariance diagonal (inflate uncertainty after reboot)
