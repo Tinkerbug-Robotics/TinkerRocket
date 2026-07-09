@@ -706,7 +706,7 @@ struct RocketStateView: View {
     static func padBadge(for state: String) -> (String, Bool)? {
         switch state {
         case "PRELAUNCH": return ("EKF Ready", true)
-        case "READY":     return ("Acquiring — waiting for GNSS + OC link", false)
+        case "READY":     return ("Acquiring GNSS", false)
         default:          return nil
         }
     }
