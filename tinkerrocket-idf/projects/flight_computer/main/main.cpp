@@ -3198,27 +3198,42 @@ static void loop_fc()
     // loop-period gating.
     static uint32_t dbg_ism6_reads = 0, dbg_bmp_reads = 0, dbg_bmp_bad_reads = 0, dbg_mmc_reads = 0, dbg_iis2mdc_reads = 0, dbg_gnss_reads = 0;
 
-    if (sensor_collector.getISM6HG256Data(ism6hg256_data))
+    // Drain ALL pending IMU samples each iteration.  The chip runs at
+    // ISM6HG256_UPDATE_RATE (1920 Hz) — about two samples per ~1 ms loop pass —
+    // and every one is logged to I2S so the recorded IMU rate follows the chip
+    // ODR, not the loop rate (single-slot handoff used to cap it at ~980/s).
+    // The control/EKF path converts only the FRESHEST drained sample: guidance,
+    // kinematics and the EKF all keep running at loop rate exactly as before.
     {
-        dbg_ism6_reads++;
-        sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
-        have_ism6_si = true;
+        bool ism6_new_this_iter = false;
+        while (sensor_collector.getISM6HG256Data(ism6hg256_data))
+        {
+            dbg_ism6_reads++;
+            ism6_new_this_iter = true;
 
-        // Feed the live low-g accel to the mag calibrator so each
-        // incoming mag sample can be bucketed by physical orientation
-        // (issue #96 follow-up).  Raw int16 LSB units share the same
-        // sign convention as the mag direction-wedge encoding.
-        mag_calibrator.setLiveAccel(ism6hg256_data.acc_low_raw.x,
-                                    ism6hg256_data.acc_low_raw.y,
-                                    ism6hg256_data.acc_low_raw.z);
+            memcpy(ism6hg256_data_buffer,
+                   &ism6hg256_data,
+                   SIZE_OF_ISM6HG256_DATA);
 
-        memcpy(ism6hg256_data_buffer,
-               &ism6hg256_data,
-               SIZE_OF_ISM6HG256_DATA);
+            (void)enqueueI2STx(ISM6HG256_MSG,
+                               ism6hg256_data_buffer,
+                               SIZE_OF_ISM6HG256_DATA);
+        }
 
-        (void)enqueueI2STx(ISM6HG256_MSG,
-                           ism6hg256_data_buffer,
-                           SIZE_OF_ISM6HG256_DATA);
+        if (ism6_new_this_iter)
+        {
+            sensor_converter.convertISM6HG256Data(ism6hg256_data, ism6_latest_si);
+            have_ism6_si = true;
+
+            // Feed the live low-g accel to the mag calibrator so each
+            // incoming mag sample can be bucketed by physical orientation
+            // (issue #96 follow-up).  Raw int16 LSB units share the same
+            // sign convention as the mag direction-wedge encoding.  The
+            // freshest sample is sufficient — the mag runs at 100 Hz.
+            mag_calibrator.setLiveAccel(ism6hg256_data.acc_low_raw.x,
+                                        ism6hg256_data.acc_low_raw.y,
+                                        ism6hg256_data.acc_low_raw.z);
+        }
     }
 
     if (sensor_collector.getBMP585Data(bmp585_data))
@@ -6350,13 +6365,14 @@ static void loop_fc()
                           (unsigned long)pt.bmp_max_us,
                           (unsigned long)pt.mmc_max_us,
                           (unsigned long)pt.ism6_read_max_us);
-            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu",
+            ESP_LOGI(TAG, "[GAP DIAG] gaps>10ms=%lu worst=%lu us | gnss calls=%lu >1ms=%lu >5ms=%lu >10ms=%lu | imu_q_drops=%lu",
                           (unsigned long)pt.gap_count,
                           (unsigned long)pt.gap_worst_us,
                           (unsigned long)pt.gnss_calls,
                           (unsigned long)pt.gnss_over_1ms,
                           (unsigned long)pt.gnss_over_5ms,
-                          (unsigned long)pt.gnss_over_10ms);
+                          (unsigned long)pt.gnss_over_10ms,
+                          (unsigned long)pt.ism6_queue_drops);
             ESP_LOGI(TAG, "[GAP DIAG] i2s enqueue ok/drop=%lu/%lu tx ok/fail=%lu/%lu last_err=%d q_free=%u",
                           (unsigned long)i2s_tx_enqueue_ok,
                           (unsigned long)i2s_tx_enqueue_drop,

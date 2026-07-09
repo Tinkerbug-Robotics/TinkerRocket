@@ -68,9 +68,11 @@ struct config : board_pins
     //     board header) ---
     // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
     // Higher rate = faster DMA buffer turnover = less stale data.
-    // 22050 Hz = 88 KB/s.  Lower rates cause more gaps from DMA replay.
-    // IMPORTANT: If sensor rates increase, raise this proportionally.
-    static constexpr uint32_t I2S_SAMPLE_RATE = 22050;  // Must match FC
+    // 44100 Hz = 176 KB/s.  Raised from 22050 with the FC's IMU 960 -> 1920 Hz
+    // logging step (the link was ~76% full at 22050).  RX DMA descriptors are
+    // sized in setup (dma_frame_num) to keep the callback cadence ~3 ms at
+    // this rate.  IMPORTANT: must match the FC — flash both together.
+    static constexpr uint32_t I2S_SAMPLE_RATE = 44100;  // Must match FC
 
     // --- LoRa RF parameters (radio presence + pins in board header) ---
     static constexpr float LORA_FREQ_MHZ = 915.0f;
