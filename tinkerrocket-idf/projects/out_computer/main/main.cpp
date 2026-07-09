@@ -502,6 +502,9 @@ static void setPendingCommand(uint8_t cmd)
 static const uint8_t CMD_REPEAT_LIMIT = 3;
 static uint8_t cmd_delivery_count = 0;
 static bool camera_recording_requested = false;
+// #383: camera/logging uplinks refused because the rocket was INFLIGHT
+// (FC skips I2C polls in flight — the command could never be delivered).
+static uint32_t uplink_inflight_refusals = 0;
 static volatile bool flash_op_active = false;   // set during blocking NAND ops (file list/delete/download)
 // Set alongside flash_op_active. Gates the I2S DMA recv callback so FC
 // sensor data stops being ingested while we're busy serving the phone.
@@ -1224,13 +1227,22 @@ static inline size_t rxLen()
 
 static inline IRAM_ATTR void rxPush(uint8_t b)
 {
-    rx_ring[rx_head] = b;
-    rx_head = (rx_head + 1U) % RX_STREAM_RING;
-    if (rx_head == rx_tail)
+    // #383: drop the NEWEST byte on overflow. The old drop-oldest advanced
+    // rx_tail from the ISR while the parser task does its own non-atomic RMW
+    // in rxPop() — an interleave could move the tail backwards and re-parse
+    // stale bytes (caught by SOF/CRC, but wasted work exactly when the ring
+    // is already drowning). With the ISR never touching rx_tail this is a
+    // textbook single-producer/single-consumer ring; one slot is sacrificed
+    // as the full marker. Either policy corrupts the in-flight frame during
+    // an overflow — framing resynchronizes on the next SOF regardless.
+    const size_t next = (rx_head + 1U) % RX_STREAM_RING;
+    if (next == rx_tail)
     {
         rx_ring_overflow_drops++;
-        rx_tail = (rx_tail + 1U) % RX_STREAM_RING; // drop oldest on overflow
+        return;
     }
+    rx_ring[rx_head] = b;
+    rx_head = next;
     // High-water tracking — non-atomic but only one ISR context produces.
     const uint32_t fill = (rx_head >= rx_tail)
                             ? (rx_head - rx_tail)
@@ -1647,6 +1659,14 @@ static void ocOtaTxFeederTask(void *)
     }
 }
 
+// #383: OTA_BEGIN handoff from the NimBLE host task to the loop task —
+// the loop task copies these into pending_config_data so that buffer keeps
+// a single writer. volatile flag is sufficient: single producer (BLE task),
+// single consumer (loop task), and the consumer is idempotent.
+static volatile bool ota_begin_stage_pending = false;
+static uint32_t ota_begin_total_size_staged = 0;
+static uint8_t  ota_begin_sha256_staged[32] = {};
+
 static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* sha256)
 {
     static_assert(sizeof(pending_config_data) >= 4 + 32,
@@ -1662,12 +1682,17 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     oc_ota_warmup_since_ms        = 0;
     oc_ota_revert_to_rx_requested = false;
     oc_ota_total_size             = total_size;
-    memcpy(pending_config_data, &total_size, 4);
-    memcpy(pending_config_data + 4, sha256, 32);
-    pending_config_data_len = 36;
-    pending_config_msg_type = OTA_BEGIN_MSG;
-    setPendingCommand(OTA_BEGIN_PENDING);
-    ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)", (unsigned)total_size);
+    // #383: this callback runs on the NimBLE host task, but every other
+    // writer of the pending_config_data staging buffer is the oc_loop task —
+    // a memcpy here could tear a config frame the loop task was packing.
+    // Stash into dedicated fields and let the loop task do the staging
+    // (single-writer restored); the flag handoff is SPSC like
+    // prepare_request_pending_.
+    memcpy(ota_begin_sha256_staged, sha256, 32);
+    ota_begin_total_size_staged = total_size;
+    ota_begin_stage_pending     = true;
+    ESP_LOGI("OC", "OTA relay: OTA_BEGIN stashed for loop-task staging (size=%u)",
+             (unsigned)total_size);
 }
 static void ocOtaRelayFinish(void* /*ctx*/)
 {
@@ -2928,6 +2953,21 @@ static void cacheRollControlConfig(const uint8_t* payload, size_t len)
 static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len)
 {
     ESP_LOGI("LORA", "UPLINK RX cmd=%u payload_len=%u", cmd, (unsigned)payload_len);
+
+    // #383: the FC skips I2C polls during INFLIGHT, so camera/logging
+    // commands are undeliverable mid-flight. The old path flipped
+    // camera_recording_requested immediately — the downlink then reported a
+    // state change that never happened, and the stale command fired on the
+    // ground after landing. Refuse honestly instead (per design decision);
+    // the operator re-sends after landing if still wanted.
+    if ((cmd == 1 || cmd == 23) && latest_rocket_state == INFLIGHT)
+    {
+        uplink_inflight_refusals++;
+        ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
+                         " until landing; %lu refused so far)",
+                 cmd, (unsigned long)uplink_inflight_refusals);
+        return;
+    }
 
     if (cmd == 1)
     {
@@ -5255,6 +5295,19 @@ static void loop_oc()
     ble_app.loop();
 
     // Check for BLE commands
+    // #383: stage a stashed OTA_BEGIN from the loop task (see ocOtaRelayBegin).
+    if (ota_begin_stage_pending)
+    {
+        ota_begin_stage_pending = false;
+        memcpy(pending_config_data, (const void*)&ota_begin_total_size_staged, 4);
+        memcpy(pending_config_data + 4, ota_begin_sha256_staged, 32);
+        pending_config_data_len = 36;
+        pending_config_msg_type = OTA_BEGIN_MSG;
+        setPendingCommand(OTA_BEGIN_PENDING);
+        ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)",
+                 (unsigned)ota_begin_total_size_staged);
+    }
+
     uint8_t ble_cmd = ble_app.getCommand();
     if (ble_cmd != 0)
     {
@@ -5321,7 +5374,18 @@ static void loop_oc()
         {
             // Delete file, then return the refreshed page-0 listing.
             String filename = ble_app.getDeleteFilename();
-            if (filename.length() > 0)
+            // #383: deletes erase NAND and pause I2S ingest + I2C service for
+            // the duration — never while flying (per design decision the gate
+            // is INFLIGHT only; pad-state file ops remain allowed). Answer
+            // with the current listing so the app UI refreshes truthfully.
+            if (filename.length() > 0 && latest_rocket_state == INFLIGHT)
+            {
+                ESP_LOGW("BLE", "Delete '%s' refused: rocket INFLIGHT",
+                         filename.c_str());
+                String json = flightlogBuildFileListJson(/*page=*/0).c_str();
+                ble_app.sendFileList(json);
+            }
+            else if (filename.length() > 0)
             {
                 beginPhoneIO();
                 auto st = flightlog.deleteFlight(filename.c_str());
@@ -5336,6 +5400,18 @@ static void loop_oc()
 
         // Handle file download requests from BLE app
         String download_filename = ble_app.getDownloadFilename();
+        // #383: a download pauses I2S ingest + I2C service for the whole
+        // multi-second transfer — mid-flight that would blind the OC and
+        // drop the flight data it exists to record. Terminate the request
+        // cleanly with an empty EOF chunk (the app sees a zero-length file
+        // instead of a hung transfer). INFLIGHT-only per design decision.
+        if (download_filename.length() > 0 && latest_rocket_state == INFLIGHT)
+        {
+            ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
+                     download_filename.c_str());
+            ble_app.sendFileChunk(0, nullptr, 0, true);
+            download_filename = "";
+        }
         if (download_filename.length() > 0)
         {
             beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking flash reads
