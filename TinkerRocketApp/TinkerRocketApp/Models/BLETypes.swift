@@ -104,6 +104,7 @@ struct RocketConfig {
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     var imuOrientSetting: UInt8? = nil   // 0xFF auto / 0..23 manual (nil = not reported)
+    var imuRateHz: UInt16? = nil         // ISM6 logging rate readback (nil = not reported)
     var loraFreqMHz: Float? = nil
     var loraSF: UInt8? = nil
     var loraBwKHz: Float? = nil

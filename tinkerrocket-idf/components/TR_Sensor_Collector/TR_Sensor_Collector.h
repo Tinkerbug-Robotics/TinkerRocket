@@ -158,6 +158,7 @@ private:
     uint8_t ISM6HG256_CS;
     uint8_t ISM6HG256_INT;
     uint16_t ISM6HG256_UPDATE_RATE;
+    bool ism6_rate_applied_ = false;  // Begin() programmed the chip ODR
     uint8_t BMP585_CS;
     uint8_t BMP585_INT;
     uint16_t BMP585_UPDATE_RATE;
@@ -210,13 +211,26 @@ private:
     // consumer when it starts draining — the ~4 s of pre-loop boot produce
     // thousands of meaningless pre-consumer drops otherwise).
     QueueHandle_t ism6Queue = nullptr;
-    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 32;
+    // 64 samples = ~16.7 ms of buffer at 3840 Hz (33 ms at 1920) — sized so the
+    // user-selectable top rate keeps the same stall tolerance the depth-32
+    // queue gave 1920 Hz (a measured 47.7 ms I2C-recovery stall overflowed
+    // even 32 at 1920; the [GAP DIAG] imu_q_drops gauge stays the witness).
+    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 64;
     volatile uint32_t ism6_queue_drops = 0;
 
 public:
     // Zero the drop counter (and nothing else).  Called once by the consumer
     // when it begins draining, so the gauge counts only consumer-era drops.
     void resetIsm6QueueDrops() { ism6_queue_drops = 0; }
+
+    // Runtime IMU logging-rate change (user setting, BLE cmd 67): reprograms
+    // the ISM6HG256 ODR on all three channels and the derived period. Safe
+    // while the DRDY-driven poll task runs — the task services whatever
+    // cadence the chip produces; one inter-sample gap changes length at the
+    // switch and downstream consumers use per-sample timestamps. Call before
+    // Begin() to only stage the rate for init.
+    bool setIsm6Rate(uint16_t rate_hz);
+    uint16_t ism6Rate() const { return ISM6HG256_UPDATE_RATE; }
 
 private:
 

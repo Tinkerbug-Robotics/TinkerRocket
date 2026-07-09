@@ -453,6 +453,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_OutputDataRate((float)ISM6HG256_UPDATE_RATE));
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_OutputDataRate((float)ISM6HG256_UPDATE_RATE));
         status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_OutputDataRate((float)ISM6HG256_UPDATE_RATE));
+        ism6_rate_applied_ = (status == TR_ISM6HG256_OK);
 
         // Full-scale settings — from the ctor (config::ISM6_*_FS on the FC),
         // the same constants the converter scale + snapshots read (#386).
@@ -1204,4 +1205,31 @@ void IRAM_ATTR SensorCollector::onMMC5983MAInt()
     {
         portYIELD_FROM_ISR();
     }
+}
+
+
+bool SensorCollector::setIsm6Rate(uint16_t rate_hz)
+{
+    if (rate_hz == 0)
+    {
+        return false;
+    }
+    ISM6HG256_UPDATE_RATE = rate_hz;
+    ism6hg256_update_period = (uint32_t)(1000000 / ISM6HG256_UPDATE_RATE);
+    if (!ism6_rate_applied_)
+    {
+        // Pre-Begin(): just stage the value; Begin() programs the chip.
+        return true;
+    }
+    TR_ISM6HG256Status status = TR_ISM6HG256_OK;
+    status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_OutputDataRate((float)rate_hz));
+    status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_OutputDataRate((float)rate_hz));
+    status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_OutputDataRate((float)rate_hz));
+    if (status != TR_ISM6HG256_OK)
+    {
+        ESP_LOGE(SC_TAG, "setIsm6Rate(%u): ODR reprogram failed (0x%x)", rate_hz, status);
+        return false;
+    }
+    ESP_LOGI(SC_TAG, "ISM6HG256 logging rate -> %u Hz (live)", rate_hz);
+    return true;
 }

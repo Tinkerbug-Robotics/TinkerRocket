@@ -609,6 +609,17 @@ struct SettingsView: View {
             }
         }
 
+        Section("IMU Logging Rate") {
+            Picker("Rate", selection: imuRateBinding) {
+                Text("1k").tag(UInt16(960))
+                Text("2k").tag(UInt16(1920))
+                Text("4k").tag(UInt16(3840))
+            }
+            .pickerStyle(.segmented)
+            Text("Samples logged per second from the IMU (actual: 960 / 1920 / 3840 Hz). Higher rates capture faster shock and vibration detail; the control loop is unaffected. Applies on the pad \u{2014} never mid-flight.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+
         // Device-level firmware update lives on the General tab only (#314).
         firmwareSection
     }
@@ -649,6 +660,16 @@ struct SettingsView: View {
         let v = UInt8(clamping: axis * 4 + clock)
         updateProfile { $0.imuOrientSetting = v }
         if device.isConnected { device.sendImuOrientationConfig(v) }
+    }
+
+    // IMU logging rate: whitelisted ISM6HG256 ODR steps.
+    private var imuRateBinding: Binding<UInt16> {
+        Binding(
+            get: { profile.imuRateHz },
+            set: { hz in
+                updateProfile { $0.imuRateHz = hz }
+                if device.isConnected { device.sendImuRateConfig(hz) }
+            })
     }
 
     @ViewBuilder

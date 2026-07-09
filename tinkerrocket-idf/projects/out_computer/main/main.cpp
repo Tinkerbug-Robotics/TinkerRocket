@@ -727,6 +727,21 @@ static void stageImuOrientConfig()
     pending_config_msg_type = ORIENT_CONFIG_MSG;
     setPendingCommand(ORIENT_CONFIG_PENDING);
 }
+
+// IMU logging rate setting (BLE cmd 67).  Cached here for app readback and
+// re-push on connect; the FC persists it in its own NVS and re-applies at
+// boot, so no status-query self-heal is needed (unlike orientation).
+static uint16_t cfg_imu_rate = 1920;
+
+static void stageImuRateConfig()
+{
+    ImuRateConfigData cfg;
+    cfg.rate_hz = cfg_imu_rate;
+    memcpy(pending_config_data, &cfg, sizeof(cfg));
+    pending_config_data_len = sizeof(cfg);
+    pending_config_msg_type = IMU_RATE_CONFIG_MSG;
+    setPendingCommand(IMU_RATE_CONFIG_PENDING);
+}
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -1776,6 +1791,8 @@ static bool isKnownMessageType(uint8_t type)
         case CAMERA_CONFIG_MSG:
         case ORIENT_CONFIG_PENDING:
         case ORIENT_CONFIG_MSG:
+        case IMU_RATE_CONFIG_PENDING:
+        case IMU_RATE_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
@@ -2874,6 +2891,7 @@ static void sendCurrentConfig()
     j += ",\"iwind\":"; j += fmtf(cfg_iwind_dps, 1);
     j += ",\"ge\":";  j += cfg_guidance_en ? "true" : "false";
     j += ",\"camt\":"; j += itos(cfg_camera_type);
+    j += ",\"irate\":"; j += itos(cfg_imu_rate);
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 1);
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -4653,6 +4671,13 @@ void initPeripherals()
                  cfg_imu_orient == IMU_ORIENT_AUTO
                      ? "AUTO" : orientCodeName(cfg_imu_orient));
 
+        // Load cached IMU logging rate.  Readback/cache only — the FC owns
+        // application (its own NVS survives FC reboots independently).
+        prefs.begin("imurate", false);
+        cfg_imu_rate = prefs.getUShort("hz", cfg_imu_rate);
+        prefs.end();
+        ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
+
         // Load cached pyro config from NVS (4 channels)
         prefs.begin("pyro", true);
         size_t pyro_sz = prefs.getBytesLength("cfg");
@@ -6049,6 +6074,35 @@ static void loop_oc()
                 ESP_LOGI("BLE", "IMU orientation setting: %s",
                          cfg_imu_orient == IMU_ORIENT_AUTO
                              ? "AUTO" : orientCodeName(cfg_imu_orient));
+            }
+        }
+        else if (ble_cmd == 67)
+        {
+            // IMU logging rate: [rate_hz:2 LE] — whitelisted ISM6HG256 ODR
+            // (960/1920/3840).  Relayed to the FC, which applies the ODR
+            // live (except INFLIGHT) and persists it in FC NVS.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 2)
+            {
+                uint16_t rate_hz;
+                memcpy(&rate_hz, payload, sizeof(rate_hz));
+                if (imuRateValid(rate_hz))
+                {
+                    cfg_imu_rate = rate_hz;
+                    stageImuRateConfig();
+                    Preferences p2;
+                    p2.begin("imurate", false);
+                    p2.putUShort("hz", cfg_imu_rate);
+                    p2.end();
+                    ESP_LOGI("BLE", "IMU logging rate: %u Hz -> FlightComputer",
+                             (unsigned)cfg_imu_rate);
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "IMU logging rate %u Hz rejected (not 960/1920/3840)",
+                             (unsigned)rate_hz);
+                }
             }
         }
         else if (ble_cmd == 34)

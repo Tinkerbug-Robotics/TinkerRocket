@@ -38,14 +38,19 @@ struct config : board_pins
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.
     // 200 Hz is the highest step that fits within I2C budget.
     static constexpr uint16_t MMC5983MA_UPDATE_RATE = 200;
-    // 1920 Hz: first step of the logging-rate maximization.  The chip supports
-    // 1920/3840/7680; the poll task's handoff queue + the loop's drain-all
-    // consumption log EVERY sample regardless of loop rate (~980/s).  The
-    // control/EKF/guidance path still consumes the freshest sample at loop
-    // rate.  I2S share at 1920: 1920 x 30 B = 58 KB/s of the 176 KB/s link
-    // (I2S_SAMPLE_RATE below).  Going to 3840 needs a further link bump and
-    // bench proof of OC ingest headroom first ([GAP DIAG] imu_q_drops and the
-    // OC LogBufferStats ring fill are the gauges).
+    // DEFAULT IMU logging rate — the user can select 960/1920/3840 Hz from
+    // the app (BLE cmd 67); the FC persists the choice in NVS ("imu"/"rate")
+    // and stages it into the collector before begin().  The poll task's
+    // handoff queue + the loop's drain-all consumption log EVERY sample
+    // regardless of loop rate (~980/s); control/EKF/guidance still consume
+    // the freshest sample at loop rate.  Link budget on the 44100 Hz I2S
+    // (176.4 KB/s): ISM6 framed = rate x 30 B, so 1920 -> ~58 KB/s and
+    // 3840 -> ~115 KB/s; with all other streams total inflow is ~99 KB/s
+    // at 1920 and ~156 KB/s (88%) at 3840 — no link bump needed, verified
+    // against the post-#467/#469 OC budgets (parser ~10x headroom, MRAM
+    // staging ~8% duty, NAND flush ~50% duty at 3840).  Bench gauges for
+    // any new rate: [GAP DIAG] imu_q_drops, FC I2S enqueue drops, OC
+    // rx_ovf/ring_peak, and the .bin per-type rates.
     static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
     static constexpr uint16_t NON_SENSOR_UPDATE_RATE = 500;
     // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.

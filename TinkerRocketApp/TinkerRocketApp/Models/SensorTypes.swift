@@ -168,6 +168,8 @@ nonisolated struct FlightSettingsData {
     // pre-v3 frames.
     let fin_min_deg: Float?
     let fin_max_deg: Float?
+    /// v5+: IMU logging rate (ISM6HG256 ODR, Hz) that actually flew.
+    let ism6_update_rate_hz: UInt16?
 
     let b2r_code: UInt8?
     let b2r_mode: UInt8?            // 0 default, 1 manual, 2 auto-snap, 3 auto-exact
@@ -293,6 +295,14 @@ nonisolated struct FlightSettingsData {
         } else {
             fin_min_deg = nil
             fin_max_deg = nil
+        }
+
+        // v5 IMU logging rate tail at fixed offset 208.
+        if version >= 5 && data.count >= 210 {
+            var o = 208
+            ism6_update_rate_hz = data.readUInt16LE(at: &o)
+        } else {
+            ism6_update_rate_hz = nil
         }
     }
 }

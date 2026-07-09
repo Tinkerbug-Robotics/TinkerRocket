@@ -711,6 +711,7 @@ nonisolated struct FlightSettings: Codable, Sendable {
             gyro_fs_dps: Int(raw.ism6_gyro_fs_dps),
             low_g_fs_g: Int(raw.ism6_low_g_fs_g),
             high_g_fs_g: Int(raw.ism6_high_g_fs_g),
+            update_rate_hz: raw.ism6_update_rate_hz.map(Int.init),
             mounting: MountingSettings(from: raw)
         )
     }
@@ -863,6 +864,9 @@ nonisolated struct IMUSettings: Codable, Sendable {
     let gyro_fs_dps: Int
     let low_g_fs_g: Int
     let high_g_fs_g: Int
+    /// Logged IMU sample rate in Hz (v5 settings frames). nil on older
+    /// logs, which ran the then-fixed build default.
+    let update_rate_hz: Int?
     /// Board→rocket mounting orientation (v2 settings frames). nil on
     /// pre-orientation logs, which always meant the +X-nose mounting.
     let mounting: MountingSettings?

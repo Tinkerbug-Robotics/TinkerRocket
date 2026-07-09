@@ -859,7 +859,7 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
 // here so a struct edit can't silently desync the cross-language decode.
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
-    EXPECT_EQ(sizeof(FlightSettingsData), 208u);  // v2: +12 b2r orientation; v3: +8 fin cal
+    EXPECT_EQ(sizeof(FlightSettingsData), 210u);  // v2: +12 b2r orientation; v3: +8 fin cal; v5: +2 imu rate
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
@@ -905,6 +905,7 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     // so v1/v2 parsers decode their prefix unchanged.
     EXPECT_EQ(offsetof(FlightSettingsData, fin_min_deg),       200u);
     EXPECT_EQ(offsetof(FlightSettingsData, fin_max_deg),       204u);
+    EXPECT_EQ(offsetof(FlightSettingsData, ism6_update_rate_hz), 208u);
 }
 
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
@@ -998,6 +999,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         // passed the guard silently).
         MT(GUIDANCE_CONFIG_PENDING),  MT(GUIDANCE_CONFIG_MSG),
         MT(FIN_CONFIG_PENDING),       MT(FIN_CONFIG_MSG),
+        // IMU logging rate config (BLE cmd 67).
+        MT(IMU_RATE_CONFIG_PENDING),  MT(IMU_RATE_CONFIG_MSG),
         // #402: FC->OC slave TX-ring desync recovery trigger.
         MT(I2C_TX_RESYNC),
     };
@@ -1019,9 +1022,9 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // Tripwire: keep the registry above exhaustive.  If you add or remove a
     // message type in RocketComputerTypes.h, update this list AND this count
     // -- the uniqueness check is only as strong as the list it walks.
-    // 85 = 80 prior + guidance/fin config pair codes (were missing, #386 gap)
-    //    + I2C_TX_RESYNC (#402).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 85u)
+    // 87 = 80 prior + guidance/fin config pair codes (were missing, #386 gap)
+    //    + I2C_TX_RESYNC (#402) + IMU rate config pair (BLE cmd 67).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 87u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

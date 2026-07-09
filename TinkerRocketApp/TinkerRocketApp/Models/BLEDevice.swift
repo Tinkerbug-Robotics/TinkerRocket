@@ -846,6 +846,19 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// IMU logging rate in Hz — whitelisted ISM6HG256 ODR (960/1920/3840).
+    /// The FC applies it live on the pad and persists it in FC NVS.
+    func sendImuRateConfig(_ rateHz: UInt16) {
+        var payload = Data()
+        payload.append(UInt8(rateHz & 0xFF))
+        payload.append(UInt8(rateHz >> 8))
+        sendRawCommand(67, payload: payload)
+        if var cfg = rocketConfig {
+            cfg.imuRateHz = rateHz
+            rocketConfig = cfg
+        }
+    }
+
     /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
     /// Wire layout (24 bytes): 4 × {u8 enabled, u8 mode, f32 value}.
     func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) {
@@ -1439,6 +1452,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let iw = parseFloat(dict["iwind"]), iw >= 0 { cfg.integralSepThreshold = iw }
             cfg.guidanceEnabled = dict["ge"] as? Bool ?? cfg.guidanceEnabled
             cfg.cameraType = UInt8(dict["camt"] as? Int ?? Int(cfg.cameraType))
+            if let irate = dict["irate"] as? Int, let hz = UInt16(exactly: irate) {
+                cfg.imuRateHz = hz
+            }
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }
             cfg.loraBwKHz = parseFloat(dict["lbw"])
