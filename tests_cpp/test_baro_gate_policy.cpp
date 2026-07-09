@@ -20,11 +20,17 @@ namespace
 {
 constexpr float kSpikeThreshM  = 5.0f;
 constexpr float kSpikeRateMps  = 500.0f;
+constexpr uint32_t kFuseIntervalUs = 20000u;  // config::BARO_FUSE_MIN_INTERVAL_US
 
+// Pre-throttle tests evaluate with the throttle DISABLED (0) so they keep
+// exercising freshness/spike behavior on every sample; throttle tests pass
+// kFuseIntervalUs explicitly.
 BaroGatePolicy::Decision eval(BaroGatePolicy& p, uint32_t t_us, float alt_m,
-                              bool locked = false)
+                              bool locked = false,
+                              uint32_t fuse_interval_us = 0u)
 {
-    return p.evaluate(t_us, alt_m, locked, kSpikeThreshM, kSpikeRateMps);
+    return p.evaluate(t_us, alt_m, locked, kSpikeThreshM, kSpikeRateMps,
+                      fuse_interval_us);
 }
 }  // namespace
 
@@ -227,4 +233,91 @@ TEST(BaroGatePolicy, TimestampWrapIsHandled)
     EXPECT_FALSE(d.spike);
     EXPECT_TRUE(d.accept);
     EXPECT_NEAR(d.apparent_rate_mps, 0.2f / 2053e-6f, 5.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Fusion throttle (post-#450 CPU fix): fusing baro at the full 487 Hz ODR
+// tripled per-tick EKF cost (554 -> ~1650 us, loop 959 -> ~715/s) because each
+// fusion pays the 15x15 covariance update.  The throttle rate-limits ACCEPTED
+// samples to the configured interval while spike/freshness tracking still
+// inspects every sample.
+// ---------------------------------------------------------------------------
+TEST(BaroGatePolicy, ThrottleLimitsFusionRateOnFullOdrStream)
+{
+    BaroGatePolicy gate;
+    constexpr double kBmpPeriodUs = 1e6 / 487.0;
+    constexpr double kDurationS   = 10.0;
+
+    uint32_t fresh = 0, accepted = 0, spikes = 0;
+    const long n = (long)(kDurationS * 1e6 / kBmpPeriodUs);
+    for (long i = 0; i < n; ++i)
+    {
+        const uint32_t t = (uint32_t)(i * kBmpPeriodUs);
+        const float alt = 100.0f * (float)(t * 1e-6);  // 100 m/s climb
+        const auto d = eval(gate, t, alt, false, kFuseIntervalUs);
+        if (d.fresh) fresh++;
+        if (d.accept) accepted++;
+        if (d.spike) spikes++;
+    }
+
+    EXPECT_EQ(fresh, (uint32_t)n);          // every sample still inspected
+    EXPECT_EQ(spikes, 0u);
+    // 20 ms interval -> 50 Hz.  Sample grid quantizes to the next sample at
+    // or beyond each interval boundary, so allow a small band.
+    EXPECT_GE(accepted, 480u);
+    EXPECT_LE(accepted, 510u);
+}
+
+// Spike tracking must remain a consecutive-sample test while throttled: a
+// glitch landing between fusions is still measured against its immediate
+// predecessor (not the last fused sample), and a glitch on a fusion tick is
+// still rejected.
+TEST(BaroGatePolicy, ThrottleDoesNotBreakSpikeTracking)
+{
+    BaroGatePolicy gate;
+    // Establish stream at 2 ms cadence; fuse interval 20 ms.
+    uint32_t t = 0;
+    for (int i = 0; i < 11; ++i)
+    {
+        eval(gate, t, 100.0f + 0.2f * i, false, kFuseIntervalUs);
+        t += 2000u;
+    }
+    // Next sample is a +8 m glitch mid-throttle-window: apparent rate vs the
+    // IMMEDIATE predecessor is ~4000 m/s -> flagged spike even though it
+    // would not have been fused anyway.
+    const auto g = eval(gate, t, 110.2f, false, kFuseIntervalUs);
+    EXPECT_TRUE(g.fresh);
+    EXPECT_TRUE(g.spike);
+    EXPECT_FALSE(g.accept);
+}
+
+// Throttle interval 0 disables the throttle entirely (every clean fresh
+// sample fuses) — guards the config escape hatch.
+TEST(BaroGatePolicy, ZeroIntervalDisablesThrottle)
+{
+    BaroGatePolicy gate;
+    uint32_t accepted = 0;
+    for (int i = 0; i < 100; ++i)
+    {
+        const auto d = eval(gate, (uint32_t)(i * 2053u), 0.05f * i, false, 0u);
+        if (d.accept) accepted++;
+    }
+    EXPECT_EQ(accepted, 100u);
+}
+
+// The throttle clock restarts from the last FUSED sample, so a spike-rejected
+// or locked sample does not push the next fusion further out.
+TEST(BaroGatePolicy, RejectedSamplesDoNotResetThrottleClock)
+{
+    BaroGatePolicy gate;
+    eval(gate, 0u, 0.0f, false, kFuseIntervalUs);             // fused @ t=0
+
+    // Locked sample at t=10ms: fresh, tracked, not fused.
+    const auto locked = eval(gate, 10000u, 1.0f, true, kFuseIntervalUs);
+    EXPECT_TRUE(locked.fresh);
+    EXPECT_FALSE(locked.accept);
+
+    // Clean sample at t=20ms: 20 ms since last FUSION -> fuses.
+    const auto d = eval(gate, 20000u, 2.0f, false, kFuseIntervalUs);
+    EXPECT_TRUE(d.accept);
 }
