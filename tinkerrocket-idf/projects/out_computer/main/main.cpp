@@ -4699,16 +4699,19 @@ void initPeripherals()
         oc_ota_tx_queue = xQueueCreate(16, sizeof(OcOtaTxFrame));
 
     // I2S telemetry stream from FlightComputer (DMA-based slave RX)
-    // Small DMA buffers (4 × 256 bytes = 1 KB) minimize latency.
+    // Small DMA buffers (4 × 512 bytes = 2 KB) minimize latency.
     // FRAME_SYNC interrupt gating prevents stale replay regardless of
     // buffer count, but smaller buffers reduce read-to-parse latency.
+    // dma_frame_num doubled 64 -> 128 alongside the 22050 -> 44100 link rate
+    // so each descriptor still spans ~2.9 ms (512 B at 176 KB/s) — the same
+    // callback cadence the parser was tuned against at the old rate.
     if (i2s_stream.beginSlaveRx(config::I2S_BCLK_PIN,
                                  config::I2S_WS_PIN,
                                  config::I2S_DIN_PIN,
                                  config::I2S_FSYNC_PIN,
                                  config::I2S_SAMPLE_RATE,
-                                 4,     // dma_desc_num
-                                 64) != ESP_OK)  // dma_frame_num → 256 bytes each
+                                 4,      // dma_desc_num
+                                 128) != ESP_OK)  // dma_frame_num → 512 bytes each
     {
         ESP_LOGE("PWR", "I2S slave RX init failed");
     }

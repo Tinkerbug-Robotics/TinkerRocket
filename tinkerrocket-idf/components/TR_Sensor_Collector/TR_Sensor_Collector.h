@@ -39,6 +39,7 @@ typedef struct
     uint32_t gnss_over_1ms;         // GNSS parses > 1 ms
     uint32_t gnss_over_5ms;         // GNSS parses > 5 ms
     uint32_t gnss_over_10ms;        // GNSS parses > 10 ms
+    uint32_t ism6_queue_drops;      // IMU samples evicted from a full handoff queue
 } PollTimingSnapshot;
 
 typedef struct
@@ -111,7 +112,6 @@ public:
     const uint16_t ism6_high_g_fs_g_;
     const uint16_t ism6_gyro_fs_dps_;
 
-    volatile bool ism6hg256_data_ready;
     volatile bool bmp585_data_ready;
     volatile bool mmc5983ma_data_ready;
     volatile bool iis2mdc_data_ready;
@@ -190,13 +190,24 @@ private:
     TR_MMC5983MA mmc5983ma;
     TR_IIS2MDC iis2mdc;
     TR_GNSSReceiverUBloxSerial gnss_receiver;
-    ISM6HG256Data ism6hg256_data;
+    ISM6HG256Data ism6hg256_data;   // scratch for the poll task (queue is the handoff)
     BMP585Data bmp585_data;
     MMC5983MAData mmc5983ma_data;
     IIS2MDCData iis2mdc_data;
     GNSSData gnss_data;
 
-    SemaphoreHandle_t ism6hg256DataSemaphore;
+    // IMU handoff queue (poll task -> consumer).  The previous single-slot
+    // latest-sample handoff silently dropped any sample the consumer didn't
+    // collect before the next DRDY — capping the LOGGED rate at the flight
+    // loop rate (~980/s) no matter the chip ODR.  A short queue lets the loop
+    // drain every sample (it logs each one; control uses the freshest), so
+    // the logged rate follows ISM6HG256_UPDATE_RATE.  Depth 8 ≈ 4 ms at
+    // 1920 Hz — far beyond any loop-iteration jitter observed ([GAP DIAG]
+    // iter_max ≈ 1.4 ms); overflow drops the OLDEST sample and counts it.
+    QueueHandle_t ism6Queue = nullptr;
+    static constexpr UBaseType_t ISM6_QUEUE_DEPTH = 8;
+    volatile uint32_t ism6_queue_drops = 0;
+
     SemaphoreHandle_t bmp585DataSemaphore;
     SemaphoreHandle_t mmc5983maDataSemaphore;
     SemaphoreHandle_t iis2mdcDataSemaphore;

@@ -38,13 +38,22 @@ struct config : board_pins
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.
     // 200 Hz is the highest step that fits within I2C budget.
     static constexpr uint16_t MMC5983MA_UPDATE_RATE = 200;
-    static constexpr uint16_t ISM6HG256_UPDATE_RATE = 960;
+    // 1920 Hz: first step of the logging-rate maximization.  The chip supports
+    // 1920/3840/7680; the poll task's handoff queue + the loop's drain-all
+    // consumption log EVERY sample regardless of loop rate (~980/s).  The
+    // control/EKF/guidance path still consumes the freshest sample at loop
+    // rate.  I2S share at 1920: 1920 x 30 B = 58 KB/s of the 176 KB/s link
+    // (I2S_SAMPLE_RATE below).  Going to 3840 needs a further link bump and
+    // bench proof of OC ingest headroom first ([GAP DIAG] imu_q_drops and the
+    // OC LogBufferStats ring fill are the gauges).
+    static constexpr uint16_t ISM6HG256_UPDATE_RATE = 1920;
     static constexpr uint16_t NON_SENSOR_UPDATE_RATE = 500;
     // Guidance telemetry (GUIDANCE_TELEM_MSG) log rate while guidance is active.
     // Emitted from inside the NonSensor TX block, so it must divide
     // NON_SENSOR_UPDATE_RATE; 500 = lockstep with NonSensor/roll_cmd (frames
-    // time-aligned 1:1). The guidance law recomputes at ISM6HG256_UPDATE_RATE
-    // (960 Hz), so values are fresh at any rate up to NON_SENSOR_UPDATE_RATE.
+    // time-aligned 1:1). The guidance law recomputes once per flight-loop
+    // iteration (~980 Hz, on the freshest IMU sample), so values are fresh at
+    // any rate up to NON_SENSOR_UPDATE_RATE.
     static constexpr uint16_t GUIDANCE_TELEM_RATE_HZ = 500;
     static_assert(GUIDANCE_TELEM_RATE_HZ >= 1 &&
                   GUIDANCE_TELEM_RATE_HZ <= NON_SENSOR_UPDATE_RATE,
@@ -387,9 +396,12 @@ struct config : board_pins
     //     header) ###
     // I2S bandwidth = sample_rate * 4 bytes (16-bit stereo).
     // Higher rate = faster DMA buffer turnover = less stale data.
-    // 22050 Hz = 88 KB/s.  Lower rates cause more gaps from DMA replay.
-    // IMPORTANT: If sensor rates increase, raise this proportionally.
-    static constexpr uint32_t I2S_SAMPLE_RATE = 22050;  // Must match OC
+    // 44100 Hz = 176 KB/s.  Raised from 22050 with the IMU 960 -> 1920 Hz
+    // step: at 22050 the link was already ~76% full (~67 KB/s) and doubling
+    // the IMU frames would not fit.  New steady-state budget ~97 KB/s (55%):
+    // IMU 58 K + NonSensor 24 K + baro 10 K + mag/GNSS/power/misc ~5 K.
+    // IMPORTANT: must match the OC's I2S_SAMPLE_RATE — flash both together.
+    static constexpr uint32_t I2S_SAMPLE_RATE = 44100;  // Must match OC
  
     // ### Execution Cores ###
 

@@ -94,7 +94,6 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     uint8_t i = 0;
 
     // Data ready flag init
-    ism6hg256_data_ready = false;
     bmp585_data_ready = false;
     mmc5983ma_data_ready = false;
     iis2mdc_data_ready = false;
@@ -162,13 +161,16 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     mmc_stall_threshold_us  = 5U  * (1000000UL / (uint32_t)MMC5983MA_UPDATE_RATE);
     mmc_recover_cooldown_us = 15U * (1000000UL / (uint32_t)MMC5983MA_UPDATE_RATE);
 
-    ism6hg256DataSemaphore = xSemaphoreCreateBinary();
-    if (ism6hg256DataSemaphore == NULL)
+    // IMU handoff queue (see header): the poll task pushes every sample; the
+    // flight loop drains all of them per iteration so the LOGGED rate follows
+    // the chip ODR instead of being capped at the loop rate.
+    ism6Queue = xQueueCreate(ISM6_QUEUE_DEPTH, sizeof(ISM6HG256Data));
+    if (ism6Queue == NULL)
     {
-        ESP_LOGE(SC_TAG, "Failed to create ISM6HG256 data semaphore!");
+        ESP_LOGE(SC_TAG, "Failed to create ISM6HG256 sample queue!");
         while (1) delay_ms(1000);
     }
-    xSemaphoreGive(ism6hg256DataSemaphore);
+    ism6_queue_drops = 0;
 
     bmp585DataSemaphore = xSemaphoreCreateBinary();
     if (bmp585DataSemaphore == NULL)
@@ -579,7 +581,6 @@ void SensorCollector::pollIMUdata(void* parameter)
             // Bulk read: gyro + lg accel + hg accel in one 24-byte SPI transaction
             (void)self->ism6hg256.Get_AllAxesRaw(&g_raw, &lg_raw, &hg_raw);
 
-            if (xSemaphoreTake(self->ism6hg256DataSemaphore, 0) == pdTRUE)
             {
                 self->start_time = time_us();
                 self->ism6hg256_data.time_us = self->start_time;
@@ -613,8 +614,17 @@ void SensorCollector::pollIMUdata(void* parameter)
                 }
                 self->pt_last_ism6_time_us = this_time;
 
-                self->ism6hg256_data_ready = true;
-                xSemaphoreGive(self->ism6hg256DataSemaphore);
+                // Enqueue the sample; on a full queue drop the OLDEST so the
+                // freshest data always lands (control reads the tail).  A
+                // nonzero drop counter means the consumer stalled for longer
+                // than ISM6_QUEUE_DEPTH samples — visible in [SENSOR] diag.
+                if (xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0) != pdTRUE)
+                {
+                    ISM6HG256Data discard;
+                    (void)xQueueReceive(self->ism6Queue, &discard, 0);
+                    self->ism6_queue_drops++;
+                    (void)xQueueSend(self->ism6Queue, &self->ism6hg256_data, 0);
+                }
             }
 
             const uint32_t ism6_elapsed = time_us() - ism6_t0;
@@ -845,14 +855,12 @@ void SensorCollector::pollGNSSdata(void* parameter)
 // Returns the latest sensor data if available, and marks the data as read so that new data can be collected
 bool SensorCollector::getISM6HG256Data(ISM6HG256Data& ism6hg256_out)
 {
-    if (ism6hg256_data_ready && xSemaphoreTake(ism6hg256DataSemaphore, 0) == pdTRUE) 
-    {
-        ism6hg256_out = ism6hg256_data;
-        xSemaphoreGive(ism6hg256DataSemaphore);
-        ism6hg256_data_ready = false;
-        return true;
-    }
-    return false;
+    // Pops ONE sample; callers drain with a while() loop.  Returns false when
+    // no sample is pending — same contract as before, but samples queue up
+    // instead of overwriting, so a consumer slower than the ODR sees every
+    // sample (up to ISM6_QUEUE_DEPTH of backlog) rather than only the latest.
+    return ism6Queue != nullptr &&
+           xQueueReceive(ism6Queue, &ism6hg256_out, 0) == pdTRUE;
 }
 
 bool SensorCollector::getBMP585Data(BMP585Data& bmp585_out)
@@ -962,6 +970,7 @@ void SensorCollector::getPollTimingSnapshot(PollTimingSnapshot &snapshot_out) co
     snapshot_out.gnss_over_1ms   = pt_gnss_over_1ms;
     snapshot_out.gnss_over_5ms   = pt_gnss_over_5ms;
     snapshot_out.gnss_over_10ms  = pt_gnss_over_10ms;
+    snapshot_out.ism6_queue_drops = ism6_queue_drops;
 }
 
 void SensorCollector::resetPollTimingSnapshot()
