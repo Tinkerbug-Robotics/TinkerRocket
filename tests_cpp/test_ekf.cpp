@@ -543,3 +543,177 @@ TEST_F(EKFTest, AdvancingTimestamps_NeverTripTheSkip) {
     }
     EXPECT_EQ(ekf.frozenDtSkips(), 0u);
 }
+
+// ---------- Rank-1 Joseph baro covariance update (perf follow-up to #450) ----------
+//
+// baroMeasUpdate's Joseph-form covariance update was implemented with dense
+// 15x15 matrix products (2 x 15^3 MACs) even though the baro measurement is
+// scalar with a single nonzero H entry (H[2] = -1) — making K*H rank-1 and the
+// whole update expressible in three outer products (~700 MACs).  On target the
+// dense form cost ~1.1 ms per fusion; with #450 restoring every-sample fusion
+// that tripled per-tick EKF cost (554 -> ~1650 us) and cut the loop 959 -> 715/s.
+//
+// The rewrite reassociates float arithmetic, so validation is tolerance-based:
+// (1) formula equivalence — dense vs rank-1 on randomized symmetric-PSD
+//     matrices, elementwise;
+// (2) an end-to-end golden trajectory captured from the dense build.
+
+namespace joseph_ref {
+
+// Dense Joseph form exactly as previously implemented in baroMeasUpdate.
+static void dense(float P[15][15], const float K[15], float R)
+{
+    float I_KH[15][15];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * (j == 2 ? -1.0f : 0.0f);
+
+    float P_new[15][15] = {};
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            for (int k = 0; k < 15; k++)
+                P_new[i][j] += I_KH[i][k] * P[k][j];
+
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++) {
+            float sum = 0;
+            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
+            P[i][j] = sum + K[i] * R * K[j];
+        }
+}
+
+// Rank-1 form as now implemented in baroMeasUpdate (H[2] = -1):
+//   A  = (I-KH)P      -> A[i][j] = P[i][j] + K[i]*P[2][j]
+//   B  = A(I-KH)^T    -> B[i][j] = A[i][j] + A[i][2]*K[j]
+//   P' = B + R*K*K^T
+static void rank1(float P[15][15], const float K[15], float R)
+{
+    float Prow2[15];
+    for (int j = 0; j < 15; j++) Prow2[j] = P[2][j];
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j < 15; j++)
+            P[i][j] += K[i] * Prow2[j];
+
+    float Acol2[15];
+    for (int i = 0; i < 15; i++) Acol2[i] = P[i][2];
+    for (int i = 0; i < 15; i++) {
+        const float KR_i = K[i] * R;
+        for (int j = 0; j < 15; j++)
+            P[i][j] += Acol2[i] * K[j] + KR_i * K[j];
+    }
+}
+
+// Deterministic LCG so the matrices are identical on every run/platform.
+static uint32_t lcg_state = 0x1234567u;
+static float frand()
+{
+    lcg_state = lcg_state * 1664525u + 1013904223u;
+    return (float)(lcg_state >> 8) / (float)(1u << 24);  // [0,1)
+}
+
+}  // namespace joseph_ref
+
+TEST_F(EKFTest, Rank1JosephMatchesDenseJoseph) {
+    using namespace joseph_ref;
+
+    float max_rel = 0.0f;
+    for (int trial = 0; trial < 200; ++trial) {
+        // Random symmetric PSD P = M*M^T with entries scaled to spread
+        // magnitudes across the state kinds (pos/vel/att/bias covariances
+        // live at very different scales in flight).
+        float M[15][15];
+        for (int i = 0; i < 15; i++) {
+            const float scale = (i < 3) ? 3.0f : (i < 6) ? 1.0f
+                              : (i < 9) ? 0.3f : 0.03f;
+            for (int j = 0; j < 15; j++)
+                M[i][j] = scale * (frand() - 0.5f);
+        }
+        float P[15][15] = {};
+        for (int i = 0; i < 15; i++)
+            for (int j = 0; j < 15; j++)
+                for (int k = 0; k < 15; k++)
+                    P[i][j] += M[i][k] * M[j][k];
+
+        // Optimal-gain K for a random measurement noise (plus a few trials
+        // with deliberately suboptimal K — Joseph must tolerate any K).
+        const float R = 0.01f + 10.0f * frand();
+        const float S = P[2][2] + R;
+        float K[15];
+        for (int i = 0; i < 15; i++) {
+            K[i] = -P[i][2] / S;
+            if (trial % 5 == 4) K[i] *= 1.3f;  // suboptimal-gain trials
+        }
+
+        float Pd[15][15], Pr[15][15];
+        memcpy(Pd, P, sizeof(P));
+        memcpy(Pr, P, sizeof(P));
+        dense(Pd, K, R);
+        rank1(Pr, K, R);
+
+        for (int i = 0; i < 15; i++)
+            for (int j = 0; j < 15; j++) {
+                const float denom = std::max(1e-6f, std::fabs(Pd[i][j]));
+                const float rel = std::fabs(Pd[i][j] - Pr[i][j]) / denom;
+                if (rel > max_rel) max_rel = rel;
+            }
+    }
+    // Same algebra, different association: agreement to float roundoff.
+    EXPECT_LT(max_rel, 5e-4f) << "dense vs rank-1 Joseph diverged";
+}
+
+// End-to-end golden: a deterministic 20 s dynamic scenario (sinusoidal thrust
+// wobble, slow roll, oscillating baro altitude) captured on the dense-Joseph
+// build.  The rank-1 build must reproduce the trajectory within float-
+// reassociation tolerance.  Guards the integration (K computation, state
+// correction, symmetrize/stabilize interplay), not just the formula.
+TEST_F(EKFTest, BaroJosephGoldenTrajectory) {
+    ekf.init(makeStationaryIMU(0), makeStationaryGNSS(0), makeStationaryMag(0));
+
+    uint32_t t = 0;
+    for (int i = 1; i <= 10000; i++) {   // 20 s at 500 Hz
+        t += 2000;
+        EkfIMUData imu = makeStationaryIMU(t);
+        imu.acc_x = 0.3f * std::sin(0.004 * i);
+        imu.acc_y = 0.2f * std::cos(0.003 * i);
+        imu.acc_z = 9.807 + 0.5 * std::sin(0.002 * i);
+        imu.gyro_z = 3.0f * std::sin(0.001 * i);   // slow yaw wobble, dps
+        EkfGNSSDataLLA gnss = makeStationaryGNSS(t);
+        gnss.alt_m = ALT_M + 1.5 * std::sin(0.0005 * i);
+        ekf.update(true, imu, gnss, makeStationaryMag(t));
+
+        if (i % 10 == 0) {               // 50 Hz baro (post-throttle rate)
+            EkfBaroData baro;
+            baro.time_us = t;
+            baro.altitude_m = ALT_M + 2.0 * std::sin(0.0004 * i);
+            ekf.baroMeasUpdate(baro);
+        }
+    }
+
+    double pos[3]; float vel[3], q[4], cov[15];
+    ekf.getPosEst(pos);
+    ekf.getVelEst(vel);
+    ekf.getQuaternion(q);
+    ekf.getCovDiag(cov);
+
+    // Goldens captured from the dense-Joseph build (pre-rank-1, commit
+    // 6764977).  Tolerances cover float reassociation across 1000 fusions:
+    // ~1e-8 rad lat/lon (~6 cm), mm-scale altitude, mm/s velocity.
+    EXPECT_NEAR(pos[0],  0.588175958, 1e-8);
+    EXPECT_NEAR(pos[1], -2.066469834, 1e-8);
+    EXPECT_NEAR(pos[2], 100.287896,   5e-3);
+    EXPECT_NEAR(vel[0], 0.024522f, 2e-3f);
+    EXPECT_NEAR(vel[1], 0.000624f, 2e-3f);
+    EXPECT_NEAR(vel[2], 0.009548f, 2e-3f);
+    const float q_gold[4] = {0.9247040f, 0.0403636f, 0.3780217f, -0.0198218f};
+    for (int i = 0; i < 4; i++)
+        EXPECT_NEAR(q[i], q_gold[i], 2e-4f) << "q[" << i << "]";
+    const float cov_gold[15] = {
+        1.866526e-03f, 1.866525e-03f, 2.964458e-03f,
+        2.649696e-03f, 2.650031e-03f, 2.643718e-03f,
+        3.090044e-06f, 4.691107e-06f, 2.907600e-06f,
+        7.639116e-04f, 1.441619e-03f, 6.485872e-04f,
+        1.867444e-07f, 2.240813e-07f, 1.721429e-07f};
+    for (int i = 0; i < 15; i++)
+        EXPECT_NEAR(cov[i], cov_gold[i], 0.02f * cov_gold[i] + 1e-9f)
+            << "cov[" << i << "]";
+}
