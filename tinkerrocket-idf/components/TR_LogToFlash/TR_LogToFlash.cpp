@@ -272,6 +272,35 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
     }
     frames_received++;
     bytes_received += len;
+
+    // MRAM path: stage in RAM and write MRAM in STAGING_SIZE batches — a
+    // per-frame MRAM push costs two SPI transactions under the bus mutex
+    // (~325 us/frame with flush contention), capping ingest at ~2.1k
+    // frames/s.  RAM-ring path keeps the direct per-frame push (memcpy is
+    // already cheap).
+    if (use_mram_ && len <= STAGING_SIZE)
+    {
+        if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+        bool ok = true;
+        if (staged_len_ + len > STAGING_SIZE)
+        {
+            ok = flushStagingLocked();
+        }
+        if (staged_len_ == 0)
+        {
+            staged_first_us_ = esp_timer_get_time();
+        }
+        memcpy(staging_buf_ + staged_len_, frame, len);
+        staged_len_ += static_cast<uint32_t>(len);
+        staged_frames_++;
+        if (push_mutex_) xSemaphoreGive(push_mutex_);
+        if (!ok)
+        {
+            return false;  // this frame is staged; the DROPPED batch was counted
+        }
+        return true;
+    }
+
     if (!ringPush(frame, static_cast<uint32_t>(len)))
     {
         frames_dropped++;
@@ -291,6 +320,60 @@ bool TR_LogToFlash::enqueueFrame(const uint8_t* frame, size_t len)
         return false;
     }
     return true;
+}
+
+// Write the staged frames to the MRAM ring as one batched push and reset
+// staging.  Caller holds push_mutex_.  On ring rejection (in-flight, ring
+// full behind a NAND stall) the whole batch is dropped-newest — the same
+// bytes a per-frame push would have shed under the same stall — and counted.
+bool TR_LogToFlash::flushStagingLocked()
+{
+    if (staged_len_ == 0)
+    {
+        return true;
+    }
+    const bool ok = ringPushLocked(staging_buf_, staged_len_);
+    if (!ok)
+    {
+        frames_dropped += staged_frames_;
+        if (!drop_warned_)
+        {
+            drop_warned_ = true;
+            ESP_LOGW(TAG, "RING FULL in flight: dropped staged batch (%lu B, %lu "
+                          "frames); log truncates at the tail (received=%lu, "
+                          "highwater=%lu).",
+                     static_cast<unsigned long>(staged_len_),
+                     static_cast<unsigned long>(staged_frames_),
+                     static_cast<unsigned long>(frames_received),
+                     static_cast<unsigned long>(rb_highwater));
+        }
+    }
+    else
+    {
+        staging_flushes_++;
+    }
+    staged_len_ = 0;
+    staged_frames_ = 0;
+    return ok;
+}
+
+// Push staged frames that have been waiting longer than max_age_us, so the
+// staleness of ring contents (and the brownout-durability gap) stays bounded
+// even when inflow is a trickle.  Called from the flush task loop (Core 0)
+// and the pre-task service() fallback; safe cross-core via push_mutex_.
+void TR_LogToFlash::flushStagingIfStale(int64_t max_age_us)
+{
+    if (!use_mram_ || staged_len_ == 0)
+    {
+        return;
+    }
+    if ((esp_timer_get_time() - staged_first_us_) < max_age_us)
+    {
+        return;
+    }
+    if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+    flushStagingLocked();
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
 }
 
 void TR_LogToFlash::startLogging()
@@ -319,11 +402,14 @@ void TR_LogToFlash::endLogging()
 void TR_LogToFlash::service()
 {
     // When the flush task is running (Core 0), service() is a no-op on Core 1.
-    // The flush task loop handles openLogSession, flushRingToNand, closeLogSession.
+    // The flush task loop handles openLogSession, flushRingToNand,
+    // closeLogSession, and the staged-write staleness flush.
     if (flush_task_running_)
     {
         return;
     }
+
+    flushStagingIfStale(STAGING_MAX_AGE_US);
 
     // Single-threaded fallback (flush task not started yet — startup/recovery).
     // #365: same consume-on-observe shape as flushTaskLoop — the launch edge
@@ -780,16 +866,22 @@ bool TR_LogToFlash::mramRawRead(uint32_t addr, uint8_t* out, uint32_t len)
 
 bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
 {
-    if (len == 0 || len > ring_size_)
-    {
-        return false;
-    }
-
     // Serialize against concurrent pushes (parser and oc_loop can preempt
     // each other on Core 1) and against clearRing (Core 0 flush task). This
     // closes the #74 race where a push snapshotted rb_head before clearRing
     // ran and then wrote a stale rb_head value, clobbering the reset.
     if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+    const bool ok = ringPushLocked(data, len);
+    if (push_mutex_) xSemaphoreGive(push_mutex_);
+    return ok;
+}
+
+bool TR_LogToFlash::ringPushLocked(const uint8_t* data, uint32_t len)
+{
+    if (len == 0 || len > ring_size_)
+    {
+        return false;
+    }
 
     // Read current count under spinlock
     portENTER_CRITICAL(&ring_mux_);
@@ -803,14 +895,17 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
         if (ring_prelaunch_cap_ - count_now < len)
         {
             rb_overruns++;
-            if (push_mutex_) xSemaphoreGive(push_mutex_);
             return false;
         }
     }
     else
     {
         // Pre-launch: drop oldest frames from tail to make room (single-threaded,
-        // flush task not touching tail yet).
+        // flush task not touching tail yet).  Headers are walked in chunked
+        // window reads — the old per-frame 6-byte ringPeekAt cost one full
+        // MRAM SPI transaction per dropped frame, which at the prelaunch cap
+        // roughly doubled the per-frame push cost (#74 noted it; the 1920 Hz
+        // stream made it a throughput ceiling).
         bool did_overrun = false;
         uint32_t local_count = count_now;
         while (ring_prelaunch_cap_ - local_count < len)
@@ -823,48 +918,75 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
                 break;
             }
 
-            uint8_t hdr[6];
-            ringPeekAt(rb_tail, hdr, 6);
+            uint8_t win[512];
+            const uint32_t take = (local_count < sizeof(win))
+                                      ? local_count : (uint32_t)sizeof(win);
+            ringPeekAt(rb_tail, win, take);
 
-            if (hdr[0] != 0xAA || hdr[1] != 0x55 || hdr[2] != 0xAA || hdr[3] != 0x55)
+            bool cleared = false;
+            uint32_t off = 0;
+            uint32_t dropped_here = 0;
+            while (ring_prelaunch_cap_ - local_count < len && off + 6 <= take)
             {
-                if (cfg.debug)
+                if (win[off] != 0xAA || win[off + 1] != 0x55 ||
+                    win[off + 2] != 0xAA || win[off + 3] != 0x55)
                 {
-                    ESP_LOGW(TAG, "ringPush: bad SOF at tail, clearing ring");
+                    if (cfg.debug)
+                    {
+                        ESP_LOGW(TAG, "ringPush: bad SOF at tail, clearing ring");
+                    }
+                    rb_drop_oldest_bytes += local_count + dropped_here;
+                    rb_bad_sof_clears++;
+                    clearRingLocked();
+                    local_count = 0;
+                    cleared = true;
+                    break;
                 }
-                rb_drop_oldest_bytes += local_count;
-                rb_bad_sof_clears++;
-                clearRingLocked();
-                local_count = 0;
-                break;
+
+                const uint32_t payload_len = win[off + 5];
+                const uint32_t frame_size = 4 + 1 + 1 + payload_len + 2;
+
+                if (frame_size > local_count)
+                {
+                    if (cfg.debug)
+                    {
+                        ESP_LOGW(TAG, "ringPush: partial frame at tail (%lu > %lu), clearing ring",
+                                      (unsigned long)frame_size, (unsigned long)local_count);
+                    }
+                    rb_drop_oldest_bytes += local_count + dropped_here;
+                    rb_bad_sof_clears++;
+                    clearRingLocked();
+                    local_count = 0;
+                    cleared = true;
+                    break;
+                }
+
+                // Frame extends past this window: re-read from the new tail.
+                // frame_size <= MAX_FRAME < sizeof(win), so the next window
+                // always makes progress.
+                if (off + frame_size > take)
+                {
+                    break;
+                }
+
+                off += frame_size;
+                local_count -= frame_size;
+                dropped_here += frame_size;
+                did_overrun = true;
             }
 
-            const uint32_t payload_len = hdr[5];
-            const uint32_t frame_size = 4 + 1 + 1 + payload_len + 2;
-
-            if (frame_size > local_count)
+            if (cleared)
             {
-                if (cfg.debug)
-                {
-                    ESP_LOGW(TAG, "ringPush: partial frame at tail (%lu > %lu), clearing ring",
-                                  (unsigned long)frame_size, (unsigned long)local_count);
-                }
-                rb_drop_oldest_bytes += local_count;
-                rb_bad_sof_clears++;
-                clearRingLocked();
-                local_count = 0;
                 break;
             }
-
-            rb_tail = (rb_tail + frame_size) % ring_size_;
-            local_count -= frame_size;
-
-            portENTER_CRITICAL(&ring_mux_);
-            rb_count = local_count;
-            portEXIT_CRITICAL(&ring_mux_);
-
-            rb_drop_oldest_bytes += frame_size;
-            did_overrun = true;
+            if (dropped_here > 0)
+            {
+                rb_tail = (rb_tail + dropped_here) % ring_size_;
+                rb_drop_oldest_bytes += dropped_here;
+                portENTER_CRITICAL(&ring_mux_);
+                rb_count = local_count;
+                portEXIT_CRITICAL(&ring_mux_);
+            }
         }
         if (did_overrun)
         {
@@ -913,7 +1035,6 @@ bool TR_LogToFlash::ringPush(const uint8_t* data, uint32_t len)
     {
         rb_highwater = new_count;
     }
-    if (push_mutex_) xSemaphoreGive(push_mutex_);
     return true;
 }
 
@@ -1762,6 +1883,12 @@ void TR_LogToFlash::clearRing()
     // would clobber our reset back to a prelaunch value on its trailing
     // rb_head assignment (the #74 race).
     if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+    // Discard staged-but-unwritten frames too — the caller is wiping the ring,
+    // and a later staging flush must not resurrect pre-wipe data.  Only here,
+    // NOT in clearRingLocked(): the drop-oldest path inside ringPushLocked
+    // calls clearRingLocked() while flushing staging_buf_ itself.
+    staged_len_ = 0;
+    staged_frames_ = 0;
     clearRingLocked();
     if (push_mutex_) xSemaphoreGive(push_mutex_);
 }
@@ -2216,6 +2343,11 @@ void TR_LogToFlash::flushTaskLoop()
     {
         const int64_t iter_t0 = esp_timer_get_time();
 
+        // Push any staged frames that have waited past the age bound, so
+        // trickle-rate traffic still reaches the (brownout-durable) MRAM
+        // ring promptly even when staging never fills.
+        flushStagingIfStale(STAGING_MAX_AGE_US);
+
         // Handle deferred pre-create request (from PRELAUNCH state).
         // #365: consume the request ONLY after observing it set.  The old
         // unconditional else-clear could destroy a request that landed
@@ -2278,6 +2410,14 @@ void TR_LogToFlash::flushTaskLoop()
         if (end_flight_requested && logging_active && file_open)
         {
             uint32_t t0 = millis();
+
+            // The last <=STAGING_SIZE of accepted frames may still sit in RAM
+            // staging (enqueueFrame rejects new data once end_flight_requested
+            // is set, so no more can arrive) — push them into the ring so the
+            // drain below captures the true tail of the flight.
+            if (push_mutex_) xSemaphoreTake(push_mutex_, portMAX_DELAY);
+            flushStagingLocked();
+            if (push_mutex_) xSemaphoreGive(push_mutex_);
 
             // Drain remaining data
             portENTER_CRITICAL(&ring_mux_);

@@ -280,6 +280,23 @@ private:
     // once logging is active (see openLogSession / closeLogSession).
     uint32_t ring_prelaunch_cap_ = 0;  // Set in begin() from ring_size_
 
+    // MRAM write staging (2026-07-09 bench): a per-frame ringPush costs two
+    // SPI transactions (WREN + WRITE) under the bus mutex — ~325 us/frame
+    // with flush-side contention — which caps ingest at ~2.1k frames/s and
+    // silently dropped ~30% of the 1920 Hz stream at the DMA ISR.  Frames
+    // stage in RAM (memcpy) and reach MRAM as one batched write per
+    // STAGING_SIZE, or after STAGING_MAX_AGE_US via the flush task, so the
+    // brownout-durability window is bounded.  MRAM path only; guarded by
+    // push_mutex_ like the ring pointers.  FIFO order is preserved because
+    // every producer funnels through the same staging under the same mutex.
+    static constexpr uint32_t STAGING_SIZE = 2048;
+    static constexpr int64_t  STAGING_MAX_AGE_US = 50000;
+    uint8_t  staging_buf_[STAGING_SIZE] = {};
+    uint32_t staged_len_ = 0;
+    uint32_t staged_frames_ = 0;
+    int64_t  staged_first_us_ = 0;
+    uint32_t staging_flushes_ = 0;
+
     // NAND/log state
     uint32_t nand_page = 0;
     uint32_t nand_block = 0;
@@ -460,6 +477,9 @@ private:
     inline void csHigh(int pin) { digitalWrite(pin, HIGH); }
 
     bool ringPush(const uint8_t* data, uint32_t len);
+    bool ringPushLocked(const uint8_t* data, uint32_t len);  // caller holds push_mutex_
+    bool flushStagingLocked();                               // caller holds push_mutex_
+    void flushStagingIfStale(int64_t max_age_us);
     uint32_t ringPop(uint8_t* out, uint32_t len);
     void ringPeekAt(uint32_t offset, uint8_t* out, uint32_t len);
 
