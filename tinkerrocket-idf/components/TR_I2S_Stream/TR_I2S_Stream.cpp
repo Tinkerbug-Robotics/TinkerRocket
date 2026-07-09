@@ -64,6 +64,13 @@ esp_err_t TR_I2S_Stream::beginMasterTx(int bclk_pin,
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num  = dma_desc_num;
     chan_cfg.dma_frame_num = dma_frame_num;
+    // #468: zero each DMA descriptor after it transmits. Without this, a
+    // sender-task underrun makes the DMA re-transmit whatever stale frames
+    // are still in the ring — the receiver saw one descriptor's worth of
+    // 10+ s-old frames once per ring revolution (46.4 ms at 44100), which
+    // its dedup misread as an FC reboot. With auto_clear an underrun sends
+    // zeros, which every receiver in this system already skips as idle fill.
+    chan_cfg.auto_clear = true;
 
     esp_err_t err = i2s_new_channel(&chan_cfg, &chan_handle_, nullptr);
     if (err != ESP_OK)

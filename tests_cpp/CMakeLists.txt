@@ -390,3 +390,18 @@ target_include_directories(test_baro_gate_policy PRIVATE
 )
 target_link_libraries(test_baro_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_baro_gate_policy)
+
+# ---------- test_dedup_reboot_policy ----------
+# Host-side test for the OC's FC-reboot-vs-replay discriminator (#468): a
+# reboot verdict requires the timestamp backstep to persist for the confirm
+# window; replayed stale I2S TX descriptors (once per DMA ring revolution,
+# interleaved with fresh frames) must be dropped without resetting the dedup
+# baselines. dedup_reboot_policy.h is pure, so the test just adds the
+# out_computer/main dir.
+add_executable(test_dedup_reboot_policy test_dedup_reboot_policy.cpp)
+target_include_directories(test_dedup_reboot_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_dedup_reboot_policy GTest::gtest_main)
+gtest_discover_tests(test_dedup_reboot_policy)

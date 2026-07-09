@@ -46,6 +46,7 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
+#include "dedup_reboot_policy.h"
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -1184,6 +1185,7 @@ static uint32_t frames_bad_crc = 0;
 static volatile uint32_t dma_cb_count = 0;      // DMA callback invocations
 static uint32_t dedup_drops_lt = 0;              // ts strictly less than prev (replay / reorder)
 static uint32_t dedup_drops_eq = 0;              // ts exactly equal to prev (byte-duplicate)
+static uint32_t dedup_replay_drops = 0;          // #468: >10 s backstep, unconfirmed (replayed TX descriptor)
 static uint32_t stale_drops = 0;                 // stale timestamp rejects
 static uint32_t raw_i2c_reads = 0;
 static uint64_t raw_i2c_bytes = 0;
@@ -1859,27 +1861,42 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         if (prev != nullptr)
         {
-            // FC-reboot detection (#16). The FC's time_us restarts near 0 on every
-            // reboot — including the one right after a successful OTA. All the
-            // prev_time_*/max_time_us state here is from the prior session, so every
-            // post-reboot frame looks non-monotonic (dropped below) AND stale (dropped
-            // by the 5 s filter) until ts climbs back past the old high-water mark —
-            // tens of seconds of lost telemetry, so the app shows stale FC data right
-            // after an update. A timestamp far behind the global high-water mark (well
-            // beyond any reorder/jitter, which is sub-second) can only mean a new
-            // session: reset the dedup baseline and adopt the new stream. Also covers a
-            // uint32 µs wrap (~71 min) gracefully.
+            // FC-reboot detection (#16, hardened in #468). The FC's time_us
+            // restarts near 0 on every reboot — including the one right after a
+            // successful OTA. All the prev_time_*/max_time_us state here is from
+            // the prior session, so every post-reboot frame looks non-monotonic
+            // (dropped below) AND stale (dropped by the 5 s filter) until ts
+            // climbs back past the old high-water mark — tens of seconds of lost
+            // telemetry, so the app shows stale FC data right after an update. A
+            // timestamp far behind the global high-water mark can only mean a
+            // new session... OR a replayed stale TX descriptor (#468): an FC
+            // sender underrun re-transmits 10+ s-old frames once per DMA ring
+            // revolution, interleaved with fresh traffic. DedupRebootPolicy
+            // tells them apart: only a backstep that PERSISTS (no fresh frame
+            // for 100 ms) is a reboot; a lone stale frame between fresh ones is
+            // dropped as a replay without touching the baselines. Also covers a
+            // uint32 µs wrap (~71 min) gracefully (wrap = sustained backstep).
             static constexpr uint32_t REBOOT_BACKSTEP_US = 10'000'000;  // 10 s
-            if (time_us != 0 && max_time_us > REBOOT_BACKSTEP_US &&
-                time_us < (max_time_us - REBOOT_BACKSTEP_US))
+            static DedupRebootPolicy reboot_policy;  // 100 ms > 2 TX ring revolutions
+            const bool far_backstep =
+                (time_us != 0 && max_time_us > REBOOT_BACKSTEP_US &&
+                 time_us < (max_time_us - REBOOT_BACKSTEP_US));
+            switch (reboot_policy.onFrame(far_backstep, millis()))
             {
-                ESP_LOGW("DEDUP", "FC reboot detected (ts=%lu << max=%lu); resetting baseline",
-                         (unsigned long)time_us, (unsigned long)max_time_us);
-                prev_time_ism6 = prev_time_bmp = prev_time_mmc = prev_time_iis2mdc =
-                    prev_time_gnss = prev_time_ns = prev_time_pwr = prev_time_guid = 0;
-                max_time_us = 0;
-                // *prev now reads 0, so this frame passes the checks below as the first
-                // of the new session and re-seeds the baseline.
+                case DedupRebootPolicy::Action::RESET_BASELINE:
+                    ESP_LOGW("DEDUP", "FC reboot confirmed (ts=%lu << max=%lu, sustained); resetting baseline",
+                             (unsigned long)time_us, (unsigned long)max_time_us);
+                    prev_time_ism6 = prev_time_bmp = prev_time_mmc = prev_time_iis2mdc =
+                        prev_time_gnss = prev_time_ns = prev_time_pwr = prev_time_guid = 0;
+                    max_time_us = 0;
+                    // *prev now reads 0, so this frame passes the checks below as the
+                    // first of the new session and re-seeds the baseline.
+                    break;
+                case DedupRebootPolicy::Action::DROP_REPLAY:
+                    dedup_replay_drops++;
+                    return;
+                case DedupRebootPolicy::Action::PROCEED:
+                    break;
             }
 
             // Non-monotonic or exact-duplicate frame for this type — drop.
@@ -4125,6 +4142,9 @@ static void printStats()
         uint32_t d_stale = stale_drops - prev_stale;
         uint32_t d_dedup_eq = dedup_drops_eq - prev_dedup_eq;
         uint32_t d_dedup_lt = dedup_drops_lt - prev_dedup_lt;
+        static uint32_t prev_replay = 0;
+        uint32_t d_replay = dedup_replay_drops - prev_replay;
+        prev_replay = dedup_replay_drops;
         uint32_t d_parsed = msg_count_ism6 + msg_count_bmp + msg_count_mmc + msg_count_non_sensor + msg_count_gnss;
         static uint32_t prev_total_parsed = 0;
         uint32_t d_p = d_parsed - prev_total_parsed;
@@ -4135,7 +4155,7 @@ static void printStats()
         uint32_t d_tot = dma_total_bytes - prev_tot;
         float nz_pct = (d_tot > 0) ? (d_nz * 100.0f / d_tot) : 0;
 
-        ESP_LOGI("I2S", "dma_cb=%lu KB=%.1f nz=%.1f%% ovf=%lu dedup_eq=%lu dedup_lt=%lu stale=%lu parsed=%lu frx=%lu fdr=%lu",
+        ESP_LOGI("I2S", "dma_cb=%lu KB=%.1f nz=%.1f%% ovf=%lu dedup_eq=%lu dedup_lt=%lu stale=%lu replay=%lu parsed=%lu frx=%lu fdr=%lu",
                  (unsigned long)d_cb,
                  (double)(d_bytes / 1024.0),
                  (double)nz_pct,
@@ -4143,6 +4163,7 @@ static void printStats()
                  (unsigned long)d_dedup_eq,
                  (unsigned long)d_dedup_lt,
                  (unsigned long)d_stale,
+                 (unsigned long)d_replay,
                  (unsigned long)d_p,
                  (unsigned long)s.frames_received,
                  (unsigned long)s.frames_dropped);
