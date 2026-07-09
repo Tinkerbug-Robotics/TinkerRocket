@@ -213,3 +213,74 @@ TEST_F(PIDTest, DFilter_Reset_ClearsFilterState) {
     out = p.computePID(0.0f, 0.0f, DT);
     EXPECT_NEAR(out, 0.0f, 1e-6f);
 }
+
+// ---------- #386: integrator ACCUMULATOR clamp ----------
+//
+// The I output was always clamped, but cumulative_error grew unbounded during
+// a long saturated stretch; after the error reversed, all that surplus had to
+// integrate back down before the command moved at all — fins held hard-over
+// long past reversal.  The accumulator is now bounded at the value that
+// exactly saturates the output, so recovery begins on the first
+// post-reversal sample.
+
+TEST_F(PIDTest, IntegratorRecoversPromptlyAfterLongSaturation) {
+    // I-only controller: Ki=0.5, output cap ±10 -> accumulator cap ±20.
+    TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
+    i_pid.computePID(0.0f, 0.0f, DT);  // init
+
+    // 60 simulated seconds of hard +10 error: unclamped accumulator would
+    // reach 6000 (I = 3000 pre-clamp); clamped it stops at 20.
+    for (int i = 0; i < 6000; i++) {
+        i_pid.computePID(10.0f, 0.0f, DT);
+    }
+
+    // Error reverses to -10.  Pre-fix, unwinding 6000 -> 20 at 0.1/step took
+    // ~59800 steps (~10 minutes of flight) with the output pinned at MAX the
+    // whole time.  Post-fix the output must leave the +MAX rail within the
+    // steps it takes the accumulator to cross from +cap toward zero: at
+    // |error|*dt = 0.1 per step and cap 20, output < MAX within ~2 steps and
+    // negative within ~400.
+    int steps_to_leave_rail = -1, steps_to_negative = -1;
+    for (int i = 0; i < 1000; i++) {
+        float out = i_pid.computePID(-10.0f, 0.0f, DT);
+        if (steps_to_leave_rail < 0 && out < MAX - 1e-4f) steps_to_leave_rail = i;
+        if (steps_to_negative < 0 && out < 0.0f) { steps_to_negative = i; break; }
+    }
+    ASSERT_GE(steps_to_leave_rail, 0) << "output never left the +MAX rail";
+    EXPECT_LE(steps_to_leave_rail, 3);
+    ASSERT_GE(steps_to_negative, 0) << "output never crossed zero";
+    EXPECT_LE(steps_to_negative, 450);
+}
+
+TEST_F(PIDTest, AccumulatorClampPreservesSteadyState) {
+    // Below saturation the clamp must be inert: a small steady error
+    // integrates exactly as before.
+    TR_PID i_pid(0.0f, KI, 0.0f, MAX, MIN);
+    i_pid.computePID(0.0f, 0.0f, DT);
+    float out = 0.0f;
+    for (int i = 0; i < 100; i++) out = i_pid.computePID(1.0f, 0.0f, DT);
+    // 100 steps of error 1.0 at dt 0.01 -> accumulator 1.0 -> I = 0.5.
+    EXPECT_NEAR(out, 0.5f, 1e-4f);
+}
+
+TEST_F(PIDTest, KiZeroAccumulatorHarmlessThenClampedOnEnable) {
+    // Ki = 0: the I term is inert and the clamp is skipped (min/Ki would be
+    // undefined).  Enabling Ki at runtime must clamp the stale accumulator on
+    // the next compute instead of pinning the output for minutes.
+    TR_PID pid_rt(0.0f, 0.0f, 0.0f, MAX, MIN);
+    pid_rt.computePID(0.0f, 0.0f, DT);
+    for (int i = 0; i < 6000; i++) pid_rt.computePID(10.0f, 0.0f, DT);
+
+    pid_rt.setKi(KI);
+    // First compute after enable: accumulator (6000) clamps to 20 -> I = 10.
+    float out = pid_rt.computePID(0.0f, 0.0f, DT);
+    EXPECT_LE(out, MAX);
+    // Reversal releases promptly, proving the stale accumulator was clamped.
+    int steps_to_negative = -1;
+    for (int i = 0; i < 1000; i++) {
+        float o = pid_rt.computePID(-10.0f, 0.0f, DT);
+        if (o < 0.0f) { steps_to_negative = i; break; }
+    }
+    ASSERT_GE(steps_to_negative, 0);
+    EXPECT_LE(steps_to_negative, 450);
+}
