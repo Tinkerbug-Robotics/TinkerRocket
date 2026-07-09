@@ -6,9 +6,8 @@
 #include "TR_GpsInsEKF.h"
 
 GpsInsEKF::GpsInsEKF() {
-    // Observation matrix (H) — 6x15
-    std::memset(H_, 0, sizeof(H_));
-    H_[0][0]=1; H_[1][1]=1; H_[2][2]=1; H_[3][3]=1; H_[4][4]=1; H_[5][5]=1;
+    // (The GNSS observation matrix H = [I6 | 0] is exploited structurally in
+    // measUpdate rather than stored and multiplied densely.)
 
     // Process noise Rw — 12x12
     std::memset(Rw_, 0, sizeof(Rw_));
@@ -584,6 +583,94 @@ void GpsInsEKF::stabilizeP() {
 
 // ─── Accelerometer Gravity Reference Update ──────────────────────────
 
+// ─── Shared scalar measurement update ────────────────────────────────
+// Generalized scalar Kalman update for a 1-row H with hn nonzero entries
+// (hval[m] at column hidx[m]).  Computes the gain, applies the full state
+// correction, and updates P in Joseph form exploiting the RANK-1 structure of
+// K*H: three outer-product passes (~700 MACs) instead of the dense 15x15
+// products (~6750 MACs) each caller previously carried as a private copy of
+// this exact sequence.  The dense form dominated the EKF budget whenever the
+// AHRS updates ran (mag heading fused at every ~480 Hz tick).
+//
+//   A  = (I-KH)*P      -> A[i][j] = P[i][j] - K[i]*HP[j]
+//   B  = A*(I-KH)^T    -> B[i][j] = A[i][j] - (A[i][:] . H) * K[j]
+//   P' = B + R*K*K^T
+//
+// P is exactly symmetric on entry (every update ends with an explicit
+// symmetrize), so K = P*H^T*S^-1 can be read from HP^T bit-identically.
+void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
+                                      int hn, float y, float R, float s_min)
+{
+    // HP = H*P (1x15), snapshotted before P is modified
+    float HP[15] = {};
+    for (int m = 0; m < hn; m++) {
+        const float h = hval[m];
+        const float* Prow = P_[hidx[m]];
+        for (int j = 0; j < 15; j++) HP[j] += h * Prow[j];
+    }
+
+    // S = H*P*H^T + R  (negated form of !(S > s_min) is deliberate: it also
+    // rejects a NaN S instead of proceeding with a poisoned gain)
+    float S = R;
+    for (int m = 0; m < hn; m++) S += HP[hidx[m]] * hval[m];
+    if (!(S > s_min)) return;
+    const float S_inv = 1.0f / S;
+
+    // K = P*H^T * S^-1  (= HP^T * S^-1 by symmetry of P)
+    float K[15];
+    for (int i = 0; i < 15; i++) K[i] = HP[i] * S_inv;
+
+    // State correction xk = K*y — position via curvature radii, velocity,
+    // biases, attitude via left-multiplied error quaternion (the shared
+    // convention across all measurement updates).
+    float xk[15];
+    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
+
+    double Rew, Rns;
+    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
+    pEst_D_rrm_[2] -= xk[2];
+    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
+    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
+    for (int i = 0; i < 3; i++) {
+        vEst_NED_mps_[i] += xk[i + 3];
+        aBias_mps2_[i]   += xk[i + 9];
+        wBias_rps_[i]    += xk[i + 12];
+    }
+
+    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
+    normalizeQuaternion(quatDelta, quatDelta);
+    float qTemp[4];
+    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
+    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
+
+    // Rank-1 Joseph covariance update (in place)
+    for (int i = 0; i < 15; i++) {
+        const float Ki = K[i];
+        for (int j = 0; j < 15; j++)
+            P_[i][j] -= Ki * HP[j];
+    }
+    float Acol[15];
+    for (int i = 0; i < 15; i++) {
+        float s = 0.0f;
+        for (int m = 0; m < hn; m++) s += P_[i][hidx[m]] * hval[m];
+        Acol[i] = s;
+    }
+    for (int i = 0; i < 15; i++) {
+        const float KR_i = K[i] * R;
+        for (int j = 0; j < 15; j++)
+            P_[i][j] += -Acol[i] * K[j] + KR_i * K[j];
+    }
+
+    // Symmetrize P
+    for (int i = 0; i < 15; i++)
+        for (int j = 0; j <= i; j++) {
+            float s = 0.5f * (P_[i][j] + P_[j][i]);
+            P_[i][j] = s; P_[j][i] = s;
+        }
+
+    stabilizeP();
+}
+
 void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
     // Compute gravity in body frame from current quaternion
     float T_NED2B[3][3];
@@ -757,75 +844,10 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     //    the body-down axis d (yaw is rotation about NED-down); the factor 2
     //    accounts for the half-angle attitude error xk[6..8] = δθ/2 (matching
     //    accelMeasUpdate's -2·skew).  Nonzero only in cols 6,7,8.
-    const float H6 = 2.0f*d[0], H7 = 2.0f*d[1], H8 = 2.0f*d[2];
-
-    // S = H P Hᵀ + R_mag_  (only the attitude block contributes)
-    float HP[15];
-    for (int j = 0; j < 15; j++)
-        HP[j] = H6*P_[6][j] + H7*P_[7][j] + H8*P_[8][j];
-    const float S = HP[6]*H6 + HP[7]*H7 + HP[8]*H8 + R_mag_;
-    if (!(S > 1e-9f)) return;            // |H|=2 ⇒ S ≥ R_mag_ at any attitude; NaN-safe
-    const float S_inv = 1.0f / S;
-
-    // K = P Hᵀ S⁻¹  (15×1)
-    float K[15];
-    for (int i = 0; i < 15; i++)
-        K[i] = (P_[i][6]*H6 + P_[i][7]*H7 + P_[i][8]*H8) * S_inv;
-
-    // State correction xk = K y
-    float xk[15];
-    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
-
-    double Rew, Rns;
-    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
-    pEst_D_rrm_[2] -= xk[2];
-    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
-    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
-    for (int i = 0; i < 3; i++) {
-        vEst_NED_mps_[i] += xk[i + 3];
-        aBias_mps2_[i]   += xk[i + 9];
-        wBias_rps_[i]    += xk[i + 12];
-    }
-
-    // Quaternion correction (body-frame δθ, left-multiply — same convention as
-    // accel/baro/GNSS updates)
-    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
-    normalizeQuaternion(quatDelta, quatDelta);
-    float qTemp[4];
-    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
-    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
-
-    // Joseph form: P = (I-KH) P (I-KH)ᵀ + K R Kᵀ.  H is sparse — nonzero only
-    // in cols {6,7,8} with values {H6,H7,H8}.
-    float Hrow[15] = {};
-    Hrow[6] = H6; Hrow[7] = H7; Hrow[8] = H8;
-
-    float I_KH[15][15];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * Hrow[j];
-
-    float P_new[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 15; k++)
-                P_new[i][j] += I_KH[i][k] * P_[k][j];
-
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++) {
-            float sum = 0;
-            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
-            P_[i][j] = sum + K[i] * R_mag_ * K[j];
-        }
-
-    // Symmetrize P
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j <= i; j++) {
-            float s = 0.5f * (P_[i][j] + P_[j][i]);
-            P_[i][j] = s; P_[j][i] = s;
-        }
-
-    stabilizeP();
+    //    |H|=2 ⇒ S ≥ R_mag_ at any attitude, so the s_min gate is NaN-safety.
+    const int   hidx[3] = {6, 7, 8};
+    const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_mag_, 1e-9f);
 }
 
 // ─── Heading update from GNSS velocity course ───────────────────────
@@ -849,61 +871,9 @@ void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
     while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
 
     const float R_course = 0.05f;   // ~13° course noise (rad²)
-    const float H6 = 2.0f*d[0], H7 = 2.0f*d[1], H8 = 2.0f*d[2];
-
-    float HP[15];
-    for (int j = 0; j < 15; j++)
-        HP[j] = H6*P_[6][j] + H7*P_[7][j] + H8*P_[8][j];
-    const float S = HP[6]*H6 + HP[7]*H7 + HP[8]*H8 + R_course;
-    if (!(S > 1e-9f)) return;
-    const float S_inv = 1.0f / S;
-
-    float K[15];
-    for (int i = 0; i < 15; i++)
-        K[i] = (P_[i][6]*H6 + P_[i][7]*H7 + P_[i][8]*H8) * S_inv;
-
-    float xk[15];
-    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
-
-    double Rew, Rns;
-    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
-    pEst_D_rrm_[2] -= xk[2];
-    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
-    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
-    for (int i = 0; i < 3; i++) {
-        vEst_NED_mps_[i] += xk[i + 3];
-        aBias_mps2_[i]   += xk[i + 9];
-        wBias_rps_[i]    += xk[i + 12];
-    }
-
-    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
-    normalizeQuaternion(quatDelta, quatDelta);
-    float qTemp[4];
-    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
-    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
-
-    float Hrow[15] = {}; Hrow[6] = H6; Hrow[7] = H7; Hrow[8] = H8;
-    float I_KH[15][15];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * Hrow[j];
-    float P_new[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 15; k++)
-                P_new[i][j] += I_KH[i][k] * P_[k][j];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++) {
-            float sum = 0;
-            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
-            P_[i][j] = sum + K[i] * R_course * K[j];
-        }
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j <= i; j++) {
-            float s = 0.5f * (P_[i][j] + P_[j][i]);
-            P_[i][j] = s; P_[j][i] = s;
-        }
-    stabilizeP();
+    const int   hidx[3] = {6, 7, 8};
+    const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_course, 1e-9f);
 }
 
 // ─── Heading update by body↔world lateral-acceleration matching ─────
@@ -934,61 +904,9 @@ void GpsInsEKF::accelMatchHeadingUpdate(const float aMeas[3], const float aWorld
     while (y < -(float)M_PI) y += 2.0f * (float)M_PI;
 
     const float R_am = 0.20f;   // ~26° (rad²) — GNSS-derived accel is noisy
-    const float H6 = 2.0f*d[0], H7 = 2.0f*d[1], H8 = 2.0f*d[2];
-
-    float HP[15];
-    for (int j = 0; j < 15; j++)
-        HP[j] = H6*P_[6][j] + H7*P_[7][j] + H8*P_[8][j];
-    const float S = HP[6]*H6 + HP[7]*H7 + HP[8]*H8 + R_am;
-    if (!(S > 1e-9f)) return;
-    const float S_inv = 1.0f / S;
-
-    float K[15];
-    for (int i = 0; i < 15; i++)
-        K[i] = (P_[i][6]*H6 + P_[i][7]*H7 + P_[i][8]*H8) * S_inv;
-
-    float xk[15];
-    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
-
-    double Rew, Rns;
-    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
-    pEst_D_rrm_[2] -= xk[2];
-    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
-    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
-    for (int i = 0; i < 3; i++) {
-        vEst_NED_mps_[i] += xk[i + 3];
-        aBias_mps2_[i]   += xk[i + 9];
-        wBias_rps_[i]    += xk[i + 12];
-    }
-
-    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
-    normalizeQuaternion(quatDelta, quatDelta);
-    float qTemp[4];
-    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
-    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
-
-    float Hrow[15] = {}; Hrow[6] = H6; Hrow[7] = H7; Hrow[8] = H8;
-    float I_KH[15][15];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            I_KH[i][j] = (i == j ? 1.0f : 0.0f) - K[i] * Hrow[j];
-    float P_new[15][15] = {};
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++)
-            for (int k = 0; k < 15; k++)
-                P_new[i][j] += I_KH[i][k] * P_[k][j];
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j < 15; j++) {
-            float sum = 0;
-            for (int k = 0; k < 15; k++) sum += P_new[i][k] * I_KH[j][k];
-            P_[i][j] = sum + K[i] * R_am * K[j];
-        }
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j <= i; j++) {
-            float s = 0.5f * (P_[i][j] + P_[j][i]);
-            P_[i][j] = s; P_[j][i] = s;
-        }
-    stabilizeP();
+    const int   hidx[3] = {6, 7, 8};
+    const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_am, 1e-9f);
 }
 
 // ─── Measurement Update (GNSS correction) ───────────────────────────
@@ -1022,18 +940,12 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
     for (int i=0;i<3;i++) { R_scaled[i][i]     = R_[i][i]     * pos_scale2;
                             R_scaled[i+3][i+3] = R_[i+3][i+3] * vel_scale; }
 
-    // S = H * P * H^T + R_scaled
-    float H_T[15][6];
-    for (int i=0;i<6;i++) for (int j=0;j<15;j++) H_T[j][i]=H_[i][j];
-
-    float H_P[6][15]={};
-    for (int i=0;i<6;i++) for (int j=0;j<15;j++) for (int k=0;k<15;k++) H_P[i][j]+=H_[i][k]*P_[k][j];
-
-    float S[36]={};
-    for (int i=0;i<6;i++) for (int j=0;j<6;j++) {
-        for (int k=0;k<15;k++) S[i*6+j]+=H_P[i][k]*H_T[k][j];
-        S[i*6+j]+=R_scaled[i][j];
-    }
+    // S = H * P * H^T + R_scaled.  H = [I6 | 0] (position rows read states
+    // 0-2, velocity rows states 3-5), so H*P is just the first six ROWS of P
+    // and H*P*H^T its top-left 6x6 block — no dense products needed.
+    float S[36];
+    for (int i=0;i<6;i++) for (int j=0;j<6;j++)
+        S[i*6+j] = P_[i][j] + R_scaled[i][j];
 
     float S_inv[36];
     if (!invertMatrix6x6(S, S_inv)) return;  // singular S — skip update
@@ -1094,19 +1006,15 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         if (infl_pos > 1.0f || infl_vh > 1.0f || infl_vd > 1.0f) {
             R_scaled[0][0]*=infl_pos; R_scaled[1][1]*=infl_pos; R_scaled[2][2]*=infl_pos;
             R_scaled[3][3]*=infl_vh;  R_scaled[4][4]*=infl_vh;  R_scaled[5][5]*=infl_vd;
-            for (int i=0;i<6;i++) for (int j=0;j<6;j++) {
-                float s=0.0f; for (int k=0;k<15;k++) s+=H_P[i][k]*H_T[k][j];
-                S[i*6+j]=s+R_scaled[i][j];
-            }
+            for (int i=0;i<6;i++) for (int j=0;j<6;j++)
+                S[i*6+j] = P_[i][j] + R_scaled[i][j];
             if (!invertMatrix6x6(S, S_inv)) return;
         }
     }
 
-    float P_Ht[15][6]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<15;k++) P_Ht[i][j]+=P_[i][k]*H_T[k][j];
-
+    // K = P * H^T * S^-1.  P*H^T is the first six COLUMNS of P.
     float K[15][6]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) K[i][j]+=P_Ht[i][k]*S_inv[k*6+j];
+    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) K[i][j]+=P_[i][k]*S_inv[k*6+j];
 
     // Gate attitude rows of K by cos⁴(pitch) to suppress GNSS attitude
     // corrections near vertical, where position/velocity innovations have
@@ -1126,26 +1034,32 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         }
     }
 
-    // Joseph form: P = (I-KH)*P*(I-KH)^T + K*R_scaled*K^T
-    float KH[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<6;k++) KH[i][j]+=K[i][k]*H_[k][j];
-
-    float I_KH[15][15];
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) I_KH[i][j]=(i==j?1.0f:0.0f)-KH[i][j];
-
-    float I_KH_P[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<15;k++) I_KH_P[i][j]+=I_KH[i][k]*P_[k][j];
-
-    float I_KH_P_I_KHt[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<15;k++) I_KH_P_I_KHt[i][j]+=I_KH_P[i][k]*I_KH[j][k];
-
-    float KR[15][6]={};
-    for (int i=0;i<15;i++) for (int j=0;j<6;j++) for (int k=0;k<6;k++) KR[i][j]+=K[i][k]*R_scaled[k][j];
-
-    float KR_Kt[15][15]={};
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) for (int k=0;k<6;k++) KR_Kt[i][j]+=KR[i][k]*K[j][k];
-
-    for (int i=0;i<15;i++) for (int j=0;j<15;j++) P_[i][j]=I_KH_P_I_KHt[i][j]+KR_Kt[i][j];
+    // Joseph form: P = (I-KH)*P*(I-KH)^T + K*R_scaled*K^T.  With H = [I6|0],
+    // K*H = [K | 0] — a rank-6 block — so each product is one 15x15x6 pass
+    // against the first six rows/columns instead of a dense 15^3 multiply
+    // (~4.6k MACs total vs ~13.8k before, and no 15x15 intermediates for
+    // KH/I_KH).  R_scaled is diagonal, so K*R*K^T contracts over one index.
+    //
+    //   A = (I-KH)*P    -> A[i][j] = P[i][j] - sum_k K[i][k]*P[k][j]   (k<6)
+    //   B = A*(I-KH)^T  -> B[i][j] = A[i][j] - sum_k A[i][k]*K[j][k]   (k<6)
+    //   P' = B + K*R*K^T
+    float A[15][15];
+    for (int i=0;i<15;i++) for (int j=0;j<15;j++) {
+        float s = P_[i][j];
+        for (int k=0;k<6;k++) s -= K[i][k]*P_[k][j];
+        A[i][j] = s;
+    }
+    const float Rdiag[6] = {R_scaled[0][0], R_scaled[1][1], R_scaled[2][2],
+                            R_scaled[3][3], R_scaled[4][4], R_scaled[5][5]};
+    for (int i=0;i<15;i++) {
+        float KRrow[6];
+        for (int k=0;k<6;k++) KRrow[k]=K[i][k]*Rdiag[k];
+        for (int j=0;j<15;j++) {
+            float s = A[i][j];
+            for (int k=0;k<6;k++) s += -A[i][k]*K[j][k] + KRrow[k]*K[j][k];
+            P_[i][j] = s;
+        }
+    }
 
     // Symmetrize P
     for (int i=0;i<15;i++) for (int j=0;j<=i;j++) {
@@ -1193,74 +1107,11 @@ void GpsInsEKF::baroMeasUpdate(EkfBaroData baro_data) {
     //           = baro_alt - pEst_D_rrm_[2]
     float y = (float)(baro_data.altitude_m - pEst_D_rrm_[2]);
 
-    // S = H*P*H^T + R.  With H[2]=-1: S = (-1)*P[2][2]*(-1) + R = P[2][2] + R
-    float S = P_[2][2] + R_baro_;
-    if (S < 1e-10f) return;
-    float S_inv = 1.0f / S;
-
-    // K = P * H^T * S^-1.  H^T has -1 at row 2, so K[i] = P[i][2]*(-1)*S_inv
-    float K[15];
-    for (int i = 0; i < 15; i++) K[i] = -P_[i][2] * S_inv;
-
-    // State correction: x = K * y  (x is in NED, so xk[2] is Down)
-    float xk[15];
-    for (int i = 0; i < 15; i++) xk[i] = K[i] * y;
-
-    // Apply corrections — same convention as GPS measUpdate:
-    // altitude (up) subtracts the Down correction
-    double Rew, Rns;
-    EarthRad(pEst_D_rrm_[0], &Rew, &Rns);
-    pEst_D_rrm_[2] -= xk[2];
-    pEst_D_rrm_[0] += xk[0] / (Rns + pEst_D_rrm_[2]);
-    pEst_D_rrm_[1] += xk[1] / ((Rew + pEst_D_rrm_[2]) * std::cos(pEst_D_rrm_[0]));
-
-    for (int i = 0; i < 3; i++) {
-        vEst_NED_mps_[i] += xk[i + 3];
-        aBias_mps2_[i] += xk[i + 9];
-        wBias_rps_[i] += xk[i + 12];
-    }
-
-    // Quaternion correction
-    float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
-    normalizeQuaternion(quatDelta, quatDelta);
-    float qTemp[4];
-    multiplyQuaternions(quat_BL_, quatDelta, qTemp);
-    for (int i = 0; i < 4; i++) quat_BL_[i] = qTemp[i];
-
-    // Joseph form covariance: P = (I - K*H) * P * (I - K*H)^T + K*R*K^T.
-    // H is a single row with one nonzero (H[2] = -1), so K*H is RANK-1:
-    // (I-KH)[i][j] = delta_ij + K[i]*delta_j2, and both matrix products
-    // collapse to outer-product updates against row/column 2 — ~700 MACs
-    // instead of the dense 2x15^3 (~6750) this used to cost (~1.1 ms per
-    // fusion on target, which tripled per-tick EKF cost when #450 restored
-    // every-sample fusion).  Same algebra, same Joseph symmetry/PSD
-    // robustness — only the float association differs.
-    //
-    //   A  = (I-KH)*P      -> A[i][j] = P[i][j] + K[i]*P[2][j]
-    //   B  = A*(I-KH)^T    -> B[i][j] = A[i][j] + A[i][2]*K[j]
-    //   P' = B + R*K*K^T
-    float Prow2[15];
-    for (int j = 0; j < 15; j++) Prow2[j] = P_[2][j];  // snapshot: row 2 is
-    for (int i = 0; i < 15; i++)                       // itself updated below
-        for (int j = 0; j < 15; j++)
-            P_[i][j] += K[i] * Prow2[j];
-
-    float Acol2[15];
-    for (int i = 0; i < 15; i++) Acol2[i] = P_[i][2];
-    for (int i = 0; i < 15; i++) {
-        const float KR_i = K[i] * R_baro_;
-        for (int j = 0; j < 15; j++)
-            P_[i][j] += Acol2[i] * K[j] + KR_i * K[j];
-    }
-
-    // Symmetrize P
-    for (int i = 0; i < 15; i++)
-        for (int j = 0; j <= i; j++) {
-            float s = 0.5f * (P_[i][j] + P_[j][i]);
-            P_[i][j] = s; P_[j][i] = s;
-        }
-
-    stabilizeP();
+    // H_baro is a single -1 at the Down state; the shared helper does the
+    // gain, state correction, and rank-1 Joseph covariance update.
+    const int   hidx[1] = {2};
+    const float hval[1] = {-1.0f};
+    applyScalarMeasUpdate(hidx, hval, 1, y, R_baro_, 1e-10f);
 }
 
 // ─── Set Quaternion ─────────────────────────────────────────────────
