@@ -83,6 +83,9 @@ static int8_t  lora_tx_power   = config::LORA_TX_POWER_DBM;
 // Stats tracking
 static uint32_t last_stats_ms = 0;
 static uint32_t last_rx_count = 0;
+// Last time we heard OUR rocket: bumped only on a network-id-matched beacon
+// or telemetry decode (#384). Drives the cmd-10 VERIFYING predicate, silence
+// recovery, and hop-liveness — none of which should trust foreign traffic.
 static uint32_t last_packet_ms = 0;
 // CRC-passing decodes whose SNR was below loraMinValidSnrDb(current_sf)
 // — almost certainly noise-floor false positives.  Counted but otherwise
@@ -3342,7 +3345,15 @@ static void loop_bs()
 
     if (rx_packet_accepted)
     {
-        last_packet_ms = millis();
+        // #384: last_packet_ms deliberately NOT bumped here — this point is
+        // before the network-id filter, so foreign-network packets (or any
+        // SNR-passing decode of the right shape) counted as proof of life.
+        // That suppressed silence recovery and, worse, satisfied the cmd-10
+        // VERIFYING predicate ("any last_packet_ms increase = the rocket
+        // followed us"), committing a new frequency to NVS on the strength
+        // of somebody else's traffic and stranding the BS on a channel our
+        // rocket isn't on. The bump now lives in the two netid-matched
+        // branches below (beacon + telemetry).
 
         // --- Name beacon: [0xBE][network_id][rocket_id][unit_name...] ---
         // #384: a telemetry frame whose first byte (network_id) happens to
@@ -3356,6 +3367,7 @@ static void loop_bs()
             uint8_t bcn_rid = rx_buf[2];
             if (bcn_nid == network_id)
             {
+                last_packet_ms = millis();  // netid-matched proof of life (#384)
                 int slot = findOrAllocRocket(bcn_rid);
                 if (slot >= 0 && rx_len > 3)
                 {
@@ -3396,6 +3408,8 @@ static void loop_bs()
             }
             else
             {
+                last_packet_ms = millis();  // netid-matched proof of life (#384)
+
                 // Route to per-rocket tracker
                 int slot = findOrAllocRocket(decoded.rocket_id);
 
