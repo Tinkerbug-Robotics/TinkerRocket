@@ -222,11 +222,17 @@ struct config : board_pins
     static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad²,  worst attitude axis (~18° 1σ)
     static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
 
-    // Barometer spike rejection: max altitude change (m) between consecutive
-    // BMP585 samples before the reading is rejected.  At 500 Hz a 5 m jump
-    // implies >2500 m/s — far beyond any model rocket — so real flight data
-    // passes easily while ejection-charge pressure transients are rejected.
-    static constexpr float BARO_SPIKE_THRESH_M = 5.0f;
+    // Barometer spike rejection (#450: rate-aware).  A sample is rejected only
+    // if BOTH hold between it and the previous sample the EKF gate consumed:
+    //   |delta|        > BARO_SPIKE_THRESH_M   (absolute deadband), AND
+    //   |delta| / dt   > BARO_SPIKE_RATE_MPS   (apparent rate over the ACTUAL
+    //                                           pair spacing from timestamps)
+    // Real subsonic flight through any legitimate sampling gap stays far below
+    // the rate limit (a 66 ms gap at 100 m/s is 6.6 m but only 100 m/s), while
+    // glitches — an in-band SPI-corrupted sample or an ejection-charge pressure
+    // transient at the ~2 ms ODR — show km/s-scale apparent rates.
+    static constexpr float BARO_SPIKE_THRESH_M  = 5.0f;
+    static constexpr float BARO_SPIKE_RATE_MPS  = 500.0f;
 
     // Transonic barometer lockout: shock waves near Mach 1 cause large static
     // pressure errors (the "transonic jump").  Lock out baro updates when EKF
