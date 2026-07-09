@@ -366,47 +366,59 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
 
     uint8_t cmd = data[0];
 
+    // #384: parse into locals; nothing shared is touched until the single
+    // atomic commit at the end. The old per-branch writes let bs_loop observe
+    // a command with the WRONG payload/filename (a second BLE write between
+    // getCommand() and getCommandPayload() swapped the latch), and the String
+    // filename members did heap ops from two tasks with no lock.
+    char    name_local[64];
+    bool    have_delete = false, have_download = false;
+    int     page_local  = -1;
+    uint8_t payload_local[sizeof(pending_payload_)];
+    size_t  payload_len_local = 0;
+    bool    have_payload = false;
+
+    auto copyName = [&](const uint8_t* src, size_t n) {
+        if (n >= sizeof(name_local)) n = sizeof(name_local) - 1;
+        memcpy(name_local, src, n);
+        name_local[n] = '\0';
+    };
+
     if (cmd == 2 && length > 1)
     {
         // Command 2: File list request (optional page number follows)
-        pending_file_list_page_ = data[1];
-        ESP_LOGI(BLE_TAG, "File list request, page: %u", pending_file_list_page_);
+        page_local = data[1];
+        ESP_LOGI(BLE_TAG, "File list request, page: %u", (unsigned)page_local);
     }
     else if (cmd == 2)
     {
         // Command 2 without page number defaults to page 0
-        pending_file_list_page_ = 0;
+        page_local = 0;
     }
     else if (cmd == 3 && length > 1)
     {
         // Command 3: Delete file (filename follows command byte)
-        pending_delete_filename_ = "";
-        for (size_t i = 1; i < length; ++i)
-        {
-            pending_delete_filename_ += (char)data[i];
-        }
-        ESP_LOGI(BLE_TAG, "Delete file request: %s", pending_delete_filename_.c_str());
+        copyName(data + 1, length - 1);
+        have_delete = true;
+        ESP_LOGI(BLE_TAG, "Delete file request: %s", name_local);
     }
     else if (cmd == 4 && length > 1)
     {
         // Command 4: Download file (filename follows command byte)
-        pending_download_filename_ = "";
-        for (size_t i = 1; i < length; ++i)
-        {
-            pending_download_filename_ += (char)data[i];
-        }
-        ESP_LOGI(BLE_TAG, "Download file request: %s", pending_download_filename_.c_str());
+        copyName(data + 1, length - 1);
+        have_download = true;
+        ESP_LOGI(BLE_TAG, "Download file request: %s", name_local);
     }
     else if (cmd == 5 && length >= 13)
     {
         // Command 5: Sim config [cmd][mass_g:4][thrust_n:4][burn_s:4]
-        size_t payload_len = length - 1;
-        if (payload_len > sizeof(pending_payload_))
+        payload_len_local = length - 1;
+        if (payload_len_local > sizeof(payload_local))
         {
-            payload_len = sizeof(pending_payload_);
+            payload_len_local = sizeof(payload_local);
         }
-        memcpy(pending_payload_, data + 1, payload_len);
-        pending_payload_len_ = payload_len;
+        memcpy(payload_local, data + 1, payload_len_local);
+        have_payload = true;
         ESP_LOGI(BLE_TAG, "Sim config received");
     }
     else if (cmd == 6)
@@ -427,13 +439,13 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     else if (cmd == 9 && length >= 8)
     {
         // Command 9: Time sync [cmd][year_lo][year_hi][month][day][hour][minute][second]
-        size_t payload_len = length - 1;
-        if (payload_len > sizeof(pending_payload_))
+        payload_len_local = length - 1;
+        if (payload_len_local > sizeof(payload_local))
         {
-            payload_len = sizeof(pending_payload_);
+            payload_len_local = sizeof(payload_local);
         }
-        memcpy(pending_payload_, data + 1, payload_len);
-        pending_payload_len_ = payload_len;
+        memcpy(payload_local, data + 1, payload_len_local);
+        have_payload = true;
         ESP_LOGI(BLE_TAG, "Time sync received");
     }
     else if (cmd == 70)
@@ -459,26 +471,38 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     else if (length > 1)
     {
         // Generic payload handler for any other command carrying data
-        size_t payload_len = length - 1;
-        if (payload_len > sizeof(pending_payload_))
+        payload_len_local = length - 1;
+        if (payload_len_local > sizeof(payload_local))
         {
-            payload_len = sizeof(pending_payload_);
+            payload_len_local = sizeof(payload_local);
         }
-        memcpy(pending_payload_, data + 1, payload_len);
-        pending_payload_len_ = payload_len;
+        memcpy(payload_local, data + 1, payload_len_local);
+        have_payload = true;
     }
 
+    // #384: commit the command AND everything that travels with it in one
+    // critical section, so bs_loop can never pair a command with a different
+    // write's payload/filename/page.
+    uint8_t overwritten = 0;
     portENTER_CRITICAL(&s_cmd_mux);
-    if (pending_command_ != 0)
+    overwritten = pending_command_;
+    if (have_payload)
     {
-        // Previous command not yet consumed — log and overwrite
-        portEXIT_CRITICAL(&s_cmd_mux);
-        ESP_LOGW(BLE_TAG, "Overwriting unconsumed cmd %u with %u",
-                 pending_command_, cmd);
-        portENTER_CRITICAL(&s_cmd_mux);
+        memcpy(pending_payload_, payload_local, payload_len_local);
+        pending_payload_len_ = payload_len_local;
     }
+    if (page_local >= 0)   pending_file_list_page_ = (uint8_t)page_local;
+    if (have_delete)       strlcpy(pending_delete_filename_,   name_local, sizeof(pending_delete_filename_));
+    if (have_download)     strlcpy(pending_download_filename_, name_local, sizeof(pending_download_filename_));
     pending_command_ = cmd;
     portEXIT_CRITICAL(&s_cmd_mux);
+    if (overwritten != 0)
+    {
+        // Previous command not yet consumed — it was overwritten wholesale
+        // (command + latches together, so at least never mismatched).
+        ESP_LOGW(BLE_TAG, "Overwriting unconsumed cmd %u with %u",
+                 overwritten, cmd);
+    }
 
     ESP_LOGI(BLE_TAG, "Received command: %u", cmd);
 }
@@ -854,32 +878,47 @@ void TR_BLE_To_APP::sendTelemetry(const TelemetryData& data)
 
 uint8_t TR_BLE_To_APP::getCommand()
 {
+    // #384: consume the command and snapshot its payload in the SAME critical
+    // section — a later BLE write can then only replace the pending latch,
+    // never the copy this command's handler reads via getCommandPayload().
     portENTER_CRITICAL(&s_cmd_mux);
     uint8_t cmd = pending_command_;
     pending_command_ = 0;
+    consumed_payload_len_ = pending_payload_len_;
+    memcpy(consumed_payload_, pending_payload_, sizeof(consumed_payload_));
     portEXIT_CRITICAL(&s_cmd_mux);
     return cmd;
 }
 
 uint8_t TR_BLE_To_APP::getFileListPage()
 {
+    portENTER_CRITICAL(&s_cmd_mux);
     uint8_t page = pending_file_list_page_;
     pending_file_list_page_ = 0;
+    portEXIT_CRITICAL(&s_cmd_mux);
     return page;
 }
 
 String TR_BLE_To_APP::getDeleteFilename()
 {
-    String filename = pending_delete_filename_;
-    pending_delete_filename_ = "";
-    return filename;
+    // Copy out under the mux; build the String (heap) only after exiting the
+    // critical section.
+    char buf[sizeof(pending_delete_filename_)];
+    portENTER_CRITICAL(&s_cmd_mux);
+    strlcpy(buf, pending_delete_filename_, sizeof(buf));
+    pending_delete_filename_[0] = '\0';
+    portEXIT_CRITICAL(&s_cmd_mux);
+    return String(buf);
 }
 
 String TR_BLE_To_APP::getDownloadFilename()
 {
-    String filename = pending_download_filename_;
-    pending_download_filename_ = "";
-    return filename;
+    char buf[sizeof(pending_download_filename_)];
+    portENTER_CRITICAL(&s_cmd_mux);
+    strlcpy(buf, pending_download_filename_, sizeof(buf));
+    pending_download_filename_[0] = '\0';
+    portEXIT_CRITICAL(&s_cmd_mux);
+    return String(buf);
 }
 
 void TR_BLE_To_APP::sendConfigJSON(const String& json)
