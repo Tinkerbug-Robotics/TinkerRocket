@@ -2288,15 +2288,19 @@ static void handleReceivedFrame(const uint8_t* frame, size_t frame_len,
 static void parseRxStream()
 {
     uint8_t payload[MAX_PAYLOAD];
-    // Issue #74 follow-up: when the prelaunch ring is at cap, every ringPush
-    // triggers drop-oldest which does an MRAM peek (~150 us SPI) on top of the
-    // normal MRAM write. Under sustained 72 KB/s ingest that pushes per-frame
-    // work above 400 us / 2400 fps = 416 us budget. rx_ring fills faster than
-    // this loop drains, the while condition never goes false, Core 1 stays
-    // 100% busy in this task, IDLE1 never runs, task_wdt trips. Yield a tick
-    // every N frames so IDLE can pet the watchdog even under that load.
-    static constexpr size_t YIELD_EVERY_N_FRAMES = 64;
-    size_t frames_this_call = 0;
+    // Throughput note (2026-07-09 bench): the previous fixed 64-frame yield
+    // slept one tick (~10 ms) per 64 frames, hard-capping parse throughput
+    // at ~2.1k frames/s.  That was invisibly adequate at the pre-1920 Hz
+    // inflow (~2.0k frames/s) but 30% short of the 1920 Hz-logging inflow
+    // (~3.0k frames/s): rx_ring pinned at 65535, the DMA ISR dropped
+    // ~45 KB/s (rx_ovf), and recordings captured ~69% of frames uniformly.
+    // Yield on TIME instead — parse at full speed, and only give up the core
+    // for a tick after a sustained slice so IDLE1 can pet the task watchdog
+    // and loop_oc (prio 5, same core) gets serviced under overload (#74's
+    // original concern).  20 ms slices = >=2/3 duty even when saturated —
+    // far above inflow with the batched copies below.
+    static constexpr int64_t PARSE_SLICE_US = 20000;
+    int64_t slice_t0 = esp_timer_get_time();
     while (rxLen() >= (4 + 1 + 1 + 2))
     {
         if (!(rxPeek(0) == 0xAA &&
@@ -2304,8 +2308,23 @@ static void parseRxStream()
               rxPeek(2) == 0xAA &&
               rxPeek(3) == 0x55))
         {
-            parser_resync_drops++;
-            (void)rxPop();
+            // Bulk-skip to the next SOF candidate.  ~45% of the raw stream is
+            // the master's zero idle-fill; scanning it one rxPop() at a time
+            // (with a 4-byte peek per iteration) was a large share of the
+            // parser's per-byte cost.  Scan the contiguous span for the next
+            // 0xAA and consume the whole gap in one tail advance.  Only the
+            // parser advances rx_tail (#383: the ISR never touches it), so
+            // reading the span directly is race-free.
+            const size_t tail = rx_tail;
+            const size_t head = rx_head;
+            const size_t contiguous =
+                (head >= tail) ? (head - tail) : (RX_STREAM_RING - tail);
+            const uint8_t* p = static_cast<const uint8_t*>(
+                memchr(rx_ring + tail + 1, 0xAA, contiguous - 1));
+            const size_t skip =
+                p ? static_cast<size_t>(p - (rx_ring + tail)) : contiguous;
+            parser_resync_drops += skip;
+            rx_tail = (tail + skip) % RX_STREAM_RING;
             continue;
         }
 
@@ -2322,10 +2341,18 @@ static void parseRxStream()
             return;
         }
 
+        // Copy the frame out in at most two contiguous spans (the old
+        // per-byte rxPeek loop paid a modulo per byte, twice per frame).
         uint8_t frame[MAX_FRAME];
-        for (size_t i = 0; i < frame_len; ++i)
         {
-            frame[i] = rxPeek(i);
+            const size_t tail = rx_tail;
+            const size_t to_end = RX_STREAM_RING - tail;
+            const size_t first = (frame_len <= to_end) ? frame_len : to_end;
+            memcpy(frame, rx_ring + tail, first);
+            if (first < frame_len)
+            {
+                memcpy(frame + first, rx_ring, frame_len - first);
+            }
         }
 
         uint8_t type = 0;
@@ -2344,16 +2371,15 @@ static void parseRxStream()
             continue;
         }
 
-        for (size_t i = 0; i < frame_len; ++i)
-        {
-            (void)rxPop();
-        }
+        // Consume the whole frame with one tail advance (was frame_len
+        // single-byte rxPop() calls, each with a modulo).
+        rx_tail = (rx_tail + frame_len) % RX_STREAM_RING;
         handleReceivedFrame(frame, frame_len, type, payload, out_payload_len);
 
-        if (++frames_this_call >= YIELD_EVERY_N_FRAMES)
+        if ((esp_timer_get_time() - slice_t0) >= PARSE_SLICE_US)
         {
-            frames_this_call = 0;
             vTaskDelay(1);
+            slice_t0 = esp_timer_get_time();
         }
     }
 }
