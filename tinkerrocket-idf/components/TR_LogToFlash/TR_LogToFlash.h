@@ -275,10 +275,20 @@ private:
     // reset it to 0, clobbering the reset with a prelaunch value.
     // See #74 bench trace (CR1 h=0 → CR2 h=50771 despite zero-sweep).
     SemaphoreHandle_t push_mutex_ = nullptr;
-    // Before logging starts, cap the ring at 50% so the initial flush at
-    // launch detection doesn't stall the main loop.  Raised to full size
-    // once logging is active (see openLogSession / closeLogSession).
-    uint32_t ring_prelaunch_cap_ = 0;  // Set in begin() from ring_size_
+    // Before logging starts, cap the ring at 75% (was 50%) so drop-oldest
+    // keeps ~1 s of pre-ignition history at the 1920 Hz stream (~99 KB/s)
+    // while still leaving launch-transient headroom: at activation the
+    // flush task drains the prelaunch backlog to NAND at ~310 KB/s against
+    // ~99 KB/s inflow, so a 97 KB backlog clears in ~0.5 s and the free
+    // quarter (~33 KB = ~0.3 s of inflow) absorbs flush-task stalls during
+    // the drain. The historical 100-500 ms LFS stalls that motivated the
+    // 50% cap no longer occur in the boost window (sink mode skips LFS,
+    // the flight range is pre-erased at PRELAUNCH, the rename is deferred
+    // to end-of-flight); the worst bounded stall left is a ~7 ms page
+    // program plus NimBLE contention on core 0. Raised to full size once
+    // logging is active (see activateLogging / closeLogSession).
+    uint32_t prelaunchCap() const { return (ring_size_ / 4) * 3; }
+    uint32_t ring_prelaunch_cap_ = 0;  // Set in begin() from prelaunchCap()
 
     // MRAM write staging (2026-07-09 bench): a per-frame ringPush costs two
     // SPI transactions (WREN + WRITE) under the bus mutex — ~325 us/frame

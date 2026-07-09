@@ -76,7 +76,7 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         if (cfg.debug) ESP_LOGI(TAG, "Allocated %lu byte RAM ring (free heap: %lu)",
                                       (unsigned long)ring_size_, (unsigned long)esp_get_free_heap_size());
     }
-    ring_prelaunch_cap_ = ring_size_ / 2;
+    ring_prelaunch_cap_ = prelaunchCap();
 
     // Mutex to serialize ringPush callers and to block clearRing from
     // running concurrently with an in-flight push (#74). Unconditionally
@@ -1678,8 +1678,12 @@ void TR_LogToFlash::activateLogging()
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
-    // Arm per-drain diagnostic logs for the first 20 flushRingToNand drains.
-    flush_log_remaining_ = 20;
+    // Arm per-drain diagnostic logs for the first few flushRingToNand
+    // drains. Kept small on purpose: these are blocking UART writes (~9 ms
+    // each at 115200) inside the launch-critical prelaunch-drain window —
+    // 20 of them measured ~180 ms of the 438 ms activation drain on the
+    // 2026-07-09 bench. Four lines still show the handoff shape.
+    flush_log_remaining_ = 4;
 
     ESP_LOGW(TAG, "ACT2 exit      h=%lu t=%lu c=%lu (logging_active=1)",
              (unsigned long)rb_head, (unsigned long)rb_tail, (unsigned long)rb_count);
@@ -1712,7 +1716,7 @@ void TR_LogToFlash::closeLogSession()
         logging_active = false;
         clearDirty();
         persistBadBlocksIfDirty();
-        ring_prelaunch_cap_ = ring_size_ / 2;
+        ring_prelaunch_cap_ = prelaunchCap();
         if (cfg.debug)
         {
             ESP_LOGI(TAG, "closeLogSession (sink mode): %lu bytes handed off",
@@ -1756,7 +1760,7 @@ void TR_LogToFlash::closeLogSession()
 
     // Restore pre-launch ring cap so the buffer doesn't fill completely
     // before the next launch — leaves headroom for the initial flush.
-    ring_prelaunch_cap_ = ring_size_ / 2;
+    ring_prelaunch_cap_ = prelaunchCap();
 
     if (cfg.debug)
     {
