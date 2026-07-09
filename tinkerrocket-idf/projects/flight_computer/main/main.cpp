@@ -2,6 +2,7 @@
 
 // Configuration Parameters
 #include "config.h"
+#include "baro_gate_policy.h"
 
 // Libraries
 #include <TR_Sensor_Collector.h>
@@ -240,7 +241,11 @@ static bool have_ism6_si = false;
 static bool have_bmp_si = false;
 static bool have_mmc_si = false;
 static bool have_gnss_si = false;
-static bool bmp_new_for_kf = false; // Set when new BMP sample arrives, cleared after KF update
+static bool bmp_new_for_kf = false; // Set when new BMP sample arrives, cleared at loop end.
+                                    // Consumed by kinematicChecks (runs every iteration).
+                                    // The EKF baro gate deliberately does NOT use it: it
+                                    // would miss samples read on EKF-off decimation ticks
+                                    // (#450) — see BaroGatePolicy.
 
 // --- Flight logic state ---
 static RocketState rocket_state = INITIALIZATION;
@@ -3797,12 +3802,17 @@ static void loop_fc()
                 const bool use_ahrs_acc = (rocket_state != INFLIGHT) || post_apogee;
                 ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
 
-                // Barometer measurement update (when new BMP sample available)
-                if (bmp_new_for_kf && have_bmp_si)
+                // Barometer measurement update.  Freshness is tracked by
+                // BaroGatePolicy against the sample's own timestamp, NOT the
+                // loop-lifetime bmp_new_for_kf flag: that flag is cleared at
+                // the end of every loop iteration, so a sample read on an
+                // EKF-off iteration (EKF_DECIMATION) was wiped before any EKF
+                // tick saw it — the 487 Hz BMP ODR beating against the
+                // 479.5 Hz EKF rate starved the EKF of baro in ~66 ms bursts
+                // for ~half of every flight (#450).
+                if (have_bmp_si)
                 {
-                    static float prev_baro_alt_m = 0.0f;
-                    static bool  prev_baro_valid = false;
-                    // mach_locked_out is now file-scope (used by apogee voting)
+                    // mach_locked_out is file-scope (used by apogee voting)
 
                     // --- Transonic lockout (hysteresis) ---
                     bool baro_locked = false;
@@ -3820,12 +3830,15 @@ static void loop_fc()
                         baro_locked = mach_locked_out;
                     }
 
-                    // --- Spike rejection ---
-                    const float delta = fabsf(pressure_altitude_m - prev_baro_alt_m);
-                    const bool  spike = prev_baro_valid &&
-                                        (delta > config::BARO_SPIKE_THRESH_M);
+                    static BaroGatePolicy baro_gate;
+                    const BaroGatePolicy::Decision gate =
+                        baro_gate.evaluate(bmp_latest_si.time_us,
+                                           pressure_altitude_m,
+                                           baro_locked,
+                                           config::BARO_SPIKE_THRESH_M,
+                                           config::BARO_SPIKE_RATE_MPS);
 
-                    if (!spike && !baro_locked)
+                    if (gate.accept)
                     {
                         EkfBaroData ekf_baro = {};
                         ekf_baro.time_us = bmp_latest_si.time_us;
@@ -3843,16 +3856,14 @@ static void loop_fc()
                         ekf_baro.altitude_m = (double)pressure_altitude_m + ref_alt_m;
                         ekf.baroMeasUpdate(ekf_baro);
                     }
-                    else if (spike)
+                    else if (gate.spike)
                     {
-                        ESP_LOGW(TAG, "[BARO] Spike rejected: delta=%.1f m (thresh=%.1f)",
-                                 (double)delta, (double)config::BARO_SPIKE_THRESH_M);
+                        ESP_LOGW(TAG, "[BARO] Spike rejected: delta=%.1f m rate=%.0f m/s "
+                                 "(thresh=%.1f m @ >%.0f m/s)",
+                                 (double)gate.delta_m, (double)gate.apparent_rate_mps,
+                                 (double)config::BARO_SPIKE_THRESH_M,
+                                 (double)config::BARO_SPIKE_RATE_MPS);
                     }
-                    // Always update reference so the next sample compares against
-                    // the latest reading — prevents prolonged rejection after a
-                    // single transient spike or mach lockout exit.
-                    prev_baro_alt_m = pressure_altitude_m;
-                    prev_baro_valid = true;
                 }
 
                 const uint32_t ekf_us = time_us() - ekf_t0;

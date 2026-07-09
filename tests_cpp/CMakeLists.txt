@@ -377,3 +377,16 @@ target_include_directories(test_mag_calibrator PRIVATE
 )
 target_link_libraries(test_mag_calibrator GTest::gtest_main)
 gtest_discover_tests(test_mag_calibrator)
+
+# ---------- test_baro_gate_policy ----------
+# Host-side test for the FC EKF barometer admission gate (#450): consume-on-use
+# freshness (the old bmp_new_for_kf flag dropped ~50% of samples under the
+# 487 Hz BMP / 479.5 Hz decimated-EKF beat) and the rate-aware spike test.
+# baro_gate_policy.h is pure, so the test just adds the flight_computer/main dir.
+add_executable(test_baro_gate_policy test_baro_gate_policy.cpp)
+target_include_directories(test_baro_gate_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_baro_gate_policy GTest::gtest_main)
+gtest_discover_tests(test_baro_gate_policy)
