@@ -300,6 +300,9 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 
             iis2mdc_active = true;
             ESP_LOGI(SC_TAG, "IIS2MDC found and initialized (100 Hz continuous, BDU on)");
+            ESP_LOGI(SC_TAG, "MMC5983MA path skipped — IIS2MDC is the magnetometer on this "
+                             "board (shared pin %d owned by I2C SDA)",
+                     (int)IIS2MDC_SDA);
 
             // Dump OFFSET_X/Y/Z hard-iron correction registers — should be all
             // zero after softReset(); non-zero values would be subtracted from

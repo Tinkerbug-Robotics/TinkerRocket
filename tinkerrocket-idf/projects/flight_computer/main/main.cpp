@@ -6396,6 +6396,10 @@ static void loop_fc()
             //   lost     = stall-recovery tripped (sensor went silent)
             //   rec ok/a = recovery-reinit attempts / successes
             //   int_pin  = live state of MMC5983MA INT line
+            // Skipped when the IIS2MDC won the boot-time probe: the MMC path
+            // was never started, so every counter is a meaningless zero (and
+            // reads as a dead sensor to anyone reviewing the log).
+            if (!sensor_collector.isIIS2MDCActive())
             {
                 static MMC5983MADebugSnapshot prev_mmc_snap = {};
                 MMC5983MADebugSnapshot now_mmc_snap;
