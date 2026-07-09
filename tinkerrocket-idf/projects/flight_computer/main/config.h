@@ -234,6 +234,17 @@ struct config : board_pins
     static constexpr float BARO_SPIKE_THRESH_M  = 5.0f;
     static constexpr float BARO_SPIKE_RATE_MPS  = 500.0f;
 
+    // Barometer fusion throttle: minimum spacing between baro samples ACCEPTED
+    // into the EKF measurement update (0 disables).  Fusing at the full
+    // ~487 Hz ODR buys nothing — altitude dynamics are slow against the sample
+    // rate — but each fusion pays the EKF's 15x15 covariance update.  When
+    // #450 restored every-sample fusion, per-tick EKF cost tripled
+    // (554 -> ~1650 us) and the flight loop fell ~960 -> ~715/s.  20 ms
+    // (50 Hz) keeps altitude aiding far above its information rate while
+    // making the covariance cost negligible.  Spike/freshness tracking in
+    // BaroGatePolicy still inspects every sample; only fusion is rate-limited.
+    static constexpr uint32_t BARO_FUSE_MIN_INTERVAL_US = 20000u;
+
     // Transonic barometer lockout: shock waves near Mach 1 cause large static
     // pressure errors (the "transonic jump").  Lock out baro updates when EKF
     // speed estimate exceeds LOCK_ON and keep them locked until speed drops

@@ -3836,7 +3836,8 @@ static void loop_fc()
                                            pressure_altitude_m,
                                            baro_locked,
                                            config::BARO_SPIKE_THRESH_M,
-                                           config::BARO_SPIKE_RATE_MPS);
+                                           config::BARO_SPIKE_RATE_MPS,
+                                           config::BARO_FUSE_MIN_INTERVAL_US);
 
                     if (gate.accept)
                     {
