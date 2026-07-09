@@ -2585,7 +2585,16 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         lora.gyro_x = (float)ism_si.gyro_x;
         lora.gyro_y = (float)ism_si.gyro_y;
         lora.gyro_z = (float)ism_si.gyro_z;
-        lora.temp = 0.0f;
+    }
+
+    // #386: temp_x10 was transmitted as a hardwired 0.0 degC.  The BMP585
+    // measures die temperature alongside pressure and the OC already latches
+    // those frames — relay it as the board temperature.
+    if (latest_bmp_valid)
+    {
+        BMP585DataSI bmp_si = {};
+        sensor_converter.convertBMP585Data(latest_bmp_raw, bmp_si);
+        lora.temp = bmp_si.temperature;
     }
 
     if (latest_power_valid)
