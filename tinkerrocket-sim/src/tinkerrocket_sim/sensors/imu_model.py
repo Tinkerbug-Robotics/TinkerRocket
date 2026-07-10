@@ -23,7 +23,8 @@ class IMUModel:
                  gyro_bias_sigma: float = 0.00025,     # rad/s
                  accel_bias_tau: float = 100.0,        # s
                  gyro_bias_tau: float = 50.0,          # s
-                 rate_hz: float = 1200.0):
+                 rate_hz: float = 1200.0,
+                 seed: int = None):
         self.accel_noise_sigma = accel_noise_sigma
         self.gyro_noise_sigma = gyro_noise_sigma
         self.accel_bias_sigma = accel_bias_sigma
@@ -37,7 +38,7 @@ class IMUModel:
         self.accel_bias = np.zeros(3)
         self.gyro_bias = np.zeros(3)
 
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(seed)
 
     def measure(self, true_accel_enu: np.ndarray,
                 true_omega_body: np.ndarray,

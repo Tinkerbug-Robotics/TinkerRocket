@@ -17,12 +17,13 @@ class BaroModel:
                  pressure_noise_sigma: float = 1.0,    # Pa
                  temp_noise_sigma: float = 0.5,         # K
                  rate_hz: float = 500.0,
-                 ground_pressure_pa: float = 101325.0):
+                 ground_pressure_pa: float = 101325.0,
+                 seed: int = None):
         self.pressure_noise_sigma = pressure_noise_sigma
         self.temp_noise_sigma = temp_noise_sigma
         self.rate_hz = rate_hz
         self.ground_pressure_pa = ground_pressure_pa
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(seed)
 
     def measure(self, altitude_m: float, mach: float = 0.0) -> dict:
         """Generate barometric measurement from true altitude.

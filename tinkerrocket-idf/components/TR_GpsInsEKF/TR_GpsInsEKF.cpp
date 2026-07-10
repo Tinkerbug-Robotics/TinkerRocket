@@ -212,7 +212,14 @@ void GpsInsEKF::updateCore(bool use_ahrs_acc,
     // 9. Magnetometer heading update — scalar Kalman, yaw-only (needs valid
     //    accel for the gravity/level reference; accel owns roll/pitch, mag owns
     //    heading, so the two are complementary, not competing).
-    if (mag_valid && accel_valid) magMeasUpdate(aMeas, magMeas);
+    //    #459: fuse each mag sample exactly once (same time_us dedup as
+    //    baroMeasUpdate) — the mag delivers ~98 Hz while this runs every EKF
+    //    tick (~480 Hz), and re-fusing one sample N times contracts yaw
+    //    covariance N-fold faster than the sensor's real information rate.
+    if (mag_valid && accel_valid && mag_data.time_us != magTimePrev_) {
+        magTimePrev_ = mag_data.time_us;
+        magMeasUpdate(aMeas, magMeas);
+    }
 
     // 10. GNSS measurement update
     if ((gnss_time_us - timeWeekPrev_) > 0) {
