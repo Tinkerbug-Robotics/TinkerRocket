@@ -163,13 +163,36 @@ TEST_F(EKFTest, StationaryVelocityAccuracy) {
     }
 }
 
-// Heading fusion must CONVERGE while nose-vertical — the exact case the old
-// Mahony correction (cos²(pitch) → 0 at vertical) could not handle.
-TEST_F(EKFTest, MagHeadingConvergesWhenVertical) {
-    ekf.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
+// Rail-tilt fixtures (85° elevation, roll 0, heading 0) — a realistic pad.
+// #480: exact-vertical is both numerically degenerate (psi_pred =
+// atan2(~0, ~0)) and physically heading-weak from accel+mag (the accel-
+// derived roll in the tilt-comp is singular); the old constant 3° R masked
+// both by overpowering the artifacts every tick. The guarantees these tests
+// exist for — pad heading converges and holds before launch — are encoded
+// at the rail angle where the physics supports them; exact vertical gets a
+// bounded-behavior guard below.
+// down-in-body d = (−sinθ, 0, cosθ); acc = −g·d; mag = R_NED2B·(22,0,42).
+static EkfIMUData makeRail85IMU(uint32_t time_us) {
+    EkfIMUData imu;
+    imu.time_us = time_us;
+    imu.acc_x = 9.7697; imu.acc_y = 0.0; imu.acc_z = -0.8548;
+    imu.gyro_x = 0.0; imu.gyro_y = 0.0; imu.gyro_z = 0.0;
+    return imu;
+}
+static EkfMagData makeRail85Mag(uint32_t time_us) {
+    EkfMagData mag;
+    mag.time_us = time_us;
+    mag.mag_x = -39.92; mag.mag_y = 0.0; mag.mag_z = 25.58;
+    return mag;
+}
+
+// Heading fusion must CONVERGE on the rail — the case the old Mahony
+// correction (cos²(pitch) → 0 near vertical) could not handle.
+TEST_F(EKFTest, MagHeadingConvergesOnRail) {
+    ekf.init(makeRail85IMU(0), makeStationaryGNSS(0), makeRail85Mag(0));
     uint32_t t = 0;
     for (int i = 0; i < 2000; i++) { t += 2000;
-        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+        ekf.update(true, makeRail85IMU(t), makeStationaryGNSS(t), makeRail85Mag(t)); }
     float q_ref[4]; ekf.getQuaternion(q_ref);
 
     // Inject a 50° heading error (rotation about NED-down), then reopen the
@@ -182,24 +205,51 @@ TEST_F(EKFTest, MagHeadingConvergesWhenVertical) {
     EXPECT_GT(tqGeodesicDeg(q_err, q_ref), 30.0f);     // error really was injected
 
     for (int i = 0; i < 6000; i++) { t += 2000;
-        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
+        ekf.update(true, makeRail85IMU(t), makeStationaryGNSS(t), makeRail85Mag(t)); }
     float q_fin[4]; ekf.getQuaternion(q_fin);
     EXPECT_LT(tqGeodesicDeg(q_fin, q_ref), 8.0f);      // heading converged back
 }
 
-// Heading fusion must be STABLE (no drift) while stationary nose-vertical —
+// Heading fusion must be STABLE (no drift) while stationary on the rail —
 // the symptom we observed (±180° roll/yaw cycling) must not recur.
-TEST_F(EKFTest, MagHeadingStableVertical) {
+TEST_F(EKFTest, MagHeadingStableOnRail) {
+    ekf.init(makeRail85IMU(0), makeStationaryGNSS(0), makeRail85Mag(0));
+    uint32_t t = 0;
+    for (int i = 0; i < 2000; i++) { t += 2000;
+        ekf.update(true, makeRail85IMU(t), makeStationaryGNSS(t), makeRail85Mag(t)); }
+    float q_a[4]; ekf.getQuaternion(q_a);
+    for (int i = 0; i < 4000; i++) { t += 2000;
+        ekf.update(true, makeRail85IMU(t), makeStationaryGNSS(t), makeRail85Mag(t)); }
+    float q_b[4]; ekf.getQuaternion(q_b);
+    EXPECT_LT(tqGeodesicDeg(q_a, q_b), 2.0f);          // no heading drift over 8 s
+    float n = std::sqrt(q_b[0]*q_b[0] + q_b[1]*q_b[1] + q_b[2]*q_b[2] + q_b[3]*q_b[3]);
+    EXPECT_NEAR(n, 1.0f, 0.01f);
+}
+
+// At EXACT vertical the mag heading update is gated off entirely (#480):
+// the accel-derived roll is atan2(noise, noise) and psi_pred is atan2(~0,~0)
+// — float garbage that differs by platform (CI x86 dragged heading ±175°
+// where the bench arm held). With the gate, the filter simply HOLDS heading
+// on the gyro: an injected error is neither corrected nor worsened, and the
+// quaternion stays sane (the old ±180° cycling symptom cannot recur).
+TEST_F(EKFTest, MagHeadingHeldAtExactVertical) {
     ekf.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
     uint32_t t = 0;
     for (int i = 0; i < 2000; i++) { t += 2000;
         ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
-    float q_a[4]; ekf.getQuaternion(q_a);
-    for (int i = 0; i < 4000; i++) { t += 2000;
+    float q_ref[4]; ekf.getQuaternion(q_ref);
+
+    const float a = 50.0f * (float)M_PI / 180.0f;
+    const float qyaw[4] = { std::cos(a/2), 0.0f, 0.0f, std::sin(a/2) };
+    float q_err[4]; tqMul(qyaw, q_ref, q_err);
+    ekf.setQuaternion(q_err[0], q_err[1], q_err[2], q_err[3]);
+    for (int i = 6; i < 9; i++) ekf.inflateCovDiag(i, 1.0f);
+
+    for (int i = 0; i < 6000; i++) { t += 2000;
         ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
-    float q_b[4]; ekf.getQuaternion(q_b);
-    EXPECT_LT(tqGeodesicDeg(q_a, q_b), 2.0f);          // no heading drift over 8 s
-    float n = std::sqrt(q_b[0]*q_b[0] + q_b[1]*q_b[1] + q_b[2]*q_b[2] + q_b[3]*q_b[3]);
+    float q_fin[4]; ekf.getQuaternion(q_fin);
+    EXPECT_NEAR(tqGeodesicDeg(q_fin, q_ref), 50.0f, 5.0f);  // held: no fusion, no runaway
+    float n = std::sqrt(q_fin[0]*q_fin[0] + q_fin[1]*q_fin[1] + q_fin[2]*q_fin[2] + q_fin[3]*q_fin[3]);
     EXPECT_NEAR(n, 1.0f, 0.01f);
 }
 

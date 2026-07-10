@@ -351,8 +351,24 @@ private:
     // Accel gravity-reference measurement noise variance (sigma m/s²)^2
     float R_accel_ = 0.25f;
 
-    // Mag heading-only Kalman measurement noise variance (rad²; ~3° sigma)
+    // Mag heading-only Kalman measurement noise variance FLOOR (rad²; ~3°
+    // sigma) — the level-attitude base, which also absorbs calibration
+    // residuals. #480: the effective R is computed per sample in
+    // magMeasUpdate from the tilt geometry (accel roll noise leaking the
+    // vertical field into the heading), floored here and capped below.
     float R_mag_ = 0.0027f;
+    // Cap on the per-sample mag R (rad²; ~14° sigma). Near exact vertical the
+    // propagated noise diverges (roll unobservable from accel); the cap keeps
+    // the pad heading usable — converging over seconds instead of never —
+    // while staying ~5x more honest there than the old 3° constant. The SIL
+    // honesty evidence (#480) constrains attitudes up to the ~85° rail, where
+    // the propagation (~6.7°) rules and this cap is far from binding.
+    float R_mag_ceiling_ = 0.06f;
+    // Physical 1σ inputs for the #480 propagation. Mag: IIS2MDC RMS noise
+    // (~0.4 µT) plus margin. Accel: ISM6 low-g noise density integrated over
+    // the AHRS bandwidth plus pad vibration margin.
+    float sigma_mag_uT_ = 0.5f;
+    float sigma_accel_mps2_ = 0.05f;
 
     // Magnetic declination (rad, EAST-positive); added to the measured magnetic
     // heading to yield a true-north heading.  Set from GPS+WMM at fix; 0 until.
