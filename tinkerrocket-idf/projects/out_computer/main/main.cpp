@@ -1312,6 +1312,7 @@ static bool isConfigCommand(uint8_t cmd)
            cmd == PYRO_CONFIG_PENDING ||
            cmd == CAMERA_CONFIG_PENDING ||     // FC needs the CameraConfigData frame appended
            cmd == ORIENT_CONFIG_PENDING ||
+           cmd == IMU_RATE_CONFIG_PENDING ||   // ISM6 logging-rate payload (2 bytes)
            cmd == PYRO_CONT_TEST ||
            cmd == PYRO_FIRE_TEST ||
            cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
@@ -1439,6 +1440,15 @@ static void queueOutStatusResponse(bool ready)
     {
         ESP_LOGW("OC", "I2C TX config cmd=0x%02X but data_len=0",
                       (unsigned)cmd);
+    }
+    else if (cmd != 0U && serving_cfg_len > 0)
+    {
+        // Staged payload exists but the command is not in isConfigCommand():
+        // the whitelist is out of sync with a stageXxxConfig() helper and the
+        // FC will never receive the frame (how IMU_RATE_CONFIG_PENDING failed).
+        ESP_LOGE("OC", "I2C TX cmd=0x%02X has %u staged config bytes but is not "
+                       "in isConfigCommand() — frame dropped",
+                      (unsigned)cmd, (unsigned)serving_cfg_len);
     }
 
     // Non-blocking (timeout=0): if the TX ringbuffer is full, drop this
