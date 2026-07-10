@@ -145,14 +145,13 @@ static bool     uplink_pending = false;
 static const char* SD_MOUNT_POINT = "/sdcard";
 static sdmmc_card_t* sd_card = nullptr;
 static bool using_internal_flash = false;
-static bool using_external_flash = false;   // V2: FAT on the external SPI flash
-#if BS_BOARD_V2
+static bool using_external_flash = false;   // V2/V3: FAT on the external SPI flash
 static spi_device_handle_t      s_ext_spi = nullptr;
 static spi_nand_flash_device_t *s_nand    = nullptr;
 
 // Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
-// flash used for logging on the new PCB (M_* pins on SPI3_HOST; LoRa owns
-// SPI2_HOST). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
+// flash used for logging on the V2/V3 PCBs (M_* pins on SPI3_HOST; LoRa owns
+// SPI2_HOST on V2). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
 // the vendored+patched spi_nand_flash component (components/spi_nand_flash/src/
 // devices/nand_foresee.c). On success repoints SD_MOUNT_POINT and sets
 // using_external_flash; otherwise returns the error so the caller falls back to
@@ -206,7 +205,6 @@ static esp_err_t mountExternalFlashFat()
     ESP_LOGI(TAG, "External-flash FAT mounted at %s", SD_MOUNT_POINT);
     return ESP_OK;
 }
-#endif  // BS_BOARD_V2
 static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
 // CSV logging state
@@ -2811,6 +2809,10 @@ static void setup_bs()
     delay(500);
     ESP_LOGI(TAG, "======================================");
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
+    // Board banner = the wrong-build-dir flash guard (same lesson as the
+    // FC/OC -B build_v8 gotcha): if this line doesn't match the physical
+    // board, stop and flash the right variant.
+    ESP_LOGI(TAG, "  Board: %s (TR_BS_BOARD=%d)", config::BOARD_NAME, TR_BS_BOARD);
     ESP_LOGI(TAG, "======================================");
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
@@ -2842,52 +2844,55 @@ static void setup_bs()
     setenv("TZ", "UTC0", 1);
     tzset();
 
-    // Initialize storage. V2 (new PCB) -> wear-leveled FAT on the external SPI
-    // flash; V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
+    // Initialize storage. V2/V3 -> wear-leveled FAT on the external SPI NAND;
+    // V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
     // internal flash. Logging is backend-agnostic (uses SD_MOUNT_POINT + the
     // standard file API), so only the mount differs per board.
     {
-        esp_err_t ret;
-#if BS_BOARD_V2
-        ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
-#else
-        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-        host.max_freq_khz = SDMMC_FREQ_DEFAULT;
-
-        sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-        slot.width = 4;
-        slot.clk = (gpio_num_t)config::SD_CLK;
-        slot.cmd = (gpio_num_t)config::SD_CMD;
-        slot.d0  = (gpio_num_t)config::SD_D0;
-        slot.d1  = (gpio_num_t)config::SD_D1;
-        slot.d2  = (gpio_num_t)config::SD_D2;
-        slot.d3  = (gpio_num_t)config::SD_D3;
-        slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-
-        esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
-        mount_cfg.format_if_mount_failed = false;
-        mount_cfg.max_files = 5;
-        mount_cfg.allocation_unit_size = 16 * 1024;
-
-        ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mount_cfg, &sd_card);
-        if (ret == ESP_OK)
+        esp_err_t ret = ESP_ERR_NOT_FOUND;
+        if (config::HAS_EXT_NAND)
         {
-            sdmmc_card_print_info(stdout, sd_card);
+            ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
+        }
+        else if (config::HAS_SDMMC)
+        {
+            sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+            host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
-            FATFS* fs;
-            DWORD free_clust;
-            if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+            sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+            slot.width = 4;
+            slot.clk = (gpio_num_t)config::SD_CLK;
+            slot.cmd = (gpio_num_t)config::SD_CMD;
+            slot.d0  = (gpio_num_t)config::SD_D0;
+            slot.d1  = (gpio_num_t)config::SD_D1;
+            slot.d2  = (gpio_num_t)config::SD_D2;
+            slot.d3  = (gpio_num_t)config::SD_D3;
+            slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
+            esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
+            mount_cfg.format_if_mount_failed = false;
+            mount_cfg.max_files = 5;
+            mount_cfg.allocation_unit_size = 16 * 1024;
+
+            ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mount_cfg, &sd_card);
+            if (ret == ESP_OK)
             {
-                uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
-                uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
-                uint64_t used = total - free_bytes;
-                ESP_LOGI(TAG, "SD card mounted: %llu MB total, %llu MB used, %llu MB free",
-                         (unsigned long long)(total / (1024 * 1024)),
-                         (unsigned long long)(used / (1024 * 1024)),
-                         (unsigned long long)(free_bytes / (1024 * 1024)));
+                sdmmc_card_print_info(stdout, sd_card);
+
+                FATFS* fs;
+                DWORD free_clust;
+                if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+                {
+                    uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
+                    uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
+                    uint64_t used = total - free_bytes;
+                    ESP_LOGI(TAG, "SD card mounted: %llu MB total, %llu MB used, %llu MB free",
+                             (unsigned long long)(total / (1024 * 1024)),
+                             (unsigned long long)(used / (1024 * 1024)),
+                             (unsigned long long)(free_bytes / (1024 * 1024)));
+                }
             }
         }
-#endif
         if (ret != ESP_OK)
         {
             ESP_LOGW(TAG, "Primary storage mount failed (0x%x) — falling back to internal flash (SPIFFS)",

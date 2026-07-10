@@ -3,55 +3,40 @@
 #include <cstdint>
 #include <RocketComputerTypes.h>  // LORA_FACTORY_RENDEZVOUS_* (#105)
 
-namespace config
-{
-    // --- Board variant (working toward a single firmware for both PCBs) ---
-    // V2 (=1): new PCB  -> BQ27Z746 gauge, SPI-flash storage, LoRa RST on GPIO33,
-    //                      extra LoRa control lines (RXEN/DIO2/DIO3) wired.
-    // V1 (=0): original -> MAX17205 gauge, SDMMC SD card, original LoRa pin map.
-    // The fuel gauge is auto-detected at runtime (probe 0x55 then 0x36), so it
-    // does NOT depend on this switch. Pins the silicon can't probe (LoRa, storage)
-    // are selected here at compile time for now; moving them to runtime board
-    // detection is the follow-up to fully unify into one binary.
-    #ifndef BS_BOARD_V2
-    #define BS_BOARD_V2 1
-    #endif
+// --- Board revision (OC #411 pattern) ---
+// Pins + peripheral-presence/topology flags live in the per-board headers
+// (main/board/board_v{1,2,3}.h); everything below is board-independent policy
+// and must not fork per revision. Select with a separate build dir per
+// variant (the flag is cached by CMake):
+//   V2 (default): idf.py build
+//   V1 original:  idf.py -B build_v1 -DTR_BS_BOARD=1 build
+//   V3 new PCB:   idf.py -B build_v3 -DTR_BS_BOARD=3 build
+// The fuel gauge is still auto-detected at runtime on the board's I2C bus
+// (BQ27Z746 0x55, then MAX17205/MAX17303 0x36 split by DevName), so it does
+// NOT depend on this switch. Pins the silicon can't probe (LoRa topology,
+// storage, the I2C bus itself) are compile-time.
+#ifndef TR_BS_BOARD
+#define TR_BS_BOARD 2
+#endif
+#if TR_BS_BOARD == 3
+#include "board/board_v3.h"
+#elif TR_BS_BOARD == 2
+#include "board/board_v2.h"
+#elif TR_BS_BOARD == 1
+#include "board/board_v1.h"
+#else
+#error "TR_BS_BOARD must be 1, 2, or 3"
+#endif
 
+struct config : board_pins
+{
     // --- Debug ---
     static constexpr bool DEBUG = true;
     static constexpr uint32_t STATS_PERIOD_MS = 5000;
 
-    // --- LoRa Radio (LLCC68 via RadioLib) ---
-    // Must match OutComputer radio parameters exactly.
-    // The V1 values below are the original-board assignments (previously the
-    // "//" comments here); V2 is the new-PCB schematic. NOTE: on the new board
-    // LoRa RST = GPIO33 (differs from BOTH the prior config value 36 and the
-    // original-board 37).
-#if BS_BOARD_V2
-    static constexpr int LORA_SPI_SCK  = 10;   // L_SCK
-    static constexpr int LORA_SPI_MISO = 13;   // L_MISO
-    static constexpr int LORA_SPI_MOSI = 12;   // L_MOSI
-    static constexpr int LORA_CS_PIN   = 11;   // L_CS
-    static constexpr int LORA_DIO1_PIN = 21;   // L_DIO1
-    static constexpr int LORA_RST_PIN  = 33;   // L_RST
-    static constexpr int LORA_BUSY_PIN = 14;   // L_BUSY
-    // Extra control lines wired on the new PCB (LLCC68):
-    static constexpr int LORA_RXEN_PIN = 17;   // L_RXEN (RF switch RX enable)
-    static constexpr int LORA_DIO2_PIN = 18;   // L_DIO2
-    static constexpr int LORA_DIO3_PIN = 3;    // L_DIO3
-#else
-    static constexpr int LORA_SPI_SCK  = 36;
-    static constexpr int LORA_SPI_MISO = 34;
-    static constexpr int LORA_SPI_MOSI = 35;
-    static constexpr int LORA_CS_PIN   = 38;
-    static constexpr int LORA_DIO1_PIN = 18;
-    static constexpr int LORA_RST_PIN  = 37;
-    static constexpr int LORA_BUSY_PIN = 17;
-    static constexpr int LORA_RXEN_PIN = -1;   // not wired on the original PCB
-    static constexpr int LORA_DIO2_PIN = -1;
-    static constexpr int LORA_DIO3_PIN = -1;
-#endif
-
+    // --- LoRa Radio (LLCC68 via RadioLib, or the UART radio daughterboard) ---
+    // Must match OutComputer radio parameters exactly. Pins + topology
+    // (direct SPI vs UART modem) are in the board headers.
     static constexpr float   LORA_FREQ_MHZ       = 915.0f;
     static constexpr uint8_t LORA_SF              = 8;
     static constexpr float   LORA_BW_KHZ          = 250.0f;
@@ -78,24 +63,10 @@ namespace config
     static constexpr uint32_t UPLINK_RETRY_INTERVAL_MS = 100;   // Delay between retries
 
     // --- Storage ---
-    // V2/new PCB logs to an external SPI NOR flash (M_*, on SPI3_HOST since LoRa
-    // owns SPI2_HOST); V1 uses an SDMMC SD card. Both mount as FAT behind
-    // SD_MOUNT_POINT, so the logging code is backend-agnostic. NOR is assumed
-    // (esp_flash auto-detects JEDEC ID/size); a SPI NAND part would need the
-    // spi_nand_flash component instead.
-#if BS_BOARD_V2
-    static constexpr int FLASH_SCK  = 4;   // M_SCK
-    static constexpr int FLASH_MOSI = 5;   // M_MOSI
-    static constexpr int FLASH_CS   = 6;   // M_FLASH_CS
-    static constexpr int FLASH_MISO = 7;   // M_MISO
-#endif
-    // --- SD Card (SDMMC 4-bit, original PCB) ---
-    static constexpr int SD_CLK  = 6;
-    static constexpr int SD_CMD  = 7;
-    static constexpr int SD_D0   = 5;
-    static constexpr int SD_D1   = 4;
-    static constexpr int SD_D2   = 9;
-    static constexpr int SD_D3   = 8;
+    // V2/V3 log to a FORESEE F35SQB004G SPI NAND (M_* nets, on SPI3_HOST since
+    // LoRa owns SPI2_HOST on V2); V1 uses an SDMMC SD card. Pins + presence
+    // flags (HAS_EXT_NAND / HAS_SDMMC) are in the board headers. Both mount as
+    // FAT behind SD_MOUNT_POINT, so the logging code is backend-agnostic.
 
     // --- LoRa CSV Logging ---
     // Close the log after 5 min of no rocket packets.  Long enough to ride
@@ -122,10 +93,8 @@ namespace config
     // cadence (Long Range preset ≈ 2 Hz) plus a couple of misses.
     static constexpr uint32_t BLE_TELEMETRY_STALE_MS = 3000;
 
-    // --- I2C Bus (fuel gauge; "SCL_SENS/SDA_SENS" on the new-PCB schematic) ---
-    // Same pins on both boards. External pull-ups on-board (internal OFF).
-    static constexpr int      I2C_SCL_PIN       = 37;
-    static constexpr int      I2C_SDA_PIN       = 38;
+    // --- I2C Bus (fuel gauge + V3 pack charger; pins in board headers) ---
+    // External pull-ups on-board (internal OFF).
     static constexpr uint32_t I2C_FREQ_HZ       = 400'000;  // 400 kHz
 
     // --- Device Identity (factory defaults, overridden by NVS on boot) ---
@@ -147,4 +116,4 @@ namespace config
     // (series doubles voltage, capacity stays per-cell). Written to MAX17205
     // DesignCap at boot to seed the ModelGauge m5 algorithm.
     static constexpr uint16_t BATTERY_DESIGN_MAH = 2800;
-}
+};
