@@ -97,9 +97,12 @@ esp_err_t TR_MAX17303::begin(i2c_master_bus_handle_t bus,
                       "a MAX17303 — claiming it (report this value!)",
                  _devname);
     }
-    else if (variant != Reg::DEVNAME_VARIANT_303)
+    else if (variant != Reg::DEVNAME_VARIANT_303 &&
+             variant != Reg::DEVNAME_VARIANT_303_HW)
     {
-        // Sibling part (MAX17300/01/02) — same driver works; just say so.
+        // Neither the datasheet nibble (0x7) nor the confirmed production
+        // nibble (0xC): could be a sibling part (MAX17300/01/02) — same
+        // driver works, but flag it so a wrong BOM stuff gets noticed.
         ESP_LOGW(TAG, "MAX1730x variant %u (DevName 0x%04X), driving as MAX17303",
                  (unsigned)variant, _devname);
     }

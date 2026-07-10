@@ -60,7 +60,14 @@ namespace MAX17303_Reg {
     // firmware-revision-based value (~0x02xx) with device nibble 1/5, so the
     // family field cleanly separates the two.
     static constexpr uint16_t DEVNAME_FAMILY      = 0x406;
-    static constexpr uint16_t DEVNAME_VARIANT_303 = 0x7;
+    // Datasheet (Rev 6) lists variant nibble 0x7 for MAX17303/13, BUT
+    // production MAX17303G+ silicon reads DevName 0x407C — variant nibble
+    // 0xC — bench-confirmed on the V3 base station 2026-07-10 (readings all
+    // sane against this driver's register map). The datasheet's DevName
+    // table is known to disagree with shipped silicon (UG6807 lists yet a
+    // third nibble scheme). Both 0x7 and 0xC are accepted without warning.
+    static constexpr uint16_t DEVNAME_VARIANT_303    = 0x7;   // datasheet
+    static constexpr uint16_t DEVNAME_VARIANT_303_HW = 0xC;   // observed silicon
 }
 
 struct TR_MAX17303_Data
