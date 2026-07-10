@@ -393,9 +393,6 @@ static bool ina_continuous = false;         // INA230 in continuous-averaging mo
 static constexpr float INA230_R_SHUNT_OHM = 0.002f;     // 2 mOhm
 static constexpr float INA230_CURRENT_LSB_A = 0.001f;    // 1 mA/bit
 static volatile uint8_t pending_out_command = 0U;  // command currently being SERVED to the FC
-static uint8_t  pending_config_data[sizeof(RollProfileData)] = {};
-static volatile size_t   pending_config_data_len = 0;
-static volatile uint8_t  pending_config_msg_type = 0;
 
 // ---- FC command queue (#366) -----------------------------------------------
 // The old single pending slot meant every setPendingCommand() overwrote the
@@ -437,12 +434,14 @@ static uint8_t serving_cfg_len  = 0;
 static uint8_t serving_cfg[sizeof(RollProfileData)] = {};
 static bool    cmd_idle_gap_pending = false;    // serve one cmd=0 poll between commands
 
-// Enqueue a command for the FC, snapshotting the staging globals
-// (pending_config_data/len/msg_type — written by the caller just before this
-// call, same task, so the snapshot is coherent).  Callers' API is unchanged.
+// Enqueue a command for the FC with its config payload passed explicitly
+// (#476: the old shared staging globals leaked stale payloads into
+// command-only entries and were a cross-task hazard — the payload is now
+// snapshotted from the caller's own buffer, so any task may call this).
 // BLE callbacks run on core 0, the LoRa/main loop on core 1 — the critical
 // section covers both enqueue and pop.
-static void setPendingCommand(uint8_t cmd)
+static void setPendingCommandWithConfig(uint8_t cmd, uint8_t msg_type,
+                                        const void* data, size_t len)
 {
     if (cmd == 0U)   // legacy "clear serving slot" (internal use only)
     {
@@ -452,11 +451,10 @@ static void setPendingCommand(uint8_t cmd)
 
     QueuedCommand entry;
     entry.cmd      = cmd;
-    entry.cfg_type = pending_config_msg_type;
-    size_t len = pending_config_data_len;
+    entry.cfg_type = msg_type;
     if (len > sizeof(entry.cfg)) len = sizeof(entry.cfg);
     entry.cfg_len = (uint8_t)len;
-    if (len > 0) memcpy(entry.cfg, pending_config_data, len);
+    if (len > 0 && data != nullptr) memcpy(entry.cfg, data, len);
 
     const bool front = (cmd == PYRO_FIRE_TEST || cmd == PYRO_CONT_TEST);
 
@@ -494,6 +492,12 @@ static void setPendingCommand(uint8_t cmd)
     }
     cmd_queue_count++;
     portEXIT_CRITICAL(&cmd_queue_mux);
+}
+
+// Command-only relay (no config payload). Safe from any task.
+static void setPendingCommand(uint8_t cmd)
+{
+    setPendingCommandWithConfig(cmd, 0, nullptr, 0);
 }
 // Command repeat: each served command is repeated for CMD_REPEAT_LIMIT polls.
 // Was 5 as insurance against the lossy pre-#399 channel; with the TX-ring
@@ -722,10 +726,7 @@ static void stageImuOrientConfig()
 {
     ImuOrientConfigData cfg;
     cfg.setting = cfg_imu_orient;
-    memcpy(pending_config_data, &cfg, sizeof(cfg));
-    pending_config_data_len = sizeof(cfg);
-    pending_config_msg_type = ORIENT_CONFIG_MSG;
-    setPendingCommand(ORIENT_CONFIG_PENDING);
+        setPendingCommandWithConfig(ORIENT_CONFIG_PENDING, ORIENT_CONFIG_MSG, &cfg, sizeof(cfg));
 }
 
 // IMU logging rate setting (BLE cmd 67).  Cached here for app readback and
@@ -737,10 +738,7 @@ static void stageImuRateConfig()
 {
     ImuRateConfigData cfg;
     cfg.rate_hz = cfg_imu_rate;
-    memcpy(pending_config_data, &cfg, sizeof(cfg));
-    pending_config_data_len = sizeof(cfg);
-    pending_config_msg_type = IMU_RATE_CONFIG_MSG;
-    setPendingCommand(IMU_RATE_CONFIG_PENDING);
+        setPendingCommandWithConfig(IMU_RATE_CONFIG_PENDING, IMU_RATE_CONFIG_MSG, &cfg, sizeof(cfg));
 }
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
@@ -1297,29 +1295,6 @@ static inline void endPhoneIO()
     flash_op_active   = false;
 }
 
-// Commands that carry a config-data payload to be read via readConfigFrame
-static bool isConfigCommand(uint8_t cmd)
-{
-    return cmd == SIM_CONFIG_PENDING  ||
-           cmd == SERVO_CONFIG_PENDING ||
-           cmd == PID_CONFIG_PENDING  ||
-           cmd == SERVO_TEST_PENDING ||
-           cmd == ROLL_PROFILE_PENDING ||
-           cmd == SERVO_REPLAY_PENDING ||
-           cmd == ROLL_CTRL_CONFIG_PENDING ||
-           cmd == GUIDANCE_CONFIG_PENDING ||
-           cmd == FIN_CONFIG_PENDING ||
-           cmd == PYRO_CONFIG_PENDING ||
-           cmd == CAMERA_CONFIG_PENDING ||     // FC needs the CameraConfigData frame appended
-           cmd == ORIENT_CONFIG_PENDING ||
-           cmd == IMU_RATE_CONFIG_PENDING ||   // ISM6 logging-rate payload (2 bytes)
-           cmd == PYRO_CONT_TEST ||
-           cmd == PYRO_FIRE_TEST ||
-           cmd == MAG_CAL_APPLY_PENDING ||     // #132: app-pushed mag cal payload
-           cmd == SENSOR_CAL_APPLY_PENDING ||  // #132: app-pushed sensor cal payload
-           cmd == OTA_BEGIN_PENDING;           // #8 Phase 4: FC OTA image header
-}
-
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
 // The new i2c_slave driver panics if the master clocks out more bytes
 // than are in the TX ringbuffer.  Always write exactly this many bytes
@@ -1406,10 +1381,13 @@ static void queueOutStatusResponse(bool ready)
     }
     tx_pos = frame_len;
 
-    // Append config data for config commands (#366: from the SERVING snapshot,
-    // never the staging globals — a concurrent enqueue can't tear this frame)
-    if (cmd != 0U && serving_cfg_len > 0
-        && isConfigCommand(cmd))
+    // Append the config payload when the entry carries one (#366: from the
+    // SERVING snapshot — a concurrent enqueue can't tear this frame).
+    // #476: cfg_len > 0 is authoritative — payloads are passed explicitly to
+    // setPendingCommandWithConfig(), so there is no whitelist to desync (the
+    // old isConfigCommand() list silently ate the IMU-rate frame in #473)
+    // and no stale staging data to leak into command-only entries.
+    if (cmd != 0U && serving_cfg_len > 0)
     {
         uint8_t cfg_frame[MAX_FRAME];
         size_t  cfg_frame_len = 0;
@@ -1435,20 +1413,6 @@ static void queueOutStatusResponse(bool ready)
                           (unsigned)serving_cfg_type,
                           (unsigned)serving_cfg_len);
         }
-    }
-    else if (cmd != 0U && isConfigCommand(cmd) && serving_cfg_len == 0)
-    {
-        ESP_LOGW("OC", "I2C TX config cmd=0x%02X but data_len=0",
-                      (unsigned)cmd);
-    }
-    else if (cmd != 0U && serving_cfg_len > 0)
-    {
-        // Staged payload exists but the command is not in isConfigCommand():
-        // the whitelist is out of sync with a stageXxxConfig() helper and the
-        // FC will never receive the frame (how IMU_RATE_CONFIG_PENDING failed).
-        ESP_LOGE("OC", "I2C TX cmd=0x%02X has %u staged config bytes but is not "
-                       "in isConfigCommand() — frame dropped",
-                      (unsigned)cmd, (unsigned)serving_cfg_len);
     }
 
     // Non-blocking (timeout=0): if the TX ringbuffer is full, drop this
@@ -1687,17 +1651,17 @@ static void ocOtaTxFeederTask(void *)
 }
 
 // #383: OTA_BEGIN handoff from the NimBLE host task to the loop task —
-// the loop task copies these into pending_config_data so that buffer keeps
-// a single writer. volatile flag is sufficient: single producer (BLE task),
-// single consumer (loop task), and the consumer is idempotent.
+// the loop task enqueues the header via setPendingCommandWithConfig().
+// volatile flag is sufficient: single producer (BLE task), single
+// consumer (loop task), and the consumer is idempotent.
 static volatile bool ota_begin_stage_pending = false;
 static uint32_t ota_begin_total_size_staged = 0;
 static uint8_t  ota_begin_sha256_staged[32] = {};
 
 static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* sha256)
 {
-    static_assert(sizeof(pending_config_data) >= 4 + 32,
-                  "pending_config_data too small for the OTA_BEGIN_MSG payload");
+    static_assert(sizeof(QueuedCommand::cfg) >= 4 + 32,
+                  "QueuedCommand::cfg too small for the OTA_BEGIN_MSG payload");
     last_relay_state_ = 0xFF;
     last_relay_err_   = 0xFF;
     last_relay_bytes_ = 0xFFFFFFFFu;
@@ -1709,12 +1673,10 @@ static void ocOtaRelayBegin(void* /*ctx*/, uint32_t total_size, const uint8_t* s
     oc_ota_warmup_since_ms        = 0;
     oc_ota_revert_to_rx_requested = false;
     oc_ota_total_size             = total_size;
-    // #383: this callback runs on the NimBLE host task, but every other
-    // writer of the pending_config_data staging buffer is the oc_loop task —
-    // a memcpy here could tear a config frame the loop task was packing.
-    // Stash into dedicated fields and let the loop task do the staging
-    // (single-writer restored); the flag handoff is SPSC like
-    // prepare_request_pending_.
+    // #383: this callback runs on the NimBLE host task. The enqueue itself
+    // is task-safe now (#476: payload passed by argument), but keep the
+    // loop-task handoff so the OTA state resets and the enqueue happen in
+    // loop order; the flag handoff is SPSC like prepare_request_pending_.
     memcpy(ota_begin_sha256_staged, sha256, 32);
     ota_begin_total_size_staged = total_size;
     ota_begin_stage_pending     = true;
@@ -3103,10 +3065,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     else if (cmd == 24 && payload_len >= sizeof(ServoTestAnglesData))
     {
         // Servo test angles: relay to FlightComputer via I2C
-        memcpy(pending_config_data, payload, sizeof(ServoTestAnglesData));
-        pending_config_data_len = sizeof(ServoTestAnglesData);
-        pending_config_msg_type = SERVO_TEST_MSG;
-        setPendingCommand(SERVO_TEST_PENDING);
+                setPendingCommandWithConfig(SERVO_TEST_PENDING, SERVO_TEST_MSG, payload, sizeof(ServoTestAnglesData));
         ESP_LOGI("LORA", "UPLINK Servo test angles queued");
     }
     else if (cmd == 25)
@@ -3128,10 +3087,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         if (payload_len >= 16) {
             memcpy(&sim_cfg.descent_rate_mps, payload + 12, 4);
         }
-        memcpy(pending_config_data, &sim_cfg, sizeof(sim_cfg));
-        pending_config_data_len = sizeof(sim_cfg);
-        pending_config_msg_type = SIM_CONFIG_MSG;
-        setPendingCommand(SIM_CONFIG_PENDING);
+                setPendingCommandWithConfig(SIM_CONFIG_PENDING, SIM_CONFIG_MSG, &sim_cfg, sizeof(sim_cfg));
         ESP_LOGI("LORA", "UPLINK Sim config queued: mass=%.0fg thrust=%.1fN burn=%.1fs descent=%.1fm/s",
                       (double)mass_g, (double)sim_cfg.thrust_n,
                       (double)sim_cfg.burn_time_s, (double)sim_cfg.descent_rate_mps);
@@ -3239,20 +3195,14 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     else if (cmd == 12 && payload_len >= sizeof(ServoConfigData))
     {
         // Servo config from BaseStation: relay to FlightComputer + cache
-        memcpy(pending_config_data, payload, sizeof(ServoConfigData));
-        pending_config_data_len = sizeof(ServoConfigData);
-        pending_config_msg_type = SERVO_CONFIG_MSG;
-        setPendingCommand(SERVO_CONFIG_PENDING);
+                setPendingCommandWithConfig(SERVO_CONFIG_PENDING, SERVO_CONFIG_MSG, payload, sizeof(ServoConfigData));
         cacheServoConfig(payload, payload_len);
         ESP_LOGI("LORA", "UPLINK Servo config queued for RocketComputer");
     }
     else if (cmd == 13 && payload_len >= 20)
     {
         // PID config from BaseStation: relay to FlightComputer + cache
-        memcpy(pending_config_data, payload, 20);
-        pending_config_data_len = 20;
-        pending_config_msg_type = PID_CONFIG_MSG;
-        setPendingCommand(PID_CONFIG_PENDING);
+                setPendingCommandWithConfig(PID_CONFIG_PENDING, PID_CONFIG_MSG, payload, 20);
         cachePIDConfig(payload, payload_len);
         ESP_LOGI("LORA", "UPLINK PID config queued for RocketComputer");
     }
@@ -3277,10 +3227,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Roll control config from BaseStation. Relay the FULL struct: the FC
         // rejects any frame shorter than sizeof(RollControlConfigData) (16 B),
         // so a truncated copy silently drops every roll-control setting.
-        memcpy(pending_config_data, payload, sizeof(RollControlConfigData));
-        pending_config_data_len = sizeof(RollControlConfigData);
-        pending_config_msg_type = ROLL_CTRL_CONFIG_MSG;
-        setPendingCommand(ROLL_CTRL_CONFIG_PENDING);
+                setPendingCommandWithConfig(ROLL_CTRL_CONFIG_PENDING, ROLL_CTRL_CONFIG_MSG, payload, sizeof(RollControlConfigData));
         cacheRollControlConfig(payload, payload_len);
         ESP_LOGI("LORA", "UPLINK Roll control config queued for RocketComputer");
     }
@@ -3301,10 +3248,7 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     else if (cmd == 66 && payload_len >= sizeof(FinConfigData))
     {
         // Full fin layout from BaseStation: relay to FC
-        memcpy(pending_config_data, payload, sizeof(FinConfigData));
-        pending_config_data_len = sizeof(FinConfigData);
-        pending_config_msg_type = FIN_CONFIG_MSG;
-        setPendingCommand(FIN_CONFIG_PENDING);
+                setPendingCommandWithConfig(FIN_CONFIG_PENDING, FIN_CONFIG_MSG, payload, sizeof(FinConfigData));
         ESP_LOGI("LORA", "UPLINK Fin layout queued for RocketComputer");
     }
     else if (cmd == LORA_CMD_CHANNEL_SET && payload_len >= 5)
@@ -5393,11 +5337,11 @@ static void loop_oc()
     if (ota_begin_stage_pending)
     {
         ota_begin_stage_pending = false;
-        memcpy(pending_config_data, (const void*)&ota_begin_total_size_staged, 4);
-        memcpy(pending_config_data + 4, ota_begin_sha256_staged, 32);
-        pending_config_data_len = 36;
-        pending_config_msg_type = OTA_BEGIN_MSG;
-        setPendingCommand(OTA_BEGIN_PENDING);
+        uint8_t ota_hdr[36];
+        memcpy(ota_hdr, (const void*)&ota_begin_total_size_staged, 4);
+        memcpy(ota_hdr + 4, ota_begin_sha256_staged, 32);
+        setPendingCommandWithConfig(OTA_BEGIN_PENDING, OTA_BEGIN_MSG,
+                                    ota_hdr, sizeof(ota_hdr));
         ESP_LOGI("OC", "OTA relay: staged OTA_BEGIN for FC (size=%u)",
                  (unsigned)ota_begin_total_size_staged);
     }
@@ -5451,10 +5395,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(ServoTestAnglesData))
             {
-                memcpy(pending_config_data, payload, sizeof(ServoTestAnglesData));
-                pending_config_data_len = sizeof(ServoTestAnglesData);
-                pending_config_msg_type = SERVO_TEST_MSG;
-                setPendingCommand(SERVO_TEST_PENDING);
+                                setPendingCommandWithConfig(SERVO_TEST_PENDING, SERVO_TEST_MSG, payload, sizeof(ServoTestAnglesData));
                 ESP_LOGI("BLE", "Servo test angles received");
             }
         }
@@ -5658,10 +5599,7 @@ static void loop_oc()
                 if (plen >= 16) {
                     memcpy(&sim_cfg.descent_rate_mps, payload + 12, 4);
                 }
-                memcpy(pending_config_data, &sim_cfg, sizeof(sim_cfg));
-                pending_config_data_len = sizeof(sim_cfg);
-                pending_config_msg_type = SIM_CONFIG_MSG;
-                setPendingCommand(SIM_CONFIG_PENDING);
+                                setPendingCommandWithConfig(SIM_CONFIG_PENDING, SIM_CONFIG_MSG, &sim_cfg, sizeof(sim_cfg));
                 ESP_LOGI("OC", "SIM Config queued: mass=%.0fg thrust=%.1fN burn=%.1fs descent=%.1fm/s",
                               (double)mass_g, (double)sim_cfg.thrust_n,
                               (double)sim_cfg.burn_time_s, (double)sim_cfg.descent_rate_mps);
@@ -5866,10 +5804,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(ServoConfigData))
             {
-                memcpy(pending_config_data, payload, sizeof(ServoConfigData));
-                pending_config_data_len = sizeof(ServoConfigData);
-                pending_config_msg_type = SERVO_CONFIG_MSG;
-                setPendingCommand(SERVO_CONFIG_PENDING);
+                                setPendingCommandWithConfig(SERVO_CONFIG_PENDING, SERVO_CONFIG_MSG, payload, sizeof(ServoConfigData));
                 cacheServoConfig(payload, plen);
                 ESP_LOGI("BLE", "Servo config queued for RocketComputer");
             }
@@ -5881,10 +5816,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 20)
             {
-                memcpy(pending_config_data, payload, 20);
-                pending_config_data_len = 20;
-                pending_config_msg_type = PID_CONFIG_MSG;
-                setPendingCommand(PID_CONFIG_PENDING);
+                                setPendingCommandWithConfig(PID_CONFIG_PENDING, PID_CONFIG_MSG, payload, 20);
                 cachePIDConfig(payload, plen);
                 ESP_LOGI("BLE", "PID config queued for RocketComputer");
             }
@@ -5937,10 +5869,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(RollProfileData))
             {
-                memcpy(pending_config_data, payload, sizeof(RollProfileData));
-                pending_config_data_len = sizeof(RollProfileData);
-                pending_config_msg_type = ROLL_PROFILE_MSG;
-                setPendingCommand(ROLL_PROFILE_PENDING);
+                                setPendingCommandWithConfig(ROLL_PROFILE_PENDING, ROLL_PROFILE_MSG, payload, sizeof(RollProfileData));
                 ESP_LOGI("BLE", "Roll profile (%d waypoints) queued for RocketComputer",
                               payload[0]);
             }
@@ -5963,10 +5892,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(ServoReplayData))
             {
-                memcpy(pending_config_data, payload, sizeof(ServoReplayData));
-                pending_config_data_len = sizeof(ServoReplayData);
-                pending_config_msg_type = SERVO_REPLAY_MSG;
-                setPendingCommand(SERVO_REPLAY_PENDING);
+                                setPendingCommandWithConfig(SERVO_REPLAY_PENDING, SERVO_REPLAY_MSG, payload, sizeof(ServoReplayData));
                 ESP_LOGI("BLE", "Servo replay data queued");
             }
         }
@@ -5988,10 +5914,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(RollControlConfigData))
             {
-                memcpy(pending_config_data, payload, sizeof(RollControlConfigData));
-                pending_config_data_len = sizeof(RollControlConfigData);
-                pending_config_msg_type = ROLL_CTRL_CONFIG_MSG;
-                setPendingCommand(ROLL_CTRL_CONFIG_PENDING);
+                                setPendingCommandWithConfig(ROLL_CTRL_CONFIG_PENDING, ROLL_CTRL_CONFIG_MSG, payload, sizeof(RollControlConfigData));
                 cacheRollControlConfig(payload, plen);
                 ESP_LOGI("BLE", "Roll control config queued");
             }
@@ -6020,10 +5943,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(GuidanceConfigData))
             {
-                memcpy(pending_config_data, payload, sizeof(GuidanceConfigData));
-                pending_config_data_len = sizeof(GuidanceConfigData);
-                pending_config_msg_type = GUIDANCE_CONFIG_MSG;
-                setPendingCommand(GUIDANCE_CONFIG_PENDING);
+                                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, payload, sizeof(GuidanceConfigData));
                 ESP_LOGI("BLE", "Guidance config queued for RocketComputer");
             }
         }
@@ -6034,10 +5954,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(FinConfigData))
             {
-                memcpy(pending_config_data, payload, sizeof(FinConfigData));
-                pending_config_data_len = sizeof(FinConfigData);
-                pending_config_msg_type = FIN_CONFIG_MSG;
-                setPendingCommand(FIN_CONFIG_PENDING);
+                                setPendingCommandWithConfig(FIN_CONFIG_PENDING, FIN_CONFIG_MSG, payload, sizeof(FinConfigData));
                 ESP_LOGI("BLE", "Fin layout queued for RocketComputer");
             }
         }
@@ -6051,10 +5968,7 @@ static void loop_oc()
                 // Send to FC via I2C config
                 CameraConfigData cam_cfg;
                 cam_cfg.camera_type = cfg_camera_type;
-                memcpy(pending_config_data, &cam_cfg, sizeof(cam_cfg));
-                pending_config_data_len = sizeof(cam_cfg);
-                pending_config_msg_type = CAMERA_CONFIG_MSG;
-                setPendingCommand(CAMERA_CONFIG_PENDING);
+                                setPendingCommandWithConfig(CAMERA_CONFIG_PENDING, CAMERA_CONFIG_MSG, &cam_cfg, sizeof(cam_cfg));
                 // Cache in NVS
                 Preferences prefs;
                 prefs.begin("cam", false);
@@ -6135,10 +6049,7 @@ static void loop_oc()
                     cfg_pyro_trigger_value[i] = val[i];
                 }
                 // Queue for FC via I2C
-                memcpy(pending_config_data, &pcfg, sizeof(pcfg));
-                pending_config_data_len = sizeof(pcfg);
-                pending_config_msg_type = PYRO_CONFIG_MSG;
-                setPendingCommand(PYRO_CONFIG_PENDING);
+                                setPendingCommandWithConfig(PYRO_CONFIG_PENDING, PYRO_CONFIG_MSG, &pcfg, sizeof(pcfg));
                 // Persist to NVS
                 Preferences prefs;
                 prefs.begin("pyro", false);
@@ -6164,10 +6075,7 @@ static void loop_oc()
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
             } else {
-                pending_config_data[0] = ch;
-                pending_config_data_len = 1;
-                pending_config_msg_type = PYRO_CONT_TEST;
-                setPendingCommand(PYRO_CONT_TEST);
+                setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
             }
         }
@@ -6180,10 +6088,7 @@ static void loop_oc()
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
             } else {
-                pending_config_data[0] = ch;
-                pending_config_data_len = 1;
-                pending_config_msg_type = PYRO_FIRE_TEST;
-                setPendingCommand(PYRO_FIRE_TEST);
+                setPendingCommandWithConfig(PYRO_FIRE_TEST, PYRO_FIRE_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro test fire CH%u", ch);
             }
         }
@@ -6300,10 +6205,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(MagCalApplyData))
             {
-                memcpy(pending_config_data, payload, sizeof(MagCalApplyData));
-                pending_config_data_len = sizeof(MagCalApplyData);
-                pending_config_msg_type = MAG_CAL_APPLY_MSG;
-                setPendingCommand(MAG_CAL_APPLY_PENDING);
+                                setPendingCommandWithConfig(MAG_CAL_APPLY_PENDING, MAG_CAL_APPLY_MSG, payload, sizeof(MagCalApplyData));
                 ESP_LOGI("BLE", "Mag cal APPLY queued for FlightComputer");
             }
             else
@@ -6333,10 +6235,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(SensorCalApplyData))
             {
-                memcpy(pending_config_data, payload, sizeof(SensorCalApplyData));
-                pending_config_data_len = sizeof(SensorCalApplyData);
-                pending_config_msg_type = SENSOR_CAL_APPLY_MSG;
-                setPendingCommand(SENSOR_CAL_APPLY_PENDING);
+                                setPendingCommandWithConfig(SENSOR_CAL_APPLY_PENDING, SENSOR_CAL_APPLY_MSG, payload, sizeof(SensorCalApplyData));
                 ESP_LOGI("BLE", "Sensor cal APPLY queued for FlightComputer");
             }
             else
