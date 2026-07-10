@@ -1,77 +1,132 @@
 import XCTest
 @testable import TinkerRocketApp
 
-/// Regression tests for #378: pre-#267 profile JSON carries servo pulse limits
-/// (old defaults 1250/1750 µs) but no finMinDeg/finMaxDeg keys. The decoder
-/// used to backfill the missing angles with the new ±60° defaults, pairing
-/// "1250–1750 µs ↔ ±60°" — a mapping whose commanded-vs-physical fin angle is
-/// off ~2×, so an untouched old profile silently flew with about half the
-/// roll/guidance authority the gains were retuned for. The migration now
-/// derives missing angles from the pulses via the 1:1 servo-arm line
-/// (1000 µs = −60°, 2000 µs = +60°), keeping the pair self-consistent without
-/// changing the hardware's actual travel.
+/// #449: the servo calibration is three datasheet numbers — the pulse endpoints
+/// and the TOTAL fin travel swept between them. The endpoint angles are derived,
+/// so a profile can no longer describe a servo that does not exist.
+///
+/// This supersedes the #378 migration these tests used to cover. #378 derived the
+/// angles only when the JSON *omitted* them and deliberately left an explicit pair
+/// alone — which is how `1250/1750 µs ↔ ±60°` (no physical servo: that span sweeps
+/// 60° total on a standard arm) survived in the flying profile and made the FC
+/// drive half the commanded deflection. The stale keys are now ignored outright.
 final class RocketProfileMigrationTests: XCTestCase {
 
     private func decode(_ json: String) throws -> RocketProfile {
         try JSONDecoder().decode(RocketProfile.self, from: json.data(using: .utf8)!)
     }
 
-    // MARK: - The pulse→angle line itself
+    // MARK: - The standard-servo seed line
 
-    func testFinDegForPulse_CanonicalLine() {
-        XCTAssertEqual(RocketProfile.finDegForPulse(1000), -60.0, accuracy: 0.001)
-        XCTAssertEqual(RocketProfile.finDegForPulse(1500), 0.0, accuracy: 0.001)
-        XCTAssertEqual(RocketProfile.finDegForPulse(2000), 60.0, accuracy: 0.001)
-        XCTAssertEqual(RocketProfile.finDegForPulse(1250), -30.0, accuracy: 0.001)
-        XCTAssertEqual(RocketProfile.finDegForPulse(1750), 30.0, accuracy: 0.001)
+    func testStandardFinTravel_CanonicalSpans() {
+        XCTAssertEqual(RocketProfile.standardFinTravelDeg(minUs: 1000, maxUs: 2000), 120.0, accuracy: 0.001)
+        XCTAssertEqual(RocketProfile.standardFinTravelDeg(minUs: 1250, maxUs: 1750), 60.0, accuracy: 0.001)
+        XCTAssertEqual(RocketProfile.standardFinTravelDeg(minUs: 1100, maxUs: 1900), 96.0, accuracy: 0.001)
     }
 
-    // MARK: - The #378 regression
+    // MARK: - Endpoints are derived, always symmetric about the travel
 
-    func testPre267Profile_OldDefaultPulses_GetConsistentAngles() throws {
-        // The exact case from the issue: old defaults, no fin-angle keys.
-        let p = try decode(#"{"name":"OldBird","servoMinUs":1250,"servoMaxUs":1750}"#)
+    func testEndpointAngles_AreHalfTheTravel() {
+        var p = RocketProfile.makeDefault(name: "Fresh")
+        XCTAssertEqual(p.finMinDeg, -60.0, accuracy: 0.001)
+        XCTAssertEqual(p.finMaxDeg, 60.0, accuracy: 0.001)
+
+        p.finTravelDeg = 90.0            // e.g. a 90°-travel servo
+        XCTAssertEqual(p.finMinDeg, -45.0, accuracy: 0.001)
+        XCTAssertEqual(p.finMaxDeg, 45.0, accuracy: 0.001)
+    }
+
+    func testFinDegForPulse_WalksTheCalibrationLine() {
+        var p = RocketProfile.makeDefault(name: "Std")   // 1000/2000 µs, 120°
+        XCTAssertEqual(p.finDeg(forPulse: 1000), -60.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDeg(forPulse: 1500), 0.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDeg(forPulse: 1750), 30.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDeg(forPulse: 2000), 60.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDegPerUs, 0.12, accuracy: 0.0001)
+
+        // Narrowed endpoints on the same servo: the fin sweeps proportionally less.
+        p.servoMinUs = 1250; p.servoMaxUs = 1750
+        p.finTravelDeg = RocketProfile.standardFinTravelDeg(minUs: 1250, maxUs: 1750)
+        XCTAssertEqual(p.finDeg(forPulse: 1250), -30.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDeg(forPulse: 1500), 0.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDeg(forPulse: 1750), 30.0, accuracy: 0.001)
+        XCTAssertEqual(p.finDegPerUs, 0.12, accuracy: 0.0001, "same servo, same slope")
+    }
+
+    func testNonStandardServo_TravelIsHonoured() {
+        // A 90°-travel servo driven across the full 1000–2000 µs span: the slope
+        // is NOT the 0.12 °/µs standard line, and nothing in the model assumes it.
+        var p = RocketProfile.makeDefault(name: "SG90-ish")
+        p.finTravelDeg = 90.0
+        XCTAssertEqual(p.finDegPerUs, 0.09, accuracy: 0.0001)
+        XCTAssertEqual(p.finDeg(forPulse: 2000), 45.0, accuracy: 0.001)
+    }
+
+    func testZeroSpan_DoesNotDivideByZero() {
+        var p = RocketProfile.makeDefault(name: "Degenerate")
+        p.servoMinUs = 1500; p.servoMaxUs = 1500
+        XCTAssertEqual(p.finDegPerUs, 0.0)
+        XCTAssertEqual(p.finDeg(forPulse: 1800), 0.0)
+        XCTAssertFalse(p.finDeg(forPulse: 1800).isNaN)
+    }
+
+    // MARK: - Decoding: stale angle keys are ignored (the #449 inversion)
+
+    func testFlyingProfile_StaleExplicitAngles_AreIgnored() throws {
+        // The exact pair every flight report carried: 1250/1750 µs declared ±60°.
+        // Under #378 this was "explicit user data, untouched" and the FC flew a
+        // 2×-off calibration. It must now resolve to the physical ±30°.
+        let p = try decode(#"{"name":"RollyPoly","servoMinUs":1250,"servoMaxUs":1750,"finMinDeg":-60,"finMaxDeg":60}"#)
         XCTAssertEqual(p.servoMinUs, 1250)
         XCTAssertEqual(p.servoMaxUs, 1750)
+        XCTAssertEqual(p.finTravelDeg, 60.0, accuracy: 0.001)
         XCTAssertEqual(p.finMinDeg, -30.0, accuracy: 0.001,
-                       "1250 µs physically reaches −30°, not the ±60° default")
+                       "1250 µs physically reaches −30°; the stored −60° was fiction")
         XCTAssertEqual(p.finMaxDeg, 30.0, accuracy: 0.001)
     }
 
-    func testPre267Profile_CustomPulses_GetProportionalAngles() throws {
-        // A user-tuned old profile keeps its physical travel, correctly labeled.
+    func testLegacyProfile_PulsesOnly_SeedsStandardTravel() throws {
+        let p = try decode(#"{"name":"OldBird","servoMinUs":1250,"servoMaxUs":1750}"#)
+        XCTAssertEqual(p.finMinDeg, -30.0, accuracy: 0.001)
+        XCTAssertEqual(p.finMaxDeg, 30.0, accuracy: 0.001)
+    }
+
+    func testLegacyProfile_CustomPulses_SeedProportionalTravel() throws {
         let p = try decode(#"{"name":"Custom","servoMinUs":1100,"servoMaxUs":1900}"#)
+        XCTAssertEqual(p.finTravelDeg, 96.0, accuracy: 0.001)
         XCTAssertEqual(p.finMinDeg, -48.0, accuracy: 0.001)
         XCTAssertEqual(p.finMaxDeg, 48.0, accuracy: 0.001)
     }
 
     func testProfileWithoutAnyServoKeys_KeepsFullTravelDefaults() throws {
-        // No pulses AND no angles: defaults are 1000/2000 ↔ ±60 — the formula
-        // reproduces the defaults exactly, so nothing changes for new profiles.
         let p = try decode(#"{"name":"Fresh"}"#)
         XCTAssertEqual(p.servoMinUs, 1000)
         XCTAssertEqual(p.servoMaxUs, 2000)
+        XCTAssertEqual(p.finTravelDeg, 120.0, accuracy: 0.001)
         XCTAssertEqual(p.finMinDeg, -60.0, accuracy: 0.001)
-        XCTAssertEqual(p.finMaxDeg, 60.0, accuracy: 0.001)
     }
 
-    func testPost267Profile_ExplicitAngles_Untouched() throws {
-        // A profile that already carries angle keys is never rewritten — even
-        // if the pair looks odd, explicit user data wins.
-        let p = try decode(
-            #"{"name":"Tuned","servoMinUs":1250,"servoMaxUs":1750,"finMinDeg":-25.5,"finMaxDeg":27.0}"#)
-        XCTAssertEqual(p.finMinDeg, -25.5, accuracy: 0.001)
-        XCTAssertEqual(p.finMaxDeg, 27.0, accuracy: 0.001)
+    func testExplicitTravel_SurvivesDecode() throws {
+        // Once a user states their servo's travel it is authoritative — the
+        // standard-servo seed applies only when the key is absent.
+        let p = try decode(#"{"name":"NineZero","servoMinUs":1000,"servoMaxUs":2000,"finTravelDeg":90}"#)
+        XCTAssertEqual(p.finTravelDeg, 90.0, accuracy: 0.001)
+        XCTAssertEqual(p.finMaxDeg, 45.0, accuracy: 0.001)
     }
 
-    func testMigratedProfile_RoundTripsStable() throws {
-        // Once migrated and re-saved, the angles are explicit — decoding the
-        // re-encoded JSON must not shift values again (idempotence).
-        let migrated = try decode(#"{"name":"OldBird","servoMinUs":1250,"servoMaxUs":1750}"#)
-        let reencoded = try JSONEncoder().encode(migrated)
-        let again = try JSONDecoder().decode(RocketProfile.self, from: reencoded)
-        XCTAssertEqual(again.finMinDeg, migrated.finMinDeg, accuracy: 0.001)
-        XCTAssertEqual(again.finMaxDeg, migrated.finMaxDeg, accuracy: 0.001)
+    // MARK: - Round trip
+
+    func testRoundTrip_IsStable_AndDropsDerivedKeys() throws {
+        let migrated = try decode(#"{"name":"OldBird","servoMinUs":1250,"servoMaxUs":1750,"finMinDeg":-60,"finMaxDeg":60}"#)
+        let data = try JSONEncoder().encode(migrated)
+        let json = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(json.contains("finMinDeg"), "derived angles must not be persisted")
+        XCTAssertFalse(json.contains("finMaxDeg"))
+        XCTAssertTrue(json.contains("finTravelDeg"))
+
+        let again = try JSONDecoder().decode(RocketProfile.self, from: data)
+        XCTAssertEqual(again.finTravelDeg, migrated.finTravelDeg, accuracy: 0.001)
+        XCTAssertEqual(again.finMinDeg, -30.0, accuracy: 0.001)
         XCTAssertEqual(again.servoMinUs, 1250)
     }
 }
