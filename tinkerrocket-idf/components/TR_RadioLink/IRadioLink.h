@@ -58,4 +58,25 @@ public:
     virtual void serviceTxWatchdog() = 0;
 
     virtual void getStats(TR_LoRa_Comms::Stats& out) const = 0;
+
+    // ---- Spectrum scan (pre-launch collision avoidance; BS caller, #414) --
+    // Mirrors the TR_LoRa_Comms scan surface exactly (same call-site-audit
+    // rule as above — this is the set the BS application uses). Contract:
+    // startScan() kicks off a sweep (refused mid-TX or mid-scan); the caller
+    // then calls serviceScan() every loop iteration until isScanDone(),
+    // reads the samples, and consumeScanDone()s. A backend must NEVER leave
+    // isScanDone() false forever after a startScan() that returned true —
+    // the BS gates uplink TX on scan state (#379), so a wedged scan mutes
+    // the uplink. On any failure path (modem reboot, lost SCAN_RESULT) the
+    // backend reports done-with-zero-samples instead.
+    // TR_LoRa_Comms::ScanSample is the shared sample currency.
+    virtual bool startScan(float start_mhz, float stop_mhz, uint16_t step_khz,
+                           uint16_t dwell_ms) = 0;
+    virtual void serviceScan() = 0;
+    virtual bool isScanDone() const = 0;
+    virtual void consumeScanDone() = 0;
+    virtual size_t getScanSampleCount() const = 0;
+    virtual const TR_LoRa_Comms::ScanSample* getScanSamples() const = 0;
+    virtual float getScanStartMHz() const = 0;
+    virtual float getScanStepKHz() const = 0;
 };

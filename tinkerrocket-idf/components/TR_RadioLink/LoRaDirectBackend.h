@@ -46,6 +46,22 @@ public:
 
     void getStats(TR_LoRa_Comms::Stats& out) const override { lora_.getStats(out); }
 
+    bool startScan(float start_mhz, float stop_mhz, uint16_t step_khz,
+                   uint16_t dwell_ms) override
+    {
+        return lora_.startScan(start_mhz, stop_mhz, step_khz, dwell_ms);
+    }
+    void serviceScan() override { lora_.serviceScan(); }
+    bool isScanDone() const override { return lora_.isScanDone(); }
+    void consumeScanDone() override { lora_.consumeScanDone(); }
+    size_t getScanSampleCount() const override { return lora_.getScanSampleCount(); }
+    const TR_LoRa_Comms::ScanSample* getScanSamples() const override
+    {
+        return lora_.getScanSamples();
+    }
+    float getScanStartMHz() const override { return lora_.getScanStartMHz(); }
+    float getScanStepKHz() const override { return lora_.getScanStepKHz(); }
+
 private:
     TR_LoRa_Comms lora_;
 };

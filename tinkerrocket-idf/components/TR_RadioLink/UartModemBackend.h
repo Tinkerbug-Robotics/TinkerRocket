@@ -69,6 +69,25 @@ public:
 
     void getStats(TR_LoRa_Comms::Stats& out) const override;
 
+    // Spectrum scan (#414): START_SCAN is fire-and-forget on the wire —
+    // the modem runs the sweep autonomously and answers with one
+    // SCAN_RESULT frame, which we cache so every query answers locally.
+    // The modem is silent on a refused/dropped scan, so a host-side
+    // deadline (sweep duration + margin) fails the scan as
+    // done-with-zero-samples; a modem BOOT mid-scan does the same.
+    bool startScan(float start_mhz, float stop_mhz, uint16_t step_khz,
+                   uint16_t dwell_ms) override;
+    void serviceScan() override;
+    bool isScanDone() const override { return scan_done_; }
+    void consumeScanDone() override { scan_done_ = false; }
+    size_t getScanSampleCount() const override { return scan_count_; }
+    const TR_LoRa_Comms::ScanSample* getScanSamples() const override
+    {
+        return scan_samples_;
+    }
+    float getScanStartMHz() const override { return scan_start_mhz_; }
+    float getScanStepKHz() const override { return scan_step_khz_; }
+
     // Modem-side identity captured from BOOT/IDENTITY (fw version, chip,
     // capabilities) — surfaced for status/logging.
     const radio_modem::ModemIdentityData& identity() const { return identity_; }
@@ -117,6 +136,18 @@ private:
 
     // STATUS ack tracking for reconfigure()
     uint32_t status_rx_count_ = 0;
+
+    // BOOT config re-push deferred out of the frame handler (see onFrame)
+    bool config_repush_pending_ = false;
+
+    // Scan state (cached SCAN_RESULT; see startScan comment)
+    bool scan_active_ = false;
+    bool scan_done_ = false;
+    uint32_t scan_deadline_ms_ = 0;
+    size_t scan_count_ = 0;
+    float scan_start_mhz_ = 0.0f;
+    float scan_step_khz_ = 0.0f;
+    TR_LoRa_Comms::ScanSample scan_samples_[TR_LoRa_Comms::SCAN_MAX_SAMPLES] = {};
 
     // Stats mirror in TR_LoRa_Comms currency (fed by TX_RESULT / RX_FRAME /
     // STATUS)

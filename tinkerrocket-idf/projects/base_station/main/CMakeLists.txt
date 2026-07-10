@@ -9,6 +9,7 @@ idf_component_register(
         TR_Coordinates
         TR_BLE_To_APP
         TR_LoRa_Comms
+        TR_RadioLink
         TR_MAX17205G
         TR_BQ27Z746
         TR_OTA

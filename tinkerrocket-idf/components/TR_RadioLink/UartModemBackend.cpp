@@ -22,6 +22,15 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
 {
     cfg_ = cfg;
     debug_ = debug;
+    // Seed the cached radio params with the host's DESIRED config before we
+    // know whether a modem is attached. If begin() times out (daughterboard
+    // absent/unpowered at boot) but the modem shows up later, its BOOT frame
+    // hot-joins: the handler below re-pushes these values instead of zeros.
+    cfg_freq_mhz_ = freq_mhz;
+    cfg_sf_ = sf;
+    cfg_bw_khz_ = bw_khz;
+    cfg_cr_ = cr;
+    cfg_tx_power_ = tx_power;
 
     if (cfg.act_pin >= 0)
     {
@@ -67,6 +76,9 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
              (int)identity_.max_tx_power_dbm,
              (double)identity_.freq_min_mhz, (double)identity_.freq_max_mhz);
 
+    // A BOOT received during the wait loop above queues a deferred re-push;
+    // moot now — begin() pushes the same config itself right here.
+    config_repush_pending_ = false;
     if (!pushConfig(freq_mhz, sf, bw_khz, cr, tx_power, /*start_rx=*/true,
                     /*ack_timeout_ms=*/500))
     {
@@ -198,6 +210,38 @@ void UartModemBackend::onFrame(uint8_t type, const uint8_t* payload, size_t len)
             break;
         }
 
+        case MSG_SCAN_RESULT:
+        {
+            if (len < sizeof(ScanResultHeader))
+            {
+                break;
+            }
+            ScanResultHeader hdr;
+            memcpy(&hdr, payload, sizeof(hdr));
+            size_t n = hdr.count;
+            if (n > TR_LoRa_Comms::SCAN_MAX_SAMPLES)
+            {
+                n = TR_LoRa_Comms::SCAN_MAX_SAMPLES;
+            }
+            if (n > len - sizeof(hdr))
+            {
+                n = len - sizeof(hdr);
+            }
+            const uint8_t* rssi = payload + sizeof(hdr);
+            for (size_t i = 0; i < n; i++)
+            {
+                scan_samples_[i].freq_mhz =
+                    hdr.start_mhz + (float)i * hdr.step_khz / 1000.0f;
+                scan_samples_[i].rssi_dbm = (int8_t)rssi[i];
+            }
+            scan_start_mhz_ = hdr.start_mhz;
+            scan_step_khz_ = hdr.step_khz;
+            scan_count_ = n;
+            scan_active_ = false;
+            scan_done_ = true;
+            break;
+        }
+
         case MSG_STATUS:
         {
             if (len != sizeof(ModemStatusData))
@@ -222,20 +266,30 @@ void UartModemBackend::onFrame(uint8_t type, const uint8_t* payload, size_t len)
             memcpy(&identity_, payload, sizeof(identity_));
             const bool was_alive = modem_alive_;
             modem_alive_ = true;
-            if (type == MSG_BOOT && was_alive)
+            if (type == MSG_BOOT)
             {
-                // Daughterboard rebooted underneath us (brownout / watchdog):
-                // its queue is empty and its radio is on boot defaults.
-                // Clear the in-flight slot and re-push our config.
-                ESP_LOGW(TAG, "modem REBOOTED — re-pushing radio config");
+                // Daughterboard (re)booted underneath us: either it rebooted
+                // (brownout / watchdog) or it hot-joined after a begin()
+                // timeout. Its queue is empty and its radio is on boot
+                // defaults — clear the in-flight slot, fail any active scan
+                // (its SCAN_RESULT is never coming), and re-push our config.
+                // The push is DEFERRED to service(): pushConfig() polls the
+                // link, and calling it from inside this frame handler would
+                // re-enter link_.poll() mid-chunk.
+                ESP_LOGW(TAG, "modem %s — re-pushing radio config",
+                         was_alive ? "REBOOTED" : "hot-joined");
                 if (tx_in_flight_)
                 {
                     tx_in_flight_ = false;
                     stats_.tx_fail++;
                 }
-                (void)pushConfig(cfg_freq_mhz_, cfg_sf_, cfg_bw_khz_, cfg_cr_,
-                                 cfg_tx_power_, /*start_rx=*/true,
-                                 /*ack_timeout_ms=*/300);
+                if (scan_active_)
+                {
+                    scan_active_ = false;
+                    scan_done_ = true;
+                    scan_count_ = 0;
+                }
+                config_repush_pending_ = true;
             }
             break;
         }
@@ -261,6 +315,15 @@ void UartModemBackend::service()
         return;
     }
     link_.poll(&UartModemBackend::onFrameTrampoline, this);
+
+    // Deferred BOOT config re-push (see onFrame) — outside the poll handler.
+    if (config_repush_pending_ && modem_alive_)
+    {
+        config_repush_pending_ = false;
+        (void)pushConfig(cfg_freq_mhz_, cfg_sf_, cfg_bw_khz_, cfg_cr_,
+                         cfg_tx_power_, /*start_rx=*/true,
+                         /*ack_timeout_ms=*/300);
+    }
 }
 
 bool UartModemBackend::send(const uint8_t* payload, size_t len)
@@ -404,6 +467,61 @@ void UartModemBackend::serviceTxWatchdog()
         stats_.transmitting = false;
         stats_.tx_fail++;
         stats_.tx_watchdog_fires++;
+    }
+}
+
+bool UartModemBackend::startScan(float start_mhz, float stop_mhz,
+                                 uint16_t step_khz, uint16_t dwell_ms)
+{
+    if (!modem_alive_ || scan_active_ || tx_in_flight_ || step_khz == 0 ||
+        stop_mhz <= start_mhz)
+    {
+        // Mirrors the direct driver's refusals (no scan mid-TX/mid-scan);
+        // the caller retries.
+        return false;
+    }
+
+    ScanRequestData d = {};
+    d.start_mhz = start_mhz;
+    d.stop_mhz = stop_mhz;
+    d.step_khz = step_khz;
+    d.dwell_ms = dwell_ms;
+    if (!link_.sendFrame(MSG_START_SCAN, reinterpret_cast<uint8_t*>(&d),
+                         sizeof(d)))
+    {
+        return false;
+    }
+
+    // The modem is silent when it refuses/drops a scan, so bound the wait:
+    // sweep duration (steps x dwell, plus per-step retune overhead) doubled,
+    // plus fixed slack for queueing + the result frame.
+    uint32_t steps = (uint32_t)((stop_mhz - start_mhz) * 1000.0f / step_khz) + 1;
+    if (steps > TR_LoRa_Comms::SCAN_MAX_SAMPLES)
+    {
+        steps = TR_LoRa_Comms::SCAN_MAX_SAMPLES;
+    }
+    scan_deadline_ms_ = millis() + 2 * steps * (dwell_ms + 5) + 3000;
+
+    scan_active_ = true;
+    scan_done_ = false;
+    scan_count_ = 0;
+    scan_start_mhz_ = start_mhz;
+    scan_step_khz_ = step_khz;
+    return true;
+}
+
+void UartModemBackend::serviceScan()
+{
+    // The sweep itself runs on the modem; frames drain via service(). Our
+    // only job here is the never-wedge guarantee (IRadioLink contract):
+    // a lost SCAN_RESULT must not gate the BS uplink forever (#379).
+    if (scan_active_ && (int32_t)(millis() - scan_deadline_ms_) > 0)
+    {
+        ESP_LOGW(TAG, "scan timed out (SCAN_RESULT never arrived) — "
+                      "reporting empty scan");
+        scan_active_ = false;
+        scan_done_ = true;
+        scan_count_ = 0;
     }
 }
 
