@@ -41,6 +41,9 @@ class SimConfig:
     baro_rate: float = 500.0
     mag_rate: float = 1000.0
     gnss_rate: float = 25.0
+    # Seed for the sensor-noise RNGs (None = nondeterministic). Each model
+    # gets a distinct derived seed so streams are independent (#459 A/B).
+    sensor_seed: int = None
     duration: float = 30.0          # max sim time (after launch)
     pad_time: float = 0.0           # pre-launch pad warmup (s) for EKF convergence
 
@@ -222,19 +225,23 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         wind_enu = np.array([wind_east, wind_north, 0.0])
 
     # Initialize sensors
+    def _seed(i):
+        return None if config.sensor_seed is None else config.sensor_seed + i
     if config.perfect_imu:
         imu = IMUModel(rate_hz=config.imu_rate,
                        accel_noise_sigma=0.0, gyro_noise_sigma=0.0,
-                       accel_bias_sigma=0.0, gyro_bias_sigma=0.0)
+                       accel_bias_sigma=0.0, gyro_bias_sigma=0.0,
+                       seed=_seed(0))
     else:
-        imu = IMUModel(rate_hz=config.imu_rate)
-    baro = BaroModel(rate_hz=config.baro_rate)
-    mag = MagModel(rate_hz=config.mag_rate)
+        imu = IMUModel(rate_hz=config.imu_rate, seed=_seed(0))
+    baro = BaroModel(rate_hz=config.baro_rate, seed=_seed(1))
+    mag = MagModel(rate_hz=config.mag_rate, seed=_seed(2))
     gnss = GNSSModel(
         rate_hz=config.gnss_rate,
         ref_lat_deg=config.ref_lat_deg,
         ref_lon_deg=config.ref_lon_deg,
         ref_alt_m=config.ref_alt_m,
+        seed=_seed(3),
     )
 
     # Initialize controller
@@ -329,6 +336,11 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     next_baro = t
     next_mag = t
     next_gnss = t
+    # #459: mag samples are generated at mag_rate and HELD between samples
+    # with their sample timestamp, so the EKF sees the sensor's real cadence
+    # (the FC stamps ekf_mag.time_us with the sensor sample time).
+    held_mag_frd = None
+    mag_sample_time_us = 0
     next_log = t
 
     # Current actuator state
@@ -473,6 +485,10 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                     mag_d.mag_x = mag_meas['mag_x']
                     mag_d.mag_y = -mag_meas['mag_y']
                     mag_d.mag_z = -mag_meas['mag_z']
+                    # #459: this is the first held sample
+                    held_mag_frd = (mag_d.mag_x, mag_d.mag_y, mag_d.mag_z)
+                    mag_sample_time_us = ekf_time_us
+                    next_mag = t + mag_dt
                 # else: zeros → Mahony skips mag correction
 
                 ekf.init(imu_d, gnss_d, mag_d)
@@ -567,14 +583,25 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 else:
                     gnss_d.time_us = gnss_time_counter  # same as last
 
-                # Mag sample (zeros if disabled → Mahony runs gyro+accel only)
+                # Mag sample (zeros if disabled → Mahony runs gyro+accel only).
+                # #459: a new sample is generated only at mag_rate; between
+                # samples the last one is re-presented with its ORIGINAL
+                # timestamp — matching the FC, where updateCore runs every EKF
+                # tick but iis2mdc_latest_si only refreshes at ~98 Hz. The
+                # EKF's mag freshness gate dedups on time_us.
                 mag_d = EKFMagData()
                 mag_d.time_us = ekf_time_us
                 if config.enable_mag_updates:
-                    mag_meas = mag.measure(q)
-                    mag_d.mag_x = mag_meas['mag_x']
-                    mag_d.mag_y = -mag_meas['mag_y']   # FLU→FRD
-                    mag_d.mag_z = -mag_meas['mag_z']   # FLU→FRD
+                    if t >= next_mag:
+                        next_mag += mag_dt
+                        mag_meas = mag.measure(q)
+                        held_mag_frd = (mag_meas['mag_x'],
+                                        -mag_meas['mag_y'],   # FLU→FRD
+                                        -mag_meas['mag_z'])   # FLU→FRD
+                        mag_sample_time_us = ekf_time_us
+                    if held_mag_frd is not None:
+                        mag_d.time_us = mag_sample_time_us
+                        mag_d.mag_x, mag_d.mag_y, mag_d.mag_z = held_mag_frd
 
                 # Sensor trust: only use accel gravity reference on the pad and
                 # during descent.  During boost the accelerometer reads thrust,
@@ -1119,6 +1146,12 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                 row['ekf_vel_sigma_n'] = math.sqrt(max(0.0, cov_vel[0]))
                 row['ekf_vel_sigma_e'] = math.sqrt(max(0.0, cov_vel[1]))
                 row['ekf_vel_sigma_d'] = math.sqrt(max(0.0, cov_vel[2]))
+                # Attitude-error sigmas (deg) — index 2 ≈ yaw; used by the
+                # #459 covariance-honesty check.
+                cov_orient = ekf.get_cov_orient()
+                row['ekf_att_sigma_x_deg'] = math.degrees(math.sqrt(max(0.0, cov_orient[0])))
+                row['ekf_att_sigma_y_deg'] = math.degrees(math.sqrt(max(0.0, cov_orient[1])))
+                row['ekf_att_sigma_z_deg'] = math.degrees(math.sqrt(max(0.0, cov_orient[2])))
 
             # Guidance telemetry
             row['guidance_active'] = guidance_active

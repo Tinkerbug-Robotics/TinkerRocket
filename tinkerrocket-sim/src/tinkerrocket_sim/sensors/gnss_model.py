@@ -38,7 +38,8 @@ class GNSSModel:
                  # Recovery quality
                  recovery_noise_scale_initial: float = 15.0,
                  recovery_settle_time_s: float = 2.0,
-                 enable_dropout: bool = True):
+                 enable_dropout: bool = True,
+                 seed: int = None):
         self.pos_noise_ne = pos_noise_ne_m
         self.pos_noise_d = pos_noise_d_m
         self.vel_noise_ne = vel_noise_ne_mps
@@ -73,7 +74,7 @@ class GNSSModel:
         self._recovery_start_time = None  # when fix was reacquired
         self._boost_lockout = False  # preemptive lockout during boost
 
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(seed)
 
     def measure(self, pos_enu: np.ndarray, vel_enu: np.ndarray,
                 accel_magnitude: float = None,

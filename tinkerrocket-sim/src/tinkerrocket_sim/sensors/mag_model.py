@@ -14,7 +14,8 @@ class MagModel:
     def __init__(self,
                  noise_sigma: float = 0.5,  # uT
                  rate_hz: float = 1000.0,
-                 field_ned: np.ndarray = None):
+                 field_ned: np.ndarray = None,
+                 seed: int = None):
         """
         Args:
             noise_sigma: Measurement noise std dev in uT.
@@ -29,7 +30,7 @@ class MagModel:
             self.field_ned = np.array([22.0, 5.0, 42.0])
         else:
             self.field_ned = np.array(field_ned)
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(seed)
 
     def measure(self, quaternion: np.ndarray) -> dict:
         """Generate magnetometer measurement from true orientation.
