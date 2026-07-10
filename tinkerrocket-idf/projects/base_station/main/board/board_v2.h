@@ -49,6 +49,9 @@ struct board_pins
     // --- I2C bus (fuel gauge; SCL_SENS/SDA_SENS nets) ---
     static constexpr int I2C_SCL_PIN = 37;
     static constexpr int I2C_SDA_PIN = 38;
+    // No MAX17303 on this board — an 0x36 answer must be a MAX17205 (V1
+    // firmware cross-flashed) and the strict DevName check applies.
+    static constexpr bool EXPECT_MAX17303 = false;
 
     // --- Flight-pack charger (MP2672): V3-only feature ---
     static constexpr bool HAS_PACK_CHARGER = false;

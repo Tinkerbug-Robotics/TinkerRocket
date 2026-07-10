@@ -62,6 +62,11 @@ struct board_pins
     // --- I2C bus (MAX17303 fuel gauge + MP2672 pack charger) ---
     static constexpr int I2C_SCL_PIN = 34;
     static constexpr int I2C_SDA_PIN = 33;
+    // BOM assertion: the part at 0x36 IS a MAX17303 — claim it even if its
+    // DevName die rev is outside the known 0x404-0x406 range (first bench
+    // boot: an unlisted DevName silently demoted the gauge to the MAX17205
+    // driver's wrong register map).
+    static constexpr bool EXPECT_MAX17303 = true;
 
     // --- Flight-pack charger (MP2672GD-0000-Z, external 2S packs) ---
     static constexpr bool HAS_PACK_CHARGER = true;

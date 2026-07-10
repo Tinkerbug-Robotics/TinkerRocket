@@ -72,18 +72,32 @@ esp_err_t TR_MAX17303::begin(i2c_master_bus_handle_t bus,
         return ESP_FAIL;
     }
 
-    // Family field 0x406 (accept older sample revs 0x404/0x405); variant
-    // nibble 7 = MAX17303. A MAX17205 reads a ~0x02xx firmware-rev value
-    // here, so a mismatch means "not this part" — hand the address back.
+    // Family field: production silicon reads 0x406, older samples 0x404/
+    // 0x405 — accept the whole 0x40x die-rev range. Variant nibble 7 =
+    // MAX17303. A MAX17205 reads a ~0x02xx firmware-rev value here, so a
+    // mismatch normally means "not this part" — hand the address back...
+    // unless the board header asserts this PCB carries a MAX17303
+    // (assume_when_unidentified): then claim it anyway and log the value,
+    // so an unlisted die rev can't silently demote V3 to the wrong-map
+    // MAX17205 driver (bench 2026-07-10: exactly that happened).
     const uint16_t family  = _devname >> 4;
     const uint16_t variant = _devname & 0xF;
-    if (family != Reg::DEVNAME_FAMILY && family != 0x405 && family != 0x404)
+    const bool is_1730x = (family & 0xFF0) == 0x400;
+    if (!is_1730x)
     {
-        i2c_master_bus_rm_device(_dev);
-        _dev = nullptr;
-        return ESP_ERR_NOT_FOUND;
+        if (!_cfg.assume_when_unidentified)
+        {
+            ESP_LOGI(TAG, "DevName 0x%04X is not a MAX1730x — handing 0x36 back",
+                     _devname);
+            i2c_master_bus_rm_device(_dev);
+            _dev = nullptr;
+            return ESP_ERR_NOT_FOUND;
+        }
+        ESP_LOGW(TAG, "DevName 0x%04X unrecognized, but the board says this is "
+                      "a MAX17303 — claiming it (report this value!)",
+                 _devname);
     }
-    if (variant != Reg::DEVNAME_VARIANT_303)
+    else if (variant != Reg::DEVNAME_VARIANT_303)
     {
         // Sibling part (MAX17300/01/02) — same driver works; just say so.
         ESP_LOGW(TAG, "MAX1730x variant %u (DevName 0x%04X), driving as MAX17303",

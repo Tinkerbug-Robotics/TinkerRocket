@@ -3052,6 +3052,7 @@ static void setup_bs()
             m3_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
             m3_cfg.rsense_mohm    = config::RSENSE_MOHM;   // TODO: verify V3 Rsense on the bench
             m3_cfg.current_invert = false;                  // TODO: verify CSP/CSN polarity on V3
+            m3_cfg.assume_when_unidentified = config::EXPECT_MAX17303;
 
             if (max17303_gauge.begin(i2c_bus, m3_cfg, config::I2C_FREQ_HZ) == ESP_OK)
             {

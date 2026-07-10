@@ -51,6 +51,10 @@ struct board_pins
     static constexpr int I2C_SCL_PIN = 37;
     static constexpr int I2C_SDA_PIN = 38;
 
+    // No MAX17303 on this board — 0x36 is the MAX17205; the strict DevName
+    // check keeps the MAX17303 driver from claiming it.
+    static constexpr bool EXPECT_MAX17303 = false;
+
     // --- Flight-pack charger (MP2672): V3-only feature ---
     static constexpr bool HAS_PACK_CHARGER = false;
 };

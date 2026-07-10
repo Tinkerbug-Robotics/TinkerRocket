@@ -84,6 +84,13 @@ struct TR_MAX17303_Config
                                       //   current/capacity scaling only)
     bool     current_invert = false;  // Flip the *displayed* current sign
                                       //   (CSP/CSN swap on the PCB)
+    bool assume_when_unidentified = false;  // Board-level assertion that the
+                                      //   part at 0x36 IS a MAX17303: claim it
+                                      //   even when DevName reads an unknown
+                                      //   family (a die rev newer than the
+                                      //   0x404-0x406 range seen in the wild),
+                                      //   instead of falling through to the
+                                      //   MAX17205 driver's wrong register map.
 };
 
 class TR_MAX17303
