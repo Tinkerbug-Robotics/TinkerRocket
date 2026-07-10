@@ -717,3 +717,39 @@ TEST_F(EKFTest, BaroJosephGoldenTrajectory) {
         EXPECT_NEAR(cov[i], cov_gold[i], 0.02f * cov_gold[i] + 1e-9f)
             << "cov[" << i << "]";
 }
+
+// #459: each unique mag sample (time_us) is fused exactly once. Re-presenting
+// the held sample on subsequent EKF ticks — which is what the FC does between
+// real ~98 Hz IIS2MDC samples while updateCore runs at ~480 Hz — must be a
+// bitwise no-op, identical to running those ticks with no mag at all. Before
+// the freshness gate, the held sample was re-fused every tick, contracting
+// yaw covariance ~5x faster than the sensor's real information rate.
+TEST_F(EKFTest, MagSampleFusedOncePerUniqueTimestamp) {
+    GpsInsEKF a, b;
+    a.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
+    b.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
+
+    const EkfMagData no_mag = {};   // zero field → mag_valid=false, fusion skipped
+
+    uint32_t last_fresh_t = 0;
+    for (int k = 1; k <= 500; k++) {
+        const uint32_t t = 2000u * k;               // 500 Hz ticks
+        EkfMagData mag_a, mag_b;
+        if ((k - 1) % 5 == 0) {                     // fresh sample at ~100 Hz
+            last_fresh_t = t;
+            mag_a = makeNoseUpMag(t);
+            mag_b = makeNoseUpMag(t);
+        } else {
+            mag_a = makeNoseUpMag(last_fresh_t);    // held sample, stale time_us
+            mag_b = no_mag;                         // nothing new arrived
+        }
+        a.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), mag_a);
+        b.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), mag_b);
+    }
+
+    float qa[4], qb[4], ca[3], cb[3];
+    a.getQuaternion(qa); b.getQuaternion(qb);
+    a.getCovOrient(ca);  b.getCovOrient(cb);
+    for (int i = 0; i < 4; i++) EXPECT_EQ(qa[i], qb[i]) << "quat[" << i << "]";
+    for (int i = 0; i < 3; i++) EXPECT_EQ(ca[i], cb[i]) << "covOrient[" << i << "]";
+}

@@ -298,6 +298,9 @@ private:
     float dt_s_ = 0.0f;
     uint32_t timeWeekPrev_ = 0;
     uint32_t baroTimePrev_ = 0;
+    // #459: last fused mag sample time — fuse each unique sample exactly once
+    // (the mag delivers ~98 Hz; updateCore ticks ~480 Hz).
+    uint32_t magTimePrev_ = 0;
     float euler_BL_rad_[3] = {0.0f, 0.0f, 0.0f};
 
     // GNSS-acceleration estimate for accelMatchHeadingUpdate: previous GNSS
