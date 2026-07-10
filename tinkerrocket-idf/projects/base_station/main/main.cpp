@@ -32,10 +32,14 @@
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 
 #include <TR_LoRa_Comms.h>
+#include <LoRaDirectBackend.h>
+#include <UartModemBackend.h>
 #include <TR_Sensor_Data_Converter.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
+#include <TR_MAX17303.h>
+#include <TR_MP2672.h>
 #include <TR_BQ27Z746.h>
 #include <RocketComputerTypes.h>
 
@@ -67,7 +71,16 @@ static inline void maybeMarkOtaValid()
 // Forward declarations
 static const char* rocketStateToString(uint8_t state);
 
-static TR_LoRa_Comms lora_comms;
+// Radio backend seam (#410/#414): direct SPI LLCC68 (V1/V2 boards) or the
+// UART radio-daughterboard modem (V3), selected by the board header. The
+// reference keeps the historical `lora_comms` name so every call site below
+// is untouched; the unused backend is never begun.
+static LoRaDirectBackend lora_direct_backend;
+static UartModemBackend lora_modem_backend;
+static IRadioLink& lora_comms =
+    config::USE_UART_RADIO_MODEM
+        ? static_cast<IRadioLink&>(lora_modem_backend)
+        : static_cast<IRadioLink&>(lora_direct_backend);
 static SensorConverter sensor_converter;
 static TR_Coordinates coord;
 static TR_BLE_To_APP ble_app("TinkerBaseStation");
@@ -109,8 +122,10 @@ static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
 static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
+static TR_MAX17303  max17303_gauge(config::MAX17303_ADDR);  // V3; shares 0x36 with MAX17205, split by DevName
+static TR_MP2672    pack_charger(config::MP2672_ADDR);      // V3 flight-pack charger (HAS_PACK_CHARGER)
 // Which gauge runtime detection found (one firmware image, both PCBs).
-enum class GaugeKind { None, MAX17205, BQ27Z746 };
+enum class GaugeKind { None, MAX17205, BQ27Z746, MAX17303 };
 static GaugeKind gauge_kind = GaugeKind::None;
 static bool fuel_gauge_present = false;   // true if EITHER gauge is present
 
@@ -145,14 +160,13 @@ static bool     uplink_pending = false;
 static const char* SD_MOUNT_POINT = "/sdcard";
 static sdmmc_card_t* sd_card = nullptr;
 static bool using_internal_flash = false;
-static bool using_external_flash = false;   // V2: FAT on the external SPI flash
-#if BS_BOARD_V2
+static bool using_external_flash = false;   // V2/V3: FAT on the external SPI flash
 static spi_device_handle_t      s_ext_spi = nullptr;
 static spi_nand_flash_device_t *s_nand    = nullptr;
 
 // Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
-// flash used for logging on the new PCB (M_* pins on SPI3_HOST; LoRa owns
-// SPI2_HOST). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
+// flash used for logging on the V2/V3 PCBs (M_* pins on SPI3_HOST; LoRa owns
+// SPI2_HOST on V2). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
 // the vendored+patched spi_nand_flash component (components/spi_nand_flash/src/
 // devices/nand_foresee.c). On success repoints SD_MOUNT_POINT and sets
 // using_external_flash; otherwise returns the error so the caller falls back to
@@ -206,7 +220,6 @@ static esp_err_t mountExternalFlashFat()
     ESP_LOGI(TAG, "External-flash FAT mounted at %s", SD_MOUNT_POINT);
     return ESP_OK;
 }
-#endif  // BS_BOARD_V2
 static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
 // CSV logging state
@@ -514,6 +527,32 @@ static void updateBattery()
         bs_soc         = bq_gauge.soc();
         bs_current     = bq_gauge.current();
         bs_temperature = bq_gauge.temperature();
+    }
+    else if (gauge_kind == GaugeKind::MAX17303)
+    {
+        max17303_gauge.update();
+        bs_voltage     = max17303_gauge.voltage();
+        bs_soc         = max17303_gauge.soc();
+        bs_current     = max17303_gauge.current();
+        bs_temperature = max17303_gauge.temperature();
+
+        // Protector observability (BQ FET saga lesson). No enable action
+        // exists or is needed on this part — the protector runs the FETs —
+        // but log WHY the battery path opened, once per transition.
+        static bool last_fets_on = true;
+        static uint16_t last_prot = 0;
+        const bool fets_on = max17303_gauge.fetsOn();
+        const uint16_t prot = max17303_gauge.protStatus();
+        if (fets_on != last_fets_on || (prot != last_prot && prot != 0))
+        {
+            if (!fets_on || prot != 0)
+                ESP_LOGW(TAG, "MAX17303 protector: FETs %s, ProtStatus=0x%04X",
+                         fets_on ? "on" : "OFF", prot);
+            else
+                ESP_LOGI(TAG, "MAX17303 protector: FETs back on, faults clear");
+        }
+        last_fets_on = fets_on;
+        last_prot = prot;
     }
     else
     {
@@ -2811,6 +2850,10 @@ static void setup_bs()
     delay(500);
     ESP_LOGI(TAG, "======================================");
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
+    // Board banner = the wrong-build-dir flash guard (same lesson as the
+    // FC/OC -B build_v8 gotcha): if this line doesn't match the physical
+    // board, stop and flash the right variant.
+    ESP_LOGI(TAG, "  Board: %s (TR_BS_BOARD=%d)", config::BOARD_NAME, TR_BS_BOARD);
     ESP_LOGI(TAG, "======================================");
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
@@ -2842,52 +2885,55 @@ static void setup_bs()
     setenv("TZ", "UTC0", 1);
     tzset();
 
-    // Initialize storage. V2 (new PCB) -> wear-leveled FAT on the external SPI
-    // flash; V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
+    // Initialize storage. V2/V3 -> wear-leveled FAT on the external SPI NAND;
+    // V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
     // internal flash. Logging is backend-agnostic (uses SD_MOUNT_POINT + the
     // standard file API), so only the mount differs per board.
     {
-        esp_err_t ret;
-#if BS_BOARD_V2
-        ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
-#else
-        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-        host.max_freq_khz = SDMMC_FREQ_DEFAULT;
-
-        sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
-        slot.width = 4;
-        slot.clk = (gpio_num_t)config::SD_CLK;
-        slot.cmd = (gpio_num_t)config::SD_CMD;
-        slot.d0  = (gpio_num_t)config::SD_D0;
-        slot.d1  = (gpio_num_t)config::SD_D1;
-        slot.d2  = (gpio_num_t)config::SD_D2;
-        slot.d3  = (gpio_num_t)config::SD_D3;
-        slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-
-        esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
-        mount_cfg.format_if_mount_failed = false;
-        mount_cfg.max_files = 5;
-        mount_cfg.allocation_unit_size = 16 * 1024;
-
-        ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mount_cfg, &sd_card);
-        if (ret == ESP_OK)
+        esp_err_t ret = ESP_ERR_NOT_FOUND;
+        if (config::HAS_EXT_NAND)
         {
-            sdmmc_card_print_info(stdout, sd_card);
+            ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
+        }
+        else if (config::HAS_SDMMC)
+        {
+            sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+            host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
-            FATFS* fs;
-            DWORD free_clust;
-            if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+            sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+            slot.width = 4;
+            slot.clk = (gpio_num_t)config::SD_CLK;
+            slot.cmd = (gpio_num_t)config::SD_CMD;
+            slot.d0  = (gpio_num_t)config::SD_D0;
+            slot.d1  = (gpio_num_t)config::SD_D1;
+            slot.d2  = (gpio_num_t)config::SD_D2;
+            slot.d3  = (gpio_num_t)config::SD_D3;
+            slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
+            esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
+            mount_cfg.format_if_mount_failed = false;
+            mount_cfg.max_files = 5;
+            mount_cfg.allocation_unit_size = 16 * 1024;
+
+            ret = esp_vfs_fat_sdmmc_mount(SD_MOUNT_POINT, &host, &slot, &mount_cfg, &sd_card);
+            if (ret == ESP_OK)
             {
-                uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
-                uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
-                uint64_t used = total - free_bytes;
-                ESP_LOGI(TAG, "SD card mounted: %llu MB total, %llu MB used, %llu MB free",
-                         (unsigned long long)(total / (1024 * 1024)),
-                         (unsigned long long)(used / (1024 * 1024)),
-                         (unsigned long long)(free_bytes / (1024 * 1024)));
+                sdmmc_card_print_info(stdout, sd_card);
+
+                FATFS* fs;
+                DWORD free_clust;
+                if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+                {
+                    uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
+                    uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
+                    uint64_t used = total - free_bytes;
+                    ESP_LOGI(TAG, "SD card mounted: %llu MB total, %llu MB used, %llu MB free",
+                             (unsigned long long)(total / (1024 * 1024)),
+                             (unsigned long long)(used / (1024 * 1024)),
+                             (unsigned long long)(free_bytes / (1024 * 1024)));
+                }
             }
         }
-#endif
         if (ret != ESP_OK)
         {
             ESP_LOGW(TAG, "Primary storage mount failed (0x%x) — falling back to internal flash (SPIFFS)",
@@ -2998,36 +3044,77 @@ static void setup_bs()
         }
         else if (i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
         {
-            // Original PCB: MAX17205 gauge.
-            TR_MAX17205G_Config fg_cfg;
-            fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
-            fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
-            fg_cfg.current_invert = true;   // CSP/CSN swapped on schematic (U7) vs.
-                                            //   datasheet typical app circuit; flips
-                                            //   displayed current so charge reads
-                                            //   positive. Driver uses VFSOC for SoC
-                                            //   because the chip's m5 can't be told.
-            fg_cfg.num_cells      = config::NUM_BATTERY_CELLS;
+            // 0x36 is shared by two ModelGauge m5 parts: MAX17303 (V3 PCB,
+            // 1S + protector) and MAX17205 (V1 PCB, 2S). Try the MAX17303
+            // driver first — its begin() reads DevName and hands the address
+            // back (ESP_ERR_NOT_FOUND) when the part isn't a MAX1730x.
+            TR_MAX17303_Config m3_cfg;
+            m3_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
+            m3_cfg.rsense_mohm    = config::RSENSE_MOHM;   // TODO: verify V3 Rsense on the bench
+            m3_cfg.current_invert = false;                  // TODO: verify CSP/CSN polarity on V3
+            m3_cfg.assume_when_unidentified = config::EXPECT_MAX17303;
 
-            if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+            if (max17303_gauge.begin(i2c_bus, m3_cfg, config::I2C_FREQ_HZ) == ESP_OK)
             {
-                gauge_kind = GaugeKind::MAX17205;
+                gauge_kind = GaugeKind::MAX17303;
                 fuel_gauge_present = true;
-                ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
-                fuel_gauge.initIfNeeded();
+                ESP_LOGI(TAG, "MAX17303 fuel gauge found on I2C (0x%02X), DevName 0x%04X",
+                         config::MAX17303_ADDR, max17303_gauge.devName());
+                max17303_gauge.initIfNeeded();
                 updateBattery();
                 ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
                          (double)bs_voltage, (double)bs_soc, (double)bs_current);
-                fuel_gauge.logDiagnostics(TAG);
+                max17303_gauge.logDiagnostics(TAG);
             }
             else
             {
-                ESP_LOGW(TAG, "MAX17205G probe succeeded but begin() failed");
+                // Original PCB: MAX17205 gauge.
+                TR_MAX17205G_Config fg_cfg;
+                fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
+                fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
+                fg_cfg.current_invert = true;   // CSP/CSN swapped on schematic (U7) vs.
+                                                //   datasheet typical app circuit; flips
+                                                //   displayed current so charge reads
+                                                //   positive. Driver uses VFSOC for SoC
+                                                //   because the chip's m5 can't be told.
+                fg_cfg.num_cells      = config::NUM_BATTERY_CELLS;
+
+                if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+                {
+                    gauge_kind = GaugeKind::MAX17205;
+                    fuel_gauge_present = true;
+                    ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
+                    fuel_gauge.initIfNeeded();
+                    updateBattery();
+                    ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
+                             (double)bs_voltage, (double)bs_soc, (double)bs_current);
+                    fuel_gauge.logDiagnostics(TAG);
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "MAX17205G probe succeeded but begin() failed");
+                }
             }
         }
         else
         {
-            ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205 0x36) — battery readings unavailable");
+            ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205/MAX17303 0x36) — battery readings unavailable");
+        }
+    }
+
+    // V3: external flight-pack charger on the same I2C bus as the gauge.
+    // begin() succeeds even with no charge input attached (the chip is
+    // unpowered then); the periodic service() detects plug-in and applies
+    // the charge config each time.
+    if (config::HAS_PACK_CHARGER && i2c_bus != nullptr)
+    {
+        TR_MP2672_Config chg_cfg;
+        chg_cfg.vbatt_reg_code = config::PACK_VBATT_REG_CODE;
+        chg_cfg.icc_code       = config::PACK_CHARGE_ICC_CODE;
+        chg_cfg.chg_timer_code = config::PACK_CHG_TIMER_CODE;
+        if (pack_charger.begin(i2c_bus, chg_cfg, config::I2C_FREQ_HZ) != ESP_OK)
+        {
+            ESP_LOGW(TAG, "MP2672 pack-charger driver init failed");
         }
     }
 
@@ -3183,34 +3270,66 @@ static void setup_bs()
         ble_app.setName(unit_name);
     }
 
-    // Configure LoRa radio (uses NVS-saved config or factory defaults)
-    TR_LoRa_Comms::Config lora_cfg = {};
-    lora_cfg.enabled           = true;
-    lora_cfg.cs_pin            = config::LORA_CS_PIN;
-    lora_cfg.dio1_pin          = config::LORA_DIO1_PIN;
-    lora_cfg.rst_pin           = config::LORA_RST_PIN;
-    lora_cfg.busy_pin          = config::LORA_BUSY_PIN;
-    // V2 PCB: MCU-driven RX half of the RF switch (was defined but never
-    // driven — RXEN floated in RX). -1 on the original PCB (no switch).
-    lora_cfg.rxen_pin          = config::LORA_RXEN_PIN;
-    lora_cfg.spi_sck           = config::LORA_SPI_SCK;
-    lora_cfg.spi_miso          = config::LORA_SPI_MISO;
-    lora_cfg.spi_mosi          = config::LORA_SPI_MOSI;
-    lora_cfg.spi_host          = SPI2_HOST;
-    lora_cfg.freq_mhz          = lora_freq_mhz;
-    lora_cfg.spreading_factor  = lora_sf;
-    lora_cfg.bandwidth_khz     = lora_bw_khz;
-    lora_cfg.coding_rate       = lora_cr;
-    lora_cfg.preamble_len      = config::LORA_PREAMBLE_LEN;
-    lora_cfg.tx_power_dbm      = lora_tx_power;
-    lora_cfg.crc_on            = config::LORA_CRC_ON;
-    lora_cfg.rx_boosted_gain   = config::LORA_RX_BOOSTED_GAIN;
-    lora_cfg.syncword_private  = config::LORA_SYNCWORD_PRIVATE;
-
-    if (!lora_comms.begin(lora_cfg, config::DEBUG))
+    // Configure LoRa radio (uses NVS-saved config or factory defaults).
+    // Backend per board header (#410 pattern): V3 talks to the radio
+    // daughterboard over UART; V1/V2 drive the on-board LLCC68 over SPI.
+    bool radio_ok = false;
+    if (config::USE_UART_RADIO_MODEM)
     {
-        ESP_LOGE(TAG, "LoRa init FAILED!");
-        while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+        UartModemBackend::Config mcfg = {};
+        mcfg.uart.tx_pin      = config::LORA_UART_TX_PIN;
+        mcfg.uart.rx_pin      = config::LORA_UART_RX_PIN;
+        mcfg.act_pin          = config::LORA_ACT_PIN;
+        mcfg.preamble_len     = config::LORA_PREAMBLE_LEN;
+        mcfg.crc_on           = config::LORA_CRC_ON;
+        mcfg.rx_boosted_gain  = config::LORA_RX_BOOSTED_GAIN;
+        mcfg.syncword_private = config::LORA_SYNCWORD_PRIVATE;
+        radio_ok = lora_modem_backend.begin(mcfg, lora_freq_mhz, lora_sf,
+                                            lora_bw_khz, lora_cr,
+                                            lora_tx_power, config::DEBUG);
+        if (!radio_ok)
+        {
+            // Unlike the direct-SPI boards, a missing daughterboard must not
+            // brick the BS: bench bring-up runs gauge/charger/storage/BLE
+            // without a radio, and the backend hot-joins a modem that BOOTs
+            // later (service() keeps polling the UART).
+            ESP_LOGE(TAG, "LoRa modem init FAILED — continuing radio-less "
+                          "(daughterboard can hot-join)");
+        }
+    }
+    else
+    {
+        TR_LoRa_Comms::Config lora_cfg = {};
+        lora_cfg.enabled           = true;
+        lora_cfg.cs_pin            = config::LORA_CS_PIN;
+        lora_cfg.dio1_pin          = config::LORA_DIO1_PIN;
+        lora_cfg.rst_pin           = config::LORA_RST_PIN;
+        lora_cfg.busy_pin          = config::LORA_BUSY_PIN;
+        // V2 PCB: MCU-driven RX half of the RF switch (was defined but never
+        // driven — RXEN floated in RX). -1 on the original PCB (no switch).
+        lora_cfg.rxen_pin          = config::LORA_RXEN_PIN;
+        lora_cfg.spi_sck           = config::LORA_SPI_SCK;
+        lora_cfg.spi_miso          = config::LORA_SPI_MISO;
+        lora_cfg.spi_mosi          = config::LORA_SPI_MOSI;
+        lora_cfg.spi_host          = SPI2_HOST;
+        lora_cfg.freq_mhz          = lora_freq_mhz;
+        lora_cfg.spreading_factor  = lora_sf;
+        lora_cfg.bandwidth_khz     = lora_bw_khz;
+        lora_cfg.coding_rate       = lora_cr;
+        lora_cfg.preamble_len      = config::LORA_PREAMBLE_LEN;
+        lora_cfg.tx_power_dbm      = lora_tx_power;
+        lora_cfg.crc_on            = config::LORA_CRC_ON;
+        lora_cfg.rx_boosted_gain   = config::LORA_RX_BOOSTED_GAIN;
+        lora_cfg.syncword_private  = config::LORA_SYNCWORD_PRIVATE;
+
+        radio_ok = lora_direct_backend.begin(lora_cfg, config::DEBUG);
+        if (!radio_ok)
+        {
+            // On-board radio is soldered to this PCB — a failed init is a
+            // hardware fault, keep the historical hard stop.
+            ESP_LOGE(TAG, "LoRa init FAILED!");
+            while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+        }
     }
 
     ESP_LOGI(TAG, "LoRa config: %.1f MHz SF%u BW%.0f kHz CR%u %d dBm",
@@ -3221,10 +3340,13 @@ static void setup_bs()
              (int)lora_tx_power);
 
     // Start continuous receive mode
-    if (!lora_comms.startReceive())
+    if (radio_ok && !lora_comms.startReceive())
     {
         ESP_LOGE(TAG, "LoRa startReceive FAILED!");
-        while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+        if (!config::USE_UART_RADIO_MODEM)
+        {
+            while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+        }
     }
 
     // Initialize BLE app interface
@@ -3777,6 +3899,13 @@ static void loop_bs()
         if (!ble_app.isOtaActive())
         {
             updateBattery();
+            // V3: reconcile the flight-pack charger (presence detect, config
+            // re-apply after plug-in / watchdog, 40 s WD kick, status/fault
+            // transition logs). Cheap no-op while no charge input is present.
+            if (config::HAS_PACK_CHARGER)
+            {
+                pack_charger.service();
+            }
         }
 
         // Always push base station stats to BLE, even without LoRa packets,

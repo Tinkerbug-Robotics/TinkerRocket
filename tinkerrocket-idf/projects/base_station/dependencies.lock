@@ -23,11 +23,11 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.3.2
+    version: 6.0.1
   spi_nand_flash:
     dependencies: []
     source:
-      path: /Users/christianpedersen/Documents/Hobbies/ModelRockets/Code/tinkerrocket-idf/components/spi_nand_flash
+      path: ../../components/spi_nand_flash
       type: local
     version: 1.0.3
 direct_dependencies:
@@ -36,4 +36,4 @@ direct_dependencies:
 - idf
 manifest_hash: f64261c42547eac634a21ceaf9a8c6809f180d102872059d406cdf289483de8d
 target: esp32s3
-version: 2.0.0
+version: 3.0.0
