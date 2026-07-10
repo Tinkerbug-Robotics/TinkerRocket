@@ -864,6 +864,17 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     //    covers calibration residuals the propagation can't see), and capped
     //    so S stays finite at exact vertical (the update is then effectively
     //    a no-op — heading is genuinely unobservable from accel+mag there).
+    //    KNOWN, ACCEPTED LIMIT (#483): the accel MARKOV BIAS also enters the
+    //    tilt-comp roll and hence psi_meas — on the rail that is ~1.3–2° (1σ)
+    //    of heading error CORRELATED over τ≈100 s, which no white-R value can
+    //    represent. The filter tracks that slow component confidently (SIL
+    //    pad heading NEES O(100) vs truth), while its fast-noise honesty is
+    //    correct (0.10° observed vs 0.175° claimed). Accepted because the
+    //    error is bounded (±~2° at ±2σ bias) and inside guidance-init
+    //    tolerance. If sub-degree pad heading is ever needed, model the
+    //    coupling instead: extend this update's H to the accel-bias states
+    //    with the same geometry as the propagation above (δψ ≈
+    //    (Bv/|Bh|)·δb_lat/(g·cosθ)) — design notes in #483.
     const float Bv   = -mx*sp + my*sr*cp + mz*cr*cp;         // vertical field, level frame
     const float sroll = (sigma_accel_mps2_ / aN) / std::max(cp, 0.02f);
     const float r_eff_raw = 2.0f*sigma_mag_uT_*sigma_mag_uT_/Bh2
