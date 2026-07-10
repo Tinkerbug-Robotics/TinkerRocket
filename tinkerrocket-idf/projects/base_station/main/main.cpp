@@ -38,6 +38,7 @@
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
+#include <TR_MAX17303.h>
 #include <TR_BQ27Z746.h>
 #include <RocketComputerTypes.h>
 
@@ -120,8 +121,9 @@ static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
 static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
+static TR_MAX17303  max17303_gauge(config::MAX17303_ADDR);  // V3; shares 0x36 with MAX17205, split by DevName
 // Which gauge runtime detection found (one firmware image, both PCBs).
-enum class GaugeKind { None, MAX17205, BQ27Z746 };
+enum class GaugeKind { None, MAX17205, BQ27Z746, MAX17303 };
 static GaugeKind gauge_kind = GaugeKind::None;
 static bool fuel_gauge_present = false;   // true if EITHER gauge is present
 
@@ -523,6 +525,32 @@ static void updateBattery()
         bs_soc         = bq_gauge.soc();
         bs_current     = bq_gauge.current();
         bs_temperature = bq_gauge.temperature();
+    }
+    else if (gauge_kind == GaugeKind::MAX17303)
+    {
+        max17303_gauge.update();
+        bs_voltage     = max17303_gauge.voltage();
+        bs_soc         = max17303_gauge.soc();
+        bs_current     = max17303_gauge.current();
+        bs_temperature = max17303_gauge.temperature();
+
+        // Protector observability (BQ FET saga lesson). No enable action
+        // exists or is needed on this part — the protector runs the FETs —
+        // but log WHY the battery path opened, once per transition.
+        static bool last_fets_on = true;
+        static uint16_t last_prot = 0;
+        const bool fets_on = max17303_gauge.fetsOn();
+        const uint16_t prot = max17303_gauge.protStatus();
+        if (fets_on != last_fets_on || (prot != last_prot && prot != 0))
+        {
+            if (!fets_on || prot != 0)
+                ESP_LOGW(TAG, "MAX17303 protector: FETs %s, ProtStatus=0x%04X",
+                         fets_on ? "on" : "OFF", prot);
+            else
+                ESP_LOGI(TAG, "MAX17303 protector: FETs back on, faults clear");
+        }
+        last_fets_on = fets_on;
+        last_prot = prot;
     }
     else
     {
@@ -3014,36 +3042,60 @@ static void setup_bs()
         }
         else if (i2c_master_probe(i2c_bus, config::MAX17205_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
         {
-            // Original PCB: MAX17205 gauge.
-            TR_MAX17205G_Config fg_cfg;
-            fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
-            fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
-            fg_cfg.current_invert = true;   // CSP/CSN swapped on schematic (U7) vs.
-                                            //   datasheet typical app circuit; flips
-                                            //   displayed current so charge reads
-                                            //   positive. Driver uses VFSOC for SoC
-                                            //   because the chip's m5 can't be told.
-            fg_cfg.num_cells      = config::NUM_BATTERY_CELLS;
+            // 0x36 is shared by two ModelGauge m5 parts: MAX17303 (V3 PCB,
+            // 1S + protector) and MAX17205 (V1 PCB, 2S). Try the MAX17303
+            // driver first — its begin() reads DevName and hands the address
+            // back (ESP_ERR_NOT_FOUND) when the part isn't a MAX1730x.
+            TR_MAX17303_Config m3_cfg;
+            m3_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
+            m3_cfg.rsense_mohm    = config::RSENSE_MOHM;   // TODO: verify V3 Rsense on the bench
+            m3_cfg.current_invert = false;                  // TODO: verify CSP/CSN polarity on V3
 
-            if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+            if (max17303_gauge.begin(i2c_bus, m3_cfg, config::I2C_FREQ_HZ) == ESP_OK)
             {
-                gauge_kind = GaugeKind::MAX17205;
+                gauge_kind = GaugeKind::MAX17303;
                 fuel_gauge_present = true;
-                ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
-                fuel_gauge.initIfNeeded();
+                ESP_LOGI(TAG, "MAX17303 fuel gauge found on I2C (0x%02X), DevName 0x%04X",
+                         config::MAX17303_ADDR, max17303_gauge.devName());
+                max17303_gauge.initIfNeeded();
                 updateBattery();
                 ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
                          (double)bs_voltage, (double)bs_soc, (double)bs_current);
-                fuel_gauge.logDiagnostics(TAG);
+                max17303_gauge.logDiagnostics(TAG);
             }
             else
             {
-                ESP_LOGW(TAG, "MAX17205G probe succeeded but begin() failed");
+                // Original PCB: MAX17205 gauge.
+                TR_MAX17205G_Config fg_cfg;
+                fg_cfg.design_mah     = config::BATTERY_DESIGN_MAH;
+                fg_cfg.rsense_mohm    = config::RSENSE_MOHM;
+                fg_cfg.current_invert = true;   // CSP/CSN swapped on schematic (U7) vs.
+                                                //   datasheet typical app circuit; flips
+                                                //   displayed current so charge reads
+                                                //   positive. Driver uses VFSOC for SoC
+                                                //   because the chip's m5 can't be told.
+                fg_cfg.num_cells      = config::NUM_BATTERY_CELLS;
+
+                if (fuel_gauge.begin(i2c_bus, fg_cfg, config::I2C_FREQ_HZ) == ESP_OK)
+                {
+                    gauge_kind = GaugeKind::MAX17205;
+                    fuel_gauge_present = true;
+                    ESP_LOGI(TAG, "MAX17205G fuel gauge found on I2C (0x%02X)", config::MAX17205_ADDR);
+                    fuel_gauge.initIfNeeded();
+                    updateBattery();
+                    ESP_LOGI(TAG, "Battery: %.2f V, %.1f%% SoC, %.0f mA",
+                             (double)bs_voltage, (double)bs_soc, (double)bs_current);
+                    fuel_gauge.logDiagnostics(TAG);
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "MAX17205G probe succeeded but begin() failed");
+                }
             }
         }
         else
         {
-            ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205 0x36) — battery readings unavailable");
+            ESP_LOGW(TAG, "No fuel gauge found (neither BQ27Z746 0x55 nor MAX17205/MAX17303 0x36) — battery readings unavailable");
         }
     }
 

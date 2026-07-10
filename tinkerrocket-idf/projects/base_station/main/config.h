@@ -102,13 +102,18 @@ struct config : board_pins
     static constexpr const char* DEVICE_TYPE     = "B";  // "B" = base station
 
     // --- Battery Monitoring ---
-    // Fuel gauge is auto-detected at runtime: BQ27Z746 (new PCB) probed first at
-    // 0x55, then MAX17205 (original PCB) at 0x36. Both addresses are always
-    // defined so one firmware image covers both boards. The MAX17205-specific
-    // seed values (cells/Rsense/design mAh) below are used only on the MAX path;
+    // Fuel gauge is auto-detected at runtime on the board's I2C bus:
+    // BQ27Z746 (V2) probed first at 0x55, then 0x36 — where DevName picks
+    // MAX17303 (V3, 1S + protector) vs MAX17205 (V1, 2S). All addresses are
+    // always defined so one firmware image covers every board's bus. The
+    // seed values (cells/Rsense/design mAh) below feed the MAX drivers;
     // the BQ27Z746 self-gauges from its own data-flash config.
-    static constexpr uint16_t MAX17205_ADDR      = 0x36;     // original PCB gauge
-    static constexpr uint16_t BQ27Z746_ADDR      = 0x55;     // new PCB gauge
+    static constexpr uint16_t MAX17205_ADDR      = 0x36;     // V1 gauge
+    static constexpr uint16_t BQ27Z746_ADDR      = 0x55;     // V2 gauge
+    static constexpr uint16_t MAX17303_ADDR      = 0x36;     // V3 gauge (m5 family
+                                                              //   address, same as
+                                                              //   MAX17205 — DevName
+                                                              //   picks the driver)
     static constexpr int      NUM_BATTERY_CELLS  = 2;        // 2S NCR18650B (original PCB / MAX path)
     static constexpr float    RSENSE_MOHM        = 10.0f;    // Sense resistor (mΩ)
     static constexpr uint32_t PWR_UPDATE_PERIOD_MS = 2000;   // Battery read interval
