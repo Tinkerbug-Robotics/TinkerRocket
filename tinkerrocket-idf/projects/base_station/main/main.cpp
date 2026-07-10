@@ -39,6 +39,7 @@
 #include <TR_BLE_To_APP.h>
 #include <TR_MAX17205G.h>
 #include <TR_MAX17303.h>
+#include <TR_MP2672.h>
 #include <TR_BQ27Z746.h>
 #include <RocketComputerTypes.h>
 
@@ -122,6 +123,7 @@ static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
 static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
 static TR_MAX17303  max17303_gauge(config::MAX17303_ADDR);  // V3; shares 0x36 with MAX17205, split by DevName
+static TR_MP2672    pack_charger(config::MP2672_ADDR);      // V3 flight-pack charger (HAS_PACK_CHARGER)
 // Which gauge runtime detection found (one firmware image, both PCBs).
 enum class GaugeKind { None, MAX17205, BQ27Z746, MAX17303 };
 static GaugeKind gauge_kind = GaugeKind::None;
@@ -3099,6 +3101,22 @@ static void setup_bs()
         }
     }
 
+    // V3: external flight-pack charger on the same I2C bus as the gauge.
+    // begin() succeeds even with no charge input attached (the chip is
+    // unpowered then); the periodic service() detects plug-in and applies
+    // the charge config each time.
+    if (config::HAS_PACK_CHARGER && i2c_bus != nullptr)
+    {
+        TR_MP2672_Config chg_cfg;
+        chg_cfg.vbatt_reg_code = config::PACK_VBATT_REG_CODE;
+        chg_cfg.icc_code       = config::PACK_CHARGE_ICC_CODE;
+        chg_cfg.chg_timer_code = config::PACK_CHG_TIMER_CODE;
+        if (pack_charger.begin(i2c_bus, chg_cfg, config::I2C_FREQ_HZ) != ESP_OK)
+        {
+            ESP_LOGW(TAG, "MP2672 pack-charger driver init failed");
+        }
+    }
+
     // Load saved LoRa config from NVS (write config.h defaults if empty)
     prefs.begin("lora", false);  // read-write
 
@@ -3880,6 +3898,13 @@ static void loop_bs()
         if (!ble_app.isOtaActive())
         {
             updateBattery();
+            // V3: reconcile the flight-pack charger (presence detect, config
+            // re-apply after plug-in / watchdog, 40 s WD kick, status/fault
+            // transition logs). Cheap no-op while no charge input is present.
+            if (config::HAS_PACK_CHARGER)
+            {
+                pack_charger.service();
+            }
         }
 
         // Always push base station stats to BLE, even without LoRa packets,

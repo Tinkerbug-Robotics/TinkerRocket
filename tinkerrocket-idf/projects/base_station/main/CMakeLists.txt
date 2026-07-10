@@ -12,6 +12,7 @@ idf_component_register(
         TR_RadioLink
         TR_MAX17205G
         TR_MAX17303
+        TR_MP2672
         TR_BQ27Z746
         TR_OTA
         app_update

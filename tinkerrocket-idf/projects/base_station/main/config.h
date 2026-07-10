@@ -121,4 +121,15 @@ struct config : board_pins
     // (series doubles voltage, capacity stays per-cell). Written to MAX17205
     // DesignCap at boot to seed the ModelGauge m5 algorithm.
     static constexpr uint16_t BATTERY_DESIGN_MAH = 2800;
+
+    // --- Flight-pack charger (MP2672 on V3; gated by HAS_PACK_CHARGER) ---
+    static constexpr uint16_t MP2672_ADDR = 0x4B;
+    // Fast-charge current code (REG01 ICC[3:0]): I = FS*(5+code)/20 with
+    // FS = 12 kΩ / RISET amps — the current scale is set by the board's
+    // RISET resistor, not just this register. Code 0 = the selectable
+    // minimum (25% of full scale); raise only after RISET is confirmed on
+    // the bench, then size for ≲0.5C of the smallest flight pack.
+    static constexpr uint8_t PACK_CHARGE_ICC_CODE = 0;
+    static constexpr uint8_t PACK_VBATT_REG_CODE  = 1;   // 8.4 V pack (4.2 V/cell) — LiPo max
+    static constexpr uint8_t PACK_CHG_TIMER_CODE  = 1;   // 8 h fast-charge safety timer
 };
