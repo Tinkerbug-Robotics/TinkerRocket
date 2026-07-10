@@ -130,17 +130,16 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var servoBias3: Int16 = 0
     var servoBias4: Int16 = 0
     var servoHz: Int16 = 333
-    // #267: full-travel range. 1000us = fin -60deg, 2000us = +60deg (the servo's
-    // mechanical limit). MUST match config.h SERVO_MIN_US/MAX_US + the firmware
-    // setFinCalibration endpoints, or the commanded-vs-physical fin angle is wrong
-    // (e.g. 1250/1750 would only reach +/-30deg at a +/-60deg command).
+    // #449: the servo calibration is exactly three datasheet numbers — the pulse
+    // endpoints and the total fin travel swept between them. MUST match config.h
+    // SERVO_MIN_US/MAX_US.
     var servoMinUs: Int16 = 1000
     var servoMaxUs: Int16 = 2000
-    // #267: physical fin angle (deg) the servo reaches at servoMinUs / servoMaxUs.
-    // Fin bolts directly to the servo arm (1:1), so this is the servo's mechanical
-    // travel. Sent with the servo config; the FC maps commanded fin-deg across it.
-    var finMinDeg: Float = -60.0
-    var finMaxDeg: Float = 60.0
+    // Total fin deflection (deg) swept between servoMinUs and servoMaxUs: the
+    // servo's rated travel across that pulse range, times the linkage ratio
+    // (1:1 for a fin bolted straight to the arm). finMinDeg/finMaxDeg are
+    // DERIVED from it — see below.
+    var finTravelDeg: Float = 120.0
 
     // MARK: Fin layout
     // Servo→fin mapping + ring orientation, sent as FinConfigData (cmd 66): each
@@ -225,13 +224,44 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     }
 }
 
+// MARK: - Fin calibration (#449)
+//
+// The servo response is linear in pulse width, so the fin angle at any pulse is
+// fully determined by the two endpoints and the travel between them. Storing the
+// endpoint ANGLES separately (as this type used to) allowed a pair that describes
+// no physical servo — e.g. 1250/1750 µs declared as ±60°, which the FC then used
+// as calibration and drove to half the commanded deflection. Deriving them makes
+// that state unrepresentable.
 extension RocketProfile {
-    /// Physical fin angle (deg) a servo pulse reaches on the 1:1 fin-to-servo-
-    /// arm line from #267: 1000 µs = −60°, 1500 µs = 0°, 2000 µs = +60°.
-    /// Used to migrate pre-#267 profiles whose JSON has pulse limits but no
-    /// fin-angle keys (#378) — static and pure so the migration is unit-tested.
-    static func finDegForPulse(_ us: Int16) -> Float {
-        (Float(us) - 1500.0) * (120.0 / 1000.0)
+    /// Rated travel of a standard hobby servo: 120° across a 1000 µs span
+    /// (1000→2000 µs), 1:1 fin linkage. Only used to seed `finTravelDeg` for a
+    /// profile that predates the field (#267 line).
+    static let standardFinDegPerUs: Float = 120.0 / 1000.0
+
+    /// Default travel for the given endpoints, assuming a standard servo.
+    /// 1000/2000 → 120°, 1250/1750 → 60°.
+    static func standardFinTravelDeg(minUs: Int16, maxUs: Int16) -> Float {
+        Float(maxUs - minUs) * standardFinDegPerUs
+    }
+
+    /// Pulse (µs) at zero fin deflection — the midpoint of the endpoints.
+    /// Per-servo mechanical trim rides on top of this via `servoBiasN`.
+    var servoCenterUs: Float { Float(servoMinUs) + Float(servoMaxUs - servoMinUs) / 2.0 }
+
+    /// Slope of the calibration line, °/µs. Zero-span profiles yield 0.
+    var finDegPerUs: Float {
+        let span = Float(servoMaxUs - servoMinUs)
+        return span == 0 ? 0 : finTravelDeg / span
+    }
+
+    /// Physical fin angle (deg) reached at `servoMinUs` — always −travel/2.
+    var finMinDeg: Float { -finTravelDeg / 2.0 }
+    /// Physical fin angle (deg) reached at `servoMaxUs` — always +travel/2.
+    var finMaxDeg: Float { finTravelDeg / 2.0 }
+
+    /// Physical fin angle (deg) this profile's servo reaches at `us`.
+    func finDeg(forPulse us: Int16) -> Float {
+        (Float(us) - servoCenterUs) * finDegPerUs
     }
 }
 
@@ -285,20 +315,16 @@ extension RocketProfile {
         servoHz = try c.decodeIfPresent(Int16.self, forKey: .servoHz) ?? defaults.servoHz
         servoMinUs = try c.decodeIfPresent(Int16.self, forKey: .servoMinUs) ?? defaults.servoMinUs
         servoMaxUs = try c.decodeIfPresent(Int16.self, forKey: .servoMaxUs) ?? defaults.servoMaxUs
-        // #378: pre-#267 profiles carry pulse limits (e.g. the old 1250/1750
-        // defaults) but no fin-angle keys. Backfilling the angles with the new
-        // ±60° defaults paired old pulses with full-travel angles, so the FC's
-        // commanded-vs-physical fin mapping was off ~2× (~half roll/guidance
-        // authority, silently). Derive the missing angles from the pulses via
-        // the 1:1 servo-arm line instead (1000 µs = −60°, 2000 µs = +60°, per
-        // the #267 calibration above): the pair is then self-consistent and
-        // the hardware's actual travel is unchanged — 1250/1750 correctly
-        // becomes ±30°, and absent pulses still yield the ±60° defaults.
-        // Profiles that already carry angle keys are untouched.
-        finMinDeg = try c.decodeIfPresent(Float.self, forKey: .finMinDeg)
-            ?? RocketProfile.finDegForPulse(servoMinUs)
-        finMaxDeg = try c.decodeIfPresent(Float.self, forKey: .finMaxDeg)
-            ?? RocketProfile.finDegForPulse(servoMaxUs)
+        // #449: the legacy `finMinDeg`/`finMaxDeg` keys are deliberately NOT read.
+        // They were free-form user input and are exactly the values that could
+        // contradict the pulse limits — every profile written before this build
+        // carries 1250/1750 µs paired with ±60°, which is no physical servo (that
+        // pulse span sweeps 60° total on a standard arm). Reading them back would
+        // preserve the 2×-off calibration the FC was flying. Seed the travel from
+        // the endpoints on the standard-servo line instead; a non-standard servo
+        // is one field edit away, and thereafter the stored value is honoured.
+        finTravelDeg = try c.decodeIfPresent(Float.self, forKey: .finTravelDeg)
+            ?? RocketProfile.standardFinTravelDeg(minUs: servoMinUs, maxUs: servoMaxUs)
         finRingMode = try c.decodeIfPresent(UInt8.self, forKey: .finRingMode) ?? defaults.finRingMode
         let finSlots = try c.decodeIfPresent([Int].self, forKey: .finServoAtSlot) ?? defaults.finServoAtSlot
         finServoAtSlot = finSlots.count == 4 ? finSlots : defaults.finServoAtSlot

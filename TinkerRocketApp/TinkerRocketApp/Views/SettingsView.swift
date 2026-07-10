@@ -36,8 +36,7 @@ struct SettingsView: View {
     @State private var sServoHz = ""
     @State private var sServoMinUs = ""
     @State private var sServoMaxUs = ""
-    @State private var sFinMinDeg = ""
-    @State private var sFinMaxDeg = ""
+    @State private var sFinTravelDeg = ""
     @State private var sPidKp = ""
     @State private var sPidKi = ""
     @State private var sPidKd = ""
@@ -123,7 +122,7 @@ struct SettingsView: View {
     // MARK: - Focus-driven self-apply (#144)
 
     private enum EditField: Hashable {
-        case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax, finMin, finMax
+        case bias1, bias2, bias3, bias4, servoHz, servoMin, servoMax, finTravel
         case pidKp, pidKi, pidKd, pidMin, pidMax
         case rollDelay
         case rateCap
@@ -134,11 +133,36 @@ struct SettingsView: View {
         case pyroValue(Int)   // ch index 0..3
     }
 
+    /// Fin-angle range implied by the pulse + travel fields as they are being
+    /// edited. The endpoint angles are derived, never typed (#449); showing them
+    /// live is what makes narrowing the pulse range visibly narrow the fins —
+    /// the mismatch this used to silently allow flew as a 2× calibration error.
+    @ViewBuilder private var finCalibrationReadout: some View {
+        let mn = parseDouble(sServoMinUs, fallback: Double(profile.servoMinUs))
+        let mx = parseDouble(sServoMaxUs, fallback: Double(profile.servoMaxUs))
+        let travel = parseDouble(sFinTravelDeg, fallback: Double(profile.finTravelDeg))
+        let span = mx - mn
+        HStack {
+            Text("Fin Range")
+            Spacer()
+            if span <= 0 {
+                Text("Max Pulse must exceed Min Pulse")
+                    .foregroundColor(.red)
+            } else {
+                Text(String(format: "%+.1f\u{00B0} \u{2026} %+.1f\u{00B0}   (%.3f\u{00B0}/\u{00B5}s)",
+                            -travel / 2.0, travel / 2.0, travel / span))
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .font(.subheadline)
+    }
+
     private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
-        case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finMin, .finMax: return .servo
+        case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finTravel: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
         case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed: return .guidance
@@ -395,9 +419,9 @@ struct SettingsView: View {
             stringRow("Frequency", text: $sServoHz, field: .servoHz, unit: "Hz")
             stringRow("Min Pulse", text: $sServoMinUs, field: .servoMin, unit: "\u{00B5}s")
             stringRow("Max Pulse", text: $sServoMaxUs, field: .servoMax, unit: "\u{00B5}s")
-            stringRow("Min Fin Angle", text: $sFinMinDeg, field: .finMin, unit: "deg")
-            stringRow("Max Fin Angle", text: $sFinMaxDeg, field: .finMax, unit: "deg")
-            Text("Fin-angle calibration: the physical fin deflection at Min/Max Pulse \u{2014} the servo's mechanical travel (fin bolts 1:1 to the arm). The controller maps a commanded fin angle onto the pulse that produces it, so e.g. 1000/2000\u{00B5}s = \u{2212}60/+60\u{00B0}.")
+            stringRow("Fin Travel", text: $sFinTravelDeg, field: .finTravel, unit: "deg")
+            finCalibrationReadout
+            Text("Servo datasheet values: the pulse endpoints and the TOTAL fin deflection swept between them (servo travel \u{00D7} linkage ratio; 1:1 for a fin bolted straight to the arm). The controller maps a commanded fin angle onto the pulse that produces it, so these three numbers set the real authority \u{2014} narrowing the pulse range narrows the fins.")
                 .font(.caption).foregroundColor(.secondary)
         }
 
@@ -1009,8 +1033,7 @@ struct SettingsView: View {
         sServoHz = formatInt(Double(p.servoHz))
         sServoMinUs = formatInt(Double(p.servoMinUs))
         sServoMaxUs = formatInt(Double(p.servoMaxUs))
-        sFinMinDeg = formatDecimal(Double(p.finMinDeg))
-        sFinMaxDeg = formatDecimal(Double(p.finMaxDeg))
+        sFinTravelDeg = formatDecimal(Double(p.finTravelDeg))
         sPidKp = formatDecimal(Double(p.pidKp))
         sPidKi = formatDecimal(Double(p.pidKi))
         sPidKd = formatDecimal(Double(p.pidKd))
@@ -1127,14 +1150,16 @@ struct SettingsView: View {
         let hz = Int16(clamping: Int(parseDouble(sServoHz, fallback: Double(profile.servoHz)).rounded()))
         let mn = Int16(clamping: Int(parseDouble(sServoMinUs, fallback: Double(profile.servoMinUs)).rounded()))
         let mx = Int16(clamping: Int(parseDouble(sServoMaxUs, fallback: Double(profile.servoMaxUs)).rounded()))
-        let fmn = Float(parseDouble(sFinMinDeg, fallback: Double(profile.finMinDeg)))
-        let fmx = Float(parseDouble(sFinMaxDeg, fallback: Double(profile.finMaxDeg)))
+        let travel = Float(parseDouble(sFinTravelDeg, fallback: Double(profile.finTravelDeg)))
 
         updateProfile {
             $0.servoBias1 = b1; $0.servoBias2 = b2; $0.servoBias3 = b3; $0.servoBias4 = b4
             $0.servoHz = hz; $0.servoMinUs = mn; $0.servoMaxUs = mx
-            $0.finMinDeg = fmn; $0.finMaxDeg = fmx
+            $0.finTravelDeg = travel
         }
+        // #449: the endpoint angles the FC calibrates against are derived from the
+        // travel, never typed — so the pair it receives always describes a real servo.
+        let fmn = -travel / 2, fmx = travel / 2
         if device.isConnected {
             device.sendServoConfig(biases: [b1, b2, b3, b4], hz: hz, minUs: mn, maxUs: mx,
                                    finMinDeg: fmn, finMaxDeg: fmx)
