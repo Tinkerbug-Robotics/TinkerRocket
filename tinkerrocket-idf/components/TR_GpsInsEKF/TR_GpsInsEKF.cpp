@@ -834,9 +834,33 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     const float mx = magMeas[0], my = magMeas[1], mz = magMeas[2];
     const float Xh = mx*cp + my*sr*sp + mz*cr*sp;   // north-ish
     const float Yh = my*cr - mz*sr;                 // east-ish
-    if (Xh*Xh + Yh*Yh < 9.0f) return;               // |B_horiz| < 3 µT: heading
+    const float Bh2 = Xh*Xh + Yh*Yh;
+    if (Bh2 < 9.0f) return;                         // |B_horiz| < 3 µT: heading
                                                     // unobservable (polar/vertical field)
     const float psi_meas = std::atan2(-Yh, Xh) + declination_rad_;   // TRUE heading
+
+    // ── Per-sample measurement noise (#480). The tilt-compensated heading's
+    //    noise is strongly attitude-dependent, and a constant R over-trusts
+    //    the mag exactly where a rocket lives: near vertical the accel-derived
+    //    ROLL is nearly singular (dmy,dmz ~ cos(pitch)·1g + accel noise), and
+    //    a roll error δφ leaks the VERTICAL field into the horizontal
+    //    components, i.e. δψ ≈ δφ·B_v/|B_h| (Bv/Bh ≈ 1.9 at mid-latitudes).
+    //    On the pad at ~85° tilt that is ~6–7° of real per-sample heading
+    //    noise against the 3° constant — the over-weighted samples dragged
+    //    the heading estimate and pumped the gyro-z bias state (SIL pad NEES
+    //    ~390). First-order propagation, all terms already in scope:
+    //      σψ² ≈ 2·σ_m²/|B_h|²                (raw field noise on Xh,Yh)
+    //           + (σ_roll · B_v/|B_h|)²      (accel tilt-comp roll noise)
+    //      σ_roll ≈ (σ_a/|a|)/max(cp, ε)     (roll singular as pitch → ±90°)
+    //    Floored at R_mag_ so level attitude keeps the tuned base (which also
+    //    covers calibration residuals the propagation can't see), and capped
+    //    so S stays finite at exact vertical (the update is then effectively
+    //    a no-op — heading is genuinely unobservable from accel+mag there).
+    const float Bv   = -mx*sp + my*sr*cp + mz*cr*cp;         // vertical field, level frame
+    const float sroll = (sigma_accel_mps2_ / aN) / std::max(cp, 0.02f);
+    const float r_eff_raw = 2.0f*sigma_mag_uT_*sigma_mag_uT_/Bh2
+                          + sroll*sroll*(Bv*Bv)/Bh2;
+    const float R_eff = std::min(std::max(r_eff_raw, R_mag_), R_mag_ceiling_);
 
     // ── Predicted heading (yaw) from the state quaternion (true-NED frame).
     //    Computed from T_NED2B directly (euler_BL_rad_ is a cycle stale here).
@@ -854,7 +878,7 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     //    |H|=2 ⇒ S ≥ R_mag_ at any attitude, so the s_min gate is NaN-safety.
     const int   hidx[3] = {6, 7, 8};
     const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
-    applyScalarMeasUpdate(hidx, hval, 3, y, R_mag_, 1e-9f);
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_eff, 1e-9f);
 }
 
 // ─── Heading update from GNSS velocity course ───────────────────────
