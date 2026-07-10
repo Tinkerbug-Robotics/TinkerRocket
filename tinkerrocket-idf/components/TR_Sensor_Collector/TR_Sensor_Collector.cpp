@@ -552,6 +552,29 @@ void SensorCollector::pollIMUdata(void* parameter)
             self->ism6_notify_timeouts++;
         }
 
+        // Apply a staged live rate change here, between transactions — this
+        // task is the sole owner of the ISM6 SPI device once running (#475).
+        if (self->ism6_rate_pending_ != 0)
+        {
+            const uint16_t new_rate = self->ism6_rate_pending_;
+            self->ism6_rate_pending_ = 0;
+            TR_ISM6HG256Status st = TR_ISM6HG256_OK;
+            st = (TR_ISM6HG256Status)(st | self->ism6hg256.Set_X_OutputDataRate((float)new_rate));
+            st = (TR_ISM6HG256Status)(st | self->ism6hg256.Set_HG_X_OutputDataRate((float)new_rate));
+            st = (TR_ISM6HG256Status)(st | self->ism6hg256.Set_G_OutputDataRate((float)new_rate));
+            if (st == TR_ISM6HG256_OK)
+            {
+                self->ISM6HG256_UPDATE_RATE = new_rate;
+                self->ism6hg256_update_period = (uint32_t)(1000000 / new_rate);
+                ESP_LOGI(SC_TAG, "ISM6HG256 logging rate -> %u Hz (live)", new_rate);
+            }
+            else
+            {
+                ESP_LOGE(SC_TAG, "ISM6HG256 live rate %u Hz FAILED (0x%x); keeping %u Hz",
+                         new_rate, st, self->ISM6HG256_UPDATE_RATE);
+            }
+        }
+
         // === ISM6HG256 FIRST — highest rate sensor, latency-critical ===
         // Use the ISR flag instead of an SPI DRDY register read.  The ISR
         // fires when ANY routed DRDY goes high.  We read all three channels
@@ -1214,22 +1237,19 @@ bool SensorCollector::setIsm6Rate(uint16_t rate_hz)
     {
         return false;
     }
-    ISM6HG256_UPDATE_RATE = rate_hz;
-    ism6hg256_update_period = (uint32_t)(1000000 / ISM6HG256_UPDATE_RATE);
     if (!ism6_rate_applied_)
     {
         // Pre-Begin(): just stage the value; Begin() programs the chip.
+        ISM6HG256_UPDATE_RATE = rate_hz;
+        ism6hg256_update_period = (uint32_t)(1000000 / ISM6HG256_UPDATE_RATE);
         return true;
     }
-    TR_ISM6HG256Status status = TR_ISM6HG256_OK;
-    status = (TR_ISM6HG256Status)(status | ism6hg256.Set_X_OutputDataRate((float)rate_hz));
-    status = (TR_ISM6HG256Status)(status | ism6hg256.Set_HG_X_OutputDataRate((float)rate_hz));
-    status = (TR_ISM6HG256Status)(status | ism6hg256.Set_G_OutputDataRate((float)rate_hz));
-    if (status != TR_ISM6HG256_OK)
-    {
-        ESP_LOGE(SC_TAG, "setIsm6Rate(%u): ODR reprogram failed (0x%x)", rate_hz, status);
-        return false;
-    }
-    ESP_LOGI(SC_TAG, "ISM6HG256 logging rate -> %u Hz (live)", rate_hz);
+    // Live: the ISM6 uses spi_device_polling_transmit, and concurrent polling
+    // transactions from two tasks corrupt the register RMW (#475 — reprogram
+    // from the relay handler while pollIMUdata reads killed the channel).
+    // Stage the change; pollIMUdata applies it between transactions and
+    // updates the rate members on success.
+    ism6_rate_pending_ = rate_hz;
+    ESP_LOGI(SC_TAG, "ISM6HG256 logging rate %u Hz staged for poll-task apply", rate_hz);
     return true;
 }

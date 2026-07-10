@@ -159,6 +159,10 @@ private:
     uint8_t ISM6HG256_INT;
     uint16_t ISM6HG256_UPDATE_RATE;
     bool ism6_rate_applied_ = false;  // Begin() programmed the chip ODR
+    // Live rate change staged by setIsm6Rate(); pollIMUdata applies it
+    // between transactions. The ISM6 uses spi_device_polling_transmit, so
+    // only the poll task may touch the chip once it is running (#475).
+    volatile uint16_t ism6_rate_pending_ = 0;
     uint8_t BMP585_CS;
     uint8_t BMP585_INT;
     uint16_t BMP585_UPDATE_RATE;
