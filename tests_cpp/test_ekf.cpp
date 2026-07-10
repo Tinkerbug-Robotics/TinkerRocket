@@ -226,12 +226,13 @@ TEST_F(EKFTest, MagHeadingStableOnRail) {
     EXPECT_NEAR(n, 1.0f, 0.01f);
 }
 
-// At EXACT vertical, heading is genuinely weakly observable (accel-derived
-// roll is singular in the tilt-comp) and psi_pred is numerically degenerate.
-// The filter may converge slowly there — but it must stay bounded and sane:
-// no runaway past the injected error, no quaternion corruption (the old
-// ±180° cycling symptom).
-TEST_F(EKFTest, MagHeadingBoundedAtExactVertical) {
+// At EXACT vertical the mag heading update is gated off entirely (#480):
+// the accel-derived roll is atan2(noise, noise) and psi_pred is atan2(~0,~0)
+// — float garbage that differs by platform (CI x86 dragged heading ±175°
+// where the bench arm held). With the gate, the filter simply HOLDS heading
+// on the gyro: an injected error is neither corrected nor worsened, and the
+// quaternion stays sane (the old ±180° cycling symptom cannot recur).
+TEST_F(EKFTest, MagHeadingHeldAtExactVertical) {
     ekf.init(makeNoseUpIMU(0), makeStationaryGNSS(0), makeNoseUpMag(0));
     uint32_t t = 0;
     for (int i = 0; i < 2000; i++) { t += 2000;
@@ -247,7 +248,7 @@ TEST_F(EKFTest, MagHeadingBoundedAtExactVertical) {
     for (int i = 0; i < 6000; i++) { t += 2000;
         ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t)); }
     float q_fin[4]; ekf.getQuaternion(q_fin);
-    EXPECT_LT(tqGeodesicDeg(q_fin, q_ref), 55.0f);     // improved or held, never ran away
+    EXPECT_NEAR(tqGeodesicDeg(q_fin, q_ref), 50.0f, 5.0f);  // held: no fusion, no runaway
     float n = std::sqrt(q_fin[0]*q_fin[0] + q_fin[1]*q_fin[1] + q_fin[2]*q_fin[2] + q_fin[3]*q_fin[3]);
     EXPECT_NEAR(n, 1.0f, 0.01f);
 }

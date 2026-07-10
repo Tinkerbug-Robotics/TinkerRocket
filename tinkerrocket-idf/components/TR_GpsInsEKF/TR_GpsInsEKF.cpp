@@ -830,6 +830,14 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     const float pitch = std::atan2(-dmx, std::sqrt(dmy*dmy + dmz*dmz));
     const float sr = std::sin(roll),  cr = std::cos(roll);
     const float sp = std::sin(pitch), cp = std::cos(pitch);
+    // ── #480: within ~2° of exact vertical, heading is unobservable from
+    //    accel+mag — the accel-derived roll above is atan2(noise, noise) and
+    //    psi_pred below degenerates to atan2(~0, ~0), whose float garbage is
+    //    platform-dependent (CI x86 vs bench arm dragged heading ±180° in
+    //    opposite ways). Skip outright, like the |B_h| gate: the filter holds
+    //    heading on the gyro until the rocket tips a couple of degrees. The
+    //    adaptive R below owns the near-vertical band outside this gate.
+    if (cp < 0.03f) return;
     // Tilt-compensated horizontal field (level frame), standard e-compass.
     const float mx = magMeas[0], my = magMeas[1], mz = magMeas[2];
     const float Xh = mx*cp + my*sr*sp + mz*cr*sp;   // north-ish
