@@ -106,6 +106,14 @@ void SensorCollectorSim::configureSimRotation(float ism6_rot_z_deg)
              (double)ism6_rot_z_deg, (double)ism6_inv_c_, (double)ism6_inv_s_);
 }
 
+void SensorCollectorSim::configureSimIis2mdcRotation(float rot_z_deg)
+{
+    const float rad = rot_z_deg * (float)M_PI / 180.0f;
+    iis_inv_c_ = cosf(rad);
+    iis_inv_s_ = sinf(rad);
+    ESP_LOGI("SIM", "IIS2MDC rotation: %.1f deg", (double)rot_z_deg);
+}
+
 void SensorCollectorSim::configureSimBoardToRocket(const float R[9])
 {
     // Store the transpose (rocket→board); flag identity to skip the
@@ -214,10 +222,20 @@ bool SensorCollectorSim::getMMC5983MAData(MMC5983MAData& data_out)
 
 bool SensorCollectorSim::getIIS2MDCData(IIS2MDCData& data_out)
 {
-    // No sim model for IIS2MDC yet — pass through real data only.
-    // When sim is active, IIS2MDC frames are simply not produced (sim flights
-    // populate MMC instead via encodeMMC5983MA above).
-    return real_.getIIS2MDCData(data_out);
+    bool have_data = real_.getIIS2MDCData(data_out);
+
+    if (phase_ == SIM_IDLE) return have_data;
+
+    if (!have_data) return false;
+
+    // Replace with simulated magnetometer (#463). This path used to pass the
+    // REAL bench field through during a sim: on IIS2MDC boards (MMC not
+    // populated) the EKF then fused the bench's fixed heading against the
+    // sim's flying attitude every sample — a sustained innovation the
+    // heading-axis gyro bias absorbed (~±20–200 dps at sim start depending
+    // on bench orientation, decaying all flight).
+    encodeIIS2MDC(micros(), data_out);
+    return true;
 }
 
 bool SensorCollectorSim::getGNSSData(GNSSData& data_out)
@@ -529,6 +547,35 @@ void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
     out.mag_x = (uint32_t)(lroundf(body_x * COUNTS_PER_UT) + 131072);
     out.mag_y = (uint32_t)(lroundf(body_y * COUNTS_PER_UT) + 131072);
     out.mag_z = (uint32_t)(lroundf(body_z * COUNTS_PER_UT) + 131072);
+}
+
+void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
+{
+    memset(&out, 0, sizeof(out));
+    out.time_us = time_us;
+
+    // Same Earth field + pitch-plane rotation as encodeMMC5983MA (#463).
+    static constexpr float B_NORTH = 22.0f;   // µT
+    static constexpr float B_EAST  =  5.0f;
+    static constexpr float B_DOWN  = 42.0f;
+    static constexpr float COUNTS_PER_UT = 1.0f / 0.15f;   // datasheet 0.15 µT/LSB
+
+    const float sp = sinf(pitch_rad_);
+    const float cp = cosf(pitch_rad_);
+    float body_x =  B_NORTH * sp + B_DOWN * cp;
+    float body_y =  B_EAST;
+    float body_z = -B_NORTH * cp + B_DOWN * sp;
+
+    // Rocket frame → board frame (inverse mounting), then board → sensor
+    // frame (inverse of the converter's sensor→board +Z rotation), so the
+    // forward conversion chain reproduces the simulated field exactly.
+    rocketToBoard(body_x, body_y, body_z);
+    const float sensor_x =  body_x * iis_inv_c_ + body_y * iis_inv_s_;
+    const float sensor_y = -body_x * iis_inv_s_ + body_y * iis_inv_c_;
+
+    out.mag_x = (int16_t)lroundf(sensor_x * COUNTS_PER_UT);
+    out.mag_y = (int16_t)lroundf(sensor_y * COUNTS_PER_UT);
+    out.mag_z = (int16_t)lroundf(body_z   * COUNTS_PER_UT);
 }
 
 void SensorCollectorSim::encodeGNSS(uint32_t time_us, GNSSData& out)

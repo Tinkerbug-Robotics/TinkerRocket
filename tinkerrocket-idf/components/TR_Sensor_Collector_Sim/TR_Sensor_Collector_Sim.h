@@ -57,6 +57,10 @@ public:
     // ---- Sim control ----
     void configureSim(const SimConfigData& cfg);
     void configureSimRotation(float ism6_rot_z_deg);
+    // #463: sensor→board rotation of the IIS2MDC, so the synthetic mag comes
+    // out geodetically correct after the converter re-applies the forward
+    // rotation (mirrors configureSimRotation for the ISM6).
+    void configureSimIis2mdcRotation(float rot_z_deg);
     // Board→rocket mounting rotation (row-major, v_rocket = R * v_board).
     // The sim's physics are rocket-frame; encoders apply the INVERSE so the
     // forward conversion (chip rotZ, then board→rocket) reproduces the
@@ -106,6 +110,10 @@ private:
     // Inverse rotation (body frame → sensor frame) for ISM6 encoding
     float ism6_inv_c_ = 1.0f;   // cos(config_angle)
     float ism6_inv_s_ = 0.0f;   // sin(config_angle)
+
+    // Inverse rotation (board frame → sensor frame) for IIS2MDC encoding (#463)
+    float iis_inv_c_ = 1.0f;
+    float iis_inv_s_ = 0.0f;
 
     // Inverse board→rocket rotation (rocket frame → board frame), i.e. the
     // transpose of the configured mounting matrix.  Identity by default.
@@ -167,6 +175,7 @@ private:
     void encodeISM6(uint32_t time_us, ISM6HG256Data& out);
     void encodeBMP585(uint32_t time_us, BMP585Data& out);
     void encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out);
+    void encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out);
     void encodeGNSS(uint32_t time_us, GNSSData& out);
 };
 

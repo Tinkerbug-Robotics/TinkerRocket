@@ -2694,6 +2694,7 @@ static void setup_fc()
     sensor_converter.configureMMC5983MARotationZ(config::MMC5983MA_ROT_Z_DEG);
     sensor_converter.configureIIS2MDCRotationZ(config::IIS2MDC_ROT_Z_DEG);
     sensor_collector.configureSimRotation(config::ISM6HG256_ROT_Z_DEG);
+    sensor_collector.configureSimIis2mdcRotation(config::IIS2MDC_ROT_Z_DEG);
 
     // Board→rocket mounting orientation (converter + sim + OC query payload).
     applyBoardToRocketOrientation(
