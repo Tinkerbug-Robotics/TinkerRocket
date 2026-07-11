@@ -5,11 +5,13 @@
 
 namespace tr_flightlog {
 
-// ---- NAND geometry (ISM6HG256 — matches TR_LogToFlash) ----
-constexpr uint32_t NAND_PAGE_SIZE      = 2048;
+// ---- NAND geometry (FORESEE F35SQB004G, 4 Gbit / 512 MB — matches TR_LogToFlash) ----
+// 4096 B/page x 64 pages/block x 2048 blocks = 512 MB. Must stay identical to the
+// duplicate set in TR_LogToFlash.h (the live raw-SPI driver programs against it).
+constexpr uint32_t NAND_PAGE_SIZE      = 4096;
 constexpr uint32_t NAND_PAGES_PER_BLK  = 64;
-constexpr uint32_t NAND_BLOCK_SIZE     = NAND_PAGE_SIZE * NAND_PAGES_PER_BLK;  // 128 KB
-constexpr uint32_t NAND_BLOCK_COUNT    = 1024;
+constexpr uint32_t NAND_BLOCK_SIZE     = NAND_PAGE_SIZE * NAND_PAGES_PER_BLK;  // 256 KB
+constexpr uint32_t NAND_BLOCK_COUNT    = 2048;
 
 // ---- Block state (2 bits per block in the persistent bitmap) ----
 enum BlockState : uint8_t {

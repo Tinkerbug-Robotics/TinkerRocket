@@ -50,8 +50,10 @@ FlightIndexEntry makeEntry(uint32_t id, const char* filename,
     return e;
 }
 
-constexpr uint32_t META_A = 1020;
-constexpr uint32_t META_B = 1021;
+// Match the default Config metadata blocks (top of the 2048-block F35SQB004G),
+// so tests that seed the index here line up with a default-config begin().
+constexpr uint32_t META_A = 2044;
+constexpr uint32_t META_B = 2045;
 
 }  // namespace
 
@@ -180,7 +182,7 @@ TEST(TRFlightLogScaffold, BeginAcceptsDefaultConfig) {
     TR_FlightLog::Config cfg;
     EXPECT_EQ(fl.begin(nand, cfg), Status::Ok);
     EXPECT_TRUE(fl.isInitialized());
-    EXPECT_EQ(fl.config().prealloc_blocks, 80);
+    EXPECT_EQ(fl.config().prealloc_blocks, 40);
 }
 
 TEST(TRFlightLogScaffold, BeginRejectsInvertedRegion) {
@@ -350,9 +352,9 @@ TEST(BlockStateBitmap, DeserializeRejectsShortBuffer) {
     EXPECT_FALSE(bm.deserializeFrom(buf, sizeof(buf)));
 }
 
-TEST(BlockStateBitmap, SerializedSizeIs256Bytes) {
-    // Storage layout guard: 1024 blocks * 2 bits = 256 bytes.
-    EXPECT_EQ(BlockStateBitmap::SERIALIZED_SIZE, 256u);
+TEST(BlockStateBitmap, SerializedSizeIs512Bytes) {
+    // Storage layout guard: 2048 blocks * 2 bits = 512 bytes.
+    EXPECT_EQ(BlockStateBitmap::SERIALIZED_SIZE, 512u);
 }
 
 // ================================================================
@@ -731,21 +733,21 @@ TEST(TRFlightLogPrepare, SkipsKnownBadBlocksWhenPicking) {
     TR_FlightLog::Config cfg;
     // Factory-bad a block partway through the first natural prealloc-block range
     // (must be < prealloc_blocks so it actually breaks the first candidate run).
-    nand.injectFactoryBadBlock(cfg.flight_region_start + 50);
+    nand.injectFactoryBadBlock(cfg.flight_region_start + 20);
 
     ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
     uint32_t flight_id = 0;
     ASSERT_EQ(fl.prepareFlight(flight_id), Status::Ok);
 
-    // The chosen start must be >= flight_region_start + 51 (first fresh free
+    // The chosen start must be >= flight_region_start + 21 (first fresh free
     // run after the bad block).
     // Walk the bitmap to find the chosen range.
     uint32_t first_alloc = 0;
     for (uint32_t b = 0; b < NAND_BLOCK_COUNT; ++b) {
         if (fl.bitmap().get(b) == BLOCK_ALLOCATED) { first_alloc = b; break; }
     }
-    EXPECT_EQ(first_alloc, cfg.flight_region_start + 51);
-    EXPECT_EQ(fl.bitmap().get(cfg.flight_region_start + 50), BLOCK_BAD);
+    EXPECT_EQ(first_alloc, cfg.flight_region_start + 21);
+    EXPECT_EQ(fl.bitmap().get(cfg.flight_region_start + 20), BLOCK_BAD);
 }
 
 TEST(TRFlightLogPrepare, NoSpaceWhenInsufficientContiguousFree) {

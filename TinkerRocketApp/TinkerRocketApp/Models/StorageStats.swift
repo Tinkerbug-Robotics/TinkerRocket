@@ -12,10 +12,10 @@
 
 import Foundation
 
-/// Rocket NAND flight-log usage, in 128 KB blocks (wire = 14 bytes, LE packed):
+/// Rocket NAND flight-log usage, in 256 KB blocks (wire = 15 bytes, LE packed):
 ///   [0..1] u16 flight_region_blocks  [2..3] u16 used  [4..5] u16 free
 ///   [6..7] u16 bad  [8..9] u16 system  [10..11] u16 flight_count
-///   [12] u8 block_size_kb  [13] u8 flags(bit0=initialized)
+///   [12..13] u16 block_size_kb  [14] u8 flags(bit0=initialized)
 struct RocketStorageStats: Equatable {
     let flightRegionBlocks: Int
     let usedBlocks: Int
@@ -36,7 +36,7 @@ struct RocketStorageStats: Equatable {
 
     /// Decode the payload *after* the 0xCC discriminator byte.
     static func decode(_ bytes: [UInt8]) -> RocketStorageStats? {
-        guard bytes.count >= 14 else { return nil }
+        guard bytes.count >= 15 else { return nil }
         func u16(_ o: Int) -> Int {
             Int(bytes.withUnsafeBufferPointer {
                 UnsafeRawBufferPointer($0).loadUnaligned(fromByteOffset: o, as: UInt16.self)
@@ -45,7 +45,7 @@ struct RocketStorageStats: Equatable {
         return RocketStorageStats(
             flightRegionBlocks: u16(0), usedBlocks: u16(2), freeBlocks: u16(4),
             badBlocks: u16(6), systemBlocks: u16(8), flightCount: u16(10),
-            blockSizeKB: Int(bytes[12]), initialized: (bytes[13] & 0x01) != 0)
+            blockSizeKB: u16(12), initialized: (bytes[14] & 0x01) != 0)
     }
 }
 

@@ -116,7 +116,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         return false;
     };
 
-    uint8_t page[NAND_PAGE_SIZE];
+    uint8_t* const page = page_buf_;  // off-stack (member); recovery is boot-time single-threaded
     bool index_dirty  = false;
     bool bitmap_dirty = false;
 
@@ -235,7 +235,7 @@ Status TR_FlightLog::scanForBrownoutRecovery() {
         }
 
         // Synthesize a partial flight entry. final_bytes is the logical PAYLOAD
-        // byte count actually flushed to NAND — #273: PAYLOAD_PER_PAGE (2032),
+        // byte count actually flushed to NAND — #273: PAYLOAD_PER_PAGE (4080),
         // NOT NAND_PAGE_SIZE (2048), or the downloader walks past the last real
         // page into PageHeader/0xFF bytes (corrupt tail, size ~0.8% too large).
         constexpr uint32_t PAYLOAD_PER_PAGE = NAND_PAGE_SIZE - sizeof(PageHeader);
@@ -403,8 +403,8 @@ Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
     if (payload == nullptr && payload_len != 0) return Status::OutOfRange;
     if (payload_len > NAND_PAGE_SIZE - sizeof(PageHeader)) return Status::OutOfRange;
 
-    uint8_t page[NAND_PAGE_SIZE];
-    std::memset(page, 0xFF, sizeof(page));
+    uint8_t* const page = page_buf_;  // off-stack (member); guarded by mutex_ above
+    std::memset(page, 0xFF, NAND_PAGE_SIZE);
 
     PageHeader hdr;
     hdr.crc32      = 0;  // placeholder
@@ -482,7 +482,7 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
     // is retired and the relocation restarts from page 0 into the next block —
     // the source is still readable, so no salvaged page is dropped. Restarts
     // are bounded by the number of blocks available.
-    uint8_t buf[NAND_PAGE_SIZE];
+    uint8_t* const buf = salvage_buf_;  // off-stack (member); live while page_buf_ is held
     const uint32_t max_restarts = active_n_blocks_ + cfg_.extend_blocks + 1;
     uint32_t restarts = 0;
     uint32_t i = 0;
@@ -500,7 +500,7 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
             // unrecoverable. Write a zeroed placeholder so the stream stays
             // aligned (one lost page beats orphaning + shifting everything
             // after it) and flag it.
-            std::memset(buf, 0x00, sizeof(buf));
+            std::memset(buf, 0x00, NAND_PAGE_SIZE);
             ++unrecoverable_page_count_;
             FL_LOGW("salvage: page %lu of retired block %lu unreadable — wrote "
                     "zeroed placeholder to keep the stream aligned (#371)",
@@ -620,7 +620,7 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
     if (offset >= entry->final_bytes) return Status::Ok;  // EOF, 0 bytes
 
     // Pages written via writeFrame have a 16 B PageHeader at the start, so the
-    // *logical* payload size per NAND page is PAYLOAD_PER_PAGE = 2032 bytes.
+    // *logical* payload size per NAND page is PAYLOAD_PER_PAGE = 4080 bytes.
     // `offset` is a byte index into the concatenated payload stream (what the
     // caller originally enqueued via writeFrame / what iOS expects to
     // download). The mapping hops the 16 B header on each physical page.
@@ -648,7 +648,7 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
     if (abs_block >= end_block) return Status::Ok;  // logical page past the data
     const uint32_t page_in_blk = pages_left;
 
-    uint8_t page[NAND_PAGE_SIZE];
+    uint8_t* const page = page_buf_;  // off-stack (member); guarded by mutex_ above
     if (!nand_->readPage(abs_block, page_in_blk, page)) return Status::BackendFailed;
 
     // Payload starts right after the PageHeader on the physical page.

@@ -25,7 +25,7 @@ struct TR_LogToFlashConfig
     // Optional hot-path write override (issue #50 Stage 2c-3c). When set,
     // the flush task calls `write_sink(write_sink_ctx, payload, len)` for
     // each page drained from the ring instead of lfs_file_write. `len` is
-    // fixed at NAND_PAGE_SIZE - 16 (2032) so the sink can prepend a 16-byte
+    // fixed at NAND_PAGE_SIZE - 16 (4080) so the sink can prepend a 16-byte
     // TR_FlightLog PageHeader and still land on a NAND page boundary. The
     // sink should return true on success; false drops the page (same as an
     // LFS write failure). When the sink is set, periodic lfs_file_sync calls
@@ -223,10 +223,12 @@ private:
     static constexpr uint8_t STAT_PFAIL = 0x08;
     static constexpr uint8_t STAT_EFAIL = 0x04;
 
-    static constexpr uint32_t NAND_PAGE_SIZE = 2048;
+    // FORESEE F35SQB004G, 4 Gbit / 512 MB: 4096 B/page x 64 pages/block x 2048 blocks.
+    // Must stay identical to tr_flightlog:: geometry in TR_FlightLog_types.h.
+    static constexpr uint32_t NAND_PAGE_SIZE = 4096;
     static constexpr uint32_t NAND_PAGES_PER_BLK = 64;
-    static constexpr uint32_t NAND_BLOCK_SIZE = NAND_PAGE_SIZE * NAND_PAGES_PER_BLK;  // 128KB
-    static constexpr uint32_t NAND_BLOCK_COUNT = 1024;
+    static constexpr uint32_t NAND_BLOCK_SIZE = NAND_PAGE_SIZE * NAND_PAGES_PER_BLK;  // 256KB
+    static constexpr uint32_t NAND_BLOCK_COUNT = 2048;
 
     struct __attribute__((packed)) LogMeta
     {
@@ -348,7 +350,7 @@ private:
     // NAND write amplification.  64 pages is the compromise: still cuts
     // the pre-patch 3.7 s loss window in half while letting LFS batch its
     // metadata commits.
-    static constexpr uint32_t SYNC_INTERVAL_PAGES = 64;   // ~128 KB / 1.8 s
+    static constexpr uint32_t SYNC_INTERVAL_PAGES = 64;   // ~256 KB / 1.8 s
     uint32_t pages_since_sync_ = 0;
 
     // Interval-peak timing instrumentation (µs) — reset by

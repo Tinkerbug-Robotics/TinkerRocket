@@ -7,7 +7,7 @@
 
 namespace tr_flightlog {
 
-// 2-bit-per-block state map. 1024 blocks = 256 bytes.
+// 2-bit-per-block state map. 2048 blocks = 512 bytes.
 //
 // Byte layout (little-endian within the byte):
 //   buf[N / 4] bits [(N % 4)*2 .. (N % 4)*2 + 1] = state of block N

@@ -24,11 +24,13 @@ public:
         // flights without an overflow extend.  Was 256 (32 MB / ~8.5 min): with
         // recovered flights now trimmed (scanForBrownoutRecovery) that headroom
         // is pure waste/fragmentation, and a brownout flight no longer keeps it.
-        uint16_t prealloc_blocks     = 80;    // ~10 MB
-        uint16_t extend_blocks       = 64;    // overflow step (~200 ms stall)
+        // Block is now 256 KB (F35SQB004G), so these are halved vs the old 128 KB
+        // block count to keep the same byte footprint / erase-stall duration.
+        uint16_t prealloc_blocks     = 40;    // ~10 MB
+        uint16_t extend_blocks       = 32;    // overflow step (~200 ms stall)
         uint16_t flight_region_start = 32;    // first block owned by this layer
-        uint16_t flight_region_end   = 1020;  // one past last flight block
-        uint16_t metadata_blocks[4]  = {1020, 1021, 1022, 1023};
+        uint16_t flight_region_end   = 2044;  // one past last flight block
+        uint16_t metadata_blocks[4]  = {2044, 2045, 2046, 2047};
         // #277: wall-clock cap on one brownout-recovery pass so a chip with many
         // large orphaned ranges can't scan for minutes and look hung past the
         // app's 180 s power-on watchdog. Checked at run boundaries (never
@@ -113,7 +115,7 @@ public:
     Status writePage(const uint8_t* page);
 
     // Hot-path helper: wrap `payload` (up to NAND_PAGE_SIZE - sizeof(PageHeader)
-    // = 2032 bytes) in a PageHeader (active flight_id + monotonic seq + CRC32)
+    // = 4080 bytes) in a PageHeader (active flight_id + monotonic seq + CRC32)
     // and program it. This is the recommended write API — pages written via
     // writeFrame are recoverable by the brownout scanner if finalizeFlight is
     // never called.
@@ -149,6 +151,16 @@ private:
     uint32_t salvaged_block_count_    = 0;  // #371: bad blocks whose pages were relocated
     uint32_t unrecoverable_page_count_ = 0; // #371: salvage pages that would not re-read
     bool     flight_active_       = false;
+
+    // Page-sized scratch buffers kept OFF the task stack. At the 4 KB
+    // F35SQB004G page size, the nested writeFrame -> writePageLocked ->
+    // retireBlockAndSalvage path would otherwise put two 4 KB page[] arrays on
+    // the flush task's 8 KB stack at once and overflow it. All uses are
+    // serialized by mutex_ (or run at boot before the flush task exists);
+    // salvage needs its own buffer because it is live while page_buf_ is still
+    // held by the in-progress writeFrame/writePage call.
+    uint8_t  page_buf_[NAND_PAGE_SIZE]    = {};  // writeFrame / readFlightPage / recovery
+    uint8_t  salvage_buf_[NAND_PAGE_SIZE] = {};  // retireBlockAndSalvage only
 
     // Single-producer (any task) / single-consumer (flush task) request flag
     // for the deferred prepareFlight path. `volatile` is sufficient because
