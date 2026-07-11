@@ -4090,7 +4090,18 @@ static void loop_fc()
             // message type so it bypasses the OC's timestamp dedup. Skipped while
             // an image is streaming in (the version can't change mid-OTA and the
             // OC already has it — keep the OTA control bus quiet). #8 Phase 4.
-            if (!fc_ota_data_mode)
+            //
+            // Also skipped during a SIM: the #393 exception keeps this poll block
+            // running through a sim's INFLIGHT (for SIM_STOP), so this extra I2C
+            // transaction would fire every ~8 polls (2.008 s = 8 × the ~251 ms
+            // polled interval). loop_fc() is single-threaded, so that transaction
+            // stalls the loop long enough (>5 ms) to punch a gap into the
+            // synthetic sensor stream — which, unlike the real path, is re-stamped
+            // with micros() at drain time, so a loop stall shows up as a timestamp
+            // gap across ISM6/BMP/NonSensor together. The version can't change on a
+            // bench sim and the OC already cached it from the pre-sim READY/
+            // PRELAUNCH pushes, so there is nothing to relay mid-sim.
+            if (!fc_ota_data_mode && !sensor_collector.isSimActive())
             {
                 static uint32_t fc_id_throttle = 1000;  // fire on first poll, then ~2 s
                 if (++fc_id_throttle >= 8)
