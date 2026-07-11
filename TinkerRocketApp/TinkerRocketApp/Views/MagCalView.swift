@@ -45,6 +45,17 @@ struct MagCalView: View {
     @State private var verifyMinUT: Float? = nil
     @State private var verifyMaxUT: Float? = nil
 
+    /// True once the user has actually run the cal flow during THIS view
+    /// session (we've observed a live SAMPLING/REVIEW/VERIFYING frame).
+    /// The FC rests in APPLIED whenever a calibration exists — it reports
+    /// sub_type=APPLIED on every connect-time MAG_CAL_READ (see
+    /// BLEDevice.sendMagCalRead / FC main.cpp "leave the calibrator in
+    /// APPLIED").  So APPLIED on entry means "this board is already
+    /// calibrated", NOT "you just finished" — without this flag the view
+    /// opened straight into the terminal Saved banner and the user could
+    /// never start a fresh run.  Reset per navigation (fresh @State).
+    @State private var ranCalThisSession = false
+
 
     var body: some View {
         Form {
@@ -54,7 +65,13 @@ struct MagCalView: View {
             case .idle, .aborted:    introSection
             case .sampling:           samplingSection
             case .review:             reviewSection
-            case .applied:            appliedSection
+            // APPLIED just after a run this session → the one-shot Saved
+            // banner.  APPLIED on entry (the FC's resting "already
+            // calibrated" state, e.g. the connect-time read reply) → the
+            // intro, so the user can start a fresh run instead of being
+            // stuck on a Done-only screen.
+            case .applied:            ranCalThisSession ? AnyView(appliedSection)
+                                                        : AnyView(introSection)
             // #206: between Accept and final NVS persist.  FC is sampling
             // the corrected stream to confirm |B| stays in band.
             case .verifying:          verifyingSection
@@ -66,6 +83,12 @@ struct MagCalView: View {
         // tagged with this board's id so the syncer can re-apply it on connect
         // and warn if a different board is later used.
         .onChange(of: device.magCalStatus) { newStatus in
+            // Mark that a real run happened this session the moment we see
+            // a live cal frame, so a later APPLIED shows the Saved banner
+            // (not the intro).  A bare APPLIED on entry never sets this.
+            if let st = newStatus?.subType, st == .sampling || st == .review || st == .verifying {
+                ranCalThisSession = true
+            }
             // #148 verify-window |B| accumulators.  Update on every
             // status frame received while VERIFYING; reset when we
             // leave VERIFYING so the next entry starts fresh.
@@ -139,6 +162,18 @@ struct MagCalView: View {
                 }
             }
 
+            // Board already has a saved calibration (the FC rests in
+            // APPLIED and reports it on connect).  Surface it so Start
+            // reads as an intentional re-run, not a first-time cal.
+            if let s = status, s.subType == .applied {
+                Section {
+                    Label(String(format: "Already calibrated — Earth field %.1f µT, residual %.1f µT.",
+                                 s.fieldR_uT, s.residualUT),
+                          systemImage: "checkmark.seal.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+
             Section(footer: Text("For the calibration to match what the flight computer sees, ensure the rocket is in the flight configuration before calibration.")) {
                 // Start button — greyed out when the rocket isn't in a
                 // valid state (in-flight, or telemetry not connected /
@@ -150,7 +185,7 @@ struct MagCalView: View {
                 } label: {
                     HStack {
                         Image(systemName: "play.fill")
-                        Text("Start Calibration")
+                        Text(status?.subType == .applied ? "Recalibrate" : "Start Calibration")
                             .fontWeight(.semibold)
                         Spacer()
                     }
