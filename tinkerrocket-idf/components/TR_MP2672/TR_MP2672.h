@@ -96,6 +96,9 @@ struct TR_MP2672_Data
     uint8_t status_raw = 0;          // raw REG03
     uint32_t config_applies = 0;     // times config was (re)applied
     uint32_t write_verify_fails = 0;
+    bool write_locked = false;       // chip ACKs but ignores register writes →
+                                     //   monitor-only mode (CV standalone strap
+                                     //   or OTP-locked part; see service())
 };
 
 class TR_MP2672
@@ -136,6 +139,8 @@ private:
     TR_MP2672_Config        _cfg;
     TR_MP2672_Data          _data;
     bool                    _config_applied;
+    bool                    _write_locked = false;
+    uint8_t                 _apply_fail_streak = 0;
 };
 
 #endif
