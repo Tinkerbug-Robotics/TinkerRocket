@@ -68,6 +68,13 @@ uint8_t TR_MP2672::desiredReg02() const
 // ---------------------------------------------------------------------------
 bool TR_MP2672::applyConfig()
 {
+    // Kick the watchdog FIRST: an expired watchdog latches WD_FAULT (seen
+    // whenever the host was silent >40 s — e.g. across a reflash), and the
+    // kick is the only documented interaction with that state. Doing it
+    // before the config writes gives a fault-latched chip its best chance
+    // of accepting them.
+    (void)writeReg(Reg::REG02, (uint8_t)(desiredReg02() | 0x40));
+
     struct { uint8_t reg; uint8_t val; } seq[] = {
         { Reg::REG01, desiredReg01() },
         { Reg::REG02, desiredReg02() },
@@ -77,14 +84,20 @@ bool TR_MP2672::applyConfig()
     for (const auto& w : seq)
     {
         uint8_t back = 0xFF;
-        if (!writeReg(w.reg, w.val) || !readReg(w.reg, back) || back != w.val)
+        const bool wrote = writeReg(w.reg, w.val);
+        const bool read  = wrote && readReg(w.reg, back);
+        if (!wrote || !read || back != w.val)
         {
             // The kick bit self-behavior is undocumented; exclude bit6 from
             // the REG02 comparison.
-            if (w.reg == Reg::REG02 && (back & ~0x40) == (w.val & ~0x40))
+            if (read && w.reg == Reg::REG02 && (back & ~0x40) == (w.val & ~0x40))
                 continue;
-            ESP_LOGW(TAG, "REG%02X write not verified (wrote 0x%02X, read 0x%02X)",
-                     w.reg, w.val, back);
+            if (!wrote || !read)
+                ESP_LOGW(TAG, "REG%02X %s failed (I2C)", w.reg,
+                         wrote ? "readback" : "write");
+            else
+                ESP_LOGW(TAG, "REG%02X write ACKed but ignored (wrote 0x%02X, "
+                              "read 0x%02X)", w.reg, w.val, back);
             _data.write_verify_fails++;
             ok = false;
         }
@@ -155,13 +168,43 @@ void TR_MP2672::service()
     if (!was_present)
     {
         ESP_LOGI(TAG, "charge input attached (REG00=0x%02X on wake)", r00);
+        // Fresh power-up of the chip: give writes a fresh chance even if a
+        // previous session concluded they were refused (transient vs strap).
+        _write_locked = false;
+        _data.write_locked = false;
+        _apply_fail_streak = 0;
     }
 
     // (Re)apply config on first contact after plug-in, or when the live
     // REG00 drifted from desired (watchdog expiry silently reverts it).
-    if (!_config_applied || r00 != desiredReg00())
+    if (_write_locked)
+    {
+        // Monitor-only: the chip ACKs but ignores register writes (bench
+        // 2026-07-11). Known causes: CV pin strapped for STANDALONE mode
+        // (host register control requires CV = VCC; charge parameters then
+        // come from the RISET/CV pins, which is safe) or an OTP-locked
+        // non-A MP2672 (unresolved MPS forum report). Either way charging
+        // runs at hardware-set limits; we just watch status/faults.
+    }
+    else if (!_config_applied || r00 != desiredReg00())
     {
         _config_applied = applyConfig();
+        if (_config_applied)
+        {
+            _apply_fail_streak = 0;
+        }
+        else if (++_apply_fail_streak >= 3)
+        {
+            _write_locked = true;
+            _data.write_locked = true;
+            ESP_LOGE(TAG, "register writes ACKed but ignored after %u attempts "
+                          "— falling back to MONITOR-ONLY. Likely the CV pin is "
+                          "strapped for standalone mode (host control needs "
+                          "CV=VCC) or the part is write-locked. Charging "
+                          "continues at pin-set defaults (RISET is the current "
+                          "clamp); status/fault polling unaffected.",
+                     (unsigned)_apply_fail_streak);
+        }
     }
     else
     {
