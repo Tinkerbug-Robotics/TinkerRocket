@@ -32,6 +32,16 @@ target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)
 # build` compiles the matching main/board/board_v*.h pin map; default is V2.
 # Use a separate build dir per variant (e.g. -B build_v3) — the flag is
 # cached by CMake.
+#
+# NOTE the trap: the build-dir name is cosmetic — the board comes ONLY from
+# this flag. `idf.py -B build_v3 build` (no -DTR_BS_BOARD=3) silently builds
+# V2. Surface the choice at configure time so a missing/wrong flag is visible
+# in the build log, not just from the runtime boot banner.
 if(TR_BS_BOARD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BS_BOARD=${TR_BS_BOARD})
+    message(STATUS "base_station: building for board V${TR_BS_BOARD} (TR_BS_BOARD=${TR_BS_BOARD})")
+else()
+    message(WARNING "base_station: TR_BS_BOARD not set — defaulting to V2. "
+                    "For another board pass -DTR_BS_BOARD=<1|3> (the build-dir "
+                    "name alone does NOT select the board).")
 endif()
