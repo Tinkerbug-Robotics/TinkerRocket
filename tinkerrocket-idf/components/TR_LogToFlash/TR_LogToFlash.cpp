@@ -161,14 +161,14 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
     lfs_cfg->erase = lfsBlockErase;
     lfs_cfg->sync = lfsBlockSync;
 
-    lfs_cfg->read_size = NAND_PAGE_SIZE;      // 2048
-    lfs_cfg->prog_size = NAND_PAGE_SIZE;      // 2048
-    lfs_cfg->block_size = NAND_BLOCK_SIZE;    // 128KB
+    lfs_cfg->read_size = NAND_PAGE_SIZE;      // 4096
+    lfs_cfg->prog_size = NAND_PAGE_SIZE;      // 4096
+    lfs_cfg->block_size = NAND_BLOCK_SIZE;    // 256KB
     // Default to the full chip; caller may shrink (issue #50 Stage 2c) so the
     // trailing blocks can be owned by TR_FlightLog.
     lfs_cfg->block_count = (cfg.lfs_block_count > 0) ? cfg.lfs_block_count
                                                      : NAND_BLOCK_COUNT;
-    lfs_cfg->cache_size = NAND_PAGE_SIZE;     // 2048
+    lfs_cfg->cache_size = NAND_PAGE_SIZE;     // 4096
     lfs_cfg->lookahead_size = 128;            // 128 bytes = 1024 bits
     lfs_cfg->block_cycles = 500;              // Wear leveling
 
@@ -1707,7 +1707,7 @@ void TR_LogToFlash::closeLogSession()
             // Pad the tail chunk with the existing 0xFF fill from NAND prior
             // state is not possible here (page_buf is just RAM), so we pass
             // whatever bytes we have — the sink (writeFrame) wraps payload
-            // in a PageHeader and programs a full 2048-byte page, zero-
+            // in a PageHeader and programs a full 4096-byte page, zero-
             // padding the unused payload tail. Accepted small loss.
             (void)cfg.write_sink(cfg.write_sink_ctx, page_buf, page_buf_idx);
             page_buf_idx = 0;
@@ -1859,7 +1859,7 @@ bool TR_LogToFlash::checkMramDirty()
 uint32_t TR_LogToFlash::drainMramToSink()
 {
     if (!use_mram_ || cfg.write_sink == nullptr) return 0;
-    constexpr uint32_t kChunk = NAND_PAGE_SIZE - 16u;   // 2032; matches flushRingToNand
+    constexpr uint32_t kChunk = NAND_PAGE_SIZE - 16u;   // 4080; matches flushRingToNand
     uint8_t buf[kChunk];
     uint32_t total = 0;
     for (uint32_t off = 0; off < ring_size_; off += kChunk)
@@ -2157,8 +2157,11 @@ void TR_LogToFlash::runStartupRecovery()
         return;
     }
 
-    // Read MRAM in page-sized chunks and write to LittleFS
-    uint8_t chunk[NAND_PAGE_SIZE];
+    // Read MRAM in page-sized chunks and write to LittleFS. Reuse the idle
+    // page staging member rather than a 4 KB (F35SQB004G page) stack array so
+    // this buffer plus the nested lfsBlockRead page buffer don't both land on
+    // one task stack. Boot-only, single-threaded, staging is idle here.
+    uint8_t* const chunk = page_buf;
     uint32_t offset = 0;
     uint32_t total_written = 0;
     while (offset < ring_size_)

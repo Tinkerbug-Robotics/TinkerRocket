@@ -99,7 +99,7 @@ static TR_LogToFlash logger;
 // writes via writeFrame(), with dual-copy index metadata in blocks 1020-1023
 // and a persistent 3-state bitmap in NVS. TR_LogToFlash keeps the ring/flush
 // machinery and shelled-down 4 MB LFS partition for config; a write_sink
-// fn-pointer routes each drained 2032 B page into flightlog.writeFrame().
+// fn-pointer routes each drained 4080 B page into flightlog.writeFrame().
 static tr_flightlog::TR_NandBackend_esp flightlog_backend;
 static tr_flightlog::TR_FlightLog flightlog;
 static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
@@ -146,7 +146,7 @@ static SensorHealthState ocStorageHealth()
 
 // Stage 3b (issue #50): BLE file-ops re-backed on TR_FlightLog.
 // Fills up to `max_bytes` of the downloader's scratch buffer by issuing
-// successive readFlightPage calls (each one returns at most 2032 payload
+// successive readFlightPage calls (each one returns at most 4080 payload
 // bytes — the portion of a single NAND page past its PageHeader). Matches
 // the logger.readFileChunk contract: sets eof=true when the last byte of
 // the flight has been read; returns false only on underlying NAND I/O error.
@@ -3908,7 +3908,7 @@ static void printStats()
                 rss.bad_blocks    = (uint16_t)flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD);
                 rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
                 rss.flight_count  = (uint16_t)flightlog.index().size();
-                rss.block_size_kb = (uint8_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
+                rss.block_size_kb = (uint16_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
                 rss.flags         = 0x01;  // initialized
             }
             ble_app.sendStorageStats(0xCC, reinterpret_cast<const uint8_t*>(&rss), sizeof(rss));
@@ -4386,7 +4386,7 @@ void initPeripherals()
 
     // --- LFS shrunk to 4 MB + hot-path write sink (issue #50) ---------------
     // LFS holds 32 blocks for config/placeholder use; TR_FlightLog owns the
-    // remaining 988 blocks plus the metadata blocks 1020-1023. Each 2032 B
+    // remaining 2012 blocks plus the metadata blocks 2044-2047. Each 4080 B
     // chunk the flush task drains from the ring is routed through
     // flightlogWriteSink → flightlog.writeFrame(), which wraps it in a
     // PageHeader (CRC32 + seq + flight_id) and programs one NAND page

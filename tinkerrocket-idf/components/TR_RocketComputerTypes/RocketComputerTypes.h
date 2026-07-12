@@ -940,17 +940,17 @@ static_assert(sizeof(SensorCalStatusData) == 19,
 // reserved = bad + system, free = free_blocks.  Accurate on a DIRECT rocket link.
 typedef struct __attribute__((packed))
 {
-    uint16_t flight_region_blocks;  // total blocks the flight layer manages (~988)
+    uint16_t flight_region_blocks;  // total blocks the flight layer manages (~2012)
     uint16_t used_blocks;           // ALLOCATED (finalized + active flights)
     uint16_t free_blocks;           // FREE
     uint16_t bad_blocks;            // BAD (unusable)
     uint16_t system_blocks;         // LFS + metadata blocks (fixed overhead)
     uint16_t flight_count;          // entries in the flight index
-    uint8_t  block_size_kb;         // NAND block size in KB (128)
+    uint16_t block_size_kb;         // NAND block size in KB (256; u16 — 256 > uint8 max)
     uint8_t  flags;                 // bit0 = flight log initialized
 } RocketStorageStatsData;
-static_assert(sizeof(RocketStorageStatsData) == 14,
-              "RocketStorageStatsData must be 14 bytes");
+static_assert(sizeof(RocketStorageStatsData) == 15,
+              "RocketStorageStatsData must be 15 bytes");
 
 // BS→app flash-space stats for the base station's own log filesystem.  Rides the
 // file_ops characteristic behind a 0xCD discriminator.  Bytes (not blocks) since
