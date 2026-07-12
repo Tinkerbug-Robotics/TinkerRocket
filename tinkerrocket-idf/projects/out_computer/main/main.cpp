@@ -3811,6 +3811,103 @@ static void printLoRaPayloadDebug()
                   (double)decoded.soc);
 }
 
+// #398: per-task CPU utilization sampler.
+//
+// The launch-activation window (~4 s) co-stalls everything on loop_oc, which
+// the bench (issue #398 comment 2) read as core-1 CPU starvation by a task
+// ABOVE the parser's prio 6 — prime suspect the prio-20 i2c_slv_tx serve, or
+// ISR load during the prepareFlight erase burst. This dumps, once per stats
+// interval, each task's run-time delta (µs of CPU consumed since the last
+// call) as a percent of the wall interval, sorted high-to-low, plus core-1
+// utilization derived from the IDLE1 idle task. During the launch window the
+// hog's share spikes, naming it without a full scheduling trace.
+//
+// Needs configUSE_TRACE_FACILITY + configGENERATE_RUN_TIME_STATS (set in this
+// project's sdkconfig.defaults). ulRunTimeCounter is the esp_timer µs clock.
+#if (configUSE_TRACE_FACILITY == 1) && (configGENERATE_RUN_TIME_STATS == 1)
+static void logTaskCpuDeltas(uint32_t dt_ms)
+{
+    if (!config::PROFILE_TASK_CPU) return;
+
+    // Single call site (printStats on oc_loop), so these can be static — keeps
+    // ~3 KB of snapshot off a stack that already runs deep into BLE sendTelemetry.
+    static constexpr UBaseType_t MAXT = 48;
+    struct Prev { TaskHandle_t h; uint32_t rt; };
+    static Prev prev[MAXT];
+    static UBaseType_t prev_n = 0;
+    static bool primed = false;
+
+    static TaskStatus_t now[MAXT];
+    uint32_t total_run = 0;
+    const UBaseType_t n = uxTaskGetSystemState(now, MAXT, &total_run);
+    if (n == 0)
+    {
+        static bool warned = false;
+        if (!warned) { warned = true; ESP_LOGW("TASKCPU", "task count > %u — profiler disabled", (unsigned)MAXT); }
+        return;
+    }
+
+    struct Row { const char* name; UBaseType_t prio; int core; uint32_t d; };
+    static Row rows[MAXT];
+    UBaseType_t rown = 0;
+    uint32_t idle1_d = 0;
+    for (UBaseType_t i = 0; i < n; ++i)
+    {
+        const uint32_t cur = (uint32_t)now[i].ulRunTimeCounter;
+        uint32_t before = cur;   // unseen task → 0 delta this round
+        for (UBaseType_t j = 0; j < prev_n; ++j)
+            if (prev[j].h == now[i].xHandle) { before = prev[j].rt; break; }
+        const uint32_t d = cur - before;   // uint32 subtraction wraps correctly
+        int core = -1;
+        #if (configTASKLIST_INCLUDE_COREID == 1)
+        core = (int)now[i].xCoreID;        // 0, 1, or tskNO_AFFINITY (-1)
+        #endif
+        rows[rown++] = { now[i].pcTaskName, now[i].uxCurrentPriority, core, d };
+        if (now[i].pcTaskName && strcmp(now[i].pcTaskName, "IDLE1") == 0)
+            idle1_d = d;
+    }
+
+    // Persist this snapshot for the next interval's delta.
+    prev_n = (n < MAXT) ? n : MAXT;
+    for (UBaseType_t i = 0; i < prev_n; ++i)
+        prev[i] = { now[i].xHandle, (uint32_t)now[i].ulRunTimeCounter };
+
+    if (!primed) { primed = true; return; }   // first call has no baseline
+
+    const uint32_t win_us = dt_ms * 1000u;
+    if (win_us == 0) return;
+
+    // Partial selection sort: bring the top-K consumers to the front.
+    const UBaseType_t K = (rown < 6) ? rown : 6;
+    for (UBaseType_t a = 0; a < K; ++a)
+    {
+        UBaseType_t best = a;
+        for (UBaseType_t b = a + 1; b < rown; ++b)
+            if (rows[b].d > rows[best].d) best = b;
+        if (best != a) { Row t = rows[a]; rows[a] = rows[best]; rows[best] = t; }
+    }
+
+    // Core-1 utilization = fraction of the interval IDLE1 did NOT run. Clamp:
+    // tickless-idle skew can make idle1_d edge just past the wall interval.
+    const uint32_t idle1_pct = (idle1_d >= win_us) ? 100u : (idle1_d * 100u) / win_us;
+    const uint32_t core1_util = 100u - idle1_pct;
+
+    char line[256];
+    int off = snprintf(line, sizeof(line), "win=%lums core1_util=%lu%% top:",
+                       (unsigned long)dt_ms, (unsigned long)core1_util);
+    for (UBaseType_t a = 0; a < K && off > 0 && off < (int)sizeof(line) - 1; ++a)
+    {
+        const uint32_t pct = (rows[a].d * 100u) / win_us;
+        off += snprintf(line + off, sizeof(line) - off, " %s[c%d p%lu]=%lu%%",
+                        rows[a].name ? rows[a].name : "?", rows[a].core,
+                        (unsigned long)rows[a].prio, (unsigned long)pct);
+    }
+    ESP_LOGW("TASKCPU", "%s", line);
+}
+#else
+static inline void logTaskCpuDeltas(uint32_t) {}   // stats facility not compiled in
+#endif
+
 static void printStats()
 {
     const uint32_t now = millis();
@@ -4228,6 +4325,11 @@ static void printStats()
              (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
              (unsigned long)s.spi_hold_max_us);  // #398
     logger.resetIntervalTimings();
+
+    // #398: per-task CPU deltas over this same interval — pins the core-1 hog
+    // that co-stalls loop_oc during the launch-activation window. Uses `dt`
+    // (the actual interval) as the denominator so percentages track jitter.
+    logTaskCpuDeltas(dt);
 
     // Send telemetry to BLE app
     TR_BLE_To_APP::TelemetryData ble_telem = {};

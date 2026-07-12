@@ -33,6 +33,17 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000
 
+# #398: per-task CPU runtime profiling — identify the core-1 hog (above parser
+# prio 6) that co-stalls loop_oc during the ~4 s launch-activation window.
+# Trace facility + run-time stats (esp_timer µs clock) + per-task core id feed
+# the once-per-stats-interval TASKCPU dump in main.cpp. Small per-context-switch
+# cost (one esp_timer read); flip config::PROFILE_TASK_CPU false to silence the
+# log without rebuilding config. Bench-diagnostic build.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
 # Interrupt WDT
 CONFIG_ESP_INT_WDT=y
 CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
