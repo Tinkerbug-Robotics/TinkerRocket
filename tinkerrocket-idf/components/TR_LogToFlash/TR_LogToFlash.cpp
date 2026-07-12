@@ -421,9 +421,8 @@ void TR_LogToFlash::service()
             if (!file_open)
             {
                 openLogSession();
-                markDirty();
             }
-            activateLogging();
+            activateLogging();   // #417: markDirty now lives here
         }
         start_logging_requested = false;
     }
@@ -1678,6 +1677,16 @@ void TR_LogToFlash::activateLogging()
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
+
+    // #417: set the dirty marker HERE, not at openLogSession()/pre-create.
+    // A pre-created-but-never-launched session (bench: PRELAUNCH → power cut,
+    // no launch, no clean close) must NOT look "dirty" on the next boot, or it
+    // spawns a bogus flight_mram_recovered_*.bin on nearly every power cycle.
+    // The marker now means "logging was activated" (launch-detect start, or a
+    // deliberate manual cmd-23 start — both route through activateLogging), so
+    // a surviving marker flags a genuine in-flight brownout with real ring data
+    // to replay (the #274 case). Cleared symmetrically by closeLogSession().
+    markDirty();
     // Arm per-drain diagnostic logs for the first few flushRingToNand
     // drains. Kept small on purpose: these are blocking UART writes (~9 ms
     // each at 115200) inside the launch-critical prelaunch-drain window —
@@ -2366,7 +2375,8 @@ void TR_LogToFlash::flushTaskLoop()
             if (!file_open && !logging_active)
             {
                 openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
-                markDirty();
+                // #417: do NOT markDirty on pre-create — the session isn't active
+                // yet. activateLogging() sets the marker at launch/manual-start.
                 if (cfg.debug) ESP_LOGI(TAG, "Log file pre-created for launch");
             }
             // else: file already open / logging — request is moot; consume it.
@@ -2399,9 +2409,8 @@ void TR_LogToFlash::flushTaskLoop()
                 {
                     // File not pre-created — create now (legacy path)
                     openLogSession();
-                    markDirty();
                 }
-                activateLogging();  // Fast — just flips flags, no NAND I/O
+                activateLogging();  // Fast — flips flags + markDirty (#417), no NAND I/O
             }
             // else: already logging — duplicate request; consume it.
             start_logging_requested = false;
