@@ -421,9 +421,8 @@ void TR_LogToFlash::service()
             if (!file_open)
             {
                 openLogSession();
-                markDirty();
             }
-            activateLogging();
+            activateLogging();   // #417: markDirty now lives here
         }
         start_logging_requested = false;
     }
@@ -1678,6 +1677,17 @@ void TR_LogToFlash::activateLogging()
     logging_active = true;
     ring_prelaunch_cap_ = ring_size_;
     end_flight_requested = false;
+
+    // #417: set the dirty marker HERE, not at openLogSession()/pre-create.
+    // A pre-created-but-never-launched session (bench: PRELAUNCH → power cut,
+    // no launch, no clean close) must NOT look "dirty" on the next boot, or it
+    // spawns a bogus flight_mram_recovered_*.bin on nearly every power cycle.
+    // The marker now means "logging was activated" (launch-detect start, or a
+    // deliberate manual cmd-23 start — both route through activateLogging), so
+    // a surviving marker flags a genuine in-flight brownout with real ring data
+    // to replay (the #274 case). Cleared symmetrically by closeLogSession().
+    dirty_policy_.onActivate();
+    syncDirtyMarker();
     // Arm per-drain diagnostic logs for the first few flushRingToNand
     // drains. Kept small on purpose: these are blocking UART writes (~9 ms
     // each at 115200) inside the launch-critical prelaunch-drain window —
@@ -1714,7 +1724,8 @@ void TR_LogToFlash::closeLogSession()
         }
         file_open = false;
         logging_active = false;
-        clearDirty();
+        dirty_policy_.onCloseClean();   // #417
+        syncDirtyMarker();
         persistBadBlocksIfDirty();
         ring_prelaunch_cap_ = prelaunchCap();
         if (cfg.debug)
@@ -1752,7 +1763,8 @@ void TR_LogToFlash::closeLogSession()
 
     file_open = false;
     logging_active = false;
-    clearDirty();
+    dirty_policy_.onCloseClean();   // #417
+    syncDirtyMarker();
 
     // Flush any new bad-block discoveries to NVS now — no longer in the
     // hot path, and the next session should see the same list.
@@ -1834,6 +1846,18 @@ void TR_LogToFlash::clearDirty()
     lfs_remove(&lfs, "/.dirty");
 }
 
+// #417: mirror the MramDirtyPolicy intent to the physical marker. This is the
+// single write path for the live session — lifecycle transitions update the
+// policy, then call here. markDirty()/clearDirty() remain the hardware writers
+// (LittleFS marker file in non-sink mode, MRAM word in sink mode).
+void TR_LogToFlash::syncDirtyMarker()
+{
+    if (dirty_policy_.markerShouldBeSet())
+        markDirty();
+    else
+        clearDirty();
+}
+
 bool TR_LogToFlash::checkDirtyOnStartup()
 {
     struct lfs_info info;
@@ -1875,7 +1899,8 @@ uint32_t TR_LogToFlash::drainMramToSink()
 void TR_LogToFlash::finishMramRecovery()
 {
     clearRing();
-    clearDirty();   // clears the MRAM marker (sink mode)
+    dirty_policy_.onRecoveryFinished();   // #417
+    syncDirtyMarker();                    // clears the MRAM marker (sink mode)
     pending_mram_recovery_ = false;
 }
 
@@ -2122,7 +2147,10 @@ void TR_LogToFlash::runStartupRecovery()
     // sink into a NAND flight — but the sink (TR_FlightLog) isn't initialized yet
     // at begin() time. Defer: preserve the ring + marker and let the OC drive
     // drainMramToSink() once flightlog.begin() has run.
-    if (cfg.write_sink != nullptr && mram_dirty)
+    // #417: the surviving MRAM marker (set only once logging was activated) is
+    // the boot-time recovery gate — one documented home shared with the tests.
+    if (cfg.write_sink != nullptr &&
+        MramDirtyPolicy::shouldRecoverOnBoot(mram_dirty))
     {
         pending_mram_recovery_ = true;
         if (cfg.debug)
@@ -2366,7 +2394,9 @@ void TR_LogToFlash::flushTaskLoop()
             if (!file_open && !logging_active)
             {
                 openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
-                markDirty();
+                // #417: pre-create must NOT dirty the marker — the session isn't
+                // active yet. activateLogging() sets it at launch/manual-start.
+                dirty_policy_.onPreCreate();
                 if (cfg.debug) ESP_LOGI(TAG, "Log file pre-created for launch");
             }
             // else: file already open / logging — request is moot; consume it.
@@ -2399,9 +2429,8 @@ void TR_LogToFlash::flushTaskLoop()
                 {
                     // File not pre-created — create now (legacy path)
                     openLogSession();
-                    markDirty();
                 }
-                activateLogging();  // Fast — just flips flags, no NAND I/O
+                activateLogging();  // Fast — flips flags + markDirty (#417), no NAND I/O
             }
             // else: already logging — duplicate request; consume it.
             start_logging_requested = false;
