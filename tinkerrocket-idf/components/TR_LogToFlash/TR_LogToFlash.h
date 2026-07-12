@@ -4,6 +4,7 @@
 #include <compat.h>
 #include <RocketComputerTypes.h>
 #include "lfs.h"
+#include "mram_dirty_policy.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -526,6 +527,11 @@ private:
     void clearDirty();          // Remove LittleFS marker file on log close
     bool checkDirtyOnStartup(); // Check if previous session was dirty
     bool checkMramDirty();      // #274: read the sink-mode MRAM dirty marker
+
+    // #417: single source of truth for the dirty-marker intent across the log
+    // session lifecycle. syncDirtyMarker() mirrors it to the physical marker.
+    MramDirtyPolicy dirty_policy_;
+    void syncDirtyMarker();
     void clearRing();
     // Internal variant: caller holds push_mutex_. Used by ringPush()'s
     // drop-oldest fallback so it doesn't re-acquire the mutex it already

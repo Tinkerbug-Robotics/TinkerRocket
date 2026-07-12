@@ -405,3 +405,18 @@ target_include_directories(test_dedup_reboot_policy PRIVATE
 )
 target_link_libraries(test_dedup_reboot_policy GTest::gtest_main)
 gtest_discover_tests(test_dedup_reboot_policy)
+
+# ---------- test_mram_dirty_policy ----------
+# Host-side test for the #417 sink-mode dirty-marker gate: the marker means
+# "logging was activated" (launch detect / manual cmd-23 start), not "a log
+# file was pre-created at PRELAUNCH", so a bench power-cut from PRELAUNCH no
+# longer spawns a bogus flight_mram_recovered_*.bin — while a genuine in-flight
+# brownout (#274) still recovers. mram_dirty_policy.h is pure (no SPI/MRAM/LFS),
+# so the test just adds the TR_LogToFlash component dir.
+add_executable(test_mram_dirty_policy test_mram_dirty_policy.cpp)
+target_include_directories(test_mram_dirty_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_mram_dirty_policy GTest::gtest_main)
+gtest_discover_tests(test_mram_dirty_policy)

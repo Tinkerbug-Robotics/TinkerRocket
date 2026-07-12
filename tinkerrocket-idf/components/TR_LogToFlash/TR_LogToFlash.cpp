@@ -1686,7 +1686,8 @@ void TR_LogToFlash::activateLogging()
     // deliberate manual cmd-23 start — both route through activateLogging), so
     // a surviving marker flags a genuine in-flight brownout with real ring data
     // to replay (the #274 case). Cleared symmetrically by closeLogSession().
-    markDirty();
+    dirty_policy_.onActivate();
+    syncDirtyMarker();
     // Arm per-drain diagnostic logs for the first few flushRingToNand
     // drains. Kept small on purpose: these are blocking UART writes (~9 ms
     // each at 115200) inside the launch-critical prelaunch-drain window —
@@ -1723,7 +1724,8 @@ void TR_LogToFlash::closeLogSession()
         }
         file_open = false;
         logging_active = false;
-        clearDirty();
+        dirty_policy_.onCloseClean();   // #417
+        syncDirtyMarker();
         persistBadBlocksIfDirty();
         ring_prelaunch_cap_ = prelaunchCap();
         if (cfg.debug)
@@ -1761,7 +1763,8 @@ void TR_LogToFlash::closeLogSession()
 
     file_open = false;
     logging_active = false;
-    clearDirty();
+    dirty_policy_.onCloseClean();   // #417
+    syncDirtyMarker();
 
     // Flush any new bad-block discoveries to NVS now — no longer in the
     // hot path, and the next session should see the same list.
@@ -1843,6 +1846,18 @@ void TR_LogToFlash::clearDirty()
     lfs_remove(&lfs, "/.dirty");
 }
 
+// #417: mirror the MramDirtyPolicy intent to the physical marker. This is the
+// single write path for the live session — lifecycle transitions update the
+// policy, then call here. markDirty()/clearDirty() remain the hardware writers
+// (LittleFS marker file in non-sink mode, MRAM word in sink mode).
+void TR_LogToFlash::syncDirtyMarker()
+{
+    if (dirty_policy_.markerShouldBeSet())
+        markDirty();
+    else
+        clearDirty();
+}
+
 bool TR_LogToFlash::checkDirtyOnStartup()
 {
     struct lfs_info info;
@@ -1884,7 +1899,8 @@ uint32_t TR_LogToFlash::drainMramToSink()
 void TR_LogToFlash::finishMramRecovery()
 {
     clearRing();
-    clearDirty();   // clears the MRAM marker (sink mode)
+    dirty_policy_.onRecoveryFinished();   // #417
+    syncDirtyMarker();                    // clears the MRAM marker (sink mode)
     pending_mram_recovery_ = false;
 }
 
@@ -2131,7 +2147,10 @@ void TR_LogToFlash::runStartupRecovery()
     // sink into a NAND flight — but the sink (TR_FlightLog) isn't initialized yet
     // at begin() time. Defer: preserve the ring + marker and let the OC drive
     // drainMramToSink() once flightlog.begin() has run.
-    if (cfg.write_sink != nullptr && mram_dirty)
+    // #417: the surviving MRAM marker (set only once logging was activated) is
+    // the boot-time recovery gate — one documented home shared with the tests.
+    if (cfg.write_sink != nullptr &&
+        MramDirtyPolicy::shouldRecoverOnBoot(mram_dirty))
     {
         pending_mram_recovery_ = true;
         if (cfg.debug)
@@ -2375,8 +2394,9 @@ void TR_LogToFlash::flushTaskLoop()
             if (!file_open && !logging_active)
             {
                 openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
-                // #417: do NOT markDirty on pre-create — the session isn't active
-                // yet. activateLogging() sets the marker at launch/manual-start.
+                // #417: pre-create must NOT dirty the marker — the session isn't
+                // active yet. activateLogging() sets it at launch/manual-start.
+                dirty_policy_.onPreCreate();
                 if (cfg.debug) ESP_LOGI(TAG, "Log file pre-created for launch");
             }
             // else: file already open / logging — request is moot; consume it.
