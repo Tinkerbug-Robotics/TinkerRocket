@@ -74,15 +74,20 @@ TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
 
 TEST(RocketComputerTypes, NSF2_ApogeeFlagBits_NoOverlap) {
     // apogee_flags byte: 3 apogee detector bits + 2 relocated signals
-    // (reboot_recovery, guidance_enabled) that used to live in pyro_status.
+    // (reboot_recovery, guidance_enabled) that used to live in pyro_status,
+    // plus the orientation-mismatch flag (bit 5) and the #474 FC IMU-drop
+    // witness (bit 6).
     uint8_t all = NSF2_GPS_APOGEE | NSF2_PITCH_APOGEE | NSF2_MASTER_APOGEE |
-                  NSF2_REBOOT_RECOVERY | NSF2_GUIDANCE_ENABLED;
-    EXPECT_EQ(all, 0x1F);  // bits 0-4 used
-    EXPECT_EQ(__builtin_popcount(NSF2_GPS_APOGEE),       1);
-    EXPECT_EQ(__builtin_popcount(NSF2_PITCH_APOGEE),     1);
-    EXPECT_EQ(__builtin_popcount(NSF2_MASTER_APOGEE),    1);
-    EXPECT_EQ(__builtin_popcount(NSF2_REBOOT_RECOVERY),  1);
-    EXPECT_EQ(__builtin_popcount(NSF2_GUIDANCE_ENABLED), 1);
+                  NSF2_REBOOT_RECOVERY | NSF2_GUIDANCE_ENABLED |
+                  NSF2_ORIENT_THRUST_MISMATCH | NSF2_FC_IMU_DROP;
+    EXPECT_EQ(all, 0x7F);  // bits 0-6 used, none overlapping
+    EXPECT_EQ(__builtin_popcount(NSF2_GPS_APOGEE),            1);
+    EXPECT_EQ(__builtin_popcount(NSF2_PITCH_APOGEE),          1);
+    EXPECT_EQ(__builtin_popcount(NSF2_MASTER_APOGEE),         1);
+    EXPECT_EQ(__builtin_popcount(NSF2_REBOOT_RECOVERY),       1);
+    EXPECT_EQ(__builtin_popcount(NSF2_GUIDANCE_ENABLED),      1);
+    EXPECT_EQ(__builtin_popcount(NSF2_ORIENT_THRUST_MISMATCH), 1);
+    EXPECT_EQ(__builtin_popcount(NSF2_FC_IMU_DROP),           1);
 }
 
 TEST(RocketComputerTypes, PSF_FlagBits_NoOverlap) {
