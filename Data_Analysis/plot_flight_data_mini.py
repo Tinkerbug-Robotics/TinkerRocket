@@ -183,6 +183,8 @@ NSF2_PITCH_APOGEE     = (1 << 1)
 NSF2_MASTER_APOGEE    = (1 << 2)
 NSF2_REBOOT_RECOVERY  = (1 << 3)
 NSF2_GUIDANCE_ENABLED = (1 << 4)
+NSF2_ORIENT_THRUST_MISMATCH = (1 << 5)
+NSF2_FC_IMU_DROP      = (1 << 6)  # #474: FC loop stalled -> ISM6 queue overflow (sticky)
 
 # Pyro status byte bits — paired (CONT, FIRED) per channel.  Layout must match
 # the PSF_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.  An
@@ -553,6 +555,7 @@ def parse_binary_file(filepath):
                     "apogee_flag":        bool(apogee_flags_b & NSF2_MASTER_APOGEE),
                     "reboot_recovery":    bool(apogee_flags_b & NSF2_REBOOT_RECOVERY),
                     "guidance_enabled":   bool(apogee_flags_b & NSF2_GUIDANCE_ENABLED),
+                    "fc_imu_drop":        bool(apogee_flags_b & NSF2_FC_IMU_DROP),
                 })
 
             elif msg_type == MSG_NON_SENSOR:

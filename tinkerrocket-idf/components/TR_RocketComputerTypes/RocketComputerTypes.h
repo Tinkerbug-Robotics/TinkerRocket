@@ -1224,6 +1224,13 @@ static constexpr uint8_t NSF2_GUIDANCE_ENABLED = (1u << 4);  // FC's live guidan
 // orientation is NOT corrected mid-flight — this flags the mismatch for
 // telemetry and post-flight analysis (suspect attitude-derived data).
 static constexpr uint8_t NSF2_ORIENT_THRUST_MISMATCH = (1u << 5);
+// FC loop stalled long enough to overflow the ISM6 IMU handoff queue and drop
+// samples this session (#474).  Sticky: set once ism6_queue_drops > 0 and stays
+// set, so the previously-silent all-stream logging hole (a blocking I2C poll
+// starving the single-threaded sensor loop) is now recorded in the flight log
+// instead of vanishing with no counter.  Post-flight witness; the app ignores
+// this bit.  Pairs with the deepened ISM6_QUEUE_DEPTH that should keep it clear.
+static constexpr uint8_t NSF2_FC_IMU_DROP = (1u << 6);
 
 // Pyro status byte — 4 channels × (continuity, fired) = exactly 8 bits.
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);

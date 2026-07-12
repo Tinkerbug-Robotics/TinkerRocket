@@ -6279,6 +6279,14 @@ static void loop_fc()
         if (reboot_recovery_telem)        non_sensor_data.apogee_flags |= NSF2_REBOOT_RECOVERY;
         if (guidance_enabled)             non_sensor_data.apogee_flags |= NSF2_GUIDANCE_ENABLED;
         if (orient_thrust_mismatch)       non_sensor_data.apogee_flags |= NSF2_ORIENT_THRUST_MISMATCH;
+        // #474: sticky witness for a stalled sensor loop.  Nonzero drops mean
+        // loop_fc() blocked long enough (an I2C poll/config-read) to overflow the
+        // ISM6 handoff queue and lose IMU samples — the previously-silent all-
+        // stream logging hole.  Read the HW collector (owns the queue + counter,
+        // reset once at loop start) so the deepened queue's residual, if any, is
+        // recorded in the log rather than vanishing.
+        if (sensor_collector_hw.getIsm6QueueDrops() > 0)
+            non_sensor_data.apogee_flags |= NSF2_FC_IMU_DROP;
         // Snapshot pyro state under spinlock for telemetry. With per-fire
         // arming the global "armed" bit just mirrors the live PYRO_ARM pin.
         bool arm_now;
