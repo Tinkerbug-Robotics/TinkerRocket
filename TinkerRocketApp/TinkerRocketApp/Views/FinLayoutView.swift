@@ -19,6 +19,11 @@ struct FinLayoutView: View {
     let reverse: [Bool]            // per-servo (1-4) tilt (pitch/yaw) reverse
     let rollReverse: [Bool]        // per-servo (1-4) roll reverse (independent)
     let canJog: Bool
+    // Fin-angle endpoints the jog may command, from the active profile's fin
+    // calibration (#407) — same clamp ServoTestView uses, so a narrow-travel
+    // model never jogs past its calibrated deflection. Defaults to ±20°.
+    var finMinDeg: Double = -20
+    var finMaxDeg: Double = 20
     let onSetRingMode: (UInt8) -> Void
     let onSetServoAtSlot: ([Int]) -> Void
     let onSetReverse: ([Bool]) -> Void
@@ -193,7 +198,13 @@ struct FinLayoutView: View {
         guard idx >= 0 && idx < 4 else { return }
         var angles = [0.0, 0.0, 0.0, 0.0]
         // Apply the per-servo reverse so the jog reflects the controller's "+".
-        angles[idx] = (reverse.indices.contains(idx) && reverse[idx]) ? -deg : deg
+        let target = (reverse.indices.contains(idx) && reverse[idx]) ? -deg : deg
+        // Clamp the commanded angle to the profile's fin-cal range (#407) so the
+        // jog can't over-deflect on a narrow-travel model. The FC clamps too, but
+        // matching it here keeps the app honest about what it sends.
+        let lo = Swift.min(finMinDeg, finMaxDeg)
+        let hi = Swift.max(finMinDeg, finMaxDeg)
+        angles[idx] = Swift.min(Swift.max(target, lo), hi)
         device.sendServoTestAngles(angles)
     }
     private func jogStop() { device.sendServoTestStop() }

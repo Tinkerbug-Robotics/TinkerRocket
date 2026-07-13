@@ -792,6 +792,8 @@ struct SettingsView: View {
                 reverse: profile.finReverse,
                 rollReverse: profile.finRollReverse,
                 canJog: device.isConnected && !device.isBaseStation && device.telemetry.pwr_pin_on,
+                finMinDeg: Double(profile.finMinDeg),
+                finMaxDeg: Double(profile.finMaxDeg),
                 onSetRingMode: { m in updateProfile { $0.finRingMode = m }; applyFinConfig() },
                 onSetServoAtSlot: { s in updateProfile { $0.finServoAtSlot = s }; applyFinConfig() },
                 onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() },
