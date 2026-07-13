@@ -68,7 +68,9 @@ void TR_ServoControl::begin() {
         channel_conf.gpio_num   = servo_pin_[i];
         channel_conf.speed_mode = LEDC_MODE;
         channel_conf.channel    = LEDC_CHANNELS[i];
-        channel_conf.intr_type  = LEDC_INTR_DISABLE;
+        // intr_type removed: deprecated in IDF v6 (the driver handles the LEDC
+        // interrupt internally). channel_conf is zero-initialized above, which
+        // is equivalent to the old LEDC_INTR_DISABLE (== 0) anyway.
         channel_conf.timer_sel  = LEDC_TIMERS[i];
         channel_conf.duty       = 0;
         channel_conf.hpoint     = 0;

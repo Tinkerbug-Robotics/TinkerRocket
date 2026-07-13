@@ -337,7 +337,7 @@ void TR_LoRa_Comms::pollDio1()
     // Check DIO1 pin state directly
     if (gpio_get_level((gpio_num_t)dio1_pin_) == 1)
     {
-        isr_count_++;
+        isr_count_ = isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         if (rx_mode_)
         {
             rx_done_ = true;
@@ -460,12 +460,14 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     rx_mode_ = false;
     rx_done_ = false;
 
-    // Save old config for rollback on partial failure
+    // Save old config for rollback on partial failure. setOutputPower is the
+    // final step, so there's no successful step after it to unwind — its
+    // failure leaves the prior power setting untouched and nothing to restore
+    // (hence no old_pwr saved here).
     const float   old_bw   = cfg_bw_khz_;
     const uint8_t old_sf   = cfg_sf_;
     const float   old_freq = cfg_freq_mhz_;
     const uint8_t old_cr   = cfg_cr_;
-    const int8_t  old_pwr  = cfg_tx_power_;
     int steps_done = 0;
 
     // LLCC68 validates SF against the current BW, so set BW first
@@ -721,7 +723,7 @@ void IRAM_ATTR TR_LoRa_Comms::onDio1ISR()
 {
     if (instance_ != nullptr)
     {
-        instance_->isr_count_++;
+        instance_->isr_count_ = instance_->isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         if (instance_->rx_mode_)
         {
             instance_->rx_done_ = true;

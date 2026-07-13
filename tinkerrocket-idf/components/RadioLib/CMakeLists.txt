@@ -20,10 +20,11 @@ if(ESP_PLATFORM)
     REQUIRES esp_driver_gpio driver
   )
 
-  # RadioLib (vendored) trips GCC-14's -Woverloaded-virtual: PhysicalLayer base
-  # methods are hidden by derived overloads. It's upstream third-party code, so
-  # downgrade that one warning from error rather than patch their sources (#88, 6.0).
-  target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=overloaded-virtual)
+  # RadioLib (vendored) trips GCC's -Woverloaded-virtual: PhysicalLayer base
+  # methods are hidden by derived overloads. It's upstream third-party code we've
+  # chosen not to patch (#88), so silence the warning entirely at the component
+  # boundary rather than touch their sources — keeps our build warning-clean.
+  target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-overloaded-virtual)
 
   return()
 endif()

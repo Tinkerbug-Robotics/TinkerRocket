@@ -1219,7 +1219,6 @@ static uint32_t prev_msg_count_query = 0;
 static uint32_t prev_msg_count_ism6 = 0;
 static uint32_t prev_msg_count_bmp = 0;
 static uint32_t prev_msg_count_mmc = 0;
-static uint32_t prev_msg_count_iis2mdc = 0;
 static uint32_t prev_msg_count_gnss = 0;
 static uint32_t prev_msg_count_non_sensor = 0;
 static uint32_t prev_msg_count_power = 0;
@@ -1254,7 +1253,7 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
     const size_t next = (rx_head + 1U) % RX_STREAM_RING;
     if (next == rx_tail)
     {
-        rx_ring_overflow_drops++;
+        rx_ring_overflow_drops = rx_ring_overflow_drops + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         return;
     }
     rx_ring[rx_head] = b;
@@ -2415,7 +2414,7 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     // declaration for rationale.
     if (i2s_ingest_paused) return false;
 
-    dma_cb_count++;
+    dma_cb_count = dma_cb_count + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
     dma_total_bytes += len;
 
     // Count non-zero bytes for diagnostics
@@ -4242,7 +4241,7 @@ static void printStats()
     {
         static uint32_t prev_dma_cb = 0, prev_ring_ovf = 0,
                          prev_dedup_eq = 0, prev_dedup_lt = 0,
-                         prev_stale = 0, prev_parsed = 0;
+                         prev_stale = 0;
         static uint64_t prev_dma_bytes = 0;
         uint32_t d_cb = dma_cb_count - prev_dma_cb;
         uint64_t d_bytes = raw_i2c_bytes - prev_dma_bytes;
