@@ -2795,6 +2795,50 @@ static void sendLoRaBeacon()
 // Config readback: send current config to app over BLE
 // ============================================================================
 
+// #398 item 3: config-readback used to send its 4 frames inline with a
+// delay(50) between each — a ~235 ms loop_oc stall per readback (pad-only
+// today, but a mid-flight app readback would stall telemetry that long).
+// Instead the senders enqueue frames here and loop_oc drains ONE per pass,
+// paced >= the 7.5-20 ms BLE connection interval so notify_data (which already
+// retries on mbuf exhaustion) rarely has to. Enqueue and drain both run in
+// loop_oc, so the ring needs no locking. sendConfigJSON no-ops when
+// disconnected, so any frames still queued at disconnect drain out harmlessly.
+static constexpr uint8_t  CFG_RB_CAP     = 8;
+static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
+static String   cfg_rb_queue[CFG_RB_CAP];
+static uint8_t  cfg_rb_head  = 0;
+static uint8_t  cfg_rb_count = 0;
+static uint32_t cfg_rb_last_ms = 0;
+
+static void enqueueConfigReadback(const String& json)
+{
+    if (json.length() == 0) return;
+    if (cfg_rb_count >= CFG_RB_CAP)
+    {
+        // Backed up (app hammering readback faster than the pace). Drop the
+        // oldest so the freshest snapshot still gets through.
+        cfg_rb_head = (cfg_rb_head + 1) % CFG_RB_CAP;
+        cfg_rb_count--;
+        ESP_LOGW("CFG", "readback queue full — dropped oldest frame");
+    }
+    cfg_rb_queue[(cfg_rb_head + cfg_rb_count) % CFG_RB_CAP] = json;
+    cfg_rb_count++;
+}
+
+// Drained once per loop_oc pass. Sends at most one frame per CFG_RB_PACE_MS so
+// the loop never blocks on BLE backpressure.
+static void serviceConfigReadbackQueue()
+{
+    if (cfg_rb_count == 0) return;
+    const uint32_t now = millis();
+    if ((uint32_t)(now - cfg_rb_last_ms) < CFG_RB_PACE_MS) return;
+    ble_app.sendConfigJSON(cfg_rb_queue[cfg_rb_head]);
+    cfg_rb_queue[cfg_rb_head] = String();   // release the String's heap buffer
+    cfg_rb_head = (cfg_rb_head + 1) % CFG_RB_CAP;
+    cfg_rb_count--;
+    cfg_rb_last_ms = now;
+}
+
 // Publish the FC's relayed firmware version to the app as a compact "fc_identity"
 // config message (#8 Phase 4). Kept separate from "config_identity" so it stays
 // well under the BLE notify MTU (sendConfigJSON silently drops anything over
@@ -2807,8 +2851,8 @@ static void sendFcIdentity()
     char buf[80];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\"}", fc_fw);
-    ble_app.sendConfigJSON(String(buf));
-    ESP_LOGI("CFG", "Sent fc_identity (fc_fw=%s)", fc_fw);
+    enqueueConfigReadback(String(buf));   // #398 item 3
+    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s)", fc_fw);
 }
 
 // Publish the FC's active board→rocket mounting orientation as its own
@@ -2830,10 +2874,10 @@ static void sendImuOrientation()
              (unsigned)last_query_cfg.b2r_mode,
              orientCodeName(last_query_cfg.b2r_code),
              (unsigned)cfg_imu_orient);
-    ble_app.sendConfigJSON(String(buf));
+    enqueueConfigReadback(String(buf));   // #398 item 3
     imu_orient_pub_code = last_query_cfg.b2r_code;
     imu_orient_pub_mode = last_query_cfg.b2r_mode;
-    ESP_LOGI("CFG", "Sent imu_orient (%s, mode %u)",
+    ESP_LOGI("CFG", "Queued imu_orient (%s, mode %u)",
              orientCodeName(last_query_cfg.b2r_code),
              (unsigned)last_query_cfg.b2r_mode);
 }
@@ -2872,10 +2916,8 @@ static void sendCurrentConfig()
     j += ",\"lpw\":"; j += itos(lora_tx_power);
     j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
     j += "}";
-    ble_app.sendConfigJSON(j);
-    ESP_LOGI("CFG", "Sent config readback (%u bytes)", (unsigned)j.length());
-
-    delay(50);  // let BLE stack drain before next notification
+    enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
+    ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
 
     // Message 2: pyro config ("config_pyro" type) — 4 channels
     String p = "{\"type\":\"config_pyro\"";
@@ -2888,10 +2930,8 @@ static void sendCurrentConfig()
         p += ",\""; p += PV_KEYS[i]; p += "\":"; p += fmtf(cfg_pyro_trigger_value[i], 1);
     }
     p += "}";
-    ble_app.sendConfigJSON(p);
-    ESP_LOGI("CFG", "Sent pyro config readback (%u bytes)", (unsigned)p.length());
-
-    delay(50);
+    enqueueConfigReadback(p);   // #398 item 3
+    ESP_LOGI("CFG", "Queued pyro config readback (%u bytes)", (unsigned)p.length());
 
     // Message 3: device identity ("config_identity" type)
     const esp_app_desc_t* app_desc = esp_app_get_description();
@@ -2910,15 +2950,13 @@ static void sendCurrentConfig()
              config::DEVICE_TYPE,
              fw_ver);
     String id_json(id_buf);
-    ble_app.sendConfigJSON(id_json);
-    ESP_LOGI("CFG", "Sent identity readback (%u bytes)", (unsigned)id_json.length());
+    enqueueConfigReadback(id_json);   // #398 item 3
+    ESP_LOGI("CFG", "Queued identity readback (%u bytes)", (unsigned)id_json.length());
 
-    // Also push the relayed FC firmware version as its own small message (#8).
-    delay(50);
+    // Also push the relayed FC firmware version as its own small message (#8),
+    // then the FC's board→rocket mounting orientation (pre-arm display). Both
+    // enqueue too, so the whole readback drains from loop_oc without blocking.
     sendFcIdentity();
-
-    // And the FC's board→rocket mounting orientation (pre-arm display).
-    delay(50);
     sendImuOrientation();
 }
 
@@ -5183,6 +5221,11 @@ static void loop_oc()
     // Serial debug console removed (was Arduino Serial.available/read).
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
+
+    // #398 item 3: drain one paced config-readback frame (if any) per pass.
+    // Outside the pwr_pin_on gate so connect-time readback (low-power mode)
+    // drains too. Replaces the old inline delay(50) chain in sendCurrentConfig.
+    serviceConfigReadbackQueue();
 
     // --- Active mode: FlightComputer + sensors powered on ---
     if (pwr_pin_on)
