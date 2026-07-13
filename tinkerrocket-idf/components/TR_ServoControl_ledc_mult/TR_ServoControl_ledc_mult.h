@@ -46,6 +46,28 @@ public:
     bool isIdle() const { return is_idle_; }
     // set each servo to an individual angle (degrees), bypassing PID
     void setServoAngles(const float angles[4]);
+
+    // ── Anti-backlash neutral settle (#407) ──
+    // Park the tabs at neutral repeatably despite mild gear backlash by always
+    // approaching from the SAME side: beginNeutralSettle() drives a few degrees
+    // past neutral (loading the gear mesh one way), then serviceNeutralSettle(),
+    // called each loop tick, drops to neutral once the overshoot has been held
+    // long enough to take up the slack.  Non-blocking — no delays; the two-phase
+    // move is timed across ticks via the caller's now_ms.  Matches the boot
+    // wiggle, which already ends by approaching mid from the max (high) side.
+    // Intended only for pad-time "go to neutral and hold" moments (boot settle,
+    // trim preview, test stow) — never the flight control path, which repositions
+    // every tick and drives through the backlash continuously.
+    void beginNeutralSettle(uint32_t now_ms);
+    void serviceNeutralSettle(uint32_t now_ms);
+    bool isNeutralSettling() const { return neutral_settle_active_; }
+    // Degrees past neutral to load the backlash before settling.  Clamped to the
+    // fin-cal range by setServoAngles(), so a narrow cal just approaches from its
+    // own endpoint.
+    static constexpr float    kNeutralSettleOvershootDeg = 6.0f;
+    // How long to hold the overshoot before the settle-back command (ms) — long
+    // enough for an 8 g servo to physically take up the slack.
+    static constexpr uint32_t kNeutralSettleHoldMs       = 200;
     // last computed roll command (deg)
     float getRollCmdDeg();
     // last computed pulse width (µs) of servo1
@@ -190,6 +212,11 @@ private:
     // (setPulse/setServoAngles), which re-asserts a real duty and so resumes
     // PWM without an explicit wake step.
     bool is_idle_ = false;
+
+    // Anti-backlash neutral settle (#407): true between beginNeutralSettle()
+    // (overshoot commanded) and serviceNeutralSettle() dropping to neutral.
+    bool     neutral_settle_active_ = false;
+    uint32_t neutral_settle_at_ms_  = 0;   // tick at/after which to settle
 
     // LEDC channels/timers for four servos
     static constexpr int LEDC_CHANNEL_COUNT = 4;

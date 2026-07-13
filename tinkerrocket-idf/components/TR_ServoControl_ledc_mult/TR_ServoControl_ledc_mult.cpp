@@ -189,6 +189,31 @@ void TR_ServoControl::setServoAngles(const float angles[4]) {
     }
 }
 
+void TR_ServoControl::beginNeutralSettle(uint32_t now_ms) {
+    // Phase 1: drive a few degrees past neutral on every channel (a higher
+    // pulse — usFromFinDeg is monotonic — so all four load their gear mesh from
+    // the same side).  setServoAngles clamps to the fin-cal range, so a narrow
+    // cal simply parks at its endpoint.  serviceNeutralSettle() completes the
+    // move to neutral once kNeutralSettleHoldMs has elapsed.
+    const float overshoot[4] = {
+        kNeutralSettleOvershootDeg, kNeutralSettleOvershootDeg,
+        kNeutralSettleOvershootDeg, kNeutralSettleOvershootDeg };
+    setServoAngles(overshoot);
+    neutral_settle_active_ = true;
+    neutral_settle_at_ms_  = now_ms + kNeutralSettleHoldMs;
+}
+
+void TR_ServoControl::serviceNeutralSettle(uint32_t now_ms) {
+    if (!neutral_settle_active_) return;
+    // Signed compare so the tick counter can wrap safely (same idiom as the
+    // pad-relax wake gate in main.cpp).
+    if ((int32_t)(now_ms - neutral_settle_at_ms_) < 0) return;  // still overshooting
+    // Phase 2: settle to the commanded neutral, approached from the high side.
+    const float neutral[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    setServoAngles(neutral);
+    neutral_settle_active_ = false;
+}
+
 int TR_ServoControl::saturateCommand(int command) {
     if (command < servo_min_us) return servo_min_us;
     if (command > servo_max_us) return servo_max_us;
