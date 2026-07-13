@@ -64,6 +64,7 @@ static inline std::string itos(int v)
 #include <TR_FlightLog.h>
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
+#include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
 #include <WireFormat.h>
 // FlightSimulator.h removed — sim now runs on FlightComputer via TR_Sensor_Collector_Sim
 
@@ -102,7 +103,7 @@ static TR_LogToFlash logger;
 // fn-pointer routes each drained 4080 B page into flightlog.writeFrame().
 static tr_flightlog::TR_NandBackend_esp flightlog_backend;
 static tr_flightlog::TR_FlightLog flightlog;
-static tr_flightlog::NvsBitmapStore flightlog_bitmap_store;
+static tr_flightlog::NandBitmapStore flightlog_bitmap_store;  // #398: NAND-backed, bound in initPeripherals
 
 // Phone time sync (BLE Command 9) — used for flight-filename timestamps
 // so each flight gets a unique filename instead of the hardcoded
@@ -4545,12 +4546,24 @@ void initPeripherals()
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------
     // SPI bus + physical bad-block bitmap are initialized by logger.begin();
-    // flightlog.begin() loads the persistent 3-state bitmap from NVS and the
-    // newest-valid of the dual-copy index from metadata blocks 1020-1023.
+    // flightlog.begin() loads the newest-valid of the dual-copy index from the
+    // metadata blocks, plus the 3-state block bitmap. #398: the bitmap now
+    // persists to NAND (metadata blocks [2]/[3], = 2046/2047) instead of NVS,
+    // so prepareFlight/extend/bad-block saves never hit internal flash and can't
+    // trigger the NVS-compaction cache-disable that stalled core 1.
     flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
     {
+        tr_flightlog::TR_FlightLog::Config fl_cfg{};
+        // #398 / #492: the 3840 Hz stream makes larger files and the 512 MB
+        // chip has ample headroom, so pre-allocate ~20 MB up front (80 × 256 KB
+        // blocks) — most flights then never extend mid-flight (the extend path's
+        // NAND erase + bitmap persist is the in-flight hiccup we want to avoid).
+        fl_cfg.prealloc_blocks = 80;
+        flightlog_bitmap_store.bind(&flightlog_backend,
+                                    fl_cfg.metadata_blocks[2],
+                                    fl_cfg.metadata_blocks[3]);
         auto st = flightlog.begin(flightlog_backend,
-                                  tr_flightlog::TR_FlightLog::Config{},
+                                  fl_cfg,
                                   &flightlog_bitmap_store);
         if (st == tr_flightlog::Status::Ok)
         {

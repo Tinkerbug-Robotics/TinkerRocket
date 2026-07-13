@@ -72,7 +72,8 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     }
 
     // Try to restore bitmap from persistent store. If nothing saved (or wrong
-    // size) start fresh and seed from the NAND backend's bad-block oracle.
+    // size) start fresh and seed from the NAND backend's bad-block oracle. When
+    // fresh, defer persisting until after the index reconciliation below.
     uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE];
     bool restored = bitmap_store_ && bitmap_store_->load(buf, sizeof(buf));
     if (restored) {
@@ -80,13 +81,36 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     } else {
         bitmap_.clear();
         seedBitmapFromBackend();
-        persistBitmap();
     }
 
     Status idx_st = index_.load(*nand_, cfg_.metadata_blocks[0], cfg_.metadata_blocks[1]);
     if (idx_st != Status::Ok && idx_st != Status::CrcMismatch) return idx_st;
     // CrcMismatch on a fresh chip (or both copies corrupt) is recoverable;
     // the index is already cleared and we proceed with an empty one.
+
+    // Reconcile the bitmap against the index on every boot: any block an
+    // indexed flight owns but the bitmap thinks is FREE gets promoted to
+    // ALLOCATED. A restored bitmap is normally already consistent, but a fresh
+    // seed (fresh chip / NVS wipe / the one-time NVS->NAND migration, #398) — or
+    // a bitmap that was persisted before this reconciliation existed — has lost
+    // those allocations. findContiguousFree is bitmap-only, so without this the
+    // next flight would allocate over an indexed one and overwrite it. Running
+    // every boot self-heals such a bitmap (e.g. a device already migrated by an
+    // earlier build). BAD blocks are left untouched. Persist only when we
+    // actually changed something, or on a fresh seed (to store the seeded bad
+    // blocks).
+    size_t promoted = 0;
+    for (size_t i = 0; i < index_.size(); ++i) {
+        const FlightIndexEntry& e = index_.at(i);
+        const uint32_t end = static_cast<uint32_t>(e.start_block) + e.n_blocks;
+        for (uint32_t b = e.start_block; b < end && b < NAND_BLOCK_COUNT; ++b) {
+            if (bitmap_.get(b) == BLOCK_FREE) {
+                bitmap_.set(b, BLOCK_ALLOCATED);
+                ++promoted;
+            }
+        }
+    }
+    if (!restored || promoted > 0) persistBitmap();
 
     initialized_ = true;
 
