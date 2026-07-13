@@ -1254,7 +1254,7 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
     const size_t next = (rx_head + 1U) % RX_STREAM_RING;
     if (next == rx_tail)
     {
-        rx_ring_overflow_drops++;
+        rx_ring_overflow_drops = rx_ring_overflow_drops + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         return;
     }
     rx_ring[rx_head] = b;
@@ -2415,7 +2415,7 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     // declaration for rationale.
     if (i2s_ingest_paused) return false;
 
-    dma_cb_count++;
+    dma_cb_count = dma_cb_count + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
     dma_total_bytes += len;
 
     // Count non-zero bytes for diagnostics
@@ -4113,6 +4113,7 @@ static void printStats()
     const uint32_t d_ism6 = msg_count_ism6 - prev_msg_count_ism6;
     const uint32_t d_bmp = msg_count_bmp - prev_msg_count_bmp;
     const uint32_t d_mmc = msg_count_mmc - prev_msg_count_mmc;
+    const uint32_t d_iis2mdc = msg_count_iis2mdc - prev_msg_count_iis2mdc;
     const uint32_t d_gnss = msg_count_gnss - prev_msg_count_gnss;
     const uint32_t d_non_sensor = msg_count_non_sensor - prev_msg_count_non_sensor;
     const uint32_t d_power = msg_count_power - prev_msg_count_power;
@@ -4124,6 +4125,7 @@ static void printStats()
     const float hz_ism6 = (float)d_ism6 * hz_scale;
     const float hz_bmp = (float)d_bmp * hz_scale;
     const float hz_mmc = (float)d_mmc * hz_scale;
+    const float hz_iis2mdc = (float)d_iis2mdc * hz_scale;
     const float hz_gnss = (float)d_gnss * hz_scale;
     const float hz_non_sensor = (float)d_non_sensor * hz_scale;
     const float hz_power = (float)d_power * hz_scale;
@@ -4134,6 +4136,7 @@ static void printStats()
     prev_msg_count_ism6 = msg_count_ism6;
     prev_msg_count_bmp = msg_count_bmp;
     prev_msg_count_mmc = msg_count_mmc;
+    prev_msg_count_iis2mdc = msg_count_iis2mdc;
     prev_msg_count_gnss = msg_count_gnss;
     prev_msg_count_non_sensor = msg_count_non_sensor;
     prev_msg_count_power = msg_count_power;
@@ -4212,11 +4215,12 @@ static void printStats()
                   (double)((float)last_query_cfg.ism6_rot_z_cdeg / 100.0f),
                   (double)((float)last_query_cfg.mmc_rot_z_cdeg / 100.0f),
                   (unsigned)last_query_cfg.format_version);
-    ESP_LOGI("OC", "msg Hz q/ism6/bmp/mmc/gnss/ns/pwr/st/en/unk=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
+    ESP_LOGI("OC", "msg Hz q/ism6/bmp/mmc/iis2mdc/gnss/ns/pwr/st/en/unk=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
                   (double)hz_query,
                   (double)hz_ism6,
                   (double)hz_bmp,
                   (double)hz_mmc,
+                  (double)hz_iis2mdc,
                   (double)hz_gnss,
                   (double)hz_non_sensor,
                   (double)hz_power,
@@ -4242,7 +4246,7 @@ static void printStats()
     {
         static uint32_t prev_dma_cb = 0, prev_ring_ovf = 0,
                          prev_dedup_eq = 0, prev_dedup_lt = 0,
-                         prev_stale = 0, prev_parsed = 0;
+                         prev_stale = 0;
         static uint64_t prev_dma_bytes = 0;
         uint32_t d_cb = dma_cb_count - prev_dma_cb;
         uint64_t d_bytes = raw_i2c_bytes - prev_dma_bytes;
@@ -4253,7 +4257,7 @@ static void printStats()
         static uint32_t prev_replay = 0;
         uint32_t d_replay = dedup_replay_drops - prev_replay;
         prev_replay = dedup_replay_drops;
-        uint32_t d_parsed = msg_count_ism6 + msg_count_bmp + msg_count_mmc + msg_count_non_sensor + msg_count_gnss;
+        uint32_t d_parsed = msg_count_ism6 + msg_count_bmp + msg_count_mmc + msg_count_iis2mdc + msg_count_non_sensor + msg_count_gnss;
         static uint32_t prev_total_parsed = 0;
         uint32_t d_p = d_parsed - prev_total_parsed;
         // Calculate non-zero byte percentage

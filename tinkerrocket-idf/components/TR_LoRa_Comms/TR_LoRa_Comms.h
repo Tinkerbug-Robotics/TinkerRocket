@@ -1,7 +1,15 @@
 #pragma once
 
 #include <compat.h>
+// RadioLib (vendored) trips -Woverloaded-virtual: its module classes hide
+// PhysicalLayer base methods by design. Suppress it just for this include so
+// every consumer of this header (main.cpp, TR_LoRa_Comms.cpp) stays
+// warning-clean without patching upstream sources (#88). RadioLib's own .cpp
+// files are handled by the same suppression in components/RadioLib/CMakeLists.txt.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverloaded-virtual"
 #include <RadioLib.h>
+#pragma GCC diagnostic pop
 #include "EspHal.h"
 
 class TR_LoRa_Comms

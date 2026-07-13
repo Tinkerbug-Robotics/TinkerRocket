@@ -7,7 +7,11 @@
 //
 
 import Foundation
-import CoreBluetooth
+// CoreBluetooth predates Swift concurrency: CBPeripheral et al. aren't marked
+// Sendable, so capturing them in @Sendable closures (e.g. the OTA backpressure
+// continuation below) warns. @preconcurrency suppresses those module-level
+// Sendable warnings — the CB objects are only ever touched on the main actor.
+@preconcurrency import CoreBluetooth
 import Combine
 import UIKit
 

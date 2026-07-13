@@ -21,6 +21,9 @@ esp_err_t TR_UART_Link::begin(const Config& cfg)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .rx_flow_ctrl_thresh = 0,
         .source_clk = UART_SCLK_DEFAULT,
+        // Zero the sleep-power flags (allow_pd / backup_before_sleep) added in
+        // IDF v6 — we don't power-gate this UART across light sleep.
+        .flags = {},
     };
 
     esp_err_t err = uart_driver_install(cfg.port,

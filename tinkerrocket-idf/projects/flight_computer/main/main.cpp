@@ -5430,7 +5430,12 @@ static void loop_fc()
                     for (int i = 0; i < 4; ++i)
                         if (!(f.azimuth_deg[i] >= -360.0f && f.azimuth_deg[i] <= 360.0f)) ok = false;
                     if (ok) {
-                        control_mixer.setFinLayout(f.azimuth_deg, f.reverse_mask,
+                        // Copy out of the packed FinConfigData into an aligned
+                        // local before passing — &f.azimuth_deg[0] is a
+                        // potentially-unaligned pointer (-Waddress-of-packed-member).
+                        float az[4];
+                        memcpy(az, f.azimuth_deg, sizeof(az));
+                        control_mixer.setFinLayout(az, f.reverse_mask,
                                                    f.roll_reverse_mask);
                         ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                                       (double)f.azimuth_deg[0], (double)f.azimuth_deg[1],
@@ -5623,9 +5628,9 @@ static void loop_fc()
                     float a_cmd_e = -K_tilt * nose_east;
                     float a_cmd_ned[3] = { a_cmd_n, a_cmd_e, 0.0f };
 
-                    float r00 = 1.0f - 2.0f*(q2g*q2g + q3g*q3g);
-                    float r10 = 2.0f*(q1g*q2g + q0g*q3g);
-                    float r20 = 2.0f*(q1g*q3g - q0g*q2g);
+                    // First column (r00/r10/r20 — body-forward axis) is unused
+                    // here: a_cmd_ned has no down component, so only the right
+                    // and down body projections below are needed.
                     float r01 = 2.0f*(q1g*q2g - q0g*q3g);
                     float r11 = 1.0f - 2.0f*(q1g*q1g + q3g*q3g);
                     float r21 = 2.0f*(q2g*q3g + q0g*q1g);
