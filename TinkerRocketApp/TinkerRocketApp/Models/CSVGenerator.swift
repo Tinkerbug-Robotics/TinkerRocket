@@ -678,7 +678,9 @@ nonisolated struct FlightSummary: Codable, Sendable {
 
 /// Round a float32 to `digits` significant figures so the JSON shows clean
 /// gains (e.g. 0.04, not 0.039999999105930) instead of float32→Double noise.
-private func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
+/// `nonisolated` (pure math, no shared state) so the nonisolated `FlightSettings`
+/// initializers can call it without a main-actor hop under default MainActor isolation.
+private nonisolated func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
     let d = Double(v)
     if d == 0 || !d.isFinite { return d }
     let mag = floor(log10(abs(d)))

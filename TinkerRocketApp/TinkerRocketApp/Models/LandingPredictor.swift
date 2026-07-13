@@ -134,7 +134,7 @@ final class LandingPredictor: ObservableObject {
         // Once LANDED is asserted, freeze the last prediction so the map
         // pin doesn't twitch on noise as the rocket sits on the ground.
         if t.landed_flag {
-            if !landed, var last = prediction {
+            if !landed, let last = prediction {
                 landed = true
                 let frozen = LandingPrediction(
                     landing: last.landing, descentTrack: last.descentTrack,
@@ -143,7 +143,6 @@ final class LandingPredictor: ObservableObject {
                     computedAt: now, sampleAt: last.sampleAt
                 )
                 prediction = frozen
-                _ = last
             }
             return
         }
