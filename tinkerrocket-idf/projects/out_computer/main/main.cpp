@@ -2795,6 +2795,50 @@ static void sendLoRaBeacon()
 // Config readback: send current config to app over BLE
 // ============================================================================
 
+// #398 item 3: config-readback used to send its 4 frames inline with a
+// delay(50) between each — a ~235 ms loop_oc stall per readback (pad-only
+// today, but a mid-flight app readback would stall telemetry that long).
+// Instead the senders enqueue frames here and loop_oc drains ONE per pass,
+// paced >= the 7.5-20 ms BLE connection interval so notify_data (which already
+// retries on mbuf exhaustion) rarely has to. Enqueue and drain both run in
+// loop_oc, so the ring needs no locking. sendConfigJSON no-ops when
+// disconnected, so any frames still queued at disconnect drain out harmlessly.
+static constexpr uint8_t  CFG_RB_CAP     = 8;
+static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
+static String   cfg_rb_queue[CFG_RB_CAP];
+static uint8_t  cfg_rb_head  = 0;
+static uint8_t  cfg_rb_count = 0;
+static uint32_t cfg_rb_last_ms = 0;
+
+static void enqueueConfigReadback(const String& json)
+{
+    if (json.length() == 0) return;
+    if (cfg_rb_count >= CFG_RB_CAP)
+    {
+        // Backed up (app hammering readback faster than the pace). Drop the
+        // oldest so the freshest snapshot still gets through.
+        cfg_rb_head = (cfg_rb_head + 1) % CFG_RB_CAP;
+        cfg_rb_count--;
+        ESP_LOGW("CFG", "readback queue full — dropped oldest frame");
+    }
+    cfg_rb_queue[(cfg_rb_head + cfg_rb_count) % CFG_RB_CAP] = json;
+    cfg_rb_count++;
+}
+
+// Drained once per loop_oc pass. Sends at most one frame per CFG_RB_PACE_MS so
+// the loop never blocks on BLE backpressure.
+static void serviceConfigReadbackQueue()
+{
+    if (cfg_rb_count == 0) return;
+    const uint32_t now = millis();
+    if ((uint32_t)(now - cfg_rb_last_ms) < CFG_RB_PACE_MS) return;
+    ble_app.sendConfigJSON(cfg_rb_queue[cfg_rb_head]);
+    cfg_rb_queue[cfg_rb_head] = String();   // release the String's heap buffer
+    cfg_rb_head = (cfg_rb_head + 1) % CFG_RB_CAP;
+    cfg_rb_count--;
+    cfg_rb_last_ms = now;
+}
+
 // Publish the FC's relayed firmware version to the app as a compact "fc_identity"
 // config message (#8 Phase 4). Kept separate from "config_identity" so it stays
 // well under the BLE notify MTU (sendConfigJSON silently drops anything over
@@ -2807,8 +2851,8 @@ static void sendFcIdentity()
     char buf[80];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\"}", fc_fw);
-    ble_app.sendConfigJSON(String(buf));
-    ESP_LOGI("CFG", "Sent fc_identity (fc_fw=%s)", fc_fw);
+    enqueueConfigReadback(String(buf));   // #398 item 3
+    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s)", fc_fw);
 }
 
 // Publish the FC's active board→rocket mounting orientation as its own
@@ -2830,10 +2874,10 @@ static void sendImuOrientation()
              (unsigned)last_query_cfg.b2r_mode,
              orientCodeName(last_query_cfg.b2r_code),
              (unsigned)cfg_imu_orient);
-    ble_app.sendConfigJSON(String(buf));
+    enqueueConfigReadback(String(buf));   // #398 item 3
     imu_orient_pub_code = last_query_cfg.b2r_code;
     imu_orient_pub_mode = last_query_cfg.b2r_mode;
-    ESP_LOGI("CFG", "Sent imu_orient (%s, mode %u)",
+    ESP_LOGI("CFG", "Queued imu_orient (%s, mode %u)",
              orientCodeName(last_query_cfg.b2r_code),
              (unsigned)last_query_cfg.b2r_mode);
 }
@@ -2872,10 +2916,8 @@ static void sendCurrentConfig()
     j += ",\"lpw\":"; j += itos(lora_tx_power);
     j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
     j += "}";
-    ble_app.sendConfigJSON(j);
-    ESP_LOGI("CFG", "Sent config readback (%u bytes)", (unsigned)j.length());
-
-    delay(50);  // let BLE stack drain before next notification
+    enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
+    ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
 
     // Message 2: pyro config ("config_pyro" type) — 4 channels
     String p = "{\"type\":\"config_pyro\"";
@@ -2888,10 +2930,8 @@ static void sendCurrentConfig()
         p += ",\""; p += PV_KEYS[i]; p += "\":"; p += fmtf(cfg_pyro_trigger_value[i], 1);
     }
     p += "}";
-    ble_app.sendConfigJSON(p);
-    ESP_LOGI("CFG", "Sent pyro config readback (%u bytes)", (unsigned)p.length());
-
-    delay(50);
+    enqueueConfigReadback(p);   // #398 item 3
+    ESP_LOGI("CFG", "Queued pyro config readback (%u bytes)", (unsigned)p.length());
 
     // Message 3: device identity ("config_identity" type)
     const esp_app_desc_t* app_desc = esp_app_get_description();
@@ -2910,15 +2950,13 @@ static void sendCurrentConfig()
              config::DEVICE_TYPE,
              fw_ver);
     String id_json(id_buf);
-    ble_app.sendConfigJSON(id_json);
-    ESP_LOGI("CFG", "Sent identity readback (%u bytes)", (unsigned)id_json.length());
+    enqueueConfigReadback(id_json);   // #398 item 3
+    ESP_LOGI("CFG", "Queued identity readback (%u bytes)", (unsigned)id_json.length());
 
-    // Also push the relayed FC firmware version as its own small message (#8).
-    delay(50);
+    // Also push the relayed FC firmware version as its own small message (#8),
+    // then the FC's board→rocket mounting orientation (pre-arm display). Both
+    // enqueue too, so the whole readback drains from loop_oc without blocking.
     sendFcIdentity();
-
-    // And the FC's board→rocket mounting orientation (pre-arm display).
-    delay(50);
     sendImuOrientation();
 }
 
@@ -3811,6 +3849,103 @@ static void printLoRaPayloadDebug()
                   (double)decoded.soc);
 }
 
+// #398: per-task CPU utilization sampler.
+//
+// The launch-activation window (~4 s) co-stalls everything on loop_oc, which
+// the bench (issue #398 comment 2) read as core-1 CPU starvation by a task
+// ABOVE the parser's prio 6 — prime suspect the prio-20 i2c_slv_tx serve, or
+// ISR load during the prepareFlight erase burst. This dumps, once per stats
+// interval, each task's run-time delta (µs of CPU consumed since the last
+// call) as a percent of the wall interval, sorted high-to-low, plus core-1
+// utilization derived from the IDLE1 idle task. During the launch window the
+// hog's share spikes, naming it without a full scheduling trace.
+//
+// Needs configUSE_TRACE_FACILITY + configGENERATE_RUN_TIME_STATS (set in this
+// project's sdkconfig.defaults). ulRunTimeCounter is the esp_timer µs clock.
+#if (configUSE_TRACE_FACILITY == 1) && (configGENERATE_RUN_TIME_STATS == 1)
+static void logTaskCpuDeltas(uint32_t dt_ms)
+{
+    if (!config::PROFILE_TASK_CPU) return;
+
+    // Single call site (printStats on oc_loop), so these can be static — keeps
+    // ~3 KB of snapshot off a stack that already runs deep into BLE sendTelemetry.
+    static constexpr UBaseType_t MAXT = 48;
+    struct Prev { TaskHandle_t h; uint32_t rt; };
+    static Prev prev[MAXT];
+    static UBaseType_t prev_n = 0;
+    static bool primed = false;
+
+    static TaskStatus_t now[MAXT];
+    uint32_t total_run = 0;
+    const UBaseType_t n = uxTaskGetSystemState(now, MAXT, &total_run);
+    if (n == 0)
+    {
+        static bool warned = false;
+        if (!warned) { warned = true; ESP_LOGW("TASKCPU", "task count > %u — profiler disabled", (unsigned)MAXT); }
+        return;
+    }
+
+    struct Row { const char* name; UBaseType_t prio; int core; uint32_t d; };
+    static Row rows[MAXT];
+    UBaseType_t rown = 0;
+    uint32_t idle1_d = 0;
+    for (UBaseType_t i = 0; i < n; ++i)
+    {
+        const uint32_t cur = (uint32_t)now[i].ulRunTimeCounter;
+        uint32_t before = cur;   // unseen task → 0 delta this round
+        for (UBaseType_t j = 0; j < prev_n; ++j)
+            if (prev[j].h == now[i].xHandle) { before = prev[j].rt; break; }
+        const uint32_t d = cur - before;   // uint32 subtraction wraps correctly
+        int core = -1;
+        #if (configTASKLIST_INCLUDE_COREID == 1)
+        core = (int)now[i].xCoreID;        // 0, 1, or tskNO_AFFINITY (-1)
+        #endif
+        rows[rown++] = { now[i].pcTaskName, now[i].uxCurrentPriority, core, d };
+        if (now[i].pcTaskName && strcmp(now[i].pcTaskName, "IDLE1") == 0)
+            idle1_d = d;
+    }
+
+    // Persist this snapshot for the next interval's delta.
+    prev_n = (n < MAXT) ? n : MAXT;
+    for (UBaseType_t i = 0; i < prev_n; ++i)
+        prev[i] = { now[i].xHandle, (uint32_t)now[i].ulRunTimeCounter };
+
+    if (!primed) { primed = true; return; }   // first call has no baseline
+
+    const uint32_t win_us = dt_ms * 1000u;
+    if (win_us == 0) return;
+
+    // Partial selection sort: bring the top-K consumers to the front.
+    const UBaseType_t K = (rown < 6) ? rown : 6;
+    for (UBaseType_t a = 0; a < K; ++a)
+    {
+        UBaseType_t best = a;
+        for (UBaseType_t b = a + 1; b < rown; ++b)
+            if (rows[b].d > rows[best].d) best = b;
+        if (best != a) { Row t = rows[a]; rows[a] = rows[best]; rows[best] = t; }
+    }
+
+    // Core-1 utilization = fraction of the interval IDLE1 did NOT run. Clamp:
+    // tickless-idle skew can make idle1_d edge just past the wall interval.
+    const uint32_t idle1_pct = (idle1_d >= win_us) ? 100u : (idle1_d * 100u) / win_us;
+    const uint32_t core1_util = 100u - idle1_pct;
+
+    char line[256];
+    int off = snprintf(line, sizeof(line), "win=%lums core1_util=%lu%% top:",
+                       (unsigned long)dt_ms, (unsigned long)core1_util);
+    for (UBaseType_t a = 0; a < K && off > 0 && off < (int)sizeof(line) - 1; ++a)
+    {
+        const uint32_t pct = (rows[a].d * 100u) / win_us;
+        off += snprintf(line + off, sizeof(line) - off, " %s[c%d p%lu]=%lu%%",
+                        rows[a].name ? rows[a].name : "?", rows[a].core,
+                        (unsigned long)rows[a].prio, (unsigned long)pct);
+    }
+    ESP_LOGW("TASKCPU", "%s", line);
+}
+#else
+static inline void logTaskCpuDeltas(uint32_t) {}   // stats facility not compiled in
+#endif
+
 static void printStats()
 {
     const uint32_t now = millis();
@@ -4228,6 +4363,11 @@ static void printStats()
              (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
              (unsigned long)s.spi_hold_max_us);  // #398
     logger.resetIntervalTimings();
+
+    // #398: per-task CPU deltas over this same interval — pins the core-1 hog
+    // that co-stalls loop_oc during the launch-activation window. Uses `dt`
+    // (the actual interval) as the denominator so percentages track jitter.
+    logTaskCpuDeltas(dt);
 
     // Send telemetry to BLE app
     TR_BLE_To_APP::TelemetryData ble_telem = {};
@@ -5081,6 +5221,11 @@ static void loop_oc()
     // Serial debug console removed (was Arduino Serial.available/read).
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
+
+    // #398 item 3: drain one paced config-readback frame (if any) per pass.
+    // Outside the pwr_pin_on gate so connect-time readback (low-power mode)
+    // drains too. Replaces the old inline delay(50) chain in sendCurrentConfig.
+    serviceConfigReadbackQueue();
 
     // --- Active mode: FlightComputer + sensors powered on ---
     if (pwr_pin_on)
