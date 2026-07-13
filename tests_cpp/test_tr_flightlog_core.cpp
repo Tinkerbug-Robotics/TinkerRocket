@@ -1178,6 +1178,94 @@ TEST(TRFlightLogFinalize, PersistsIndexAcrossReboot) {
     EXPECT_STREQ(fl2.index().at(0).filename, "flight_001.bin");
 }
 
+// #398: when the bitmap store comes up empty but the index survives on NAND
+// (fresh chip, NVS wipe, or the one-time NVS->NAND bitmap migration), begin()
+// must reconstruct the ALLOCATED state of every indexed flight from the index
+// — otherwise findContiguousFree (bitmap-only) hands out blocks that still hold
+// a flight and the next flight overwrites it.
+TEST(TRFlightLogMigration, FreshBitmapReconstructsAllocationsFromIndex) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+
+    // Session 1: log a flight so its block range lands in the on-NAND index.
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        ASSERT_EQ(fl.finalizeFlight("flight_001.bin", 5 * NAND_PAGE_SIZE), Status::Ok);
+    }
+
+    // Simulate the migration: bitmap persistence is gone, index stays on NAND.
+    store.forgetSaved();
+
+    TR_FlightLog fl2;
+    ASSERT_EQ(fl2.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    ASSERT_EQ(fl2.index().size(), 1u);
+    const auto& e = fl2.index().at(0);
+
+    // The indexed flight's blocks must read ALLOCATED, not FREE.
+    for (uint32_t b = e.start_block; b < e.start_block + e.n_blocks; ++b) {
+        EXPECT_EQ(fl2.bitmap().get(b), BLOCK_ALLOCATED) << "reconstructed block " << b;
+    }
+
+    // And a fresh flight must be allocated clear of the existing one.
+    uint32_t id2 = 0;
+    ASSERT_EQ(fl2.prepareFlight(id2), Status::Ok);
+    const uint32_t nb  = fl2.activeBlockCount();
+    const uint32_t sb  = fl2.activeStartBlock();
+    const bool disjoint = (sb + nb <= e.start_block) ||
+                          (sb >= static_cast<uint32_t>(e.start_block) + e.n_blocks);
+    EXPECT_TRUE(disjoint) << "new flight [" << sb << "," << (sb + nb)
+                          << ") overlaps existing [" << e.start_block << ","
+                          << (e.start_block + e.n_blocks) << ")";
+}
+
+// #398: a device migrated by an EARLIER build persisted a bitmap that lacks the
+// index reconciliation, so it comes up "restored" but missing existing flights'
+// allocations. begin() must self-heal it on a restored boot too (not only on a
+// fresh seed) and re-persist the corrected bitmap.
+TEST(TRFlightLogMigration, RestoredBitmapMissingAllocationIsSelfHealed) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+
+    // Session 1: one flight -> its range lands in the on-NAND index.
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        ASSERT_EQ(fl.finalizeFlight("flight_001.bin", 5 * NAND_PAGE_SIZE), Status::Ok);
+    }
+
+    // Overwrite the store with an all-FREE bitmap while the index survives on
+    // NAND — exactly the state left by a pre-reconciliation build's migration.
+    {
+        BlockStateBitmap blank;  // all FREE
+        uint8_t buf[BlockStateBitmap::SERIALIZED_SIZE];
+        blank.serializeTo(buf, sizeof(buf));
+        store.save(buf, sizeof(buf));
+    }
+    const size_t saves_before = store.saveCount();
+
+    // Restored boot: bitmap loads but is missing flight_001 -> must self-heal.
+    TR_FlightLog fl2;
+    ASSERT_EQ(fl2.begin(nand, TR_FlightLog::Config{}, &store), Status::Ok);
+    ASSERT_EQ(fl2.index().size(), 1u);
+    const auto& e = fl2.index().at(0);
+    for (uint32_t b = e.start_block; b < e.start_block + e.n_blocks; ++b) {
+        EXPECT_EQ(fl2.bitmap().get(b), BLOCK_ALLOCATED) << "healed block " << b;
+    }
+    EXPECT_GT(store.saveCount(), saves_before) << "self-heal must re-persist";
+
+    uint32_t id2 = 0;
+    ASSERT_EQ(fl2.prepareFlight(id2), Status::Ok);
+    const uint32_t sb = fl2.activeStartBlock(), nb = fl2.activeBlockCount();
+    const bool disjoint = (sb + nb <= e.start_block) ||
+                          (sb >= static_cast<uint32_t>(e.start_block) + e.n_blocks);
+    EXPECT_TRUE(disjoint);
+}
+
 TEST(TRFlightLogList, EmptyIndexReturnsZero) {
     FakeNandBackend nand;
     MemoryBitmapStore store;
