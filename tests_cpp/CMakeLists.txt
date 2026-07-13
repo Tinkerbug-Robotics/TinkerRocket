@@ -272,6 +272,32 @@ target_include_directories(test_tr_flightlog_core PRIVATE
 target_link_libraries(test_tr_flightlog_core GTest::gtest_main Threads::Threads)
 gtest_discover_tests(test_tr_flightlog_core)
 
+# ---------- test_nand_bitmap_store (#398) ----------
+# NAND-backed dual-copy bitmap store — replaces the NVS store on the OC so the
+# frequent bitmap persists never touch internal flash (whose compaction erase
+# cache-disabled core 1). Uses FakeNandBackend + CRC (calcCRC32).
+add_executable(test_nand_bitmap_store
+    test_nand_bitmap_store.cpp
+    fakes/fake_nand_backend.cpp
+    ${LIB_DIR}/TR_FlightLog/NandBitmapStore.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_nand_bitmap_store PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_FlightLog/include
+    ${LIB_DIR}/CRC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_nand_bitmap_store GTest::gtest_main Threads::Threads)
+gtest_discover_tests(test_nand_bitmap_store)
+
 # ---------- test_tr_ota (#8 phase 2) ----------
 # Host coverage for TR_OTA_Receiver: state machine, offset/size validation,
 # SHA-256 verification, callback fan-out. Real esp_ota_* is replaced with
