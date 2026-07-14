@@ -315,7 +315,10 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     // Transaction Collision". Schedule it instead and let the peer go first;
     // loop() fires it once the link has settled.
     conn_param_attempts_ = 0;
-    conn_param_due_ms_   = (uint32_t)millis() + kConnParamDelayMs;
+    // Skip when the app owns the parameter policy (the OC does — see
+    // setAutoConnParams). Otherwise the two requests race and whichever lands
+    // second is rejected with "update already in progress".
+    conn_param_due_ms_   = auto_conn_params_ ? ((uint32_t)millis() + kConnParamDelayMs) : 0;
 }
 
 // #503: Apple's Accessory Design Guidelines are strict about what a peripheral may

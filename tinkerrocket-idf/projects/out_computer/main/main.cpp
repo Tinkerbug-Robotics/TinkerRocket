@@ -5263,6 +5263,20 @@ static void setup_oc()
         ESP_LOGW("PWR", "INA230 not found -- battery monitoring disabled");
     }
 
+    // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
+    // while the rail is off to save idle power, fast (30 ms) once it comes on for
+    // file transfer. TR_BLE_To_APP's own connect-time request is for the base
+    // station, which has no policy; here the two collide, and the bench caught it:
+    //
+    //   BLE: Slow (low-power) conn params requested (handle=1)
+    //   NimBLE: GAP update_params: update already in progress; conn_handle=0x0001
+    //   W BLE: Connection param update request failed to send, rc=2
+    //
+    // The OC won that race, but had it lost, the idle link would have stayed at
+    // 30 ms and thrown away most of the power saving. Take ownership instead of
+    // relying on who gets there first.
+    ble_app.setAutoConnParams(false);
+
     // Only BLE starts at boot — everything else is behind PWR_PIN
     if (!ble_app.begin())
     {
