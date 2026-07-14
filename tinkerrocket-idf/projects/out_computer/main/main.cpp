@@ -294,10 +294,24 @@ static void flightlogFlushTaskHook(void* /*ctx*/)
 {
     uint32_t id = 0;
     tr_flightlog::Status st = tr_flightlog::Status::Ok;
+    const uint32_t evicted_before = flightlog.autoEvictedCount();
     if (flightlog.servicePendingPrepareFlight(id, st))
     {
         if (st == tr_flightlog::Status::Ok)
         {
+            // #315: if this arm auto-evicted to make room, surface it (never
+            // silent). The RSS_FLAG_AUTO_EVICTED storage-stats bit carries it to
+            // the app; this log line records which flight(s) went.
+            const uint32_t evicted_now = flightlog.autoEvictedCount() - evicted_before;
+            if (evicted_now > 0)
+            {
+                ESP_LOGW("FLIGHTLOG",
+                         "#315 auto-evict: reclaimed %u oldest flight(s) (last id=%u) "
+                         "to arm; %u free blocks remain",
+                         (unsigned)evicted_now,
+                         (unsigned)flightlog.lastEvictedFlightId(),
+                         (unsigned)flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE));
+            }
             ESP_LOGI("FLIGHTLOG",
                      "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
                      (unsigned)id,
@@ -4045,7 +4059,9 @@ static void printStats()
                 rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
                 rss.flight_count  = (uint16_t)flightlog.index().size();
                 rss.block_size_kb = (uint16_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
-                rss.flags         = 0x01;  // initialized
+                rss.flags         = RSS_FLAG_INITIALIZED;
+                if (flightlog.autoEvictedCount() > 0)  // #315: rolling-buffer evicted this session
+                    rss.flags |= RSS_FLAG_AUTO_EVICTED;
             }
             ble_app.sendStorageStats(0xCC, reinterpret_cast<const uint8_t*>(&rss), sizeof(rss));
         }
@@ -4563,6 +4579,19 @@ void initPeripherals()
         // blocks) — most flights then never extend mid-flight (the extend path's
         // NAND erase + bitmap persist is the in-flight hiccup we want to avoid).
         fl_cfg.prealloc_blocks = 80;
+        // #315: rolling-buffer auto-eviction. When the card fills, prepareFlight
+        // reclaims space at arm time by deleting the oldest finalized flight(s)
+        // — never the in-progress one — down to a free-block headroom floor, so
+        // the operator never hand-deletes and the pre-launch storage verdict
+        // stays green. Destructive by nature (an un-downloaded flight can be
+        // dropped), so it's a deliberate opt-in; it's surfaced via a log line +
+        // the RSS_FLAG_AUTO_EVICTED storage-stats bit, never silent. Target ~10%
+        // of the flight region (~2.5 preallocs of headroom).
+        constexpr uint32_t kAutoEvictTargetFreePct = 10;
+        fl_cfg.auto_evict_oldest = true;
+        fl_cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(
+            static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) *
+            kAutoEvictTargetFreePct / 100u);
         flightlog_bitmap_store.bind(&flightlog_backend,
                                     fl_cfg.metadata_blocks[2],
                                     fl_cfg.metadata_blocks[3]);

@@ -1007,13 +1007,15 @@ struct StorageBarView: View {
                 card(title: "Rocket Storage",
                      subtitle: "\(s.flightCount) flight\(s.flightCount == 1 ? "" : "s")",
                      used: s.usedBytes, reserved: s.reservedBytes, free: s.freeBytes,
-                     total: s.totalBytes)
+                     total: s.totalBytes,
+                     autoEvicted: s.autoEvicted)
             }
         }
     }
 
     private func card(title: String, subtitle: String,
-                      used: Int, reserved: Int, free: Int, total: Int) -> some View {
+                      used: Int, reserved: Int, free: Int, total: Int,
+                      autoEvicted: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title).font(.headline)
@@ -1026,6 +1028,17 @@ struct StorageBarView: View {
                 if reserved > 0 { legend(Color(.systemGray2), "Reserved", reserved) }
                 legend(.green, "Free", free)
                 Spacer()
+            }
+            // #315: rolling-buffer note. When the card fills, the OC auto-deletes
+            // the oldest flight(s) at arm time to make room — surface it so the
+            // operator knows data rolled off rather than being silently dropped.
+            if autoEvicted {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("Auto-reclaimed oldest flight(s) this session")
+                }
+                .font(.caption2)
+                .foregroundColor(.secondary)
             }
         }
         .padding()

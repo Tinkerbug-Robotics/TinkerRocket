@@ -1081,9 +1081,6 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func nextPage() { requestFileList(page: currentPage + 1) }
-    func previousPage() { if currentPage > 0 { requestFileList(page: currentPage - 1) } }
-
     func deleteFile(_ filename: String) {
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else { return }
@@ -1094,6 +1091,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
         files.removeAll { $0.name == filename }
         downloadStates.removeValue(forKey: filename)
+    }
+
+    /// Bulk delete for multi-select. Each name is an independent cmd-3 write;
+    /// CoreBluetooth serializes the `.withResponse` writes on its own queue, so
+    /// the firmware processes them one at a time. The caller should refresh the
+    /// file list afterward (totals/pagination shift once the deletes land).
+    func deleteFiles(_ filenames: [String]) {
+        for name in filenames { deleteFile(name) }
     }
 
     func downloadFile(_ filename: String, completion: @escaping (URL?) -> Void) {
