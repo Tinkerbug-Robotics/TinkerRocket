@@ -6081,14 +6081,26 @@ static void loop_oc()
                      (unsigned long)xs.rssi_n);
             ESP_LOGW("BLE", "%s", s_xfer_summary);
 
-            // A link at the sensitivity floor is retransmitting, and every retransmit
-            // costs one of the ~4 packet slots per connection event that the transfer
-            // rate is made of. Say so, rather than leaving it to be spotted.
-            if (xs.rssi_n > 0 && rssi_avg < -85)
+            // JUDGE THE LINK BY max, NOT avg OR min. Bench 2026-07-14, phone six inches
+            // away: quiet link -64 dBm; during the transfer avg=-79 min=-113 max=-59
+            // over 74 samples.
+            //
+            // -113 dBm is BELOW the receiver's noise floor — it is not a measurement.
+            // HCI_Read_RSSI reports whatever the controller last saw, and under load that
+            // includes idle moments between connection events, so the low samples are
+            // junk. The MAX tracks the quiet-link reading (-59 vs -64), and that is the
+            // real link quality.
+            //
+            // This is not a nitpick: a single such outlier (-107) was used to explain away
+            // a slow run, and it explained nothing — three later runs on the same hardware
+            // all hit 35 KB/s. If you are about to blame RSSI for a slow transfer, look at
+            // max first, and check the app's own CoreBluetooth RSSI before believing it.
+            if (xs.rssi_n > 0 && xs.rssi_max < -85)
             {
-                ESP_LOGW("BLE", "  ^ link was WEAK (avg %d dBm). Expect the LL to be "
-                                "retransmitting; move the phone closer before comparing "
-                                "this number to anything.", rssi_avg);
+                ESP_LOGW("BLE", "  ^ link genuinely WEAK (best sample %d dBm). The LL will "
+                                "be retransmitting, and every retransmit costs one of the "
+                                "~4 packet slots per connection event that the transfer "
+                                "rate is made of.", (int)xs.rssi_max);
             }
 
             // Keep saying it, so a battery run can be read back over USB afterwards.
