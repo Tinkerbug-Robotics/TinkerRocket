@@ -1339,15 +1339,62 @@ static inline uint8_t rxPop()
     return b;
 }
 
+// #524: hold the CPU at full speed and out of light sleep while we are serving
+// the phone.
+//
+// A download runs for MINUTES entirely inside enterLowPowerMode()'s regime:
+// 80/40 MHz DFS with light sleep armed. Neither is free here. Throughput is set
+// by how many packets we land in each 30 ms connection event, and a core that is
+// asleep — or at 40 MHz — when the event opens cannot refill the controller's
+// queue in time to fill it.
+//
+// The 34.7 kB/s bench result was measured over USB, where
+// CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION holds a NO_LIGHT_SLEEP lock on our behalf,
+// so light sleep never actually engaged during that test. On battery it would,
+// and we would quietly hand part of the win back. Hold the locks ourselves rather
+// than depend on a USB cable being plugged in — the same "measure it on battery"
+// trap as #519, in mirror image.
+//
+// Costs nothing real: idle current only matters when nobody is talking to us, and
+// during a transfer the radio is busy regardless.
+#if defined(CONFIG_PM_ENABLE)
+static esp_pm_lock_handle_t s_phone_io_cpu_lock = nullptr;  // ESP_PM_CPU_FREQ_MAX
+static esp_pm_lock_handle_t s_phone_io_ls_lock  = nullptr;  // ESP_PM_NO_LIGHT_SLEEP
+
+static void phoneIoPmAcquire()
+{
+    if (s_phone_io_cpu_lock == nullptr)
+    {
+        esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX,   0, "phone_io_cpu", &s_phone_io_cpu_lock);
+        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "phone_io_ls",  &s_phone_io_ls_lock);
+    }
+    if (s_phone_io_cpu_lock) esp_pm_lock_acquire(s_phone_io_cpu_lock);
+    if (s_phone_io_ls_lock)  esp_pm_lock_acquire(s_phone_io_ls_lock);
+}
+static void phoneIoPmRelease()
+{
+    if (s_phone_io_ls_lock)  esp_pm_lock_release(s_phone_io_ls_lock);
+    if (s_phone_io_cpu_lock) esp_pm_lock_release(s_phone_io_cpu_lock);
+}
+#else
+static inline void phoneIoPmAcquire() {}
+static inline void phoneIoPmRelease() {}
+#endif
+
 // beginPhoneIO / endPhoneIO — bracket a phone-serving operation (file
 // list / delete / download). Pauses both I2C servicing (flash_op_active)
 // and I2S ingest (i2s_ingest_paused), then drains the rx ring on resume
 // so stale sensor bytes from before the pause aren't processed as if
 // they were current. Must be called from a single task (oc_loop).
+//
+// esp_pm locks are counting, and every begin has a matching end on every path
+// (the download loop breaks out, it never returns), so the PM lock cannot leak
+// and strand us at full power.
 static inline void beginPhoneIO()
 {
     i2s_ingest_paused = true;
     flash_op_active   = true;
+    phoneIoPmAcquire();
 }
 static inline void endPhoneIO()
 {
@@ -1355,6 +1402,7 @@ static inline void endPhoneIO()
     rx_tail = rx_head;
     i2s_ingest_paused = false;
     flash_op_active   = false;
+    phoneIoPmRelease();
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -5744,6 +5792,14 @@ static void loop_oc()
             uint32_t start_ms = millis();
             bool eof = false;
 
+            // #524 diagnostic: split the wall clock between the two things a
+            // download actually does. The NAND read path is bit-banged, so its
+            // share is a genuine unknown — if flash owns a meaningful slice of the
+            // transfer then no amount of BLE tuning will show up.
+            uint64_t flash_us = 0;
+            uint64_t ble_us   = 0;
+            ble_app.resetXferStats();
+
             // #524: there is no per-chunk delay any more.
             //
             // There used to be a fixed 30 ms one, with this rationale: "the bursty
@@ -5769,9 +5825,11 @@ static void loop_oc()
             {
                 // Read next block from flash, appended after any carryover bytes
                 size_t flash_bytes_read = 0;
+                const uint32_t t_flash = micros();
                 bool read_ok = flightlogReadChunk(download_filename.c_str(), file_offset,
                                                   read_buf + carryover, FLASH_READ_SIZE,
                                                   flash_bytes_read, eof);
+                flash_us += (uint32_t)(micros() - t_flash);
                 if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
@@ -5806,7 +5864,10 @@ static void loop_oc()
                     // Complete frame found — flush BLE buffer if this frame won't fit
                     if (ble_used > 0 && ble_used + frame_size > chunk_data_size)
                     {
-                        if (!ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false))
+                        const uint32_t t_ble = micros();
+                        const bool sent = ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        ble_us += (uint32_t)(micros() - t_ble);
+                        if (!sent)
                         {
                             // #524: could not send even after full backpressure. Do
                             // NOT keep going — that would hand the app a file with a
@@ -5863,6 +5924,26 @@ static void loop_oc()
             ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s)",
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
                           elapsed_ms / 1000.0f, kbps);
+
+            // #524 diagnostic — reads as: where did the time go, and why can't we
+            // put more packets in each connection event?
+            //
+            //   flash%  large       -> the bit-banged NAND read is a real cost and
+            //                          BLE tuning is chasing the wrong thing
+            //   qdepth ~2 chunks    -> the controller's outbound queue is the cap;
+            //                          there may be a knob
+            //   qdepth deep + slow  -> iOS just won't drain more per event, and the
+            //                          only way past it is an L2CAP channel (#526)
+            const auto xs = ble_app.xferStats();
+            const float total_ms = (elapsed_ms > 0) ? (float)elapsed_ms : 1.0f;
+            ESP_LOGW("BLE", "XFER: flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
+                            "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks",
+                     (unsigned long long)(flash_us / 1000),
+                     100.0f * (flash_us / 1000.0f) / total_ms,
+                     (unsigned long long)(ble_us / 1000),
+                     100.0f * (ble_us / 1000.0f) / total_ms,
+                     (unsigned long)xs.chunks, (unsigned long)xs.retries_total,
+                     (unsigned long)xs.retries_max, (unsigned long)xs.burst_max);
             } // else (chunk_data_size > 0)
             endPhoneIO();
         }

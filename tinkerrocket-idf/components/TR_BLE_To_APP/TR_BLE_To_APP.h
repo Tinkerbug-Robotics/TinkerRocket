@@ -250,6 +250,28 @@ public:
     // Falls back to 170 if the MTU has not been negotiated yet.
     size_t getMaxChunkDataSize() const;
 
+    // #524 bench diagnostic. We know the transfer is bounded by packets per
+    // connection event (~4.4 of a possible ~21). What we do NOT know is WHY, and
+    // there are two very different answers:
+    //
+    //   - the controller's outbound queue is shallow, so we cannot keep enough
+    //     data staged for iOS to drain a full event  -> maybe tunable, or
+    //   - iOS simply refuses to pull more notifications per event  -> nothing we
+    //     do on this side matters, and the answer is an L2CAP channel.
+    //
+    // burst_max separates them: it is the longest run of chunks the stack accepted
+    // with ZERO waiting, i.e. how many chunks actually fit in the queue. If it is
+    // ~2, we are queue-limited. If it is deep and we are still slow, iOS is the cap.
+    struct XferStats
+    {
+        uint32_t chunks;         // notifications sent
+        uint32_t retries_total;  // summed backpressure waits
+        uint32_t retries_max;    // worst single chunk
+        uint32_t burst_max;      // longest run accepted with no wait == queue depth
+    };
+    void resetXferStats();
+    XferStats xferStats() const { return xfer_; }
+
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
     // failure). main.cpp gates I2C battery-gauge polling on this so the
     // esp_ota_begin() flash erase doesn't collide with the I2C bus (#17).
@@ -258,6 +280,9 @@ public:
 private:
     static constexpr size_t MAX_DEVICE_NAME_LEN = 29;   // BLE adv name limit
     char device_name_[MAX_DEVICE_NAME_LEN + 1];          // mutable, null-terminated
+
+    XferStats xfer_{};        // #524 diagnostic, reset at each download
+    uint32_t  xfer_burst_{0}; // current run of zero-wait sends
 
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;

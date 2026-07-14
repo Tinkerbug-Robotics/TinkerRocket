@@ -972,6 +972,12 @@ size_t TR_BLE_To_APP::maxNotifyBytes() const
     return (mtu > 3) ? (size_t)(mtu - 3) : 20;
 }
 
+void TR_BLE_To_APP::resetXferStats()
+{
+    xfer_ = XferStats{};
+    xfer_burst_ = 0;
+}
+
 size_t TR_BLE_To_APP::getMaxChunkDataSize() const
 {
     // #524: this used to return the MTU-maximal size (mtu - 3 - 7 = 502 at MTU
@@ -1028,10 +1034,12 @@ static constexpr int NOTIFY_RELIABLE_DELAY_MS    = 5;
 static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
                        const uint8_t* data, size_t len,
                        int max_retries = NOTIFY_BEST_EFFORT_RETRIES,
-                       int retry_delay_ms = NOTIFY_BEST_EFFORT_DELAY_MS)
+                       int retry_delay_ms = NOTIFY_BEST_EFFORT_DELAY_MS,
+                       int* attempts_out = nullptr)  // #524: how long we were blocked
 {
     for (int attempt = 0; attempt < max_retries; attempt++)
     {
+        if (attempts_out) *attempts_out = attempt;
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
         if (!om)
         {
@@ -1366,9 +1374,26 @@ bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
 
     // #524: RELIABLE budget — wait for the controller to drain rather than drop.
     // A dropped file chunk is lost data, unlike a dropped telemetry frame.
+    int attempts = 0;
     const int rc = notify_data(conn_handle_, file_transfer_val_handle_,
                                chunk_buffer_, packet_size,
-                               NOTIFY_RELIABLE_RETRIES, NOTIFY_RELIABLE_DELAY_MS);
+                               NOTIFY_RELIABLE_RETRIES, NOTIFY_RELIABLE_DELAY_MS,
+                               &attempts);
+
+    // #524 diagnostic. A run of zero-wait sends is the controller queue emptying
+    // into us; its length is the queue depth in chunks. See XferStats.
+    xfer_.chunks++;
+    xfer_.retries_total += (uint32_t)attempts;
+    if ((uint32_t)attempts > xfer_.retries_max) xfer_.retries_max = (uint32_t)attempts;
+    if (attempts == 0)
+    {
+        if (++xfer_burst_ > xfer_.burst_max) xfer_.burst_max = xfer_burst_;
+    }
+    else
+    {
+        xfer_burst_ = 0;
+    }
+
     if (rc != 0)
     {
         // Report it. The caller must abort the transfer rather than carry on and
