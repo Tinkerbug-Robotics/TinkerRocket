@@ -19,6 +19,30 @@ struct FileManagerView: View {
         device.files
     }
 
+    // Both firmwares paginate the BLE file list at 5 entries/page
+    // (FILES_PER_PAGE in out_computer + base_station config).
+    private static let filesPerPage = 5
+
+    /// Authoritative total page count when we know the full file count, else nil.
+    /// The rocket's storage stats report `flightCount` (== the flight-log index
+    /// size, which is exactly what the file list paginates over), so we can show
+    /// a fixed numbered navigator. The base station reports no count, so its
+    /// navigator is discovered page-by-page instead (see FilePageNavigator).
+    private var totalFilePages: Int? {
+        guard !device.isBaseStation,
+              let s = device.rocketStorage, s.initialized else { return nil }
+        return FilePageNavigator.totalPages(forFileCount: s.flightCount,
+                                            pageSize: Self.filesPerPage)
+    }
+
+    /// Show the navigator whenever there's more than one page. With a known
+    /// total this also hides it (and the phantom "next") for an exactly-full
+    /// single page, which the count==pageSize "hasMore" heuristic can't.
+    private var showPagination: Bool {
+        if let total = totalFilePages { return total > 1 }
+        return device.currentPage > 0 || device.hasMoreFiles
+    }
+
     var body: some View {
         VStack(spacing: 20) {
             if !device.isConnected {
@@ -35,8 +59,12 @@ struct FileManagerView: View {
                     VStack(alignment: .leading) {
                         Text(device.isBaseStation ? "LoRa Logs" : "Flights")
                             .font(.headline)
-                        if device.currentPage > 0 || device.hasMoreFiles {
-                            Text("Page \(device.currentPage + 1)")
+                        if let total = totalFilePages, total > 1 {
+                            Text("Page \(Int(device.currentPage) + 1) of \(total)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if device.currentPage > 0 || device.hasMoreFiles {
+                            Text("Page \(Int(device.currentPage) + 1)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
@@ -157,41 +185,15 @@ struct FileManagerView: View {
                         }
                     }
 
-                    // Pagination controls
-                    if device.currentPage > 0 || device.hasMoreFiles {
-                        HStack(spacing: 20) {
-                            Button(action: {
-                                device.previousPage()
-                            }) {
-                                HStack {
-                                    Image(systemName: "chevron.left")
-                                    Text("Previous")
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(device.currentPage > 0 ? Color.blue : Color.gray)
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
-                            }
-                            .disabled(device.currentPage == 0)
-
-                            Spacer()
-
-                            Button(action: {
-                                device.nextPage()
-                            }) {
-                                HStack {
-                                    Text("Next")
-                                    Image(systemName: "chevron.right")
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(device.hasMoreFiles ? Color.blue : Color.gray)
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
-                            }
-                            .disabled(!device.hasMoreFiles)
-                        }
+                    // Pagination — numbered page navigator so many saved files
+                    // are easy to jump through (not just Prev/Next one at a time).
+                    if showPagination {
+                        FilePageNavigator(
+                            currentPage: Int(device.currentPage),
+                            totalPages: totalFilePages,
+                            hasMore: device.hasMoreFiles,
+                            onSelect: { device.requestFileList(page: UInt8(clamping: $0)) }
+                        )
                         .padding(.horizontal)
                         .padding(.bottom, 10)
                     }
@@ -213,6 +215,109 @@ struct FileManagerView: View {
             // Rebuild download states from cache when file list updates
             device.rebuildDownloadStates(for: files.map { $0.name })
         }
+    }
+}
+
+// Numbered page bar for the saved-files list. Tapping a number jumps straight
+// to that page; chevrons step one at a time. Two modes:
+//   • totalPages known (rocket, from flightCount) → fixed pills 1…N, so you can
+//     jump to any page including the last.
+//   • totalPages nil (base station reports no count) → pills are discovered as
+//     you page forward (1…current, plus a "…" while more remain).
+// The row scrolls horizontally and keeps the current page centered.
+struct FilePageNavigator: View {
+    let currentPage: Int          // 0-based
+    let totalPages: Int?          // nil when the device reports no total
+    let hasMore: Bool             // used only in the discovered (nil-total) mode
+    let onSelect: (Int) -> Void
+
+    // 0-based page indices to render.
+    private var pageIndices: [Int] {
+        Self.pageIndices(currentPage: currentPage, totalPages: totalPages, hasMore: hasMore)
+    }
+
+    private var canGoNext: Bool {
+        Self.canGoNext(currentPage: currentPage, totalPages: totalPages, hasMore: hasMore)
+    }
+
+    // --- Pure paging logic (unit-tested; see FilePageNavigatorTests) ---
+
+    /// Total pages for a known file count, paginated at `pageSize`. At least 1.
+    static func totalPages(forFileCount count: Int, pageSize: Int) -> Int {
+        guard pageSize > 0 else { return 1 }
+        return max(1, (count + pageSize - 1) / pageSize)
+    }
+
+    static func pageIndices(currentPage: Int, totalPages: Int?, hasMore: Bool) -> [Int] {
+        if let total = totalPages, total > 0 { return Array(0..<total) }
+        let last = currentPage + (hasMore ? 1 : 0)
+        return Array(0...max(0, last))
+    }
+
+    static func canGoNext(currentPage: Int, totalPages: Int?, hasMore: Bool) -> Bool {
+        if let total = totalPages { return currentPage < total - 1 }
+        return hasMore
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            chevron("chevron.left", enabled: currentPage > 0) {
+                onSelect(currentPage - 1)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pageIndices, id: \.self) { p in
+                            pagePill(p).id(p)
+                        }
+                        if totalPages == nil && hasMore {
+                            Text("…")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 2)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .onChange(of: currentPage) { p in
+                    withAnimation { proxy.scrollTo(p, anchor: .center) }
+                }
+                .onAppear { proxy.scrollTo(currentPage, anchor: .center) }
+            }
+
+            chevron("chevron.right", enabled: canGoNext) {
+                onSelect(currentPage + 1)
+            }
+        }
+    }
+
+    private func pagePill(_ p: Int) -> some View {
+        let isCurrent = (p == currentPage)
+        return Button {
+            if !isCurrent { onSelect(p) }
+        } label: {
+            Text("\(p + 1)")
+                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                .frame(minWidth: 34, minHeight: 34)
+                .background(isCurrent ? Color.blue : Color(.systemGray5))
+                .foregroundColor(isCurrent ? .white : .primary)
+                .clipShape(Circle())
+        }
+        .disabled(isCurrent)
+        .accessibilityLabel("Page \(p + 1)")
+    }
+
+    private func chevron(_ system: String, enabled: Bool,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .frame(width: 34, height: 34)
+                .background(enabled ? Color.blue : Color(.systemGray4))
+                .foregroundColor(.white)
+                .clipShape(Circle())
+        }
+        .disabled(!enabled)
     }
 }
 

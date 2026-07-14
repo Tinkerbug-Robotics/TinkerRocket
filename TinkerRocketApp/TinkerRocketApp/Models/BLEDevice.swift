@@ -1081,9 +1081,6 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func nextPage() { requestFileList(page: currentPage + 1) }
-    func previousPage() { if currentPage > 0 { requestFileList(page: currentPage - 1) } }
-
     func deleteFile(_ filename: String) {
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else { return }
