@@ -73,7 +73,7 @@ TEST(BleChunkSize, TradesPayloadForThroughput)
 
 // Smallest MTU we will actually size a chunk against; below this we cannot know
 // the real MTU and fall back (see UnnegotiatedMtuAssumesIosDefault).
-constexpr uint16_t kFirstRealMtu = 31;  // kAttNotifyHdr + kChunkHeader + 20 + 1
+constexpr uint16_t kFirstRealMtu = tr_ble::kMinUsableMtu + 1;
 
 TEST(BleChunkSize, NeverExceedsTheMtu)
 {

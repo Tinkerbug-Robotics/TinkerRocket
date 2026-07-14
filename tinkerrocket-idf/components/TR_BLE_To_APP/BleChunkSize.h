@@ -50,6 +50,10 @@ static constexpr size_t kChunkHeader   = 7;  // offset(4) + length(2) + flags(1)
 // Bytes the link layer must carry in front of every chunk payload.
 static constexpr size_t kWireOverhead = kL2capHeader + kAttNotifyHdr + kChunkHeader;  // 14
 
+// Smallest ATT MTU worth sizing a real chunk against. At or below this we cannot
+// know the true MTU and fall back (see below).
+static constexpr uint16_t kMinUsableMtu = kAttNotifyHdr + kChunkHeader + 20;  // 30
+
 // Chunk size used before the MTU has been negotiated (fits iOS's 185-byte default).
 static constexpr size_t kFallbackChunkData = 170;
 
@@ -62,7 +66,7 @@ static constexpr size_t kFallbackChunkData = 170;
 inline size_t maxChunkDataSize(uint16_t att_mtu, uint16_t ll_tx_octets)
 {
     // Before the MTU exchange lands there is nothing to optimise against.
-    if (att_mtu <= kAttNotifyHdr + kChunkHeader + 20)
+    if (att_mtu <= kMinUsableMtu)
     {
         return kFallbackChunkData;
     }

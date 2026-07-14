@@ -228,12 +228,30 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         // slow while we assumed otherwise. Same discipline as the connection
         // interval (#503) and the PHY.
         self->ll_tx_octets_ = event->data_len_chg.max_tx_octets;
-        ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets "
-                          "-> chunk %u bytes",
-                 (unsigned)event->data_len_chg.max_tx_octets,
-                 (unsigned)event->data_len_chg.max_tx_time,
-                 (unsigned)event->data_len_chg.max_rx_octets,
-                 (unsigned)self->getMaxChunkDataSize());
+
+        // Quote the resulting chunk size ONLY once the MTU is real. DLE and the
+        // MTU exchange race, and iOS runs DLE first: at this point effectiveMtu()
+        // is usually still 23, so a chunk size printed here would be the 170-byte
+        // pre-MTU fallback — which reads exactly like DLE having failed, on the
+        // very line you would check to see whether it worked. onMtuChanged() logs
+        // the settled size either way.
+        if (self->effectiveMtu() > tr_ble::kMinUsableMtu)
+        {
+            ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets "
+                              "-> chunk %u bytes",
+                     (unsigned)event->data_len_chg.max_tx_octets,
+                     (unsigned)event->data_len_chg.max_tx_time,
+                     (unsigned)event->data_len_chg.max_rx_octets,
+                     (unsigned)self->getMaxChunkDataSize());
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets "
+                              "(chunk size pending MTU exchange)",
+                     (unsigned)event->data_len_chg.max_tx_octets,
+                     (unsigned)event->data_len_chg.max_tx_time,
+                     (unsigned)event->data_len_chg.max_rx_octets);
+        }
         break;
 
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
