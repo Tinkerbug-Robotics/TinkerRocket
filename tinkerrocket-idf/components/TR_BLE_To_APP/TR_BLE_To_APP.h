@@ -219,7 +219,11 @@ public:
     // data: chunk data
     // len: chunk length
     // eof: true if this is the last chunk
-    void sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof);
+    // Send one file-transfer chunk. Returns false if the chunk could NOT be
+    // notified even after the full reliable backpressure budget (#524) — the
+    // caller must then abort the transfer rather than carry on and hand the app a
+    // file with a hole in it. Unlike telemetry, a dropped chunk is lost data.
+    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof);
 
     // Get the negotiated MTU (after connection established)
     // Returns 0 if not yet negotiated
@@ -241,9 +245,69 @@ public:
         return device_connected_ && effectiveMtu() > 23 && telem_notify_subscribed_;
     }
 
-    // Get max data bytes per BLE chunk (MTU - ATT overhead - our header)
-    // Falls back to 170 if MTU not yet negotiated
+    // Max data bytes per BLE file chunk. NOT simply "MTU minus headers" — that
+    // wastes a whole link-layer packet on a 14-byte stub. See BleChunkSize.h.
+    // Falls back to 170 if the MTU has not been negotiated yet.
     size_t getMaxChunkDataSize() const;
+
+    // #524 bench diagnostic. We know the transfer is bounded by packets per
+    // connection event (~4.4 of a possible ~21). What we do NOT know is WHY, and
+    // there are two very different answers:
+    //
+    //   - the controller's outbound queue is shallow, so we cannot keep enough
+    //     data staged for iOS to drain a full event  -> maybe tunable, or
+    //   - iOS simply refuses to pull more notifications per event  -> nothing we
+    //     do on this side matters, and the answer is an L2CAP channel.
+    //
+    // burst_max separates them: it is the longest run of chunks the stack accepted
+    // with ZERO waiting, i.e. how many chunks actually fit in the queue. If it is
+    // ~2, we are queue-limited. If it is deep and we are still slow, iOS is the cap.
+    struct XferStats
+    {
+        uint32_t chunks;         // notifications sent
+        uint32_t retries_total;  // summed backpressure waits
+        uint32_t retries_max;    // worst single chunk
+        uint32_t burst_max;      // longest run accepted with no wait == queue depth
+
+        // Link quality sampled DURING the transfer, not once at the end. A single
+        // end-of-run reading cannot tell a genuinely bad link from a stray sample,
+        // and the difference matters: at the sensitivity floor the link layer
+        // retransmits, and each retransmit burns one of the ~4 packet slots per
+        // connection event that the whole transfer rate is made of.
+        int8_t   rssi_min;
+        int8_t   rssi_max;
+        int32_t  rssi_sum;
+        uint32_t rssi_n;
+    };
+    void resetXferStats();
+    XferStats xferStats() const { return xfer_; }
+
+    // Ask the peer for a parameter set, and REMEMBER it so a collision retry re-asks
+    // for the same one. Units are raw BLE: interval in 1.25 ms, timeout in 10 ms.
+    // `what` is a label for the log ("Fast (transfer)", "Slow (low-power)").
+    void requestConnParams(uint16_t itvl_min, uint16_t itvl_max,
+                           uint16_t latency, uint16_t timeout, const char* what);
+
+    // How often the link ACTUALLY carries data, in ms: interval x (latency + 1).
+    //
+    // Latency is the number of connection events the peripheral may skip, so this —
+    // not the interval — is the real cadence. On the idle link (200 ms, latency 4)
+    // it is a FULL SECOND. Anything that waits on the controller draining must be
+    // measured against this, or it will time out on a perfectly healthy link.
+    // Returns 30 (the fast link) if the parameters are not known yet.
+    //
+    // Cached, NOT queried. It used to call ble_gap_conn_find() — which takes the
+    // NimBLE host lock — and sendFileChunk calls this once per chunk, so a download
+    // was grabbing the host stack's own lock ~19,000 times while that same host task
+    // was trying to drain the queue we were waiting on. The value only changes when
+    // the parameters change, so it is latched in onConnect/onConnParamsUpdated.
+    uint32_t effectiveEventMs() const { return eff_event_ms_; }
+
+    // Live RSSI of the phone link, dBm (0 if not connected / unavailable). A weak
+    // link means the link layer is silently retransmitting, which eats exactly the
+    // per-event packet budget the transfer is bounded by — so it is a candidate
+    // explanation any time throughput drops without the code changing.
+    int8_t connRssi() const;
 
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
     // failure). main.cpp gates I2C battery-gauge polling on this so the
@@ -254,8 +318,23 @@ private:
     static constexpr size_t MAX_DEVICE_NAME_LEN = 29;   // BLE adv name limit
     char device_name_[MAX_DEVICE_NAME_LEN + 1];          // mutable, null-terminated
 
+    XferStats xfer_{};        // #524 diagnostic, reset at each download
+    uint32_t  xfer_burst_{0}; // current run of zero-wait sends
+
+    // Latched link cadence, interval x (latency + 1) ms. See effectiveEventMs().
+    volatile uint32_t eff_event_ms_ = 30;
+
+    // Sample RSSI every N chunks — often enough to see a link go bad mid-transfer,
+    // rare enough that taking the host lock for it costs nothing.
+    static constexpr uint32_t kRssiSampleEveryChunks = 256;
+
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;
+    // #524: LL max TX payload from BLE_GAP_EVENT_DATA_LEN_CHG. 27 is the pre-DLE
+    // minimum every link starts at, so it is the safe assumption until the peer
+    // agrees to more. getMaxChunkDataSize() sizes chunks to a whole number of
+    // these, which is where the download throughput is.
+    volatile uint16_t ll_tx_octets_;
     volatile bool telem_notify_subscribed_;  // central enabled notifications on telemetry/config char
     volatile uint16_t conn_handle_;          // NimBLE connection handle
     // #517: a RING, not a single latch (see BleCommandRing.h). It used to be
@@ -322,9 +401,25 @@ private:
     uint32_t conn_param_due_ms_   = 0;   // 0 = nothing scheduled
     uint8_t  conn_param_attempts_ = 0;
     bool     auto_conn_params_    = true;  // see setAutoConnParams()
+
+    // #524: WHAT we last asked for, so a collision retry re-asks for the SAME set.
+    // The retry used to re-send a hardcoded 15-30 ms / latency 0 no matter what the
+    // caller had wanted — so a SLOW (low-power) request that lost a collision race
+    // would come back as a FAST one and silently undo low-power mode. Defaults are
+    // the fast set, which is what the shared/auto path asks for.
+    uint16_t cp_itvl_min_ = 0x0C;   // 15 ms (1.25 ms units)
+    uint16_t cp_itvl_max_ = 0x18;   // 30 ms
+    uint16_t cp_latency_  = 0;
+    uint16_t cp_timeout_  = 200;    // 2 s (10 ms units)
+    const char* cp_what_  = "Default";
+
     static constexpr uint32_t kConnParamDelayMs = 1000;  // let iOS settle the link first
+    // #524: 0x2A means the PEER has a transaction in flight. Retrying straight back
+    // into the same window just collides again — the bench logged four in a row, then
+    // we gave up and ran a whole download on the 200 ms idle link. Back off instead
+    // (750, 1500, 2250 ...) and allow more tries.
     static constexpr uint32_t kConnParamRetryMs = 750;
-    static constexpr uint8_t  kConnParamMaxAttempts = 3;
+    static constexpr uint8_t  kConnParamMaxAttempts = 6;
     // Throttle the per-chunk "writing" status notifications. Updated on
     // every successful chunk; we notify at most ~2 Hz so the BLE notify
     // queue isn't saturated mid-flash.
@@ -383,6 +478,7 @@ private:
     // #503: connection-parameter negotiation. Deferred out of the connect
     // callback so it doesn't collide with the peer's own update procedure.
     void requestConnParams();
+    static uint32_t effFromDesc(const struct ble_gap_conn_desc& desc);
     void onConnParamsUpdated(uint16_t conn_handle, int status);
     void onCommandWrite(const uint8_t* data, size_t length);
 

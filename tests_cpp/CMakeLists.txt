@@ -401,6 +401,21 @@ target_include_directories(test_ble_command_ring PRIVATE
 target_link_libraries(test_ble_command_ring GTest::gtest_main)
 gtest_discover_tests(test_ble_command_ring)
 
+# ---------- test_ble_chunk_size ----------
+# #524: BLE file downloads ran at ~17 kB/s because chunks were sized MTU-maximal
+# (502 B), which puts 516 octets on the wire and fragments as 251 + 251 + 14 — a
+# whole link-layer packet to carry fourteen bytes. Throughput here is bounded by
+# packets per connection event, so that stub cost ~a third of the download.
+# BleChunkSize.h is pure integer arithmetic over (ATT MTU, LL TX octets), so the
+# alignment — and the degenerate links it has to survive — are tested on the host.
+add_executable(test_ble_chunk_size test_ble_chunk_size.cpp)
+target_include_directories(test_ble_chunk_size PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_ble_chunk_size GTest::gtest_main)
+gtest_discover_tests(test_ble_chunk_size)
+
 # ---------- test_bs_download_policy ----------
 # Host-side test for the base-station cooperative BLE download (#380): chunk
 # planning bounded by open-time file size + the 15 ms notify-drain pacing gate.

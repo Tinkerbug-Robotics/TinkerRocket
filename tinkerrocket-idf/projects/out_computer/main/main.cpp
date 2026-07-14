@@ -1054,21 +1054,23 @@ static void exitLowPowerMode()
 // "GAP update_params: connection not found; conn_handle=0x0000" and neither the
 // slow (low-power) nor the fast (file-transfer) parameters have EVER been applied.
 // They now take no handle and read the live one from the BLE layer.
+// #524: go through TR_BLE_To_APP rather than calling ble_gap_update_params() here.
+// It records the requested set, so when iOS rejects with a transaction collision the
+// retry re-asks for THE SAME set. Calling the HCI directly bypassed that: the retry
+// path had its own hardcoded 15-30 ms, so a SLOW request that lost a collision race
+// came back as a FAST one and silently cancelled low-power mode.
+//
+// The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler, which logs
+// the interval actually in force — the peer is free to counter (#503).
 static void applyBLEParams(const char* what, const struct ble_gap_upd_params& params)
 {
-    const uint16_t h = ble_app.connHandle();
-    if (h == 0xFFFF)
+    if (ble_app.connHandle() == 0xFFFF)
     {
         ESP_LOGW("BLE", "%s conn params skipped — not connected", what);
         return;
     }
-    const int rc = ble_gap_update_params(h, &params);
-    if (rc != 0)
-        ESP_LOGW("BLE", "%s conn param request failed to send, rc=%d (handle=%u)", what, rc, h);
-    else
-        ESP_LOGI("BLE", "%s conn params requested (handle=%u)", what, h);
-    // The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler,
-    // which logs the interval actually in force — the peer is free to counter (#503).
+    ble_app.requestConnParams(params.itvl_min, params.itvl_max,
+                              params.latency, params.supervision_timeout, what);
 }
 
 // Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
@@ -1101,6 +1103,50 @@ static void requestFastBLEParams()
     params.min_ce_len = 0;
     params.max_ce_len = 0;
     applyBLEParams("Fast (transfer)", params);
+}
+
+// #524: never start a transfer on the idle link.
+//
+// Bench 2026-07-14: the Power-On fast-param request lost a collision race with iOS
+// (status=554 x4), the retry budget ran out, and the link stayed at 200 ms / latency 4
+// — a ONE SECOND effective event period, 33x slower than the fast link. The download
+// that followed aborted after 5 kB of an 8.5 MB file.
+//
+// This is very likely also the original "~50% data loss" that the old fixed 30 ms
+// per-chunk delay was invented to hide: a download on the idle link drains 33x slower,
+// so of course the notify queue overflowed. The delay throttled the producer enough to
+// survive it, and we spent years believing the phone could not keep up.
+//
+// So: ask again, at the point where it actually matters, and give the peer a moment to
+// answer before streaming. Not fatal if it never lands — sendFileChunk's budget now
+// scales with the link, so a slow transfer completes rather than aborting — but say so.
+static constexpr uint32_t FAST_LINK_EVENT_MS_MAX = 60;    // 30 ms interval, latency 0, + slack
+static constexpr uint32_t FAST_LINK_WAIT_MS      = 3000;
+
+static void ensureFastLinkForTransfer()
+{
+    if (ble_app.effectiveEventMs() <= FAST_LINK_EVENT_MS_MAX) return;   // already fast
+
+    ESP_LOGW("BLE", "Link too slow for a transfer (%lu ms effective) — asking for fast params",
+             (unsigned long)ble_app.effectiveEventMs());
+    requestFastBLEParams();
+
+    // Waiting here is free: this is a ground operation, and oc_loop is already given
+    // over to the transfer.
+    const uint32_t deadline = millis() + FAST_LINK_WAIT_MS;
+    while ((int32_t)(deadline - millis()) > 0)
+    {
+        delay(50);
+        if (ble_app.effectiveEventMs() <= FAST_LINK_EVENT_MS_MAX)
+        {
+            ESP_LOGI("BLE", "Link now %lu ms effective — starting transfer",
+                     (unsigned long)ble_app.effectiveEventMs());
+            return;
+        }
+    }
+    ESP_LOGW("BLE", "Fast params never took (still %lu ms effective) — transfer will be SLOW "
+                    "but will complete",
+             (unsigned long)ble_app.effectiveEventMs());
 }
 
 static void updateDerivedAltitudeFromBMP()
@@ -1339,15 +1385,101 @@ static inline uint8_t rxPop()
     return b;
 }
 
+// #524: hold the CPU at full speed and out of light sleep while we are serving
+// the phone.
+//
+// A download runs for MINUTES entirely inside enterLowPowerMode()'s regime:
+// 80/40 MHz DFS with light sleep armed. Neither is free here. Throughput is set
+// by how many packets we land in each 30 ms connection event, and a core that is
+// asleep — or at 40 MHz — when the event opens cannot refill the controller's
+// queue in time to fill it.
+//
+// The 34.7 kB/s bench result was measured over USB, where
+// CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION holds a NO_LIGHT_SLEEP lock on our behalf,
+// so light sleep never actually engaged during that test. On battery it would,
+// and we would quietly hand part of the win back. Hold the locks ourselves rather
+// than depend on a USB cable being plugged in — the same "measure it on battery"
+// trap as #519, in mirror image.
+//
+// Costs nothing real: idle current only matters when nobody is talking to us, and
+// during a transfer the radio is busy regardless.
+#if defined(CONFIG_PM_ENABLE)
+static esp_pm_lock_handle_t s_phone_io_cpu_lock = nullptr;  // ESP_PM_CPU_FREQ_MAX
+static esp_pm_lock_handle_t s_phone_io_ls_lock  = nullptr;  // ESP_PM_NO_LIGHT_SLEEP
+
+// Did the locks actually engage? A silently-failed esp_pm_lock_create() would look
+// exactly like "light sleep was never the problem", and we would draw the opposite
+// conclusion from the same evidence. So report it rather than assume it.
+static bool s_phone_io_pm_held = false;
+
+static void phoneIoPmAcquire()
+{
+    if (s_phone_io_cpu_lock == nullptr && s_phone_io_ls_lock == nullptr)
+    {
+        const esp_err_t e1 = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX,   0,
+                                                "phone_io_cpu", &s_phone_io_cpu_lock);
+        const esp_err_t e2 = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0,
+                                                "phone_io_ls",  &s_phone_io_ls_lock);
+        if (e1 != ESP_OK || e2 != ESP_OK)
+        {
+            ESP_LOGE("PWR", "phone-IO PM lock create FAILED (cpu=%d ls=%d) — transfers "
+                            "will light-sleep on battery", (int)e1, (int)e2);
+        }
+    }
+    const esp_err_t a1 = s_phone_io_cpu_lock ? esp_pm_lock_acquire(s_phone_io_cpu_lock)
+                                             : ESP_FAIL;
+    const esp_err_t a2 = s_phone_io_ls_lock  ? esp_pm_lock_acquire(s_phone_io_ls_lock)
+                                             : ESP_FAIL;
+    s_phone_io_pm_held = (a1 == ESP_OK && a2 == ESP_OK);
+    if (!s_phone_io_pm_held)
+    {
+        ESP_LOGE("PWR", "phone-IO PM lock acquire FAILED (cpu=%d ls=%d)", (int)a1, (int)a2);
+    }
+}
+static void phoneIoPmRelease()
+{
+    if (s_phone_io_ls_lock)  esp_pm_lock_release(s_phone_io_ls_lock);
+    if (s_phone_io_cpu_lock) esp_pm_lock_release(s_phone_io_cpu_lock);
+    s_phone_io_pm_held = false;
+}
+#else
+static bool s_phone_io_pm_held = false;
+static inline void phoneIoPmAcquire() {}
+static inline void phoneIoPmRelease() {}
+#endif
+
+// #524: the XFER diagnostic is worthless if you cannot READ it — and on battery you
+// cannot, because the console is USB-Serial-JTAG: unplugging the cable takes the
+// console with it. That is exactly the run we most need to see (battery downloads
+// measured ~2.7x slower than USB).
+//
+// So latch the last transfer's summary and keep re-emitting it for a few minutes.
+// That is long enough to finish a battery download, plug USB back in, and attach a
+// monitor WITHOUT resetting the board:
+//
+//     idf.py -p <PORT> monitor --no-reset
+//
+// (a plain `idf.py monitor` resets the chip and you lose it).
+static char     s_xfer_summary[256]     = {0};
+static uint32_t s_xfer_reprint_until_ms = 0;
+static uint32_t s_xfer_next_reprint_ms  = 0;
+static constexpr uint32_t XFER_REPRINT_WINDOW_MS = 240000;  // 4 min to get a cable in
+static constexpr uint32_t XFER_REPRINT_EVERY_MS  = 15000;
+
 // beginPhoneIO / endPhoneIO — bracket a phone-serving operation (file
 // list / delete / download). Pauses both I2C servicing (flash_op_active)
 // and I2S ingest (i2s_ingest_paused), then drains the rx ring on resume
 // so stale sensor bytes from before the pause aren't processed as if
 // they were current. Must be called from a single task (oc_loop).
+//
+// esp_pm locks are counting, and every begin has a matching end on every path
+// (the download loop breaks out, it never returns), so the PM lock cannot leak
+// and strand us at full power.
 static inline void beginPhoneIO()
 {
     i2s_ingest_paused = true;
     flash_op_active   = true;
+    phoneIoPmAcquire();
 }
 static inline void endPhoneIO()
 {
@@ -1355,6 +1487,7 @@ static inline void endPhoneIO()
     rx_tail = rx_head;
     i2s_ingest_paused = false;
     flash_op_active   = false;
+    phoneIoPmRelease();
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -4011,6 +4144,17 @@ static inline void logTaskCpuDeltas(uint32_t) {}   // stats facility not compile
 static void printStats()
 {
     const uint32_t now = millis();
+
+    // #524: re-emit the last transfer's summary for a few minutes so a BATTERY
+    // download can still be read back — plug USB in afterwards and attach with
+    // `idf.py monitor --no-reset`. See s_xfer_summary.
+    if (s_xfer_summary[0] != '\0' && (int32_t)(s_xfer_reprint_until_ms - now) > 0 &&
+        (int32_t)(now - s_xfer_next_reprint_ms) >= 0)
+    {
+        s_xfer_next_reprint_ms = now + XFER_REPRINT_EVERY_MS;
+        ESP_LOGW("BLE", "%s", s_xfer_summary);
+    }
+
     if ((now - last_stats_ms) < config::STATS_PERIOD_MS)
     {
         return;
@@ -5707,9 +5851,30 @@ static void loop_oc()
             beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking flash reads
             ESP_LOGI("BLE", "Download file request: %s", download_filename.c_str());
 
+            // #524: read RSSI on the QUIET link, before we put any load on it.
+            //
+            // The 2026-07-14 run reported -107 dBm with the phone six inches away and
+            // real antennas on both ends — which is ~60 dB of loss that the physics does
+            // not allow. So this is very likely NOT a weak link but a broken instrument:
+            // ble_gap_conn_rssi() issues HCI_Read_RSSI, a command inherited from Classic
+            // Bluetooth whose LE behaviour on the ESP32 controller we have never checked.
+            //
+            // This line settles it without a single guess: if the QUIET link also reads
+            // ~-107 at six inches, HCI_Read_RSSI is not usable here and every rssi= number
+            // in the XFER line must be thrown away. Cross-check against the app, which
+            // reads its own RSSI from CoreBluetooth (BLEDevice.connectedRSSI).
+            ESP_LOGI("BLE", "Link before transfer: %lu ms effective, rssi=%d dBm "
+                            "(cross-check against the app's own RSSI — if these disagree, "
+                            "believe the app)",
+                     (unsigned long)ble_app.effectiveEventMs(), (int)ble_app.connRssi());
+
+            // The link must be the fast one before we stream a single byte.
+            ensureFastLinkForTransfer();
+
             // Dynamic chunk size based on negotiated MTU (falls back to 170 if not yet negotiated)
             const size_t chunk_data_size = ble_app.getMaxChunkDataSize();
-            ESP_LOGI("BLE", "Chunk data size: %u", (unsigned)chunk_data_size);
+            ESP_LOGI("BLE", "Chunk data size: %u  (link %lu ms effective)",
+                     (unsigned)chunk_data_size, (unsigned long)ble_app.effectiveEventMs());
 
             if (chunk_data_size == 0)
             {
@@ -5744,19 +5909,44 @@ static void loop_oc()
             uint32_t start_ms = millis();
             bool eof = false;
 
-            // Delay between every BLE notification (matches Legacy base station
-            // pacing).  The bursty 3-at-a-time batch scheme overwhelmed the iOS
-            // BLE notification queue, causing ~50% data loss.  A consistent
-            // per-chunk delay keeps the queue shallow and reliable.
-            const unsigned long CHUNK_DELAY_MS = 30;
+            // #524 diagnostic: split the wall clock between the two things a
+            // download actually does. The NAND read path is bit-banged, so its
+            // share is a genuine unknown — if flash owns a meaningful slice of the
+            // transfer then no amount of BLE tuning will show up.
+            uint64_t flash_us = 0;
+            uint64_t ble_us   = 0;
+            ble_app.resetXferStats();
+
+            // #524: there is no per-chunk delay any more.
+            //
+            // There used to be a fixed 30 ms one, with this rationale: "the bursty
+            // 3-at-a-time batch scheme overwhelmed the iOS BLE notification queue,
+            // causing ~50% data loss. A consistent per-chunk delay keeps the queue
+            // shallow and reliable."
+            //
+            // The data loss was real, but the delay was treating the symptom. File
+            // chunks went out through the same best-effort notify path as telemetry,
+            // which retries 3 x 5 ms and then DROPS the notification — fine for a
+            // telemetry frame, data loss for a file. So the queue was kept shallow
+            // enough that the drop path never fired, which pinned the transfer to one
+            // notification per connection event: 502 B / 30 ms ~ 16 kB/s, with the
+            // radio idle ~90% of the time.
+            //
+            // sendFileChunk now applies real backpressure instead — it waits for the
+            // controller to drain rather than dropping — and returns false only if it
+            // genuinely could not send. So chunks can be fed as fast as the stack
+            // accepts them (several per connection event), with no drops.
+            bool send_failed = false;
 
             while (!eof)
             {
                 // Read next block from flash, appended after any carryover bytes
                 size_t flash_bytes_read = 0;
+                const uint32_t t_flash = micros();
                 bool read_ok = flightlogReadChunk(download_filename.c_str(), file_offset,
                                                   read_buf + carryover, FLASH_READ_SIZE,
                                                   flash_bytes_read, eof);
+                flash_us += (uint32_t)(micros() - t_flash);
                 if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
@@ -5791,10 +5981,19 @@ static void loop_oc()
                     // Complete frame found — flush BLE buffer if this frame won't fit
                     if (ble_used > 0 && ble_used + frame_size > chunk_data_size)
                     {
-                        ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        const uint32_t t_ble = micros();
+                        const bool sent = ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        ble_us += (uint32_t)(micros() - t_ble);
+                        if (!sent)
+                        {
+                            // #524: could not send even after full backpressure. Do
+                            // NOT keep going — that would hand the app a file with a
+                            // hole in it and call it a success.
+                            send_failed = true;
+                            break;
+                        }
                         bytes_sent += ble_used;
                         ble_used = 0;
-                        delay(CHUNK_DELAY_MS);
                     }
 
                     // Append frame to BLE buffer
@@ -5804,6 +6003,8 @@ static void loop_oc()
                     pos += frame_size;
                 }
 
+                if (send_failed) break;   // #524: abort the transfer, don't limp on
+
                 // Move unparsed bytes to start of buffer for next iteration
                 carryover = buf_len - pos;
                 if (carryover > 0 && pos > 0)
@@ -5812,8 +6013,16 @@ static void loop_oc()
                 }
             }
 
+            if (send_failed)
+            {
+                // Terminate cleanly so the app sees a truncated file rather than a
+                // hung transfer, and say so — this used to be a silent hole.
+                ESP_LOGE("BLE", "Download ABORTED after %lu bytes: BLE send failed",
+                         (unsigned long)bytes_sent);
+                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+            }
             // Send remaining data with EOF flag
-            if (ble_used > 0)
+            else if (ble_used > 0)
             {
                 ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
                 bytes_sent += ble_used;
@@ -5832,6 +6041,71 @@ static void loop_oc()
             ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s)",
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
                           elapsed_ms / 1000.0f, kbps);
+
+            // #524 diagnostic — where did the time go, and why can't we put more
+            // packets in each connection event?
+            //
+            //   flash% large        -> the bit-banged NAND read is a real cost and
+            //                          BLE tuning is chasing the wrong thing
+            //   qdepth ~2 chunks    -> the controller's outbound queue is the cap;
+            //                          there may be a knob
+            //   qdepth deep + slow  -> iOS just won't drain more per event, and the
+            //                          only way past it is an L2CAP channel (#526)
+            //
+            // pm= and rssi= exist to explain the battery-vs-USB gap (battery measured
+            // ~2.7x slower). They separate the two candidate causes, which point in
+            // opposite directions:
+            //   pm=0                -> the PM lock never engaged; we ARE light-sleeping
+            //                          through the transfer and the fix is here
+            //   pm=1 + rssi much
+            //   worse than on USB   -> PM is fine and the link is the problem (the LL
+            //                          is silently retransmitting, eating the per-event
+            //                          packet budget) — a rail/antenna issue, not code
+            const auto xs = ble_app.xferStats();
+            const float total_ms = (elapsed_ms > 0) ? (float)elapsed_ms : 1.0f;
+            const int rssi_avg = (xs.rssi_n > 0) ? (int)(xs.rssi_sum / (int32_t)xs.rssi_n) : 0;
+            snprintf(s_xfer_summary, sizeof(s_xfer_summary),
+                     "XFER: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
+                     "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks  |  "
+                     "link=%lu ms pm=%d  rssi avg=%d min=%d max=%d dBm (n=%lu)",
+                     kbps,
+                     (unsigned long long)(flash_us / 1000),
+                     100.0f * (flash_us / 1000.0f) / total_ms,
+                     (unsigned long long)(ble_us / 1000),
+                     100.0f * (ble_us / 1000.0f) / total_ms,
+                     (unsigned long)xs.chunks, (unsigned long)xs.retries_total,
+                     (unsigned long)xs.retries_max, (unsigned long)xs.burst_max,
+                     (unsigned long)ble_app.effectiveEventMs(),
+                     s_phone_io_pm_held ? 1 : 0,
+                     rssi_avg, (int)xs.rssi_min, (int)xs.rssi_max,
+                     (unsigned long)xs.rssi_n);
+            ESP_LOGW("BLE", "%s", s_xfer_summary);
+
+            // JUDGE THE LINK BY max, NOT avg OR min. Bench 2026-07-14, phone six inches
+            // away: quiet link -64 dBm; during the transfer avg=-79 min=-113 max=-59
+            // over 74 samples.
+            //
+            // -113 dBm is BELOW the receiver's noise floor — it is not a measurement.
+            // HCI_Read_RSSI reports whatever the controller last saw, and under load that
+            // includes idle moments between connection events, so the low samples are
+            // junk. The MAX tracks the quiet-link reading (-59 vs -64), and that is the
+            // real link quality.
+            //
+            // This is not a nitpick: a single such outlier (-107) was used to explain away
+            // a slow run, and it explained nothing — three later runs on the same hardware
+            // all hit 35 KB/s. If you are about to blame RSSI for a slow transfer, look at
+            // max first, and check the app's own CoreBluetooth RSSI before believing it.
+            if (xs.rssi_n > 0 && xs.rssi_max < -85)
+            {
+                ESP_LOGW("BLE", "  ^ link genuinely WEAK (best sample %d dBm). The LL will "
+                                "be retransmitting, and every retransmit costs one of the "
+                                "~4 packet slots per connection event that the transfer "
+                                "rate is made of.", (int)xs.rssi_max);
+            }
+
+            // Keep saying it, so a battery run can be read back over USB afterwards.
+            s_xfer_reprint_until_ms = millis() + XFER_REPRINT_WINDOW_MS;
+            s_xfer_next_reprint_ms  = millis() + XFER_REPRINT_EVERY_MS;
             } // else (chunk_data_size > 0)
             endPhoneIO();
         }
