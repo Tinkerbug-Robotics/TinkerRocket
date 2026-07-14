@@ -272,6 +272,21 @@ public:
     void resetXferStats();
     XferStats xferStats() const { return xfer_; }
 
+    // Ask the peer for a parameter set, and REMEMBER it so a collision retry re-asks
+    // for the same one. Units are raw BLE: interval in 1.25 ms, timeout in 10 ms.
+    // `what` is a label for the log ("Fast (transfer)", "Slow (low-power)").
+    void requestConnParams(uint16_t itvl_min, uint16_t itvl_max,
+                           uint16_t latency, uint16_t timeout, const char* what);
+
+    // How often the link ACTUALLY carries data, in ms: interval x (latency + 1).
+    //
+    // Latency is the number of connection events the peripheral may skip, so this —
+    // not the interval — is the real cadence. On the idle link (200 ms, latency 4)
+    // it is a FULL SECOND. Anything that waits on the controller draining must be
+    // measured against this, or it will time out on a perfectly healthy link.
+    // Returns 30 (the fast link) if the parameters cannot be read.
+    uint32_t effectiveEventMs() const;
+
     // Live RSSI of the phone link, dBm (0 if not connected / unavailable). A weak
     // link means the link layer is silently retransmitting, which eats exactly the
     // per-event packet budget the transfer is bounded by — so it is a candidate
@@ -363,9 +378,25 @@ private:
     uint32_t conn_param_due_ms_   = 0;   // 0 = nothing scheduled
     uint8_t  conn_param_attempts_ = 0;
     bool     auto_conn_params_    = true;  // see setAutoConnParams()
+
+    // #524: WHAT we last asked for, so a collision retry re-asks for the SAME set.
+    // The retry used to re-send a hardcoded 15-30 ms / latency 0 no matter what the
+    // caller had wanted — so a SLOW (low-power) request that lost a collision race
+    // would come back as a FAST one and silently undo low-power mode. Defaults are
+    // the fast set, which is what the shared/auto path asks for.
+    uint16_t cp_itvl_min_ = 0x0C;   // 15 ms (1.25 ms units)
+    uint16_t cp_itvl_max_ = 0x18;   // 30 ms
+    uint16_t cp_latency_  = 0;
+    uint16_t cp_timeout_  = 200;    // 2 s (10 ms units)
+    const char* cp_what_  = "Default";
+
     static constexpr uint32_t kConnParamDelayMs = 1000;  // let iOS settle the link first
+    // #524: 0x2A means the PEER has a transaction in flight. Retrying straight back
+    // into the same window just collides again — the bench logged four in a row, then
+    // we gave up and ran a whole download on the 200 ms idle link. Back off instead
+    // (750, 1500, 2250 ...) and allow more tries.
     static constexpr uint32_t kConnParamRetryMs = 750;
-    static constexpr uint8_t  kConnParamMaxAttempts = 3;
+    static constexpr uint8_t  kConnParamMaxAttempts = 6;
     // Throttle the per-chunk "writing" status notifications. Updated on
     // every successful chunk; we notify at most ~2 Hz so the BLE notify
     // queue isn't saturated mid-flash.

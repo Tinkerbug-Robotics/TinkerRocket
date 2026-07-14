@@ -382,15 +382,34 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
 //   slave latency <= 30                           -> 0
 //   supervision timeout: <= 6 s, and greater than
 //     interval_max * (latency + 1) * 3 = 90 ms    -> 2 s (200 * 10 ms)
+// Public entry point: caller states what it wants, we remember it, then ask.
+void TR_BLE_To_APP::requestConnParams(uint16_t itvl_min, uint16_t itvl_max,
+                                      uint16_t latency, uint16_t timeout,
+                                      const char* what)
+{
+    cp_itvl_min_ = itvl_min;
+    cp_itvl_max_ = itvl_max;
+    cp_latency_  = latency;
+    cp_timeout_  = timeout;
+    cp_what_     = (what != nullptr) ? what : "Unnamed";
+
+    // A new intent supersedes any in-flight retry of the old one.
+    conn_param_attempts_ = 0;
+    requestConnParams();
+}
+
+// Send whatever the last stated intent was. This is also the collision-retry path,
+// which is exactly why it must NOT hardcode a parameter set (#524): re-asking for
+// 15-30 ms after a SLOW request collided would quietly cancel low-power mode.
 void TR_BLE_To_APP::requestConnParams()
 {
     if (!device_connected_) { conn_param_due_ms_ = 0; return; }
 
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x0C;              // 15 ms — iOS's minimum; asking lower is refused
-    params.itvl_max = 0x18;              // 30 ms — must be >= min + 15 ms
-    params.latency = 0;                  // No slave latency
-    params.supervision_timeout = 200;    // 2 seconds (units of 10 ms)
+    params.itvl_min = cp_itvl_min_;
+    params.itvl_max = cp_itvl_max_;
+    params.latency = cp_latency_;
+    params.supervision_timeout = cp_timeout_;
     params.min_ce_len = 0;
     params.max_ce_len = 0;
 
@@ -398,17 +417,33 @@ void TR_BLE_To_APP::requestConnParams()
     const int rc = ble_gap_update_params(conn_handle_, &params);
     if (rc == 0)
     {
-        ESP_LOGI(BLE_TAG, "Requested connection parameters (15-30 ms interval), attempt %u",
-                 (unsigned)conn_param_attempts_);
+        ESP_LOGI(BLE_TAG, "%s conn params requested (%u-%u ms, latency %u), attempt %u",
+                 cp_what_,
+                 (unsigned)(cp_itvl_min_ * 5 / 4), (unsigned)(cp_itvl_max_ * 5 / 4),
+                 (unsigned)cp_latency_, (unsigned)conn_param_attempts_);
         conn_param_due_ms_ = 0;   // wait for the CONN_UPDATE event
     }
     else
     {
-        ESP_LOGW(BLE_TAG, "Connection param update request failed to send, rc=%d", rc);
+        ESP_LOGW(BLE_TAG, "%s conn param request failed to send, rc=%d", cp_what_, rc);
         conn_param_due_ms_ = (conn_param_attempts_ < kConnParamMaxAttempts)
                                  ? (uint32_t)millis() + kConnParamRetryMs
                                  : 0;
     }
+}
+
+uint32_t TR_BLE_To_APP::effectiveEventMs() const
+{
+    struct ble_gap_conn_desc desc;
+    if (!device_connected_ || ble_gap_conn_find(conn_handle_, &desc) != 0)
+    {
+        return 30;   // assume the fast link rather than invent a stall
+    }
+    // conn_itvl is in 1.25 ms units. conn_latency is how many events the peripheral
+    // may SKIP, so real data opportunities are (latency + 1) intervals apart.
+    const uint32_t itvl_ms = ((uint32_t)desc.conn_itvl * 5u) / 4u;
+    const uint32_t eff     = itvl_ms * ((uint32_t)desc.conn_latency + 1u);
+    return (eff > 0) ? eff : 30;
 }
 
 void TR_BLE_To_APP::onConnParamsUpdated(uint16_t conn_handle, int status)
@@ -466,7 +501,13 @@ void TR_BLE_To_APP::onConnParamsUpdated(uint16_t conn_handle, int status)
                  (double)desc.conn_itvl * 1.25);
     }
 
-    conn_param_due_ms_ = retry ? ((uint32_t)millis() + kConnParamRetryMs) : 0;
+    // #524: back off. 0x2A says the PEER already has a transaction in flight; firing
+    // straight back into the same window just collides again — the bench logged four
+    // in a row, then we gave up (kConnParamMaxAttempts) and ran an entire download on
+    // the 200 ms idle link. Give the peer's procedure room to finish.
+    conn_param_due_ms_ = retry
+        ? ((uint32_t)millis() + kConnParamRetryMs * (uint32_t)(conn_param_attempts_ + 1))
+        : 0;
 }
 
 void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
@@ -1036,8 +1077,25 @@ bool TR_BLE_To_APP::isConnected() const
 // event), at a third of the churn.
 static constexpr int NOTIFY_BEST_EFFORT_RETRIES  = 3;
 static constexpr int NOTIFY_BEST_EFFORT_DELAY_MS = 5;
-static constexpr int NOTIFY_RELIABLE_RETRIES     = 100;  // x 5 ms = ~500 ms of backpressure
 static constexpr int NOTIFY_RELIABLE_DELAY_MS    = 5;
+
+// #524: the RELIABLE budget is no longer a constant, because a constant cannot know
+// how often the link actually carries data.
+//
+// It was 500 ms. Bench 2026-07-14: the fast-parameter request lost a collision race
+// with iOS (status=554 four times, then kConnParamMaxAttempts gave up), so a download
+// ran on the IDLE link — 200 ms interval, latency 4. Latency is events the peripheral
+// may SKIP, so the effective period was 200 x (4+1) = ONE SECOND. A 500 ms budget
+// cannot span even a single connection event on that link: every chunk exhausted its
+// retries, and the transfer aborted after 5 kB of an 8.5 MB file.
+//
+// Budget against the EFFECTIVE event period instead, so a slow link makes a download
+// slow rather than impossible:
+//     fast link (30 ms)  -> 240 ms, floored to 500 ms
+//     idle link (1000 ms)-> 8 s
+static constexpr uint32_t NOTIFY_RELIABLE_EVENTS        = 8;      // events worth of patience
+static constexpr uint32_t NOTIFY_RELIABLE_MIN_BUDGET_MS = 500;
+static constexpr uint32_t NOTIFY_RELIABLE_MAX_BUDGET_MS = 10000;  // a stuck link is still a bug
 
 static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
                        const uint8_t* data, size_t len,
@@ -1381,11 +1439,17 @@ bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
     }
 
     // #524: RELIABLE budget — wait for the controller to drain rather than drop.
-    // A dropped file chunk is lost data, unlike a dropped telemetry frame.
+    // A dropped file chunk is lost data, unlike a dropped telemetry frame. Sized
+    // against the link's EFFECTIVE event period, not a constant (see above).
+    uint32_t budget_ms = effectiveEventMs() * NOTIFY_RELIABLE_EVENTS;
+    if (budget_ms < NOTIFY_RELIABLE_MIN_BUDGET_MS) budget_ms = NOTIFY_RELIABLE_MIN_BUDGET_MS;
+    if (budget_ms > NOTIFY_RELIABLE_MAX_BUDGET_MS) budget_ms = NOTIFY_RELIABLE_MAX_BUDGET_MS;
+
     int attempts = 0;
     const int rc = notify_data(conn_handle_, file_transfer_val_handle_,
                                chunk_buffer_, packet_size,
-                               NOTIFY_RELIABLE_RETRIES, NOTIFY_RELIABLE_DELAY_MS,
+                               (int)(budget_ms / NOTIFY_RELIABLE_DELAY_MS),
+                               NOTIFY_RELIABLE_DELAY_MS,
                                &attempts);
 
     // #524 diagnostic. A run of zero-wait sends is the controller queue emptying

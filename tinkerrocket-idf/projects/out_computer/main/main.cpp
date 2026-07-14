@@ -1054,21 +1054,23 @@ static void exitLowPowerMode()
 // "GAP update_params: connection not found; conn_handle=0x0000" and neither the
 // slow (low-power) nor the fast (file-transfer) parameters have EVER been applied.
 // They now take no handle and read the live one from the BLE layer.
+// #524: go through TR_BLE_To_APP rather than calling ble_gap_update_params() here.
+// It records the requested set, so when iOS rejects with a transaction collision the
+// retry re-asks for THE SAME set. Calling the HCI directly bypassed that: the retry
+// path had its own hardcoded 15-30 ms, so a SLOW request that lost a collision race
+// came back as a FAST one and silently cancelled low-power mode.
+//
+// The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler, which logs
+// the interval actually in force — the peer is free to counter (#503).
 static void applyBLEParams(const char* what, const struct ble_gap_upd_params& params)
 {
-    const uint16_t h = ble_app.connHandle();
-    if (h == 0xFFFF)
+    if (ble_app.connHandle() == 0xFFFF)
     {
         ESP_LOGW("BLE", "%s conn params skipped — not connected", what);
         return;
     }
-    const int rc = ble_gap_update_params(h, &params);
-    if (rc != 0)
-        ESP_LOGW("BLE", "%s conn param request failed to send, rc=%d (handle=%u)", what, rc, h);
-    else
-        ESP_LOGI("BLE", "%s conn params requested (handle=%u)", what, h);
-    // The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler,
-    // which logs the interval actually in force — the peer is free to counter (#503).
+    ble_app.requestConnParams(params.itvl_min, params.itvl_max,
+                              params.latency, params.supervision_timeout, what);
 }
 
 // Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
@@ -1101,6 +1103,50 @@ static void requestFastBLEParams()
     params.min_ce_len = 0;
     params.max_ce_len = 0;
     applyBLEParams("Fast (transfer)", params);
+}
+
+// #524: never start a transfer on the idle link.
+//
+// Bench 2026-07-14: the Power-On fast-param request lost a collision race with iOS
+// (status=554 x4), the retry budget ran out, and the link stayed at 200 ms / latency 4
+// — a ONE SECOND effective event period, 33x slower than the fast link. The download
+// that followed aborted after 5 kB of an 8.5 MB file.
+//
+// This is very likely also the original "~50% data loss" that the old fixed 30 ms
+// per-chunk delay was invented to hide: a download on the idle link drains 33x slower,
+// so of course the notify queue overflowed. The delay throttled the producer enough to
+// survive it, and we spent years believing the phone could not keep up.
+//
+// So: ask again, at the point where it actually matters, and give the peer a moment to
+// answer before streaming. Not fatal if it never lands — sendFileChunk's budget now
+// scales with the link, so a slow transfer completes rather than aborting — but say so.
+static constexpr uint32_t FAST_LINK_EVENT_MS_MAX = 60;    // 30 ms interval, latency 0, + slack
+static constexpr uint32_t FAST_LINK_WAIT_MS      = 3000;
+
+static void ensureFastLinkForTransfer()
+{
+    if (ble_app.effectiveEventMs() <= FAST_LINK_EVENT_MS_MAX) return;   // already fast
+
+    ESP_LOGW("BLE", "Link too slow for a transfer (%lu ms effective) — asking for fast params",
+             (unsigned long)ble_app.effectiveEventMs());
+    requestFastBLEParams();
+
+    // Waiting here is free: this is a ground operation, and oc_loop is already given
+    // over to the transfer.
+    const uint32_t deadline = millis() + FAST_LINK_WAIT_MS;
+    while ((int32_t)(deadline - millis()) > 0)
+    {
+        delay(50);
+        if (ble_app.effectiveEventMs() <= FAST_LINK_EVENT_MS_MAX)
+        {
+            ESP_LOGI("BLE", "Link now %lu ms effective — starting transfer",
+                     (unsigned long)ble_app.effectiveEventMs());
+            return;
+        }
+    }
+    ESP_LOGW("BLE", "Fast params never took (still %lu ms effective) — transfer will be SLOW "
+                    "but will complete",
+             (unsigned long)ble_app.effectiveEventMs());
 }
 
 static void updateDerivedAltitudeFromBMP()
@@ -5805,9 +5851,13 @@ static void loop_oc()
             beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking flash reads
             ESP_LOGI("BLE", "Download file request: %s", download_filename.c_str());
 
+            // #524: the link must be the fast one before we stream a single byte.
+            ensureFastLinkForTransfer();
+
             // Dynamic chunk size based on negotiated MTU (falls back to 170 if not yet negotiated)
             const size_t chunk_data_size = ble_app.getMaxChunkDataSize();
-            ESP_LOGI("BLE", "Chunk data size: %u", (unsigned)chunk_data_size);
+            ESP_LOGI("BLE", "Chunk data size: %u  (link %lu ms effective)",
+                     (unsigned)chunk_data_size, (unsigned long)ble_app.effectiveEventMs());
 
             if (chunk_data_size == 0)
             {
@@ -5999,7 +6049,7 @@ static void loop_oc()
             snprintf(s_xfer_summary, sizeof(s_xfer_summary),
                      "XFER: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
                      "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks  |  "
-                     "pm=%d rssi=%d dBm",
+                     "link=%lu ms pm=%d rssi=%d dBm",
                      kbps,
                      (unsigned long long)(flash_us / 1000),
                      100.0f * (flash_us / 1000.0f) / total_ms,
@@ -6007,6 +6057,7 @@ static void loop_oc()
                      100.0f * (ble_us / 1000.0f) / total_ms,
                      (unsigned long)xs.chunks, (unsigned long)xs.retries_total,
                      (unsigned long)xs.retries_max, (unsigned long)xs.burst_max,
+                     (unsigned long)ble_app.effectiveEventMs(),
                      s_phone_io_pm_held ? 1 : 0, (int)ble_app.connRssi());
             ESP_LOGW("BLE", "%s", s_xfer_summary);
 
