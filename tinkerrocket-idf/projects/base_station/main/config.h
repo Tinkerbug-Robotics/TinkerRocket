@@ -62,6 +62,25 @@ struct config : board_pins
     static constexpr uint8_t  UPLINK_RETRIES           = 8;     // TX attempts per command
     static constexpr uint32_t UPLINK_RETRY_INTERVAL_MS = 100;   // Delay between retries
 
+    // --- Uplink TX window (#506) ---
+    // The radio is half-duplex, so every uplink retry is a deaf window. At
+    // SF8/BW250 a downlink packet is ~82 ms on air while the gaps between retries
+    // are only ~49 ms — an 82 ms packet cannot fit in a 49 ms gap, so a blind
+    // burst loses essentially EVERY packet that arrives during it (bench-measured:
+    // 3 of 3). Rather than firing blind, transmit inside the quiet stretch between
+    // the rocket's ~500 ms telemetry packets. See bs_uplink_txwin.h.
+    //
+    // Air to keep clear ahead of the next expected downlink packet: its ~82 ms of
+    // time-on-air plus margin for cadence jitter and TX/RX turnaround.
+    static constexpr uint32_t UPLINK_RX_RESERVE_MS = 140;
+    // No packet for this long => no downlink worth protecting; transmit freely.
+    // Also the case where we most need to (silence recovery, rendezvous).
+    static constexpr uint32_t UPLINK_LINK_STALE_MS = 2000;
+    // Liveness backstop: never let the window gate starve a command. The uplink is
+    // blind and carries safety-relevant commands, so a command that never goes out
+    // is far worse than a dropped telemetry row.
+    static constexpr uint32_t UPLINK_MAX_DEFER_MS  = 1500;
+
     // --- Storage ---
     // V2/V3 log to a FORESEE F35SQB004G SPI NAND (M_* nets, on SPI3_HOST since
     // LoRa owns SPI2_HOST on V2); V1 uses an SDMMC SD card. Pins + presence

@@ -362,6 +362,19 @@ target_include_directories(test_bs_uplink_queue PRIVATE
 target_link_libraries(test_bs_uplink_queue GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_queue)
 
+# ---------- test_bs_uplink_txwin ----------
+# Host-side test for the base-station uplink TX-window policy (#506): the radio is
+# half-duplex, and a downlink packet (~82 ms on air) cannot fit in the ~49 ms gap
+# between blind retries — so a burst lost essentially every packet that arrived
+# during it. bs_uplink_txwin.h is pure, so the test just adds base_station/main.
+add_executable(test_bs_uplink_txwin test_bs_uplink_txwin.cpp)
+target_include_directories(test_bs_uplink_txwin PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_uplink_txwin GTest::gtest_main)
+gtest_discover_tests(test_bs_uplink_txwin)
+
 # ---------- test_bs_battery_soc ----------
 # Host-side test for the base-station voltage-based SoC fallback (#501): the
 # BQ27Z746 reported 0% on a 4.17 V pack because its coulomb counter was never

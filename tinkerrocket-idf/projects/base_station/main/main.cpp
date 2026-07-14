@@ -31,6 +31,7 @@
 #include "bs_log_policy.h"        // parseSequentialFilename() (#137)
 #include "bs_uplink_policy.h"     // mayTransmitUplink() scan gate (#379)
 #include "bs_uplink_queue.h"      // uplink command FIFO (#502)
+#include "bs_uplink_txwin.h"      // TX-in-the-RX-gap window policy (#506)
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 
@@ -165,6 +166,16 @@ static uint32_t uplink_last_tx_ms = 0;
 // mask-drift paths keep their original meaning: don't touch the radio, and
 // don't consider a relay finished, until the queue has fully drained.
 static inline bool uplinkBusy() { return uplink_q.busy(); }
+
+// #506: the rocket's downlink cadence, learned from RX timestamps, so uplink
+// retries can be fired into the quiet stretch between telemetry packets instead
+// of straight over the top of them.
+static bs_uplink_txwin::RxCadence rx_cadence;
+static uint32_t uplink_defer_start_ms = 0;   // when the head command was first held back
+static uint32_t uplink_tx_count       = 0;   // TXs actually emitted (stats)
+static uint32_t uplink_tx_airtime_ms  = 0;   // cumulative uplink time-on-air (stats)
+static uint32_t uplink_defer_count    = 0;   // passes deferred to protect the downlink
+static uint32_t uplink_defer_override = 0;   // liveness backstop fired (should be ~0)
 
 // Storage mount state. Preferred backend is SD over SDMMC; if that fails at boot
 // we fall back to SPIFFS on internal flash (partitions.csv: "spiffs", ~5 MB).
@@ -1549,6 +1560,19 @@ static void printStats()
              (double)ls.last_snr,
              last_pkt_str);
 
+    // Uplink airtime (#506).  The radio is half-duplex, so uplink time-on-air is
+    // time we are deaf — and it used to be silently charged to the downlink loss
+    // counters above, making a self-inflicted hole look like an RF problem. txwin
+    // = retries held back to land in the gap between telemetry packets; forced =
+    // the liveness backstop transmitting over the downlink anyway (want ~0).
+    ESP_LOGI(TAG, "[UPLINK] TX: %lu sent, %lu ms airtime | txwin: %lu deferred, %lu forced | rocket cadence: %u ms%s",
+             (unsigned long)uplink_tx_count,
+             (unsigned long)uplink_tx_airtime_ms,
+             (unsigned long)uplink_defer_count,
+             (unsigned long)uplink_defer_override,
+             (unsigned)rx_cadence.periodMs(),
+             rx_cadence.valid() ? "" : " (est, not yet learned)");
+
     // Base-station battery.  The (est) marker says the SoC came from the voltage
     // curve rather than the gauge's coulomb count (#501) — without it, a plausible
     // number gives no hint that the gauge underneath it is untrustworthy.
@@ -1705,6 +1729,7 @@ static void serviceUplink()
         // startReceive() here: it would reset rx_done_ and drop any downlink
         // packet that arrived between the TX completion and this point.
         uplink_q.pop();  // next queued command (if any) starts on the following pass
+        uplink_defer_start_ms = 0;  // #506: don't carry this command's defer clock over
         return;
     }
 
@@ -1731,8 +1756,45 @@ static void serviceUplink()
         return;  // radio busy, or a scan owns the channel — retry next pass
     }
 
+    // #506: the radio is half-duplex, so this TX is a deaf window. At SF8/BW250 a
+    // downlink packet is ~82 ms on air and the gaps between our retries are only
+    // ~49 ms, so a blind burst loses essentially EVERY packet that arrives during
+    // it (bench-measured: 3 of 3, and they were the run's ONLY losses). Fire into
+    // the quiet stretch between the rocket's ~500 ms telemetry packets instead.
+    // Transmitting right after the rocket's own TX is also when it is listening,
+    // so this should help uplink delivery too.
+    bs_uplink_txwin::Params win;
+    win.period_ms     = rx_cadence.periodMs();
+    win.tx_airtime_ms = bs_uplink_txwin::timeOnAirMs(tx->len, lora_sf, lora_bw_khz, lora_cr);
+    win.rx_reserve_ms = config::UPLINK_RX_RESERVE_MS;
+    win.link_stale_ms = config::UPLINK_LINK_STALE_MS;
+    win.max_defer_ms  = config::UPLINK_MAX_DEFER_MS;
+
+    // No established telemetry cadence yet => nothing to protect; don't gate.
+    const uint32_t rx_anchor = rx_cadence.valid() ? rx_cadence.lastMs() : 0;
+    if (uplink_defer_start_ms == 0) uplink_defer_start_ms = now;
+    const uint32_t deferred_for = now - uplink_defer_start_ms;
+
+    if (!bs_uplink_txwin::mayStartTx(now, rx_anchor, deferred_for, win))
+    {
+        uplink_defer_count++;
+        return;  // inside the rocket's next downlink slot — wait for the gap
+    }
+    if (deferred_for >= win.max_defer_ms && rx_anchor != 0)
+    {
+        // The liveness backstop fired: we transmitted over the downlink rather
+        // than starve a blind, safety-relevant command. Should be ~0 in practice;
+        // if it climbs, the cadence estimate or the reserve is wrong.
+        uplink_defer_override++;
+        ESP_LOGW(TAG, "[UPLINK] cmd=%u: TX window never opened for %ums — transmitting anyway",
+                 (unsigned)tx->cmd(), (unsigned)deferred_for);
+    }
+
     if (lora_comms.send(tx->buf, tx->len))
     {
+        uplink_defer_start_ms = 0;   // this attempt got out; re-arm for the next
+        uplink_tx_count++;
+        uplink_tx_airtime_ms += win.tx_airtime_ms;
         tx->retries_left--;
         uplink_last_tx_ms = now;
         // #285: "blind" + "unconfirmed" so the log is not mistaken for an ACK.
@@ -3624,6 +3686,10 @@ static void loop_bs()
             else
             {
                 last_packet_ms = millis();  // netid-matched proof of life (#384)
+                // #506: learn the downlink cadence from the TELEMETRY stream only.
+                // Beacons are sporadic (~2 s) and would corrupt the estimate; this
+                // is the steady ~500 ms stream whose gaps the uplink aims for.
+                rx_cadence.onPacket(last_packet_ms);
 
                 // Route to per-rocket tracker
                 int slot = findOrAllocRocket(decoded.rocket_id);
