@@ -39,6 +39,22 @@ public:
         // Monotonic-ms source for the budget; nullptr uses the built-in source
         // (esp_timer on hardware, 0 on host so the budget is inert in tests).
         uint32_t (*now_ms)()         = nullptr;
+
+        // #315: rolling-buffer auto-eviction. When true, prepareFlight reclaims
+        // space by deleting the oldest finalized flight(s) at arm time until the
+        // new flight fits, an index slot is free, AND at least
+        // auto_evict_target_free_blocks remain free. Default OFF (opt-in):
+        // deleting an un-downloaded flight is destructive, so it stays gated
+        // until bench-trusted. The active/in-progress flight is never a candidate
+        // (it isn't in the index until finalizeFlight), and eviction runs only
+        // here — before launch — never mid-flight. Evictions are counted
+        // (autoEvictedCount) so the OC can surface them; never silent.
+        bool     auto_evict_oldest             = false;
+        // Free-block headroom to restore at arm time when auto_evict_oldest is on.
+        // Eviction continues oldest-first until FREE blocks reach this floor, so
+        // the card keeps a rolling buffer instead of evicting one flight per arm.
+        // Clamped to the flight region; 0 means "reclaim only just enough to fit".
+        uint16_t auto_evict_target_free_blocks = 0;
     };
 
     TR_FlightLog() = default;
@@ -76,6 +92,15 @@ public:
     // to stay 0; a non-zero value flags genuine, unavoidable loss).
     uint32_t  salvagedBlockCount()    const { return salvaged_block_count_; }
     uint32_t  unrecoverablePageCount() const { return unrecoverable_page_count_; }
+
+    // #315 rolling-buffer eviction telemetry. autoEvictedCount(): cumulative
+    // number of finalized flights auto-deleted since begin() to make room at arm
+    // time (stays 0 unless Config::auto_evict_oldest). lastEvictedFlightId():
+    // flight_id of the most recently auto-evicted flight (0 if none). The OC
+    // surfaces both in the storage-stats telemetry + a log line so a rolling
+    // eviction is observable, never silent.
+    uint32_t  autoEvictedCount()      const { return auto_evicted_count_; }
+    uint32_t  lastEvictedFlightId()   const { return last_evicted_flight_id_; }
 
     // Pre-launch: pick + erase a free contiguous range. May stall ~770 ms.
     // Writes the assigned flight_id to `flight_id_out` on success.
@@ -150,6 +175,8 @@ private:
     uint32_t extension_count_     = 0;
     uint32_t salvaged_block_count_    = 0;  // #371: bad blocks whose pages were relocated
     uint32_t unrecoverable_page_count_ = 0; // #371: salvage pages that would not re-read
+    uint32_t auto_evicted_count_      = 0;  // #315: flights auto-deleted to make room
+    uint32_t last_evicted_flight_id_  = 0;  // #315: id of the most recent auto-evict
     bool     flight_active_       = false;
 
     // Page-sized scratch buffers kept OFF the task stack. At the 4 KB
@@ -181,6 +208,23 @@ private:
     // twice on one thread.
     Status prepareFlightLocked(uint32_t& flight_id_out);
     Status writePageLocked(const uint8_t* page);
+
+    // Lock-held delete: frees the flight's blocks, removes its index entry, and
+    // persists both. The public deleteFlight() wraps this; it is also the
+    // eviction primitive (evictOldestLocked deletes via this path). Assumes
+    // mutex_ is held so the non-recursive lock is never taken twice.
+    Status deleteFlightLocked(const char* filename);
+
+    // #315 rolling buffer. evictOldestLocked deletes the single oldest eligible
+    // (finalized, non-active) flight and returns true, or false when the index
+    // holds nothing eligible. evictOldestToTargetLocked repeats it oldest-first
+    // until the pending prealloc fits, an index slot is free, AND free blocks
+    // reach cfg_.auto_evict_target_free_blocks — or nothing eligible remains;
+    // it returns the number of flights evicted. Both assume mutex_ is held and
+    // are reached only from prepareFlightLocked (arm time — no active flight to
+    // hit, since the active allocation is never in the index).
+    bool     evictOldestLocked();
+    uint32_t evictOldestToTargetLocked();
 
     // On a mid-block program failure, retire `bad_block` (relative index
     // `rel_block`) and relocate the `valid_pages` pages already written at its
