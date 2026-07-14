@@ -16,6 +16,7 @@ using String = std::string;     // API-compatible subset used by callers
 #include <cstdint>
 #include <cstddef>
 
+#include "BleCommandRing.h"      // #517: depth for the command intake
 #include "TR_OTA_Receiver.h"
 #include "TR_OTA_Backend_esp.h"
 
@@ -146,8 +147,8 @@ public:
     // #384: return the loop-task snapshot taken atomically by getCommand(),
     // not the live latch — a second BLE write between getCommand() and this
     // call could otherwise swap (or tear) the payload under the command.
-    const uint8_t* getCommandPayload() const { return consumed_payload_; }
-    size_t getCommandPayloadLength() const { return consumed_payload_len_; }
+    const uint8_t* getCommandPayload() const { return consumed_.payload; }
+    size_t getCommandPayloadLength() const { return consumed_.payload_len; }
 
     // Get pending delete filename (empty if none)
     // Clears the filename after reading
@@ -237,23 +238,20 @@ private:
     volatile uint16_t negotiated_mtu_;
     volatile bool telem_notify_subscribed_;  // central enabled notifications on telemetry/config char
     volatile uint16_t conn_handle_;          // NimBLE connection handle
-    // #384: every latch below is written on the NimBLE host task and read on
-    // bs_loop. They are all committed/consumed inside the same s_cmd_mux
-    // critical section as pending_command_, so a command and its payload/
-    // filename travel as one atomic unit. The filenames are fixed buffers —
-    // the old String members did heap operations from two tasks with no
-    // lock, which risks allocator corruption, not just a swapped name.
-    volatile uint8_t pending_command_;
-    volatile uint8_t pending_file_list_page_;
-    char pending_delete_filename_[64] = {};
-    char pending_download_filename_[64] = {};
-    uint8_t pending_payload_[80] = {};   // Raw payload for commands with data (max = RollProfileData 76 bytes)
-    size_t  pending_payload_len_ = 0;
-    // Loop-task-only snapshot of the payload, filled by getCommand() under
-    // the mux; getCommandPayload() reads this so later BLE writes can't
-    // mutate it mid-use.
-    uint8_t consumed_payload_[80] = {};
-    size_t  consumed_payload_len_ = 0;
+    // #517: a RING, not a single latch (see BleCommandRing.h). It used to be
+    // one slot overwritten by the NimBLE write callback, so two commands
+    // arriving between two loop polls lost the first outright.
+    //
+    // #384 (keep): the ring is written on the NimBLE host task and read on the
+    // loop task; push() and pop() each run inside the s_cmd_mux critical
+    // section, so a command and its payload/filename/page still travel as one
+    // atomic unit and can never be mismatched.
+    tr_ble::CommandRing cmd_ring_;
+
+    // Loop-task-only snapshot, filled by getCommand() under the mux. The
+    // payload/filename/page accessors read THIS, never the ring, so a later
+    // BLE write can't mutate what the current command's handler is using.
+    tr_ble::PendingCommand consumed_;
     String file_list_json_;              // Persistent storage for file list
     uint8_t* chunk_buffer_;              // Persistent storage for file chunks
     size_t chunk_buffer_size_;
