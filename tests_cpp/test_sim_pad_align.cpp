@@ -79,11 +79,18 @@ TEST(SimPadAlign, PadReferenceMatchesEncoderOutput) {
     // Gravity along the rail at 85° nose-up.
     EXPECT_NEAR(up[0], std::sin(LAUNCH_ANGLE_RAD), 1e-5);
     EXPECT_NEAR(up[2], std::cos(LAUNCH_ANGLE_RAD), 1e-5);
-    // Field: this is the vector the bench log actually recorded at t=0
-    // (25.65, 4.95, 39.90 µT) — pins the reference to real observed data.
-    EXPECT_NEAR(mag[0], 25.6f, 0.2f);
-    EXPECT_NEAR(mag[1],  5.0f, 0.1f);
-    EXPECT_NEAR(mag[2], 39.9f, 0.2f);
+
+    // Field at the 85° rail. UPDATED for #512: the old expectation here was
+    // (25.6, 5.0, 39.9) — the value the pre-#512 encoders emitted and that the
+    // bench logs recorded. That field was rotating in the WRONG sense (opposite
+    // to the accelerometer), so pinning it here was pinning the bug. The correct
+    // projection of the NED field onto the body axes is (N·cosθ - D·sinθ, -E,
+    // -N·sinθ - D·cosθ). Magnitude is unchanged, as a rotation demands.
+    EXPECT_NEAR(mag[0], -39.9f, 0.2f);
+    EXPECT_NEAR(mag[1],  -5.0f, 0.1f);
+    EXPECT_NEAR(mag[2], -25.6f, 0.2f);
+    const float b = std::sqrt(mag[0]*mag[0] + mag[1]*mag[1] + mag[2]*mag[2]);
+    EXPECT_NEAR(b, 47.68f, 0.05f);
 }
 
 // ================================================================

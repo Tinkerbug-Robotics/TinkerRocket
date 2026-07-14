@@ -458,3 +458,14 @@ target_include_directories(test_sim_pad_align PRIVATE
 )
 target_link_libraries(test_sim_pad_align GTest::gtest_main)
 gtest_discover_tests(test_sim_pad_align)
+
+# ---------- test_sim_sensor_model (#512) ----------
+# Header-only pure math. Pins the rigid-body kinematic identity that the sim's
+# three synthetic sensors must jointly satisfy — the guard that was missing.
+add_executable(test_sim_sensor_model test_sim_sensor_model.cpp)
+target_include_directories(test_sim_sensor_model PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_sensor_model GTest::gtest_main)
+gtest_discover_tests(test_sim_sensor_model)

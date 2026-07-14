@@ -11,6 +11,7 @@
 
 #include "TR_Sensor_Collector_Sim.h"
 #include "SimPadAlign.h"
+#include "SimSensorModel.h"
 #include <cmath>
 // SensorCollector.h no longer transitively pulls in compat.h, but this
 // file still uses the Arduino-shim millis()/micros() heavily.  Pulled
@@ -499,12 +500,15 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     // Simplification: accel_mps2_ is the net vertical acceleration (excl gravity).
     // specific_force_vertical = accel_mps2_ + GRAVITY (what a vertical accel would read).
     // Project onto body axes via pitch:
-    const float sp = sinf(pitch_rad_);
-    const float cp = cosf(pitch_rad_);
+    // #512: the specific-force DIRECTION is the world "up" seen in the body
+    // frame; the magnitude is the vertical specific force. This was already
+    // correct — it is the gyro and the field that were inconsistent with it.
     const float sf_vert = accel_mps2_ + GRAVITY;  // specific force if perfectly vertical
-    float body_ax = sf_vert * sp;  // axial (along rocket)
-    float body_ay = 0.0f;
-    float body_az = sf_vert * cp;  // perpendicular
+    float up_b[3];
+    sim_sensor_model::upInBody(pitch_rad_, up_b);
+    float body_ax = sf_vert * up_b[0];   // axial (along rocket)
+    float body_ay = sf_vert * up_b[1];
+    float body_az = sf_vert * up_b[2];   // perpendicular
 
     // Carry the sim's pad frame onto the board's actual resting attitude (#508)
     // so the real→sim handover has no gravity/attitude step.  Identity unless a
@@ -537,11 +541,21 @@ void SensorCollectorSim::encodeISM6(uint32_t time_us, ISM6HG256Data& out)
     out.acc_high_raw.z = (int16_t)constrain(
         lroundf(sensor_az / ACC_HIGH_MS2_PER_LSB), -32768, 32767);
 
-    // Gyro: pitch rate on body Y axis (right-hand rule: Y = pitch axis),
-    // through the same inverse chain as accel (rocket → board → sensor).
-    float gyro_body_x_dps = 0.0f;
-    float gyro_body_y_dps = pitch_rate_rps_ * (180.0f / 3.14159265f);
-    float gyro_body_z_dps = 0.0f;
+    // Gyro: body rate for the current pitch rate, through the same inverse chain
+    // as accel (rocket → board → sensor).
+    //
+    // #512: this used to be +pitch_rate on Y, which is the WRONG SIGN. In FLU a
+    // positive rotation about +Y pitches the nose DOWN, while `pitch` measures
+    // nose-UP — so a rising nose is a NEGATIVE omega_y. The old sign made the
+    // accelerometer's gravity vector rotate 180° opposite to the gyro, i.e. the
+    // sim emitted a motion no rigid body can perform, and the EKF could never
+    // fuse it. gyroInBody() owns the sign now, alongside upInBody/fieldInBody, so
+    // the three cannot drift apart again.
+    float gyro_b[3];
+    sim_sensor_model::gyroInBody(pitch_rate_rps_ * (180.0f / 3.14159265f), gyro_b);
+    float gyro_body_x_dps = gyro_b[0];
+    float gyro_body_y_dps = gyro_b[1];
+    float gyro_body_z_dps = gyro_b[2];
     // Same rigid rotation as the accel: the body rates must be expressed in the
     // same re-oriented frame or the attitude the EKF integrates won't match the
     // gravity vector it sees (#508).
@@ -582,11 +596,15 @@ void SensorCollectorSim::encodeMMC5983MA(uint32_t time_us, MMC5983MAData& out)
     //   body_z = -North * cos(pitch) + Down * sin(pitch)
     static constexpr float COUNTS_PER_UT = 131072.0f / 800.0f;
 
-    const float sp = sinf(pitch_rad_);
-    const float cp = cosf(pitch_rad_);
-    float body_x =  B_NORTH * sp + B_DOWN * cp;
-    float body_y =  B_EAST;
-    float body_z = -B_NORTH * cp + B_DOWN * sp;
+    // #512: was (N·sp + D·cp, E, -N·cp + D·sp) — a rotation whose implied "up"
+    // sat 90°+ away from the accelerometer's. fieldInBody() projects the NED
+    // field onto the actual body axes, so it now rotates in lockstep with
+    // upInBody/gyroInBody.
+    float body[3];
+    sim_sensor_model::fieldInBody(pitch_rad_, B_NORTH, B_EAST, B_DOWN, body);
+    float body_x = body[0];
+    float body_y = body[1];
+    float body_z = body[2];
 
     // Pad-frame alignment (#508) — keeps the field continuous across the
     // real→sim handover, so no heading step winds the gyro bias either.
@@ -606,14 +624,14 @@ void SensorCollectorSim::encodeIIS2MDC(uint32_t time_us, IIS2MDCData& out)
     memset(&out, 0, sizeof(out));
     out.time_us = time_us;
 
-    // Same Earth field + pitch-plane rotation as encodeMMC5983MA (#463).
+    // Same Earth field + body projection as encodeMMC5983MA (#463, corrected #512).
     static constexpr float COUNTS_PER_UT = 1.0f / 0.15f;   // datasheet 0.15 µT/LSB
 
-    const float sp = sinf(pitch_rad_);
-    const float cp = cosf(pitch_rad_);
-    float body_x =  B_NORTH * sp + B_DOWN * cp;
-    float body_y =  B_EAST;
-    float body_z = -B_NORTH * cp + B_DOWN * sp;
+    float body[3];
+    sim_sensor_model::fieldInBody(pitch_rad_, B_NORTH, B_EAST, B_DOWN, body);
+    float body_x = body[0];
+    float body_y = body[1];
+    float body_z = body[2];
 
     // Pad-frame alignment (#508) — see encodeISM6.
     applyPadAlign(body_x, body_y, body_z);
