@@ -1545,11 +1545,15 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | low-SNR drop: %lu | netid drop: %lu | log wr-fail: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    // #520: dup-rx = stale DIO1 latches caught before they could re-read the
+    // radio buffer and emit a byte-identical duplicate packet. Nonzero is
+    // EXPECTED and healthy — it means the race still occurs and is being caught.
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | dup-rx caught: %lu | low-SNR drop: %lu | netid drop: %lu | log wr-fail: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
              (unsigned long)ls.rx_len_drop,
+             (unsigned long)ls.rx_spurious,
              (unsigned long)lora_low_snr_drops,
              (unsigned long)lora_netid_mismatch_drops,
              (unsigned long)log_write_fail_count,

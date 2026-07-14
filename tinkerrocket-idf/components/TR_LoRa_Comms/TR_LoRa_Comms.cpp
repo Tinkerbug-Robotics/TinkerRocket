@@ -257,6 +257,27 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
         return false;
     }
 
+    // #520: rx_done_ is only a HINT. It has two racing writers — the DIO1 ISR
+    // (edge-triggered, fires once per packet) and pollDio1() (the missed-interrupt
+    // fallback, which latches on the DIO1 *level*). The radio holds DIO1 asserted
+    // until readData() below clears the RxDone IRQ, several SPI transactions after
+    // we clear rx_done_ — so there is a window where rx_done_ is false while DIO1
+    // is still high, and a level-based latch landing in it re-arms the flag for a
+    // packet we ALREADY consumed. The next call would then re-read the SX126x
+    // buffer, which still holds that packet, and hand back a byte-identical
+    // duplicate (bench: same seq, same RSSI/SNR to 0.1 dB, ~9 ms later).
+    //
+    // So ask the radio, not the flag. DIO1 is masked to RxDone only, so a set
+    // RX_DONE bit means a genuinely new packet is waiting.
+    if (!(radio_->getIrqFlags() & RADIOLIB_SX126X_IRQ_RX_DONE))
+    {
+        portDISABLE_INTERRUPTS();
+        rx_done_ = false;
+        portENABLE_INTERRUPTS();
+        stats_.rx_spurious++;
+        return false;
+    }
+
     // Clear the flag atomically w.r.t. the DIO1 ISR so we never lose
     // an rx_done_ that fires between the check above and this assignment.
     portDISABLE_INTERRUPTS();

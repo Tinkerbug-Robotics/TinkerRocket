@@ -53,6 +53,12 @@ public:
         uint32_t rx_count = 0;
         uint32_t rx_crc_fail = 0;
         uint32_t rx_len_drop = 0;  // #288: RX dropped for bad length (0 or > maxLen)
+        // #520: rx_done_ was latched but the radio had no packet — a stale DIO1
+        // level re-armed the flag for a packet already consumed. Caught and
+        // discarded instead of re-reading the SX126x buffer (which produced
+        // byte-identical duplicate packets). Nonzero here is EXPECTED and healthy:
+        // it means the race is still happening and is being caught.
+        uint32_t rx_spurious = 0;
         uint32_t isr_count = 0;
         uint32_t tx_watchdog_fires = 0;  // tx_ongoing_ force-cleared by watchdog (#105)
         float last_rssi = 0.0f;
