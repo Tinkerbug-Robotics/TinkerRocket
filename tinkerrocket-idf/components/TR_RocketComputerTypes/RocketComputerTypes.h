@@ -952,6 +952,14 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(RocketStorageStatsData) == 15,
               "RocketStorageStatsData must be 15 bytes");
 
+// RocketStorageStatsData.flags bits.  Wire-compatible: the app ignores unknown
+// bits, so new flags don't bump the format.
+static constexpr uint8_t RSS_FLAG_INITIALIZED  = (1u << 0);  // flight log up
+// #315: at least one oldest-flight auto-eviction has run since boot (rolling
+// buffer reclaimed space to arm a flight). Surfaces the event so a silently
+// dropped-then-reclaimed card is observable in the app's storage view.
+static constexpr uint8_t RSS_FLAG_AUTO_EVICTED = (1u << 1);
+
 // BS→app flash-space stats for the base station's own log filesystem.  Rides the
 // file_ops characteristic behind a 0xCD discriminator.  Bytes (not blocks) since
 // the backend may be SD/FAT (GB) or SPIFFS (MB).  reserved is FS overhead =
