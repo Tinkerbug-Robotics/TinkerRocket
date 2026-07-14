@@ -19,7 +19,7 @@
 
 static const char* BLE_TAG = "BLE";
 
-// Spinlock protecting pending_command_ against races between the BLE
+// Spinlock protecting the command ring (#517) against races between the BLE
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -112,10 +112,6 @@ TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
       negotiated_mtu_(0),
       telem_notify_subscribed_(false),
       conn_handle_(0),
-      pending_command_(0),
-      pending_file_list_page_(0),
-      pending_delete_filename_(""),
-      pending_download_filename_(""),
       file_list_json_(""),
       chunk_buffer_(nullptr),
       chunk_buffer_size_(0),
@@ -374,7 +370,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     char    name_local[64];
     bool    have_delete = false, have_download = false;
     int     page_local  = -1;
-    uint8_t payload_local[sizeof(pending_payload_)];
+    uint8_t payload_local[tr_ble::kMaxPayload];
     size_t  payload_len_local = 0;
     bool    have_payload = false;
 
@@ -480,31 +476,39 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
         have_payload = true;
     }
 
-    // #384: commit the command AND everything that travels with it in one
-    // critical section, so bs_loop can never pair a command with a different
-    // write's payload/filename/page.
-    uint8_t overwritten = 0;
-    portENTER_CRITICAL(&s_cmd_mux);
-    overwritten = pending_command_;
+    // Build the entry in a local first — the parse/copy work stays OUT of the
+    // critical section, which now only has to do the ring push.
+    tr_ble::PendingCommand entry;   // zero-initialised: empty payload/name/page
+    entry.cmd = cmd;
     if (have_payload)
     {
-        memcpy(pending_payload_, payload_local, payload_len_local);
-        pending_payload_len_ = payload_len_local;
+        memcpy(entry.payload, payload_local, payload_len_local);
+        entry.payload_len = payload_len_local;
     }
-    if (page_local >= 0)   pending_file_list_page_ = (uint8_t)page_local;
-    if (have_delete)       strlcpy(pending_delete_filename_,   name_local, sizeof(pending_delete_filename_));
-    if (have_download)     strlcpy(pending_download_filename_, name_local, sizeof(pending_download_filename_));
-    pending_command_ = cmd;
+    if (page_local >= 0)   entry.file_list_page = (uint8_t)page_local;
+    if (have_delete)       strlcpy(entry.delete_name,   name_local, sizeof(entry.delete_name));
+    if (have_download)     strlcpy(entry.download_name, name_local, sizeof(entry.download_name));
+
+    // #384: the command and everything travelling with it are committed in ONE
+    // critical section, so the loop task can never pair a command with a
+    // different write's payload/filename/page.
+    // #517: append to the ring instead of overwriting a single latch.
+    portENTER_CRITICAL(&s_cmd_mux);
+    const bool   queued = cmd_ring_.push(entry);
+    const size_t depth  = cmd_ring_.size();
     portEXIT_CRITICAL(&s_cmd_mux);
-    if (overwritten != 0)
+
+    if (!queued)
     {
-        // Previous command not yet consumed — it was overwritten wholesale
-        // (command + latches together, so at least never mismatched).
-        ESP_LOGW(BLE_TAG, "Overwriting unconsumed cmd %u with %u",
-                 overwritten, cmd);
+        // The loop task isn't draining (a multi-second blocking op, or it died).
+        // Drop the NEWEST: the older commands are the ones the app sent first
+        // and is still waiting on, so rotating them out would be worse.
+        ESP_LOGE(BLE_TAG, "Command ring full (%u) — cmd %u DROPPED",
+                 (unsigned)tr_ble::kRingDepth, cmd);
+        return;
     }
 
-    ESP_LOGI(BLE_TAG, "Received command: %u", cmd);
+    ESP_LOGI(BLE_TAG, "Received command: %u (queued, depth=%u)", cmd, (unsigned)depth);
 }
 
 // ============================================================================
@@ -878,47 +882,56 @@ void TR_BLE_To_APP::sendTelemetry(const TelemetryData& data)
 
 uint8_t TR_BLE_To_APP::getCommand()
 {
-    // #384: consume the command and snapshot its payload in the SAME critical
-    // section — a later BLE write can then only replace the pending latch,
-    // never the copy this command's handler reads via getCommandPayload().
+    // #384: consume the command and snapshot everything travelling with it in
+    // the SAME critical section — a later BLE write can then only append to the
+    // ring, never mutate the copy this command's handler is about to read via
+    // getCommandPayload() / getDeleteFilename() / getDownloadFilename() /
+    // getFileListPage().
+    // #517: pop the OLDEST entry rather than clearing a single latch, so a
+    // burst of commands is delivered in order instead of collapsing to the last.
     portENTER_CRITICAL(&s_cmd_mux);
-    uint8_t cmd = pending_command_;
-    pending_command_ = 0;
-    consumed_payload_len_ = pending_payload_len_;
-    memcpy(consumed_payload_, pending_payload_, sizeof(consumed_payload_));
+    const bool got = cmd_ring_.pop(consumed_);
     portEXIT_CRITICAL(&s_cmd_mux);
-    return cmd;
+
+    if (!got)
+    {
+        consumed_ = tr_ble::PendingCommand{};   // no command: empty payload/name/page
+        return 0;
+    }
+    return consumed_.cmd;
 }
+
+// The three accessors below read the loop-task-only snapshot taken by
+// getCommand(), so they need no lock: the NimBLE task can no longer reach the
+// data this command's handler is using. (They used to read the live latch under
+// the mux, which still let a BLE write arriving mid-handler swap the filename
+// or page out from under it — the gap #384 left open.)
 
 uint8_t TR_BLE_To_APP::getFileListPage()
 {
-    portENTER_CRITICAL(&s_cmd_mux);
-    uint8_t page = pending_file_list_page_;
-    pending_file_list_page_ = 0;
-    portEXIT_CRITICAL(&s_cmd_mux);
+    uint8_t page = consumed_.file_list_page;
+    consumed_.file_list_page = 0;   // "clears after reading" contract
     return page;
 }
 
 String TR_BLE_To_APP::getDeleteFilename()
 {
-    // Copy out under the mux; build the String (heap) only after exiting the
-    // critical section.
-    char buf[sizeof(pending_delete_filename_)];
-    portENTER_CRITICAL(&s_cmd_mux);
-    strlcpy(buf, pending_delete_filename_, sizeof(buf));
-    pending_delete_filename_[0] = '\0';
-    portEXIT_CRITICAL(&s_cmd_mux);
-    return String(buf);
+    // Empty unless the command just consumed was a delete (cmd 3) — the name
+    // belongs to that entry, so it can't leak onto an unrelated command the
+    // way the shared latch could.
+    String name(consumed_.delete_name);
+    consumed_.delete_name[0] = '\0';   // "clears after reading" contract
+    return name;
 }
 
 String TR_BLE_To_APP::getDownloadFilename()
 {
-    char buf[sizeof(pending_download_filename_)];
-    portENTER_CRITICAL(&s_cmd_mux);
-    strlcpy(buf, pending_download_filename_, sizeof(buf));
-    pending_download_filename_[0] = '\0';
-    portEXIT_CRITICAL(&s_cmd_mux);
-    return String(buf);
+    // Empty unless the command just consumed was a download (cmd 4). The OC
+    // calls this on EVERY command (main.cpp: after the cmd dispatch chain), so
+    // a stale name here would kick off a spurious file transfer.
+    String name(consumed_.download_name);
+    consumed_.download_name[0] = '\0';   // "clears after reading" contract
+    return name;
 }
 
 void TR_BLE_To_APP::sendConfigJSON(const String& json)
