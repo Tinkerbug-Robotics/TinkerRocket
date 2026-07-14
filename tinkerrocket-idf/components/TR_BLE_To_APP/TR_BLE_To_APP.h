@@ -130,6 +130,14 @@ public:
     // Check if a device is connected
     bool isConnected() const;
 
+    // NimBLE's handle for the current connection; 0xFFFF when not connected.
+    // #519: the out computer was calling ble_gap_update_params(0, ...) with a
+    // HARDCODED zero because this was never exposed. NimBLE handed out handle 1,
+    // so every one of its connection-parameter requests failed with "connection
+    // not found; conn_handle=0x0000" — including the slow/low-power params that
+    // exist precisely to cut idle power. Callers must pass this, not a literal.
+    uint16_t connHandle() const { return device_connected_ ? conn_handle_ : 0xFFFF; }
+
     // Send telemetry update to connected device
     // Sends JSON via BLE notification
     void sendTelemetry(const TelemetryData& data);

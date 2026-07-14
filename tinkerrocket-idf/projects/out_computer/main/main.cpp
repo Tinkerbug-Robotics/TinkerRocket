@@ -1049,32 +1049,58 @@ static void exitLowPowerMode()
     ESP_LOGI("PWR", "Full performance mode (%d MHz)", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
 }
 
-// Request slow BLE connection parameters for low-power idle.
-// Only called when a connection exists and power is OFF.
-static void requestSlowBLEParams(uint16_t conn_handle)
+// #519: both of these took a conn_handle argument and BOTH call sites passed a
+// literal 0 — while NimBLE had handed out handle 1. So every request failed with
+// "GAP update_params: connection not found; conn_handle=0x0000" and neither the
+// slow (low-power) nor the fast (file-transfer) parameters have EVER been applied.
+// They now take no handle and read the live one from the BLE layer.
+static void applyBLEParams(const char* what, const struct ble_gap_upd_params& params)
+{
+    const uint16_t h = ble_app.connHandle();
+    if (h == 0xFFFF)
+    {
+        ESP_LOGW("BLE", "%s conn params skipped — not connected", what);
+        return;
+    }
+    const int rc = ble_gap_update_params(h, &params);
+    if (rc != 0)
+        ESP_LOGW("BLE", "%s conn param request failed to send, rc=%d (handle=%u)", what, rc, h);
+    else
+        ESP_LOGI("BLE", "%s conn params requested (handle=%u)", what, h);
+    // The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler,
+    // which logs the interval actually in force — the peer is free to counter (#503).
+}
+
+// Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
+// lever on idle current. Within Apple's envelope: min >= 15 ms; max >= min + 15 ms;
+// latency <= 30; itvl_max * (latency + 1) = 1000 ms <= 2 s; supervision timeout
+// (4 s) > itvl_max * (latency + 1) * 3 = 3 s, and <= 6 s.
+static void requestSlowBLEParams()
 {
     struct ble_gap_upd_params params = {};
     params.itvl_min = 0x50;              // 100ms  (units of 1.25ms)
     params.itvl_max = 0xA0;              // 200ms
-    params.latency = 4;                  // Skip up to 4 connection events (~800ms effective)
+    params.latency = 4;                  // Skip up to 4 connection events (~1 s effective)
     params.supervision_timeout = 400;    // 4 seconds (units of 10ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
-    ble_gap_update_params(conn_handle, &params);
+    applyBLEParams("Slow (low-power)", params);
 }
 
-// Request fast BLE connection parameters for file transfer.
-// Called when power is turned ON and a connection already exists.
-static void requestFastBLEParams(uint16_t conn_handle)
+// Fast parameters for file transfer.
+// #503: this asked for itvl_min = 0x06 = 7.5 ms, which is BELOW iOS's 15 ms floor
+// and could never be granted — the same bug fixed in TR_BLE_To_APP, living on in a
+// second copy here. Now inside Apple's envelope (15-30 ms), like the shared path.
+static void requestFastBLEParams()
 {
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x06;              // 7.5ms  (units of 1.25ms)
-    params.itvl_max = 0x10;              // 20ms
+    params.itvl_min = 0x0C;              // 15ms — iOS minimum; below this is refused
+    params.itvl_max = 0x18;              // 30ms — must be >= min + 15 ms
     params.latency = 0;                  // No slave latency
     params.supervision_timeout = 200;    // 2 seconds (units of 10ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
-    ble_gap_update_params(conn_handle, &params);
+    applyBLEParams("Fast (transfer)", params);
 }
 
 static void updateDerivedAltitudeFromBMP()
@@ -5515,7 +5541,7 @@ static void loop_oc()
             // slow params to save power (onConnect always requests fast params,
             // needed for file transfer when powered on).
             if (!pwr_pin_on) {
-                requestSlowBLEParams(0);
+                requestSlowBLEParams();
             }
         }
         ble_was_connected = ble_now;
@@ -5879,7 +5905,7 @@ static void loop_oc()
                 // Restore fast BLE connection params for file transfer
                 if (ble_app.isConnected())
                 {
-                    requestFastBLEParams(0);
+                    requestFastBLEParams();
                 }
             }
             else
