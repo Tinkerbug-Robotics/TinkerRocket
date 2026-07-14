@@ -268,6 +268,16 @@ public:
         uint32_t retries_total;  // summed backpressure waits
         uint32_t retries_max;    // worst single chunk
         uint32_t burst_max;      // longest run accepted with no wait == queue depth
+
+        // Link quality sampled DURING the transfer, not once at the end. A single
+        // end-of-run reading cannot tell a genuinely bad link from a stray sample,
+        // and the difference matters: at the sensitivity floor the link layer
+        // retransmits, and each retransmit burns one of the ~4 packet slots per
+        // connection event that the whole transfer rate is made of.
+        int8_t   rssi_min;
+        int8_t   rssi_max;
+        int32_t  rssi_sum;
+        uint32_t rssi_n;
     };
     void resetXferStats();
     XferStats xferStats() const { return xfer_; }
@@ -284,8 +294,14 @@ public:
     // not the interval — is the real cadence. On the idle link (200 ms, latency 4)
     // it is a FULL SECOND. Anything that waits on the controller draining must be
     // measured against this, or it will time out on a perfectly healthy link.
-    // Returns 30 (the fast link) if the parameters cannot be read.
-    uint32_t effectiveEventMs() const;
+    // Returns 30 (the fast link) if the parameters are not known yet.
+    //
+    // Cached, NOT queried. It used to call ble_gap_conn_find() — which takes the
+    // NimBLE host lock — and sendFileChunk calls this once per chunk, so a download
+    // was grabbing the host stack's own lock ~19,000 times while that same host task
+    // was trying to drain the queue we were waiting on. The value only changes when
+    // the parameters change, so it is latched in onConnect/onConnParamsUpdated.
+    uint32_t effectiveEventMs() const { return eff_event_ms_; }
 
     // Live RSSI of the phone link, dBm (0 if not connected / unavailable). A weak
     // link means the link layer is silently retransmitting, which eats exactly the
@@ -304,6 +320,13 @@ private:
 
     XferStats xfer_{};        // #524 diagnostic, reset at each download
     uint32_t  xfer_burst_{0}; // current run of zero-wait sends
+
+    // Latched link cadence, interval x (latency + 1) ms. See effectiveEventMs().
+    volatile uint32_t eff_event_ms_ = 30;
+
+    // Sample RSSI every N chunks — often enough to see a link go bad mid-transfer,
+    // rare enough that taking the host lock for it costs nothing.
+    static constexpr uint32_t kRssiSampleEveryChunks = 256;
 
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;
@@ -455,6 +478,7 @@ private:
     // #503: connection-parameter negotiation. Deferred out of the connect
     // callback so it doesn't collide with the peer's own update procedure.
     void requestConnParams();
+    static uint32_t effFromDesc(const struct ble_gap_conn_desc& desc);
     void onConnParamsUpdated(uint16_t conn_handle, int status);
     void onCommandWrite(const uint8_t* data, size_t length);
 

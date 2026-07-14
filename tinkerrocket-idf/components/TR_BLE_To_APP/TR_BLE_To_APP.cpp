@@ -317,6 +317,9 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     negotiated_mtu_ = 0;  // Reset until MTU exchange completes
     ll_tx_octets_   = 27; // #524: and back to the pre-DLE minimum until DATA_LEN_CHG
     telem_notify_subscribed_ = false;
+    // #524: latch the cadence the peer opened with. CONN_UPDATE only fires on a
+    // CHANGE, so without this the initial parameters would never be recorded.
+    eff_event_ms_ = (desc != nullptr) ? effFromDesc(*desc) : 30;
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
 
@@ -432,15 +435,11 @@ void TR_BLE_To_APP::requestConnParams()
     }
 }
 
-uint32_t TR_BLE_To_APP::effectiveEventMs() const
+// conn_itvl is in 1.25 ms units. conn_latency is how many connection events the
+// peripheral may SKIP, so real data opportunities are (latency + 1) intervals apart —
+// on the idle link (200 ms, latency 4) that is a full second.
+uint32_t TR_BLE_To_APP::effFromDesc(const struct ble_gap_conn_desc& desc)
 {
-    struct ble_gap_conn_desc desc;
-    if (!device_connected_ || ble_gap_conn_find(conn_handle_, &desc) != 0)
-    {
-        return 30;   // assume the fast link rather than invent a stall
-    }
-    // conn_itvl is in 1.25 ms units. conn_latency is how many events the peripheral
-    // may SKIP, so real data opportunities are (latency + 1) intervals apart.
     const uint32_t itvl_ms = ((uint32_t)desc.conn_itvl * 5u) / 4u;
     const uint32_t eff     = itvl_ms * ((uint32_t)desc.conn_latency + 1u);
     return (eff > 0) ? eff : 30;
@@ -458,9 +457,12 @@ void TR_BLE_To_APP::onConnParamsUpdated(uint16_t conn_handle, int status)
     {
         if (have_desc)
         {
-            ESP_LOGI(BLE_TAG, "Connection parameters now: interval=%.2f ms, latency=%u, timeout=%u ms",
+            eff_event_ms_ = effFromDesc(desc);   // latch: this is the ONLY place it changes
+            ESP_LOGI(BLE_TAG, "Connection parameters now: interval=%.2f ms, latency=%u, "
+                              "timeout=%u ms (%lu ms effective)",
                      (double)desc.conn_itvl * 1.25, (unsigned)desc.conn_latency,
-                     (unsigned)desc.supervision_timeout * 10);
+                     (unsigned)desc.supervision_timeout * 10,
+                     (unsigned long)eff_event_ms_);
         }
         else
         {
@@ -1016,6 +1018,8 @@ size_t TR_BLE_To_APP::maxNotifyBytes() const
 void TR_BLE_To_APP::resetXferStats()
 {
     xfer_ = XferStats{};
+    xfer_.rssi_min = 127;    // so the first real sample wins
+    xfer_.rssi_max = -128;
     xfer_burst_ = 0;
 }
 
@@ -1464,6 +1468,22 @@ bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
     else
     {
         xfer_burst_ = 0;
+    }
+
+    // Track the link, don't just read it once at the end. Bench 2026-07-14 finished a
+    // download at rssi=-107 dBm — the sensitivity floor — where the LL is retransmitting
+    // and each retransmit eats one of the ~4 packet slots per connection event that the
+    // transfer rate is made of. One sample cannot distinguish that from a stray reading.
+    if ((xfer_.chunks % kRssiSampleEveryChunks) == 1)
+    {
+        const int8_t r = connRssi();
+        if (r != 0)
+        {
+            if (r < xfer_.rssi_min) xfer_.rssi_min = r;
+            if (r > xfer_.rssi_max) xfer_.rssi_max = r;
+            xfer_.rssi_sum += r;
+            xfer_.rssi_n++;
+        }
     }
 
     if (rc != 0)

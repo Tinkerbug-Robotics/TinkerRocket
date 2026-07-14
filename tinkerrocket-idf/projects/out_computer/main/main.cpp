@@ -6046,10 +6046,11 @@ static void loop_oc()
             //                          packet budget) — a rail/antenna issue, not code
             const auto xs = ble_app.xferStats();
             const float total_ms = (elapsed_ms > 0) ? (float)elapsed_ms : 1.0f;
+            const int rssi_avg = (xs.rssi_n > 0) ? (int)(xs.rssi_sum / (int32_t)xs.rssi_n) : 0;
             snprintf(s_xfer_summary, sizeof(s_xfer_summary),
                      "XFER: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
                      "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks  |  "
-                     "link=%lu ms pm=%d rssi=%d dBm",
+                     "link=%lu ms pm=%d  rssi avg=%d min=%d max=%d dBm (n=%lu)",
                      kbps,
                      (unsigned long long)(flash_us / 1000),
                      100.0f * (flash_us / 1000.0f) / total_ms,
@@ -6058,8 +6059,20 @@ static void loop_oc()
                      (unsigned long)xs.chunks, (unsigned long)xs.retries_total,
                      (unsigned long)xs.retries_max, (unsigned long)xs.burst_max,
                      (unsigned long)ble_app.effectiveEventMs(),
-                     s_phone_io_pm_held ? 1 : 0, (int)ble_app.connRssi());
+                     s_phone_io_pm_held ? 1 : 0,
+                     rssi_avg, (int)xs.rssi_min, (int)xs.rssi_max,
+                     (unsigned long)xs.rssi_n);
             ESP_LOGW("BLE", "%s", s_xfer_summary);
+
+            // A link at the sensitivity floor is retransmitting, and every retransmit
+            // costs one of the ~4 packet slots per connection event that the transfer
+            // rate is made of. Say so, rather than leaving it to be spotted.
+            if (xs.rssi_n > 0 && rssi_avg < -85)
+            {
+                ESP_LOGW("BLE", "  ^ link was WEAK (avg %d dBm). Expect the LL to be "
+                                "retransmitting; move the phone closer before comparing "
+                                "this number to anything.", rssi_avg);
+            }
 
             // Keep saying it, so a battery run can be read back over USB afterwards.
             s_xfer_reprint_until_ms = millis() + XFER_REPRINT_WINDOW_MS;
