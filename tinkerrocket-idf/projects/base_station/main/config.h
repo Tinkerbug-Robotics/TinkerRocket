@@ -62,6 +62,25 @@ struct config : board_pins
     static constexpr uint8_t  UPLINK_RETRIES           = 8;     // TX attempts per command
     static constexpr uint32_t UPLINK_RETRY_INTERVAL_MS = 100;   // Delay between retries
 
+    // --- Uplink TX window (#506) ---
+    // The radio is half-duplex, so every uplink retry is a deaf window. At
+    // SF8/BW250 a downlink packet is ~82 ms on air while the gaps between retries
+    // are only ~49 ms — an 82 ms packet cannot fit in a 49 ms gap, so a blind
+    // burst loses essentially EVERY packet that arrives during it (bench-measured:
+    // 3 of 3). Rather than firing blind, transmit inside the quiet stretch between
+    // the rocket's ~500 ms telemetry packets. See bs_uplink_txwin.h.
+    //
+    // Air to keep clear ahead of the next expected downlink packet: its ~82 ms of
+    // time-on-air plus margin for cadence jitter and TX/RX turnaround.
+    static constexpr uint32_t UPLINK_RX_RESERVE_MS = 140;
+    // No packet for this long => no downlink worth protecting; transmit freely.
+    // Also the case where we most need to (silence recovery, rendezvous).
+    static constexpr uint32_t UPLINK_LINK_STALE_MS = 2000;
+    // Liveness backstop: never let the window gate starve a command. The uplink is
+    // blind and carries safety-relevant commands, so a command that never goes out
+    // is far worse than a dropped telemetry row.
+    static constexpr uint32_t UPLINK_MAX_DEFER_MS  = 1500;
+
     // --- Storage ---
     // V2/V3 log to a FORESEE F35SQB004G SPI NAND (M_* nets, on SPI3_HOST since
     // LoRa owns SPI2_HOST on V2); V1 uses an SDMMC SD card. Pins + presence
@@ -121,6 +140,19 @@ struct config : board_pins
     // (series doubles voltage, capacity stays per-cell). Written to MAX17205
     // DesignCap at boot to seed the ModelGauge m5 algorithm.
     static constexpr uint16_t BATTERY_DESIGN_MAH = 2800;
+
+    // --- Voltage-based SoC fallback (#501) ---
+    // The BQ27Z746 is a 1S gauge, so its Voltage() IS the cell voltage.
+    static constexpr int   BQ27Z746_CELLS = 1;
+    // Pack internal resistance (Ω) used to back out IR offset from the terminal
+    // voltage. ZERO = compensation DISABLED, which is deliberate: the gauge's CC
+    // Gain (data flash 0x4006) has never been calibrated against a known current,
+    // so its current reading would inject a scaling error rather than remove one.
+    // Set this once CC Gain is calibrated — the path is implemented and tested.
+    static constexpr float BATTERY_INTERNAL_R_OHM = 0.0f;
+    // EMA weight per battery poll (PWR_UPDATE_PERIOD_MS = 2 s) → ~20 s time
+    // constant: rides out LoRa TX current spikes, still tracks a real discharge.
+    static constexpr float SOC_FILTER_ALPHA = 0.1f;
 
     // --- Flight-pack charger (MP2672 on V3; gated by HAS_PACK_CHARGER) ---
     static constexpr uint16_t MP2672_ADDR = 0x4B;

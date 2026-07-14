@@ -68,6 +68,10 @@ struct TR_BQ27Z746_Data
     bool chg_fet_on;      // !XCHG  (CHG FET conducting)
     bool dsg_fet_on;      // !XDSG  (DSG FET conducting)
     bool fet_en;          // ManufacturingStatus FET_EN (autonomous FET control)
+    bool gauge_en;        // ManufacturingStatus GAUGE_EN — Impedance Track gauging.
+                          //   Ships at 0. While it is 0 the gauge never integrates
+                          //   current, so soc/capacity/full_capacity are meaningless
+                          //   even though voltage/temperature are fine (#501).
     bool safety_active;   // OperationStatus SS (a protection is active)
 };
 
@@ -108,6 +112,10 @@ public:
     float soc() const         { return _data.soc; }
     float temperature() const { return _data.temperature; }
     bool  fetsEnabled() const { return _data.fet_en; }
+    // False => Impedance Track gauging is off, so soc()/capacity()/full_capacity
+    // are not gauged values at all. Callers must not report them as SoC (#501).
+    bool  gaugingEnabled() const { return _data.gauge_en; }
+    float fullCapacity() const   { return _data.full_capacity; }
     bool  chgFetOn() const    { return _data.chg_fet_on; }
     bool  dsgFetOn() const    { return _data.dsg_fet_on; }
 

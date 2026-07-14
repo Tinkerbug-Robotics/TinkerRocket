@@ -19,7 +19,7 @@
 
 static const char* BLE_TAG = "BLE";
 
-// Spinlock protecting pending_command_ against races between the BLE
+// Spinlock protecting the command ring (#517) against races between the BLE
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -112,10 +112,6 @@ TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
       negotiated_mtu_(0),
       telem_notify_subscribed_(false),
       conn_handle_(0),
-      pending_command_(0),
-      pending_file_list_page_(0),
-      pending_delete_filename_(""),
-      pending_download_filename_(""),
       file_list_json_(""),
       chunk_buffer_(nullptr),
       chunk_buffer_size_(0),
@@ -212,8 +208,14 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         break;
 
     case BLE_GAP_EVENT_CONN_UPDATE:
-        ESP_LOGI(BLE_TAG, "Connection parameters updated, status=%d",
-                 event->conn_update.status);
+        // #503: this used to log an unconditional "Connection parameters updated,
+        // status=%d" at INFO — which read as success even when it wasn't (the
+        // 2026-07-14 bench logged status=554 and nobody noticed), and which never
+        // said what interval we actually ENDED UP with. status=0 only means the
+        // procedure completed; the peer is free to counter with its own values,
+        // and iOS always will. Report the negotiated interval, not the request.
+        self->onConnParamsUpdated(event->conn_update.conn_handle,
+                                  event->conn_update.status);
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -252,24 +254,112 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
 
-    // Request fast connection parameters from iOS for high-throughput transfer.
+    // #503: do NOT request the parameter update from inside the connect callback.
+    // iOS runs its OWN connection-update procedure immediately after connecting,
+    // and firing ours into the middle of it collides: the 2026-07-14 bench logged
+    // status=554, which is NimBLE's HCI base (0x200) + 0x2A = "Different
+    // Transaction Collision". Schedule it instead and let the peer go first;
+    // loop() fires it once the link has settled.
+    conn_param_attempts_ = 0;
+    conn_param_due_ms_   = (uint32_t)millis() + kConnParamDelayMs;
+}
+
+// #503: Apple's Accessory Design Guidelines are strict about what a peripheral may
+// ask for, and iOS rejects anything outside them. We were asking for 7.5 ms, which
+// is below iOS's 15 ms floor — so even without the collision it could never have
+// been granted, and the "Requested fast connection parameters (7.5-20ms)" log line
+// was describing something that was never going to happen.
+//
+//   interval min  >= 15 ms                        -> 0x0C (12 * 1.25 ms)
+//   interval max  >= interval min + 15 ms         -> 0x18 (24 * 1.25 ms = 30 ms)
+//   slave latency <= 30                           -> 0
+//   supervision timeout: <= 6 s, and greater than
+//     interval_max * (latency + 1) * 3 = 90 ms    -> 2 s (200 * 10 ms)
+void TR_BLE_To_APP::requestConnParams()
+{
+    if (!device_connected_) { conn_param_due_ms_ = 0; return; }
+
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x06;              // 7.5ms  (units of 1.25ms)
-    params.itvl_max = 0x10;              // 20ms   (units of 1.25ms)
+    params.itvl_min = 0x0C;              // 15 ms — iOS's minimum; asking lower is refused
+    params.itvl_max = 0x18;              // 30 ms — must be >= min + 15 ms
     params.latency = 0;                  // No slave latency
-    params.supervision_timeout = 200;    // 2 seconds (units of 10ms)
+    params.supervision_timeout = 200;    // 2 seconds (units of 10 ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
 
-    int rc = ble_gap_update_params(conn_handle, &params);
+    conn_param_attempts_++;
+    const int rc = ble_gap_update_params(conn_handle_, &params);
     if (rc == 0)
     {
-        ESP_LOGI(BLE_TAG, "Requested fast connection parameters (7.5-20ms interval)");
+        ESP_LOGI(BLE_TAG, "Requested connection parameters (15-30 ms interval), attempt %u",
+                 (unsigned)conn_param_attempts_);
+        conn_param_due_ms_ = 0;   // wait for the CONN_UPDATE event
     }
     else
     {
-        ESP_LOGW(BLE_TAG, "Connection param update request failed, rc=%d", rc);
+        ESP_LOGW(BLE_TAG, "Connection param update request failed to send, rc=%d", rc);
+        conn_param_due_ms_ = (conn_param_attempts_ < kConnParamMaxAttempts)
+                                 ? (uint32_t)millis() + kConnParamRetryMs
+                                 : 0;
     }
+}
+
+void TR_BLE_To_APP::onConnParamsUpdated(uint16_t conn_handle, int status)
+{
+    // Report what we ACTUALLY got. status==0 means the procedure completed, not
+    // that the peer honoured our request — iOS routinely counters with its own
+    // values, so the negotiated interval is the only number worth logging.
+    struct ble_gap_conn_desc desc;
+    const bool have_desc = (ble_gap_conn_find(conn_handle, &desc) == 0);
+
+    if (status == 0)
+    {
+        if (have_desc)
+        {
+            ESP_LOGI(BLE_TAG, "Connection parameters now: interval=%.2f ms, latency=%u, timeout=%u ms",
+                     (double)desc.conn_itvl * 1.25, (unsigned)desc.conn_latency,
+                     (unsigned)desc.supervision_timeout * 10);
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "Connection parameters updated (peer accepted)");
+        }
+        conn_param_due_ms_ = 0;
+        return;
+    }
+
+    // Decode the failure instead of printing a bare number. NimBLE returns HCI
+    // errors offset by BLE_HS_ERR_HCI_BASE (0x200), which is why the raw value
+    // looks like a nonsense "554".
+    const char* why = "unknown";
+    bool collision = false;
+    if (status >= BLE_HS_ERR_HCI_BASE && status < BLE_HS_ERR_HCI_BASE + 0x100)
+    {
+        switch (status - BLE_HS_ERR_HCI_BASE)
+        {
+            case 0x0C: why = "command disallowed"; break;
+            case 0x1E: why = "invalid LMP parameters"; break;
+            case 0x23: why = "LMP/LL transaction collision"; collision = true; break;
+            case 0x2A: why = "different transaction collision"; collision = true; break;
+            case 0x3B: why = "unacceptable connection parameters"; break;
+            default: break;
+        }
+    }
+
+    const bool retry = collision && (conn_param_attempts_ < kConnParamMaxAttempts);
+    ESP_LOGW(BLE_TAG, "Connection param update REJECTED: status=%d (HCI 0x%02X: %s)%s",
+             status,
+             (status >= BLE_HS_ERR_HCI_BASE) ? (unsigned)(status - BLE_HS_ERR_HCI_BASE) : 0u,
+             why,
+             retry ? " — retrying" : "");
+
+    if (have_desc)
+    {
+        ESP_LOGW(BLE_TAG, "  link stays at interval=%.2f ms (peer's choice)",
+                 (double)desc.conn_itvl * 1.25);
+    }
+
+    conn_param_due_ms_ = retry ? ((uint32_t)millis() + kConnParamRetryMs) : 0;
 }
 
 void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
@@ -278,6 +368,11 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     negotiated_mtu_ = 0;
     telem_notify_subscribed_ = false;
     conn_handle_ = 0;
+    // #503: cancel any pending/retrying parameter request — it belongs to the
+    // connection that just went away, and firing it on the next one's handle
+    // would be wrong.
+    conn_param_due_ms_ = 0;
+    conn_param_attempts_ = 0;
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
 
     // Restart advertising so new devices can connect
@@ -374,7 +469,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     char    name_local[64];
     bool    have_delete = false, have_download = false;
     int     page_local  = -1;
-    uint8_t payload_local[sizeof(pending_payload_)];
+    uint8_t payload_local[tr_ble::kMaxPayload];
     size_t  payload_len_local = 0;
     bool    have_payload = false;
 
@@ -480,31 +575,39 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
         have_payload = true;
     }
 
-    // #384: commit the command AND everything that travels with it in one
-    // critical section, so bs_loop can never pair a command with a different
-    // write's payload/filename/page.
-    uint8_t overwritten = 0;
-    portENTER_CRITICAL(&s_cmd_mux);
-    overwritten = pending_command_;
+    // Build the entry in a local first — the parse/copy work stays OUT of the
+    // critical section, which now only has to do the ring push.
+    tr_ble::PendingCommand entry;   // zero-initialised: empty payload/name/page
+    entry.cmd = cmd;
     if (have_payload)
     {
-        memcpy(pending_payload_, payload_local, payload_len_local);
-        pending_payload_len_ = payload_len_local;
+        memcpy(entry.payload, payload_local, payload_len_local);
+        entry.payload_len = payload_len_local;
     }
-    if (page_local >= 0)   pending_file_list_page_ = (uint8_t)page_local;
-    if (have_delete)       strlcpy(pending_delete_filename_,   name_local, sizeof(pending_delete_filename_));
-    if (have_download)     strlcpy(pending_download_filename_, name_local, sizeof(pending_download_filename_));
-    pending_command_ = cmd;
+    if (page_local >= 0)   entry.file_list_page = (uint8_t)page_local;
+    if (have_delete)       strlcpy(entry.delete_name,   name_local, sizeof(entry.delete_name));
+    if (have_download)     strlcpy(entry.download_name, name_local, sizeof(entry.download_name));
+
+    // #384: the command and everything travelling with it are committed in ONE
+    // critical section, so the loop task can never pair a command with a
+    // different write's payload/filename/page.
+    // #517: append to the ring instead of overwriting a single latch.
+    portENTER_CRITICAL(&s_cmd_mux);
+    const bool   queued = cmd_ring_.push(entry);
+    const size_t depth  = cmd_ring_.size();
     portEXIT_CRITICAL(&s_cmd_mux);
-    if (overwritten != 0)
+
+    if (!queued)
     {
-        // Previous command not yet consumed — it was overwritten wholesale
-        // (command + latches together, so at least never mismatched).
-        ESP_LOGW(BLE_TAG, "Overwriting unconsumed cmd %u with %u",
-                 overwritten, cmd);
+        // The loop task isn't draining (a multi-second blocking op, or it died).
+        // Drop the NEWEST: the older commands are the ones the app sent first
+        // and is still waiting on, so rotating them out would be worse.
+        ESP_LOGE(BLE_TAG, "Command ring full (%u) — cmd %u DROPPED",
+                 (unsigned)tr_ble::kRingDepth, cmd);
+        return;
     }
 
-    ESP_LOGI(BLE_TAG, "Received command: %u", cmd);
+    ESP_LOGI(BLE_TAG, "Received command: %u (queued, depth=%u)", cmd, (unsigned)depth);
 }
 
 // ============================================================================
@@ -708,6 +811,21 @@ bool TR_BLE_To_APP::begin()
 
 void TR_BLE_To_APP::loop()
 {
+    // #503: deferred connection-parameter request. Fired from here, on the main
+    // loop, rather than from the connect callback — so it lands AFTER iOS has
+    // finished its own connection-update procedure instead of colliding with it.
+    if (conn_param_due_ms_ != 0 && device_connected_)
+    {
+        const uint32_t now = (uint32_t)millis();
+        // Same wraparound tolerance as the OTA timer below.
+        const bool elapsed = (now >= conn_param_due_ms_) ||
+                             ((conn_param_due_ms_ - now) > 0x7FFFFFFFu);
+        if (elapsed)
+        {
+            requestConnParams();
+        }
+    }
+
     // BLE stack handles events via callbacks on the NimBLE host task.
     // Only OTA's deferred-restart watchdog needs poll-style handling here.
     if (ota_pending_restart_at_ms_ != 0)
@@ -878,47 +996,56 @@ void TR_BLE_To_APP::sendTelemetry(const TelemetryData& data)
 
 uint8_t TR_BLE_To_APP::getCommand()
 {
-    // #384: consume the command and snapshot its payload in the SAME critical
-    // section — a later BLE write can then only replace the pending latch,
-    // never the copy this command's handler reads via getCommandPayload().
+    // #384: consume the command and snapshot everything travelling with it in
+    // the SAME critical section — a later BLE write can then only append to the
+    // ring, never mutate the copy this command's handler is about to read via
+    // getCommandPayload() / getDeleteFilename() / getDownloadFilename() /
+    // getFileListPage().
+    // #517: pop the OLDEST entry rather than clearing a single latch, so a
+    // burst of commands is delivered in order instead of collapsing to the last.
     portENTER_CRITICAL(&s_cmd_mux);
-    uint8_t cmd = pending_command_;
-    pending_command_ = 0;
-    consumed_payload_len_ = pending_payload_len_;
-    memcpy(consumed_payload_, pending_payload_, sizeof(consumed_payload_));
+    const bool got = cmd_ring_.pop(consumed_);
     portEXIT_CRITICAL(&s_cmd_mux);
-    return cmd;
+
+    if (!got)
+    {
+        consumed_ = tr_ble::PendingCommand{};   // no command: empty payload/name/page
+        return 0;
+    }
+    return consumed_.cmd;
 }
+
+// The three accessors below read the loop-task-only snapshot taken by
+// getCommand(), so they need no lock: the NimBLE task can no longer reach the
+// data this command's handler is using. (They used to read the live latch under
+// the mux, which still let a BLE write arriving mid-handler swap the filename
+// or page out from under it — the gap #384 left open.)
 
 uint8_t TR_BLE_To_APP::getFileListPage()
 {
-    portENTER_CRITICAL(&s_cmd_mux);
-    uint8_t page = pending_file_list_page_;
-    pending_file_list_page_ = 0;
-    portEXIT_CRITICAL(&s_cmd_mux);
+    uint8_t page = consumed_.file_list_page;
+    consumed_.file_list_page = 0;   // "clears after reading" contract
     return page;
 }
 
 String TR_BLE_To_APP::getDeleteFilename()
 {
-    // Copy out under the mux; build the String (heap) only after exiting the
-    // critical section.
-    char buf[sizeof(pending_delete_filename_)];
-    portENTER_CRITICAL(&s_cmd_mux);
-    strlcpy(buf, pending_delete_filename_, sizeof(buf));
-    pending_delete_filename_[0] = '\0';
-    portEXIT_CRITICAL(&s_cmd_mux);
-    return String(buf);
+    // Empty unless the command just consumed was a delete (cmd 3) — the name
+    // belongs to that entry, so it can't leak onto an unrelated command the
+    // way the shared latch could.
+    String name(consumed_.delete_name);
+    consumed_.delete_name[0] = '\0';   // "clears after reading" contract
+    return name;
 }
 
 String TR_BLE_To_APP::getDownloadFilename()
 {
-    char buf[sizeof(pending_download_filename_)];
-    portENTER_CRITICAL(&s_cmd_mux);
-    strlcpy(buf, pending_download_filename_, sizeof(buf));
-    pending_download_filename_[0] = '\0';
-    portEXIT_CRITICAL(&s_cmd_mux);
-    return String(buf);
+    // Empty unless the command just consumed was a download (cmd 4). The OC
+    // calls this on EVERY command (main.cpp: after the cmd dispatch chain), so
+    // a stale name here would kick off a spurious file transfer.
+    String name(consumed_.download_name);
+    consumed_.download_name[0] = '\0';   // "clears after reading" contract
+    return name;
 }
 
 void TR_BLE_To_APP::sendConfigJSON(const String& json)

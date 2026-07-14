@@ -113,6 +113,7 @@ esp_err_t TR_BQ27Z746::readFetStatus()
     _data.dsg_fet_on    = !(opA & Reg::OPA_XDSG);
     _data.safety_active = (opA & Reg::OPA_SS) != 0;
     _data.fet_en        = (mfg & Reg::MFG_FET_EN) != 0;
+    _data.gauge_en      = (mfg & Reg::MFG_GAUGE_EN) != 0;
     return ESP_OK;
 }
 
@@ -313,6 +314,20 @@ void TR_BQ27Z746::logDiagnostics(const char* log_tag)
     ESP_LOGI(tag, "BQ27Z746 devtype=0x%04X  V=%.3f I=%.0fmA SOC=%.0f%% T=%.1fC Rem=%.0f/%.0f mAh",
              _device_type, (double)_data.voltage, (double)_data.current, (double)_data.soc,
              (double)_data.temperature, (double)_data.capacity, (double)_data.full_capacity);
-    ESP_LOGI(tag, "  BattStatus=0x%04X  FET_EN=%d CHG=%d DSG=%d SafetyActive=%d",
-             _data.batt_status, _data.fet_en, _data.chg_fet_on, _data.dsg_fet_on, _data.safety_active);
+    ESP_LOGI(tag, "  BattStatus=0x%04X  FET_EN=%d GAUGE_EN=%d CHG=%d DSG=%d SafetyActive=%d",
+             _data.batt_status, _data.fet_en, _data.gauge_en,
+             _data.chg_fet_on, _data.dsg_fet_on, _data.safety_active);
+
+    // #501: say out loud why SoC/capacity can't be believed, rather than leaving
+    // a bare "SOC=0%" in the log for someone to take at face value.
+    if (!_data.gauge_en)
+    {
+        ESP_LOGW(tag, "  GAUGE_EN=0 -> Impedance Track gauging is OFF. SOC/Rem/FullCap above are "
+                      "NOT gauged values (voltage/temp are still valid).");
+    }
+    if (_data.full_capacity > 0.0f && _data.capacity <= 0.0f && _data.voltage > 3.5f)
+    {
+        ESP_LOGW(tag, "  RemainingCapacity=0 at %.2f V — gauge state is unlearned/garbage, "
+                      "not an empty pack.", (double)_data.voltage);
+    }
 }

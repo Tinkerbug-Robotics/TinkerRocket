@@ -5244,13 +5244,16 @@ static void setup_oc()
 // LFS_TIMING / STALL_THRESHOLD_US instrumentation in TR_LogToFlash.cpp.
 static constexpr int64_t LOOP_STALL_THRESHOLD_US = 100'000;  // 100 ms
 
-// Idle (FC-off / low-power) loop period.  loop_oc drains the single-slot BLE
-// command buffer (pending_command_) once per iteration via ble_app.getCommand(),
-// so the loop must cycle faster than connect-time commands arrive (~60-90 ms
-// apart) or a burst overwrites itself — the root cause of #221 (was delay(1000)).
-// 20 ms keeps the loop responsive with negligible power cost (light sleep is
-// disabled while BLE is on, so the CPU idles at 40 MHz either way).  This is the
-// only knob: raise it if bench idle-current measurement ever shows it matters.
+// Idle (FC-off / low-power) loop period.  loop_oc drains ONE BLE command per
+// iteration via ble_app.getCommand().  This used to be a correctness
+// constraint: the BLE command buffer was a single slot, so a loop slower than
+// the ~60-90 ms connect-time command spacing let a burst overwrite itself —
+// the root cause of #221 (was delay(1000)).  #517 gave that buffer depth, so a
+// burst now queues instead of collapsing and correctness no longer rides on the
+// loop period.  20 ms stays for RESPONSIVENESS (a 16-deep ring still drains one
+// command per pass, and in-loop connection setup lagged up to 1 s at delay(1000)),
+// with negligible power cost — light sleep is disabled while BLE is on, so the
+// CPU idles at 40 MHz either way.
 static constexpr uint32_t IDLE_LOOP_DELAY_MS = 20;
 
 #define LOOP_STALL_INSTR(name, expr) do {                                       \
@@ -5458,15 +5461,15 @@ static void loop_oc()
             }
         }
 
-        // Yield to FreeRTOS.  This was delay(1000) for power, but the BLE
-        // command buffer (pending_command_) is single-slot and is only drained
-        // below via ble_app.getCommand() — a 1 s loop period let a connect-time
-        // command burst overwrite itself (only the last survived) and lagged
-        // in-loop connection setup up to 1 s, surfacing as flaky connects /
-        // dropped config+cal sync (#221).  Light sleep is disabled while BLE is
-        // on, so the CPU idles at 40 MHz (DFS min) regardless and the long delay
-        // saved little real power.  Stay responsive so the slot is drained as
-        // fast as commands arrive (~60-90 ms apart on connect).
+        // Yield to FreeRTOS.  This was delay(1000) for power; a 1 s loop period
+        // let a connect-time command burst overwrite the then-single-slot BLE
+        // command buffer (only the last survived) and lagged in-loop connection
+        // setup up to 1 s, surfacing as flaky connects / dropped config+cal sync
+        // (#221).  The buffer is now a ring (#517) so a burst queues rather than
+        // collapsing, but stay responsive anyway: one command drains per pass,
+        // and connection setup still runs in this loop.  Light sleep is disabled
+        // while BLE is on, so the CPU idles at 40 MHz (DFS min) regardless and
+        // the long delay saved little real power.
         delay(IDLE_LOOP_DELAY_MS);
 
     }

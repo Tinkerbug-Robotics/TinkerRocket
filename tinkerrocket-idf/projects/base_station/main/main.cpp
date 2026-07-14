@@ -9,6 +9,7 @@
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include <esp_vfs_fat.h>
 #include <esp_spiffs.h>
+#include <nvs_flash.h>            // nvs_flash_init — must run before any Preferences use (#500)
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
 #include <driver/spi_common.h>
@@ -29,6 +30,9 @@
 #include "config.h"
 #include "bs_log_policy.h"        // parseSequentialFilename() (#137)
 #include "bs_uplink_policy.h"     // mayTransmitUplink() scan gate (#379)
+#include "bs_uplink_queue.h"      // uplink command FIFO (#502)
+#include "bs_uplink_txwin.h"      // TX-in-the-RX-gap window policy (#506)
+#include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 
 #include <TR_LoRa_Comms.h>
@@ -118,6 +122,10 @@ static float bs_voltage = NAN;
 static float bs_soc = NAN;
 static float bs_current = NAN;
 static float bs_temperature = NAN;
+// #501: true when bs_soc came from the voltage curve rather than the gauge's own
+// coulomb count, because the gauge's SoC failed the plausibility check.
+static bool  bs_soc_estimated = false;
+static bs_battery_soc::Estimator bq_soc_estimator(config::SOC_FILTER_ALPHA);
 static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
@@ -146,12 +154,28 @@ static char    unit_id_hex[9] = {0};              // last 4 bytes of MAC as "a1b
 static char    unit_name[24]  = "TinkerBaseStation"; // default until NVS loads
 static uint8_t network_id     = config::DEFAULT_NETWORK_ID;
 
-// LoRa uplink state (BaseStation → OutComputer)
-static uint8_t  uplink_buf[40];   // 6-byte header + up to ~33 bytes payload (cmd 15 channel-set push needs 27 at BW=125)
-static size_t   uplink_len = 0;
-static uint8_t  uplink_retries_left = 0;
+// LoRa uplink state (BaseStation → OutComputer).
+// #502: a FIFO, not a single slot — see bs_uplink_queue.h. The uplink is blind
+// (no command ACK from the rocket), so a command's retries ARE its delivery;
+// overwriting a pending command threw those away.
+static bs_uplink_queue::Queue uplink_q;
 static uint32_t uplink_last_tx_ms = 0;
-static bool     uplink_pending = false;
+
+// "The uplink is busy" — successor to the old `uplink_pending` flag. True while
+// anything is queued or mid-retry, so the transaction / recovery / heartbeat /
+// mask-drift paths keep their original meaning: don't touch the radio, and
+// don't consider a relay finished, until the queue has fully drained.
+static inline bool uplinkBusy() { return uplink_q.busy(); }
+
+// #506: the rocket's downlink cadence, learned from RX timestamps, so uplink
+// retries can be fired into the quiet stretch between telemetry packets instead
+// of straight over the top of them.
+static bs_uplink_txwin::RxCadence rx_cadence;
+static uint32_t uplink_defer_start_ms = 0;   // when the head command was first held back
+static uint32_t uplink_tx_count       = 0;   // TXs actually emitted (stats)
+static uint32_t uplink_tx_airtime_ms  = 0;   // cumulative uplink time-on-air (stats)
+static uint32_t uplink_defer_count    = 0;   // passes deferred to protect the downlink
+static uint32_t uplink_defer_override = 0;   // liveness backstop fired (should be ~0)
 
 // Storage mount state. Preferred backend is SD over SDMMC; if that fails at boot
 // we fall back to SPIFFS on internal flash (partitions.csv: "spiffs", ~5 MB).
@@ -524,9 +548,50 @@ static void updateBattery()
         bq_gauge.update();
         maintainBatteryFets();
         bs_voltage     = bq_gauge.voltage();
-        bs_soc         = bq_gauge.soc();
         bs_current     = bq_gauge.current();
         bs_temperature = bq_gauge.temperature();
+
+        // #501: this gauge reported 0% SoC on a 4.17 V pack, with
+        // RemainingCapacity=0 and FullChargeCapacity ~10x design. Impedance Track
+        // derives all three by integrating current, and this part's CC Gain was
+        // never calibrated (and GAUGE_EN ships at 0), so they are garbage — while
+        // Voltage() is a direct ADC read and is correct. Prefer the gauge when it
+        // is actually believable; otherwise estimate from voltage, which is at
+        // least honest and gives us a low-battery warning.
+        const bool gauge_ok = bs_battery_soc::gaugeSocPlausible(
+            bq_gauge.gaugingEnabled(), bq_gauge.soc(), bq_gauge.fullCapacity(),
+            (float)config::BATTERY_DESIGN_MAH, bs_voltage, config::BQ27Z746_CELLS);
+
+        if (gauge_ok)
+        {
+            bs_soc           = bq_gauge.soc();
+            bs_soc_estimated = false;
+        }
+        else
+        {
+            bs_soc = bq_soc_estimator.update(bs_voltage, config::BQ27Z746_CELLS,
+                                             bs_current, config::BATTERY_INTERNAL_R_OHM);
+            bs_soc_estimated = true;
+        }
+
+        // Say it once, and again only if the verdict flips — the operator needs to
+        // know whether the number on the app is gauged or inferred.
+        static int last_verdict = -1;
+        const int verdict = gauge_ok ? 1 : 0;
+        if (verdict != last_verdict)
+        {
+            if (gauge_ok)
+                ESP_LOGI(TAG, "[BATT] BQ27Z746 gauge SoC is plausible — using it (%.0f%%)",
+                         (double)bs_soc);
+            else
+                ESP_LOGW(TAG, "[BATT] BQ27Z746 SoC not trustworthy "
+                              "(GAUGE_EN=%d, raw SOC=%.0f%%, FullCap=%.0f vs design %u mAh) — "
+                              "falling back to voltage estimate (#501)",
+                         bq_gauge.gaugingEnabled(), (double)bq_gauge.soc(),
+                         (double)bq_gauge.fullCapacity(),
+                         (unsigned)config::BATTERY_DESIGN_MAH);
+            last_verdict = verdict;
+        }
     }
     else if (gauge_kind == GaugeKind::MAX17303)
     {
@@ -1427,9 +1492,14 @@ static void printTelemetry(const LoRaDataSI& data, float rssi, float snr,
     else
         snprintf(hop_str, sizeof(hop_str), "%u", (unsigned)data.next_channel_idx);
 
-    ESP_LOGI(TAG, "[RX] %s | alt=%.0fm spd=%.1fm/s | %.0fdBm SNR=%.1f | sats=%u | %.2fV %.0f%% | nextCh=%s",
+    // #504: spd= used to be fed data.max_speed, so a landed rocket read 99 m/s —
+    // alarming to watch, and flatly contradicted by the CSV (speed=1.0,
+    // max_speed=99.0). Print the live speed under spd=, and keep the peak under
+    // its own max= label, which is what you actually want side by side on the bench.
+    ESP_LOGI(TAG, "[RX] %s | alt=%.0fm spd=%.1fm/s max=%.1fm/s | %.0fdBm SNR=%.1f | sats=%u | %.2fV %.0f%% | nextCh=%s",
              rocketStateToString(data.rocket_state),
              (double)data.pressure_alt,
+             (double)data.speed,
              (double)data.max_speed,
              (double)rssi,
              (double)snr,
@@ -1475,11 +1545,15 @@ static void printStats()
         snprintf(last_pkt_str, sizeof(last_pkt_str), "never");
     }
 
-    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | low-SNR drop: %lu | netid drop: %lu | log wr-fail: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
+    // #520: dup-rx = stale DIO1 latches caught before they could re-read the
+    // radio buffer and emit a byte-identical duplicate packet. Nonzero is
+    // EXPECTED and healthy — it means the race still occurs and is being caught.
+    ESP_LOGI(TAG, "[STATS] RX: %lu pkts (%.1f Hz) | CRC fail: %lu | len drop: %lu | dup-rx caught: %lu | low-SNR drop: %lu | netid drop: %lu | log wr-fail: %lu | ISR: %lu | rx_mode: %d | TX wdog: %lu | Last RSSI: %.0f dBm SNR: %.1f dB | Last pkt %s",
              (unsigned long)ls.rx_count,
              (double)rx_hz,
              (unsigned long)ls.rx_crc_fail,
              (unsigned long)ls.rx_len_drop,
+             (unsigned long)ls.rx_spurious,
              (unsigned long)lora_low_snr_drops,
              (unsigned long)lora_netid_mismatch_drops,
              (unsigned long)log_write_fail_count,
@@ -1489,6 +1563,30 @@ static void printStats()
              (double)ls.last_rssi,
              (double)ls.last_snr,
              last_pkt_str);
+
+    // Uplink airtime (#506).  The radio is half-duplex, so uplink time-on-air is
+    // time we are deaf — and it used to be silently charged to the downlink loss
+    // counters above, making a self-inflicted hole look like an RF problem. txwin
+    // = retries held back to land in the gap between telemetry packets; forced =
+    // the liveness backstop transmitting over the downlink anyway (want ~0).
+    ESP_LOGI(TAG, "[UPLINK] TX: %lu sent, %lu ms airtime | txwin: %lu deferred, %lu forced | rocket cadence: %u ms%s",
+             (unsigned long)uplink_tx_count,
+             (unsigned long)uplink_tx_airtime_ms,
+             (unsigned long)uplink_defer_count,
+             (unsigned long)uplink_defer_override,
+             (unsigned)rx_cadence.periodMs(),
+             rx_cadence.valid() ? "" : " (est, not yet learned)");
+
+    // Base-station battery.  The (est) marker says the SoC came from the voltage
+    // curve rather than the gauge's coulomb count (#501) — without it, a plausible
+    // number gives no hint that the gauge underneath it is untrustworthy.
+    if (fuel_gauge_present)
+    {
+        ESP_LOGI(TAG, "[BATT] %.2f V | %.0f%% SoC (%s) | %.0f mA | %.1f C",
+                 (double)bs_voltage, (double)bs_soc,
+                 bs_soc_estimated ? "est from voltage" : "gauge",
+                 (double)bs_current, (double)bs_temperature);
+    }
 
     // Hop diagnostics (#105).  hop_active=Y/N is the live link state; the
     // session counters reflect the *current* session and reset on each
@@ -1577,62 +1675,65 @@ static void buildUplinkPacket(uint8_t cmd, const uint8_t* payload, size_t payloa
                               uint8_t target_rid = 0xFF,
                               uint8_t retries = config::UPLINK_RETRIES)
 {
-    // #286: reject (do NOT truncate) an oversized payload.  Truncating would
-    // send a malformed command with a wrong-but-consistent length and no error
-    // surfaced.  Checked first so a rejected command also leaves any
-    // already-pending uplink untouched.
-    constexpr size_t kMaxUplinkPayload = sizeof(uplink_buf) - 6 - 1;  // header + 1 B slack = 33
-    if (payload_len > kMaxUplinkPayload)
+    // An idle queue transmits immediately; a busy one keeps pacing off the last
+    // TX so a queued command can't fire back-to-back with the one ahead of it.
+    const bool was_idle = uplink_q.empty();
+
+    const auto res = uplink_q.push(config::UPLINK_SYNC_BYTE,   // 0xCA
+                                   network_id, target_rid,
+                                   LORA_NEXT_CH_NO_HOP,        // phase 1: hop logic deferred
+                                   cmd, payload, payload_len, retries);
+
+    switch (res)
     {
-        ESP_LOGE(TAG, "[UPLINK] cmd=%u payload %u B exceeds max %u — REJECTED, not queued",
-                 cmd, (unsigned)payload_len, (unsigned)kMaxUplinkPayload);
-        return;
+        case bs_uplink_queue::PushResult::RejectedOversized:
+            // #286: reject (do NOT truncate) an oversized payload.  Truncating
+            // would send a malformed command with a wrong-but-consistent length
+            // and no error surfaced.  The queue checks this before anything else,
+            // so a rejected command leaves the pending ones untouched.
+            ESP_LOGE(TAG, "[UPLINK] cmd=%u payload %u B exceeds max %u — REJECTED, not queued",
+                     cmd, (unsigned)payload_len, (unsigned)bs_uplink_queue::kMaxPayload);
+            return;
+
+        case bs_uplink_queue::PushResult::RejectedFull:
+            // #502: the queue is the fix for silent clobbering, so a genuinely
+            // full queue must be loud rather than quietly dropping the oldest.
+            ESP_LOGE(TAG, "[UPLINK] queue full (%u) — cmd=%u DROPPED, not queued",
+                     (unsigned)bs_uplink_queue::kDepth, cmd);
+            return;
+
+        case bs_uplink_queue::PushResult::Queued:
+            break;
     }
 
-    if (uplink_pending)
-    {
-        ESP_LOGW(TAG, "[UPLINK] Discarding pending cmd=%u, replacing with cmd=%u",
-                 uplink_buf[4], cmd);
-    }
-    // Uplink format v2: [0xCA][network_id][target_rid][next_channel_idx][cmd][len][payload...]
-    uplink_buf[0] = config::UPLINK_SYNC_BYTE;  // 0xCA
-    uplink_buf[1] = network_id;
-    uplink_buf[2] = target_rid;
-    uplink_buf[3] = LORA_NEXT_CH_NO_HOP;       // phase 1: hop logic deferred
-    uplink_buf[4] = cmd;
-    uplink_buf[5] = (uint8_t)payload_len;
-    if (payload_len > 0 && payload != nullptr)
-    {
-        memcpy(&uplink_buf[6], payload, payload_len);
-    }
-    uplink_len = 6 + payload_len;
-    uplink_retries_left = retries;
-    uplink_pending = true;
-    uplink_last_tx_ms = 0;
-    ESP_LOGI(TAG, "[UPLINK] Queued cmd=%u -> rid=%u payload=%u bytes, %u retries",
-             cmd, target_rid, (unsigned)payload_len, (unsigned)retries);
+    if (was_idle) uplink_last_tx_ms = 0;
+
+    ESP_LOGI(TAG, "[UPLINK] Queued cmd=%u -> rid=%u payload=%u bytes, %u retries (queue=%u)",
+             cmd, target_rid, (unsigned)payload_len, (unsigned)retries,
+             (unsigned)uplink_q.size());
 }
 
 static void serviceUplink()
 {
-    if (!uplink_pending || uplink_retries_left == 0)
+    bs_uplink_queue::Entry* tx = uplink_q.head();
+    if (tx == nullptr) return;  // nothing queued
+
+    if (tx->retries_left == 0)
     {
-        if (uplink_pending)
-        {
-            // #285: the uplink is blind fire-and-retry — the rocket sends no
-            // command ACK, so completing all retries is NOT proof of delivery.
-            // Log it honestly so the operator does not read retry completion as
-            // success.  (Safety-relevant rocket state — pyro armed/fired,
-            // camera, logging — is confirmed separately via the rocket's own
-            // telemetry echo, not via this path.)
-            ESP_LOGW(TAG, "[UPLINK] cmd=%u: blind retries exhausted — delivery "
-                          "UNCONFIRMED (rocket sends no ACK)",
-                     (unsigned)uplink_buf[4]);
-            // service() already auto-entered RX after the last TX.  Do NOT call
-            // startReceive() here: it would reset rx_done_ and drop any downlink
-            // packet that arrived between the TX completion and this point.
-            uplink_pending = false;
-        }
+        // #285: the uplink is blind fire-and-retry — the rocket sends no
+        // command ACK, so completing all retries is NOT proof of delivery.
+        // Log it honestly so the operator does not read retry completion as
+        // success.  (Safety-relevant rocket state — pyro armed/fired,
+        // camera, logging — is confirmed separately via the rocket's own
+        // telemetry echo, not via this path.)
+        ESP_LOGW(TAG, "[UPLINK] cmd=%u: blind retries exhausted — delivery "
+                      "UNCONFIRMED (rocket sends no ACK)",
+                 (unsigned)tx->cmd());
+        // service() already auto-entered RX after the last TX.  Do NOT call
+        // startReceive() here: it would reset rx_done_ and drop any downlink
+        // packet that arrived between the TX completion and this point.
+        uplink_q.pop();  // next queued command (if any) starts on the following pass
+        uplink_defer_start_ms = 0;  // #506: don't carry this command's defer clock over
         return;
     }
 
@@ -1649,23 +1750,60 @@ static void serviceUplink()
     // #379: gate the transmit on radio-ready AND not-scanning. A TX during a
     // frequency scan goes out on the scan's dwell channel (silently missing the
     // rocket, no ACK to catch it) and corrupts that pass's RSSI — so defer.
-    // Returning here before send() preserves uplink_retries_left, so the command
+    // Returning here before send() preserves retries_left, so the command
     // fires once the scan completes instead of being lost. Mirrors
     // serviceHeartbeat's scan_passes_remaining_ gate.
-    if (!bs_uplink_policy::mayTransmitUplink(uplink_pending, uplink_retries_left,
+    if (!bs_uplink_policy::mayTransmitUplink(/*uplink_pending=*/true, tx->retries_left,
                                              scan_passes_remaining_,
                                              lora_comms.canSend()))
     {
         return;  // radio busy, or a scan owns the channel — retry next pass
     }
 
-    if (lora_comms.send(uplink_buf, uplink_len))
+    // #506: the radio is half-duplex, so this TX is a deaf window. At SF8/BW250 a
+    // downlink packet is ~82 ms on air and the gaps between our retries are only
+    // ~49 ms, so a blind burst loses essentially EVERY packet that arrives during
+    // it (bench-measured: 3 of 3, and they were the run's ONLY losses). Fire into
+    // the quiet stretch between the rocket's ~500 ms telemetry packets instead.
+    // Transmitting right after the rocket's own TX is also when it is listening,
+    // so this should help uplink delivery too.
+    bs_uplink_txwin::Params win;
+    win.period_ms     = rx_cadence.periodMs();
+    win.tx_airtime_ms = bs_uplink_txwin::timeOnAirMs(tx->len, lora_sf, lora_bw_khz, lora_cr);
+    win.rx_reserve_ms = config::UPLINK_RX_RESERVE_MS;
+    win.link_stale_ms = config::UPLINK_LINK_STALE_MS;
+    win.max_defer_ms  = config::UPLINK_MAX_DEFER_MS;
+
+    // No established telemetry cadence yet => nothing to protect; don't gate.
+    const uint32_t rx_anchor = rx_cadence.valid() ? rx_cadence.lastMs() : 0;
+    if (uplink_defer_start_ms == 0) uplink_defer_start_ms = now;
+    const uint32_t deferred_for = now - uplink_defer_start_ms;
+
+    if (!bs_uplink_txwin::mayStartTx(now, rx_anchor, deferred_for, win))
     {
-        uplink_retries_left--;
+        uplink_defer_count++;
+        return;  // inside the rocket's next downlink slot — wait for the gap
+    }
+    if (deferred_for >= win.max_defer_ms && rx_anchor != 0)
+    {
+        // The liveness backstop fired: we transmitted over the downlink rather
+        // than starve a blind, safety-relevant command. Should be ~0 in practice;
+        // if it climbs, the cadence estimate or the reserve is wrong.
+        uplink_defer_override++;
+        ESP_LOGW(TAG, "[UPLINK] cmd=%u: TX window never opened for %ums — transmitting anyway",
+                 (unsigned)tx->cmd(), (unsigned)deferred_for);
+    }
+
+    if (lora_comms.send(tx->buf, tx->len))
+    {
+        uplink_defer_start_ms = 0;   // this attempt got out; re-arm for the next
+        uplink_tx_count++;
+        uplink_tx_airtime_ms += win.tx_airtime_ms;
+        tx->retries_left--;
         uplink_last_tx_ms = now;
         // #285: "blind" + "unconfirmed" so the log is not mistaken for an ACK.
-        ESP_LOGI(TAG, "[UPLINK] blind TX, %u attempt(s) left (unconfirmed, no ACK)",
-                 uplink_retries_left);
+        ESP_LOGI(TAG, "[UPLINK] blind TX cmd=%u, %u attempt(s) left (unconfirmed, no ACK)",
+                 (unsigned)tx->cmd(), tx->retries_left);
     }
     else
     {
@@ -1779,10 +1917,13 @@ static void serviceLoRaTransaction()
         case LoRaTxnState::RELAYING:
         {
             const uint32_t now = millis();
-            // serviceUplink() clears uplink_pending once the last retry has
+            // serviceUplink() drains the queue once the last retry has
             // fired; at that point the rocket has either joined NEW or not.
             // TXN_MAX_RELAY_MS is a safety net in case uplink state is stuck.
-            const bool relay_done   = !uplink_pending;
+            // Waiting for the whole queue (not just this command) also keeps
+            // any command queued behind us from firing after the reconfigure
+            // below has already retuned the radio to the NEW channel.
+            const bool relay_done   = !uplinkBusy();
             const bool relay_timeout = (now - txn_phase_start_ms) > TXN_MAX_RELAY_MS;
             if (!relay_done && !relay_timeout) return;
 
@@ -2135,7 +2276,7 @@ static void serviceRecovery()
             // Give uplink retries time to land on the current channel
             // before we hop back to NVS — otherwise the rocket might miss
             // the push command and we'd just rediscover it next cycle.
-            if (!uplink_pending ||
+            if (!uplinkBusy() ||
                 (now - recovery_phase_start_ms) > TXN_MAX_RELAY_MS)
             {
                 recoveryEnd("pushed rocket home");
@@ -2195,7 +2336,7 @@ static void serviceHeartbeat()
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (scan_passes_remaining_ != 0)           return;  // #136: don't TX mid-scan
-    if (uplink_pending)                        return;  // Don't clobber a real cmd
+    if (uplinkBusy())                          return;  // Don't compete with a real cmd
     // While hopping, only TX in the safe window right after a fresh
     // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  With slow-hop
     // dwell=4 (#105 follow-up) the rocket stays on a channel for 2 s,
@@ -2500,7 +2641,7 @@ static void serviceMaskDriftRepush()
 {
     if (!chset_drift_repush_pending) return;
     // Only push when nothing else is using the radio for TX.
-    if (uplink_pending)                        return;
+    if (uplinkBusy())                          return;
     if (lora_txn_state != LoRaTxnState::IDLE)  return;
     if (recovery_state != RecoveryState::IDLE) return;
     // Cooldown: don't re-push more than once every CHSET_DRIFT_REPUSH_COOLDOWN_MS.
@@ -2614,7 +2755,7 @@ static void serviceCoordinatedScan()
             // Cmd 16 retries still going — push out the grace anchor so
             // we wait COORD_SCAN_PAUSE_GRACE_MS after the *last* retry,
             // not after we queued the command.
-            if (uplink_pending)
+            if (uplinkBusy())
             {
                 coord_scan_phase_ms_ = now;
                 return;
@@ -2659,7 +2800,7 @@ static void serviceCoordinatedScan()
             // and (a) sets scan_results_valid_ = true, (b) queues cmd 15
             // via applyAndPushChannelSet().  Either signal works as a
             // transition trigger; combining them is most precise.
-            if (scan_results_valid_ && uplink_pending)
+            if (scan_results_valid_ && uplinkBusy())
             {
                 coord_scan_state_    = CoordScanState::PUSHING_CHSET;
                 coord_scan_phase_ms_ = now;
@@ -2668,7 +2809,7 @@ static void serviceCoordinatedScan()
         }
         case CoordScanState::PUSHING_CHSET:
         {
-            if (uplink_pending) return;  // cmd 15 retries still going
+            if (uplinkBusy()) return;  // cmd 15 retries still going
             // Cmd 15 has been delivered (or all retries exhausted).
             // Rocket should resume hopping when its pause deadline hits.
             // Snapshot hop_last_rx_ms_ so we can detect a fresh RX.
@@ -2847,6 +2988,24 @@ static void serviceAutoAcquire()
 
 static void setup_bs()
 {
+    // NVS first — before BLE/LoRa and before any Preferences use (#500).
+    // The BS was missing the block OC/FC have always had, so nvs_open()
+    // returned ESP_ERR_NVS_NOT_INITIALIZED: every Preferences read fell
+    // back to the caller's default and every write no-op'd, silently. The
+    // PHY couldn't cache its RF calibration either, forcing a full recal
+    // on every boot.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        nvs_flash_erase();
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "[NVS] nvs_flash_init failed: %s — settings will NOT persist",
+                 esp_err_to_name(nvs_err));
+    }
+
     delay(500);
     ESP_LOGI(TAG, "======================================");
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
@@ -3531,6 +3690,10 @@ static void loop_bs()
             else
             {
                 last_packet_ms = millis();  // netid-matched proof of life (#384)
+                // #506: learn the downlink cadence from the TELEMETRY stream only.
+                // Beacons are sporadic (~2 s) and would corrupt the estimate; this
+                // is the steady ~500 ms stream whose gaps the uplink aims for.
+                rx_cadence.onPacket(last_packet_ms);
 
                 // Route to per-rocket tracker
                 int slot = findOrAllocRocket(decoded.rocket_id);
@@ -4289,7 +4452,7 @@ static void loop_bs()
             {
                 ESP_LOGW(TAG, "[BLE] Scan rejected: coordinated scan already in progress");
             }
-            else if (uplink_pending)
+            else if (uplinkBusy())
             {
                 ESP_LOGW(TAG, "[BLE] Scan rejected: uplink busy — retry shortly");
             }
@@ -4338,8 +4501,8 @@ static void loop_bs()
     serviceUplink();
 
     // Advance the transactional reconfigure state machine (issue #71).
-    // Must run after serviceUplink so we observe uplink_pending transitions
-    // to false in the same loop iteration they happen.
+    // Must run after serviceUplink so we observe the uplink queue draining
+    // to empty in the same loop iteration it happens.
     serviceLoRaTransaction();
 
     // Silence recovery runs after the transaction service so a freshly
