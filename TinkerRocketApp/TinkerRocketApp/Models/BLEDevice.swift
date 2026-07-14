@@ -1134,6 +1134,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         let length = UInt16(data[4]) | (UInt16(data[5]) << 8)
         let flags = data[6]
         let isEOF = (flags & 0x01) != 0
+        let isAbort = (flags & 0x02) != 0   // #526
+
+        // #526: the firmware could not finish this transfer (rocket INFLIGHT, a
+        // flash read error, or a BLE send failure). The bytes we have are a
+        // truncated fragment, NOT a complete file. Fail the download and write
+        // nothing — previously an abort arrived as a bare EOF and the partial file
+        // was saved and cached as if it were whole.
+        if isEOF && isAbort {
+            downloadStallTimer?.invalidate()
+            downloadStallTimer = nil
+            print("[DOWNLOAD] ABORTED by device after \(downloadedData.count) bytes")
+            failDownload()
+            return
+        }
+
         if length > 0 && data.count >= 7 + Int(length) {
             let chunkData = data.subdata(in: 7..<(7 + Int(length)))
             downloadedData.append(chunkData)
@@ -1165,6 +1180,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self = self, self.isDownloading else { return }
             self.completeDownload(fromStallTimer: true)
         }
+    }
+
+    // #526: end a download in failure — write nothing, cache nothing, hand the
+    // caller nil. Used when the device signals an abort (EOF|ABORT). Mirrors the
+    // cleanup in completeDownload's failure branches so state can't leak.
+    private func failDownload() {
+        downloadStallTimer?.invalidate()
+        downloadStallTimer = nil
+        let handler = downloadCompletionHandler
+        downloadingFilename = nil
+        downloadedData = Data()
+        downloadCompletionHandler = nil
+        DispatchQueue.main.async { [weak self] in self?.isDownloading = false }
+        handler?(nil)
     }
 
     private func completeDownload(fromStallTimer: Bool = false) {
