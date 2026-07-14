@@ -1481,9 +1481,14 @@ static void printTelemetry(const LoRaDataSI& data, float rssi, float snr,
     else
         snprintf(hop_str, sizeof(hop_str), "%u", (unsigned)data.next_channel_idx);
 
-    ESP_LOGI(TAG, "[RX] %s | alt=%.0fm spd=%.1fm/s | %.0fdBm SNR=%.1f | sats=%u | %.2fV %.0f%% | nextCh=%s",
+    // #504: spd= used to be fed data.max_speed, so a landed rocket read 99 m/s —
+    // alarming to watch, and flatly contradicted by the CSV (speed=1.0,
+    // max_speed=99.0). Print the live speed under spd=, and keep the peak under
+    // its own max= label, which is what you actually want side by side on the bench.
+    ESP_LOGI(TAG, "[RX] %s | alt=%.0fm spd=%.1fm/s max=%.1fm/s | %.0fdBm SNR=%.1f | sats=%u | %.2fV %.0f%% | nextCh=%s",
              rocketStateToString(data.rocket_state),
              (double)data.pressure_alt,
+             (double)data.speed,
              (double)data.max_speed,
              (double)rssi,
              (double)snr,

@@ -3,6 +3,12 @@ CONFIG_IDF_TARGET="esp32s3"
 # BLE / NimBLE
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+# #505: at INFO, NimBLE emits three lines per telemetry notify (~2/s for the whole
+# session) — "GATT procedure initiated: notify; att_handle=16". In a 96 s bench run
+# that was the overwhelming majority of the console and it buried the BS's own
+# [RX]/[STATS]/[UPLINK]/[BATT] lines, which are the ones you actually watch during
+# a flight. Also costs CPU + UART bandwidth on the hot notify path.
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
