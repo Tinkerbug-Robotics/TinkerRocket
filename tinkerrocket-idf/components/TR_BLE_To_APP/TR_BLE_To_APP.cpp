@@ -19,6 +19,18 @@
 
 static const char* BLE_TAG = "BLE";
 
+// LE PHY name for logging (#519 follow-up: 2M doubles the raw data rate).
+static const char* phyName(uint8_t phy)
+{
+    switch (phy)
+    {
+        case BLE_GAP_LE_PHY_1M:    return "1M";
+        case BLE_GAP_LE_PHY_2M:    return "2M";
+        case BLE_GAP_LE_PHY_CODED: return "Coded";
+        default:                   return "?";
+    }
+}
+
 // Spinlock protecting the command ring (#517) against races between the BLE
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -207,6 +219,24 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         self->onMtuChanged(event->mtu.conn_handle, event->mtu.value);
         break;
 
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        // Report the PHY we ACTUALLY ended up on, not the one we asked for — the
+        // same lesson as the connection interval (#503). 2M doubles the raw rate;
+        // if the peer declines we silently stay on 1M and downloads stay slow, so
+        // this needs to be visible rather than assumed.
+        if (event->phy_updated.status == 0)
+        {
+            ESP_LOGI(BLE_TAG, "PHY now: TX=%s RX=%s",
+                     phyName(event->phy_updated.tx_phy),
+                     phyName(event->phy_updated.rx_phy));
+        }
+        else
+        {
+            ESP_LOGW(BLE_TAG, "PHY update failed, status=%d — staying on 1M",
+                     event->phy_updated.status);
+        }
+        break;
+
     case BLE_GAP_EVENT_CONN_UPDATE:
         // #503: this used to log an unconditional "Connection parameters updated,
         // status=%d" at INFO — which read as success even when it wasn't (the
@@ -253,6 +283,30 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     telem_notify_subscribed_ = false;
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
+
+    // Ask for the LE 2M PHY. This is the throughput lever, and we had never used
+    // it — the controller supports it (boot log: "Feature Config ... BLE_50:1") but
+    // nobody asked, so every connection ran on 1M.
+    //
+    // It matters because #503 made our connection-parameter request spec-legal, and
+    // that cost us speed: the old request was 7.5-20 ms — below iOS's 15 ms floor —
+    // which iOS accepted anyway (status=0) and served at ~15-20 ms. Apple's envelope
+    // (min >= 15 ms AND max >= min + 15 ms) means the tightest LEGAL ask is 15-30,
+    // and iOS grants the top of it: we measure exactly 30 ms. So file downloads got
+    // ~1.5-2x slower as the price of being correct.
+    //
+    // 2M doubles the raw PHY rate and is independent of the connection interval, so
+    // it more than buys that back without going back outside the spec. If the peer
+    // declines, the link simply stays on 1M — hence the PHY_UPDATE_COMPLETE handler,
+    // which logs what we actually got rather than what we hoped for.
+    const int phy_rc = ble_gap_set_prefered_le_phy(conn_handle,
+                                                   BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_CODED_ANY);
+    if (phy_rc != 0)
+    {
+        ESP_LOGW(BLE_TAG, "2M PHY request failed to send, rc=%d — staying on 1M", phy_rc);
+    }
 
     // #503: do NOT request the parameter update from inside the connect callback.
     // iOS runs its OWN connection-update procedure immediately after connecting,
