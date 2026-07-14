@@ -53,8 +53,16 @@ if os.path.exists("cpp/ekf/ekf_bindings.cpp") and os.path.exists(ekf_lib_dir):
 # submodule is not initialized, skip the _guidance pybind11 extension and
 # the sim still builds + tests run for everything else (PID, EKF, mixer).
 # No compat shim needed — the library is framework-neutral.
+#
+# TR_SKIP_GUIDANCE=1 also skips it when the submodule IS present but its bindings
+# are out of sync with it (e.g. a work-in-progress checkout where the binding calls
+# an API the library no longer exposes). Without this escape hatch a stale guidance
+# binding takes the whole package down with it — including the EKF extension the
+# flight-replay tooling depends on, which has nothing to do with guidance.
 guidance_src = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN", "TR_GuidancePN.cpp")
-if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guidance_src):
+if (os.environ.get("TR_SKIP_GUIDANCE") not in ("1", "true", "TRUE")
+        and os.path.exists("cpp/guidance/guidance_bindings.cpp")
+        and os.path.exists(guidance_src)):
     guidance_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN")
     ext_modules.append(
         Pybind11Extension(
