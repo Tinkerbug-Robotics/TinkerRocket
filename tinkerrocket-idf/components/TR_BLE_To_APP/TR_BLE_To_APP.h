@@ -245,8 +245,9 @@ public:
         return device_connected_ && effectiveMtu() > 23 && telem_notify_subscribed_;
     }
 
-    // Get max data bytes per BLE chunk (MTU - ATT overhead - our header)
-    // Falls back to 170 if MTU not yet negotiated
+    // Max data bytes per BLE file chunk. NOT simply "MTU minus headers" — that
+    // wastes a whole link-layer packet on a 14-byte stub. See BleChunkSize.h.
+    // Falls back to 170 if the MTU has not been negotiated yet.
     size_t getMaxChunkDataSize() const;
 
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
@@ -260,6 +261,11 @@ private:
 
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;
+    // #524: LL max TX payload from BLE_GAP_EVENT_DATA_LEN_CHG. 27 is the pre-DLE
+    // minimum every link starts at, so it is the safe assumption until the peer
+    // agrees to more. getMaxChunkDataSize() sizes chunks to a whole number of
+    // these, which is where the download throughput is.
+    volatile uint16_t ll_tx_octets_;
     volatile bool telem_notify_subscribed_;  // central enabled notifications on telemetry/config char
     volatile uint16_t conn_handle_;          // NimBLE connection handle
     // #517: a RING, not a single latch (see BleCommandRing.h). It used to be

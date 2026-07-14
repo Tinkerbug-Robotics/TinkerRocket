@@ -13,6 +13,7 @@
 #include <nimble/nimble_port_freertos.h>
 #include <host/ble_hs.h>
 #include <host/ble_att.h>          // ble_att_mtu — authoritative live MTU (#283)
+#include "BleChunkSize.h"          // #524: LL-fragment-aligned chunk sizing
 #include <host/util/util.h>
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
@@ -122,6 +123,7 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
     : device_connected_(false),
       negotiated_mtu_(0),
+      ll_tx_octets_(27),  // #524: pre-DLE minimum until DATA_LEN_CHG says otherwise
       telem_notify_subscribed_(false),
       conn_handle_(0),
       file_list_json_(""),
@@ -220,14 +222,18 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         break;
 
     case BLE_GAP_EVENT_DATA_LEN_CHG:
-        // #524: report the LL payload size we actually negotiated. 27 octets means
-        // DLE did not take and every 502-byte notification is still fragmenting
-        // ~19 ways — downloads would stay slow while we assumed otherwise. Same
-        // discipline as the connection interval (#503) and the PHY.
-        ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets",
+        // #524: the LL payload size is not just a number to report — it is what we
+        // size chunks against, so latch it. 27 octets means DLE did not take and
+        // every notification is still fragmenting ~19 ways; downloads would stay
+        // slow while we assumed otherwise. Same discipline as the connection
+        // interval (#503) and the PHY.
+        self->ll_tx_octets_ = event->data_len_chg.max_tx_octets;
+        ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets "
+                          "-> chunk %u bytes",
                  (unsigned)event->data_len_chg.max_tx_octets,
                  (unsigned)event->data_len_chg.max_tx_time,
-                 (unsigned)event->data_len_chg.max_rx_octets);
+                 (unsigned)event->data_len_chg.max_rx_octets,
+                 (unsigned)self->getMaxChunkDataSize());
         break;
 
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
@@ -291,6 +297,7 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     device_connected_ = true;
     conn_handle_ = conn_handle;
     negotiated_mtu_ = 0;  // Reset until MTU exchange completes
+    ll_tx_octets_   = 27; // #524: and back to the pre-DLE minimum until DATA_LEN_CHG
     telem_notify_subscribed_ = false;
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
@@ -448,6 +455,7 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
 {
     device_connected_ = false;
     negotiated_mtu_ = 0;
+    ll_tx_octets_ = 27;  // #524: DLE is per-connection; do not carry it into the next one
     telem_notify_subscribed_ = false;
     conn_handle_ = 0;
     // #503: cancel any pending/retrying parameter request — it belongs to the
@@ -948,18 +956,13 @@ size_t TR_BLE_To_APP::maxNotifyBytes() const
 
 size_t TR_BLE_To_APP::getMaxChunkDataSize() const
 {
-    const size_t HEADER_SIZE = 7;   // offset(4) + length(2) + flags(1)
-    const size_t ATT_OVERHEAD = 3;  // ATT notification header
-
-    const uint16_t mtu = effectiveMtu();  // #283: live MTU, not the stale cache
-    if (mtu > (HEADER_SIZE + ATT_OVERHEAD + 20))
-    {
-        // Use negotiated MTU for chunk size
-        return mtu - ATT_OVERHEAD - HEADER_SIZE;
-    }
-
-    // Fallback: conservative 170 bytes (fits in iOS default 185-byte MTU)
-    return 170;
+    // #524: this used to return the MTU-maximal size (mtu - 3 - 7 = 502 at MTU
+    // 512). That is the largest chunk, but not the fastest one: it puts 516 bytes
+    // on the wire, which the link layer sends as 251 + 251 + 14 — a third packet
+    // for fourteen bytes. Throughput here is packets-per-connection-event bound,
+    // so that stub packet was costing ~a third of the download. See BleChunkSize.h.
+    return tr_ble::maxChunkDataSize(effectiveMtu(),  // #283: live MTU, not the stale cache
+                                    ll_tx_octets_);
 }
 
 bool TR_BLE_To_APP::isConnected() const
@@ -987,10 +990,22 @@ bool TR_BLE_To_APP::isConnected() const
 // time. We were throttling the transfer to hide a data-loss bug instead of fixing
 // it. Waiting is safe here: the OC pauses I2S ingest and I2C service for the whole
 // transfer (beginPhoneIO), so there is no time-critical polling to protect.
+//
+// Retry PACING matters as much as the budget. A blocked notification can only
+// clear when the controller drains, and the controller only drains at a
+// connection event — every ~30 ms. Retrying every 2 ms therefore made ~15
+// doomed attempts per event, and each attempt is not free: it allocates an
+// mbuf, copies ~500 bytes into it, calls into the host stack (which logs), and
+// frees it again. All of that runs on the NimBLE host task — the same task that
+// has to do the draining. We were competing with the thing we were waiting for.
+//
+// 5 ms still probes ~6 times per connection event, which is ample to refill the
+// queue promptly after a drain (there are ~25 ms of slack before the next
+// event), at a third of the churn.
 static constexpr int NOTIFY_BEST_EFFORT_RETRIES  = 3;
 static constexpr int NOTIFY_BEST_EFFORT_DELAY_MS = 5;
-static constexpr int NOTIFY_RELIABLE_RETRIES     = 250;  // up to ~500 ms of backpressure
-static constexpr int NOTIFY_RELIABLE_DELAY_MS    = 2;
+static constexpr int NOTIFY_RELIABLE_RETRIES     = 100;  // x 5 ms = ~500 ms of backpressure
+static constexpr int NOTIFY_RELIABLE_DELAY_MS    = 5;
 
 static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
                        const uint8_t* data, size_t len,
@@ -1031,7 +1046,12 @@ static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
         }
         if (attempt > 0 && rc == 0)
         {
-            ESP_LOGI("BLE", "notify_data succeeded after %d retries", attempt);
+            // #524: was ESP_LOGI. Backpressure is the NORMAL state during a file
+            // transfer — every chunk waits for the controller — so at INFO this
+            // printed a console line per chunk, thousands of times, on the host
+            // task in the middle of the transfer's hot path. It is a debug detail,
+            // not news.
+            ESP_LOGD("BLE", "notify_data succeeded after %d retries", attempt);
         }
         return rc;
     }
