@@ -13,7 +13,47 @@ CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 # Compiled in but only activated at runtime during low-power mode
 CONFIG_PM_ENABLE=y
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
-CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+
+# (#519) Light-sleep tick accounting. The first battery run panicked immediately:
+#
+#   assert failed: vTaskStepTick tasks.c:3068
+#     (( xTickCount + xTicksToJump ) <= xNextTaskUnblockTime)
+#   #3 vTaskStepTick (xTicksToJump=4)
+#   #4 pm_step_tick (xExpectedIdleTime=3)   <- allowed 3 ticks, actually slept 4
+#
+# Cause: FREERTOS_HZ is 1000, so a tick is 1 ms, and IDLE_TIME_BEFORE_SLEEP was 3
+# — we were dropping into light sleep for THREE MILLISECONDS at a time. The wakeup
+# overhead alone (cache misses, the 80/40 MHz DFS switch, flash latency — all three
+# named in esp_pm's own Kconfig help) is around a millisecond, so a 3 ms sleep
+# reliably overshoots by a tick, pm_step_tick tries to jump 4, and FreeRTOS aborts.
+# It only shows up on battery because USB holds the no-light-sleep lock.
+#
+# Two changes, one to remove the cause and one to survive it:
+#
+# 1. Don't take pointless naps. 3 ms of sleep against ~1 ms of entry/exit overhead
+#    is mostly waste even when it works. 10 ms means we only sleep when there is
+#    something to gain, and the overhead becomes a small fraction rather than a
+#    third. The OC idles for long stretches here (BLE at 200 ms interval, latency
+#    4; oc_loop wakes every 20 ms), so there is still plenty of sleep to be had.
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=10
+
+# 2. Belt and braces: this option exists for exactly this assert ("prevent
+#    vTaskStepTick() assertion failure when actual wakeup overhead exceeds
+#    estimation"). It clamps slept_ticks to the expected value when the overshoot
+#    is within tolerance. Default is OFF. Our measured overshoot was 1 tick;
+#    tolerance 3 leaves margin without being so loose that a genuine bug hides.
+#    Cost is that xTickCount can lag esp_timer by a tick in rare cases — which is
+#    acceptable HERE and only here: light sleep runs solely in the rail-off idle
+#    state. exitLowPowerMode() disables it and locks the CPU at full speed before
+#    anything flies, so tick accounting can never affect flight timing.
+CONFIG_PM_LIGHTSLEEP_TICK_OVERFLOW_PROTECTION=y
+CONFIG_PM_LIGHTSLEEP_TICK_OVERFLOW_TOLERANCE=3
+
+# Attack the overhead itself rather than only tolerating it: keep the sleep/wake
+# path in IRAM so it is not paying flash-cache misses on every wakeup. This is the
+# root cause the Kconfig help lists first, and shrinking it shrinks the overshoot.
+CONFIG_PM_SLP_IRAM_OPT=y
+CONFIG_PM_RTOS_IDLE_OPT=y
 
 # BLE controller modem sleep — radio powers down between BLE events
 CONFIG_BT_CTRL_MODEM_SLEEP=y
