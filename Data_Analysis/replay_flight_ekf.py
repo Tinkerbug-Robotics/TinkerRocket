@@ -31,10 +31,34 @@ LOW_G_SAT_THRESH = 15.5 * G_MS2
 # Firmware pad heading (flight_computer/main/config.h: PAD_HEADING_DEG).
 PAD_HEADING_DEG = 0.0
 
-# Firmware EKF decimation (flight_computer/main/config.h: EKF_DECIMATION).
-# The flight loop logs every IMU sample but only runs the EKF every Nth tick,
-# so the replay must decimate too or it over-applies every correction.
-EKF_DECIMATION = 2
+# Firmware EKF rate, in Hz. THE REPLAY MUST MATCH THIS OR IT IS NOT A REPLAY.
+#
+# This is a RATE, not a sample count, and that distinction is the whole point.
+# The flight loop drains the IMU queue every iteration and LOGS every sample, but
+# it hands the EKF only `ism6_latest_si` — the newest one — and only every
+# EKF_DECIMATION-th loop. So the EKF integrates a small fraction of what is in the
+# log, and which fraction depends on the loop rate, not on the IMU ODR:
+#
+#   loop ≈ 980 Hz, config::EKF_DECIMATION = 2  ->  EKF ≈ 490 Hz
+#   (firmware confirms this directly: "[TIMING] ekf: cnt=489")
+#
+# Counting logged IMU samples instead gets this wrong, and the error MOVES as the
+# IMU ODR changes:
+#   * 2026-06 logs: IMU 907 Hz -> every 2nd sample ≈ 454 Hz. Right by luck.
+#   * post-#474  : IMU 3840 Hz -> every 2nd sample ≈ 1920 Hz. 4x too fast: the
+#     EKF sees 8x the samples the vehicle's did, fires every AHRS/mag/GNSS/baro
+#     correction 4x too often, and converges a bias the firmware never had
+#     (measured: a phantom 0.77 m/s² accel bias on the nose axis = a 4.5° tilt of
+#     the gravity reference, showing up as a rock-steady 4.7° attitude offset).
+#
+# Driving the EKF on a clock instead of a sample counter is right for both, and
+# stays right the next time the IMU ODR moves.
+#
+# CAVEAT: the loop rate is not recorded in the flight log, so this constant cannot
+# be derived from the file — it has to track the firmware. Logging the EKF rate
+# (or a tick counter) would remove the last hand-maintained number here; see #515.
+EKF_RATE_HZ = 490.0
+EKF_PERIOD_US = 1e6 / EKF_RATE_HZ
 
 # RocketState::INFLIGHT (TR_RocketComputerTypes/RocketComputerTypes.h).
 # INITIALIZATION=0, READY=1, PRELAUNCH=2, INFLIGHT=3, LANDED=4, MAG_CALIBRATION=5
@@ -220,7 +244,7 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     # ---- Initialize EKF ----
     ekf = GpsInsEKF()
     ekf_initialized = False
-    ekf_decim_ctr = 0
+    next_ekf_us = None          # firmware-rate EKF clock (see EKF_RATE_HZ)
     # Firmware flight state, tracked from the log (drives the AHRS accel gate).
     # Default to a non-INFLIGHT state so a log with no NonSensor records behaves
     # like the pad — AHRS on — rather than silently disabling the gravity update.
@@ -464,15 +488,13 @@ def replay(binary_file, plot_dir=None, align_baro=True):
                       f"declination={math.degrees(decl_rad):.2f}°")
                 continue
 
-            # #514: match the firmware's EKF DECIMATION (config::EKF_DECIMATION).
-            # The flight loop consumes and logs every IMU sample but only runs the
-            # EKF every Nth tick. Replaying every logged sample fires the AHRS,
-            # mag, GNSS and baro corrections N× more often than the vehicle did,
-            # so the covariance — and therefore every gain — evolves differently.
-            ekf_decim_ctr += 1
-            if ekf_decim_ctr < EKF_DECIMATION:
+            # Run the EKF on the firmware's CLOCK, not on every logged IMU sample
+            # (see EKF_RATE_HZ). The firmware feeds it the newest sample at ~490 Hz
+            # and never sees the rest, so this drops the intervening samples exactly
+            # as the flight loop does — imu_d here is already the latest one.
+            if (next_ekf_us is not None) and (time_us < next_ekf_us):
                 continue
-            ekf_decim_ctr = 0
+            next_ekf_us = time_us + EKF_PERIOD_US
 
             # #514: AHRS accel gate — follow the LOGGED flight state.
             #
@@ -535,6 +557,17 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
     print(f"\n  Processed: {n_imu:,} IMU updates, {n_gnss_updates} GNSS updates, "
           f"{n_baro_updates} baro updates")
+
+    # Show the achieved EKF rate against the firmware's, so a rate mismatch is
+    # visible rather than inferred — it is the single easiest way to make this
+    # tool silently wrong (see EKF_RATE_HZ).
+    span_s = (imu_times[-1] - imu_times[0]) / 1e6
+    if span_s > 0:
+        imu_hz = len(records["ISM6HG256"]) / span_s
+        ekf_hz = n_imu / span_s
+        print(f"  IMU logged at {imu_hz:.0f} Hz; EKF run at {ekf_hz:.0f} Hz "
+              f"(firmware target {EKF_RATE_HZ:.0f} Hz — the EKF sees "
+              f"1 in {imu_hz / max(ekf_hz, 1e-9):.1f} logged samples)")
 
     # ---- Convert to numpy ----
     t_ekf = (np.array(log_time_us) - t0_us) / 1e6
