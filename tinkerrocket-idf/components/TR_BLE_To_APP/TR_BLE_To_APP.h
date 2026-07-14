@@ -319,6 +319,37 @@ public:
     // explanation any time throughput drops without the code changing.
     int8_t connRssi() const;
 
+    // ------------------------------------------------------------------------
+    // #526: L2CAP connection-oriented-channel download transport (OC only).
+    //
+    // Declared UNCONDITIONALLY. The header includes no NimBLE, so it cannot use
+    // `#if MYNEWT_VAL(...)` (a function-like macro inside #if is a hard error),
+    // and `#ifdef CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM` is TRUE even on the base
+    // station (int Kconfig symbols are #defined at 0), which would compile CoC
+    // into the BS. So the DECLARATIONS are plain; the DEFINITIONS in the .cpp are
+    // guarded by `#if MYNEWT_VAL(...) >= 1` with `#else` stubs. The chan pointer
+    // is stored as void* so no NimBLE type leaks into the header.
+    // ------------------------------------------------------------------------
+
+    // The PSM our L2CAP server listens on, or 0 if CoC is not compiled in. The
+    // app never hardcodes this — it reads whatever sendL2capPsm() reports — so a
+    // wrong value is a one-constant firmware change, not an app release.
+    uint16_t l2capPsm() const;
+
+    // True while a phone has an open CoC channel to us right now.
+    bool l2capConnected() const;
+
+    // Reply to cmd 43 (L2CAP_PSM_QUERY): 0xCE + psm(u16 LE) + proto_ver on the
+    // first-byte-multiplexed file_ops readback. Called from the OC loop.
+    void sendL2capPsm();
+
+    // Build the SDU mbuf pool. MUST run before nimble_port_freertos_init(), or an
+    // early CoC event could fire against an uninitialised pool.
+    void initL2capMem();
+
+    // Create the L2CAP server ONCE (idempotent). Called from on_ble_hs_sync().
+    void initL2capServer();
+
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
     // failure). main.cpp gates I2C battery-gauge polling on this so the
     // esp_ota_begin() flash erase doesn't collide with the I2C bus (#17).
@@ -347,6 +378,15 @@ private:
     volatile uint16_t ll_tx_octets_;
     volatile bool telem_notify_subscribed_;  // central enabled notifications on telemetry/config char
     volatile uint16_t conn_handle_;          // NimBLE connection handle
+
+    // #526: L2CAP CoC state. chan is void* to keep NimBLE out of the header
+    // (it holds a struct ble_l2cap_chan*). Only the NimBLE host task writes it
+    // (COC_CONNECTED / COC_DISCONNECTED), so no lock is needed; l2capConnected()
+    // is an ordinary read. server_created_ makes initL2capServer() idempotent.
+    void* l2cap_chan_ = nullptr;
+    bool  l2cap_server_created_ = false;
+    volatile uint16_t l2cap_peer_mtu_ = 0;   // learned on COC_CONNECTED; 0 = none
+
     // #517: a RING, not a single latch (see BleCommandRing.h). It used to be
     // one slot overwritten by the NimBLE write callback, so two commands
     // arriving between two loop polls lost the first outright.
@@ -481,6 +521,10 @@ public:
     static int  gap_event_cb(struct ble_gap_event* event, void* arg);
     static int  gatt_svc_access_cb(uint16_t conn_handle, uint16_t attr_handle,
                                    struct ble_gatt_access_ctxt* ctxt, void* arg);
+    // #526: the CoC event callback. `struct ble_l2cap_event` is an incomplete type
+    // here (no NimBLE include), which is all a pointer parameter needs. Defined in
+    // the .cpp under #if MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM) >= 1.
+    static int  l2cap_event_cb(struct ble_l2cap_event* event, void* arg);
 private:
     void onConnect(uint16_t conn_handle, const struct ble_gap_conn_desc* desc);
     void onDisconnect(uint16_t conn_handle, int reason);

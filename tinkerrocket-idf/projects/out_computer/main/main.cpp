@@ -5768,6 +5768,14 @@ static void loop_oc()
             ESP_LOGI("BLE", "Sent file list page %u: %u bytes",
                      page, (unsigned)json.length());
         }
+        else if (ble_cmd == BLE_OC_CMD_L2CAP_PSM_QUERY)
+        {
+            // #526: the app is asking whether we support an L2CAP download channel
+            // and, if so, on which PSM. Answered here in the loop (not the NimBLE
+            // write callback) so it never races a busy startup. l2capPsm() is 0
+            // when CoC is not compiled in, which the app reads as "GATT only".
+            ble_app.sendL2capPsm();
+        }
         else if (ble_cmd == 23)
         {
             // Toggle logging (manual start/stop from app)

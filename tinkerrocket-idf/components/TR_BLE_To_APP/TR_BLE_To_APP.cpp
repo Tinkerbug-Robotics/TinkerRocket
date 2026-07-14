@@ -17,6 +17,9 @@
 #include <host/util/util.h>
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
+#include <host/ble_l2cap.h>         // #526: L2CAP CoC download transport (guarded below)
+#include "Crc32.h"                  // #526: END-record integrity check
+#include "FileStreamFraming.h"      // #526: BEGIN/DATA/END stream framing
 
 static const char* BLE_TAG = "BLE";
 
@@ -181,6 +184,10 @@ void TR_BLE_To_APP::on_ble_hs_sync()
 
     if (s_instance_)
     {
+        // #526: create the CoC server once the host is synced (idempotent; stub
+        // when CoC is not built). Before advertising so a fast central that
+        // connects immediately finds the PSM live.
+        s_instance_->initL2capServer();
         s_instance_->startAdvertising();
     }
 }
@@ -951,6 +958,10 @@ bool TR_BLE_To_APP::begin()
     ble_hs_cfg.reset_cb = on_ble_hs_reset;
     ble_hs_cfg.sync_cb  = on_ble_hs_sync;
 
+    // #526: build the CoC SDU pool BEFORE the host task starts, so a CoC event can
+    // never fire against an uninitialised pool. No-op / stub when CoC is not built.
+    initL2capMem();
+
     // Start the NimBLE host task
     nimble_port_freertos_init(nimble_host_task);
 
@@ -1409,6 +1420,168 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
                      rc, (unsigned long)fail_count);
         }
     }
+}
+
+// ============================================================================
+// #526: L2CAP connection-oriented-channel download transport.
+//
+// Compiled in only on the OC (CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=1); the base
+// station sets it to 0 explicitly and gets the #else stubs. Step 3 stands up the
+// CHANNEL LIFECYCLE only — server, accept/RX-arm, connect/disconnect, PSM
+// handshake. No data flows yet (that is the step-4 send engine).
+// ============================================================================
+#if MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM) >= 1
+
+// LE dynamic PSM (0x0080-0x00FF). The IDF example's 0x1002 is outside the LE
+// range and iOS can reject it. The app learns this value via cmd 43, so it is not
+// load-bearing in the app — a wrong value is a one-line firmware change.
+static constexpr uint16_t kL2capPsm = 0x0083;
+
+// Our advertised CoC MTU: the largest SDU a peer may send us. 512 matches the ATT
+// MTU we request, and an incoming SDU chains across pool blocks as needed.
+static constexpr uint16_t kL2capOurMtu = 512;
+
+// Dedicated SDU pool, NOT msys — msys is for the GATT notify path and the
+// stack's own K-frames, and must not be drained by a stuck download. Sized for
+// one RX SDU (up to 512 B, ~2 blocks) plus, in step 4, one TX SDU (~1 KB, ~3
+// blocks) with slack. Block payload is block_size minus the os_mbuf + pkthdr
+// overhead, so an N-byte SDU always chains more than one N-byte block.
+#define TR_COC_BLOCK_SIZE   512
+#define TR_COC_BLOCK_COUNT  8
+static os_membuf_t     s_coc_sdu_mem[OS_MEMPOOL_SIZE(TR_COC_BLOCK_COUNT, TR_COC_BLOCK_SIZE)];
+static struct os_mempool   s_coc_sdu_mempool;
+static struct os_mbuf_pool s_coc_sdu_mbuf_pool;
+static bool s_coc_mem_ready = false;
+
+// Hand NimBLE a fresh RX buffer so the channel can receive. MANDATORY: the server
+// channel is created with sdu_rx = NULL but RX credits are granted regardless, so
+// without this the first byte a phone writes NULL-derefs on the host task.
+static int coc_arm_rx(struct ble_l2cap_chan* chan)
+{
+    struct os_mbuf* sdu_rx = os_mbuf_get_pkthdr(&s_coc_sdu_mbuf_pool, 0);
+    if (sdu_rx == nullptr) return BLE_HS_ENOMEM;
+    return ble_l2cap_recv_ready(chan, sdu_rx);
+}
+
+int TR_BLE_To_APP::l2cap_event_cb(struct ble_l2cap_event* event, void* arg)
+{
+    TR_BLE_To_APP* self = static_cast<TR_BLE_To_APP*>(arg);
+    struct ble_l2cap_chan_info info;
+
+    switch (event->type)
+    {
+    case BLE_L2CAP_EVENT_COC_ACCEPT:
+        // Peer is opening the channel — arm RX before any data can arrive.
+        return coc_arm_rx(event->accept.chan);
+
+    case BLE_L2CAP_EVENT_COC_CONNECTED:
+        if (event->connect.status != 0)
+        {
+            ESP_LOGW(BLE_TAG, "L2CAP CoC connect failed: status=%d", event->connect.status);
+            return 0;
+        }
+        self->l2cap_chan_ = event->connect.chan;
+        if (ble_l2cap_get_chan_info(event->connect.chan, &info) == 0)
+        {
+            self->l2cap_peer_mtu_ = info.peer_coc_mtu;
+            ESP_LOGI(BLE_TAG, "L2CAP CoC CONNECTED: psm=0x%04x our_mtu=%u peer_mtu=%u",
+                     (unsigned)info.psm, (unsigned)info.our_coc_mtu,
+                     (unsigned)info.peer_coc_mtu);
+        }
+        else
+        {
+            ESP_LOGW(BLE_TAG, "L2CAP CoC connected but get_chan_info failed");
+        }
+        return 0;
+
+    case BLE_L2CAP_EVENT_COC_DISCONNECTED:
+        ESP_LOGI(BLE_TAG, "L2CAP CoC DISCONNECTED");
+        self->l2cap_chan_ = nullptr;
+        self->l2cap_peer_mtu_ = 0;
+        return 0;
+
+    case BLE_L2CAP_EVENT_COC_DATA_RECEIVED:
+        // Phone -> device is not used by the download, but we must free each RX
+        // SDU and re-arm, or credits run out and the channel wedges.
+        if (event->receive.sdu_rx != nullptr)
+        {
+            os_mbuf_free_chain(event->receive.sdu_rx);
+        }
+        coc_arm_rx(event->receive.chan);
+        return 0;
+
+    case BLE_L2CAP_EVENT_COC_TX_UNSTALLED:
+        // Step 4 (the send engine) acts on this. Log for now.
+        ESP_LOGD(BLE_TAG, "L2CAP CoC TX unstalled: status=%d", event->tx_unstalled.status);
+        return 0;
+
+    default:
+        return 0;
+    }
+}
+
+void TR_BLE_To_APP::initL2capMem()
+{
+    if (s_coc_mem_ready) return;
+    int rc = os_mempool_init(&s_coc_sdu_mempool, TR_COC_BLOCK_COUNT, TR_COC_BLOCK_SIZE,
+                             s_coc_sdu_mem, "tr_coc_sdu");
+    if (rc != 0) { ESP_LOGE(BLE_TAG, "CoC mempool init failed, rc=%d", rc); return; }
+    rc = os_mbuf_pool_init(&s_coc_sdu_mbuf_pool, &s_coc_sdu_mempool, TR_COC_BLOCK_SIZE,
+                           TR_COC_BLOCK_COUNT);
+    if (rc != 0) { ESP_LOGE(BLE_TAG, "CoC mbuf pool init failed, rc=%d", rc); return; }
+    s_coc_mem_ready = true;
+}
+
+void TR_BLE_To_APP::initL2capServer()
+{
+    if (l2cap_server_created_) return;
+    if (!s_coc_mem_ready)
+    {
+        ESP_LOGE(BLE_TAG, "CoC server: mem not ready — initL2capMem() must run first");
+        return;
+    }
+    int rc = ble_l2cap_create_server(kL2capPsm, kL2capOurMtu, l2cap_event_cb, this);
+    if (rc != 0)
+    {
+        ESP_LOGE(BLE_TAG, "ble_l2cap_create_server(psm=0x%04x) failed, rc=%d", kL2capPsm, rc);
+        return;
+    }
+    l2cap_server_created_ = true;
+    ESP_LOGI(BLE_TAG, "L2CAP CoC server listening on PSM 0x%04x (rx MTU %u)",
+             kL2capPsm, kL2capOurMtu);
+}
+
+uint16_t TR_BLE_To_APP::l2capPsm() const { return kL2capPsm; }
+
+bool TR_BLE_To_APP::l2capConnected() const { return l2cap_chan_ != nullptr; }
+
+#else  // CoC not compiled in (base station): inert stubs.
+
+int  TR_BLE_To_APP::l2cap_event_cb(struct ble_l2cap_event*, void*) { return 0; }
+void TR_BLE_To_APP::initL2capMem() {}
+void TR_BLE_To_APP::initL2capServer() {}
+uint16_t TR_BLE_To_APP::l2capPsm() const { return 0; }
+bool TR_BLE_To_APP::l2capConnected() const { return false; }
+
+#endif  // MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM) >= 1
+
+// Reply to cmd 43: 0xCE marker + PSM(u16 LE) + proto_ver on the file_ops readback.
+// Unconditional — on the BS l2capPsm() returns 0 and the reply says "no CoC", which
+// the app reads as "use GATT". The app never opens a channel to a PSM of 0.
+void TR_BLE_To_APP::sendL2capPsm()
+{
+    if (!device_connected_) return;
+    const uint16_t psm = l2capPsm();
+    uint8_t buf[4];
+    buf[0] = 0xCE;                       // file_ops marker (free; see BLEDevice router)
+    buf[1] = (uint8_t)(psm & 0xFF);
+    buf[2] = (uint8_t)((psm >> 8) & 0xFF);
+    buf[3] = tr_filestream::kProtoVersion;
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, sizeof(buf));
+    if (rc != 0)
+        ESP_LOGW(BLE_TAG, "L2CAP PSM reply notify failed, rc=%d", rc);
+    else
+        ESP_LOGI(BLE_TAG, "L2CAP PSM reply: psm=0x%04x ver=%u", psm, tr_filestream::kProtoVersion);
 }
 
 bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,

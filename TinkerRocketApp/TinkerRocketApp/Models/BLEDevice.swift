@@ -191,6 +191,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private var fileOpsCharacteristic: CBCharacteristic?
     private var fileTransferCharacteristic: CBCharacteristic?
 
+    // #526: L2CAP CoC download transport. The device advertises its PSM in reply
+    // to cmd 43 (arrives as 0xCE on file_ops). 0 = no CoC channel -> use GATT.
+    // Step 3 stands up the channel and logs it; it is not yet wired to downloads.
+    @Published var l2capPSM: UInt16 = 0
+    private var l2capChannel: CBL2CAPChannel?
+    private var l2capOpenRequested = false
+
     // UUIDs matching ESP32 (must match TR_BLE_To_APP.h)
     private let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
     private let telemetryCharUUID = CBUUID(string: "beb5483e-36e1-4688-b7f5-ea07361b26a8")
@@ -1403,12 +1410,56 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.requestConfig()
         }
+        // #526: ask whether this device offers an L2CAP download channel. Only the
+        // Out Computer answers cmd 43; the base station never does, so skip it there
+        // to avoid a pointless command. Delayed like requestConfig so it does not
+        // race the connect-time config push.
+        if !isBaseStation {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.sendCommand(43)
+            }
+        }
+    }
+
+    // #526: 0xCE = [marker][psm u16 LE][proto_ver]. The device is telling us its
+    // L2CAP download PSM (or 0 = none). Step 3 de-risk: record it and immediately
+    // try to open the channel, so a bench run confirms iOS connects to our server
+    // on an unencrypted, unbonded link. Step 5 makes the open lazy-on-download.
+    private func parseL2capPsm(_ data: Data) {
+        guard data.count >= 3 else { return }
+        let psm = UInt16(data[1]) | (UInt16(data[2]) << 8)
+        let ver = data.count >= 4 ? data[3] : 0
+        print("[L2CAP] device reports PSM=0x\(String(psm, radix: 16)) ver=\(ver)")
+        DispatchQueue.main.async { self.l2capPSM = psm }
+        guard psm != 0, let peripheral = peripheral, !l2capOpenRequested else { return }
+        l2capOpenRequested = true
+        print("[L2CAP] opening channel on PSM 0x\(String(psm, radix: 16))…")
+        peripheral.openL2CAPChannel(psm)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
         guard error == nil else { return }
         let newRSSI = RSSI.intValue
         if connectedRSSI != newRSSI { connectedRSSI = newRSSI }
+    }
+
+    // #526: the result of openL2CAPChannel(psm). Step 3 is the de-risk: does iOS
+    // actually open a CoC channel against our ble_l2cap_create_server, on an
+    // unencrypted link? Log the answer. Step 5 schedules the streams and consumes
+    // the download; step 3 stops at "the channel is open".
+    func peripheral(_ peripheral: CBPeripheral, didOpen channel: CBL2CAPChannel?,
+                    error: Error?) {
+        if let error = error {
+            print("[L2CAP] openL2CAPChannel FAILED: \(error.localizedDescription)")
+            return
+        }
+        guard let channel = channel else {
+            print("[L2CAP] didOpen returned a nil channel with no error")
+            return
+        }
+        l2capChannel = channel
+        print("[L2CAP] channel OPEN: psm=0x\(String(channel.psm, radix: 16)) "
+              + "input=\(channel.inputStream != nil) output=\(channel.outputStream != nil)")
     }
 
     func peripheral(_ peripheral: CBPeripheral,
@@ -1446,6 +1497,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 case 0xCB: parseSensorCalStatus(data)  // issue #132
                 case 0xCC: parseRocketStorageStats(data)
                 case 0xCD: parseBaseStationStorageStats(data)
+                case 0xCE: parseL2capPsm(data)          // #526
                 case 0x7B:                              // '{' → JSON object
                     if let s = OTAStatusUpdate.parse(data) {
                         otaStatus = s
