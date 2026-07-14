@@ -978,6 +978,14 @@ void TR_BLE_To_APP::resetXferStats()
     xfer_burst_ = 0;
 }
 
+int8_t TR_BLE_To_APP::connRssi() const
+{
+    if (!device_connected_) return 0;
+    int8_t rssi = 0;
+    if (ble_gap_conn_rssi(conn_handle_, &rssi) != 0) return 0;
+    return rssi;
+}
+
 size_t TR_BLE_To_APP::getMaxChunkDataSize() const
 {
     // #524: this used to return the MTU-maximal size (mtu - 3 - 7 = 502 at MTU

@@ -272,6 +272,12 @@ public:
     void resetXferStats();
     XferStats xferStats() const { return xfer_; }
 
+    // Live RSSI of the phone link, dBm (0 if not connected / unavailable). A weak
+    // link means the link layer is silently retransmitting, which eats exactly the
+    // per-event packet budget the transfer is bounded by — so it is a candidate
+    // explanation any time throughput drops without the code changing.
+    int8_t connRssi() const;
+
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
     // failure). main.cpp gates I2C battery-gauge polling on this so the
     // esp_ota_begin() flash erase doesn't collide with the I2C bus (#17).

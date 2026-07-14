@@ -1361,25 +1361,64 @@ static inline uint8_t rxPop()
 static esp_pm_lock_handle_t s_phone_io_cpu_lock = nullptr;  // ESP_PM_CPU_FREQ_MAX
 static esp_pm_lock_handle_t s_phone_io_ls_lock  = nullptr;  // ESP_PM_NO_LIGHT_SLEEP
 
+// Did the locks actually engage? A silently-failed esp_pm_lock_create() would look
+// exactly like "light sleep was never the problem", and we would draw the opposite
+// conclusion from the same evidence. So report it rather than assume it.
+static bool s_phone_io_pm_held = false;
+
 static void phoneIoPmAcquire()
 {
-    if (s_phone_io_cpu_lock == nullptr)
+    if (s_phone_io_cpu_lock == nullptr && s_phone_io_ls_lock == nullptr)
     {
-        esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX,   0, "phone_io_cpu", &s_phone_io_cpu_lock);
-        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "phone_io_ls",  &s_phone_io_ls_lock);
+        const esp_err_t e1 = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX,   0,
+                                                "phone_io_cpu", &s_phone_io_cpu_lock);
+        const esp_err_t e2 = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0,
+                                                "phone_io_ls",  &s_phone_io_ls_lock);
+        if (e1 != ESP_OK || e2 != ESP_OK)
+        {
+            ESP_LOGE("PWR", "phone-IO PM lock create FAILED (cpu=%d ls=%d) — transfers "
+                            "will light-sleep on battery", (int)e1, (int)e2);
+        }
     }
-    if (s_phone_io_cpu_lock) esp_pm_lock_acquire(s_phone_io_cpu_lock);
-    if (s_phone_io_ls_lock)  esp_pm_lock_acquire(s_phone_io_ls_lock);
+    const esp_err_t a1 = s_phone_io_cpu_lock ? esp_pm_lock_acquire(s_phone_io_cpu_lock)
+                                             : ESP_FAIL;
+    const esp_err_t a2 = s_phone_io_ls_lock  ? esp_pm_lock_acquire(s_phone_io_ls_lock)
+                                             : ESP_FAIL;
+    s_phone_io_pm_held = (a1 == ESP_OK && a2 == ESP_OK);
+    if (!s_phone_io_pm_held)
+    {
+        ESP_LOGE("PWR", "phone-IO PM lock acquire FAILED (cpu=%d ls=%d)", (int)a1, (int)a2);
+    }
 }
 static void phoneIoPmRelease()
 {
     if (s_phone_io_ls_lock)  esp_pm_lock_release(s_phone_io_ls_lock);
     if (s_phone_io_cpu_lock) esp_pm_lock_release(s_phone_io_cpu_lock);
+    s_phone_io_pm_held = false;
 }
 #else
+static bool s_phone_io_pm_held = false;
 static inline void phoneIoPmAcquire() {}
 static inline void phoneIoPmRelease() {}
 #endif
+
+// #524: the XFER diagnostic is worthless if you cannot READ it — and on battery you
+// cannot, because the console is USB-Serial-JTAG: unplugging the cable takes the
+// console with it. That is exactly the run we most need to see (battery downloads
+// measured ~2.7x slower than USB).
+//
+// So latch the last transfer's summary and keep re-emitting it for a few minutes.
+// That is long enough to finish a battery download, plug USB back in, and attach a
+// monitor WITHOUT resetting the board:
+//
+//     idf.py -p <PORT> monitor --no-reset
+//
+// (a plain `idf.py monitor` resets the chip and you lose it).
+static char     s_xfer_summary[256]     = {0};
+static uint32_t s_xfer_reprint_until_ms = 0;
+static uint32_t s_xfer_next_reprint_ms  = 0;
+static constexpr uint32_t XFER_REPRINT_WINDOW_MS = 240000;  // 4 min to get a cable in
+static constexpr uint32_t XFER_REPRINT_EVERY_MS  = 15000;
 
 // beginPhoneIO / endPhoneIO — bracket a phone-serving operation (file
 // list / delete / download). Pauses both I2C servicing (flash_op_active)
@@ -4059,6 +4098,17 @@ static inline void logTaskCpuDeltas(uint32_t) {}   // stats facility not compile
 static void printStats()
 {
     const uint32_t now = millis();
+
+    // #524: re-emit the last transfer's summary for a few minutes so a BATTERY
+    // download can still be read back — plug USB in afterwards and attach with
+    // `idf.py monitor --no-reset`. See s_xfer_summary.
+    if (s_xfer_summary[0] != '\0' && (int32_t)(s_xfer_reprint_until_ms - now) > 0 &&
+        (int32_t)(now - s_xfer_next_reprint_ms) >= 0)
+    {
+        s_xfer_next_reprint_ms = now + XFER_REPRINT_EVERY_MS;
+        ESP_LOGW("BLE", "%s", s_xfer_summary);
+    }
+
     if ((now - last_stats_ms) < config::STATS_PERIOD_MS)
     {
         return;
@@ -5925,25 +5975,44 @@ static void loop_oc()
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
                           elapsed_ms / 1000.0f, kbps);
 
-            // #524 diagnostic — reads as: where did the time go, and why can't we
-            // put more packets in each connection event?
+            // #524 diagnostic — where did the time go, and why can't we put more
+            // packets in each connection event?
             //
-            //   flash%  large       -> the bit-banged NAND read is a real cost and
+            //   flash% large        -> the bit-banged NAND read is a real cost and
             //                          BLE tuning is chasing the wrong thing
             //   qdepth ~2 chunks    -> the controller's outbound queue is the cap;
             //                          there may be a knob
             //   qdepth deep + slow  -> iOS just won't drain more per event, and the
             //                          only way past it is an L2CAP channel (#526)
+            //
+            // pm= and rssi= exist to explain the battery-vs-USB gap (battery measured
+            // ~2.7x slower). They separate the two candidate causes, which point in
+            // opposite directions:
+            //   pm=0                -> the PM lock never engaged; we ARE light-sleeping
+            //                          through the transfer and the fix is here
+            //   pm=1 + rssi much
+            //   worse than on USB   -> PM is fine and the link is the problem (the LL
+            //                          is silently retransmitting, eating the per-event
+            //                          packet budget) — a rail/antenna issue, not code
             const auto xs = ble_app.xferStats();
             const float total_ms = (elapsed_ms > 0) ? (float)elapsed_ms : 1.0f;
-            ESP_LOGW("BLE", "XFER: flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
-                            "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks",
+            snprintf(s_xfer_summary, sizeof(s_xfer_summary),
+                     "XFER: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
+                     "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks  |  "
+                     "pm=%d rssi=%d dBm",
+                     kbps,
                      (unsigned long long)(flash_us / 1000),
                      100.0f * (flash_us / 1000.0f) / total_ms,
                      (unsigned long long)(ble_us / 1000),
                      100.0f * (ble_us / 1000.0f) / total_ms,
                      (unsigned long)xs.chunks, (unsigned long)xs.retries_total,
-                     (unsigned long)xs.retries_max, (unsigned long)xs.burst_max);
+                     (unsigned long)xs.retries_max, (unsigned long)xs.burst_max,
+                     s_phone_io_pm_held ? 1 : 0, (int)ble_app.connRssi());
+            ESP_LOGW("BLE", "%s", s_xfer_summary);
+
+            // Keep saying it, so a battery run can be read back over USB afterwards.
+            s_xfer_reprint_until_ms = millis() + XFER_REPRINT_WINDOW_MS;
+            s_xfer_next_reprint_ms  = millis() + XFER_REPRINT_EVERY_MS;
             } // else (chunk_data_size > 0)
             endPhoneIO();
         }
