@@ -1475,8 +1475,19 @@ static constexpr float ORIENT_ACCEPT_TOL_DEG = 5.0f;
 
 // One completed pad-gravity window: decide whether the active board→rocket
 // rotation still matches how the rocket is actually sitting on the rail.
+// Latest filtered pad "up" (specific-force) direction in ROCKET frame, from the
+// orientation estimator. Cached so the sim can align its pad frame to how the
+// board is ACTUALLY resting when a sim run starts (#508).
+static float pad_up_rocket[3]   = {0.0f, 0.0f, 0.0f};
+static bool  pad_up_rocket_valid = false;
+
 static void handleOrientationEstimate(const float up_rocket[3])
 {
+    pad_up_rocket[0] = up_rocket[0];
+    pad_up_rocket[1] = up_rocket[1];
+    pad_up_rocket[2] = up_rocket[2];
+    pad_up_rocket_valid = true;
+
     float cx = up_rocket[0];
     if (cx > 1.0f) cx = 1.0f;
     if (cx < -1.0f) cx = -1.0f;
@@ -4340,6 +4351,29 @@ static void loop_fc()
                     sensor_collector.configureSim(defaults);
                     ESP_LOGW(TAG, "[SIM] No config received, using defaults");
                 }
+                // #508: carry the sim's pad frame onto the board's ACTUAL resting
+                // attitude before the first synthetic sample. Without this, a
+                // bench board lying flat makes rocket-frame gravity jump ~90° the
+                // instant sim data replaces real data; the EKF (accel/mag updates
+                // still live on the pad) can only explain that step by blaming the
+                // gyro bias, which slams to ~-190 dps and is then frozen in at
+                // launch — wrecking attitude for the whole flight.
+                if (pad_up_rocket_valid)
+                {
+                    const float mag_rocket[3] = {
+                        (float)iis2mdc_latest_si.mag_x_uT,
+                        (float)iis2mdc_latest_si.mag_y_uT,
+                        (float)iis2mdc_latest_si.mag_z_uT };
+                    sensor_collector.configureSimPadAlignment(
+                        pad_up_rocket, have_iis2mdc_si ? mag_rocket : nullptr);
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[SIM] no pad orientation estimate yet — starting "
+                                  "UNALIGNED; expect a gyro-bias excursion if the "
+                                  "board isn't nose-up (#508)");
+                }
+
                 sensor_collector.startSim(ground_pressure_pa);
                 ESP_LOGI(TAG, "[SIM] Start cmd received, sim active=%s ground_p=%.0f",
                               sensor_collector.isSimActive() ? "YES" : "NO",
