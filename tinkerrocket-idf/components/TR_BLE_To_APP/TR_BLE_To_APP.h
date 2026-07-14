@@ -130,6 +130,26 @@ public:
     // Check if a device is connected
     bool isConnected() const;
 
+    // Whether this component should request connection parameters itself on
+    // connect (#503). Default true, which is what the base station wants — it has
+    // no policy of its own.
+    //
+    // The out computer DOES have one (slow 200 ms while idle, fast 30 ms once the
+    // rail is on for file transfer), and the two collide: the bench logged
+    // "GAP update_params: update already in progress ... rc=2" as our deferred
+    // request landed on top of the OC's. The OC happened to win that race, but had
+    // it lost, the idle link would have sat at 30 ms and thrown away most of #519's
+    // power saving. So the OC turns this off and owns the policy end to end.
+    void setAutoConnParams(bool enabled) { auto_conn_params_ = enabled; }
+
+    // NimBLE's handle for the current connection; 0xFFFF when not connected.
+    // #519: the out computer was calling ble_gap_update_params(0, ...) with a
+    // HARDCODED zero because this was never exposed. NimBLE handed out handle 1,
+    // so every one of its connection-parameter requests failed with "connection
+    // not found; conn_handle=0x0000" — including the slow/low-power params that
+    // exist precisely to cut idle power. Callers must pass this, not a literal.
+    uint16_t connHandle() const { return device_connected_ ? conn_handle_ : 0xFFFF; }
+
     // Send telemetry update to connected device
     // Sends JSON via BLE notification
     void sendTelemetry(const TelemetryData& data);
@@ -301,6 +321,7 @@ private:
     // first, then ask — and retry if we still lose the race.
     uint32_t conn_param_due_ms_   = 0;   // 0 = nothing scheduled
     uint8_t  conn_param_attempts_ = 0;
+    bool     auto_conn_params_    = true;  // see setAutoConnParams()
     static constexpr uint32_t kConnParamDelayMs = 1000;  // let iOS settle the link first
     static constexpr uint32_t kConnParamRetryMs = 750;
     static constexpr uint8_t  kConnParamMaxAttempts = 3;

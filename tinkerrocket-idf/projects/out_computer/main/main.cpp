@@ -990,14 +990,35 @@ static void enterLowPowerMode()
 {
 #if defined(CONFIG_PM_ENABLE)
     // Low-power idle: 80 MHz max (BLE needs 80 MHz APB), 40 MHz min via DFS.
-    // Light sleep disabled (btLS blocks it; USB-Serial-JTAG incompatible).
+    //
+    // #519: light sleep is now ENABLED here. It used to be off "because btLS
+    // blocks it; USB-Serial-JTAG incompatible" — both reasons are now handled:
+    //
+    //  - "btLS blocks it": the BT controller sets no_light_sleep when its
+    //    low-power clock is the MAIN_XTAL (bt.c). Pointing that clock at the
+    //    board's 32.768 kHz crystal instead (RTC_CLK_SRC_EXT_CRYS +
+    //    BT_CTRL_LPCLK_SEL_EXT_32K_XTAL) means it never sets that flag. This was
+    //    NOT a hardware limitation, it was a config we chose. Bench-confirmed:
+    //    "BLE_INIT: Using external 32.768 kHz crystal/oscillator as clock source".
+    //
+    //  - "USB-Serial-JTAG incompatible": true, but ESP-IDF handles it for us.
+    //    CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION makes the USJ driver hold an
+    //    ESP_PM_NO_LIGHT_SLEEP lock while the USB port is actually connected and
+    //    release it when it is unplugged. So the console keeps working on the
+    //    bench, and light sleep engages in flight when USB is gone — which is the
+    //    only time idle current matters anyway.
+    //
+    // MEASUREMENT GOTCHA: with USB plugged in, that lock is held and the chip will
+    // NOT light-sleep. Idle current has to be measured on battery, USB detached,
+    // or you will see no change and wrongly conclude this did nothing.
     esp_pm_config_t pm_cfg = {};
     pm_cfg.max_freq_mhz = 80;
     pm_cfg.min_freq_mhz = 40;
-    pm_cfg.light_sleep_enable = false;
+    pm_cfg.light_sleep_enable = true;
     esp_err_t pm_err = esp_pm_configure(&pm_cfg);
     if (pm_err == ESP_OK)
-        ESP_LOGI("PWR", "Low-power mode: 80/40 MHz DFS, light sleep OFF");
+        ESP_LOGI("PWR", "Low-power mode: 80/40 MHz DFS, light sleep ON "
+                        "(held off while USB is connected)");
     else
         ESP_LOGE("PWR", "esp_pm_configure failed: %s", esp_err_to_name(pm_err));
 
@@ -1028,32 +1049,58 @@ static void exitLowPowerMode()
     ESP_LOGI("PWR", "Full performance mode (%d MHz)", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
 }
 
-// Request slow BLE connection parameters for low-power idle.
-// Only called when a connection exists and power is OFF.
-static void requestSlowBLEParams(uint16_t conn_handle)
+// #519: both of these took a conn_handle argument and BOTH call sites passed a
+// literal 0 — while NimBLE had handed out handle 1. So every request failed with
+// "GAP update_params: connection not found; conn_handle=0x0000" and neither the
+// slow (low-power) nor the fast (file-transfer) parameters have EVER been applied.
+// They now take no handle and read the live one from the BLE layer.
+static void applyBLEParams(const char* what, const struct ble_gap_upd_params& params)
+{
+    const uint16_t h = ble_app.connHandle();
+    if (h == 0xFFFF)
+    {
+        ESP_LOGW("BLE", "%s conn params skipped — not connected", what);
+        return;
+    }
+    const int rc = ble_gap_update_params(h, &params);
+    if (rc != 0)
+        ESP_LOGW("BLE", "%s conn param request failed to send, rc=%d (handle=%u)", what, rc, h);
+    else
+        ESP_LOGI("BLE", "%s conn params requested (handle=%u)", what, h);
+    // The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler,
+    // which logs the interval actually in force — the peer is free to counter (#503).
+}
+
+// Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
+// lever on idle current. Within Apple's envelope: min >= 15 ms; max >= min + 15 ms;
+// latency <= 30; itvl_max * (latency + 1) = 1000 ms <= 2 s; supervision timeout
+// (4 s) > itvl_max * (latency + 1) * 3 = 3 s, and <= 6 s.
+static void requestSlowBLEParams()
 {
     struct ble_gap_upd_params params = {};
     params.itvl_min = 0x50;              // 100ms  (units of 1.25ms)
     params.itvl_max = 0xA0;              // 200ms
-    params.latency = 4;                  // Skip up to 4 connection events (~800ms effective)
+    params.latency = 4;                  // Skip up to 4 connection events (~1 s effective)
     params.supervision_timeout = 400;    // 4 seconds (units of 10ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
-    ble_gap_update_params(conn_handle, &params);
+    applyBLEParams("Slow (low-power)", params);
 }
 
-// Request fast BLE connection parameters for file transfer.
-// Called when power is turned ON and a connection already exists.
-static void requestFastBLEParams(uint16_t conn_handle)
+// Fast parameters for file transfer.
+// #503: this asked for itvl_min = 0x06 = 7.5 ms, which is BELOW iOS's 15 ms floor
+// and could never be granted — the same bug fixed in TR_BLE_To_APP, living on in a
+// second copy here. Now inside Apple's envelope (15-30 ms), like the shared path.
+static void requestFastBLEParams()
 {
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x06;              // 7.5ms  (units of 1.25ms)
-    params.itvl_max = 0x10;              // 20ms
+    params.itvl_min = 0x0C;              // 15ms — iOS minimum; below this is refused
+    params.itvl_max = 0x18;              // 30ms — must be >= min + 15 ms
     params.latency = 0;                  // No slave latency
     params.supervision_timeout = 200;    // 2 seconds (units of 10ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
-    ble_gap_update_params(conn_handle, &params);
+    applyBLEParams("Fast (transfer)", params);
 }
 
 static void updateDerivedAltitudeFromBMP()
@@ -5216,6 +5263,20 @@ static void setup_oc()
         ESP_LOGW("PWR", "INA230 not found -- battery monitoring disabled");
     }
 
+    // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
+    // while the rail is off to save idle power, fast (30 ms) once it comes on for
+    // file transfer. TR_BLE_To_APP's own connect-time request is for the base
+    // station, which has no policy; here the two collide, and the bench caught it:
+    //
+    //   BLE: Slow (low-power) conn params requested (handle=1)
+    //   NimBLE: GAP update_params: update already in progress; conn_handle=0x0001
+    //   W BLE: Connection param update request failed to send, rc=2
+    //
+    // The OC won that race, but had it lost, the idle link would have stayed at
+    // 30 ms and thrown away most of the power saving. Take ownership instead of
+    // relying on who gets there first.
+    ble_app.setAutoConnParams(false);
+
     // Only BLE starts at boot — everything else is behind PWR_PIN
     if (!ble_app.begin())
     {
@@ -5494,7 +5555,7 @@ static void loop_oc()
             // slow params to save power (onConnect always requests fast params,
             // needed for file transfer when powered on).
             if (!pwr_pin_on) {
-                requestSlowBLEParams(0);
+                requestSlowBLEParams();
             }
         }
         ble_was_connected = ble_now;
@@ -5858,7 +5919,7 @@ static void loop_oc()
                 // Restore fast BLE connection params for file transfer
                 if (ble_app.isConnected())
                 {
-                    requestFastBLEParams(0);
+                    requestFastBLEParams();
                 }
             }
             else
