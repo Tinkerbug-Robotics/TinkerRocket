@@ -754,15 +754,36 @@ TEST_F(EKFTest, BaroJosephGoldenTrajectory) {
     EXPECT_NEAR(vel[0], 0.024522f, 2e-3f);
     EXPECT_NEAR(vel[1], 0.000624f, 2e-3f);
     EXPECT_NEAR(vel[2], 0.009548f, 2e-3f);
-    const float q_gold[4] = {0.9247040f, 0.0403636f, 0.3780217f, -0.0198218f};
+    // Attitude golden RE-BASELINED for #508 (was {0.9247040, 0.0403636,
+    // 0.3780217, -0.0198218}). This fixture is magnetically INCONSISTENT: it
+    // yaws the gyro at 3 dps while feeding a CONSTANT magnetometer, so the field
+    // does not follow the rotation. That is exactly the inconsistency #508's
+    // gyro-bias observability gate exists to catch, and it fires 18 times over
+    // the 20 s run — correctly refusing to learn gyro bias from a magnetometer
+    // that is lying about the vehicle's rotation.
+    //
+    // This is an improvement, not a regression: the fixture's TRUE gyro bias is
+    // zero, and the estimate went from 0.4985 dps (pre-#508) to 0.3870 dps. The
+    // position, velocity and covariance goldens above are unchanged and still
+    // pass — only attitude moved, because we stopped laundering the bad heading
+    // into the bias. The test keeps its original job: guarding the rank-1 Joseph
+    // integration against float-reassociation drift.
+    const float q_gold[4] = {0.9235595f, 0.0412485f, 0.3807520f, -0.0190893f};
     for (int i = 0; i < 4; i++)
         EXPECT_NEAR(q[i], q_gold[i], 2e-4f) << "q[" << i << "]";
+    // The gyro-bias block (12-14) is RE-BASELINED for #508 and is now slightly
+    // LARGER (was 1.867444e-07, 2.240813e-07, 1.721429e-07). That is the gate
+    // working as designed, not drift: zeroing rows 12-14 of K means the Joseph
+    // update does not shrink the bias covariance on a gated sample, so the filter
+    // correctly reports that it learned less about the bias from a magnetometer
+    // that wasn't following the vehicle's yaw. Every other block (pos/vel/att/
+    // accel-bias) is unchanged within the existing 2% tolerance.
     const float cov_gold[15] = {
-        1.866526e-03f, 1.866525e-03f, 2.964458e-03f,
-        2.649696e-03f, 2.650031e-03f, 2.643718e-03f,
-        3.090044e-06f, 4.691107e-06f, 2.907600e-06f,
-        7.639116e-04f, 1.441619e-03f, 6.485872e-04f,
-        1.867444e-07f, 2.240813e-07f, 1.721429e-07f};
+        1.866526e-03f, 1.866530e-03f, 2.964469e-03f,
+        2.649618e-03f, 2.650011e-03f, 2.643721e-03f,
+        3.068467e-06f, 4.648058e-06f, 2.927017e-06f,
+        7.511995e-04f, 1.435934e-03f, 6.463774e-04f,
+        1.947543e-07f, 2.267617e-07f, 1.819631e-07f};
     for (int i = 0; i < 15; i++)
         EXPECT_NEAR(cov[i], cov_gold[i], 0.02f * cov_gold[i] + 1e-9f)
             << "cov[" << i << "]";
@@ -802,4 +823,167 @@ TEST_F(EKFTest, MagSampleFusedOncePerUniqueTimestamp) {
     a.getCovOrient(ca);  b.getCovOrient(cb);
     for (int i = 0; i < 4; i++) EXPECT_EQ(qa[i], qb[i]) << "quat[" << i << "]";
     for (int i = 0; i < 3; i++) EXPECT_EQ(ca[i], cb[i]) << "covOrient[" << i << "]";
+}
+
+// ====================================================================
+// #508 — gyro-bias observability gate + physical bound
+//
+// The bench failure: a flat board makes rocket-frame gravity jump ~81° the
+// instant sim data replaces real data. accel/mag had no consistency test, so
+// the Kalman gain laundered that inconsistency into gyro bias via the
+// attitude↔bias cross-covariance — -190 dps, ~100x beyond anything physical.
+// Launch then gates accel/mag off, freezing the bias in for the whole ascent.
+//
+// The same laundering happens on a REAL pad from a bump, wind sway, a steel
+// rail deflecting the mag, or a stale hard-iron cal — the sim just made it
+// extreme enough to see.
+// ====================================================================
+
+// Nose-up fixture with gravity rotated by `off_deg` away from the nose — i.e.
+// the board is not resting where the filter thinks it is.
+static EkfIMUData makeTiltedIMU(uint32_t time_us, float off_deg) {
+    EkfIMUData imu;
+    imu.time_us = time_us;
+    const float r = off_deg * (float)M_PI / 180.0f;
+    imu.acc_x = 9.807 * std::cos(r);      // along nose
+    imu.acc_y = 0.0;
+    imu.acc_z = 9.807 * std::sin(r);      // leaked perpendicular
+    imu.gyro_x = 0.0; imu.gyro_y = 0.0; imu.gyro_z = 0.0;
+    return imu;
+}
+
+static void settleNoseUp(GpsInsEKF& ekf, uint32_t& t) {
+    ekf.init(makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    for (int i = 0; i < 2000; i++) {
+        t += 2500;   // 400 Hz
+        ekf.update(true, makeNoseUpIMU(t), makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+}
+
+TEST(EkfGyroBias508, ConvergedPadBiasIsSmallAndHealthy) {
+    // Baseline: a consistent stationary pad must still converge to ~zero bias,
+    // and must report healthy. If this regresses, the gate is too tight.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+
+    EXPECT_LT(ekf.gyroBiasMaxDps(), 1.0f);
+    EXPECT_EQ(ekf.gyroBiasClipCount(), 0u);
+    EXPECT_TRUE(ekf.gyroBiasHealthy());
+}
+
+TEST(EkfGyroBias508, FrameStepNoLongerDivergesTheBias) {
+    // Reproduce the bench event: converge on a consistent pad, then hand the
+    // filter a gravity vector 81° away with the gyro still reading zero — the
+    // real→sim handover. Before #508 this drove the bias to -190 dps.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    ASSERT_LT(ekf.gyroBiasMaxDps(), 1.0f);
+
+    for (int i = 0; i < 2000; i++) {           // 5 s of the inconsistent frame
+        t += 2500;
+        ekf.update(true, makeTiltedIMU(t, 81.0f), makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+
+    // The gate must have fired, and the bias must stay essentially uncorrupted.
+    // Unfixed, this scenario drove it to -190 dps; the LATCHING gate holds the
+    // coupling cut through the whole attitude slew, so almost nothing leaks in.
+    EXPECT_GT(ekf.gyroBiasGateTrips(), 0u);
+    EXPECT_LT(ekf.gyroBiasMaxDps(), 1.0f) << "inconsistency still laundered into the bias";
+}
+
+TEST(EkfGyroBias508, GateTripsAreVisibleToThePreLaunchCheck) {
+    // Even when the bias survives intact, a tripping gate means the filter is
+    // being fed accel/mag data inconsistent with its state — a bad mounting, a
+    // steel rail deflecting the mag, a stale hard-iron cal. The scorecard must be
+    // able to see that, because launch freezes whatever the bias holds.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    ASSERT_EQ(ekf.gyroBiasGateTrips(), 0u);    // clean pad trips nothing
+
+    for (int i = 0; i < 2000; i++) {
+        t += 2500;
+        ekf.update(true, makeTiltedIMU(t, 81.0f), makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+    EXPECT_GT(ekf.gyroBiasGateTrips(), 0u);
+}
+
+TEST(EkfGyroBias508, GenuineBiasIsStillLearnedAndOutOfSpecIsFlagged) {
+    // The gate must not blind the filter to a REAL gyro bias — that would be a
+    // bad trade. A gyro with a true 8 dps offset must still be learned exactly
+    // (so attitude is compensated), with no gate trips, and reported out-of-spec
+    // so a suspect sensor is caught before flight.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    EkfIMUData imu = makeNoseUpIMU(t);
+    imu.gyro_x = 8.0;                          // real, consistent 8 dps offset
+    ekf.init(imu, makeStationaryGNSS(t), makeNoseUpMag(t));
+    for (int i = 0; i < 4000; i++) {
+        t += 2500;
+        EkfIMUData u = makeNoseUpIMU(t);
+        u.gyro_x = 8.0;
+        ekf.update(true, u, makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+
+    EXPECT_NEAR(ekf.gyroBiasMaxDps(), 8.0f, 0.5f);   // learned, not suppressed
+    EXPECT_EQ(ekf.gyroBiasGateTrips(), 0u);          // consistent data — no trips
+    EXPECT_FALSE(ekf.gyroBiasHealthy());             // but out of spec → no-go
+}
+
+TEST(EkfGyroBias508, AttitudeStillCorrectsThroughTheGate) {
+    // The gate must cut the gyro-bias coupling ONLY — attitude has to keep
+    // correcting, or genuinely re-orienting the rocket on the rail would leave
+    // the filter stuck on a stale attitude. This is the anti-regression test.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+
+    // Physically re-orient by 30° and hold. The filter must follow the gravity
+    // vector to the new attitude.
+    for (int i = 0; i < 4000; i++) {
+        t += 2500;
+        ekf.update(true, makeTiltedIMU(t, 30.0f), makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+
+    // Body-frame gravity should now line up with the measurement: the estimated
+    // gravity direction must have swung ~30° off the nose.
+    float q[4];
+    ekf.getQuaternion(q);
+    // Rotate NED-down into body: g_body ∝ third column of T_NED2B.
+    const float gx = 2.0f * (q[1]*q[3] - q[0]*q[2]);
+    const float gz = q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3];
+    const float off = std::atan2(std::fabs(gz), std::fabs(gx)) * 180.0f / (float)M_PI;
+    EXPECT_NEAR(off, 30.0f, 8.0f) << "attitude failed to track the re-orientation";
+}
+
+TEST(EkfGyroBias508, BoundIsABackstopOnAnyPath) {
+    // Even init is a path: initCore seeds the bias from the raw gyro reading
+    // ("assume stationary"), so initialising while the vehicle is being handled
+    // bakes that rate straight in. It must be clamped, not trusted.
+    GpsInsEKF ekf;
+    EkfIMUData imu = makeNoseUpIMU(0);
+    imu.gyro_x = 250.0;   // deg/s — being waved around at init
+    imu.gyro_y = -300.0;
+    ekf.init(imu, makeStationaryGNSS(0), makeNoseUpMag(0));
+
+    EXPECT_LE(ekf.gyroBiasMaxDps(), 10.1f);    // clamped to the envelope
+    EXPECT_GT(ekf.gyroBiasClipCount(), 0u);    // and it says the bound bit
+    EXPECT_FALSE(ekf.gyroBiasHealthy());       // so this is a no-go
+}
+
+TEST(EkfGyroBias508, GateDoesNotFireOnNormalPadNoise) {
+    // A small, legitimate tilt (5°) must pass the gate untouched — otherwise the
+    // filter would never learn a real bias. NIS ≈ 3 here vs the gate at 25.
+    GpsInsEKF ekf;
+    uint32_t t = 0;
+    settleNoseUp(ekf, t);
+    const uint32_t trips_before = ekf.gyroBiasGateTrips();
+
+    for (int i = 0; i < 400; i++) {
+        t += 2500;
+        ekf.update(true, makeTiltedIMU(t, 5.0f), makeStationaryGNSS(t), makeNoseUpMag(t));
+    }
+    EXPECT_EQ(ekf.gyroBiasGateTrips(), trips_before) << "gate is too tight";
 }

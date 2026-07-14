@@ -102,7 +102,16 @@ void GpsInsEKF::initCore(EkfIMUData imu_data,
 
     pEst_D_rrm_[0]=pMeas_D_rrm[0]; pEst_D_rrm_[1]=pMeas_D_rrm[1]; pEst_D_rrm_[2]=pMeas_D_rrm[2];
     vEst_NED_mps_[0]=vMeas_NED[0]; vEst_NED_mps_[1]=vMeas_NED[1]; vEst_NED_mps_[2]=vMeas_NED[2];
+
+    // Coarse "assume stationary" seed: whatever the gyro reads at init IS the
+    // bias. #508: that is unbounded — init while the vehicle is being handled or
+    // rotated and the rate is baked straight into the bias state. Clamp it into
+    // the physical envelope, and start the health counters clean.
+    gbias_gate_trips_ = 0;
+    gbias_clip_count_ = 0;
+    gbias_gate_hold_until_us_ = 0;
     wBias_rps_[0]=wMeas[0]; wBias_rps_[1]=wMeas[1]; wBias_rps_[2]=wMeas[2];
+    clampGyroBias();
 
     // Initial quaternion: nose-up vertical (same as constructor)
     quat_BL_[0] = 0.707107f; quat_BL_[1] = 0.0f;
@@ -606,7 +615,8 @@ void GpsInsEKF::stabilizeP() {
 // P is exactly symmetric on entry (every update ends with an explicit
 // symmetrize), so K = P*H^T*S^-1 can be read from HP^T bit-identically.
 void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
-                                      int hn, float y, float R, float s_min)
+                                      int hn, float y, float R, float s_min,
+                                      bool gate_gyro_bias)
 {
     // HP = H*P (1x15), snapshotted before P is modified
     float HP[15] = {};
@@ -627,6 +637,19 @@ void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
     float K[15];
     for (int i = 0; i < 15; i++) K[i] = HP[i] * S_inv;
 
+    // ── #508: gyro-bias observability gate (scalar form; see accelMeasUpdate) ──
+    // NIS = y²/S. Cut the gyro-bias coupling when the measurement is
+    // inconsistent with the state, so an off heading (steel rail, stale
+    // hard-iron cal) can't be laundered into the bias. Every other state still
+    // corrects normally.
+    if (gate_gyro_bias) {
+        const float nis = (y * y) * S_inv;
+        if (!(nis <= GBIAS_GATE_NIS_SCALAR)) tripGyroBiasGate();  // negated: catches NaN
+    }
+    if (gate_gyro_bias && gyroBiasGateHeld()) {
+        K[12] = 0.0f; K[13] = 0.0f; K[14] = 0.0f;
+    }
+
     // State correction xk = K*y — position via curvature radii, velocity,
     // biases, attitude via left-multiplied error quaternion (the shared
     // convention across all measurement updates).
@@ -643,6 +666,7 @@ void GpsInsEKF::applyScalarMeasUpdate(const int* hidx, const float* hval,
         aBias_mps2_[i]   += xk[i + 9];
         wBias_rps_[i]    += xk[i + 12];
     }
+    clampGyroBias();   // #508 backstop: no path may leave a non-physical bias
 
     float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
     normalizeQuaternion(quatDelta, quatDelta);
@@ -730,6 +754,27 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
             for (int k = 0; k < 3; k++)
                 K[i][j] += PHt[i][k] * S_inv[k*3+j];
 
+    // ── #508: gyro-bias observability gate ──
+    // NIS = yᵀ·S⁻¹·y. A gravity innovation this far from what P predicts is not
+    // an attitude error the bias can explain — it's a bad measurement (pad bump,
+    // wind sway, a frame change). Gyro bias is observable only through slow,
+    // CONSISTENT drift, so cut its coupling for this update: zero rows 12-14 of
+    // K. Attitude (and accel bias) still correct in full, so a genuine
+    // re-orientation on the rail converges exactly as before. Joseph form below
+    // is valid for any gain, so P stays consistent — and with these rows zeroed
+    // the bias covariance is NOT reduced, so the filter keeps reporting the bias
+    // as un-learned. That is what the pre-launch scorecard reads.
+    float nis = 0.0f;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            nis += y[i] * S_inv[i*3+j] * y[j];
+    if (!(nis <= GBIAS_GATE_NIS_VEC)) tripGyroBiasGate();   // negated: catches NaN too
+    if (gyroBiasGateHeld()) {
+        for (int j = 0; j < 3; j++) {
+            K[12][j] = 0.0f; K[13][j] = 0.0f; K[14][j] = 0.0f;
+        }
+    }
+
     // State correction: xk = K * y
     float xk[15] = {};
     for (int i = 0; i < 15; i++)
@@ -748,6 +793,7 @@ void GpsInsEKF::accelMeasUpdate(const float aMeas[3]) {
         aBias_mps2_[i] += xk[i + 9];
         wBias_rps_[i] += xk[i + 12];
     }
+    clampGyroBias();   // #508 backstop: no path may leave a non-physical bias
 
     // Quaternion correction
     float quatDelta[4] = {1.0f, xk[6], xk[7], xk[8]};
@@ -897,7 +943,7 @@ void GpsInsEKF::magMeasUpdate(const float aMeas[3], const float magMeas[3]) {
     //    |H|=2 ⇒ S ≥ R_mag_ at any attitude, so the s_min gate is NaN-safety.
     const int   hidx[3] = {6, 7, 8};
     const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
-    applyScalarMeasUpdate(hidx, hval, 3, y, R_eff, 1e-9f);
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_eff, 1e-9f, /*gate_gyro_bias=*/true);
 }
 
 // ─── Heading update from GNSS velocity course ───────────────────────
@@ -923,7 +969,7 @@ void GpsInsEKF::velCourseHeadingUpdate(const float vMeas_NED[3]) {
     const float R_course = 0.05f;   // ~13° course noise (rad²)
     const int   hidx[3] = {6, 7, 8};
     const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
-    applyScalarMeasUpdate(hidx, hval, 3, y, R_course, 1e-9f);
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_course, 1e-9f, /*gate_gyro_bias=*/true);
 }
 
 // ─── Heading update by body↔world lateral-acceleration matching ─────
@@ -956,7 +1002,7 @@ void GpsInsEKF::accelMatchHeadingUpdate(const float aMeas[3], const float aWorld
     const float R_am = 0.20f;   // ~26° (rad²) — GNSS-derived accel is noisy
     const int   hidx[3] = {6, 7, 8};
     const float hval[3] = {2.0f*d[0], 2.0f*d[1], 2.0f*d[2]};
-    applyScalarMeasUpdate(hidx, hval, 3, y, R_am, 1e-9f);
+    applyScalarMeasUpdate(hidx, hval, 3, y, R_am, 1e-9f, /*gate_gyro_bias=*/true);
 }
 
 // ─── Measurement Update (GNSS correction) ───────────────────────────
@@ -1134,6 +1180,7 @@ void GpsInsEKF::measUpdate(double pMeas_D_rrm[3], float vMeas_NED_mps[3]) {
         aBias_mps2_[i]+=xk[i+9];
         wBias_rps_[i]+=xk[i+12];
     }
+    clampGyroBias();   // #508 backstop: no path may leave a non-physical bias
 
     // Attitude correction (K rows 6-8 already gated by cos²(pitch) above)
     float quatDelta[4]={1.0f, xk[6], xk[7], xk[8]};
