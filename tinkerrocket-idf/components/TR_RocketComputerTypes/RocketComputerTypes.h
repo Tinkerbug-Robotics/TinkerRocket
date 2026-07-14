@@ -257,6 +257,16 @@ static constexpr uint8_t BLE_BS_CMD_SET_NETWORK_ID    = 41;
 static constexpr uint8_t BLE_BS_CMD_RELAY_TO_ROCKET   = 50;
 static constexpr uint8_t BLE_BS_CMD_FREQ_SCAN         = 60;
 
+// #526: Out Computer command space is INDEPENDENT of the base-station space
+// above (see tools/check_ble_command_ids.py — the app talks to EITHER an OC or a
+// BS, so cmd 50 means different things to each). These two are for the L2CAP
+// connection-oriented-channel download path and are dispatched ONLY by the OC.
+// 43/44 are free in the OC dispatch (which uses 1-16, 20-27, 29-36, 40-42,
+// 50-58, 61-67) and are sent by neither the app nor the BS today. Do NOT reuse
+// 26/27 for this — they are the OC's roll-profile set/clear (main.cpp).
+static constexpr uint8_t BLE_OC_CMD_L2CAP_PSM_QUERY    = 43;
+static constexpr uint8_t BLE_OC_CMD_FILE_DOWNLOAD_L2CAP = 44;
+
 // Minimum SNR (dB) for an RX packet to be considered trustworthy at the
 // given spreading factor.  Bench-confirmed in #90 follow-up: a CRC-
 // passing decode at -12.8 dB SNR on SF8 (sensitivity -10 dB) was a

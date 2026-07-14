@@ -428,6 +428,38 @@ target_include_directories(test_bs_download_policy PRIVATE
 target_link_libraries(test_bs_download_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_download_policy)
 
+# ---------- #526 L2CAP CoC file transfer: pure policy modules ----------
+# The L2CAP download path is built from three pure, host-tested pieces so the
+# tricky parts are proven off-target before any NimBLE is involved:
+#   Crc32.h             — the integrity check that gates download completion
+#   FileStreamFraming.h — the in-band BEGIN/DATA/END framing (byte-stream safe)
+#   oc_l2cap_send_policy.h — the mbuf-ownership decision after ble_l2cap_coc_send()
+# All three are NimBLE-free by construction; the firmware pins the policy's
+# mirrored BLE_HS_* codes to the real macros with static_assert.
+add_executable(test_crc32 test_crc32.cpp)
+target_include_directories(test_crc32 PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_crc32 GTest::gtest_main)
+gtest_discover_tests(test_crc32)
+
+add_executable(test_file_stream_framing test_file_stream_framing.cpp)
+target_include_directories(test_file_stream_framing PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_file_stream_framing GTest::gtest_main)
+gtest_discover_tests(test_file_stream_framing)
+
+add_executable(test_oc_l2cap_send_policy test_oc_l2cap_send_policy.cpp)
+target_include_directories(test_oc_l2cap_send_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_oc_l2cap_send_policy GTest::gtest_main)
+gtest_discover_tests(test_oc_l2cap_send_policy)
+
 # ---------- test_burnout_detector (#197/#256) ----------
 # Detector logic is shared with the firmware via
 # components/TR_KinematicChecks/BurnoutDetector.h — the test exercises the
