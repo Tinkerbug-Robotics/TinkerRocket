@@ -990,14 +990,35 @@ static void enterLowPowerMode()
 {
 #if defined(CONFIG_PM_ENABLE)
     // Low-power idle: 80 MHz max (BLE needs 80 MHz APB), 40 MHz min via DFS.
-    // Light sleep disabled (btLS blocks it; USB-Serial-JTAG incompatible).
+    //
+    // #519: light sleep is now ENABLED here. It used to be off "because btLS
+    // blocks it; USB-Serial-JTAG incompatible" — both reasons are now handled:
+    //
+    //  - "btLS blocks it": the BT controller sets no_light_sleep when its
+    //    low-power clock is the MAIN_XTAL (bt.c). Pointing that clock at the
+    //    board's 32.768 kHz crystal instead (RTC_CLK_SRC_EXT_CRYS +
+    //    BT_CTRL_LPCLK_SEL_EXT_32K_XTAL) means it never sets that flag. This was
+    //    NOT a hardware limitation, it was a config we chose. Bench-confirmed:
+    //    "BLE_INIT: Using external 32.768 kHz crystal/oscillator as clock source".
+    //
+    //  - "USB-Serial-JTAG incompatible": true, but ESP-IDF handles it for us.
+    //    CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION makes the USJ driver hold an
+    //    ESP_PM_NO_LIGHT_SLEEP lock while the USB port is actually connected and
+    //    release it when it is unplugged. So the console keeps working on the
+    //    bench, and light sleep engages in flight when USB is gone — which is the
+    //    only time idle current matters anyway.
+    //
+    // MEASUREMENT GOTCHA: with USB plugged in, that lock is held and the chip will
+    // NOT light-sleep. Idle current has to be measured on battery, USB detached,
+    // or you will see no change and wrongly conclude this did nothing.
     esp_pm_config_t pm_cfg = {};
     pm_cfg.max_freq_mhz = 80;
     pm_cfg.min_freq_mhz = 40;
-    pm_cfg.light_sleep_enable = false;
+    pm_cfg.light_sleep_enable = true;
     esp_err_t pm_err = esp_pm_configure(&pm_cfg);
     if (pm_err == ESP_OK)
-        ESP_LOGI("PWR", "Low-power mode: 80/40 MHz DFS, light sleep OFF");
+        ESP_LOGI("PWR", "Low-power mode: 80/40 MHz DFS, light sleep ON "
+                        "(held off while USB is connected)");
     else
         ESP_LOGE("PWR", "esp_pm_configure failed: %s", esp_err_to_name(pm_err));
 

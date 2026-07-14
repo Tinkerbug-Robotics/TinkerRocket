@@ -65,6 +65,16 @@ CONFIG_ESP_XT_WDT_BACKUP_CLK_ENABLE=y
 # try is CONFIG_ESP_SYSTEM_RTC_EXT_XTAL_BOOTSTRAP_CYCLES (default 0 on S3), which
 # kicks the crystal with a 32 kHz square wave to help it start.
 
+# (#519) The other half of the reason light sleep was off. enterLowPowerMode()'s
+# comment cited "USB-Serial-JTAG incompatible" — which is true, the USJ peripheral
+# does not survive light sleep. But IDF solves it: with this option the USJ driver
+# holds an ESP_PM_NO_LIGHT_SLEEP lock for exactly as long as the USB port is
+# actually connected (it watches for SOF packets), and releases it on unplug. So
+# the serial console keeps working on the bench, and light sleep engages in flight
+# once USB is gone — which is the only time idle current matters.
+# Default is 'n', which is why we were carrying a hand-rolled "just don't sleep".
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+
 # (#518) CONFIG_BT_NIMBLE_SLEEP_ENABLE=y used to sit here under a "NimBLE host
 # sleep support" comment. No such kconfig symbol exists in ESP-IDF — it is not in
 # the bt component's Kconfig and not in its sdkconfig.rename map — so kconfgen
