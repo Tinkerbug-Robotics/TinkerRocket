@@ -349,6 +349,19 @@ target_include_directories(test_bs_uplink_policy PRIVATE
 target_link_libraries(test_bs_uplink_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_policy)
 
+# ---------- test_bs_uplink_queue ----------
+# Host-side test for the base-station uplink command FIFO (#502): the uplink was
+# a single slot, so a new command discarded the pending one's remaining retries —
+# and the uplink is blind, so those retries ARE the delivery mechanism.
+# bs_uplink_queue.h is pure, so the test just adds the base_station/main dir.
+add_executable(test_bs_uplink_queue test_bs_uplink_queue.cpp)
+target_include_directories(test_bs_uplink_queue PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_uplink_queue GTest::gtest_main)
+gtest_discover_tests(test_bs_uplink_queue)
+
 # ---------- test_bs_download_policy ----------
 # Host-side test for the base-station cooperative BLE download (#380): chunk
 # planning bounded by open-time file size + the 15 ms notify-drain pacing gate.
