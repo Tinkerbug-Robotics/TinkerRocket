@@ -5851,7 +5851,24 @@ static void loop_oc()
             beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking flash reads
             ESP_LOGI("BLE", "Download file request: %s", download_filename.c_str());
 
-            // #524: the link must be the fast one before we stream a single byte.
+            // #524: read RSSI on the QUIET link, before we put any load on it.
+            //
+            // The 2026-07-14 run reported -107 dBm with the phone six inches away and
+            // real antennas on both ends — which is ~60 dB of loss that the physics does
+            // not allow. So this is very likely NOT a weak link but a broken instrument:
+            // ble_gap_conn_rssi() issues HCI_Read_RSSI, a command inherited from Classic
+            // Bluetooth whose LE behaviour on the ESP32 controller we have never checked.
+            //
+            // This line settles it without a single guess: if the QUIET link also reads
+            // ~-107 at six inches, HCI_Read_RSSI is not usable here and every rssi= number
+            // in the XFER line must be thrown away. Cross-check against the app, which
+            // reads its own RSSI from CoreBluetooth (BLEDevice.connectedRSSI).
+            ESP_LOGI("BLE", "Link before transfer: %lu ms effective, rssi=%d dBm "
+                            "(cross-check against the app's own RSSI — if these disagree, "
+                            "believe the app)",
+                     (unsigned long)ble_app.effectiveEventMs(), (int)ble_app.connRssi());
+
+            // The link must be the fast one before we stream a single byte.
             ensureFastLinkForTransfer();
 
             // Dynamic chunk size based on negotiated MTU (falls back to 170 if not yet negotiated)
