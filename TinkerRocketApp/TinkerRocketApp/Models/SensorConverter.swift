@@ -365,6 +365,10 @@ nonisolated class SensorConverter {
 
         return NonSensorDataSI(
             time_us: raw.time_us,
+            // #514: the legacy wire format stores roll/pitch/yaw directly and carries
+            // NO quaternion. Emit a zero (non-unit) quaternion as an explicit "absent"
+            // marker rather than fabricating one — the CSV writes blanks for it.
+            q0: 0, q1: 0, q2: 0, q3: 0,
             roll: roll,
             pitch: pitch,
             yaw: yaw,
@@ -477,6 +481,7 @@ nonisolated class SensorConverter {
 
         return NonSensorDataSI(
             time_us: raw.time_us,
+            q0: q0, q1: q1, q2: q2, q3: q3,   // #514: carry the raw quaternion through
             roll: roll,
             pitch: pitch,
             yaw: yaw,
