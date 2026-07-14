@@ -219,7 +219,11 @@ public:
     // data: chunk data
     // len: chunk length
     // eof: true if this is the last chunk
-    void sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof);
+    // Send one file-transfer chunk. Returns false if the chunk could NOT be
+    // notified even after the full reliable backpressure budget (#524) — the
+    // caller must then abort the transfer rather than carry on and hand the app a
+    // file with a hole in it. Unlike telemetry, a dropped chunk is lost data.
+    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof);
 
     // Get the negotiated MTU (after connection established)
     // Returns 0 if not yet negotiated

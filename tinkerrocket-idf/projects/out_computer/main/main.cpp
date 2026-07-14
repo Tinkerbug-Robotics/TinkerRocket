@@ -5744,11 +5744,26 @@ static void loop_oc()
             uint32_t start_ms = millis();
             bool eof = false;
 
-            // Delay between every BLE notification (matches Legacy base station
-            // pacing).  The bursty 3-at-a-time batch scheme overwhelmed the iOS
-            // BLE notification queue, causing ~50% data loss.  A consistent
-            // per-chunk delay keeps the queue shallow and reliable.
-            const unsigned long CHUNK_DELAY_MS = 30;
+            // #524: there is no per-chunk delay any more.
+            //
+            // There used to be a fixed 30 ms one, with this rationale: "the bursty
+            // 3-at-a-time batch scheme overwhelmed the iOS BLE notification queue,
+            // causing ~50% data loss. A consistent per-chunk delay keeps the queue
+            // shallow and reliable."
+            //
+            // The data loss was real, but the delay was treating the symptom. File
+            // chunks went out through the same best-effort notify path as telemetry,
+            // which retries 3 x 5 ms and then DROPS the notification — fine for a
+            // telemetry frame, data loss for a file. So the queue was kept shallow
+            // enough that the drop path never fired, which pinned the transfer to one
+            // notification per connection event: 502 B / 30 ms ~ 16 kB/s, with the
+            // radio idle ~90% of the time.
+            //
+            // sendFileChunk now applies real backpressure instead — it waits for the
+            // controller to drain rather than dropping — and returns false only if it
+            // genuinely could not send. So chunks can be fed as fast as the stack
+            // accepts them (several per connection event), with no drops.
+            bool send_failed = false;
 
             while (!eof)
             {
@@ -5791,10 +5806,16 @@ static void loop_oc()
                     // Complete frame found — flush BLE buffer if this frame won't fit
                     if (ble_used > 0 && ble_used + frame_size > chunk_data_size)
                     {
-                        ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        if (!ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false))
+                        {
+                            // #524: could not send even after full backpressure. Do
+                            // NOT keep going — that would hand the app a file with a
+                            // hole in it and call it a success.
+                            send_failed = true;
+                            break;
+                        }
                         bytes_sent += ble_used;
                         ble_used = 0;
-                        delay(CHUNK_DELAY_MS);
                     }
 
                     // Append frame to BLE buffer
@@ -5804,6 +5825,8 @@ static void loop_oc()
                     pos += frame_size;
                 }
 
+                if (send_failed) break;   // #524: abort the transfer, don't limp on
+
                 // Move unparsed bytes to start of buffer for next iteration
                 carryover = buf_len - pos;
                 if (carryover > 0 && pos > 0)
@@ -5812,8 +5835,16 @@ static void loop_oc()
                 }
             }
 
+            if (send_failed)
+            {
+                // Terminate cleanly so the app sees a truncated file rather than a
+                // hung transfer, and say so — this used to be a silent hole.
+                ESP_LOGE("BLE", "Download ABORTED after %lu bytes: BLE send failed",
+                         (unsigned long)bytes_sent);
+                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+            }
             // Send remaining data with EOF flag
-            if (ble_used > 0)
+            else if (ble_used > 0)
             {
                 ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
                 bytes_sent += ble_used;

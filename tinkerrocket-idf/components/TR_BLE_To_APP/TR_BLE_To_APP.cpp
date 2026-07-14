@@ -219,6 +219,17 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         self->onMtuChanged(event->mtu.conn_handle, event->mtu.value);
         break;
 
+    case BLE_GAP_EVENT_DATA_LEN_CHG:
+        // #524: report the LL payload size we actually negotiated. 27 octets means
+        // DLE did not take and every 502-byte notification is still fragmenting
+        // ~19 ways — downloads would stay slow while we assumed otherwise. Same
+        // discipline as the connection interval (#503) and the PHY.
+        ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets",
+                 (unsigned)event->data_len_chg.max_tx_octets,
+                 (unsigned)event->data_len_chg.max_tx_time,
+                 (unsigned)event->data_len_chg.max_rx_octets);
+        break;
+
     case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
         // Report the PHY we ACTUALLY ended up on, not the one we asked for — the
         // same lesson as the connection interval (#503). 2M doubles the raw rate;
@@ -283,6 +294,20 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     telem_notify_subscribed_ = false;
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
+
+    // #524: request Data Length Extension. We had never called this, so the link
+    // layer stayed at its 27-byte default PDU and every 502-byte notification was
+    // fragmented into ~19 LL packets, each with its own header and inter-frame
+    // spacing. 251 octets collapses that to two. Purely a request — if the peer
+    // declines, the link simply stays at 27 and nothing breaks.
+    const int dle_rc = ble_gap_set_data_len(conn_handle,
+                                            BLE_HCI_SET_DATALEN_TX_OCTETS_MAX,
+                                            BLE_HCI_SET_DATALEN_TX_TIME_MAX);
+    if (dle_rc != 0)
+    {
+        ESP_LOGW(BLE_TAG, "Data-length extension request failed, rc=%d "
+                          "— staying on 27-byte LL PDUs", dle_rc);
+    }
 
     // Ask for the LE 2M PHY. This is the throughput lever, and we had never used
     // it — the controller supports it (boot log: "Feature Config ... BLE_50:1") but
@@ -946,30 +971,45 @@ bool TR_BLE_To_APP::isConnected() const
 // Helper: send a BLE notification on a given characteristic handle
 // ============================================================================
 
-static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
-                       const uint8_t* data, size_t len)
-{
-    // Keep retries short to avoid stalling the main loop.  The original
-    // 20 × 25 ms (500 ms worst-case) caused 50-60 ms gaps in INA230 power
-    // readings and other time-critical polling.  3 × 5 ms (15 ms max) is
-    // enough for transient BLE controller congestion; sustained congestion
-    // simply drops the notification — telemetry is best-effort anyway.
-    static constexpr int MAX_RETRIES = 3;
-    static constexpr int RETRY_DELAY_MS = 5;
+// #524: the retry budget is now the CALLER's choice, because the two kinds of
+// traffic want opposite things.
+//
+// BEST-EFFORT (telemetry, scan results, cal status): losing a frame is fine —
+// another one is along in a moment — but stalling the main loop is not. A 500 ms
+// retry budget used to blow 50-60 ms holes in INA230 polling and other
+// time-critical work, which is why this was cut to 3 x 5 ms.
+//
+// RELIABLE (file chunks): a dropped chunk is LOST DATA. Applying the best-effort
+// policy to a download meant chunks really were dropped under congestion (the
+// "~50% data loss" the old code fought), so the download loop compensated with a
+// fixed 30 ms delay per chunk to keep the queue too shallow for the drop path to
+// fire — capping transfers at ~16 kB/s and leaving the radio idle ~90% of the
+// time. We were throttling the transfer to hide a data-loss bug instead of fixing
+// it. Waiting is safe here: the OC pauses I2S ingest and I2C service for the whole
+// transfer (beginPhoneIO), so there is no time-critical polling to protect.
+static constexpr int NOTIFY_BEST_EFFORT_RETRIES  = 3;
+static constexpr int NOTIFY_BEST_EFFORT_DELAY_MS = 5;
+static constexpr int NOTIFY_RELIABLE_RETRIES     = 250;  // up to ~500 ms of backpressure
+static constexpr int NOTIFY_RELIABLE_DELAY_MS    = 2;
 
-    for (int attempt = 0; attempt < MAX_RETRIES; attempt++)
+static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
+                       const uint8_t* data, size_t len,
+                       int max_retries = NOTIFY_BEST_EFFORT_RETRIES,
+                       int retry_delay_ms = NOTIFY_BEST_EFFORT_DELAY_MS)
+{
+    for (int attempt = 0; attempt < max_retries; attempt++)
     {
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
         if (!om)
         {
             // Out of mbufs — wait for BLE controller to drain and retry
-            if (attempt < MAX_RETRIES - 1)
+            if (attempt < max_retries - 1)
             {
-                vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+                vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));
                 continue;
             }
             ESP_LOGE("BLE", "ble_hs_mbuf_from_flat failed after %d retries (len=%u)",
-                     MAX_RETRIES, (unsigned)len);
+                     max_retries, (unsigned)len);
             return BLE_HS_ENOMEM;
         }
 
@@ -977,13 +1017,13 @@ static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
         if (rc == BLE_HS_ENOMEM)
         {
             // Controller queue full — wait and retry
-            if (attempt < MAX_RETRIES - 1)
+            if (attempt < max_retries - 1)
             {
-                vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+                vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));
                 continue;
             }
             ESP_LOGE("BLE", "ble_gatts_notify_custom failed after %d retries, rc=%d",
-                     MAX_RETRIES, rc);
+                     max_retries, rc);
         }
         if (rc != 0 && rc != BLE_HS_ENOMEM)
         {
@@ -1247,10 +1287,10 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
     }
 }
 
-void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
+bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
                                    size_t len, bool eof)
 {
-    if (!device_connected_) return;
+    if (!device_connected_) return false;
 
     // Build chunk packet: [offset(4)][length(2)][flags(1)][data(N)]
     const size_t header_size = 7;
@@ -1286,12 +1326,19 @@ void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
         memcpy(chunk_buffer_ + header_size, data, len);
     }
 
-    // Send via BLE notification
-    int rc = notify_data(conn_handle_, file_transfer_val_handle_,
-                         chunk_buffer_, packet_size);
+    // #524: RELIABLE budget — wait for the controller to drain rather than drop.
+    // A dropped file chunk is lost data, unlike a dropped telemetry frame.
+    const int rc = notify_data(conn_handle_, file_transfer_val_handle_,
+                               chunk_buffer_, packet_size,
+                               NOTIFY_RELIABLE_RETRIES, NOTIFY_RELIABLE_DELAY_MS);
     if (rc != 0)
     {
-        ESP_LOGW(BLE_TAG, "File chunk notify failed, rc=%d", rc);
+        // Report it. The caller must abort the transfer rather than carry on and
+        // hand the app a file with a hole in it.
+        ESP_LOGW(BLE_TAG, "File chunk notify FAILED after full backpressure, rc=%d "
+                          "(offset=%lu len=%u)",
+                 rc, (unsigned long)offset, (unsigned)len);
+        return false;
     }
 
     // Minimal debug: only log first and last chunks
@@ -1300,6 +1347,7 @@ void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
         ESP_LOGI(BLE_TAG, "Chunk offset=%lu, len=%u, eof=%s",
                  (unsigned long)offset, (unsigned)len, eof ? "true" : "false");
     }
+    return true;
 }
 
 // ============================================================================

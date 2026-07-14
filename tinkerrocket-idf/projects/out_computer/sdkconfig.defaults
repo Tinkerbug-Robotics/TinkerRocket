@@ -9,6 +9,19 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 
+# (#524) Deepen the mbuf pool used to queue notifications. A file-transfer chunk is
+# ~509 bytes and chains several blocks, so at the IDF defaults (MSYS_1 12x256,
+# MSYS_2 24x320) only a handful of notifications can be in flight before
+# ble_hs_mbuf_from_flat() returns NULL. That shallow pool is the congestion the old
+# fixed 30 ms per-chunk delay was dodging.
+#
+# Now that sendFileChunk applies real backpressure instead of dropping, a shallow
+# pool no longer loses data — it just makes us wait. A deeper one lets several
+# notifications ride each connection event, which is where the throughput is.
+# Cost is ~13 KB of heap; the OC has ~159 KB free.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48
+
 # === POWER MANAGEMENT ===
 # Compiled in but only activated at runtime during low-power mode
 CONFIG_PM_ENABLE=y
