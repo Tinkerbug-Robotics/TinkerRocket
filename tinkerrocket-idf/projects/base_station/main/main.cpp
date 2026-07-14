@@ -9,6 +9,7 @@
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include <esp_vfs_fat.h>
 #include <esp_spiffs.h>
+#include <nvs_flash.h>            // nvs_flash_init — must run before any Preferences use (#500)
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
 #include <driver/spi_common.h>
@@ -2847,6 +2848,24 @@ static void serviceAutoAcquire()
 
 static void setup_bs()
 {
+    // NVS first — before BLE/LoRa and before any Preferences use (#500).
+    // The BS was missing the block OC/FC have always had, so nvs_open()
+    // returned ESP_ERR_NVS_NOT_INITIALIZED: every Preferences read fell
+    // back to the caller's default and every write no-op'd, silently. The
+    // PHY couldn't cache its RF calibration either, forcing a full recal
+    // on every boot.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        nvs_flash_erase();
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "[NVS] nvs_flash_init failed: %s — settings will NOT persist",
+                 esp_err_to_name(nvs_err));
+    }
+
     delay(500);
     ESP_LOGI(TAG, "======================================");
     ESP_LOGI(TAG, "  TinkerRocket Base Station");
