@@ -294,6 +294,16 @@ private:
     // Set by the OTA_FINISH handler after the ready_to_boot notification
     // flushes so the iOS app sees the new partition selection.
     uint32_t ota_pending_restart_at_ms_ = 0;
+
+    // #503: deferred connection-parameter request. Firing it from the connect
+    // callback collided with iOS's own connection-update procedure (bench:
+    // status=554 = HCI 0x2A "different transaction collision"). Let the peer go
+    // first, then ask — and retry if we still lose the race.
+    uint32_t conn_param_due_ms_   = 0;   // 0 = nothing scheduled
+    uint8_t  conn_param_attempts_ = 0;
+    static constexpr uint32_t kConnParamDelayMs = 1000;  // let iOS settle the link first
+    static constexpr uint32_t kConnParamRetryMs = 750;
+    static constexpr uint8_t  kConnParamMaxAttempts = 3;
     // Throttle the per-chunk "writing" status notifications. Updated on
     // every successful chunk; we notify at most ~2 Hz so the BLE notify
     // queue isn't saturated mid-flash.
@@ -349,6 +359,10 @@ private:
     void onConnect(uint16_t conn_handle, const struct ble_gap_conn_desc* desc);
     void onDisconnect(uint16_t conn_handle, int reason);
     void onMtuChanged(uint16_t conn_handle, uint16_t mtu);
+    // #503: connection-parameter negotiation. Deferred out of the connect
+    // callback so it doesn't collide with the peer's own update procedure.
+    void requestConnParams();
+    void onConnParamsUpdated(uint16_t conn_handle, int status);
     void onCommandWrite(const uint8_t* data, size_t length);
 
     // Start/restart BLE advertising

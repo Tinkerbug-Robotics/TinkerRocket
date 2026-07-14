@@ -208,8 +208,14 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         break;
 
     case BLE_GAP_EVENT_CONN_UPDATE:
-        ESP_LOGI(BLE_TAG, "Connection parameters updated, status=%d",
-                 event->conn_update.status);
+        // #503: this used to log an unconditional "Connection parameters updated,
+        // status=%d" at INFO — which read as success even when it wasn't (the
+        // 2026-07-14 bench logged status=554 and nobody noticed), and which never
+        // said what interval we actually ENDED UP with. status=0 only means the
+        // procedure completed; the peer is free to counter with its own values,
+        // and iOS always will. Report the negotiated interval, not the request.
+        self->onConnParamsUpdated(event->conn_update.conn_handle,
+                                  event->conn_update.status);
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -248,24 +254,112 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
 
-    // Request fast connection parameters from iOS for high-throughput transfer.
+    // #503: do NOT request the parameter update from inside the connect callback.
+    // iOS runs its OWN connection-update procedure immediately after connecting,
+    // and firing ours into the middle of it collides: the 2026-07-14 bench logged
+    // status=554, which is NimBLE's HCI base (0x200) + 0x2A = "Different
+    // Transaction Collision". Schedule it instead and let the peer go first;
+    // loop() fires it once the link has settled.
+    conn_param_attempts_ = 0;
+    conn_param_due_ms_   = (uint32_t)millis() + kConnParamDelayMs;
+}
+
+// #503: Apple's Accessory Design Guidelines are strict about what a peripheral may
+// ask for, and iOS rejects anything outside them. We were asking for 7.5 ms, which
+// is below iOS's 15 ms floor — so even without the collision it could never have
+// been granted, and the "Requested fast connection parameters (7.5-20ms)" log line
+// was describing something that was never going to happen.
+//
+//   interval min  >= 15 ms                        -> 0x0C (12 * 1.25 ms)
+//   interval max  >= interval min + 15 ms         -> 0x18 (24 * 1.25 ms = 30 ms)
+//   slave latency <= 30                           -> 0
+//   supervision timeout: <= 6 s, and greater than
+//     interval_max * (latency + 1) * 3 = 90 ms    -> 2 s (200 * 10 ms)
+void TR_BLE_To_APP::requestConnParams()
+{
+    if (!device_connected_) { conn_param_due_ms_ = 0; return; }
+
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x06;              // 7.5ms  (units of 1.25ms)
-    params.itvl_max = 0x10;              // 20ms   (units of 1.25ms)
+    params.itvl_min = 0x0C;              // 15 ms — iOS's minimum; asking lower is refused
+    params.itvl_max = 0x18;              // 30 ms — must be >= min + 15 ms
     params.latency = 0;                  // No slave latency
-    params.supervision_timeout = 200;    // 2 seconds (units of 10ms)
+    params.supervision_timeout = 200;    // 2 seconds (units of 10 ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
 
-    int rc = ble_gap_update_params(conn_handle, &params);
+    conn_param_attempts_++;
+    const int rc = ble_gap_update_params(conn_handle_, &params);
     if (rc == 0)
     {
-        ESP_LOGI(BLE_TAG, "Requested fast connection parameters (7.5-20ms interval)");
+        ESP_LOGI(BLE_TAG, "Requested connection parameters (15-30 ms interval), attempt %u",
+                 (unsigned)conn_param_attempts_);
+        conn_param_due_ms_ = 0;   // wait for the CONN_UPDATE event
     }
     else
     {
-        ESP_LOGW(BLE_TAG, "Connection param update request failed, rc=%d", rc);
+        ESP_LOGW(BLE_TAG, "Connection param update request failed to send, rc=%d", rc);
+        conn_param_due_ms_ = (conn_param_attempts_ < kConnParamMaxAttempts)
+                                 ? (uint32_t)millis() + kConnParamRetryMs
+                                 : 0;
     }
+}
+
+void TR_BLE_To_APP::onConnParamsUpdated(uint16_t conn_handle, int status)
+{
+    // Report what we ACTUALLY got. status==0 means the procedure completed, not
+    // that the peer honoured our request — iOS routinely counters with its own
+    // values, so the negotiated interval is the only number worth logging.
+    struct ble_gap_conn_desc desc;
+    const bool have_desc = (ble_gap_conn_find(conn_handle, &desc) == 0);
+
+    if (status == 0)
+    {
+        if (have_desc)
+        {
+            ESP_LOGI(BLE_TAG, "Connection parameters now: interval=%.2f ms, latency=%u, timeout=%u ms",
+                     (double)desc.conn_itvl * 1.25, (unsigned)desc.conn_latency,
+                     (unsigned)desc.supervision_timeout * 10);
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "Connection parameters updated (peer accepted)");
+        }
+        conn_param_due_ms_ = 0;
+        return;
+    }
+
+    // Decode the failure instead of printing a bare number. NimBLE returns HCI
+    // errors offset by BLE_HS_ERR_HCI_BASE (0x200), which is why the raw value
+    // looks like a nonsense "554".
+    const char* why = "unknown";
+    bool collision = false;
+    if (status >= BLE_HS_ERR_HCI_BASE && status < BLE_HS_ERR_HCI_BASE + 0x100)
+    {
+        switch (status - BLE_HS_ERR_HCI_BASE)
+        {
+            case 0x0C: why = "command disallowed"; break;
+            case 0x1E: why = "invalid LMP parameters"; break;
+            case 0x23: why = "LMP/LL transaction collision"; collision = true; break;
+            case 0x2A: why = "different transaction collision"; collision = true; break;
+            case 0x3B: why = "unacceptable connection parameters"; break;
+            default: break;
+        }
+    }
+
+    const bool retry = collision && (conn_param_attempts_ < kConnParamMaxAttempts);
+    ESP_LOGW(BLE_TAG, "Connection param update REJECTED: status=%d (HCI 0x%02X: %s)%s",
+             status,
+             (status >= BLE_HS_ERR_HCI_BASE) ? (unsigned)(status - BLE_HS_ERR_HCI_BASE) : 0u,
+             why,
+             retry ? " — retrying" : "");
+
+    if (have_desc)
+    {
+        ESP_LOGW(BLE_TAG, "  link stays at interval=%.2f ms (peer's choice)",
+                 (double)desc.conn_itvl * 1.25);
+    }
+
+    conn_param_due_ms_ = retry ? ((uint32_t)millis() + kConnParamRetryMs) : 0;
 }
 
 void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
@@ -274,6 +368,11 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     negotiated_mtu_ = 0;
     telem_notify_subscribed_ = false;
     conn_handle_ = 0;
+    // #503: cancel any pending/retrying parameter request — it belongs to the
+    // connection that just went away, and firing it on the next one's handle
+    // would be wrong.
+    conn_param_due_ms_ = 0;
+    conn_param_attempts_ = 0;
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
 
     // Restart advertising so new devices can connect
@@ -712,6 +811,21 @@ bool TR_BLE_To_APP::begin()
 
 void TR_BLE_To_APP::loop()
 {
+    // #503: deferred connection-parameter request. Fired from here, on the main
+    // loop, rather than from the connect callback — so it lands AFTER iOS has
+    // finished its own connection-update procedure instead of colliding with it.
+    if (conn_param_due_ms_ != 0 && device_connected_)
+    {
+        const uint32_t now = (uint32_t)millis();
+        // Same wraparound tolerance as the OTA timer below.
+        const bool elapsed = (now >= conn_param_due_ms_) ||
+                             ((conn_param_due_ms_ - now) > 0x7FFFFFFFu);
+        if (elapsed)
+        {
+            requestConnParams();
+        }
+    }
+
     // BLE stack handles events via callbacks on the NimBLE host task.
     // Only OTA's deferred-restart watchdog needs poll-style handling here.
     if (ota_pending_restart_at_ms_ != 0)
