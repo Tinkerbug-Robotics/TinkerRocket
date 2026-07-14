@@ -2,11 +2,22 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include "TR_GpsInsEKF.h"
+#include "TR_GeoMag.h"
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(_ekf, m) {
     m.doc() = "GPS/INS Fusion EKF (shared library: TR_GpsInsEKF)";
+
+    // WMM2025 declination — the same routine the flight computer calls once at
+    // EKF init (main.cpp) before setDeclination().  Exposed so the replay can
+    // reproduce the firmware's TRUE-north heading reference exactly rather than
+    // approximating it: without it the mag update converges to MAGNETIC north
+    // and the whole attitude carries a constant declination-sized yaw offset.
+    m.def("declination_rad", &TR_GeoMag::declinationRad,
+          py::arg("lat_rad"), py::arg("lon_rad"), py::arg("alt_m"),
+          py::arg("decimal_year"),
+          "Magnetic declination in radians (east-positive), WMM2025.");
 
     // Expose under the old Python names for backward-compatibility
     py::class_<EkfIMUData>(m, "IMUData")
@@ -74,6 +85,8 @@ PYBIND11_MODULE(_ekf, m) {
              py::arg("lat_rad"), py::arg("lon_rad"), py::arg("alt_m"))
         .def("set_velocity", &GpsInsEKF::setVelocity,
              py::arg("vn"), py::arg("ve"), py::arg("vd"))
+        .def("set_declination", &GpsInsEKF::setDeclination,
+             py::arg("decl_rad"))
         .def("set_gps_noise_scale", &GpsInsEKF::setGpsNoiseScale,
              py::arg("scale"))
         .def("get_gps_noise_scale", &GpsInsEKF::getGpsNoiseScale)

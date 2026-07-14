@@ -34,17 +34,23 @@ ext_modules = [
     ),
 ]
 
-# EKF: build from shared TR_GpsInsEKF library
+# EKF: build from shared TR_GpsInsEKF library.
+# TR_GeoMag rides along: the firmware feeds the EKF a WMM2025 declination at init,
+# so a replay that cannot compute the same declination cannot reproduce the
+# firmware's heading (it converges to magnetic north instead of true north).
 ekf_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GpsInsEKF")
+geomag_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GeoMag")
 if os.path.exists("cpp/ekf/ekf_bindings.cpp") and os.path.exists(ekf_lib_dir):
     ext_modules.append(
         Pybind11Extension(
             "tinkerrocket_sim._ekf",
             [
                 os.path.join(ekf_lib_dir, "TR_GpsInsEKF.cpp"),
+                os.path.join(geomag_lib_dir, "TR_GeoMag.cpp"),
                 "cpp/ekf/ekf_bindings.cpp",
             ],
-            include_dirs=[SHIM_DIR, ekf_lib_dir, "cpp/ekf", "cpp/common"],
+            include_dirs=[SHIM_DIR, ekf_lib_dir, geomag_lib_dir,
+                          "cpp/ekf", "cpp/common"],
             cxx_std=17,
         ),
     )
@@ -53,8 +59,16 @@ if os.path.exists("cpp/ekf/ekf_bindings.cpp") and os.path.exists(ekf_lib_dir):
 # submodule is not initialized, skip the _guidance pybind11 extension and
 # the sim still builds + tests run for everything else (PID, EKF, mixer).
 # No compat shim needed — the library is framework-neutral.
+#
+# TR_SKIP_GUIDANCE=1 also skips it when the submodule IS present but its bindings
+# are out of sync with it (e.g. a work-in-progress checkout where the binding calls
+# an API the library no longer exposes). Without this escape hatch a stale guidance
+# binding takes the whole package down with it — including the EKF extension the
+# flight-replay tooling depends on, which has nothing to do with guidance.
 guidance_src = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN", "TR_GuidancePN.cpp")
-if os.path.exists("cpp/guidance/guidance_bindings.cpp") and os.path.exists(guidance_src):
+if (os.environ.get("TR_SKIP_GUIDANCE") not in ("1", "true", "TRUE")
+        and os.path.exists("cpp/guidance/guidance_bindings.cpp")
+        and os.path.exists(guidance_src)):
     guidance_lib_dir = os.path.join(SHARED_LIB_DIR, "TR_GuidancePN")
     ext_modules.append(
         Pybind11Extension(

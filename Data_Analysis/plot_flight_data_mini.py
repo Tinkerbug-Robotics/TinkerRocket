@@ -500,7 +500,19 @@ def parse_binary_file(filepath):
                 q1 = fields[2] / 10000.0
                 q2 = fields[3] / 10000.0
                 q3 = fields[4] / 10000.0
-                # Derive Euler angles from quaternion (ZYX convention)
+                # Derive Euler angles from quaternion (ZYX convention).
+                #
+                # #514 — WARNING, these are NOT the same "roll" the iOS app exports.
+                # Here `roll` is the ZYX-EULER roll, so roll/pitch/yaw below ARE a
+                # consistent triple. The app's CSV instead writes the BODY-Z AZIMUTH
+                # as "Roll" (SensorConverter.swift: -atan2(z_east, z_north), chosen to
+                # match the FC roll controller and avoid gimbal lock) while keeping
+                # ZYX pitch/yaw — so the app's Roll/Pitch/Yaw is NOT a valid Euler
+                # triple, and its "Roll" column will not match this one.
+                #
+                # Never compare this roll against the CSV's, and never mix the two.
+                # For anything attitude-critical use q0..q3, which are carried through
+                # below and are unambiguous.
                 import math as _m
                 roll  = _m.atan2(2*(q0*q1 + q2*q3), 1 - 2*(q1*q1 + q2*q2))
                 pitch = _m.asin(max(-1, min(1, 2*(q0*q2 - q3*q1))))

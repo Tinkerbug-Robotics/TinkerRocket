@@ -18,7 +18,7 @@ from plot_flight_data_mini import (parse_binary_file, get_array,
                                    pressure_to_altitude)
 
 from tinkerrocket_sim._ekf import (GpsInsEKF, IMUData, GNSSDataLLA,
-                                    MagData, BaroData)
+                                    MagData, BaroData, declination_rad)
 
 G_MS2 = 9.80665
 DEG2RAD = math.pi / 180.0
@@ -26,6 +26,102 @@ RAD2DEG = 180.0 / math.pi
 
 # Low-g saturation threshold: ±(16 - 0.5)g = ±15.5g
 LOW_G_SAT_THRESH = 15.5 * G_MS2
+
+
+# Firmware pad heading (flight_computer/main/config.h: PAD_HEADING_DEG).
+PAD_HEADING_DEG = 0.0
+
+# Firmware EKF decimation (flight_computer/main/config.h: EKF_DECIMATION).
+# The flight loop logs every IMU sample but only runs the EKF every Nth tick,
+# so the replay must decimate too or it over-applies every correction.
+EKF_DECIMATION = 2
+
+# RocketState::INFLIGHT (TR_RocketComputerTypes/RocketComputerTypes.h).
+# INITIALIZATION=0, READY=1, PRELAUNCH=2, INFLIGHT=3, LANDED=4, MAG_CALIBRATION=5
+ROCKET_STATE_INFLIGHT = 3
+
+
+def _decimal_year(gnss_rec):
+    """Decimal year from a GNSS fix, matching the firmware's day-of-year math
+    (flight_computer/main.cpp, at EKF init).  Falls back to the WMM2025 epoch
+    when the log carries no plausible date — same guard the firmware applies."""
+    yr = int(gnss_rec.get("year", 0) or 0)
+    if not (2020 <= yr <= 2035):
+        return 2025.0                       # firmware falls back to a constant
+    mo = max(1, min(12, int(gnss_rec.get("month", 1) or 1)))
+    day = int(gnss_rec.get("day", 1) or 1)
+    mdays = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    doy = day + sum(mdays[:mo - 1])
+    leap = (yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0))
+    if leap and mo > 2:
+        doy += 1
+    return yr + (doy - 1) / (366.0 if leap else 365.0)
+
+
+def _nearest_nonsensor(records, t_us):
+    """The NonSensor record closest in time to t_us, skipping absent (zero)
+    quaternions.  Returns None if the log carries no usable NonSensor state."""
+    ns = records.get("NonSensor") or []
+    best, best_dt = None, None
+    for r in ns:
+        if (r["q0"]**2 + r["q1"]**2 + r["q2"]**2 + r["q3"]**2) < 0.25:
+            continue                        # zeroed quaternion = "not populated"
+        dt = abs(r["time_us"] - t_us)
+        if best_dt is None or dt < best_dt:
+            best, best_dt = r, dt
+    return best
+
+
+def _first_logged_quat(records, t_us):
+    """The firmware's OWN attitude at log start — the correct seed for a replay
+    (see the long note at the init site).  Normalised; None on a legacy log."""
+    r = _nearest_nonsensor(records, t_us)
+    if r is None:
+        return None
+    q = [r["q0"], r["q1"], r["q2"], r["q3"]]
+    n = math.sqrt(sum(c * c for c in q))
+    return tuple(c / n for c in q)
+
+
+def _first_logged_vel(records, t_us):
+    """The firmware's OWN NED velocity at log start.  The log stores ENU
+    (e/n/u); the EKF wants NED.  None on a legacy log."""
+    r = _nearest_nonsensor(records, t_us)
+    if r is None:
+        return None
+    return (r["n_vel"], r["e_vel"], -r["u_vel"])
+
+
+def _quat_from_accel_heading(acc_x_frd, acc_y_frd, acc_z_frd, heading_rad):
+    """Body→NED quaternion from measured gravity + a known pad heading.
+
+    A line-for-line port of the firmware's quatFromAccelHeading()
+    (components/TR_Orientation/TR_Orientation.cpp). The FC calls this immediately
+    after ekf.init() to coarse-align the pad attitude, because GpsInsEKF::initCore
+    hard-codes a nose-up-vertical quaternion rather than deriving one from the
+    sensors. A replay that omits this does not start where the vehicle started.
+
+    Keep in step with the C++ — including the 80° roll gate, which exists because
+    roll is ill-conditioned near vertical (the Y/Z accel components vanish there).
+    """
+    g_mag = math.sqrt(acc_x_frd**2 + acc_y_frd**2 + acc_z_frd**2)
+    if g_mag < 0.1:
+        g_mag = 9.807
+
+    sx = max(-1.0, min(1.0, acc_x_frd / g_mag))
+    pitch_rad = math.asin(sx)
+
+    roll_rad = 0.0
+    if abs(pitch_rad) < math.radians(80.0):
+        roll_rad = math.atan2(-acc_y_frd, -acc_z_frd)
+
+    cy, sy = math.cos(heading_rad * 0.5), math.sin(heading_rad * 0.5)
+    cp, sp = math.cos(pitch_rad * 0.5), math.sin(pitch_rad * 0.5)
+    cr, sr = math.cos(roll_rad * 0.5), math.sin(roll_rad * 0.5)
+    return (cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy)
 
 
 def build_event_list(records):
@@ -46,6 +142,11 @@ def build_event_list(records):
         events.append((r["time_us"], "mag", r))
     for r in records.get("IIS2MDC", []):
         events.append((r["time_us"], "mag", r))
+    # #514: NonSensor carries the firmware's OWN rocket_state and apogee voters.
+    # The AHRS accel gate keys off those, so the replay must follow the logged
+    # state rather than re-deriving it from an accel heuristic (see the gate).
+    for r in records.get("NonSensor", []):
+        events.append((r["time_us"], "nonsensor", r))
     events.sort(key=lambda e: e[0])
     return events
 
@@ -119,6 +220,12 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     # ---- Initialize EKF ----
     ekf = GpsInsEKF()
     ekf_initialized = False
+    ekf_decim_ctr = 0
+    # Firmware flight state, tracked from the log (drives the AHRS accel gate).
+    # Default to a non-INFLIGHT state so a log with no NonSensor records behaves
+    # like the pad — AHRS on — rather than silently disabling the gravity update.
+    log_rocket_state = ROCKET_STATE_INFLIGHT - 1
+    log_apogee_latched = False
 
     # Track latest sensor data for EKF
     latest_gnss = None
@@ -195,6 +302,12 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
         elif etype == "mag":
             latest_mag = rec
+
+        elif etype == "nonsensor":
+            # Track the firmware's own flight state — the AHRS gate reads it.
+            log_rocket_state = rec["rocket_state"]
+            if rec["alt_apogee"] or rec["vel_apogee"]:
+                log_apogee_latched = True
 
         elif etype == "baro":
             # Collect pad baro samples for reference pressure (first 20 samples)
@@ -279,28 +392,110 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
             if not ekf_initialized:
                 ekf.init_lla(imu_d, gnss_d, mag_d)
-                # FIDELITY FIX: pad attitude (INCLUDING heading) now comes from
-                # init_lla, which derives heading from the magnetometer — exactly
-                # as the firmware does. Previously this overrode it with yaw=0
-                # ("we don't know actual heading"), which discarded the mag-based
-                # pad heading and made the replay structurally unable to reproduce
-                # the firmware's rail-heading error (the root cause of the guided
-                # miss). With this removed the replay starts where the vehicle
-                # actually started.
+
+                # GpsInsEKF::initCore does NOT derive the attitude from the
+                # sensors — it hard-codes the quaternion to nose-up vertical
+                # (0.707, 0, 0.707, 0), which the firmware then immediately
+                # overwrites (quatFromAccelHeading + setQuaternion). So the
+                # attitude after init_lla is a placeholder, not an estimate, and
+                # something must overwrite it here too. (An older comment in this
+                # spot claimed the pad attitude "comes from init_lla ... exactly
+                # as the firmware does". It does not.)
                 ekf_initialized = True
-                q = ekf.get_quaternion()
-                yaw0 = math.degrees(math.atan2(2*(q[0]*q[3]+q[1]*q[2]),
-                                               1 - 2*(q[2]**2 + q[3]**2)))
-                print(f"  EKF initialized at t={t_rel:.2f}s  yaw(mag)={yaw0:.0f}°")
+
+                # #514: SEED ATTITUDE FROM THE LOG, not from a re-run of the
+                # firmware's init.
+                #
+                # The firmware initializes its EKF the moment it gets a good GNSS
+                # fix — which is BEFORE logging starts. By the time the first
+                # record lands, its filter has already been running and converging
+                # for an unlogged stretch of time. So re-running the coarse
+                # alignment on the first LOGGED sample does not reproduce the
+                # firmware's attitude at that instant; it reproduces the attitude
+                # the firmware had at an earlier moment we have no record of.
+                #
+                # Measured: that leaves a flat ~11° pedestal from t=0 that no
+                # amount of downstream fidelity work can remove, because the
+                # information simply is not in the file.
+                #
+                # The log DOES carry the firmware's own attitude (NonSensorData
+                # q0..q3). Seeding from it is the correct initial condition — the
+                # same move as seeding position from GNSS — and it is not "fitting
+                # to the answer": only t=0 is seeded, and every sample after it is
+                # the replay's own integration, which is exactly what the fidelity
+                # check then scores.
+                q_seed = _first_logged_quat(records, time_us)
+                if q_seed is not None:
+                    ekf.set_quaternion(*q_seed)
+                    align_src = "seeded from the logged quaternion"
+                else:
+                    # Legacy log with no quaternion: fall back to the firmware's
+                    # coarse alignment and accept the pre-log-history error.
+                    q_seed = _quat_from_accel_heading(
+                        imu_d.acc_x, imu_d.acc_y, imu_d.acc_z,
+                        math.radians(PAD_HEADING_DEG))
+                    ekf.set_quaternion(*q_seed)
+                    align_src = ("coarse-aligned from accel (legacy log: no "
+                                 "logged quaternion to seed from)")
+
+                # Velocity is logged too; seed it for the same reason.
+                v_seed = _first_logged_vel(records, time_us)
+                if v_seed is not None:
+                    ekf.set_velocity(*v_seed)
+
+                # #514: reproduce the firmware's MAGNETIC DECLINATION.
+                #
+                # The mag update is heading-only, and it steers toward
+                # magnetic north + declination. The firmware evaluates WMM2025
+                # once at init (TR_GeoMag::declinationRad on the averaged pad
+                # fix + GPS date) and hands it to setDeclination, so its heading
+                # is TRUE north. A replay that skips this converges to MAGNETIC
+                # north instead, leaving the attitude carrying a yaw offset the
+                # size of the local declination (−11.9° here — big enough to matter,
+                # and it was not being applied at all).
+                #
+                # Same routine as the firmware, so this is exact, not an estimate.
+                decl_rad = declination_rad(
+                    gnss_d.lat_rad, gnss_d.lon_rad, gnss_d.alt_m,
+                    _decimal_year(latest_gnss))
+                ekf.set_declination(decl_rad)
+
+                print(f"  EKF initialized at t={t_rel:.2f}s  {align_src}, "
+                      f"declination={math.degrees(decl_rad):.2f}°")
                 continue
 
-            # Determine use_ahrs_acc based on flight phase
-            if boost_start and boost_end and apogee_us:
-                in_boost = boost_start <= time_us <= boost_end
-                in_coast = boost_end < time_us <= apogee_us
-                use_ahrs_acc = not (in_boost or in_coast)
-            else:
-                use_ahrs_acc = True  # no flight detected, pad only
+            # #514: match the firmware's EKF DECIMATION (config::EKF_DECIMATION).
+            # The flight loop consumes and logs every IMU sample but only runs the
+            # EKF every Nth tick. Replaying every logged sample fires the AHRS,
+            # mag, GNSS and baro corrections N× more often than the vehicle did,
+            # so the covariance — and therefore every gain — evolves differently.
+            ekf_decim_ctr += 1
+            if ekf_decim_ctr < EKF_DECIMATION:
+                continue
+            ekf_decim_ctr = 0
+
+            # #514: AHRS accel gate — follow the LOGGED flight state.
+            #
+            # Firmware (flight_computer/main.cpp):
+            #     post_apogee   = kinematics.apogee_flag;
+            #     use_ahrs_acc  = (rocket_state != INFLIGHT) || post_apogee;
+            #
+            # This replay used to re-derive the phase from an accel>3g heuristic.
+            # When that heuristic disagreed with the firmware about *when* the
+            # vehicle went INFLIGHT, the replay kept applying the gravity-based
+            # AHRS correction through boost — where accel is 10 g and points
+            # nowhere near gravity — and the attitude got yanked. Measured on
+            # flight_20260615_171305: a 70° divergence appearing right at launch,
+            # on top of an otherwise <2° track.
+            #
+            # rocket_state is logged exactly, so the first term is now exact.
+            # CAVEAT: kinematics.apogee_flag is a 4-voter quorum (vel / alt / gps
+            # / pitch) and only two of those voters reach the log, so post_apogee
+            # is reconstructed as a LATCHED OR of the two that do. It is the one
+            # term here that is still an approximation — logging the master flag
+            # (a spare NSF bit) would make this exact.
+            post_apogee = log_apogee_latched
+            use_ahrs_acc = (log_rocket_state != ROCKET_STATE_INFLIGHT) or post_apogee
 
             ekf.update_lla(use_ahrs_acc, imu_d, gnss_d, mag_d)
             n_imu += 1
@@ -357,6 +552,97 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     cov_pos = np.array(log_cov_pos)
     cov_vel = np.array(log_cov_vel)
     cov_att = np.array(log_cov_att)
+
+    # ── Replay fidelity: does this replay reproduce the FIRMWARE's own EKF? ──
+    #
+    # #514: without this the replay is trusted, never checked. The flight log
+    # already carries the firmware EKF's attitude quaternion (NonSensorData
+    # q0..q3), so we can compare directly instead of inferring — and a replay that
+    # silently drifts from the firmware invalidates every conclusion drawn from it.
+    #
+    # This exists because on 2026-07-14 an unfaithful replay (plus the CSV's
+    # mixed-convention Euler columns) manufactured a 50° "EKF attitude error" that
+    # did not exist — the firmware's real error was 1.4°. The check below would
+    # have caught it immediately.
+    #
+    # Compare with the geodesic angle 2·acos(|q_replay · q_logged|), which is
+    # sign-agnostic (q and -q are the same rotation) and has no Euler conventions
+    # anywhere near it.
+    fidelity = None
+    q_replay = np.array(log_ekf_q)
+    if len(q_replay) and records.get("NonSensor"):
+        ns = records["NonSensor"]
+        t_ns = np.array([r["time_us"] for r in ns], dtype=float)
+        q_ns = np.array([[r["q0"], r["q1"], r["q2"], r["q3"]] for r in ns], dtype=float)
+        n_ns = np.linalg.norm(q_ns, axis=1)
+        keep = n_ns > 0.5                      # a zero quaternion means "absent"
+        t_ns, q_ns = t_ns[keep], q_ns[keep] / n_ns[keep][:, None]
+        if len(t_ns) > 1:
+            t_r = np.array(log_time_us, dtype=float)
+            # Interpolate the LOGGED quaternion onto the replay's timestamps.
+            # Component-wise interp is fine here: the log rate (~490 Hz) is far
+            # above the attitude bandwidth, so successive quaternions are nearly
+            # parallel. Hemisphere-align first so a sign flip can't corrupt it.
+            qs = q_ns.copy()
+            flip = np.sum(qs[1:] * qs[:-1], axis=1) < 0
+            qs[1:][np.cumsum(flip) % 2 == 1] *= -1
+            q_log = np.stack([np.interp(t_r, t_ns, qs[:, k]) for k in range(4)], 1)
+            q_log /= np.linalg.norm(q_log, axis=1)[:, None]
+            qr = q_replay / np.linalg.norm(q_replay, axis=1)[:, None]
+            dot = np.abs(np.sum(qr * q_log, axis=1)).clip(0.0, 1.0)
+            div = np.degrees(2.0 * np.arccos(dot))
+            inside = (t_r >= t_ns[0]) & (t_r <= t_ns[-1])
+            if inside.any():
+                div = div[inside]
+                fidelity = {
+                    "mean_deg": float(div.mean()),
+                    "max_deg": float(div.max()),
+                    "p95_deg": float(np.percentile(div, 95)),
+                    "n": int(div.size),
+                }
+                ok = fidelity["p95_deg"] <= 5.0
+                print("\n  ── Replay fidelity vs the FIRMWARE's logged quaternion ──")
+                print(f"     mean {fidelity['mean_deg']:6.2f}°   "
+                      f"p95 {fidelity['p95_deg']:6.2f}°   "
+                      f"max {fidelity['max_deg']:6.2f}°   (n={fidelity['n']})")
+                # Divergence-vs-time is the diagnostic, not the summary: a replay
+                # that is wrong at t=0 and stays wrong has an init/frame bug, one
+                # that starts at 0 and grows has an integration/rate/bias bug, and
+                # one that steps at a phase boundary has a gate bug.
+                t_in = (t_r[inside] - t_r[inside][0]) / 1e6
+                print("     divergence over time:")
+                for f in (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0):
+                    i = min(int(f * (div.size - 1)), div.size - 1)
+                    print(f"       t={t_in[i]:7.2f}s  {div[i]:7.2f}°")
+                if ok:
+                    print("     PASS — the replay reproduces the firmware EKF; "
+                          "conclusions drawn from it are meaningful.")
+                else:
+                    print("     *** FAIL *** — this replay does NOT reproduce the "
+                          "firmware EKF. Do not draw conclusions from it.")
+                    print()
+                    print("     SUSPECT EKF VERSION SKEW FIRST. This tool compiles "
+                          "TR_GpsInsEKF.cpp at *your current checkout*,")
+                    print("     but the log was written by whatever firmware was "
+                          "flashed that day. If the EKF changed in between,")
+                    print("     the two filters are simply not the same filter and "
+                          "no amount of replay fidelity can reconcile them.")
+                    print("     The flight log records no firmware SHA, so this "
+                          "cannot be detected automatically (see #515).")
+                    print("     Check:  git log --since=<log date> -- "
+                          "tinkerrocket-idf/components/TR_GpsInsEKF/")
+                    print("     A worked example: the 2026-06-15 logs predate #243, "
+                          "which REPLACED the magnetometer heading")
+                    print("     fusion and added WMM declination — so their heading "
+                          "cannot be reproduced by a post-#243 EKF.")
+                    print()
+                    print("     Only once versions match are these worth chasing: "
+                          "the AHRS phase gate, GNSS velocity,")
+                    print("     EKF decimation, or units (EkfIMUData gyro is DEG/S, "
+                          "not rad/s).")
+    if fidelity is None:
+        print("\n  ── Replay fidelity: no logged quaternion in this file "
+              "(legacy log) — replay is UNVERIFIED ──")
 
     t_gnss = (np.array(gnss_log_time) - t0_us) / 1e6
     g_lat = np.array(gnss_log_lat)
@@ -533,6 +819,9 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     print(f"\nPlots saved to {plot_dir}/")
     return {
         "align_baro": align_baro,
+        # #514: None for legacy logs (no quaternion). A FAIL here means every other
+        # number in this dict is describing a replay, not the firmware.
+        "fidelity": fidelity,
         "t_ekf": t_ekf,
         "ekf_u": ekf_u,
         "t_gnss": t_gnss,

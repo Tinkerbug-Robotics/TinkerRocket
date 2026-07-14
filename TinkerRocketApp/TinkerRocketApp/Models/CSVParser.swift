@@ -30,9 +30,16 @@ struct FlightCSVData {
             "Low-G Acceleration X (m/s2)", "Low-G Acceleration Y (m/s2)", "Low-G Acceleration Z (m/s2)",
             "High-G Acceleration X (m/s2)", "High-G Acceleration Y (m/s2)", "High-G Acceleration Z (m/s2)"
         ]),
+        // #514: the quaternion is the only reconstructable attitude — Roll is the
+        // body-Z azimuth while Pitch/Yaw are ZYX-Euler, so those three are NOT a
+        // valid Euler triple. The old unqualified names are kept so CSVs exported
+        // before #514 still group correctly.
         ("Rotation", [
             "Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
-            "Roll (deg)", "Pitch (deg)", "Yaw (deg)", "Roll Command (deg)"
+            "Quat q0", "Quat q1", "Quat q2", "Quat q3",
+            "Roll (deg, body-Z azimuth)", "Pitch (deg, ZYX Euler)", "Yaw (deg, ZYX Euler)",
+            "Roll (deg)", "Pitch (deg)", "Yaw (deg)",           // pre-#514 exports
+            "Roll Command (deg)"
         ]),
         ("Environment", [
             "Pressure (Pa)", "Barometer Temperature (C)",
