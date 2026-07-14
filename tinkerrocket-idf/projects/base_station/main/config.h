@@ -122,6 +122,19 @@ struct config : board_pins
     // DesignCap at boot to seed the ModelGauge m5 algorithm.
     static constexpr uint16_t BATTERY_DESIGN_MAH = 2800;
 
+    // --- Voltage-based SoC fallback (#501) ---
+    // The BQ27Z746 is a 1S gauge, so its Voltage() IS the cell voltage.
+    static constexpr int   BQ27Z746_CELLS = 1;
+    // Pack internal resistance (Ω) used to back out IR offset from the terminal
+    // voltage. ZERO = compensation DISABLED, which is deliberate: the gauge's CC
+    // Gain (data flash 0x4006) has never been calibrated against a known current,
+    // so its current reading would inject a scaling error rather than remove one.
+    // Set this once CC Gain is calibrated — the path is implemented and tested.
+    static constexpr float BATTERY_INTERNAL_R_OHM = 0.0f;
+    // EMA weight per battery poll (PWR_UPDATE_PERIOD_MS = 2 s) → ~20 s time
+    // constant: rides out LoRa TX current spikes, still tracks a real discharge.
+    static constexpr float SOC_FILTER_ALPHA = 0.1f;
+
     // --- Flight-pack charger (MP2672 on V3; gated by HAS_PACK_CHARGER) ---
     static constexpr uint16_t MP2672_ADDR = 0x4B;
     // Fast-charge current code (REG01 ICC[3:0]): I = FS*(5+code)/20 with

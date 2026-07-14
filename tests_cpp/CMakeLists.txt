@@ -362,6 +362,18 @@ target_include_directories(test_bs_uplink_queue PRIVATE
 target_link_libraries(test_bs_uplink_queue GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_queue)
 
+# ---------- test_bs_battery_soc ----------
+# Host-side test for the base-station voltage-based SoC fallback (#501): the
+# BQ27Z746 reported 0% on a 4.17 V pack because its coulomb counter was never
+# calibrated. bs_battery_soc.h is pure, so the test just adds base_station/main.
+add_executable(test_bs_battery_soc test_bs_battery_soc.cpp)
+target_include_directories(test_bs_battery_soc PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_battery_soc GTest::gtest_main)
+gtest_discover_tests(test_bs_battery_soc)
+
 # ---------- test_ble_command_ring ----------
 # Host-side test for the shared BLE command intake ring (#517): the intake was a
 # single latch, so a back-to-back command burst (the app's ~13-command connect

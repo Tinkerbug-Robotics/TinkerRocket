@@ -31,6 +31,7 @@
 #include "bs_log_policy.h"        // parseSequentialFilename() (#137)
 #include "bs_uplink_policy.h"     // mayTransmitUplink() scan gate (#379)
 #include "bs_uplink_queue.h"      // uplink command FIFO (#502)
+#include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 
 #include <TR_LoRa_Comms.h>
@@ -120,6 +121,10 @@ static float bs_voltage = NAN;
 static float bs_soc = NAN;
 static float bs_current = NAN;
 static float bs_temperature = NAN;
+// #501: true when bs_soc came from the voltage curve rather than the gauge's own
+// coulomb count, because the gauge's SoC failed the plausibility check.
+static bool  bs_soc_estimated = false;
+static bs_battery_soc::Estimator bq_soc_estimator(config::SOC_FILTER_ALPHA);
 static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
@@ -532,9 +537,50 @@ static void updateBattery()
         bq_gauge.update();
         maintainBatteryFets();
         bs_voltage     = bq_gauge.voltage();
-        bs_soc         = bq_gauge.soc();
         bs_current     = bq_gauge.current();
         bs_temperature = bq_gauge.temperature();
+
+        // #501: this gauge reported 0% SoC on a 4.17 V pack, with
+        // RemainingCapacity=0 and FullChargeCapacity ~10x design. Impedance Track
+        // derives all three by integrating current, and this part's CC Gain was
+        // never calibrated (and GAUGE_EN ships at 0), so they are garbage — while
+        // Voltage() is a direct ADC read and is correct. Prefer the gauge when it
+        // is actually believable; otherwise estimate from voltage, which is at
+        // least honest and gives us a low-battery warning.
+        const bool gauge_ok = bs_battery_soc::gaugeSocPlausible(
+            bq_gauge.gaugingEnabled(), bq_gauge.soc(), bq_gauge.fullCapacity(),
+            (float)config::BATTERY_DESIGN_MAH, bs_voltage, config::BQ27Z746_CELLS);
+
+        if (gauge_ok)
+        {
+            bs_soc           = bq_gauge.soc();
+            bs_soc_estimated = false;
+        }
+        else
+        {
+            bs_soc = bq_soc_estimator.update(bs_voltage, config::BQ27Z746_CELLS,
+                                             bs_current, config::BATTERY_INTERNAL_R_OHM);
+            bs_soc_estimated = true;
+        }
+
+        // Say it once, and again only if the verdict flips — the operator needs to
+        // know whether the number on the app is gauged or inferred.
+        static int last_verdict = -1;
+        const int verdict = gauge_ok ? 1 : 0;
+        if (verdict != last_verdict)
+        {
+            if (gauge_ok)
+                ESP_LOGI(TAG, "[BATT] BQ27Z746 gauge SoC is plausible — using it (%.0f%%)",
+                         (double)bs_soc);
+            else
+                ESP_LOGW(TAG, "[BATT] BQ27Z746 SoC not trustworthy "
+                              "(GAUGE_EN=%d, raw SOC=%.0f%%, FullCap=%.0f vs design %u mAh) — "
+                              "falling back to voltage estimate (#501)",
+                         bq_gauge.gaugingEnabled(), (double)bq_gauge.soc(),
+                         (double)bq_gauge.fullCapacity(),
+                         (unsigned)config::BATTERY_DESIGN_MAH);
+            last_verdict = verdict;
+        }
     }
     else if (gauge_kind == GaugeKind::MAX17303)
     {
@@ -1497,6 +1543,17 @@ static void printStats()
              (double)ls.last_rssi,
              (double)ls.last_snr,
              last_pkt_str);
+
+    // Base-station battery.  The (est) marker says the SoC came from the voltage
+    // curve rather than the gauge's coulomb count (#501) — without it, a plausible
+    // number gives no hint that the gauge underneath it is untrustworthy.
+    if (fuel_gauge_present)
+    {
+        ESP_LOGI(TAG, "[BATT] %.2f V | %.0f%% SoC (%s) | %.0f mA | %.1f C",
+                 (double)bs_voltage, (double)bs_soc,
+                 bs_soc_estimated ? "est from voltage" : "gauge",
+                 (double)bs_current, (double)bs_temperature);
+    }
 
     // Hop diagnostics (#105).  hop_active=Y/N is the live link state; the
     // session counters reflect the *current* session and reset on each
