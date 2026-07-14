@@ -211,6 +211,10 @@ public:
     // Clears the filename after reading
     String getDownloadFilename();
 
+    // #526: true if the filename just returned by getDownloadFilename() came from
+    // cmd 44 (L2CAP) rather than cmd 4 (GATT). Read immediately after.
+    bool downloadWasL2cap() const;
+
     // Send config JSON to connected device (config readback on connect)
     void sendConfigJSON(const String& json);
 
@@ -350,6 +354,27 @@ public:
     // Create the L2CAP server ONCE (idempotent). Called from on_ble_hs_sync().
     void initL2capServer();
 
+    // The peer's advertised CoC MTU (largest SDU we may send), or 0 if no channel.
+    uint16_t l2capPeerMtu() const;
+
+    // #526 step 4: the send engine. Called from the OC LOOP (never a callback).
+    // The actual ble_l2cap_send() runs on the NimBLE host task via a posted event;
+    // these block the loop on a task notification until the SDU completes, stalls-
+    // then-completes, or fails. All return false on failure (the caller aborts).
+    //
+    //   l2capBeginTransfer  emits BEGIN{status, name, size_hint}, resets the CRC.
+    //                       status 0 = OK; a non-zero status (e.g. 2 = INFLIGHT
+    //                       refusal) means "no file follows" and the app fails over.
+    //   l2capSendData       emits one DATA SDU (gated on os_msys_num_free()), folds
+    //                       the bytes into the CRC. `data` is packed AA55AA55 frame
+    //                       bytes — identical to what sendFileChunk would carry.
+    //   l2capEndTransfer    emits END{bytes, crc32, status}. status 0 = success.
+    //   l2capAbort          tears the channel down (disconnect) after a failure.
+    bool l2capBeginTransfer(const char* name, uint32_t size_hint, uint8_t status = 0);
+    bool l2capSendData(const uint8_t* data, size_t len);
+    bool l2capEndTransfer(uint8_t status);
+    void l2capAbort();
+
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
     // failure). main.cpp gates I2C battery-gauge polling on this so the
     // esp_ota_begin() flash erase doesn't collide with the I2C bus (#17).
@@ -386,6 +411,13 @@ private:
     void* l2cap_chan_ = nullptr;
     bool  l2cap_server_created_ = false;
     volatile uint16_t l2cap_peer_mtu_ = 0;   // learned on COC_CONNECTED; 0 = none
+    // #526 step 4: running CRC + byte count for the in-flight transfer (folded in
+    // l2capSendData, emitted in the END record). Only oc_loop touches these.
+    uint32_t l2cap_xfer_crc_ = 0;
+    uint32_t l2cap_xfer_bytes_ = 0;
+    // Park one SDU, post to the host eventq, block here until it completes. All
+    // ble_l2cap_send() calls funnel through this (never called off the host task).
+    bool l2capSubmitAndWait(struct os_mbuf* om, uint32_t budget_ms);
 
     // #517: a RING, not a single latch (see BleCommandRing.h). It used to be
     // one slot overwritten by the NimBLE write callback, so two commands
@@ -525,6 +557,11 @@ public:
     // here (no NimBLE include), which is all a pointer parameter needs. Defined in
     // the .cpp under #if MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM) >= 1.
     static int  l2cap_event_cb(struct ble_l2cap_event* event, void* arg);
+    // #526 step 4: events run on the NimBLE host task. l2cap_tx_event_fn does the
+    // one ble_l2cap_send(); l2cap_disc_event_fn does the one ble_l2cap_disconnect().
+    // (ble_npl_event_fn signature: void(struct ble_npl_event*).)
+    static void l2cap_tx_event_fn(struct ble_npl_event* ev);
+    static void l2cap_disc_event_fn(struct ble_npl_event* ev);
 private:
     void onConnect(uint16_t conn_handle, const struct ble_gap_conn_desc* desc);
     void onDisconnect(uint16_t conn_handle, int reason);

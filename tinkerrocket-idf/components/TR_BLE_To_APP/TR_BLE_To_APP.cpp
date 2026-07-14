@@ -626,6 +626,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     // filename members did heap ops from two tasks with no lock.
     char    name_local[64];
     bool    have_delete = false, have_download = false;
+    bool    download_l2cap_local = false;   // #526: cmd 44 vs cmd 4
     int     page_local  = -1;
     uint8_t payload_local[tr_ble::kMaxPayload];
     size_t  payload_len_local = 0;
@@ -657,10 +658,20 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     }
     else if (cmd == 4 && length > 1)
     {
-        // Command 4: Download file (filename follows command byte)
+        // Command 4: Download file over GATT (filename follows command byte)
         copyName(data + 1, length - 1);
         have_download = true;
         ESP_LOGI(BLE_TAG, "Download file request: %s", name_local);
+    }
+    else if (cmd == 44 && length > 1)   // BLE_OC_CMD_FILE_DOWNLOAD_L2CAP
+    {
+        // #526 Command 44: Download file over the L2CAP CoC channel. Same filename
+        // format as cmd 4; the l2cap flag routes it to the streaming path. (Literal
+        // 44 to match this file's convention — every other cmd here is a literal.)
+        copyName(data + 1, length - 1);
+        have_download = true;
+        download_l2cap_local = true;
+        ESP_LOGI(BLE_TAG, "Download file request (L2CAP): %s", name_local);
     }
     else if (cmd == 5 && length >= 13)
     {
@@ -745,6 +756,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     if (page_local >= 0)   entry.file_list_page = (uint8_t)page_local;
     if (have_delete)       strlcpy(entry.delete_name,   name_local, sizeof(entry.delete_name));
     if (have_download)     strlcpy(entry.download_name, name_local, sizeof(entry.download_name));
+    entry.download_l2cap = download_l2cap_local;
 
     // #384: the command and everything travelling with it are committed in ONE
     // critical section, so the loop task can never pair a command with a
@@ -1280,6 +1292,11 @@ String TR_BLE_To_APP::getDownloadFilename()
     return name;
 }
 
+// #526: was the download filename just returned a cmd-44 (L2CAP) request rather
+// than cmd 4 (GATT)? Read RIGHT AFTER getDownloadFilename(), before the next
+// getCommand() overwrites consumed_.
+bool TR_BLE_To_APP::downloadWasL2cap() const { return consumed_.download_l2cap; }
+
 void TR_BLE_To_APP::sendConfigJSON(const String& json)
 {
     if (!device_connected_) return;
@@ -1426,11 +1443,27 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
 // #526: L2CAP connection-oriented-channel download transport.
 //
 // Compiled in only on the OC (CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=1); the base
-// station sets it to 0 explicitly and gets the #else stubs. Step 3 stands up the
-// CHANNEL LIFECYCLE only — server, accept/RX-arm, connect/disconnect, PSM
-// handshake. No data flows yet (that is the step-4 send engine).
+// station sets it to 0 explicitly and gets the #else stubs.
+//
+// THE CARDINAL RULE (step 4): every ble_l2cap_* call runs on the NimBLE HOST
+// TASK. ble_l2cap_coc_send() derefs the channel before locking and "leaves the
+// host locked on purpose", and the channel is freed on disconnect — so calling it
+// off the host task, or under a mutex, is a use-after-free or an AB-BA deadlock.
+// oc_loop therefore builds ONE SDU, posts an event to the default eventq (drained
+// by the host task), and blocks on a FreeRTOS task notification. The host task
+// does the single send and classifies the mbuf ownership per oc_l2cap_send_policy.
 // ============================================================================
 #if MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM) >= 1
+
+#include "oc_l2cap_send_policy.h"
+
+// Pin the mirrored policy codes to NimBLE's real values. The policy header is
+// host-linkable (no NimBLE), so it carries copies; this is where they meet truth.
+static_assert(oc_l2cap::kRcOk       == 0,               "BLE_HS success");
+static_assert(oc_l2cap::kRcENoMem   == BLE_HS_ENOMEM,   "ENOMEM drift");
+static_assert(oc_l2cap::kRcEBadData == BLE_HS_EBADDATA, "EBADDATA drift");
+static_assert(oc_l2cap::kRcEBusy    == BLE_HS_EBUSY,    "EBUSY drift");
+static_assert(oc_l2cap::kRcEStalled == BLE_HS_ESTALLED, "ESTALLED drift");
 
 // LE dynamic PSM (0x0080-0x00FF). The IDF example's 0x1002 is outside the LE
 // range and iOS can reject it. The app learns this value via cmd 43, so it is not
@@ -1441,17 +1474,43 @@ static constexpr uint16_t kL2capPsm = 0x0083;
 // MTU we request, and an incoming SDU chains across pool blocks as needed.
 static constexpr uint16_t kL2capOurMtu = 512;
 
-// Dedicated SDU pool, NOT msys — msys is for the GATT notify path and the
-// stack's own K-frames, and must not be drained by a stuck download. Sized for
-// one RX SDU (up to 512 B, ~2 blocks) plus, in step 4, one TX SDU (~1 KB, ~3
-// blocks) with slack. Block payload is block_size minus the os_mbuf + pkthdr
-// overhead, so an N-byte SDU always chains more than one N-byte block.
+// One SDU's budget with NO progress before we give the channel up. NOT the GATT
+// effectiveEventMs()*8 (~500 ms): CoC credits only return when the iOS app drains
+// its InputStream, so a brief UI hitch must not abort a healthy transfer.
+static constexpr uint32_t kL2capBudgetMs = 30000;
+
+// Refuse to submit an SDU unless MSYS_1 has at least this many free blocks. Every
+// K-frame the stack fragments our SDU into comes from MSYS_1, and exhaustion
+// MID-SDU frees a half-transmitted SDU -> silent corruption. This is the real
+// backpressure; it is mandatory, not tuning. Pool is 48 blocks (#526 step 1).
+static constexpr int kMsysWatermark = 16;
+
+// Dedicated SDU pool, NOT msys — msys is for the GATT notify path and the stack's
+// own K-frames, and must not be drained by a stuck download. Sized for one RX SDU
+// (up to 512 B, ~2 blocks) plus one TX SDU (~1 KB, ~3 blocks) with slack. Block
+// payload is block_size minus the os_mbuf + pkthdr overhead, so an N-byte SDU
+// always chains more than one N-byte block.
 #define TR_COC_BLOCK_SIZE   512
 #define TR_COC_BLOCK_COUNT  8
 static os_membuf_t     s_coc_sdu_mem[OS_MEMPOOL_SIZE(TR_COC_BLOCK_COUNT, TR_COC_BLOCK_SIZE)];
 static struct os_mempool   s_coc_sdu_mempool;
 static struct os_mbuf_pool s_coc_sdu_mbuf_pool;
 static bool s_coc_mem_ready = false;
+
+// ---- host-task-confined TX engine state ------------------------------------
+enum { TX_IDLE = 0, TX_SUBMITTED, TX_STALLED, TX_DONE, TX_ERROR, TX_DEAD };
+static struct ble_npl_event s_l2cap_tx_ev;    // "send this one SDU" event
+static struct ble_npl_event s_l2cap_disc_ev;  // "disconnect" event
+static struct os_mbuf*  s_l2cap_tx_om = nullptr;  // parked SDU (host task consumes)
+static volatile int     s_l2cap_tx_state = TX_IDLE;
+static TaskHandle_t     s_l2cap_tx_waiter = nullptr;  // oc_loop task to notify
+static bool             s_l2cap_engine_ready = false;
+
+static void l2cap_wake_waiter()
+{
+    TaskHandle_t w = s_l2cap_tx_waiter;
+    if (w != nullptr) xTaskNotifyGive(w);
+}
 
 // Hand NimBLE a fresh RX buffer so the channel can receive. MANDATORY: the server
 // channel is created with sdu_rx = NULL but RX credits are granted regardless, so
@@ -1461,6 +1520,55 @@ static int coc_arm_rx(struct ble_l2cap_chan* chan)
     struct os_mbuf* sdu_rx = os_mbuf_get_pkthdr(&s_coc_sdu_mbuf_pool, 0);
     if (sdu_rx == nullptr) return BLE_HS_ENOMEM;
     return ble_l2cap_recv_ready(chan, sdu_rx);
+}
+
+// Runs ON THE HOST TASK: the single ble_l2cap_send() and its ownership decision.
+void TR_BLE_To_APP::l2cap_tx_event_fn(struct ble_npl_event* /*ev*/)
+{
+    struct os_mbuf* om = s_l2cap_tx_om;
+    s_l2cap_tx_om = nullptr;
+    struct ble_l2cap_chan* chan =
+        s_instance_ ? (struct ble_l2cap_chan*)s_instance_->l2cap_chan_ : nullptr;
+
+    if (chan == nullptr || om == nullptr)
+    {
+        if (om != nullptr) os_mbuf_free_chain(om);   // disconnect raced the submit
+        s_l2cap_tx_state = TX_DEAD;
+        l2cap_wake_waiter();
+        return;
+    }
+
+    const int rc = ble_l2cap_send(chan, om);
+    switch (oc_l2cap::classifySendRc(rc))
+    {
+    case oc_l2cap::SendOutcome::Sent:
+        s_l2cap_tx_state = TX_DONE;
+        l2cap_wake_waiter();
+        break;
+    case oc_l2cap::SendOutcome::Stalled:
+        // Stack owns the SDU and will finish it on TX_UNSTALLED. Do NOT free, do
+        // NOT wake — the waiter keeps blocking until that event lands.
+        s_l2cap_tx_state = TX_STALLED;
+        break;
+    case oc_l2cap::SendOutcome::MustFreeAndAbort:
+        os_mbuf_free_chain(om);   // EBADDATA/EBUSY: returned before ownership taken
+        s_l2cap_tx_state = TX_ERROR;
+        l2cap_wake_waiter();
+        break;
+    case oc_l2cap::SendOutcome::AbortStackAlreadyFreed:
+        // The continue_tx `failed:` path already freed it (e.g. ENOMEM). Do NOT free.
+        s_l2cap_tx_state = TX_ERROR;
+        l2cap_wake_waiter();
+        break;
+    }
+}
+
+// Runs ON THE HOST TASK: tear the channel down after a failure/timeout.
+void TR_BLE_To_APP::l2cap_disc_event_fn(struct ble_npl_event* /*ev*/)
+{
+    struct ble_l2cap_chan* chan =
+        s_instance_ ? (struct ble_l2cap_chan*)s_instance_->l2cap_chan_ : nullptr;
+    if (chan != nullptr) ble_l2cap_disconnect(chan);
 }
 
 int TR_BLE_To_APP::l2cap_event_cb(struct ble_l2cap_event* event, void* arg)
@@ -1498,6 +1606,13 @@ int TR_BLE_To_APP::l2cap_event_cb(struct ble_l2cap_event* event, void* arg)
         ESP_LOGI(BLE_TAG, "L2CAP CoC DISCONNECTED");
         self->l2cap_chan_ = nullptr;
         self->l2cap_peer_mtu_ = 0;
+        // Wake a producer blocked on an in-flight SDU so it aborts instead of
+        // waiting out the full budget on a channel that is gone.
+        if (s_l2cap_tx_state == TX_SUBMITTED || s_l2cap_tx_state == TX_STALLED)
+        {
+            s_l2cap_tx_state = TX_DEAD;
+            l2cap_wake_waiter();
+        }
         return 0;
 
     case BLE_L2CAP_EVENT_COC_DATA_RECEIVED:
@@ -1511,8 +1626,14 @@ int TR_BLE_To_APP::l2cap_event_cb(struct ble_l2cap_event* event, void* arg)
         return 0;
 
     case BLE_L2CAP_EVENT_COC_TX_UNSTALLED:
-        // Step 4 (the send engine) acts on this. Log for now.
-        ESP_LOGD(BLE_TAG, "L2CAP CoC TX unstalled: status=%d", event->tx_unstalled.status);
+        // The stalled SDU finished (or failed). This is the ONLY completion signal
+        // for a stalled send. status != 0 comes from the continue_tx `failed:` path
+        // — treating it as success would hand the app a file with a hole.
+        if (s_l2cap_tx_state == TX_STALLED)
+        {
+            s_l2cap_tx_state = (event->tx_unstalled.status == 0) ? TX_DONE : TX_ERROR;
+            l2cap_wake_waiter();
+        }
         return 0;
 
     default:
@@ -1529,6 +1650,11 @@ void TR_BLE_To_APP::initL2capMem()
     rc = os_mbuf_pool_init(&s_coc_sdu_mbuf_pool, &s_coc_sdu_mempool, TR_COC_BLOCK_SIZE,
                            TR_COC_BLOCK_COUNT);
     if (rc != 0) { ESP_LOGE(BLE_TAG, "CoC mbuf pool init failed, rc=%d", rc); return; }
+    // The npl events must exist before the host task starts (they can fire on the
+    // very first connection). ble_npl_event_fn is void(ble_npl_event*).
+    ble_npl_event_init(&s_l2cap_tx_ev, l2cap_tx_event_fn, nullptr);
+    ble_npl_event_init(&s_l2cap_disc_ev, l2cap_disc_event_fn, nullptr);
+    s_l2cap_engine_ready = true;
     s_coc_mem_ready = true;
 }
 
@@ -1552,16 +1678,145 @@ void TR_BLE_To_APP::initL2capServer()
 }
 
 uint16_t TR_BLE_To_APP::l2capPsm() const { return kL2capPsm; }
-
 bool TR_BLE_To_APP::l2capConnected() const { return l2cap_chan_ != nullptr; }
+uint16_t TR_BLE_To_APP::l2capPeerMtu() const { return l2cap_peer_mtu_; }
+
+bool TR_BLE_To_APP::l2capSubmitAndWait(struct os_mbuf* om, uint32_t budget_ms)
+{
+    if (!s_l2cap_engine_ready || l2cap_chan_ == nullptr)
+    {
+        os_mbuf_free_chain(om);
+        return false;
+    }
+
+    // Drain any stale notification (e.g. a late TX_UNSTALLED from a prior SDU) so
+    // it cannot make us return before THIS SDU is actually processed.
+    ulTaskNotifyTake(pdTRUE, 0);
+
+    s_l2cap_tx_waiter = xTaskGetCurrentTaskHandle();
+    s_l2cap_tx_state  = TX_SUBMITTED;
+    s_l2cap_tx_om     = om;
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &s_l2cap_tx_ev);
+
+    const uint32_t deadline = (uint32_t)millis() + budget_ms;
+    for (;;)
+    {
+        const int32_t remaining = (int32_t)(deadline - (uint32_t)millis());
+        if (remaining <= 0)
+        {
+            ESP_LOGW(BLE_TAG, "L2CAP SDU no progress in %lu ms — aborting channel",
+                     (unsigned long)budget_ms);
+            l2capAbort();     // never reuse a timed-out channel
+            return false;
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((uint32_t)remaining));
+        const int st = s_l2cap_tx_state;
+        if (st == TX_DONE)  return true;
+        if (st == TX_ERROR || st == TX_DEAD) return false;
+        // TX_SUBMITTED / TX_STALLED: spurious wake or still in flight — keep waiting.
+    }
+}
+
+bool TR_BLE_To_APP::l2capBeginTransfer(const char* name, uint32_t size_hint, uint8_t status)
+{
+    if (l2cap_chan_ == nullptr) return false;
+    l2cap_xfer_crc_   = tr_crc32::init();
+    l2cap_xfer_bytes_ = 0;
+
+    size_t name_len = 0;
+    if (name != nullptr) { while (name[name_len] != '\0' && name_len < 255) name_len++; }
+
+    uint8_t buf[tr_filestream::kRecordHeaderSize + 7 + 255];
+    const size_t n = tr_filestream::encodeBegin(buf, sizeof(buf), tr_filestream::kProtoVersion,
+                                                status, size_hint,
+                                                name, (uint8_t)name_len);
+    if (n == 0) return false;
+
+    struct os_mbuf* om = os_mbuf_get_pkthdr(&s_coc_sdu_mbuf_pool, 0);
+    if (om == nullptr) return false;
+    if (os_mbuf_append(om, buf, n) != 0) { os_mbuf_free_chain(om); return false; }
+    return l2capSubmitAndWait(om, kL2capBudgetMs);
+}
+
+bool TR_BLE_To_APP::l2capSendData(const uint8_t* data, size_t len)
+{
+    if (l2cap_chan_ == nullptr || data == nullptr || len == 0) return false;
+
+    // Backpressure (mandatory): do not submit unless MSYS_1 has headroom for the
+    // K-frames this SDU will fragment into. Wait in short steps, bounded by budget.
+    const uint32_t deadline = (uint32_t)millis() + kL2capBudgetMs;
+    while (!oc_l2cap::msysGateOk(os_msys_num_free(), kMsysWatermark))
+    {
+        if ((int32_t)(deadline - (uint32_t)millis()) <= 0)
+        {
+            ESP_LOGW(BLE_TAG, "L2CAP msys gate never opened — aborting");
+            l2capAbort();
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+        if (l2cap_chan_ == nullptr) return false;
+    }
+
+    // One DATA record: [0x02][len u32 LE][payload]. The payload is packed AA55AA55
+    // frame bytes — byte-identical to what sendFileChunk would carry over GATT, so
+    // the cmd-4 and cmd-44 files match (the sha256 A/B oracle).
+    struct os_mbuf* om = os_mbuf_get_pkthdr(&s_coc_sdu_mbuf_pool, 0);
+    if (om == nullptr) return false;
+    uint8_t hdr[tr_filestream::kRecordHeaderSize];
+    tr_filestream::encodeDataHeader(hdr, sizeof(hdr), (uint32_t)len);
+    if (os_mbuf_append(om, hdr, sizeof(hdr)) != 0 ||
+        os_mbuf_append(om, data, len) != 0)
+    {
+        os_mbuf_free_chain(om);
+        return false;
+    }
+
+    l2cap_xfer_crc_   = tr_crc32::update(l2cap_xfer_crc_, data, len);
+    l2cap_xfer_bytes_ += (uint32_t)len;
+    return l2capSubmitAndWait(om, kL2capBudgetMs);
+}
+
+bool TR_BLE_To_APP::l2capEndTransfer(uint8_t status)
+{
+    if (l2cap_chan_ == nullptr) return false;
+    const uint32_t crc = tr_crc32::finalize(l2cap_xfer_crc_);
+
+    uint8_t buf[tr_filestream::kRecordHeaderSize + tr_filestream::kEndPayloadSize];
+    const size_t n = tr_filestream::encodeEnd(buf, sizeof(buf), l2cap_xfer_bytes_, crc, status);
+
+    struct os_mbuf* om = os_mbuf_get_pkthdr(&s_coc_sdu_mbuf_pool, 0);
+    if (om == nullptr) return false;
+    if (os_mbuf_append(om, buf, n) != 0) { os_mbuf_free_chain(om); return false; }
+    const bool ok = l2capSubmitAndWait(om, kL2capBudgetMs);
+    ESP_LOGI(BLE_TAG, "L2CAP END: bytes=%lu crc=0x%08lx status=%u (%s)",
+             (unsigned long)l2cap_xfer_bytes_, (unsigned long)crc, (unsigned)status,
+             ok ? "sent" : "send failed");
+    return ok;
+}
+
+void TR_BLE_To_APP::l2capAbort()
+{
+    if (l2cap_chan_ == nullptr || !s_l2cap_engine_ready) return;
+    // Disconnect on the host task. DISCONNECTED will clear l2cap_chan_ and wake any
+    // waiter. Never reuse a channel after this.
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &s_l2cap_disc_ev);
+}
 
 #else  // CoC not compiled in (base station): inert stubs.
 
 int  TR_BLE_To_APP::l2cap_event_cb(struct ble_l2cap_event*, void*) { return 0; }
+void TR_BLE_To_APP::l2cap_tx_event_fn(struct ble_npl_event*) {}
+void TR_BLE_To_APP::l2cap_disc_event_fn(struct ble_npl_event*) {}
 void TR_BLE_To_APP::initL2capMem() {}
 void TR_BLE_To_APP::initL2capServer() {}
 uint16_t TR_BLE_To_APP::l2capPsm() const { return 0; }
 bool TR_BLE_To_APP::l2capConnected() const { return false; }
+uint16_t TR_BLE_To_APP::l2capPeerMtu() const { return 0; }
+bool TR_BLE_To_APP::l2capSubmitAndWait(struct os_mbuf*, uint32_t) { return false; }
+bool TR_BLE_To_APP::l2capBeginTransfer(const char*, uint32_t, uint8_t) { return false; }
+bool TR_BLE_To_APP::l2capSendData(const uint8_t*, size_t) { return false; }
+bool TR_BLE_To_APP::l2capEndTransfer(uint8_t) { return false; }
+void TR_BLE_To_APP::l2capAbort() {}
 
 #endif  // MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM) >= 1
 

@@ -455,7 +455,7 @@ gtest_discover_tests(test_file_stream_framing)
 add_executable(test_oc_l2cap_send_policy test_oc_l2cap_send_policy.cpp)
 target_include_directories(test_oc_l2cap_send_policy PRIVATE
     ${SHIM_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_BLE_To_APP
 )
 target_link_libraries(test_oc_l2cap_send_policy GTest::gtest_main)
 gtest_discover_tests(test_oc_l2cap_send_policy)

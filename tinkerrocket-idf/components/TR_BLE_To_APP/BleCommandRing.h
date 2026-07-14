@@ -45,6 +45,7 @@ struct PendingCommand
     uint8_t file_list_page = 0;
     char    delete_name[kMaxFilename]   = {};
     char    download_name[kMaxFilename] = {};
+    bool    download_l2cap = false;   // #526: download_name is a cmd-44 (L2CAP) request
 };
 
 class CommandRing

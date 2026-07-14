@@ -59,6 +59,8 @@ static inline std::string itos(int v)
 #include <TR_Orientation.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
+#include <oc_l2cap_send_policy.h>   // #526: SDU sizing for the L2CAP download path
+#include <FileStreamFraming.h>      // #526: DATA record header size
 #include <RocketComputerTypes.h>
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
@@ -5842,6 +5844,9 @@ static void loop_oc()
 
         // Handle file download requests from BLE app
         String download_filename = ble_app.getDownloadFilename();
+        // #526: cmd 44 routes the same filename through the L2CAP CoC stream instead
+        // of GATT notifications. Read the flag right after the name (same consumed_).
+        const bool download_via_l2cap = ble_app.downloadWasL2cap();
         // #383: a download pauses I2S ingest + I2C service for the whole
         // multi-second transfer — mid-flight that would blind the OC and
         // drop the flight data it exists to record. Terminate the request
@@ -5854,7 +5859,10 @@ static void loop_oc()
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
                      download_filename.c_str());
-            ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+            if (download_via_l2cap)
+                ble_app.l2capBeginTransfer(nullptr, 0, /*status=refused*/2);
+            else
+                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
         }
         if (download_filename.length() > 0)
@@ -5879,19 +5887,51 @@ static void loop_oc()
                             "believe the app)",
                      (unsigned long)ble_app.effectiveEventMs(), (int)ble_app.connRssi());
 
-            // The link must be the fast one before we stream a single byte.
+            // The link must be the fast one before we stream a single byte. (The
+            // connection interval still governs how often CoC credits flow, so this
+            // helps the L2CAP path too.)
             ensureFastLinkForTransfer();
 
-            // Dynamic chunk size based on negotiated MTU (falls back to 170 if not yet negotiated)
-            const size_t chunk_data_size = ble_app.getMaxChunkDataSize();
-            ESP_LOGI("BLE", "Chunk data size: %u  (link %lu ms effective)",
-                     (unsigned)chunk_data_size, (unsigned long)ble_app.effectiveEventMs());
+            // Chunk/SDU payload size.
+            //  GATT:  MTU-aligned notification payload (falls back to 170).
+            //  L2CAP: fill an SDU (min(1024, peer_mtu)) minus the 5-byte DATA record
+            //         header, so one SDU carries one DATA record of packed frames.
+            size_t chunk_data_size;
+            if (download_via_l2cap)
+            {
+                const uint32_t sdu = oc_l2cap::sduSize(oc_l2cap::kPreferredSduBytes,
+                                                       ble_app.l2capPeerMtu());
+                chunk_data_size = (sdu > tr_filestream::kRecordHeaderSize)
+                                      ? (sdu - tr_filestream::kRecordHeaderSize) : 0;
+                // Never exceed the static ble_buf staging size (502).
+                if (chunk_data_size > 502) chunk_data_size = 502;
+                ESP_LOGI("BLE", "L2CAP download: SDU payload %u (peer_mtu=%u, link %lu ms)",
+                         (unsigned)chunk_data_size, (unsigned)ble_app.l2capPeerMtu(),
+                         (unsigned long)ble_app.effectiveEventMs());
+            }
+            else
+            {
+                chunk_data_size = ble_app.getMaxChunkDataSize();
+                ESP_LOGI("BLE", "Chunk data size: %u  (link %lu ms effective)",
+                         (unsigned)chunk_data_size, (unsigned long)ble_app.effectiveEventMs());
+            }
 
             if (chunk_data_size == 0)
             {
                 ESP_LOGE("BLE", "chunk data size is 0, aborting download");
                 // #526: this is a failure, not a completed empty file.
-                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+                if (download_via_l2cap)
+                    ble_app.l2capBeginTransfer(nullptr, 0, /*status=read error*/3);
+                else
+                    ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
+            }
+            else if (download_via_l2cap && !ble_app.l2capBeginTransfer(
+                         download_filename.c_str(), /*size_hint=*/0))
+            {
+                // The channel died between the app's cmd 44 and here. Do NOT fall
+                // back to GATT — the app is reading the stream, not notifications.
+                ESP_LOGE("BLE", "L2CAP BEGIN failed (channel gone) — aborting");
+                ble_app.l2capAbort();
             }
             else
             {
@@ -5962,7 +6002,8 @@ static void loop_oc()
                 if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
-                    ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
+                    if (download_via_l2cap) send_failed = true;   // END{error} below
+                    else ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
                     break;
                 }
                 file_offset += flash_bytes_read;
@@ -5994,7 +6035,9 @@ static void loop_oc()
                     if (ble_used > 0 && ble_used + frame_size > chunk_data_size)
                     {
                         const uint32_t t_ble = micros();
-                        const bool sent = ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        const bool sent = download_via_l2cap
+                            ? ble_app.l2capSendData(ble_buf, ble_used)
+                            : ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
                         ble_us += (uint32_t)(micros() - t_ble);
                         if (!sent)
                         {
@@ -6025,7 +6068,28 @@ static void loop_oc()
                 }
             }
 
-            if (send_failed)
+            if (download_via_l2cap)
+            {
+                // #526: flush the last partial SDU (unless we already failed), then
+                // send END. Completion is END{status=0} + a matching CRC — there is
+                // no EOF flag and no duplicate-EOF hack on this path.
+                if (!send_failed && ble_used > 0)
+                {
+                    const uint32_t t_ble = micros();
+                    if (ble_app.l2capSendData(ble_buf, ble_used)) bytes_sent += ble_used;
+                    else send_failed = true;
+                    ble_us += (uint32_t)(micros() - t_ble);
+                }
+                if (send_failed)
+                {
+                    ESP_LOGE("BLE", "L2CAP download ABORTED after %lu bytes",
+                             (unsigned long)bytes_sent);
+                }
+                // END carries the CRC over every DATA byte; status != 0 tells the app
+                // to discard. If even END cannot be sent, tear the channel down.
+                if (!ble_app.l2capEndTransfer(send_failed ? 1 : 0)) ble_app.l2capAbort();
+            }
+            else if (send_failed)
             {
                 // #526: EOF|ABORT, not a bare EOF. The app must REJECT the partial
                 // file, not save the truncated bytes and call it complete.
@@ -6048,8 +6112,12 @@ static void loop_oc()
             // must carry the SAME abort bit — otherwise a dropped abort-EOF
             // followed by a bare redundant EOF would resurrect the truncation bug
             // (the app would complete the partial file as if it were whole).
-            delay(50);
-            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
+            // GATT only — the reliable L2CAP stream needs no redundant terminator.
+            if (!download_via_l2cap)
+            {
+                delay(50);
+                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
+            }
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
@@ -6080,9 +6148,10 @@ static void loop_oc()
             const float total_ms = (elapsed_ms > 0) ? (float)elapsed_ms : 1.0f;
             const int rssi_avg = (xs.rssi_n > 0) ? (int)(xs.rssi_sum / (int32_t)xs.rssi_n) : 0;
             snprintf(s_xfer_summary, sizeof(s_xfer_summary),
-                     "XFER: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
+                     "XFER[%s]: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
                      "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks  |  "
                      "link=%lu ms pm=%d  rssi avg=%d min=%d max=%d dBm (n=%lu)",
+                     download_via_l2cap ? "L2CAP" : "GATT",
                      kbps,
                      (unsigned long long)(flash_us / 1000),
                      100.0f * (flash_us / 1000.0f) / total_ms,
