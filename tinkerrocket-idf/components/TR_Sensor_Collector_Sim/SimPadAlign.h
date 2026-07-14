@@ -33,6 +33,8 @@
 //  (tests_cpp/test_sim_pad_align.cpp).
 //
 
+#include "SimSensorModel.h"
+
 #include <math.h>
 
 namespace sim_pad_align {
@@ -117,18 +119,15 @@ inline void rotationBetween(const float a[3], const float b[3], float R[9])
     R[6] = -vy  + k * (vx*vz);           R[7] =  vx + k * (vy*vz);            R[8] = 1.0f + k * (-vy*vy - vx*vx);
 }
 
-// The sim's own pad attitude, in ROCKET frame, at `launch_angle_rad`.
-// At rest the accelerometer reads specific force: +g along "up".
+// The sim's own pad attitude, in ROCKET frame, at `launch_angle_rad`. Delegates
+// to the shared sensor model so this alignment reference cannot drift from what
+// the encoders actually emit — which is exactly how #512 hid for so long.
 inline void simPadReference(float launch_angle_rad,
                             float b_north, float b_east, float b_down,
                             float up_out[3], float mag_out[3])
 {
-    const float sp = sinf(launch_angle_rad);
-    const float cp = cosf(launch_angle_rad);
-    up_out[0]  = sp;   up_out[1] = 0.0f;   up_out[2] = cp;
-    mag_out[0] =  b_north * sp + b_down * cp;
-    mag_out[1] =  b_east;
-    mag_out[2] = -b_north * cp + b_down * sp;
+    sim_sensor_model::upInBody(launch_angle_rad, up_out);
+    sim_sensor_model::fieldInBody(launch_angle_rad, b_north, b_east, b_down, mag_out);
 }
 
 // True when |m| looks like an Earth field (µT). Guards against a dead/saturated
