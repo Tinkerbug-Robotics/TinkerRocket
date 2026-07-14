@@ -446,3 +446,15 @@ target_include_directories(test_mram_dirty_policy PRIVATE
 )
 target_link_libraries(test_mram_dirty_policy GTest::gtest_main)
 gtest_discover_tests(test_mram_dirty_policy)
+
+# ---------- test_sim_pad_align (#508) ----------
+# Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
+# compile — the alignment solve was extracted out of SensorCollectorSim precisely
+# so it could be tested on the host.
+add_executable(test_sim_pad_align test_sim_pad_align.cpp)
+target_include_directories(test_sim_pad_align PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_pad_align GTest::gtest_main)
+gtest_discover_tests(test_sim_pad_align)

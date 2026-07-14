@@ -66,6 +66,36 @@ public:
     // forward conversion (chip rotZ, then board→rocket) reproduces the
     // simulated values regardless of the configured mounting.
     void configureSimBoardToRocket(const float R[9]);
+
+    // Pad-frame alignment (#508). The sim's physics assume the rocket stands on
+    // the rail (pitch = LAUNCH_ANGLE_RAD), but on a bench the board is usually
+    // lying flat — so at the instant sim data replaces real data the rocket-frame
+    // gravity vector jumps by ~90°. The EKF has accel/mag updates live on the pad
+    // and can only explain a large attitude correction with no measured rate by
+    // blaming the gyro bias, which then slams to a physically impossible value and
+    // is frozen in at launch (accel/mag are gated off in flight) — wrecking
+    // attitude for the whole run.
+    //
+    // Fix the discontinuity at the source: pass the board's ACTUAL resting
+    // attitude (rocket-frame "up" from the orientation estimator, plus the
+    // rocket-frame mag) and we solve for the fixed rotation that carries the
+    // sim's pad attitude onto it. Every synthetic body-frame vector (accel, gyro,
+    // mag) is then rotated by it, so the handover is continuous by construction.
+    //
+    // Rotating the body-frame vectors AND the implied attitude by the same R
+    // leaves world-frame acceleration unchanged, so GNSS/baro need no adjustment
+    // — the simulated trajectory is identical, only the body frame is re-expressed.
+    //
+    // `up_rocket` is the unit specific-force ("up") direction in rocket frame.
+    // `mag_rocket` is the rocket-frame field in µT; pass nullptr (or a
+    // non-physical magnitude) to align on gravity alone.
+    void configureSimPadAlignment(const float up_rocket[3], const float mag_rocket[3]);
+
+    // True once a pad alignment has been solved (diagnostics / tests).
+    bool  hasPadAlignment() const { return !pad_align_identity_; }
+    // Angle of the pad-alignment rotation, degrees (0 when identity).
+    float padAlignmentAngleDeg() const;
+
     void startSim(float ground_pressure_pa);
     void stopSim();
     bool isSimActive() const;
@@ -131,6 +161,28 @@ private:
         x = bx; y = by; z = bz;
     }
 
+    // Pad-frame alignment (#508), applied to every synthetic ROCKET-frame vector
+    // before rocketToBoard(). Identity until configureSimPadAlignment() runs, so
+    // an un-aligned sim behaves exactly as before.
+    float pad_align_[9] = {1.0f, 0.0f, 0.0f,
+                           0.0f, 1.0f, 0.0f,
+                           0.0f, 0.0f, 1.0f};
+    bool  pad_align_identity_ = true;
+
+    inline void applyPadAlign(float &x, float &y, float &z) const
+    {
+        if (pad_align_identity_) return;
+        const float rx = pad_align_[0] * x + pad_align_[1] * y + pad_align_[2] * z;
+        const float ry = pad_align_[3] * x + pad_align_[4] * y + pad_align_[5] * z;
+        const float rz = pad_align_[6] * x + pad_align_[7] * y + pad_align_[8] * z;
+        x = rx; y = ry; z = rz;
+    }
+
+    // The sim's own pad-attitude reference vectors in rocket frame, at
+    // pitch = LAUNCH_ANGLE_RAD. These are what configureSimPadAlignment maps
+    // ONTO the measured pad vectors.
+    void simPadReference(float up_out[3], float mag_out[3]) const;
+
     // GNSS fallback timer (for indoor testing without GPS fix)
     uint32_t last_gnss_real_us_ = 0;
     uint32_t gnss_timer_us_     = 0;
@@ -144,6 +196,13 @@ private:
     static constexpr float CD             = 0.5f;
     static constexpr float REFERENCE_AREA = 0.0019635f; // pi * 0.025^2 (50mm dia)
     static constexpr float PRELAUNCH_DURATION_MS = 5000.0f;
+
+    // Synthetic Earth field at ~38N (NED, µT). Shared by both mag encoders and
+    // by simPadReference() so the alignment reference cannot drift from what the
+    // encoders actually emit.
+    static constexpr float B_NORTH = 22.0f;
+    static constexpr float B_EAST  =  5.0f;
+    static constexpr float B_DOWN  = 42.0f;
 
     // Attitude dynamics defaults (typical model rocket)
     static constexpr float LAUNCH_ANGLE_RAD = 85.0f * 3.14159265f / 180.0f;  // 5° from vertical

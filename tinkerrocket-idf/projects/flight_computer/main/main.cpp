@@ -1475,8 +1475,19 @@ static constexpr float ORIENT_ACCEPT_TOL_DEG = 5.0f;
 
 // One completed pad-gravity window: decide whether the active board→rocket
 // rotation still matches how the rocket is actually sitting on the rail.
+// Latest filtered pad "up" (specific-force) direction in ROCKET frame, from the
+// orientation estimator. Cached so the sim can align its pad frame to how the
+// board is ACTUALLY resting when a sim run starts (#508).
+static float pad_up_rocket[3]   = {0.0f, 0.0f, 0.0f};
+static bool  pad_up_rocket_valid = false;
+
 static void handleOrientationEstimate(const float up_rocket[3])
 {
+    pad_up_rocket[0] = up_rocket[0];
+    pad_up_rocket[1] = up_rocket[1];
+    pad_up_rocket[2] = up_rocket[2];
+    pad_up_rocket_valid = true;
+
     float cx = up_rocket[0];
     if (cx > 1.0f) cx = 1.0f;
     if (cx < -1.0f) cx = -1.0f;
@@ -4340,6 +4351,29 @@ static void loop_fc()
                     sensor_collector.configureSim(defaults);
                     ESP_LOGW(TAG, "[SIM] No config received, using defaults");
                 }
+                // #508: carry the sim's pad frame onto the board's ACTUAL resting
+                // attitude before the first synthetic sample. Without this, a
+                // bench board lying flat makes rocket-frame gravity jump ~90° the
+                // instant sim data replaces real data; the EKF (accel/mag updates
+                // still live on the pad) can only explain that step by blaming the
+                // gyro bias, which slams to ~-190 dps and is then frozen in at
+                // launch — wrecking attitude for the whole flight.
+                if (pad_up_rocket_valid)
+                {
+                    const float mag_rocket[3] = {
+                        (float)iis2mdc_latest_si.mag_x_uT,
+                        (float)iis2mdc_latest_si.mag_y_uT,
+                        (float)iis2mdc_latest_si.mag_z_uT };
+                    sensor_collector.configureSimPadAlignment(
+                        pad_up_rocket, have_iis2mdc_si ? mag_rocket : nullptr);
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "[SIM] no pad orientation estimate yet — starting "
+                                  "UNALIGNED; expect a gyro-bias excursion if the "
+                                  "board isn't nose-up (#508)");
+                }
+
                 sensor_collector.startSim(ground_pressure_pa);
                 ESP_LOGI(TAG, "[SIM] Start cmd received, sim active=%s ground_p=%.0f",
                               sensor_collector.isSimActive() ? "YES" : "NO",
@@ -6368,6 +6402,36 @@ static void loop_fc()
                 const bool converged = att_var < config::EKF_ATT_VAR_OK &&
                                        vel_var < config::EKF_VEL_VAR_OK;
                 ekf_st = (ekf.isHealthy() && converged) ? SH_OK : SH_DEGRADED;
+
+                // #508: the gyro bias is FROZEN IN at launch — accel/mag updates
+                // are gated off for the whole flight, so whatever it holds when we
+                // leave the pad integrates into attitude at that rate for the
+                // entire ascent (5 dps → 5°/s → ~50° by apogee on a 10 s climb),
+                // and guidance keys off attitude.  Two independent no-go signals:
+                //
+                //   1. the estimate itself is out of spec / the bound had to bite
+                //      (gyroBiasHealthy: |bias| ≤ 3 dps, sigma sane, 0 clips), or
+                //   2. the observability gate is TRIPPING on the pad — meaning the
+                //      filter is being fed accel/mag data inconsistent with its own
+                //      state (bad mounting, a steel rail deflecting the mag, a stale
+                //      hard-iron cal).  The bias may have survived intact, but the
+                //      setup is wrong and you want to know BEFORE it gets frozen.
+                //
+                // Amber rather than red: it degrades attitude/guidance, it does not
+                // by itself endanger recovery.
+                static uint32_t last_gbias_trips   = 0;
+                static uint32_t gbias_trip_seen_ms = 0;
+                const uint32_t trips_now = ekf.gyroBiasGateTrips();
+                if (trips_now != last_gbias_trips) {
+                    last_gbias_trips   = trips_now;
+                    gbias_trip_seen_ms = now_ms;
+                }
+                const bool gbias_tripping_recently =
+                    gbias_trip_seen_ms != 0 && (now_ms - gbias_trip_seen_ms) < 5000U;
+
+                if ((!ekf.gyroBiasHealthy() || gbias_tripping_recently) && ekf_st == SH_OK) {
+                    ekf_st = SH_DEGRADED;
+                }
             }
             sh = shSet(sh, SH_EKF_SHIFT, ekf_st);
 
@@ -6619,13 +6683,22 @@ static void loop_fc()
                           (double)pitch_deg,
                           (double)yaw_deg,
                           (double)cos2p);
-            ESP_LOGI(TAG, "[EKF DIAG] mag[%s]=%.1fuT(%s) gyro_bias=[%.3f,%.3f,%.3f]dps",
+            // #508: trips/clips make a laundered bias visible on the console — a
+            // healthy pad shows 0/0. Non-zero trips mean accel/mag data
+            // inconsistent with the filter's state is arriving; clips mean the
+            // physical bound had to bite, which should never happen in the field.
+            ESP_LOGI(TAG, "[EKF DIAG] mag[%s]=%.1fuT(%s) gyro_bias=[%.3f,%.3f,%.3f]dps "
+                          "(sig=%.2f trips=%u clips=%u %s)",
                           mag_src,
                           (double)mag_uT,
                           mag_status,
                           (double)(gb[0] * 180.0f / (float)M_PI),
                           (double)(gb[1] * 180.0f / (float)M_PI),
-                          (double)(gb[2] * 180.0f / (float)M_PI));
+                          (double)(gb[2] * 180.0f / (float)M_PI),
+                          (double)ekf.gyroBiasSigmaMaxDps(),
+                          (unsigned)ekf.gyroBiasGateTrips(),
+                          (unsigned)ekf.gyroBiasClipCount(),
+                          ekf.gyroBiasHealthy() ? "OK" : "NO-GO");
         }
     }
 

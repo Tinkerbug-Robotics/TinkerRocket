@@ -155,6 +155,52 @@ public:
     void getCovAccelBias(float (&r)[3]) const { r[0]=P_[9][9]; r[1]=P_[10][10]; r[2]=P_[11][11]; }
     void getCovRotRateBias(float (&r)[3]) const { r[0]=P_[12][12]; r[1]=P_[13][13]; r[2]=P_[14][14]; }
 
+    // ─── #508: gyro-bias health, for the pre-launch go/no-go ───────
+    //
+    // These exist because accel/mag updates are gated OFF for the whole flight:
+    // whatever the gyro bias holds at launch is FROZEN IN and integrates into
+    // attitude at that rate for the entire ascent (a 5 dps error → 5°/s → ~50°
+    // by apogee on a 10 s climb), and guidance keys off attitude. So a bias that
+    // is large, still un-learned, or has been clipped is a genuine no-go — and
+    // before this there was nothing that could tell you.
+
+    // Largest |gyro-bias| component, deg/s. A healthy ISM6 sits well under 2.
+    float gyroBiasMaxDps() const {
+        float m = 0.0f;
+        for (int i = 0; i < 3; ++i) {
+            const float a = std::fabs(wBias_rps_[i]);
+            if (a > m) m = a;
+        }
+        return m * RAD2DEG;
+    }
+
+    // Largest gyro-bias 1σ, deg/s — how well the bias has actually been learned.
+    // Stays high precisely when the observability gate has been cutting the
+    // bias coupling, which is the case we must not launch on.
+    float gyroBiasSigmaMaxDps() const {
+        float m = 0.0f;
+        for (int i = 12; i <= 14; ++i) {
+            const float v = P_[i][i];
+            if (v > m) m = v;
+        }
+        return std::sqrt(m) * RAD2DEG;
+    }
+
+    // True when the bias estimate is physically plausible and the bound never had
+    // to bite. Note the sigma bound is a guard against a genuinely diverged
+    // covariance (it can reach ~5.7 dps at the P cap), NOT a convergence test:
+    // gyro bias is only weakly observable on a stationary, consistent pad — with
+    // no rotation there is little information to separate bias from attitude — so
+    // sigma sits near ~0.9 dps even when fully settled. That is expected.
+    bool gyroBiasHealthy(float max_dps = 3.0f, float max_sigma_dps = 2.0f) const {
+        return gbias_clip_count_ == 0
+            && gyroBiasMaxDps()      <= max_dps
+            && gyroBiasSigmaMaxDps() <= max_sigma_dps;
+    }
+
+    uint32_t gyroBiasGateTrips() const { return gbias_gate_trips_; }
+    uint32_t gyroBiasClipCount() const { return gbias_clip_count_; }
+
     // ─── Bulk state save/restore (reboot recovery) ─────────────────
     void getState(EkfStateSnapshot& s) const {
         std::memcpy(s.pos_rrm,     pEst_D_rrm_,   sizeof(s.pos_rrm));
@@ -321,8 +367,15 @@ private:
     // state correction (pos/vel/bias/quat), and updates P in Joseph form
     // exploiting the rank-1 structure of K*H.  Used by the baro-altitude and
     // the three heading updates (mag, GNSS course, accel-match).
+    // `gate_gyro_bias` (#508) arms the gyro-bias observability gate. Set it ONLY
+    // for measurements that carry ATTITUDE information (the three heading
+    // updates) — those are the ones whose inconsistency can be laundered into
+    // the bias. Baro measures altitude: its gyro-bias coupling is incidental, and
+    // a large baro innovation during a climb is the filter lagging, not a bad
+    // measurement, so gating there would fire constantly for no reason.
     void applyScalarMeasUpdate(const int* hidx, const float* hval, int hn,
-                               float y, float R, float s_min);
+                               float y, float R, float s_min,
+                               bool gate_gyro_bias = false);
 
     // Kalman matrices
     float quat_BL_[4];
@@ -382,6 +435,85 @@ private:
     static constexpr float P_MAX_ATT   = 10.0f;   // ~180 deg sigma
     static constexpr float P_MAX_ABIAS = 10.0f;   // ~3 m/s² sigma
     static constexpr float P_MAX_GBIAS = 0.01f;   // ~6 deg/s sigma
+
+    // ── #508: gyro-bias observability gate + physical bound ──────────────
+    //
+    // Gyro bias is a PHYSICAL sensor parameter: the ISM6's zero-rate offset is
+    // ~±1 dps typical, a few dps over temperature. It is observable ONLY through
+    // slow, CONSISTENT attitude drift — a large transient innovation carries no
+    // gyro-bias information at all; it means the attitude is off, or the
+    // measurement is bad (pad bump, wind sway, a steel rail deflecting the mag,
+    // a stale hard-iron cal, a wrong mounting setting).
+    //
+    // But accel/mag are the only updates that touch attitude, and K = P·Hᵀ·S⁻¹
+    // is 15×N — so the correction reaches gyro bias through the attitude↔bias
+    // cross-covariance whether or not H names those columns. Unlike the GNSS
+    // update (NIS-gated since #174), accel/mag had NO consistency test, so an
+    // inconsistent measurement was laundered straight into the bias state.
+    // Observed on the bench: -190 dps, ~100x beyond anything physical. Because
+    // accel/mag updates are gated off in flight, whatever the bias holds at
+    // launch is FROZEN IN and integrates into attitude for the whole ascent.
+    //
+    // Fix: when the innovation is inconsistent with the state (NIS above the
+    // gate), zero ONLY the gyro-bias rows of K. Attitude still corrects in full
+    // — so genuinely re-orienting the rocket on the rail still works — but the
+    // bias cannot absorb the inconsistency. Joseph form is valid for ANY gain,
+    // not just the optimal one, so P stays consistent and PSD; and since those
+    // rows are zeroed, the bias covariance is NOT reduced, so the filter
+    // correctly reports that it has not learned the bias.
+    //
+    // Thresholds are deliberately generous — they must not fire in normal
+    // operation, only on the wild innovations that indicate a bad measurement.
+    // Reference: R_accel_ = 0.25 (σ ≈ 0.5 m/s²). A legitimate 5° pad tilt gives
+    // NIS ≈ 3 (passes); the 81° frame step gives NIS ≈ 380 (trips).
+    // Chi-squared 99.9% thresholds for the innovation's DOF — a textbook NIS
+    // gate, not a tuned number. A legitimate 5° pad tilt sits at NIS ≈ 3 (passes);
+    // the 81° frame step is ≈ 380 (trips).
+    static constexpr float GBIAS_GATE_NIS_VEC    = 16.27f;  // chi2(3, 0.999)
+    static constexpr float GBIAS_GATE_NIS_SCALAR = 10.83f;  // chi2(1, 0.999)
+
+    // The gate LATCHES. Cutting the coupling only while NIS is above threshold
+    // is not enough: as the attitude slews toward a genuinely new gravity vector
+    // the innovation shrinks back under the gate, and the filter then absorbs the
+    // remaining "attitude moved but the gyro reported nothing" discrepancy into
+    // the bias — which is precisely the laundering we are trying to stop. So once
+    // a trip occurs, hold the bias coupling cut until the measurements have been
+    // consistent for a dwell, i.e. until the slew has finished. Sized to comfortably
+    // outlast the accel update's attitude time constant.
+    static constexpr uint32_t GBIAS_GATE_HOLD_US = 2000000u;   // 2 s
+    uint32_t gbias_gate_hold_until_us_ = 0;
+
+    // True while the gyro-bias coupling is held cut (gate tripped recently).
+    inline bool gyroBiasGateHeld() const {
+        return gbias_gate_hold_until_us_ != 0 && tPrev_us_ < gbias_gate_hold_until_us_;
+    }
+    // Arm/refresh the hold and count the trip.
+    inline void tripGyroBiasGate() {
+        ++gbias_gate_trips_;
+        gbias_gate_hold_until_us_ = tPrev_us_ + GBIAS_GATE_HOLD_US;
+    }
+
+    // Hard physical bound on the gyro-bias state (rad/s). A backstop: no
+    // estimate outside a real gyro's envelope is a bias, whatever path produced
+    // it. ±10 dps is ~5-10x the ISM6 spec — generous enough never to clip a
+    // genuine bias, tight enough that no path can reach -190 dps.
+    static constexpr float GYRO_BIAS_MAX_RPS = 10.0f * (float)(M_PI / 180.0);
+
+    // Clamp the gyro-bias state into its physical envelope. Called after every
+    // state correction. Counts clips so the pre-launch scorecard can see that
+    // the estimator has been driven somewhere impossible (#508).
+    inline void clampGyroBias() {
+        for (int i = 0; i < 3; ++i) {
+            if (wBias_rps_[i] >  GYRO_BIAS_MAX_RPS) {
+                wBias_rps_[i] =  GYRO_BIAS_MAX_RPS; ++gbias_clip_count_;
+            } else if (wBias_rps_[i] < -GYRO_BIAS_MAX_RPS) {
+                wBias_rps_[i] = -GYRO_BIAS_MAX_RPS; ++gbias_clip_count_;
+            }
+        }
+    }
+
+    uint32_t gbias_gate_trips_ = 0;   // updates whose gyro-bias coupling was cut
+    uint32_t gbias_clip_count_ = 0;   // times the bound actually bit
 
     // Helper methods
     void Quat2Euler(float q[4], float euler[3]);
