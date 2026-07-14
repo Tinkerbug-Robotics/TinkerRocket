@@ -957,6 +957,14 @@ bool TR_BLE_To_APP::begin()
     ESP_LOGI(BLE_TAG, "Server started (NimBLE)");
     ESP_LOGI(BLE_TAG, "Device name: %s", device_name_);
 
+    // #526: state whether the L2CAP CoC download transport is even compiled in,
+    // derived from the NimBLE syscfg value ITSELF — not from our own #define — so
+    // a stale/overriding generated sdkconfig (the #518/#519 trap) is caught in the
+    // boot log rather than silently disabling the fast path or, on the BS, silently
+    // compiling it in. 0 => not compiled in => every download is GATT.
+    ESP_LOGI(BLE_TAG, "L2CAP CoC download transport: MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM)=%d",
+             (int)MYNEWT_VAL(BLE_L2CAP_COC_MAX_NUM));
+
     return true;
 }
 

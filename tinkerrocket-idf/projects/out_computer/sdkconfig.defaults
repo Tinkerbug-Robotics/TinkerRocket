@@ -29,8 +29,34 @@ CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 # pool no longer loses data — it just makes us wait. A deeper one lets several
 # notifications ride each connection event, which is where the throughput is.
 # Cost is ~13 KB of heap; the OC has ~159 KB free.
-CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+#
+# (#526) MSYS_1 24 -> 48. Every link-layer K-frame of an L2CAP CoC SDU is pulled
+# from MSYS_1 (the smallest pool). If it runs dry MID-SDU, NimBLE takes the
+# `failed:` path in ble_l2cap_coc_continue_tx() and FREES an SDU whose earlier
+# K-frames are already on the air -> the peer's reassembler desyncs -> a silently
+# corrupt file. The producer already refuses to submit unless os_msys_num_free()
+# is above a watermark (oc_l2cap_send_policy.h), so this bump is not the primary
+# guard — it is headroom so telemetry notifications sharing the pool cannot starve
+# a transfer. +6 KB. This is a correctness margin, NOT throughput tuning.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=48
 CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48
+
+# (#526) Enable the L2CAP connection-oriented channel — a credit-based stream
+# socket with no ATT layer — as a second, faster download transport on the OC.
+# GATT notify stays the default and the fallback. iOS's per-connection-event
+# notification budget caps GATT downloads at ~35 kB/s (#524); a CoC channel is
+# the documented way past it (expect 2-3x).
+#
+# 0 (the default) means CoC is NOT COMPILED IN AT ALL — every ble_l2cap_* symbol
+# vanishes. So this must be an explicit value, and the base station must set an
+# explicit 0 (see its sdkconfig.defaults): an ABSENT symbol resolves to MYNEWT_VAL
+# 2, i.e. CoC compiled straight IN, which we do not want on the BS.
+#
+# TX only ever has one SDU outstanding (SDU_BUFF_COUNT=1). Do NOT raise
+# MSYS_1_BLOCK_SIZE — it sets only OUR RX MPS; the TX fragment size is the peer's
+# advertised coc_mps, so a bigger block buys nothing on the send path.
+CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=1
+CONFIG_BT_NIMBLE_L2CAP_COC_SDU_BUFF_COUNT=1
 
 # === POWER MANAGEMENT ===
 # Compiled in but only activated at runtime during low-power mode

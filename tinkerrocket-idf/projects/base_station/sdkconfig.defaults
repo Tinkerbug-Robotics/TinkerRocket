@@ -11,6 +11,14 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+
+# (#526) The L2CAP CoC download transport is an OUT COMPUTER feature. The base
+# station keeps its cooperative GATT download (#380) and must NOT compile in CoC.
+# This MUST be an explicit 0: an ABSENT CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM
+# resolves to MYNEWT_VAL 2 in esp_nimble_cfg.h, which would pull the whole
+# ble_l2cap_coc.c stack into the BS binary for no reason. Asserted present-and-0
+# in the BS build's generated sdkconfig.json.
+CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM=0
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
