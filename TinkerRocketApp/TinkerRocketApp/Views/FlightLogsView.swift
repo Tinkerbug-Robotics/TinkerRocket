@@ -10,6 +10,15 @@ import SwiftUI
 struct FlightLogsView: View {
     @State private var cachedFlights: [CachedFlight] = []
 
+    // Multi-select for bulk delete of locally cached flights (id = filename).
+    @State private var isSelecting = false
+    @State private var selection: Set<String> = []
+    @State private var showBulkDeleteConfirm = false
+
+    private var allSelected: Bool {
+        !cachedFlights.isEmpty && cachedFlights.allSatisfy { selection.contains($0.id) }
+    }
+
     var body: some View {
         Group {
             if cachedFlights.isEmpty {
@@ -28,17 +37,84 @@ struct FlightLogsView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
-                    ForEach(cachedFlights) { flight in
-                        NavigationLink(destination: FlightDetailView(flight: flight, onDelete: {
-                            FileCache.shared.deleteCachedFlight(flight)
-                            cachedFlights = FileCache.shared.listCachedFlights()
-                        })) {
-                            FlightLogRow(flight: flight)
+                VStack(spacing: 0) {
+                    // Select / Cancel (+ Select all while selecting).
+                    HStack {
+                        if isSelecting {
+                            Button(allSelected ? "Deselect all" : "Select all") {
+                                if allSelected {
+                                    selection.removeAll()
+                                } else {
+                                    selection = Set(cachedFlights.map { $0.id })
+                                }
+                            }
+                            Spacer()
+                            Button("Cancel") { exitSelection() }
+                        } else {
+                            Spacer()
+                            Button("Select") { isSelecting = true }
                         }
                     }
+                    .foregroundColor(.blue)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+
+                    List {
+                        ForEach(cachedFlights) { flight in
+                            if isSelecting {
+                                Button {
+                                    toggleSelection(flight.id)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: selection.contains(flight.id)
+                                              ? "checkmark.circle.fill" : "circle")
+                                            .font(.title3)
+                                            .foregroundColor(selection.contains(flight.id) ? .blue : .secondary)
+                                        FlightLogRow(flight: flight)
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                NavigationLink(destination: FlightDetailView(flight: flight, onDelete: {
+                                    FileCache.shared.deleteCachedFlight(flight)
+                                    cachedFlights = FileCache.shared.listCachedFlights()
+                                })) {
+                                    FlightLogRow(flight: flight)
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(InsetGroupedListStyle())
+
+                    // Bulk delete action bar.
+                    if isSelecting {
+                        HStack {
+                            Spacer()
+                            Button(action: { showBulkDeleteConfirm = true }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "trash")
+                                    Text("Delete\(selection.isEmpty ? "" : " (\(selection.count))")")
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(selection.isEmpty ? Color.gray : Color.red)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            }
+                            .disabled(selection.isEmpty)
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                    }
                 }
-                .listStyle(InsetGroupedListStyle())
+                .alert("Delete \(selection.count) Flight\(selection.count == 1 ? "" : "s")?",
+                       isPresented: $showBulkDeleteConfirm) {
+                    Button("Delete", role: .destructive) { deleteSelected() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Are you sure you want to delete \(selection.count) downloaded flight\(selection.count == 1 ? "" : "s")? This removes the local copy only.")
+                }
             }
         }
         .navigationTitle("Flight Logs")
@@ -46,6 +122,22 @@ struct FlightLogsView: View {
         .onAppear {
             cachedFlights = FileCache.shared.listCachedFlights()
         }
+    }
+
+    private func toggleSelection(_ id: String) {
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+    }
+
+    private func exitSelection() {
+        isSelecting = false
+        selection.removeAll()
+    }
+
+    private func deleteSelected() {
+        let toDelete = cachedFlights.filter { selection.contains($0.id) }
+        for flight in toDelete { FileCache.shared.deleteCachedFlight(flight) }
+        exitSelection()
+        cachedFlights = FileCache.shared.listCachedFlights()
     }
 }
 

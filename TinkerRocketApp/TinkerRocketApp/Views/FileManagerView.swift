@@ -14,9 +14,22 @@ struct FileManagerView: View {
     @State private var fileToDelete: FileInfo?
     @State private var showDeleteConfirm = false
 
+    // Multi-select for bulk delete. `selection` holds file names (FileInfo.id),
+    // so it survives paging — you can select across pages and the count in the
+    // action bar reflects the full set even when some aren't on the visible page.
+    @State private var isSelecting = false
+    @State private var selection: Set<String> = []
+    @State private var showBulkDeleteConfirm = false
+
     // ESP32 already excludes recovery files from the BLE file list
     private var displayedFiles: [FileInfo] {
         device.files
+    }
+
+    // True when every file on the current page is selected (drives Select-all vs
+    // Deselect-all). False for an empty page so the toggle reads "Select all".
+    private var allOnPageSelected: Bool {
+        !displayedFiles.isEmpty && displayedFiles.allSatisfy { selection.contains($0.name) }
     }
 
     // Both firmwares paginate the BLE file list at 5 entries/page
@@ -74,19 +87,29 @@ struct FileManagerView: View {
                         }
                     }
                     Spacer()
-                    Button(action: {
-                        print("Requesting file list...")
-                        device.requestFileList(page: device.currentPage)
-                    }) {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Refresh")
+                    if isSelecting {
+                        Button("Cancel") { exitSelection() }
+                            .foregroundColor(.blue)
+                    } else {
+                        if !displayedFiles.isEmpty {
+                            Button("Select") { isSelecting = true }
+                                .foregroundColor(.blue)
+                                .padding(.trailing, 4)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        Button(action: {
+                            print("Requesting file list...")
+                            device.requestFileList(page: device.currentPage)
+                        }) {
+                            HStack {
+                                Image(systemName: "arrow.clockwise")
+                                Text("Refresh")
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        }
                     }
                 }
                 .padding()
@@ -146,25 +169,36 @@ struct FileManagerView: View {
                 } else {
                     List {
                         ForEach(displayedFiles) { file in
-                            FileRow(
-                                file: file,
-                                onDelete: {
-                                    fileToDelete = file
-                                    showDeleteConfirm = true
-                                },
-                                onDownload: {
-                                    print("Download button tapped for: \(file.name)")
+                            if isSelecting {
+                                Button {
+                                    toggleSelection(file.name)
+                                } label: {
+                                    FileRow(file: file, onDelete: {}, onDownload: {},
+                                            device: device, selectionMode: true,
+                                            isSelected: selection.contains(file.name))
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                FileRow(
+                                    file: file,
+                                    onDelete: {
+                                        fileToDelete = file
+                                        showDeleteConfirm = true
+                                    },
+                                    onDownload: {
+                                        print("Download button tapped for: \(file.name)")
 
-                                    device.downloadAndCacheFlight(file.name) { success in
-                                        if success {
-                                            print("[DOWNLOAD] Success: \(file.name)")
-                                        } else {
-                                            print("[DOWNLOAD] Failed: \(file.name)")
+                                        device.downloadAndCacheFlight(file.name) { success in
+                                            if success {
+                                                print("[DOWNLOAD] Success: \(file.name)")
+                                            } else {
+                                                print("[DOWNLOAD] Failed: \(file.name)")
+                                            }
                                         }
-                                    }
-                                },
-                                device: device
-                            )
+                                    },
+                                    device: device
+                                )
+                            }
                         }
                     }
                     .listStyle(InsetGroupedListStyle())
@@ -184,6 +218,13 @@ struct FileManagerView: View {
                             Text("Are you sure you want to delete \"\(file.displayTitle)\" from the \(device.isBaseStation ? "base station" : "rocket")? This cannot be undone.")
                         }
                     }
+                    .alert("Delete \(selection.count) \(device.isBaseStation ? "LoRa Log" : "Flight")\(selection.count == 1 ? "" : "s")?",
+                           isPresented: $showBulkDeleteConfirm) {
+                        Button("Delete", role: .destructive) { deleteSelected() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Are you sure you want to delete \(selection.count) \(device.isBaseStation ? "log" : "flight")\(selection.count == 1 ? "" : "s") from the \(device.isBaseStation ? "base station" : "rocket")? This cannot be undone.")
+                    }
 
                     // Pagination — numbered page navigator so many saved files
                     // are easy to jump through (not just Prev/Next one at a time).
@@ -194,6 +235,37 @@ struct FileManagerView: View {
                             hasMore: device.hasMoreFiles,
                             onSelect: { device.requestFileList(page: UInt8(clamping: $0)) }
                         )
+                        .padding(.horizontal)
+                        .padding(.bottom, isSelecting ? 4 : 10)
+                    }
+
+                    // Multi-select action bar.
+                    if isSelecting {
+                        HStack {
+                            Button(allOnPageSelected ? "Deselect all" : "Select all") {
+                                if allOnPageSelected {
+                                    displayedFiles.forEach { selection.remove($0.name) }
+                                } else {
+                                    displayedFiles.forEach { selection.insert($0.name) }
+                                }
+                            }
+                            .foregroundColor(.blue)
+
+                            Spacer()
+
+                            Button(action: { showBulkDeleteConfirm = true }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "trash")
+                                    Text("Delete\(selection.isEmpty ? "" : " (\(selection.count))")")
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(selection.isEmpty ? Color.gray : Color.red)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            }
+                            .disabled(selection.isEmpty)
+                        }
                         .padding(.horizontal)
                         .padding(.bottom, 10)
                     }
@@ -215,6 +287,24 @@ struct FileManagerView: View {
             // Rebuild download states from cache when file list updates
             device.rebuildDownloadStates(for: files.map { $0.name })
         }
+    }
+
+    private func toggleSelection(_ name: String) {
+        if selection.contains(name) { selection.remove(name) } else { selection.insert(name) }
+    }
+
+    private func exitSelection() {
+        isSelecting = false
+        selection.removeAll()
+    }
+
+    private func deleteSelected() {
+        let names = Array(selection)
+        device.deleteFiles(names)
+        exitSelection()
+        // Resync from the device: a bulk delete can empty the current page or
+        // shift the total, so jump back to the first page.
+        device.requestFileList(page: 0)
     }
 }
 
@@ -326,9 +416,20 @@ struct FileRow: View {
     let onDelete: () -> Void
     let onDownload: () -> Void
     @ObservedObject var device: BLEDevice
+    // In selection mode the per-row Download/Delete buttons give way to a leading
+    // checkmark and the whole row acts as a selection toggle (handled by the
+    // caller wrapping this in a Button).
+    var selectionMode: Bool = false
+    var isSelected: Bool = false
 
     var body: some View {
         HStack {
+            if selectionMode {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundColor(isSelected ? .blue : .secondary)
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(file.displayTitle)
                     .font(.body)
@@ -340,21 +441,24 @@ struct FileRow: View {
 
             Spacer()
 
-            // Download button
-            Button(action: onDownload) {
-                downloadButtonContent
-            }
-            .buttonStyle(BorderlessButtonStyle())
-            .disabled(downloadButtonDisabled)
+            if !selectionMode {
+                // Download button
+                Button(action: onDownload) {
+                    downloadButtonContent
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                .disabled(downloadButtonDisabled)
 
-            // Delete button
-            Button(action: onDelete) {
-                Image(systemName: "trash")
-                    .foregroundColor(.red)
+                // Delete button
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(BorderlessButtonStyle())
             }
-            .buttonStyle(BorderlessButtonStyle())
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 
     // Download button content based on state
