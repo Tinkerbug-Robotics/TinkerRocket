@@ -365,22 +365,25 @@ TEST(LoraPickQuietestChannel, TiesFavorLowerIndex) {
 // Issues #40 / #41: per-packet channel hopping — state gate
 // ============================================================================
 
-TEST(ShouldHopInState, OnlyPrelaunchAndInflight) {
-    // Hopping is intentionally gated to the two states where the rocket
-    // is committed to its modulation config and isn't in a recovery /
-    // pre-handshake situation.  Ground states (READY/LANDED/INIT) stay
-    // on the static channel so config and recovery work as before.
+TEST(ShouldHopInState, TelemetryStatesHopGroundSetupStatesDont) {
+    // #150: every state that streams full-rate (2 Hz) telemetry hops —
+    // that's what keeps per-frequency airtime under the FCC 15.247 FHSS
+    // occupancy bound.  LANDED transmits just as hard as INFLIGHT, so it
+    // hops too (parking 2 Hz on one channel is ~2.1 s per 10 s, 5x the
+    // 0.4 s bound).  Ground setup states (INIT/READY/MAG_CAL) stay on
+    // the static channel so config and the initial handshake stay simple.
     EXPECT_FALSE(shouldHopInState(INITIALIZATION));
     EXPECT_FALSE(shouldHopInState(READY));
     EXPECT_TRUE (shouldHopInState(PRELAUNCH));
     EXPECT_TRUE (shouldHopInState(INFLIGHT));
-    EXPECT_FALSE(shouldHopInState(LANDED));
+    EXPECT_TRUE (shouldHopInState(LANDED));
+    EXPECT_FALSE(shouldHopInState(MAG_CALIBRATION));
 }
 
 TEST(ShouldHopInState, Uint8OverloadMatchesEnum) {
     // The BS receives state numerically from the LoRa downlink, so the
     // uint8_t overload must agree bit-for-bit with the enum overload.
-    for (uint8_t s = 0; s <= 4; s++)
+    for (uint8_t s = 0; s <= 5; s++)
     {
         EXPECT_EQ(shouldHopInState(s),
                   shouldHopInState((RocketState)s)) << "state=" << (int)s;
@@ -611,10 +614,13 @@ TEST(RocketLikelyHopping, RecentHopStateTrue) {
 }
 
 TEST(RocketLikelyHopping, RecentNonHopStateFalse) {
-    // Recent RX but in READY/INIT/LANDED — direct scan path is correct.
+    // Recent RX but in READY/INIT — direct scan path is correct.
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, READY,         10000));
     EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, INITIALIZATION,10000));
-    EXPECT_FALSE(rocketLikelyHopping(false, 95000, 100000, LANDED,        10000));
+    // #150: LANDED hops now (2 Hz telemetry continues after landing), so a
+    // recent LANDED packet means a scan must take the coordinated-pause
+    // path — a direct scan would drop the link mid-schedule.
+    EXPECT_TRUE (rocketLikelyHopping(false, 95000, 100000, LANDED,        10000));
 }
 
 // ============================================================================
@@ -1032,4 +1038,218 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 87u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
+}
+
+// ============================================================================
+// Issue #150: adaptive FCC hop dwell — airtime-derived, compliance-bounded
+// ============================================================================
+// FCC 15.247 FHSS binds accumulated TRANSMIT AIRTIME on any single
+// frequency: < 0.4 s per 10 s window at channel BW >= 250 kHz, per 20 s
+// window below.  The schedule satisfies it per-visit (`dwell` packets on
+// one channel) as long as one full cycle outlasts the window, so a channel
+// is never revisited inside it.  Both halves are pinned here against the
+// shared airtime formula that the OC scheduler and BS follower use.
+
+namespace fhss150 {
+// Production telemetry frame: sizeof(LoRaData), pinned at 66 by the
+// header's static_asserts.  Growing the frame has a real regulatory cost —
+// it pushes the SF10/BW250 long-range rung over the dwell budget first —
+// so the table below fails deliberately if it changes.
+constexpr size_t  kTelemFrameLen = SIZE_OF_LORA_DATA;
+constexpr uint8_t kCr            = LORA_FACTORY_RENDEZVOUS_CR;  // 4/5 on both ends
+// = out_computer config.h LORA_TX_RATE_HZ.  Telemetry is an unconditional
+// 2 Hz in every transmitting state.  If the rate ever rises, re-derive the
+// revisit bound below — BW125 hopping stops being legal near 4 Hz.
+constexpr float   kTxRateHz      = 2.0f;
+// Current name-beacon frame (sync + id + name).  Update if it grows.
+constexpr size_t  kBeaconLen     = 23;
+
+inline uint32_t telemToaMs(uint8_t sf, float bw_khz) {
+    return loraTimeOnAirMs(kTelemFrameLen, sf, bw_khz, kCr,
+                           LORA_TELEM_PREAMBLE_SYMS);
+}
+inline uint32_t fccWindowSec(float bw_khz) {
+    return (bw_khz >= 250.0f) ? 10u : 20u;
+}
+}  // namespace fhss150
+
+TEST(LoraTimeOnAir, PinsTheNumbersTheDwellTableRestsOn) {
+    using namespace fhss150;
+    // Semtech AN1200.13 at the production frame (66 B, preamble 12, CR4/5).
+    EXPECT_NEAR(telemToaMs(8,  250.0f), 112.0, 2.0);
+    EXPECT_NEAR(telemToaMs(9,  250.0f), 203.0, 2.0);
+    // The long-range rung: 14 ms under the FCC 400 ms occupancy line.
+    EXPECT_NEAR(telemToaMs(10, 250.0f), 386.0, 3.0);
+    // SF11 @ BW250 cannot fit even one packet in the budget.
+    EXPECT_GT(telemToaMs(11, 250.0f), LORA_HOP_DWELL_BUDGET_MS);
+}
+
+TEST(LoraHopDwell, AdaptiveTable) {
+    using namespace fhss150;
+    // The ladder the iOS picker exposes (0 = hopping unavailable, GUI
+    // greys the option).  Derived, not designed — if any row changes,
+    // either the frame grew or someone touched the budget: both are
+    // regulatory decisions that must be made consciously.
+    struct Row { uint8_t sf; float bw; uint8_t dwell; };
+    const Row rows[] = {
+        {7,  250.0f, 4}, {8,  250.0f, 3}, {9,  250.0f, 1},
+        {10, 250.0f, 1},                       // the +5 dB long-range rung
+        {11, 250.0f, 0}, {12, 250.0f, 0},
+        {7,  125.0f, 3}, {8,  125.0f, 1}, {9,  125.0f, 0}, {10, 125.0f, 0},
+        {7,  500.0f, 4}, {8,  500.0f, 4}, {9,  500.0f, 3},
+        {10, 500.0f, 2}, {11, 500.0f, 1}, {12, 500.0f, 0},
+    };
+    for (const auto& r : rows) {
+        EXPECT_EQ(loraHopDwellForConfig(r.sf, r.bw, kTelemFrameLen, kCr),
+                  r.dwell)
+            << "SF" << (int)r.sf << "/BW" << r.bw
+            << " toa=" << telemToaMs(r.sf, r.bw) << " ms";
+    }
+}
+
+TEST(LoraHopDwell, ComplianceInvariant) {
+    using namespace fhss150;
+    // The binding check: for EVERY modulation the firmware can be
+    // configured into, either hopping is refused (dwell 0) or a full
+    // dwell visit stays under the FCC 400 ms occupancy line.
+    const float bws[] = {125.0f, 250.0f, 500.0f};
+    for (uint8_t sf = 6; sf <= 12; sf++) {
+        for (float bw : bws) {
+            const uint8_t d = loraHopDwellForConfig(sf, bw, kTelemFrameLen, kCr);
+            if (d == 0) continue;
+            EXPECT_LE(d * telemToaMs(sf, bw), 400u)
+                << "SF" << (int)sf << "/BW" << bw << " dwell=" << (int)d;
+        }
+    }
+}
+
+TEST(LoraHopDwell, FullCycleRevisitOutlastsTheFccWindow) {
+    using namespace fhss150;
+    // Per-visit occupancy is only sufficient if a channel is never
+    // revisited inside the window.  Worst case is the FCC floor channel
+    // count (skip-mask at its most aggressive) at the production TX rate.
+    const float bws[] = {125.0f, 250.0f, 500.0f};
+    for (uint8_t sf = 6; sf <= 12; sf++) {
+        for (float bw : bws) {
+            const uint8_t d = loraHopDwellForConfig(sf, bw, kTelemFrameLen, kCr);
+            if (d == 0) continue;
+            const float cycle_s =
+                (float)loraFhssMinChannels(bw) * (float)d / kTxRateHz;
+            EXPECT_GE(cycle_s, (float)fccWindowSec(bw))
+                << "SF" << (int)sf << "/BW" << bw << " dwell=" << (int)d;
+        }
+    }
+}
+
+TEST(LoraHopDwell, BeaconSuppressionDuringHopIsLoadBearing) {
+    using namespace fhss150;
+    // Name beacons transmit every 2 s in non-INFLIGHT states.  If one
+    // rode a hop-dwell channel visit at the long-range rung, the visit
+    // would blow the occupancy line — which is exactly why the OC
+    // suppresses beacons while hop_active_ (they'd ride hop channels the
+    // BS already follows, so they add nothing either).
+    const uint8_t d10 = loraHopDwellForConfig(10, 250.0f, kTelemFrameLen, kCr);
+    ASSERT_GT(d10, 0);
+    const uint32_t beacon_toa =
+        loraTimeOnAirMs(kBeaconLen, 10, 250.0f, kCr, LORA_TELEM_PREAMBLE_SYMS);
+    EXPECT_GT(d10 * telemToaMs(10, 250.0f) + beacon_toa, 400u)
+        << "if this passes, beacon suppression stopped being load-bearing";
+    // Even at SF8 (dwell 3) a beacon would leave ~zero margin: 336+61=397.
+    const uint32_t beacon8 =
+        loraTimeOnAirMs(kBeaconLen, 8, 250.0f, kCr, LORA_TELEM_PREAMBLE_SYMS);
+    EXPECT_LE(3 * telemToaMs(8, 250.0f) + beacon8, 400u);
+}
+
+TEST(LoraHopChannelForSeq, ExactUniformityOverFullCycles) {
+    // FCC: "each frequency used equally on the average".  The
+    // deterministic round-robin is EXACTLY uniform over whole cycles —
+    // every active channel gets k*dwell packets, masked channels get 0 —
+    // from ANY starting seq.  start=0 doubles as the rocket-reboot
+    // (seq reset) case: a reboot restarts the schedule but cannot bias
+    // long-run channel use.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    constexpr uint8_t n = 69;             // BW250 table
+    for (uint8_t i = 0; i < 19; i++) {    // mask 19 → n_active = 50 (floor)
+        loraSkipMaskSet(mask, (uint8_t)(i * 3 + 1));
+    }
+    constexpr uint8_t  dwell    = 3;      // = loraHopDwellForConfig @ SF8/BW250
+    constexpr uint16_t n_active = 50;
+    constexpr uint16_t cycle    = dwell * n_active;
+    constexpr uint16_t k        = 3;
+    const uint16_t starts[] = {0, 12345};
+    for (uint16_t start : starts) {
+        uint32_t counts[256] = {0};
+        for (uint32_t s = start; s < (uint32_t)start + k * cycle; s++) {
+            counts[loraHopChannelForSeq((uint16_t)s, dwell, mask, n)]++;
+        }
+        for (uint8_t c = 0; c < n; c++) {
+            if (loraSkipMaskTest(mask, c)) {
+                EXPECT_EQ(counts[c], 0u) << "masked ch " << (int)c
+                                         << " start=" << start;
+            } else {
+                EXPECT_EQ(counts[c], (uint32_t)(k * dwell))
+                    << "active ch " << (int)c << " start=" << start;
+            }
+        }
+    }
+}
+
+TEST(LoraHopChannelForSeq, U16WrapKeepsLongRunUseNearUniform) {
+    // 65536 is not a whole number of cycles, so each u16 epoch hands at
+    // most one extra dwell-window to some channels.  Bound the spread —
+    // this is the long-run "equal use on average" property across seq
+    // wraps.
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    constexpr uint8_t n     = 69;
+    constexpr uint8_t dwell = 3;
+    uint32_t counts[256] = {0};
+    for (uint32_t s = 0; s < 65536; s++) {
+        counts[loraHopChannelForSeq((uint16_t)s, dwell, mask, n)]++;
+    }
+    uint32_t mn = UINT32_MAX, mx = 0;
+    for (uint8_t c = 0; c < n; c++) {
+        if (counts[c] < mn) mn = counts[c];
+        if (counts[c] > mx) mx = counts[c];
+    }
+    EXPECT_LE(mx - mn, (uint32_t)dwell);
+}
+
+TEST(LoraHopSchedule, ManualScanHandoffKeepsFloorAndCoverage) {
+    using namespace fhss150;
+    // The pure-function path a user's manual Frequency Scan takes while
+    // hopping (#150, settled decision 3): hostile scan → channel-set
+    // selection enforces the FCC floor → the seq schedule then cycles
+    // EXACTLY the surviving active set.
+    const uint8_t n = loraChannelCount(250.0f);
+    ASSERT_GE(n, 50u);
+    float  freqs[139];
+    int8_t rssi[139];
+    for (uint8_t i = 0; i < n; i++) {
+        freqs[i] = loraChannelMHz(250.0f, i);
+        rssi[i]  = (i % 5 == 0) ? -100 : -50;   // most channels loud
+    }
+    LoRaChannelSetSelection out{};
+    loraSelectChannelSet(freqs, rssi, n, 250.0f, &out);
+
+    uint16_t n_active = 0;
+    for (uint8_t i = 0; i < out.n_channels; i++) {
+        if (!loraSkipMaskTest(out.skip_mask, i)) n_active++;
+    }
+    ASSERT_GE(n_active, loraFhssMinChannels(250.0f));
+
+    const uint8_t dwell = loraHopDwellForConfig(8, 250.0f, kTelemFrameLen, kCr);
+    ASSERT_GT(dwell, 0);
+    uint32_t counts[256] = {0};
+    const uint32_t cycle = (uint32_t)dwell * n_active;
+    for (uint32_t s = 0; s < cycle; s++) {
+        counts[loraHopChannelForSeq((uint16_t)s, dwell, out.skip_mask,
+                                    out.n_channels)]++;
+    }
+    for (uint8_t c = 0; c < out.n_channels; c++) {
+        if (loraSkipMaskTest(out.skip_mask, c)) {
+            EXPECT_EQ(counts[c], 0u) << "masked ch " << (int)c;
+        } else {
+            EXPECT_EQ(counts[c], (uint32_t)dwell) << "active ch " << (int)c;
+        }
+    }
 }
