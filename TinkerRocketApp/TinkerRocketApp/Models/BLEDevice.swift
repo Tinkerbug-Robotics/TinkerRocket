@@ -1168,9 +1168,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     private func reopenL2capChannel() {
-        guard l2capPSM != 0, let peripheral = peripheral, !l2capOpenRequested else { return }
-        l2capOpenRequested = true
-        peripheral.openL2CAPChannel(l2capPSM)
+        // Defer: after a channel closes, iOS needs a moment to release the PSM, or
+        // openL2CAPChannel fails with "L2CAP PSM already connected". 2 s is safe and
+        // the channel is only needed for the NEXT download anyway.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self = self, self.l2capPSM != 0, let peripheral = self.peripheral,
+                  !self.l2capOpenRequested else { return }
+            self.l2capOpenRequested = true
+            peripheral.openL2CAPChannel(self.l2capPSM)
+        }
     }
 
     // GATT (notify) download — the original path and the fallback.

@@ -1479,11 +1479,23 @@ static constexpr uint16_t kL2capOurMtu = 512;
 // its InputStream, so a brief UI hitch must not abort a healthy transfer.
 static constexpr uint32_t kL2capBudgetMs = 30000;
 
-// Refuse to submit an SDU unless MSYS_1 has at least this many free blocks. Every
-// K-frame the stack fragments our SDU into comes from MSYS_1, and exhaustion
-// MID-SDU frees a half-transmitted SDU -> silent corruption. This is the real
-// backpressure; it is mandatory, not tuning. Pool is 48 blocks (#526 step 1).
-static constexpr int kMsysWatermark = 16;
+// Backpressure watermark on os_msys_num_free(). Every K-frame the stack fragments
+// our SDU into comes from MSYS_1 (the smallest pool), and exhaustion MID-SDU frees
+// a half-transmitted SDU -> silent corruption. This is mandatory, not tuning.
+//
+// THE TRAP (bench 2026-07-15, aborted after 10 KB at 237 KB/s): os_msys_num_free()
+// sums ALL msys pools (MSYS_1 48 + MSYS_2 48 = 96), but K-frames come only from
+// MSYS_1. A naive watermark of 16 watched the 96-total, which never fell near 16
+// while MSYS_1 alone drained to zero — the gate never fired, the producer raced
+// ~20 SDUs ahead (rc==0 just QUEUES into host RAM, it is NOT "on the wire"), and
+// MSYS_1 exhausted mid-SDU. `ble_l2cap_send` then took its `failed:` path.
+//
+// MSYS_2 is not used by the TX K-frame path, so it sits ~full; therefore
+// MSYS_1_free ~= total_free - MSYS_2_count. Gating on total >= MSYS_2_count + H
+// keeps MSYS_1_free >= H at submit time. H = 24 covers a 502-byte SDU's K-frames
+// with wide margin even at a small MPS, and still pipelines ~24 MSYS_1 blocks deep
+// (several SDUs in flight) so throughput stays high.
+static constexpr int kMsysWatermark = 48 /*MSYS_2 count*/ + 24 /*MSYS_1 headroom*/;
 
 // Dedicated SDU pool, NOT msys — msys is for the GATT notify path and the stack's
 // own K-frames, and must not be drained by a stuck download. Sized for one RX SDU
@@ -1505,6 +1517,7 @@ static struct os_mbuf*  s_l2cap_tx_om = nullptr;  // parked SDU (host task consu
 static volatile int     s_l2cap_tx_state = TX_IDLE;
 static TaskHandle_t     s_l2cap_tx_waiter = nullptr;  // oc_loop task to notify
 static bool             s_l2cap_engine_ready = false;
+static int              s_l2cap_msys_min = 0x7fffffff; // low-water of os_msys_num_free during a xfer
 
 static void l2cap_wake_waiter()
 {
@@ -1722,6 +1735,7 @@ bool TR_BLE_To_APP::l2capBeginTransfer(const char* name, uint32_t size_hint, uin
     if (l2cap_chan_ == nullptr) return false;
     l2cap_xfer_crc_   = tr_crc32::init();
     l2cap_xfer_bytes_ = 0;
+    s_l2cap_msys_min  = 0x7fffffff;
 
     size_t name_len = 0;
     if (name != nullptr) { while (name[name_len] != '\0' && name_len < 255) name_len++; }
@@ -1745,6 +1759,7 @@ bool TR_BLE_To_APP::l2capSendData(const uint8_t* data, size_t len)
     // Backpressure (mandatory): do not submit unless MSYS_1 has headroom for the
     // K-frames this SDU will fragment into. Wait in short steps, bounded by budget.
     const uint32_t deadline = (uint32_t)millis() + kL2capBudgetMs;
+    { const int mf = os_msys_num_free(); if (mf < s_l2cap_msys_min) s_l2cap_msys_min = mf; }
     while (!oc_l2cap::msysGateOk(os_msys_num_free(), kMsysWatermark))
     {
         if ((int32_t)(deadline - (uint32_t)millis()) <= 0)
@@ -1788,9 +1803,11 @@ bool TR_BLE_To_APP::l2capEndTransfer(uint8_t status)
     if (om == nullptr) return false;
     if (os_mbuf_append(om, buf, n) != 0) { os_mbuf_free_chain(om); return false; }
     const bool ok = l2capSubmitAndWait(om, kL2capBudgetMs);
-    ESP_LOGI(BLE_TAG, "L2CAP END: bytes=%lu crc=0x%08lx status=%u (%s)",
+    ESP_LOGI(BLE_TAG, "L2CAP END: bytes=%lu crc=0x%08lx status=%u (%s)  msys_free_min=%d "
+                      "(watermark %d, must stay >0)",
              (unsigned long)l2cap_xfer_bytes_, (unsigned long)crc, (unsigned)status,
-             ok ? "sent" : "send failed");
+             ok ? "sent" : "send failed",
+             (s_l2cap_msys_min == 0x7fffffff) ? -1 : s_l2cap_msys_min, kMsysWatermark);
     return ok;
 }
 
