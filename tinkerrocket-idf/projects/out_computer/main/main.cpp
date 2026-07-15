@@ -594,13 +594,15 @@ static bool    hop_active_        = false;
 static uint8_t hop_idx_           = 0;
 static bool    hop_first_pkt_     = false;
 static bool    hop_needs_retune_  = false;
-// Operator override: when true, hopping is suppressed even in PRELAUNCH /
-// INFLIGHT and we stay on lora_freq_mhz for the whole flight (#106).  Set
-// by the BS via LORA_CMD_SET_HOP_DISABLED (cmd 17).  NVS-backed so the
+// Link mode (#106 origin, user-facing since #150): when true, hopping is
+// suppressed even in PRELAUNCH/INFLIGHT/LANDED and we stay on
+// lora_freq_mhz.  Set by the BS via LORA_CMD_SET_HOP_DISABLED (cmd 17),
+// driven by the app's Fixed/Hopping link-mode picker.  NVS-backed so the
 // setting survives reboot.  Both sides must agree; the BS keeps its own
-// copy and pushes changes here.  Diagnostic / link-debugging mode only —
-// using a fixed frequency in flight is not FHSS-compliant.
-static bool    lora_hop_disabled  = false;
+// copy, mirrors changes here, and re-pushes on evidence of a mismatch.
+// Initialized true (fixed mode, the default) so the window between boot
+// and the NVS load can never report hop-enabled.
+static bool    lora_hop_disabled  = true;
 
 // Hop-silence rendezvous fallback state (#40 / #41 phase 2b).
 // Definitions of HOP_FALLBACK_*_MS constants and the serviceHopFallback()
@@ -633,12 +635,23 @@ static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
 // alongside the other LoRa-stats vars.
 static bool lora_in_rx_mode = false;
 
+// #150: packets-per-channel dwell for the CURRENT modulation, derived from
+// real airtime so the FCC occupancy bound holds at every preset.  0 means a
+// single packet exceeds the budget => hopping is not permitted at this
+// (sf, bw) and every hop entry point below refuses to start.
+static inline uint8_t currentHopDwell()
+{
+    return loraHopDwellForConfig(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+}
+
 static inline void updateHopFromState(RocketState s)
 {
-    // Operator override: in fixed-frequency mode (#106) we stay on
-    // lora_freq_mhz for every state.  Otherwise fall back to the
-    // shared per-state policy.
-    const bool want_active = !lora_hop_disabled && shouldHopInState(s);
+    // Fixed-frequency mode (#106/#150 link mode) stays on lora_freq_mhz
+    // for every state.  #150 also refuses to hop when the current
+    // modulation can't fit a dwell visit inside the FCC occupancy budget
+    // (currentHopDwell() == 0, e.g. BW125 @ SF9+).
+    const bool want_active = !lora_hop_disabled && currentHopDwell() > 0 &&
+                             shouldHopInState(s);
     if (want_active && !hop_active_)
     {
         // OFF → ON.  Bootstrap: the next TX still goes out on
@@ -796,12 +809,16 @@ static float max_speed_mps = 0.0f;
 
 static uint32_t lora_tx_ok = 0;
 static uint32_t lora_tx_fail = 0;
+// #150: uplinks dropped by the network-id filter.  Counted (and logged in
+// the periodic LoRa stats line) because the #133-era nid-drift regression
+// was invisible precisely because this drop path said nothing.
+static uint32_t lora_uplink_nid_drops = 0;
 static uint32_t last_lora_tx_ms = 0;
 
 // Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
 // on every actual transmit so the BS can compute observed-loss rates and
 // the slow-hop seq-anchored channel schedule.  Widened to 16 bits in
-// proto v4 — see LORA_HOP_DWELL_PACKETS for why u8 was insufficient.
+// proto v4 — see loraHopDwellForConfig() for why u8 was insufficient.
 // Wraps mod 65536; resets to 0 on reboot.
 static uint16_t lora_tx_seq = 0;
 // lora_in_rx_mode forward-declared up with the hop state.
@@ -2756,7 +2773,7 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
             static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
             const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
             lora.next_channel_idx = loraHopChannelForSeq(
-                (uint16_t)(seq + 1), LORA_HOP_DWELL_PACKETS, mask, n);
+                (uint16_t)(seq + 1), currentHopDwell(), mask, n);
         }
     }
     else
@@ -2938,7 +2955,7 @@ static void serviceLoRa()
                 static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
                 const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
                 hop_idx_ = loraHopChannelForSeq(
-                    lora_tx_seq, LORA_HOP_DWELL_PACKETS, mask, n);
+                    lora_tx_seq, currentHopDwell(), mask, n);
             }
             hop_needs_retune_ = true;
         }
@@ -2967,6 +2984,14 @@ static void sendLoRaBeacon()
     // we don't change channel mid-flight anyway.  Logic shared with
     // tests via shouldBeaconInState() in RocketComputerTypes.h.
     if (!shouldBeaconInState(latest_rocket_state)) return;
+
+    // #150: no beacons while the hop schedule is running.  They would ride
+    // hop channels the BS already follows (it knows this rocket by then),
+    // and a beacon inside a dwell visit can blow the FCC occupancy budget
+    // (at SF10/BW250 a single beacon pushes the visit ~50% over — see the
+    // BeaconSuppressionDuringHopIsLoadBearing host test).  Rendezvous
+    // visits and scan pauses still beacon — that's their purpose.
+    if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL) return;
 
     const uint32_t now_ms = millis();
     if ((now_ms - last_beacon_ms) < 2000) return;
@@ -3110,6 +3135,9 @@ static void sendCurrentConfig()
     j += ",\"lcr\":"; j += itos(lora_cr);
     j += ",\"lpw\":"; j += itos(lora_tx_power);
     j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
+    // #150: airtime-derived hop dwell for the current preset; 0 tells the
+    // app hopping is unavailable at this modulation (option greys out).
+    j += ",\"lhdw\":"; j += itos(currentHopDwell());
     j += "}";
     enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
     ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
@@ -3409,7 +3437,19 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // hopping off mid-PRELAUNCH or back on once the operator clears
         // the override.  Persist to NVS so the setting survives reboot.
         const bool new_disabled = (payload[0] != 0);
-        if (new_disabled != lora_hop_disabled)
+        if (!new_disabled && currentHopDwell() == 0)
+        {
+            // #150: this modulation can't fit one packet inside the FCC
+            // dwell budget — refuse the enable so we cannot be commanded
+            // into a non-compliant schedule.  The BS applies the same
+            // gate (and the app greys the option via "lhdw"==0), so
+            // reaching here means the two ends disagree on sf/bw; the
+            // cmd-10 config sync heals that, after which the enable can
+            // be retried.
+            ESP_LOGW("LORA", "UPLINK Hop enable REFUSED: dwell=0 at SF%u/BW%.0f",
+                     (unsigned)lora_sf, (double)lora_bw_khz);
+        }
+        else if (new_disabled != lora_hop_disabled)
         {
             lora_hop_disabled = new_disabled;
             prefs.begin("lora", false);
@@ -3671,6 +3711,10 @@ static void serviceLoRaUplink()
                     last_uplink_rx_ms = millis();
                     if (hop_active_) hop_session_uplink_count++;
                 }
+            }
+            else if (pkt_nid != network_id)
+            {
+                lora_uplink_nid_drops++;   // #150: no more silent nid drops
             }
         }
         // readPacket() internally re-enters RX mode after reading
@@ -4505,7 +4549,7 @@ static void printStats()
         {
             TR_LoRa_Comms::Stats ls = {};
             lora_comms.getStats(ls);
-            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu rxmode=%c",
+            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu nid_drop=%lu rxmode=%c",
                           (unsigned long)ls.tx_ok,
                           (unsigned long)ls.tx_fail,
                           (unsigned long)ls.rx_count,
@@ -4513,6 +4557,7 @@ static void printStats()
                           (unsigned long)lora_low_snr_drops,
                           (unsigned long)ls.isr_count,
                           (unsigned long)lora_uplink_rx_count,
+                          (unsigned long)lora_uplink_nid_drops,
                           ls.rx_mode ? 'Y' : 'N');
         }
 
@@ -4884,6 +4929,7 @@ void initPeripherals()
             prefs.putFloat("bw",    config::LORA_BW_KHZ);
             prefs.putUChar("cr",    config::LORA_CR);
             prefs.putChar("txpwr",  config::LORA_TX_POWER_DBM);
+            prefs.putUChar("hopdis", 1);  // #150: fixed mode is the default
             ESP_LOGI("CFG", "LoRa NVS empty -- wrote config.h defaults");
         }
         lora_freq_mhz = prefs.getFloat("freq", config::LORA_FREQ_MHZ);
@@ -4891,23 +4937,24 @@ void initPeripherals()
         lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
         lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
-        lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
+        lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
 
         // Issue #136: every rocket boot starts on the hardcoded
-        // rendezvous frequency + preset, hopping off, regardless of
-        // any NVS values left from prior sessions.  The BS reaches
-        // here on rendezvous, scans, and uses the cmd-10 transactional
-        // flow to move us to the picked channel.  cmd-10's NVS write
-        // still happens during a session for visibility, but boot
-        // always re-resets here so the rendezvous is reliable.
-        // Hopping is gated behind cmd 17 (developer flag); see the
-        // "Re-enable LoRa hopping" follow-up enhancement.
+        // rendezvous frequency + preset regardless of any NVS values
+        // left from prior sessions.  The BS reaches here on rendezvous
+        // and uses the cmd-10 transactional flow to move us as needed.
+        // cmd-10's NVS write still happens during a session for
+        // visibility, but boot always re-resets here so the rendezvous
+        // is reliable.
+        // #150: lora_hop_disabled is deliberately NOT in this override
+        // anymore — the link mode is user-selected (app picker → BS →
+        // uplink cmd 17) and honors NVS across reboots.  Schema v4
+        // wiped any stale pre-#150 hopdis, and the default is 1 (fixed).
         lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
         lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
         lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
         lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
         lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
-        lora_hop_disabled = true;
 
         // Channel-set restore (#40 / #41 phase 3): skip-mask pushed by
         // the BS via cmd 15.  Skip-mask is keyed off the BW it was
@@ -5272,7 +5319,7 @@ static void setup_oc()
             lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
             lora_cr        = prefs.getUChar("cr",    config::LORA_CR);
             lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
-            lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106
+            lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
             ESP_LOGI("CFG", "NVS LoRa early load (cached): %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
@@ -5280,16 +5327,17 @@ static void setup_oc()
         }
         prefs.end();
 
-        // Issue #136: same boot-time override as the later peripheral
-        // init.  Done here too so any code between this early load and
-        // initPeripherals() (e.g., config-readback construction) sees
-        // the rendezvous values rather than stale NVS.
+        // Issue #136: same boot-time rendezvous override as the later
+        // peripheral init.  Done here too so any code between this early
+        // load and initPeripherals() (e.g., config-readback construction)
+        // sees the rendezvous values rather than stale NVS.  #150: the
+        // hopdis override is gone — link mode honors NVS (see the
+        // peripheral-init comment).
         lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
         lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
         lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
         lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
         lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
-        lora_hop_disabled = true;
 
         prefs.begin("servo", false);
         if (prefs.isKey("b1"))
@@ -5326,6 +5374,24 @@ static void setup_oc()
                  mac[2], mac[3], mac[4], mac[5]);
 
         prefs.begin("identity", false);
+
+        // #150: the identity namespace versions SEPARATELY from the lora
+        // namespace and MIGRATES instead of wiping — a wipe here is what
+        // caused the #133-era regression (BS came back nid=0, rocket kept
+        // nid=180, network-id filter silently dropped everything).  v1
+        // just stamps the version; un/nid/rid are unchanged.  Future
+        // bumps must preserve `un` (user data) and may reset nid/rid only
+        // if their stored layout actually changes.
+        {
+            const uint8_t stored_v = prefs.getUChar("schemv", 0);
+            if (stored_v != IDENTITY_NVS_SCHEMA_VERSION)
+            {
+                ESP_LOGW("CFG", "Identity NVS schema %u -> %u (migrating, keys preserved)",
+                         (unsigned)stored_v, (unsigned)IDENTITY_NVS_SCHEMA_VERSION);
+                prefs.putUChar("schemv", IDENTITY_NVS_SCHEMA_VERSION);
+            }
+        }
+
         if (!prefs.isKey("un"))
         {
             char default_name[24];
@@ -5344,19 +5410,12 @@ static void setup_oc()
         rocket_id  = prefs.getUChar("rid", config::DEFAULT_ROCKET_ID);
         prefs.end();
 
-        // #136: force network_id back to default on every boot, matching
-        // the LoRa rendezvous override.  Stops BS and OC from drifting
-        // apart when one side's NVS gets wiped (e.g., the lora-namespace
-        // clear on a schema bump) while the other keeps an old nid.
-        // Cmd 9 still works at runtime for developers; on next boot the
-        // device returns to the hardcoded default.  Per-network IDs come
-        // back in #150 alongside hopping.
-        if (network_id != config::DEFAULT_NETWORK_ID)
-        {
-            ESP_LOGW("CFG", "NVS nid=%u differs from default %u — forcing default",
-                     (unsigned)network_id, (unsigned)config::DEFAULT_NETWORK_ID);
-            network_id = config::DEFAULT_NETWORK_ID;
-        }
+        // #150: the #136 boot-time force of network_id back to default is
+        // gone.  Per-network IDs are user-set again (BLE cmd 41 / the
+        // network-name UI), survive reboot, and drift is now VISIBLE
+        // instead of silent: both ends count nid-mismatch drops (the BS
+        // surfaces its count to the app as "nidd") and identity NVS
+        // migrates rather than wipes.
 
         ESP_LOGI("CFG", "Identity early load: uid=%s name=%s nid=%u rid=%u",
                  unit_id_hex, unit_name, (unsigned)network_id, (unsigned)rocket_id);
