@@ -38,7 +38,14 @@ CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 # is above a watermark (oc_l2cap_send_policy.h), so this bump is not the primary
 # guard — it is headroom so telemetry notifications sharing the pool cannot starve
 # a transfer. +6 KB. This is a correctness margin, NOT throughput tuning.
-CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=48
+# (#526 step 6 EXPERIMENT) MSYS_1 48 -> 128. The L2CAP transfer is correct but no
+# faster than GATT (~30 kB/s), and both come out to ~5 LL packets per connection
+# event — which looks like an iOS per-event ceiling. But our backpressure gate only
+# keeps ~9 SDUs (~4.5 KB) buffered, which may STARVE iOS if it could burst a fuller
+# event. A deep MSYS_1 lets the producer queue ~35 SDUs (~17 KB) ahead so iOS can
+# burst freely. If the rate still pins at ~30 kB/s, iOS is the hard limit and L2CAP
+# cannot beat GATT here; if it jumps, our throttle was the cap. +20 KB RAM (test).
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=128
 CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48
 
 # (#526) Enable the L2CAP connection-oriented channel — a credit-based stream
