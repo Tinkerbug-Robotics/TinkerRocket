@@ -134,12 +134,15 @@ nonisolated final class L2CAPFileReceiver: NSObject, StreamDelegate {
     private func drainInput() {
         guard let input = input else { return }
         while input.hasBytesAvailable {
-            let read = readBuf.withUnsafeMutableBytes {
-                input.read($0.bindMemory(to: UInt8.self).baseAddress!, maxLength: readBuf.count)
+            // Use the buffer pointer's OWN count/baseAddress — reading readBuf.count
+            // inside its withUnsafeMutableBytes borrow is a Swift exclusivity abort.
+            let read = readBuf.withUnsafeMutableBytes { (ptr: UnsafeMutableRawBufferPointer) -> Int in
+                guard let base = ptr.baseAddress else { return 0 }
+                return input.read(base.assumingMemoryBound(to: UInt8.self), maxLength: ptr.count)
             }
             if read > 0 {
                 rearmNoBytesTimer()
-                decoder.feed(Data(bytes: readBuf, count: read))
+                decoder.feed(Data(readBuf[0..<read]))
                 if finished { return }
             } else {
                 break   // 0 = no more right now; <0 = error, surfaced via .errorOccurred
