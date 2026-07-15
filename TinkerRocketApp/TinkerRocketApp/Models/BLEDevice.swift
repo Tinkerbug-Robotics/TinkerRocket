@@ -197,6 +197,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var l2capPSM: UInt16 = 0
     private var l2capChannel: CBL2CAPChannel?
     private var l2capOpenRequested = false
+    private var activeReceiver: L2CAPFileReceiver?   // retains the in-flight download
 
     // UUIDs matching ESP32 (must match TR_BLE_To_APP.h)
     private let serviceUUID = CBUUID(string: "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
@@ -1108,7 +1109,72 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         for name in filenames { deleteFile(name) }
     }
 
+    // #526: prefer the L2CAP fast path when a channel is open and the app is
+    // foreground (a suspended app cannot service the stream). Fall back to GATT on
+    // any failure — the channel survives backgrounding, so no reconnection needed.
     func downloadFile(_ filename: String, completion: @escaping (URL?) -> Void) {
+        if let channel = l2capChannel, l2capPSM != 0,
+           UIApplication.shared.applicationState == .active {
+            downloadFileL2CAP(filename, channel: channel, completion: completion)
+        } else {
+            downloadFileGATT(filename, completion: completion)
+        }
+    }
+
+    // #526: download over the L2CAP CoC channel. The receiver streams to disk and
+    // verifies the CRC; on any failure we retry the same file over GATT so the user
+    // still gets it (just slower). One receiver per download; the channel's streams
+    // are single-use, so we reopen a fresh channel afterwards for the next one.
+    private func downloadFileL2CAP(_ filename: String, channel: CBL2CAPChannel,
+                                   completion: @escaping (URL?) -> Void) {
+        guard let commandCharacteristic = commandCharacteristic,
+              let peripheral = peripheral else {
+            downloadFileGATT(filename, completion: completion)
+            return
+        }
+        let sizeHint = files.first(where: { $0.name == filename }).map { Int($0.size) } ?? 0
+        isDownloading = true
+        downloadProgress = 0.0
+        downloadingFilename = filename
+
+        let receiver = L2CAPFileReceiver(
+            channel: channel, expectedName: filename, sizeHint: sizeHint,
+            progress: { [weak self] frac in self?.downloadProgress = frac },
+            completion: { [weak self] result in
+                guard let self = self else { return }
+                self.activeReceiver = nil
+                // The channel's streams are now closed; get a fresh one ready.
+                self.l2capChannel = nil
+                self.l2capOpenRequested = false
+                self.reopenL2capChannel()
+                switch result {
+                case .success(let url):
+                    self.isDownloading = false
+                    self.downloadProgress = 1.0
+                    print("[L2CAP] download OK: \(url.lastPathComponent)")
+                    completion(url)
+                case .failure(let err):
+                    print("[L2CAP] download failed (\(err)) — retrying over GATT")
+                    self.downloadFileGATT(filename, completion: completion)
+                }
+            })
+        activeReceiver = receiver
+        receiver.start()
+
+        // Tell the firmware to stream this file over L2CAP (cmd 44 + filename).
+        var data = Data([44])
+        if let f = filename.data(using: .utf8) { data.append(f) }
+        peripheral.writeValue(data, for: commandCharacteristic, type: .withResponse)
+    }
+
+    private func reopenL2capChannel() {
+        guard l2capPSM != 0, let peripheral = peripheral, !l2capOpenRequested else { return }
+        l2capOpenRequested = true
+        peripheral.openL2CAPChannel(l2capPSM)
+    }
+
+    // GATT (notify) download — the original path and the fallback.
+    private func downloadFileGATT(_ filename: String, completion: @escaping (URL?) -> Void) {
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else {
             completion(nil)
