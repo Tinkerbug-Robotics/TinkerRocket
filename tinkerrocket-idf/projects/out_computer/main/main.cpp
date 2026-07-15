@@ -979,6 +979,40 @@ static void readINA230Power()
 }
 
 // ---------------------------------------------------------------------------
+//  #519 power-config guard — fail the BUILD, not the ammeter.
+//
+//  sdkconfig is generated and OVERRIDES sdkconfig.defaults, so a checkout whose
+//  sdkconfig predates a defaults change silently builds current source against
+//  the old config. Third bite of this trap (after #518, #519): on 2026-07-15 a
+//  rebuild from a stale sdkconfig shipped MAIN_XTAL as the BT low-power clock —
+//  the controller then holds a permanent no_light_sleep PM lock, light sleep
+//  never engages, and OC idle sat at ~7 mA instead of ~1 mA with no warning
+//  anywhere. Each symbol below is one the OC's idle-power contract rides on.
+//
+//  If this fires, do NOT edit sdkconfig — regenerate it from the authoritative
+//  defaults:  rm sdkconfig && idf.py build
+//  If you are intentionally changing the power config, change
+//  sdkconfig.defaults and update this guard in the same commit.
+// ---------------------------------------------------------------------------
+#if defined(ESP_PLATFORM)
+#if !defined(CONFIG_PM_ENABLE)
+#error "Stale sdkconfig: CONFIG_PM_ENABLE missing — DFS + light sleep compile out entirely. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_FREERTOS_USE_TICKLESS_IDLE)
+#error "Stale sdkconfig: CONFIG_FREERTOS_USE_TICKLESS_IDLE missing — esp_pm_configure(light_sleep_enable) will fail at runtime. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_RTC_CLK_SRC_EXT_CRYS)
+#error "Stale sdkconfig: RTC slow clock is not the 32.768 kHz crystal (CONFIG_RTC_CLK_SRC_EXT_CRYS) — prerequisite for the BT 32k LP clock. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL)
+#error "Stale sdkconfig: BT low-power clock is not the 32 kHz crystal (CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL) — the controller holds no_light_sleep forever and idle is ~7 mA, not ~1 mA. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION)
+#error "Stale sdkconfig: CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION missing — light sleep will kill the USB console on the bench. rm sdkconfig && idf.py build (#519)"
+#endif
+#endif  // ESP_PLATFORM
+
+// ---------------------------------------------------------------------------
 //  Low-power mode helpers
 //  Called at boot and when power rail is turned OFF.
 //  NOTE: Light sleep, BT modem sleep, and reduced TX power disabled —
