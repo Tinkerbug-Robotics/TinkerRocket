@@ -6115,6 +6115,21 @@ static void loop_oc()
             s_xfer_next_reprint_ms  = millis() + XFER_REPRINT_EVERY_MS;
             } // else (chunk_data_size > 0)
             endPhoneIO();
+
+            // #524 follow-up: ensureFastLinkForTransfer() above moves an FC-off
+            // download onto the FAST link, and nothing asked for the slow set back
+            // — the slow request only fires on the connect edge — so after one
+            // idle-time download the OC sat at the fast link's ~7 mA instead of
+            // ~1 mA until the app disconnected. Mirror the connect-edge policy:
+            // rail off -> slow link. Sits after endPhoneIO() so it also covers the
+            // abort paths (chunk size 0, flash read error, send_failed), which all
+            // run after the fast-link switch. A redundant ask when the link never
+            // left slow is one LL procedure, not a loop: requestConnParams records
+            // the intent and collision-retries the SAME set.
+            if (!pwr_pin_on && ble_app.isConnected())
+            {
+                requestSlowBLEParams();
+            }
         }
 
         // Flight simulator commands — relay to FlightComputer via I2C
