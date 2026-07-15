@@ -150,7 +150,22 @@ static inline bool shouldHopInState(uint8_t s)
 static constexpr float   LORA_BAND_LO_MHZ        = 902.0f;  // US ISM band low edge
 static constexpr float   LORA_BAND_HI_MHZ        = 928.0f;  // US ISM band high edge
 static constexpr float   LORA_CHANNEL_SPACING_X  = 1.5f;    // spacing as multiple of BW
-static constexpr uint8_t LORA_NEXT_CH_NO_HOP     = 0xFF;    // sentinel: don't hop
+static constexpr uint8_t LORA_NEXT_CH_NO_HOP     = 0xFF;    // sentinel: not hopping
+
+// #150: second sentinel — "hop session active, but this frame is
+// momentarily off-schedule" (rendezvous visit or coordinated-scan pause).
+// Distinguishes a genuinely-fixed rocket (0xFF) from a hopping one that a
+// listening BS has lost: a fixed-mode BS hearing 0xFE has immediate
+// mode-mismatch evidence while the rocket is parked and LISTENING on the
+// shared rendezvous — exactly the window where a cmd-17 push can land —
+// and a hop-enabled BS knows to hold its channel for the rocket's return
+// rather than treating the frame as "not hopping".  Real channel indices
+// top out at 130 (BW125); loraChannelCount caps at 253 so neither
+// sentinel can collide.  Requires both ends flashed together (same
+// coordinated-re-flash rule the dwell change already imposes); an old BS
+// would misread 0xFE as a channel index and get a 0.0 MHz sentinel from
+// loraChannelMHz.
+static constexpr uint8_t LORA_NEXT_CH_HOP_OFFSCHEDULE = 0xFE;
 
 // ============================================================================
 // LoRa factory rendezvous (#105 follow-up): a single shared known-good config
@@ -192,7 +207,7 @@ static inline uint8_t loraChannelCount(float bw_khz)
     const float span     = max_f - min_f;
     const int   n        = (int)(span / spacing) + 1;
     if (n < 1)   return 0;
-    if (n > 255) return 255;  // cap so idx fits in the 1-byte header field
+    if (n > 253) return 253;  // cap below the 0xFE/0xFF header sentinels
     return (uint8_t)n;
 }
 
@@ -380,6 +395,52 @@ static inline void loraSkipMaskSet(uint8_t* mask, uint8_t idx)
     mask[idx >> 3] |= (uint8_t)(1u << (idx & 7));
 }
 
+// #150: index of the hop-grid channel whose center coincides with
+// freq_mhz (10 kHz tolerance), or -1.  The factory rendezvous 915.0 is
+// deliberately OFF the BW250 grid (channels sit at 902.125 + 0.375k),
+// but a scan-applied operating frequency can land exactly on a grid
+// channel.
+static inline int16_t loraGridIndexOfFreq(float bw_khz, float freq_mhz)
+{
+    const uint8_t n = loraChannelCount(bw_khz);
+    for (uint8_t i = 0; i < n; i++)
+    {
+        const float c = loraChannelMHz(bw_khz, i);
+        const float d = (c > freq_mhz) ? (c - freq_mhz) : (freq_mhz - c);
+        if (d < 0.010f) return (int16_t)i;
+    }
+    return -1;
+}
+
+// #150: implicit "home channel" skip.  Hop-session transition packets
+// (bootstraps after activation, rendezvous visits, scan pauses) transmit
+// on lora_freq_mhz OUTSIDE the seq-anchored schedule.  If that frequency
+// is also a grid channel the schedule visits, a transition packet plus a
+// scheduled dwell visit can stack inside one FCC window and exceed the
+// 400 ms occupancy line (e.g. SF8/BW250: 336 + 112 = 448 ms).  Fix: both
+// ends implicitly skip the coincident grid slot so the schedule never
+// dwells on the home frequency.  The skip is withheld when it would take
+// the active count below the FCC floor (that corner requires a
+// floor-tight mask AND an on-grid home — accept the residual and keep
+// the floor).  Apply to a caller-owned mask copy; returns true if a bit
+// was set.  Pure — both ends compute identically from (bw, home freq).
+static inline bool loraApplyHomeChannelSkip(uint8_t* mask, float bw_khz,
+                                            float home_freq_mhz)
+{
+    const int16_t idx = loraGridIndexOfFreq(bw_khz, home_freq_mhz);
+    if (idx < 0) return false;
+    if (loraSkipMaskTest(mask, (uint8_t)idx)) return false;
+    const uint8_t n = loraChannelCount(bw_khz);
+    uint8_t active = 0;
+    for (uint8_t i = 0; i < n; i++)
+    {
+        if (!loraSkipMaskTest(mask, i)) active++;
+    }
+    if (active <= loraFhssMinChannels(bw_khz)) return false;
+    loraSkipMaskSet(mask, (uint8_t)idx);
+    return true;
+}
+
 // Given the current channel index and a skip-mask, returns the next
 // active (non-skipped) channel index, wrapping at n_channels.  Used by
 // both sides when computing next_channel_idx for the hop header.  If
@@ -458,10 +519,6 @@ static constexpr uint16_t LORA_TELEM_PREAMBLE_SYMS = 12;  // = LORA_PREAMBLE_LEN
 // budget => hopping is not permitted at this config (e.g. SF9+ @ BW125,
 // SF11+ @ BW250) — firmware refuses the cmd-17 enable and the app greys
 // the option (config JSON key "lhdw" == 0).
-//
-// Both ends derive dwell from the cmd-10-synced (sf, bw, cr) plus the
-// compile-time frame size, so they cannot disagree — the same property
-// that keeps the channel table itself in agreement.
 static inline uint8_t loraHopDwellForConfig(uint8_t sf, float bw_khz,
                                             size_t frame_len,
                                             uint8_t cr = LORA_FACTORY_RENDEZVOUS_CR)
@@ -471,6 +528,24 @@ static inline uint8_t loraHopDwellForConfig(uint8_t sf, float bw_khz,
     if (toa == 0 || toa > LORA_HOP_DWELL_BUDGET_MS) return 0;
     const uint32_t d = LORA_HOP_DWELL_BUDGET_MS / toa;
     return (d > LORA_HOP_DWELL_MAX) ? LORA_HOP_DWELL_MAX : (uint8_t)d;
+}
+
+// Link-level dwell gate — what the firmware actually calls (#150 review).
+// sf/bw agreement is guaranteed by the cmd-10 transaction (a divergence
+// there kills the link and rolls back), but CR is NOT verifiable: the
+// explicit-header PHY decodes any payload coding rate, so the cmd-10
+// commit criterion is CR-blind and a one-sided CR-only commit leaves a
+// fully working link whose two ends would compute DIFFERENT dwells
+// (SF8/BW250: 3 at CR5 vs 2 at CR8 — schedule divergence with no heal
+// short of reboot).  Rather than make CR load-bearing, hopping is only
+// offered at the factory CR: any other CR computes dwell 0 (hopping
+// unavailable, app greys the option via "lhdw"), which no packet-loss
+// pattern can turn into a silent schedule split.
+static inline uint8_t loraHopDwellForLink(uint8_t sf, float bw_khz,
+                                          size_t frame_len, uint8_t cr)
+{
+    if (cr != LORA_FACTORY_RENDEZVOUS_CR) return 0;
+    return loraHopDwellForConfig(sf, bw_khz, frame_len, cr);
 }
 
 // Seq-anchored hop schedule (#105 follow-up).  Both sides compute the

@@ -636,12 +636,29 @@ static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
 static bool lora_in_rx_mode = false;
 
 // #150: packets-per-channel dwell for the CURRENT modulation, derived from
-// real airtime so the FCC occupancy bound holds at every preset.  0 means a
-// single packet exceeds the budget => hopping is not permitted at this
-// (sf, bw) and every hop entry point below refuses to start.
+// real airtime so the FCC occupancy bound holds at every preset.  0 means
+// hopping is not permitted at this (sf, bw, cr) and every hop entry point
+// below refuses to start.  Uses the link gate (not the raw config
+// function): CR-only changes are unverifiable over the air, so hopping is
+// only offered at the factory CR — see loraHopDwellForLink.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForConfig(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+}
+
+// #150: effective skip mask for the hop schedule = the cmd-15 noise mask
+// (when valid for the current BW) + the implicit home-channel skip
+// (loraApplyHomeChannelSkip — keeps transition packets on lora_freq_mhz
+// from stacking with a scheduled visit to the same frequency inside one
+// FCC window).  `buf` must hold LORA_SKIP_MASK_MAX_BYTES.
+static const uint8_t* effectiveHopMask(uint8_t* buf, uint8_t n_channels)
+{
+    const bool mask_valid = (skip_mask_n_ == n_channels &&
+                              channel_set_bw_khz_ == lora_bw_khz);
+    if (mask_valid) memcpy(buf, skip_mask_, LORA_SKIP_MASK_MAX_BYTES);
+    else            memset(buf, 0, LORA_SKIP_MASK_MAX_BYTES);
+    (void)loraApplyHomeChannelSkip(buf, lora_bw_khz, lora_freq_mhz);
+    return buf;
 }
 
 static inline void updateHopFromState(RocketState s)
@@ -2765,16 +2782,26 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         }
         else
         {
-            // Skip-mask aware schedule.  When no valid mask is loaded
-            // (n_chan == 0 or BW mismatch) the empty mask makes
-            // loraHopChannelForSeq degenerate to (seq/dwell) % n.
-            const bool mask_valid = (skip_mask_n_ == n &&
-                                      channel_set_bw_khz_ == lora_bw_khz);
-            static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-            const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+            // Skip-mask aware schedule (cmd-15 noise mask + the #150
+            // implicit home-channel skip).  With no valid stored mask the
+            // empty mask makes loraHopChannelForSeq degenerate to
+            // (seq/dwell) % n.
+            uint8_t mask_buf[LORA_SKIP_MASK_MAX_BYTES];
+            const uint8_t* mask = effectiveHopMask(mask_buf, n);
             lora.next_channel_idx = loraHopChannelForSeq(
                 (uint16_t)(seq + 1), currentHopDwell(), mask, n);
         }
+    }
+    else if (hop_active_)
+    {
+        // #150 (review): rendezvous visit / coordinated-scan pause — the
+        // hop session is live but this frame is off-schedule.  Tell the
+        // BS the truth (0xFE) instead of "not hopping" (0xFF): a
+        // fixed-mode BS gets immediate mode-mismatch evidence while we
+        // are parked HERE and listening — the one window where its
+        // cmd-17 push can land — and a lost BS parked on the rendezvous
+        // learns the session is still alive.
+        lora.next_channel_idx = LORA_NEXT_CH_HOP_OFFSCHEDULE;
     }
     else
     {
@@ -2950,10 +2977,8 @@ static void serviceLoRa()
             const uint8_t n = loraChannelCount(lora_bw_khz);
             if (n > 0)
             {
-                const bool mask_valid = (skip_mask_n_ == n &&
-                                          channel_set_bw_khz_ == lora_bw_khz);
-                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                uint8_t mask_buf[LORA_SKIP_MASK_MAX_BYTES];
+                const uint8_t* mask = effectiveHopMask(mask_buf, n);
                 hop_idx_ = loraHopChannelForSeq(
                     lora_tx_seq, currentHopDwell(), mask, n);
             }
@@ -5378,15 +5403,34 @@ static void setup_oc()
         // #150: the identity namespace versions SEPARATELY from the lora
         // namespace and MIGRATES instead of wiping — a wipe here is what
         // caused the #133-era regression (BS came back nid=0, rocket kept
-        // nid=180, network-id filter silently dropped everything).  v1
-        // just stamps the version; un/nid/rid are unchanged.  Future
-        // bumps must preserve `un` (user data) and may reset nid/rid only
-        // if their stored layout actually changes.
+        // nid=180, network-id filter silently dropped everything).
+        //
+        // v0 -> v1 resets nid to the compile-time default ONCE (review
+        // finding): the #136 boot-force this branch removes was RAM-only,
+        // so fielded devices still store whatever nid the #133 era left
+        // behind — values that have been masked, divergent, and
+        // unreachable for months.  Making them live would kill the link
+        // on the first post-flash boot with no over-the-air recovery
+        // (both directions are nid-filtered).  The pre-upgrade EFFECTIVE
+        // nid was always the default, so resetting to it is the
+        // behavior-preserving migration.  `un` (user data) and `rid`
+        // (never boot-forced) are preserved.
         {
             const uint8_t stored_v = prefs.getUChar("schemv", 0);
             if (stored_v != IDENTITY_NVS_SCHEMA_VERSION)
             {
-                ESP_LOGW("CFG", "Identity NVS schema %u -> %u (migrating, keys preserved)",
+                if (stored_v == 0)
+                {
+                    const uint8_t old_nid =
+                        prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
+                    if (old_nid != config::DEFAULT_NETWORK_ID)
+                    {
+                        ESP_LOGW("CFG", "Identity migration: stale masked nid=%u reset to default %u",
+                                 (unsigned)old_nid, (unsigned)config::DEFAULT_NETWORK_ID);
+                        prefs.putUChar("nid", config::DEFAULT_NETWORK_ID);
+                    }
+                }
+                ESP_LOGW("CFG", "Identity NVS schema %u -> %u (migrated)",
                          (unsigned)stored_v, (unsigned)IDENTITY_NVS_SCHEMA_VERSION);
                 prefs.putUChar("schemv", IDENTITY_NVS_SCHEMA_VERSION);
             }

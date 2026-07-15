@@ -1253,3 +1253,86 @@ TEST(LoraHopSchedule, ManualScanHandoffKeepsFloorAndCoverage) {
         }
     }
 }
+
+// ============================================================================
+// Issue #150 review fixes: CR link gate, home-channel skip, 0xFE sentinel
+// ============================================================================
+
+TEST(LoraHopDwell, LinkGateRefusesNonFactoryCr) {
+    using namespace fhss150;
+    // CR-only cmd-10 changes are unverifiable over the air (explicit-header
+    // RX decodes any payload CR, so the transaction's commit criterion is
+    // CR-blind) — a one-sided CR commit would give the two ends different
+    // dwells with no heal short of reboot.  The link gate refuses hopping
+    // at any CR but the factory one, so no packet-loss pattern can split
+    // the schedule.
+    EXPECT_EQ(loraHopDwellForLink(8, 250.0f, kTelemFrameLen,
+                                  LORA_FACTORY_RENDEZVOUS_CR),
+              loraHopDwellForConfig(8, 250.0f, kTelemFrameLen,
+                                    LORA_FACTORY_RENDEZVOUS_CR));
+    for (uint8_t cr = 6; cr <= 8; cr++) {
+        EXPECT_EQ(loraHopDwellForLink(8, 250.0f, kTelemFrameLen, cr), 0)
+            << "cr=" << (int)cr;
+    }
+}
+
+TEST(LoraHomeChannelSkip, OffGridFactoryRendezvousIsNoOp) {
+    // 915.0 sits between BW250 grid channels (902.125 + 0.375k), so the
+    // factory default never coincides and the skip is a no-op there.
+    EXPECT_EQ(loraGridIndexOfFreq(250.0f, LORA_FACTORY_RENDEZVOUS_MHZ), -1);
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    EXPECT_FALSE(loraApplyHomeChannelSkip(mask, 250.0f,
+                                          LORA_FACTORY_RENDEZVOUS_MHZ));
+    for (size_t i = 0; i < LORA_SKIP_MASK_MAX_BYTES; i++) {
+        EXPECT_EQ(mask[i], 0u);
+    }
+}
+
+TEST(LoraHomeChannelSkip, OnGridHomeIsExcludedFromTheSchedule) {
+    // A scan-applied operating frequency CAN land exactly on a grid
+    // channel; hop-session transition packets transmit on it outside the
+    // schedule, so the coincident slot is implicitly skipped on both ends
+    // — otherwise a transition packet plus a scheduled dwell visit could
+    // stack past the FCC 400 ms occupancy line in one window.
+    const float home = loraChannelMHz(250.0f, 34);   // 914.875 MHz, on-grid
+    EXPECT_EQ(loraGridIndexOfFreq(250.0f, home), 34);
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    ASSERT_TRUE(loraApplyHomeChannelSkip(mask, 250.0f, home));
+    EXPECT_TRUE(loraSkipMaskTest(mask, 34));
+    const uint8_t n = loraChannelCount(250.0f);
+    for (uint16_t s = 0; s < (uint16_t)(4 * n); s++) {
+        EXPECT_NE(loraHopChannelForSeq(s, 3, mask, n), 34) << "seq=" << s;
+    }
+}
+
+TEST(LoraHomeChannelSkip, WithheldAtTheFccFloor) {
+    // The implicit skip must never take the active count below the FCC
+    // floor — in that corner the coincidence risk is accepted and the
+    // floor wins.
+    const uint8_t n     = loraChannelCount(250.0f);
+    const uint8_t floor_ = loraFhssMinChannels(250.0f);
+    ASSERT_GT(n, floor_);
+    uint8_t mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
+    uint8_t masked = 0;
+    for (uint8_t i = 0; i < n && masked < (uint8_t)(n - floor_); i++) {
+        if (i == 34) continue;              // keep the home channel active
+        loraSkipMaskSet(mask, i);
+        masked++;
+    }
+    // Exactly `floor_` channels remain active; the skip must be withheld.
+    EXPECT_FALSE(loraApplyHomeChannelSkip(mask, 250.0f,
+                                          loraChannelMHz(250.0f, 34)));
+    EXPECT_FALSE(loraSkipMaskTest(mask, 34));
+}
+
+TEST(LoraHopSentinels, OffScheduleMarkerCannotCollideWithChannelIndices) {
+    // 0xFE ("hopping, momentarily off-schedule") and 0xFF ("not hopping")
+    // must stay clear of every real channel index at every bandwidth —
+    // loraChannelCount caps at 253 to guarantee it.
+    EXPECT_NE(LORA_NEXT_CH_HOP_OFFSCHEDULE, LORA_NEXT_CH_NO_HOP);
+    EXPECT_LE(loraChannelCount(125.0f), 253);
+    EXPECT_LE(loraChannelCount(250.0f), 253);
+    EXPECT_LE(loraChannelCount(500.0f), 253);
+    EXPECT_GT((int)LORA_NEXT_CH_HOP_OFFSCHEDULE,
+              (int)loraChannelCount(125.0f));
+}

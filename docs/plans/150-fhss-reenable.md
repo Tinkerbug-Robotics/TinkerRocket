@@ -31,10 +31,38 @@ default) vs *Frequency hopping* (the #133 scheme, re-enabled and hardened).
 - Network-ID flow restored (name UI → fnv1a8 → cmd 41 push; boot force
   lifted; identity NVS migrates instead of wiping; nid-mismatch drops are
   counted and surfaced to the app as `nidd`).
-- BS→rocket **mode resync**: if frame evidence contradicts the BS's mode for
-  ≥6 consecutive frames (10 s cooldown), the BS re-uplinks cmd 17. Rendezvous
-  visits and coordinated-scan pauses legitimately stamp `NO_HOP`, hence the
-  consecutive-frames filter.
+- BS→rocket **mode resync**: if frame evidence contradicts the BS's mode, the
+  BS re-uplinks cmd 17 (10 s cooldown). Direction A (BS hopping, rocket says
+  `NO_HOP` in a hop state) needs a 6-frame streak; direction B (BS fixed,
+  rocket announces hopping) acts immediately.
+- **`0xFE` off-schedule sentinel** (review fix): rendezvous-visit and
+  scan-pause frames stamp `next_channel_idx = 0xFE` ("hopping, momentarily
+  off-schedule") instead of `NO_HOP`. A fixed-mode BS gets its direction-B
+  evidence exactly while the rocket is parked and *listening* on the shared
+  rendezvous — the one window a cmd-17 push can land — and a following BS
+  knows not to misread the visit. Requires both ends flashed together (same
+  coordinated-re-flash rule the dwell change already imposes).
+- **Graceful hop disable** (review fix): a cmd-17 disable taken while the BS
+  is following a hop drains its 8 uplink retries *on the hop channel* before
+  the BS flips, retunes, and sends the config readback (≤1.5 s). The naive
+  order retuned away before the first retry fired, so the rocket essentially
+  never heard the disable.
+- **CR link gate** (review fix): dwell is CR-dependent, but a CR-only cmd-10
+  change is unverifiable over the air (explicit-header RX decodes any payload
+  CR, so the transaction's commit criterion is CR-blind) — a one-sided commit
+  would silently give the two ends different dwells. Hopping is therefore
+  only offered at the factory CR (4/5); any other CR computes `lhdw` = 0.
+- **Implicit home-channel skip** (review fix): hop-session transition packets
+  (activation bootstrap, visit/pause re-bootstraps) transmit on
+  `lora_freq_mhz` outside the schedule. If that frequency is also a hop-grid
+  channel, a transition packet plus a scheduled dwell visit could stack past
+  the 400 ms occupancy line in one window — so both ends implicitly skip the
+  coincident grid slot (withheld only if it would breach the channel floor).
+  The factory 915.0 is off-grid at BW250, so today's default is unaffected.
+- **cmd-60 scan gating** (review fix): the coordinated-pause scan path is
+  only taken in hopping mode — in fixed mode a recently-heard LANDED rocket
+  (LANDED now being a hop state) would otherwise trigger a pointless cmd-16 +
+  a RESUMING stall that #136 never had.
 
 ## 2. Regulatory survey (worldwide, per tinkerbug's request)
 
@@ -160,7 +188,52 @@ the start channel before hopping begins (needs short-preamble or
 start-channel rotation; SF11 is clean), and packets that long mean ~0.3 Hz
 telemetry — a tracking/recovery mode, not live telemetry.
 
-## 7. Reliability notes (what re-enabling actually risks)
+## 7. Reliability notes + adversarial review outcome
+
+A 27-agent adversarial review (5 dimension-focused finders, every finding
+verified by 2 independent skeptics) ran over the firmware diff before bench
+time. 9 findings confirmed, all addressed:
+
+1. **nid resurrection (critical, fixed)**: the #136 nid boot-force was
+   RAM-only, so fielded devices still store the divergent #133-era nids
+   (rocket 180 / BS 0) that the force had masked for months. Deleting the
+   force would have made them live on the first post-flash boot — a total,
+   silent link kill with no over-the-air recovery (both directions are
+   nid-filtered). Fix: the identity v0→v1 migration resets nid to the
+   compile-time default exactly once (the pre-upgrade *effective* nid was
+   always the default, so this is the behavior-preserving migration); `un`
+   and `rid` are preserved.
+2. **Direction-B resync undeliverable (critical, fixed)**: visit/pause frames
+   stamped `NO_HOP`, and 915.0 is off the hop grid, so a fixed BS never got
+   usable evidence nor a delivery window. Fixed by the `0xFE` sentinel: the
+   evidence arrives on frames sent while the rocket is parked on the
+   rendezvous *listening*, and the push queued off that frame lands in the
+   same visit.
+3. **cmd-17 disable ordering (critical, fixed)**: the BS retuned to the
+   static channel before its own disable retries fired. Fixed by the
+   graceful drain (retries complete on the hop channel first).
+4. **BS power-cycle rejoin only at factory rendezvous (major, mitigated)**:
+   a rebooted BS re-acquires a hopping rocket via the post-visit bootstrap on
+   `lora_freq_mhz` — which works whenever the operating channel is the
+   factory 915 (today: always; there is no shipped UI that moves it).
+   Residual corner once the scan UI returns: if the session moved the
+   channel and the BS reboots, telemetry degrades to visit bursts until the
+   *rocket* is power-cycled — the retained rendezvous boot force then resets
+   `lora_freq_mhz` to 915 and the pair re-converges. Documented, accepted.
+5. **LANDED scan parity break (minor, fixed)**: cmd-60 gated on
+   `!lora_hop_disabled` so fixed-mode post-flight scans run direct, as in
+   #136.
+6. **CR-dependent dwell divergence (major, fixed)**: CR link gate (above).
+7. **Bootstrap occupancy stacking (major, fixed)**: implicit home-channel
+   skip (above); the one-time activation bootstrap on the off-grid factory
+   915 cannot stack with any scheduled visit.
+8/9. Duplicates/variants of 4 and 5 — covered by the same fixes.
+
+Refuted by the verifiers (no change): the direction-A streak-vs-visit-length
+concern (visit frames no longer stamp `NO_HOP` at all), and a suspected
+stale-modulation window in the hop-follow during cmd-10 VERIFYING.
+
+Standing reliability notes:
 
 - #133's redesign was never field-validated; the biggest hazard family is the
   DIO1 edge-ISR/level-poll flag protocol around `hopToFrequencyMHz()` — the
@@ -170,10 +243,13 @@ telemetry — a tracking/recovery mode, not live telemetry.
 - Stale NVS `hopdis=0` from pre-#150 cmd-17 experiments would have booted
   devices straight into hopping once the boot force lifted —
   `LORA_NVS_SCHEMA_VERSION` v4 wipes it; defaults flip to disabled.
-- The #133-era nid regression (schema wipe → BS nid=0 vs rocket nid=180 →
-  silent 100 % packet drop) is triple-guarded: identity NVS migrates instead
-  of wiping, the drop counter is user-visible (`nidd`), and the network-name
-  UI shows the device-readback nid rather than an app-local copy.
+- Post-upgrade nid drift can no longer be silent: identity NVS migrates (with
+  the one-time v0 reset above), the drop counter is user-visible (`nidd`),
+  and the network-name UI shows the device-readback nid rather than an
+  app-local copy.
+- Mixed-version fleets are NOT supported across this change (0xFE sentinel +
+  dwell derivation both moved): flash BS and rocket together — the same rule
+  #133's shared-dwell constant already imposed.
 
 ## 8. Bench evidence
 

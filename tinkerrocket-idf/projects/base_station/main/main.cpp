@@ -325,13 +325,15 @@ static bool     lora_hop_disabled = true;
 
 // #150: packets-per-channel dwell for the CURRENT modulation, derived
 // from real airtime so the FCC occupancy bound holds at every preset.
-// 0 means a single packet exceeds the budget => hopping is not permitted
-// at this (sf, bw): the cmd-17 enable is refused and the hop-follow path
-// stays inert.  Must match the rocket's computation — both call the same
-// shared function on the same cmd-10-synced values.
+// 0 means hopping is not permitted at this (sf, bw, cr): the cmd-17
+// enable is refused and the hop-follow path stays inert.  Uses the link
+// gate (not the raw config function): CR-only changes are unverifiable
+// over the air, so hopping is only offered at the factory CR — see
+// loraHopDwellForLink.  Must match the rocket's computation — both call
+// the same shared function.
 static inline uint8_t currentHopDwell()
 {
-    return loraHopDwellForConfig(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
 }
 
 // ----------------------------------------------------------------------------
@@ -350,6 +352,20 @@ static inline uint8_t currentHopDwell()
 static uint8_t skip_mask_[LORA_SKIP_MASK_MAX_BYTES] = {0};
 static uint8_t skip_mask_n_        = 0;        // 0 = no mask yet
 static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
+
+// #150: effective skip mask for the hop schedule = the scan mask (when
+// valid for the current BW) + the implicit home-channel skip — identical
+// derivation to the rocket's, so the expected-next sanity check compares
+// like with like.  `buf` must hold LORA_SKIP_MASK_MAX_BYTES.
+static const uint8_t* effectiveHopMask(uint8_t* buf, uint8_t n_channels)
+{
+    const bool mask_valid = (skip_mask_n_ == n_channels &&
+                              channel_set_bw_khz_ == lora_bw_khz);
+    if (mask_valid) memcpy(buf, skip_mask_, LORA_SKIP_MASK_MAX_BYTES);
+    else            memset(buf, 0, LORA_SKIP_MASK_MAX_BYTES);
+    (void)loraApplyHomeChannelSkip(buf, lora_bw_khz, lora_freq_mhz);
+    return buf;
+}
 
 // Mask-drift auto-recovery (#105 follow-up).  Set in the hop RX path
 // when the rocket's announced next_channel_idx disagrees with the
@@ -371,6 +387,7 @@ static void analyzeAndPushFromCachedScan();
 static void pushCurrentChannelSet();
 static void serviceMaskDriftRepush();
 static void serviceHopModeResync();
+static void serviceHopDisableDrain();
 
 // Auto-acquire + auto-scan state (#136).  Full definitions live just
 // before setup_bs(); the enum + state variable are declared here so
@@ -434,6 +451,16 @@ static uint8_t  hop_mode_mismatch_streak_  = 0;
 static bool     hop_mode_resync_pending    = false;
 static uint32_t hop_mode_resync_last_ms_   = 0;
 static uint32_t hop_mode_resync_count_     = 0;
+
+// #150 (review): graceful hop disable.  A cmd-17 disable taken while we
+// are FOLLOWING a hop must drain its uplink retries on the channel the
+// rocket is listening on BEFORE we stop following and retune away — the
+// naive order (flip, retune, then let serviceUplink fire) put at most one
+// blind retry on the hop channel and the rocket essentially never heard
+// the disable.  Non-zero deadline = drain in progress; commit happens in
+// serviceHopDisableDrain().
+static constexpr uint32_t HOP_DISABLE_DRAIN_MAX_MS = 1500;
+static uint32_t hop_disable_drain_deadline_ms = 0;
 
 // Per-rocket tracker (replaces single last_decoded for multi-rocket support)
 static constexpr int MAX_TRACKED_ROCKETS = 4;
@@ -2744,6 +2771,30 @@ static void serviceHopModeResync()
     buildUplinkPacket(LORA_CMD_SET_HOP_DISABLED, &desired, 1);
 }
 
+// #150 (review): completes a graceful hop disable — see the cmd-17 BLE
+// handler.  The uplink retries were queued while we kept following the
+// hop so they'd go out on the channel the rocket is listening on; once
+// they drain (or the deadline passes) commit the mode locally.
+static void serviceHopDisableDrain()
+{
+    if (hop_disable_drain_deadline_ms == 0) return;
+    if (uplinkBusy() &&
+        (int32_t)(millis() - hop_disable_drain_deadline_ms) < 0) return;
+    hop_disable_drain_deadline_ms = 0;
+    lora_hop_disabled = true;
+    prefs.begin("lora", false);
+    prefs.putUChar("hopdis", 1);
+    prefs.end();
+    if (hop_active_)
+    {
+        hop_active_       = false;
+        hop_needs_retune_ = true;
+    }
+    hop_mode_mismatch_streak_ = 0;
+    ESP_LOGI(TAG, "[BLE->UPLINK] Hop disable: drain complete — fixed mode");
+    sendCurrentConfig();
+}
+
 // All passes done.  Ship results to BLE (preserving the existing
 // single-result protocol so the iOS app doesn't need to change), then
 // dispatch to either the auto-acquire single-channel picker (#136) or
@@ -3473,14 +3524,33 @@ static void setup_bs()
         // namespace and MIGRATES instead of wiping — a wipe is what caused
         // the #133-era regression (this BS came back nid=0 while the
         // rocket kept nid=180 and the network-id filter silently dropped
-        // everything).  v1 just stamps the version; un/nid are unchanged.
-        // Future bumps must preserve `un` (user data) and may reset nid
-        // only if its stored layout actually changes.
+        // everything).
+        //
+        // v0 -> v1 resets nid to the compile-time default ONCE (review
+        // finding): the #136 boot-force this branch removes was RAM-only,
+        // so fielded devices still store whatever nid the #133 era left
+        // behind — masked, divergent, and unreachable for months.  Making
+        // those live would kill the link on the first post-flash boot
+        // with no over-the-air recovery (both directions are
+        // nid-filtered).  The pre-upgrade EFFECTIVE nid was always the
+        // default, so resetting to it is the behavior-preserving
+        // migration.  `un` (user data) is preserved.
         {
             const uint8_t stored_v = prefs.getUChar("schemv", 0);
             if (stored_v != IDENTITY_NVS_SCHEMA_VERSION)
             {
-                ESP_LOGW(TAG, "[CFG] Identity NVS schema %u -> %u (migrating, keys preserved)",
+                if (stored_v == 0)
+                {
+                    const uint8_t old_nid =
+                        prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
+                    if (old_nid != config::DEFAULT_NETWORK_ID)
+                    {
+                        ESP_LOGW(TAG, "[CFG] Identity migration: stale masked nid=%u reset to default %u",
+                                 (unsigned)old_nid, (unsigned)config::DEFAULT_NETWORK_ID);
+                        prefs.putUChar("nid", config::DEFAULT_NETWORK_ID);
+                    }
+                }
+                ESP_LOGW(TAG, "[CFG] Identity NVS schema %u -> %u (migrated)",
                          (unsigned)stored_v, (unsigned)IDENTITY_NVS_SCHEMA_VERSION);
                 prefs.putUChar("schemv", IDENTITY_NVS_SCHEMA_VERSION);
             }
@@ -3940,10 +4010,14 @@ static void loop_bs()
                 // signal, but for the actual channel we consult seq.
                 //
                 // #150 direction B evidence: rocket announces a live hop
-                // channel while our link mode is fixed — never legitimate
-                // (either it rebooted with a stale hopdis=0 or missed our
-                // disable).  Queue a cmd-17 re-push immediately; the
-                // service applies the cooldown.
+                // channel — or the off-schedule marker 0xFE — while our
+                // link mode is fixed.  Never legitimate (it rebooted with
+                // a stale hopdis=0 or missed our disable).  Queue a
+                // cmd-17 re-push immediately; the service applies the
+                // cooldown.  The 0xFE case is the valuable one: the
+                // rocket is parked on the shared rendezvous LISTENING for
+                // the full visit window, so the push queued off this very
+                // frame lands while it can still hear us.
                 if (lora_hop_disabled &&
                     decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP)
                 {
@@ -3959,16 +4033,26 @@ static void loop_bs()
                 if (!lora_hop_disabled && currentHopDwell() > 0 &&
                     shouldHopInState(decoded.rocket_state))
                 {
-                    if (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP)
+                    if (decoded.next_channel_idx == LORA_NEXT_CH_HOP_OFFSCHEDULE)
+                    {
+                        // #150 (review): rocket is hopping but momentarily
+                        // off-schedule (rendezvous visit / scan pause) —
+                        // it is transmitting on the channel we just heard
+                        // it on and returns to the schedule on its own.
+                        // Hold position; 0xFE is a marker, not a channel
+                        // index.  A rebooted BS parked on the rendezvous
+                        // sees these frames and simply waits for the
+                        // rocket's post-visit bootstrap on lora_freq_mhz.
+                        hop_mode_mismatch_streak_ = 0;
+                    }
+                    else if (decoded.next_channel_idx != LORA_NEXT_CH_NO_HOP)
                     {
                         hop_mode_mismatch_streak_ = 0;
                         const uint8_t n = loraChannelCount(lora_bw_khz);
                         if (n > 0)
                         {
-                            const bool mask_valid = (skip_mask_n_ == n &&
-                                                      channel_set_bw_khz_ == lora_bw_khz);
-                            static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                            const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                            uint8_t mask_buf[LORA_SKIP_MASK_MAX_BYTES];
+                            const uint8_t* mask = effectiveHopMask(mask_buf, n);
                             // Compute next channel from seq+1 — what the
                             // rocket will be on for the *next* packet.
                             // Trust the rocket's announced next_channel_idx
@@ -4451,8 +4535,24 @@ static void loop_bs()
                          (unsigned)lora_sf, (double)lora_bw_khz);
                 sendCurrentConfig();
             }
+            else if (new_disabled && !lora_hop_disabled && hop_active_)
+            {
+                // #150 (review): we are FOLLOWING a hop — drain the
+                // disable retries on the channel the rocket is listening
+                // on before we stop following and retune away.  Keep
+                // tracking the hop while the retries run; the flag flip,
+                // NVS persist, retune, and config readback happen in
+                // serviceHopDisableDrain() once the queue empties (or the
+                // deadline passes).  No sendCurrentConfig() here: the app
+                // keeps its optimistic picker state and gets one clean
+                // readback when the mode actually commits (~1 s).
+                hop_disable_drain_deadline_ms = millis() + HOP_DISABLE_DRAIN_MAX_MS;
+                buildUplinkPacket(LORA_CMD_SET_HOP_DISABLED, payload, 1);
+                ESP_LOGI(TAG, "[BLE->UPLINK] Hop disable: draining retries on the hop channel first");
+            }
             else
             {
+                hop_disable_drain_deadline_ms = 0;  // an enable cancels a pending drain
                 if (new_disabled != lora_hop_disabled)
                 {
                     lora_hop_disabled = new_disabled;
@@ -4563,7 +4663,12 @@ static void loop_bs()
             memcpy(&step_khz,  payload + 8, 2);
             memcpy(&dwell_ms,  payload + 10, 2);
 
-            const bool need_coord = rocketLikelyHopping(
+            // #150 (review): in fixed mode the rocket cannot legitimately
+            // be hopping, and shouldHopInState(LANDED) is now true — a
+            // recently-heard landed rocket would otherwise force the
+            // coordinated-pause path (pointless cmd 16 + a RESUMING
+            // stall) where pre-#150 the scan ran directly.
+            const bool need_coord = !lora_hop_disabled && rocketLikelyHopping(
                 hop_active_, last_packet_ms, millis(),
                 lastSeenRocketState(), COORD_HOP_RECENT_MS);
 
@@ -4652,6 +4757,10 @@ static void loop_bs()
     // the rocket's link mode disagrees with ours.  Same idle-only /
     // cooldown discipline as the mask repush.
     serviceHopModeResync();
+
+    // Graceful hop-disable commit (#150 review): flips to fixed mode once
+    // the disable retries have drained on the hop channel.
+    serviceHopDisableDrain();
 
     // Auto-acquire (#136): one-shot per power cycle.  Waits to hear the
     // rocket on rendezvous, runs a noise scan, picks the quietest
