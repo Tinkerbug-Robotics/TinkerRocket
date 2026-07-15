@@ -5837,13 +5837,16 @@ static void loop_oc()
         // #383: a download pauses I2S ingest + I2C service for the whole
         // multi-second transfer — mid-flight that would blind the OC and
         // drop the flight data it exists to record. Terminate the request
-        // cleanly with an empty EOF chunk (the app sees a zero-length file
-        // instead of a hung transfer). INFLIGHT-only per design decision.
+        // cleanly. #526: send EOF|ABORT, not a bare EOF — a refusal is NOT a
+        // complete zero-length file. Without the abort bit the app writes the
+        // empty download to disk and reports success (completeDownload's
+        // short-transfer guard is gated on the stall timer, not this path).
+        // INFLIGHT-only per design decision.
         if (download_filename.length() > 0 && latest_rocket_state == INFLIGHT)
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
                      download_filename.c_str());
-            ble_app.sendFileChunk(0, nullptr, 0, true);
+            ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
         }
         if (download_filename.length() > 0)
@@ -5879,7 +5882,8 @@ static void loop_oc()
             if (chunk_data_size == 0)
             {
                 ESP_LOGE("BLE", "chunk data size is 0, aborting download");
-                ble_app.sendFileChunk(0, nullptr, 0, true);  // Send EOF to unblock app
+                // #526: this is a failure, not a completed empty file.
+                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             }
             else
             {
@@ -5950,7 +5954,7 @@ static void loop_oc()
                 if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
-                    ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+                    ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
                     break;
                 }
                 file_offset += flash_bytes_read;
@@ -6015,11 +6019,11 @@ static void loop_oc()
 
             if (send_failed)
             {
-                // Terminate cleanly so the app sees a truncated file rather than a
-                // hung transfer, and say so — this used to be a silent hole.
+                // #526: EOF|ABORT, not a bare EOF. The app must REJECT the partial
+                // file, not save the truncated bytes and call it complete.
                 ESP_LOGE("BLE", "Download ABORTED after %lu bytes: BLE send failed",
                          (unsigned long)bytes_sent);
-                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
             }
             // Send remaining data with EOF flag
             else if (ble_used > 0)
@@ -6032,9 +6036,12 @@ static void loop_oc()
                 ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
             }
 
-            // Redundant EOF in case the last notification was dropped
+            // Redundant EOF in case the last notification was dropped. #526: it
+            // must carry the SAME abort bit — otherwise a dropped abort-EOF
+            // followed by a bare redundant EOF would resurrect the truncation bug
+            // (the app would complete the partial file as if it were whole).
             delay(50);
-            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
