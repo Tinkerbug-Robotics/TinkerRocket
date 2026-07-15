@@ -1736,6 +1736,17 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("rssi", data.rssi, 0);
     addFloat("snr", data.snr, 1);
 
+    // #150: hop-state surface.  "hch" (current hop channel index) is only
+    // emitted while the BS is actually following a hop schedule; "nidd"
+    // (network-id mismatch drops) only once any occurred.  Fixed-mode
+    // frames with a healthy nid pay zero bytes for either.
+    if (data.hop_active) {
+        addUint("hch", data.hop_channel_idx);
+    }
+    if (data.netid_drops > 0) {
+        addUint("nidd", data.netid_drops);
+    }
+
     // Base station
     addFloat("bsoc", data.bs_soc, 1);
     addFloat("bvol", data.bs_voltage, 2);

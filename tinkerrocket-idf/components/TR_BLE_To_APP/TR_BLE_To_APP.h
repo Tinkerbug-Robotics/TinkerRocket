@@ -63,6 +63,15 @@ public:
         float rssi;             // LoRa RSSI dBm
         float snr;              // LoRa SNR dB
 
+        // #150: hop-state surface (base station only; zero-defaults keep
+        // FC/OC direct connections silent).  hop_channel_idx is only
+        // meaningful while hop_active; netid_drops counts RX packets the
+        // network-id filter dropped (nid-drift diagnostic — the #133-era
+        // drift bug was invisible because these drops were silent).
+        bool     hop_active = false;
+        uint8_t  hop_channel_idx = 0;
+        uint32_t netid_drops = 0;
+
         // Base station (only meaningful when connected via base station)
         float bs_soc;           // Base station battery SOC %
         float bs_voltage;       // Base station battery voltage V

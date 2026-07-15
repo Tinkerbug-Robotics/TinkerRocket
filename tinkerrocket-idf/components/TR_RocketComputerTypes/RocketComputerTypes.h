@@ -1453,11 +1453,6 @@ static constexpr uint8_t LORA_PROTO_VERSION = 4;
 // counts: hopping must satisfy the FHSS occupancy rule, and a fixed
 // 250 kHz LoRa carrier is not DTS-eligible either (DTS requires
 // >= 500 kHz of 6 dB bandwidth).  See docs/plans/150-fhss-reenable.md.
-//
-// DEPRECATED alias — kept only so pre-#150 call sites compile until the
-// OC/BS migrations later in this branch replace them.  Do not use in
-// new code.  TODO(#150): delete once the main.cpp call sites are gone.
-static constexpr uint8_t LORA_HOP_DWELL_PACKETS = LORA_HOP_DWELL_MAX;
 
 // LoRa name beacon sync byte (distinguishes from telemetry by size + prefix)
 static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;
