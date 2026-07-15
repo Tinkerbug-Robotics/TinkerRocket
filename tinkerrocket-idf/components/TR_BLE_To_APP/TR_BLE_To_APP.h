@@ -223,7 +223,17 @@ public:
     // notified even after the full reliable backpressure budget (#524) — the
     // caller must then abort the transfer rather than carry on and hand the app a
     // file with a hole in it. Unlike telemetry, a dropped chunk is lost data.
-    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof);
+    // GATT file-transfer chunk header flag bits (byte 6 of the 7-byte header).
+    static constexpr uint8_t kChunkFlagEof   = 0x01;  // last chunk of the transfer
+    static constexpr uint8_t kChunkFlagAbort = 0x02;  // #526: transfer FAILED, discard it
+
+    // `abort=true` sets kChunkFlagAbort alongside EOF: the transfer ended because
+    // the firmware could not finish it (INFLIGHT refusal, flash read error, send
+    // failure), NOT because the file was fully sent. The app must FAIL the download
+    // instead of saving the bytes it has. Old apps ignore bit1 and behave as today.
+    // Defaulted so the base-station call sites are unchanged and byte-identical.
+    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof,
+                       bool abort = false);
 
     // Get the negotiated MTU (after connection established)
     // Returns 0 if not yet negotiated

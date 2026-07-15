@@ -1404,7 +1404,7 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
 }
 
 bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
-                                   size_t len, bool eof)
+                                   size_t len, bool eof, bool abort)
 {
     if (!device_connected_) return false;
 
@@ -1433,8 +1433,9 @@ bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
     chunk_buffer_[4] = (len >> 0) & 0xFF;
     chunk_buffer_[5] = (len >> 8) & 0xFF;
 
-    // Flags (1 byte): bit 0 = EOF
-    chunk_buffer_[6] = eof ? 0x01 : 0x00;
+    // Flags (1 byte): bit 0 = EOF, bit 1 = ABORT (#526). ABORT only ever rides an
+    // EOF chunk — it means "this is the end AND it failed".
+    chunk_buffer_[6] = (uint8_t)((eof ? kChunkFlagEof : 0) | (abort ? kChunkFlagAbort : 0));
 
     // Data
     if (len > 0 && data != nullptr)
