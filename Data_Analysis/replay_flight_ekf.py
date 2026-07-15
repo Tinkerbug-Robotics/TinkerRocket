@@ -8,7 +8,7 @@ Usage:
     python replay_flight_ekf.py <binary_file> [--plot-dir DIR]
 """
 
-import sys, math, argparse
+import sys, math, argparse, json, subprocess
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
@@ -217,6 +217,92 @@ def detect_flight_phases(records, t0_us):
     return boost_start, boost_end, apogee_us
 
 
+# Repo root — this script lives in <repo>/Data_Analysis/.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The source this replay's EKF is compiled from. If any of these differ between
+# the firmware's build commit and the current checkout, the replay is running a
+# DIFFERENT filter than the one that wrote the log — the #515 trap, the thing
+# that manufactured a phantom 50° "EKF error" on 2026-07-14. Kept explicit so the
+# check stays honest if the component set grows.
+_EKF_SRC = [
+    "tinkerrocket-idf/components/TR_GpsInsEKF/TR_GpsInsEKF.cpp",
+    "tinkerrocket-idf/components/TR_GpsInsEKF/TR_GpsInsEKF.h",
+    "tinkerrocket-idf/components/TR_GeoMag/TR_GeoMag.cpp",
+    "tinkerrocket-idf/components/TR_GeoMag/TR_GeoMag.h",
+]
+
+
+def _git(*args):
+    """Run git in the repo. Returns (returncode, stdout) or (None, '') if git is
+    unavailable. Never raises — a version check must not be able to break a replay."""
+    try:
+        p = subprocess.run(["git", "-C", str(_REPO_ROOT), *args],
+                           capture_output=True, text=True, timeout=10)
+        return p.returncode, p.stdout.strip()
+    except Exception:
+        return None, ""
+
+
+def check_ekf_version(binary_file):
+    """Compare the firmware that WROTE the log against the EKF this replay is built
+    from, and print a verdict up front.
+
+    The app writes a sidecar <name>.json next to <name>.bin carrying
+    settings.fw_git_sha + fw_dirty (since #178). The .bin itself has no SHA, so
+    before this the skew was undetectable — a stale replay looked authoritative.
+    Now it checks whether the EKF/GeoMag source differs between the firmware's
+    commit and the current checkout, and says so. Closes the detection half of #515
+    with no firmware change. Returns a dict, or None if it can't be determined."""
+    print("\n  ── Firmware / EKF version (#515 skew guard) ──")
+    sidecar = Path(binary_file).with_suffix(".json")
+    if not sidecar.exists():
+        print(f"     no sidecar {sidecar.name} — firmware version UNKNOWN.")
+        print("     Cannot check EKF skew; treat any attitude output with suspicion.")
+        return None
+    try:
+        settings = json.loads(sidecar.read_text()).get("settings", {})
+        fw_sha = settings.get("fw_git_sha")
+        fw_dirty = bool(settings.get("fw_dirty", False))
+    except Exception as e:
+        print(f"     sidecar {sidecar.name} unreadable ({e}) — version UNKNOWN.")
+        return None
+    if not fw_sha:
+        print(f"     sidecar {sidecar.name} has no fw_git_sha — version UNKNOWN.")
+        return None
+
+    print(f"     firmware built from {fw_sha}{'+dirty' if fw_dirty else ''}")
+    dirty_note = ("  (build was DIRTY: uncommitted changes at flash time we can't "
+                  "see — match not guaranteed)") if fw_dirty else ""
+
+    rc, _ = _git("cat-file", "-e", f"{fw_sha}^{{commit}}")
+    if rc is None:
+        print("     git unavailable — cannot verify EKF skew.")
+        return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": None}
+    if rc != 0:
+        print(f"     commit {fw_sha} not in this repo (shallow clone / unmerged "
+              "branch?) — cannot verify EKF skew.")
+        return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": None}
+
+    # git diff <sha> -- <files>: lists EKF sources that differ between the
+    # firmware's commit and the working tree the extension was built from.
+    _, out = _git("diff", "--name-only", fw_sha, "--", *_EKF_SRC)
+    differ = [ln for ln in out.splitlines() if ln.strip()]
+    if not differ:
+        print(f"     EKF source matches that commit — VERSION-MATCHED.{dirty_note}")
+        return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": True}
+    print("     *** EKF SOURCE DIFFERS from the firmware's commit — SKEW ***")
+    for ln in differ:
+        print(f"        changed: {ln}")
+    print("     This replay runs a DIFFERENT filter than wrote the log. A fidelity")
+    print("     FAIL below is EXPECTED, and its attitude output is not comparable.")
+    print(f"     To match the firmware:  git checkout {fw_sha} -- "
+          + " ".join(_EKF_SRC))
+    print("     then rebuild the extension "
+          "(cd tinkerrocket-sim && TR_SKIP_GUIDANCE=1 python setup.py build_ext --inplace).")
+    return {"fw_sha": fw_sha, "fw_dirty": fw_dirty, "matched": False}
+
+
 def replay(binary_file, plot_dir=None, align_baro=True):
     mode = ("aligned baro+GNSS frame (the FIX)" if align_baro
             else "pad-relative baro (firmware behaviour, the BUG)")
@@ -224,8 +310,17 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     print(f"  Baro frame mode: {mode}")
     records, stats, config = parse_binary_file(str(binary_file))
     print(f"  Frames: {stats['good_crc']:,} good, {stats['bad_crc']} bad CRC")
+    # Mag: old PCB logs MMC5983MA, new PCB logs IIS2MDC — only one is populated.
+    # (The old line counted MMC only, so a new-PCB log read "Mag: 0" even while
+    # the EKF was fusing thousands of IIS2MDC samples — misleading on every new
+    # board.) Report the total and name the chip that actually logged.
+    n_iis = len(records.get('IIS2MDC', []))
+    n_mmc = len(records.get('MMC5983MA', []))
+    mag_chip = "IIS2MDC" if n_iis >= n_mmc else "MMC5983MA"
     print(f"  IMU: {len(records['ISM6HG256']):,}  GNSS: {len(records['GNSS']):,}  "
-          f"Baro: {len(records['BMP585']):,}  Mag: {len(records['MMC5983MA']):,}")
+          f"Baro: {len(records['BMP585']):,}  Mag: {n_iis + n_mmc:,} ({mag_chip})")
+
+    check_ekf_version(binary_file)
 
     # Detect flight phases
     imu_times = get_array(records["ISM6HG256"], "time_us")
@@ -653,26 +748,17 @@ def replay(binary_file, plot_dir=None, align_baro=True):
                 else:
                     print("     *** FAIL *** — this replay does NOT reproduce the "
                           "firmware EKF. Do not draw conclusions from it.")
-                    print()
-                    print("     SUSPECT EKF VERSION SKEW FIRST. This tool compiles "
-                          "TR_GpsInsEKF.cpp at *your current checkout*,")
-                    print("     but the log was written by whatever firmware was "
-                          "flashed that day. If the EKF changed in between,")
-                    print("     the two filters are simply not the same filter and "
-                          "no amount of replay fidelity can reconcile them.")
-                    print("     The flight log records no firmware SHA, so this "
-                          "cannot be detected automatically (see #515).")
-                    print("     Check:  git log --since=<log date> -- "
-                          "tinkerrocket-idf/components/TR_GpsInsEKF/")
-                    print("     A worked example: the 2026-06-15 logs predate #243, "
-                          "which REPLACED the magnetometer heading")
-                    print("     fusion and added WMM declination — so their heading "
-                          "cannot be reproduced by a post-#243 EKF.")
-                    print()
-                    print("     Only once versions match are these worth chasing: "
-                          "the AHRS phase gate, GNSS velocity,")
-                    print("     EKF decimation, or units (EkfIMUData gyro is DEG/S, "
-                          "not rad/s).")
+                    print("     FIRST read the version guard at the top of this run:")
+                    print("       • SKEW    → that's the cause. Check out the "
+                          "firmware's EKF sources (command shown there) and rerun.")
+                    print("       • UNKNOWN → no sidecar SHA; the log may predate the "
+                          "EKF you built. The 2026-06-15 logs are this case — they")
+                    print("                  predate #243, which replaced the mag "
+                          "heading fusion, so a modern EKF cannot reproduce them.")
+                    print("       • MATCHED → versions agree, so it's a real replay "
+                          "gap: AHRS phase gate, GNSS velocity, EKF rate")
+                    print("                  (EKF_RATE_HZ), or units (EkfIMUData gyro "
+                          "is DEG/S, not rad/s).")
     if fidelity is None:
         print("\n  ── Replay fidelity: no logged quaternion in this file "
               "(legacy log) — replay is UNVERIFIED ──")
