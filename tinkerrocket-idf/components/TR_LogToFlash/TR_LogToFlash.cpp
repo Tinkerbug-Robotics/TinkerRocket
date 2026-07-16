@@ -123,10 +123,37 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
 
     // Boot-time non-destructive bad-block scan (#47): walks every not-yet-
     // known-bad block and probes for read errors + factory bad markers.
-    // Findings get markBlockBad'd; we persist right away so a reboot during
-    // the scan doesn't lose the discoveries.
-    scanBadBlocksAtBoot();
-    persistBadBlocksIfDirty();
+    // #511: the full 2048-block walk costs ~2.7 s of the cmd-8 Power-On
+    // stall, so it now runs only until one scan has completed for this chip
+    // (NVS "scanned" marker, written strictly after the scan). Runtime
+    // discovery (markBlockBad on read/prog/erase failures) keeps the map
+    // current afterwards. A dead RDID bus skips the scan entirely — probing
+    // 2048 failing reads would mark every block bad and poison the map.
+    switch (BadBlockScanPolicy::bootScanVerdict(nand_dead_bus_,
+                                                bad_block_map_blob_ok_,
+                                                bad_block_scanned_chip_,
+                                                current_chip_id_))
+    {
+        case BadBlockScanPolicy::Verdict::Scan:
+            scanBadBlocksAtBoot();
+            // Persist right away so a reboot during the rest of begin()
+            // doesn't lose the discoveries. The marker goes last: a power
+            // cut between the two just rescans next boot.
+            persistBadBlocksIfDirty();
+            markBootScanComplete();
+            break;
+        case BadBlockScanPolicy::Verdict::SkipTrustedMap:
+            if (cfg.debug) ESP_LOGI(TAG, "Bad-block boot scan skipped: map trusted (chip 0x%04X, %lu known bad)",
+                                          (unsigned)current_chip_id_,
+                                          (unsigned long)countBadBlocks());
+            break;
+        case BadBlockScanPolicy::Verdict::SkipDeadBus:
+            // Not debug-gated — a dead NAND bus is serious, and the mount
+            // below will fail with less obvious symptoms.
+            ESP_LOGE(TAG, "NAND RDID dead bus (0x%04X) — skipping bad-block scan",
+                          (unsigned)current_chip_id_);
+            break;
+    }
 
     // Allocate LittleFS buffers on heap to avoid stack overflow
     lfs_read_buffer = (uint8_t*)malloc(NAND_PAGE_SIZE);
@@ -1404,6 +1431,10 @@ bool TR_LogToFlash::nandInit()
     // rest of begin() surface the real error.
     const uint16_t current_chip_id = (uint16_t)(((uint16_t)mid << 8) | (uint16_t)did);
     const bool dead_bus = (current_chip_id == 0x0000) || (current_chip_id == 0xFFFF);
+    // #511: stash both for the boot-scan gate in begin() — the gate must not
+    // read bad_block_chip_id_, which the wipe below rewrites pre-scan.
+    current_chip_id_ = current_chip_id;
+    nand_dead_bus_ = dead_bus;
     if (!dead_bus && current_chip_id != bad_block_chip_id_)
     {
         if (cfg.debug)
@@ -2027,18 +2058,25 @@ void TR_LogToFlash::loadBadBlocksFromNVS()
         // First boot, namespace doesn't exist yet — nothing to load.
         memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
         bad_block_chip_id_ = 0;
+        bad_block_scanned_chip_ = 0;
+        bad_block_map_blob_ok_ = false;
         bad_block_bitmap_dirty_ = false;
         if (cfg.debug) ESP_LOGI(TAG, "Bad-block NVS namespace not found, starting clean");
         return;
     }
     const size_t got = prefs.getBytes("map", bad_block_bitmap_, sizeof(bad_block_bitmap_));
     bad_block_chip_id_ = prefs.getUShort("chip", 0);
+    bad_block_scanned_chip_ = prefs.getUShort("scanned", 0);  // #511: written only post-scan
     prefs.end();
-    if (got != sizeof(bad_block_bitmap_))
+    bad_block_map_blob_ok_ = (got == sizeof(bad_block_bitmap_));
+    bad_block_bitmap_dirty_ = false;
+    if (!bad_block_map_blob_ok_)
     {
         memset(bad_block_bitmap_, 0, sizeof(bad_block_bitmap_));
+        // Self-repair: mark dirty so the forced rescan's persist rewrites the
+        // truncated/corrupt blob instead of leaving it short forever.
+        bad_block_bitmap_dirty_ = true;
     }
-    bad_block_bitmap_dirty_ = false;
     const uint32_t n_bad = countBadBlocks();
     if (cfg.debug) ESP_LOGI(TAG, "Loaded bad-block map: %lu known-bad blocks (saved chip=0x%04X)",
                                   (unsigned long)n_bad, (unsigned)bad_block_chip_id_);
@@ -2060,6 +2098,22 @@ void TR_LogToFlash::persistBadBlocksIfDirty()
     if (cfg.debug) ESP_LOGI(TAG, "Persisted bad-block map (%lu bad, chip=0x%04X)",
                                   (unsigned long)countBadBlocks(),
                                   (unsigned)bad_block_chip_id_);
+}
+
+void TR_LogToFlash::markBootScanComplete()
+{
+    Preferences prefs;
+    if (!prefs.begin("bblk", false))  // read-write
+    {
+        // Not fatal: the marker stays stale and the next boot rescans.
+        if (cfg.debug) ESP_LOGW(TAG, "Bad-block NVS open failed; boot scan will re-run next boot");
+        return;
+    }
+    prefs.putUShort("scanned", current_chip_id_);
+    prefs.end();
+    bad_block_scanned_chip_ = current_chip_id_;
+    if (cfg.debug) ESP_LOGI(TAG, "Bad-block boot scan complete for chip 0x%04X — future boots skip it",
+                                  (unsigned)current_chip_id_);
 }
 
 uint32_t TR_LogToFlash::scanBadBlocksAtBoot()

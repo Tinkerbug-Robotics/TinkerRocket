@@ -5,6 +5,7 @@
 #include <RocketComputerTypes.h>
 #include "lfs.h"
 #include "mram_dirty_policy.h"
+#include "bad_block_scan_policy.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -401,10 +402,24 @@ private:
     // bitmap is wiped — see nandInit().
     uint16_t bad_block_chip_id_ = 0;
 
+    // #511 boot-scan gate inputs. current_chip_id_/nand_dead_bus_ are set by
+    // nandInit()'s RDID read; the other two are captured by
+    // loadBadBlocksFromNVS() BEFORE nandInit() can rewrite bad_block_chip_id_
+    // (the "chip" key is written pre-scan and must not be trusted as a
+    // scan-completed signal — see bad_block_scan_policy.h).
+    uint16_t current_chip_id_ = 0;
+    bool     nand_dead_bus_ = false;
+    bool     bad_block_map_blob_ok_ = false;   // NVS "map" present, exact size
+    uint16_t bad_block_scanned_chip_ = 0;      // NVS "scanned" (0 = never)
+
     bool isBlockBad(uint32_t block) const;
     void markBlockBad(uint32_t block);
     void loadBadBlocksFromNVS();
     void persistBadBlocksIfDirty();
+    /// #511: record (NVS "bblk"/"scanned") that a boot scan completed for the
+    /// current chip. Written strictly AFTER scanBadBlocksAtBoot() so a power
+    /// cut mid-scan leaves the marker stale and the next boot rescans.
+    void markBootScanComplete();
     uint32_t countBadBlocks() const;
     /// Boot-time non-destructive bad-block scan: for every block not yet in
     /// the persistent map, PAGEREAD page 0 to catch NAND-reported read

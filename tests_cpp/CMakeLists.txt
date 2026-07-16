@@ -517,6 +517,21 @@ target_include_directories(test_mram_dirty_policy PRIVATE
 target_link_libraries(test_mram_dirty_policy GTest::gtest_main)
 gtest_discover_tests(test_mram_dirty_policy)
 
+# ---------- test_bad_block_scan_policy (#511) ----------
+# Host-side test for the boot bad-block-scan gate: the full 2048-block scan
+# (~2.7 s of the cmd-8 Power-On stall) runs only until one scan has completed
+# for the current chip — recorded by the NVS "scanned" marker written strictly
+# AFTER the scan (the "chip" key is written BEFORE it and must not be trusted).
+# A dead RDID bus skips the scan so 2048 failing reads can't poison the map.
+# bad_block_scan_policy.h is pure, so the test just adds the component dir.
+add_executable(test_bad_block_scan_policy test_bad_block_scan_policy.cpp)
+target_include_directories(test_bad_block_scan_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_bad_block_scan_policy GTest::gtest_main)
+gtest_discover_tests(test_bad_block_scan_policy)
+
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
 # compile — the alignment solve was extracted out of SensorCollectorSim precisely
