@@ -430,7 +430,8 @@ struct ConnectedDashboardView: View {
             }
 
             if showRocketViews {
-                RocketStateView(state: device.telemetry.state)
+                RocketStateView(state: device.telemetry.state,
+                                hopping: device.telemetry.hop_channel != nil)
                     .opacity(staleOpacity)
             }
 
@@ -699,6 +700,11 @@ struct DeviceChipBar: View {
 
 struct RocketStateView: View {
     let state: String
+    // #150: true while the BS is actively following the rocket's hop
+    // schedule (driven by the "hch" telemetry key, which only arrives
+    // during a live hop session — the mode merely being enabled in
+    // Settings doesn't light this up).
+    var hopping: Bool = false
 
     // #382 (display-only): the wire states READY and PRELAUNCH both mean "on
     // the pad" — READY is still waiting on the OC/GNSS gates, PRELAUNCH means
@@ -740,6 +746,11 @@ struct RocketStateView: View {
                 Label(text, systemImage: ready ? "checkmark.seal.fill" : "hourglass")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(ready ? .green : .orange)
+            }
+            if hopping {
+                Label("Frequency Hopping", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.blue)
             }
             Text("Rocket State")
                 .font(.caption)
