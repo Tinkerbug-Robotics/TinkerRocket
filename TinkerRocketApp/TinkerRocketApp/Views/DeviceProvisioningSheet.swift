@@ -16,6 +16,13 @@ struct DeviceProvisioningSheet: View {
     @State private var rocketIDInput: Int = 1
     @State private var initialized = false
 
+    // #150: the app's network (from onboarding).  Pushed to the device on
+    // provision; the device persists it across reboots now, and the
+    // Settings Network section shows the device's own readback so a
+    // mismatch can never hide again.
+    @AppStorage("networkName") private var networkName: String = ""
+    @AppStorage("networkID") private var networkID: Int = 0
+
     var body: some View {
         NavigationView {
             Form {
@@ -50,9 +57,20 @@ struct DeviceProvisioningSheet: View {
                     }
                 }
 
-                // Network section hidden in #136 — see SettingsView for
-                // the rationale.  Both ends now force a default network
-                // ID at boot, so there's nothing to push from here.
+                // #150: Network section restored — the firmware persists
+                // nid across reboots now (with a one-time migration that
+                // guards against the #133-era silent drift).
+                if networkID > 0 {
+                    Section(header: Text("Network"),
+                            footer: Text("All your devices are set to this network. Devices only hear each other on the same network ID.")) {
+                        HStack {
+                            Text(networkName.isEmpty ? "Not set" : networkName)
+                            Spacer()
+                            Text("ID: \(networkID)")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
 
                 Section {
                     Button {
@@ -100,10 +118,12 @@ struct DeviceProvisioningSheet: View {
         // Send name to device
         device.sendSetUnitName(trimmed)
 
-        // Network ID push removed in #136 — firmware boots to a hardcoded
-        // default and cmd 9 only takes effect for the current session, so
-        // pushing here would just lull the user into thinking they're on
-        // a custom network until the next power cycle.
+        // #150: push the network ID (cmd 41) — the firmware persists it in
+        // identity NVS across reboots now, so the push is durable.  The
+        // Settings Network section verifies via the device's readback.
+        if networkID > 0 {
+            device.sendSetNetworkID(UInt8(clamping: networkID))
+        }
 
         // Send rocket ID (rockets only)
         if !device.isBaseStation {

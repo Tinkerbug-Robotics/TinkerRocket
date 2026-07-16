@@ -21,6 +21,7 @@ enum DashboardSheet: Identifiable {
     case settings
     case servoTest
     case driftCast
+    case frequencyScan   // #150: restored (removed in #136)
 
     var id: Int { hashValue }
 }
@@ -245,6 +246,14 @@ struct DashboardView: View {
                         ServoTestView(device: device,
                                       finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
                                       finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
+                    }
+                case .frequencyScan:
+                    // #150: restored — the scan pipeline (cmd 60 → 0xAA
+                    // blob → scanSamples) survived #136 intact; while
+                    // hopping, the BS runs it as a coordinated scan and
+                    // pushes the resulting skip-mask via cmd 15.
+                    if let device = fleet.activeDevice {
+                        NavigationView { FrequencyScanView(device: device) }
                     }
                 }
             }
@@ -2101,6 +2110,28 @@ struct TestingControlsView: View {
                     .cornerRadius(10)
                 }
                 .disabled(!canStartGroundTest)
+
+                // #150: Frequency Scan (restored from the #136 removal).
+                // BS-only — the scan runs on the base station's radio; in
+                // hopping mode the firmware coordinates a hop pause and
+                // pushes the resulting channel mask to the rocket.
+                if device.isBaseStation {
+                    Button {
+                        activeSheet = .frequencyScan
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform.badge.magnifyingglass")
+                            Text("Frequency Scan")
+                        }
+                        .font(.system(.body, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(.white)
+                        .background(device.isConnected ? Color.purple : Color.purple.opacity(0.4))
+                        .cornerRadius(10)
+                    }
+                    .disabled(!device.isConnected)
+                }
             }
         }
         .padding()
@@ -2386,6 +2417,16 @@ struct SignalStrengthView: View {
                     valueText: bleText
                 )
             }
+
+            // #150: network-id mismatch drops — the failure that used to be
+            // a silent "Searching for rocket…".  Only rendered once the BS
+            // reports a non-zero count.
+            if isBaseStation, let drops = telemetry.netid_drops, drops > 0 {
+                Label("NetID mismatch: \(drops) packets dropped — a device is on the wrong network ID (see Settings ▸ Network)",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
         }
         .padding()
         .frame(maxWidth: .infinity)
@@ -2397,6 +2438,11 @@ struct SignalStrengthView: View {
 
     private var loraText: String {
         guard let rssi = telemetry.rssi else { return "--" }
+        // #150: while hopping, show the live channel index next to the
+        // signal so the operator can see both ends walking the schedule.
+        if let hch = telemetry.hop_channel {
+            return String(format: "%.0f ch%d", rssi, hch)
+        }
         return String(format: "%.0f", rssi)
     }
 

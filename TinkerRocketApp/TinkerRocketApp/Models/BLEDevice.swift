@@ -1499,6 +1499,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraCR = (dict["lcr"] as? Int).map { UInt8($0) }
             cfg.loraTxPower = (dict["lpw"] as? Int).map { Int8($0) }
             cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
+            cfg.loraHopDwell = dict["lhdw"] as? Int      // #150 (0 = hopping unavailable)
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode

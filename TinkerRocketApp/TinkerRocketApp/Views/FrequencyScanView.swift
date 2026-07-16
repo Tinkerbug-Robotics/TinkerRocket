@@ -133,7 +133,20 @@ struct FrequencyScanView: View {
                     summary
                 }
 
-                if let quiet = quietestSample {
+                if hoppingMode {
+                    // #150: while hopping there is no single frequency to
+                    // move to — the firmware refuses cmd 10 mid-hop, and
+                    // the scan's real product is the channel-quality mask
+                    // it pushes to the rocket automatically (cmd 15).
+                    // Offering Apply here would report success for a
+                    // change the firmware rejects.
+                    Section("Auto-Apply") {
+                        Label("Hopping mode: the scan result was applied automatically as a channel mask — noisy channels are skipped and the link keeps hopping. No frequency move is needed.",
+                              systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } else if let quiet = quietestSample {
                     Section("Auto-Apply") {
                         Button {
                             showApplyConfirm = true
@@ -181,6 +194,11 @@ struct FrequencyScanView: View {
     /// the rocket beacons in and disables again if it goes silent.
     private var applyRefusal: BLEDevice.AutoApplyRefusal? {
         device.autoApplyRefusalReason()
+    }
+
+    /// #150: link is in frequency-hopping mode (readback truth).
+    private var hoppingMode: Bool {
+        device.rocketConfig?.loraHopDisabled == false
     }
 
     private func applyQuietest() {
