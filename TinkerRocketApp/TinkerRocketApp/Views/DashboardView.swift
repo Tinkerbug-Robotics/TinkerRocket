@@ -431,7 +431,11 @@ struct ConnectedDashboardView: View {
 
             if showRocketViews {
                 RocketStateView(state: device.telemetry.state,
-                                hopping: device.telemetry.hop_channel != nil)
+                                hopBadge: hopBadge(
+                                    isBaseStation: device.isBaseStation,
+                                    hopModeOn: device.rocketConfig?.loraHopDisabled == false,
+                                    hopChannel: device.telemetry.hop_channel,
+                                    state: device.telemetry.state))
                     .opacity(staleOpacity)
             }
 
@@ -698,13 +702,32 @@ struct DeviceChipBar: View {
     }
 }
 
+// #150: the three honest hop states the tile can report.  Derived from the
+// mode readback (lhd), the live-following signal (hch — only present while
+// the BS is actually walking the schedule), and the rocket state:
+//   armed    = mode on, rocket in READY/INIT — hopping starts at PRELAUNCH
+//              by design, nothing is wrong (this wait is usually GPS)
+//   engaging = mode on, rocket in a hop state, schedule not followed yet —
+//              the handoff is in flight (normally 1-3 s; a missed bootstrap
+//              self-heals within ~60 s)
+//   active   = the BS is following the schedule
+enum HopBadge {
+    case armed, engaging, active
+}
+
+func hopBadge(isBaseStation: Bool, hopModeOn: Bool,
+              hopChannel: Int?, state: String) -> HopBadge? {
+    guard isBaseStation, hopModeOn else { return nil }
+    if hopChannel != nil { return .active }
+    switch state {
+    case "PRELAUNCH", "INFLIGHT", "LANDED": return .engaging
+    default: return .armed
+    }
+}
+
 struct RocketStateView: View {
     let state: String
-    // #150: true while the BS is actively following the rocket's hop
-    // schedule (driven by the "hch" telemetry key, which only arrives
-    // during a live hop session — the mode merely being enabled in
-    // Settings doesn't light this up).
-    var hopping: Bool = false
+    var hopBadge: HopBadge? = nil
 
     // #382 (display-only): the wire states READY and PRELAUNCH both mean "on
     // the pad" — READY is still waiting on the OC/GNSS gates, PRELAUNCH means
@@ -747,10 +770,21 @@ struct RocketStateView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundColor(ready ? .green : .orange)
             }
-            if hopping {
+            switch hopBadge {
+            case .active:
                 Label("Frequency Hopping", systemImage: "dot.radiowaves.left.and.right")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.blue)
+            case .engaging:
+                Label("Hopping — engaging…", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+            case .armed:
+                Label("Hopping armed — starts at PRELAUNCH", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            case nil:
+                EmptyView()
             }
             Text("Rocket State")
                 .font(.caption)

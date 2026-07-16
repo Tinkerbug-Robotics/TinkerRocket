@@ -4117,7 +4117,15 @@ static void loop_bs()
                             const uint8_t expected_next = loraHopChannelForSeq(
                                 (uint16_t)(decoded.seq + 1),
                                 currentHopDwell(), mask, n);
-                            if (decoded.next_channel_idx != expected_next) {
+                            // #150: bootstrap frames announce the schedule
+                            // ENTRY channel (seq + remaining bootstraps),
+                            // deliberately != f(seq+1) — so skip the drift
+                            // sanity check on the frame that STARTS a
+                            // follow session (it's a bootstrap whenever the
+                            // session is new) or a false "mask drift" warn
+                            // fires and queues a pointless cmd-15 re-push.
+                            if (hop_active_ &&
+                                decoded.next_channel_idx != expected_next) {
                                 ESP_LOGW(TAG, "[HOP] seq=%u: rocket says next=%u, "
                                               "we'd compute next=%u (mask drift "
                                               "— following rocket)",
