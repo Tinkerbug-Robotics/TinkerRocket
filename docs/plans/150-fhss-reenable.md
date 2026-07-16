@@ -304,6 +304,29 @@ Standing reliability notes:
 - End state: both ends restored to flight-standard 915/SF8/fixed, all
   counters clean.
 
+### Dwell-1 uplink fix — VERIFIED 2026-07-15 (commit ed6a41d)
+
+Root cause of the burst misses: the flat `UPLINK_RX_RESERVE_MS = 140` was
+sized for SF8's ~82 ms downlink; at SF9 (~203 ms) the TX-window gate
+sanctioned attempts colliding with the head of the next downlink, and at
+dwell-1 one collision breaks the hop-follow.  Fixed with an
+airtime-derived reserve + a no-TX-while-retune-pending guard.  Automated
+repro (3 disable/enable cycles at SF9/dwell-1): every cmd-17 delivered
+same-second (was 0/8 per burst), BS followed each re-activation at +1 s.
+Mode toggles: ~40–75 s → ~1–3 s.
+
+### iOS Phases 4–5 — DONE (commit b0c9d9a), adversarially reviewed
+
+32-agent review, 12 confirmed findings, all fixed pre-commit — notably:
+Frequency-Scan Auto-Apply and the TX-power stepper are hidden/locked
+while hopping (both ride cmd 10, which the firmware refuses mid-hop and
+the app previously reported as success); the network section + sync is
+device-agnostic (a BS-only sync could split the fleet with no in-app fix
+for a drifted rocket); `networkIdForName` remaps fnv1a8's 1-in-256
+zero-hash to 1 (0 collides with the firmware default and the app's unset
+sentinel); the hop/nidd readouts live on the real dashboard card (first
+draft put them on a never-instantiated view).  Simulator suite: 181/181.
+
 ### Seam B — ⏳ pending (E2E with app, after Phases 4–5)
 
 Onboarding + provisioning with network name, mode picker both directions
