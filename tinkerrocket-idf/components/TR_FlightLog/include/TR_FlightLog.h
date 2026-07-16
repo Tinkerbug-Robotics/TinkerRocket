@@ -102,6 +102,16 @@ public:
     uint32_t  autoEvictedCount()      const { return auto_evicted_count_; }
     uint32_t  lastEvictedFlightId()   const { return last_evicted_flight_id_; }
 
+    // #510 (#388 contention): wall time writeFrame spent BLOCKED acquiring
+    // mutex_, per stats window — the flush task's per-page waits behind a
+    // concurrent BLE listFlights/readFlightPage are otherwise folded
+    // invisibly into the logger's write timing. Max single wait + window sum;
+    // reset alongside the logger's resetIntervalTimings(). On host builds the
+    // clock is inert (0), matching monotonic_ms().
+    uint32_t  writeLockWaitMaxUs() const { return wf_lock_wait_max_us_; }
+    uint32_t  writeLockWaitSumUs() const { return wf_lock_wait_sum_us_; }
+    void      resetLockWaitStats()       { wf_lock_wait_max_us_ = 0; wf_lock_wait_sum_us_ = 0; }
+
     // Pre-launch: pick + erase a free contiguous range. May stall ~770 ms.
     // Writes the assigned flight_id to `flight_id_out` on success.
     //
@@ -201,6 +211,12 @@ private:
     // volatile flag above, so the high-priority I2S task can never block on a
     // ~770 ms prepareFlight erase that holds the lock.
     FlightLogMutex mutex_;
+
+    // #510: writeFrame's mutex_-acquire wall time (see writeLockWaitMaxUs).
+    // Written only by the flush task, read cross-task for the stats print —
+    // same unsynchronized-diagnostics convention as the logger's spi peaks.
+    volatile uint32_t wf_lock_wait_max_us_ = 0;
+    volatile uint32_t wf_lock_wait_sum_us_ = 0;
 
     // Lock-held implementations, called by the public wrappers and by the two
     // internal call chains (servicePendingPrepareFlight -> prepareFlightLocked,

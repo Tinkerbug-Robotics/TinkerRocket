@@ -54,6 +54,16 @@ inline uint32_t monotonic_ms() {
 #endif
 }
 
+// Monotonic microseconds for the #510 lock-wait metric. Host builds have no
+// clock, so waits measure 0 and the metric is inert — same as monotonic_ms().
+inline int64_t monotonic_us() {
+#ifdef ESP_PLATFORM
+    return esp_timer_get_time();
+#else
+    return 0;
+#endif
+}
+
 }  // namespace
 
 Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
@@ -502,7 +512,13 @@ bool TR_FlightLog::extendActiveRange() {
 }
 
 Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
+    // #510: time the lock acquire — the flush task's per-page wait behind a
+    // concurrent listFlights/readFlightPage (#388) is otherwise invisible.
+    const int64_t lk_t0 = monotonic_us();
     FlightLogLockGuard guard(mutex_);
+    const uint32_t lk_dt = static_cast<uint32_t>(monotonic_us() - lk_t0);
+    if (lk_dt > wf_lock_wait_max_us_) wf_lock_wait_max_us_ = lk_dt;
+    wf_lock_wait_sum_us_ = wf_lock_wait_sum_us_ + lk_dt;
     if (!initialized_)   return Status::NotInitialized;
     if (!flight_active_) return Status::Error;
     if (payload == nullptr && payload_len != 0) return Status::OutOfRange;
