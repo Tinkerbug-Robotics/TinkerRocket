@@ -553,6 +553,14 @@ struct DriftCastView: View {
     var device: BLEDevice?
     @Environment(\.dismiss) var dismiss
 
+    /// Active rocket profile (#191).  When a profile is selected, the descent
+    /// fields (drogue/main rate, main deploy) mirror it — seeded on open,
+    /// valid edits written back — so drift-cast and the live landing
+    /// predictor share one per-airframe source of truth.  With no active
+    /// profile the @AppStorage globals below stand alone (pre-#191 behavior).
+    /// Injected at the app root, so it survives the sheet boundary.
+    @EnvironmentObject var profileStore: RocketProfileStore
+
     // Display units (#160).  DriftCast is feet/knots-native (winds-aloft
     // convention); only the result readouts respect this toggle — the wind
     // profile table and ft/fps inputs stay as-is.
@@ -677,7 +685,10 @@ struct DriftCastView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear { locationManager.startUpdates() }
+            .onAppear {
+                locationManager.startUpdates()
+                seedFromActiveProfile()
+            }
             .onDisappear { locationManager.stopUpdates() }
             // Seed the launch/landing points from the first GPS fix, but only
             // while they're still blank — never clobber a value the user typed
@@ -687,6 +698,13 @@ struct DriftCastView: View {
                 didAutoSeed = true
                 applyCurrentLocation(coord)
             }
+            // #191: valid descent-field edits flow back into the active
+            // profile.  Fires per keystroke, so unparseable / non-positive
+            // mid-edit strings are skipped; the same-value guard inside
+            // swallows the echo from seedFromActiveProfile().
+            .onChange(of: drogueRate) { writeBackToProfile(\.drogueRateFps, $0) }
+            .onChange(of: mainRate) { writeBackToProfile(\.mainRateFps, $0) }
+            .onChange(of: mainDeploy) { writeBackToProfile(\.mainDeployAltAglFt, $0) }
             .sheet(isPresented: $showOfflineMaps) {
                 OfflineMapsView(suggestedCenter: mapRegion.center)
             }
@@ -796,6 +814,12 @@ struct DriftCastView: View {
                 paramRow(label: "Drogue rate", value: $drogueRate, unit: "fps")
                 paramRow(label: "Main rate", value: $mainRate, unit: "fps")
                 paramRow(label: "Main deploy", value: $mainDeploy, unit: "ft")
+                if let name = profileStore.activeProfile?.name {
+                    Text("Descent rates & main deploy come from \u{201C}\(name)\u{201D} \u{2014} edits save back to that rocket's profile.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 paramRow(label: "Max steering", value: $maxSteering, unit: "°")
 
                 DatePicker("Launch time",
@@ -1015,6 +1039,38 @@ struct DriftCastView: View {
             center: coord,
             span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
         )
+    }
+
+    // MARK: - Profile sync (#191)
+
+    /// Mirror the active profile's recovery fields into the editable strings.
+    /// Unconditional overwrite (unlike the GPS auto-seed): the profile is the
+    /// per-airframe source of truth, and any stale @AppStorage value it
+    /// replaces here is exactly the cross-rocket bleed #191 removes.
+    private func seedFromActiveProfile() {
+        guard let p = profileStore.activeProfile else { return }
+        drogueRate = formatFieldValue(p.drogueRateFps)
+        mainRate = formatFieldValue(p.mainRateFps)
+        mainDeploy = formatFieldValue(p.mainDeployAltAglFt)
+    }
+
+    /// Persist a parsed-valid descent-field edit into the active profile.
+    /// Runs on every keystroke, so it must be tolerant: unparseable or
+    /// non-positive mid-edit strings are ignored, and writing the value the
+    /// profile already holds is suppressed (blocks the seeding echo and
+    /// pointless updatedAt bumps / disk writes).
+    private func writeBackToProfile(_ kp: WritableKeyPath<RocketProfile, Double>,
+                                    _ s: String) {
+        guard let id = profileStore.activeId,
+              let v = Double(s), v > 0,
+              profileStore.activeProfile?[keyPath: kp] != v else { return }
+        profileStore.update(id) { $0[keyPath: kp] = v }
+    }
+
+    /// Double → editable string, matching the stored value exactly so the
+    /// seed → onChange → write-back round trip compares equal ("60" not "60.0").
+    private func formatFieldValue(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(v)
     }
 
     private func compute() {
