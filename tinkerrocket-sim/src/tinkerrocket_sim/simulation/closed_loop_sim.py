@@ -151,6 +151,7 @@ class SimConfig:
     # --- Guidance (PN + 3-axis control) ---
     guidance_enabled: bool = False  # False = roll-only (default), True = guided coast
     guidance_mode: str = 'pn'       # 'pn' = proportional navigation, 'attitude' = point-at-target
+    guidance_debug: bool = False    # print the first 20 PN steps (interactive use)
 
     # PN guidance parameters
     pn_nav_gain: float = 3.0
@@ -774,7 +775,9 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             if not hasattr(config, '_guid_dbg_count'):
                                 config._guid_dbg_count = 0
                                 config._guid_dbg_t_next = 0.0
-                            if t >= config._guid_dbg_t_next and config._guid_dbg_count < 20:
+                            if (config.guidance_debug
+                                    and t >= config._guid_dbg_t_next
+                                    and config._guid_dbg_count < 20):
                                 config._guid_dbg_count += 1
                                 config._guid_dbg_t_next = t + 0.5
                                 print(f"  PN[{config._guid_dbg_count:2d}] t={t:.3f}s "
