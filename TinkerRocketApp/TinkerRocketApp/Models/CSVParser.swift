@@ -32,12 +32,14 @@ struct FlightCSVData {
         ]),
         // #514: the quaternion is the only reconstructable attitude — Roll is the
         // body-Z azimuth while Pitch/Yaw are ZYX-Euler, so those three are NOT a
-        // valid Euler triple. The old unqualified names are kept so CSVs exported
-        // before #514 still group correctly.
+        // valid Euler triple. Two name generations appear in the wild: the
+        // current semicolon names (the #514 comma names broke naive readers and
+        // were re-released with semicolons; repairSplitHeaderNames folds the
+        // 7/14–7/16 comma exports into this form) and the pre-#514 plain names.
         ("Rotation", [
             "Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
             "Quat q0", "Quat q1", "Quat q2", "Quat q3",
-            "Roll (deg, body-Z azimuth)", "Pitch (deg, ZYX Euler)", "Yaw (deg, ZYX Euler)",
+            "Roll (deg; body-Z azimuth)", "Pitch (deg; ZYX Euler)", "Yaw (deg; ZYX Euler)",
             "Roll (deg)", "Pitch (deg)", "Yaw (deg)",           // pre-#514 exports
             "Roll Command (deg)"
         ]),
@@ -114,6 +116,36 @@ enum CSVParserError: Error, LocalizedError {
 
 class CSVParser {
 
+    /// Apps built 2026-07-14…07-16 (#514, pre-fix) emitted three column names
+    /// containing literal commas without quoting, so the header row carried
+    /// three more comma-separated tokens than every data row and all columns
+    /// after "Quat q3" loaded shifted. Re-join those known token pairs into
+    /// the current comma-free names so existing exports parse correctly.
+    /// (The writer no longer puts commas in column names — see CSVGenerator.)
+    private nonisolated static let splitHeaderRepairs: [String: (second: String, joined: String)] = [
+        "Roll (deg": ("body-Z azimuth)", "Roll (deg; body-Z azimuth)"),
+        "Pitch (deg": ("ZYX Euler)", "Pitch (deg; ZYX Euler)"),
+        "Yaw (deg": ("ZYX Euler)", "Yaw (deg; ZYX Euler)"),
+    ]
+
+    nonisolated static func repairSplitHeaderNames(_ headers: [String]) -> [String] {
+        var repaired: [String] = []
+        repaired.reserveCapacity(headers.count)
+        var i = 0
+        while i < headers.count {
+            if i + 1 < headers.count,
+               let fix = splitHeaderRepairs[headers[i]],
+               headers[i + 1] == fix.second {
+                repaired.append(fix.joined)
+                i += 2
+            } else {
+                repaired.append(headers[i])
+                i += 1
+            }
+        }
+        return repaired
+    }
+
     /// Parse a CSV file into columnar FlightCSVData.
     /// Call from a background Task for large files.
     nonisolated static func parse(url: URL) throws -> FlightCSVData {
@@ -125,7 +157,8 @@ class CSVParser {
         }
 
         let headerLine = lines[0]
-        let headers = headerLine.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        let rawHeaders = headerLine.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+        let headers = repairSplitHeaderNames(rawHeaders)
         let columnCount = headers.count
 
         guard columnCount > 0 else {
