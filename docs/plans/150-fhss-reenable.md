@@ -327,10 +327,35 @@ zero-hash to 1 (0 collides with the firmware default and the app's unset
 sentinel); the hop/nidd readouts live on the real dashboard card (first
 draft put them on a never-instantiated view).  Simulator suite: 181/181.
 
-### Seam B — ⏳ pending (E2E with app, after Phases 4–5)
+### Seam B — RUN 2026-07-16 morning (app-driven E2E): PASS
 
-Onboarding + provisioning with network name, mode picker both directions
-(now expecting ~1–3 s handoffs), mid-hop manual scan (cmd-16 pause →
-cmd-15 mask → floor holds), deliberate nid mismatch → `nidd` visible
-instead of silent blackout, LANDED sim flight, UART-modem pair when the
-V8 radio board returns.
+1. **Settings surfaces** ✅ — Link Mode picker, FCC footer, TX-power lock
+   while hopping, Network section with mismatch badge all rendered and
+   behaved as designed (user screenshots).
+2. **Mode toggling from the app** ✅ — mode applied <1 s; the observed
+   "slow engage" was decomposed into (a) dormant-by-design in READY
+   (GPS refix ≈ 2.5 min) and (b) one lost-handoff heal — both now
+   narrated by the three-state tile badge (armed / engaging… / active).
+3. **Mid-hop Frequency Scan** ✅ — coordinated pause (cmd 16 received
+   same-second) → 5-pass scan → `65/69 channels active (min FCC floor
+   50)` mask push (cmd 15 received) → resume.  Finding: the BS's push
+   landed at the rocket's resume deadline (pause clock starts at cmd-16
+   receipt, BS spends ~2 s confirming the park first) → resume-bootstrap
+   collision, ~46 s fallback heal.  Fixed: pause slack 2 s → 5 s.
+4. **NetID mismatch drill** ✅ — BS synced to 122 while rocket at 0:
+   orange dashboard banner with live drop count (64 → 137), stale
+   telemetry as expected; rocket-side sync restored the link.  Finding:
+   the lifetime counter kept the banner up after healing — fixed by
+   reporting drops over BLE only within 30 s of the last actual drop.
+   nid persistence across a rocket power-cycle observed (`nid=122` on
+   boot).
+5. **Full sim flight** ✅ — PRELAUNCH hop engage in ~1 s of the state
+   transition (3-packet bootstrap), continuous session through boost
+   (max 99 m/s) and descent with **2 packets lost, 1 CRC, 0 wdog, 0 nid
+   drops**, and the first live **LANDED-mode hopping** (`nextCh`
+   advancing after touchdown) — the FCC change #150 exists for.
+   Cosmetic finding fixed: the entry-channel announce in bootstrap
+   frames false-fired the mask-drift warn on session-start frames.
+
+Still deferred: UART-modem pair (BS V3 + OC V8) until the V8 radio
+daughterboard respin returns.
