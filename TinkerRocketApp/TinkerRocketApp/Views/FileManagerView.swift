@@ -14,9 +14,46 @@ struct FileManagerView: View {
     @State private var fileToDelete: FileInfo?
     @State private var showDeleteConfirm = false
 
+    // Multi-select for bulk delete. `selection` holds file names (FileInfo.id),
+    // so it survives paging — you can select across pages and the count in the
+    // action bar reflects the full set even when some aren't on the visible page.
+    @State private var isSelecting = false
+    @State private var selection: Set<String> = []
+    @State private var showBulkDeleteConfirm = false
+
     // ESP32 already excludes recovery files from the BLE file list
     private var displayedFiles: [FileInfo] {
         device.files
+    }
+
+    // True when every file on the current page is selected (drives Select-all vs
+    // Deselect-all). False for an empty page so the toggle reads "Select all".
+    private var allOnPageSelected: Bool {
+        !displayedFiles.isEmpty && displayedFiles.allSatisfy { selection.contains($0.name) }
+    }
+
+    // Both firmwares paginate the BLE file list at 5 entries/page
+    // (FILES_PER_PAGE in out_computer + base_station config).
+    private static let filesPerPage = 5
+
+    /// Authoritative total page count when we know the full file count, else nil.
+    /// The rocket's storage stats report `flightCount` (== the flight-log index
+    /// size, which is exactly what the file list paginates over), so we can show
+    /// a fixed numbered navigator. The base station reports no count, so its
+    /// navigator is discovered page-by-page instead (see FilePageNavigator).
+    private var totalFilePages: Int? {
+        guard !device.isBaseStation,
+              let s = device.rocketStorage, s.initialized else { return nil }
+        return FilePageNavigator.totalPages(forFileCount: s.flightCount,
+                                            pageSize: Self.filesPerPage)
+    }
+
+    /// Show the navigator whenever there's more than one page. With a known
+    /// total this also hides it (and the phantom "next") for an exactly-full
+    /// single page, which the count==pageSize "hasMore" heuristic can't.
+    private var showPagination: Bool {
+        if let total = totalFilePages { return total > 1 }
+        return device.currentPage > 0 || device.hasMoreFiles
     }
 
     var body: some View {
@@ -35,8 +72,12 @@ struct FileManagerView: View {
                     VStack(alignment: .leading) {
                         Text(device.isBaseStation ? "LoRa Logs" : "Flights")
                             .font(.headline)
-                        if device.currentPage > 0 || device.hasMoreFiles {
-                            Text("Page \(device.currentPage + 1)")
+                        if let total = totalFilePages, total > 1 {
+                            Text("Page \(Int(device.currentPage) + 1) of \(total)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if device.currentPage > 0 || device.hasMoreFiles {
+                            Text("Page \(Int(device.currentPage) + 1)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
@@ -46,19 +87,29 @@ struct FileManagerView: View {
                         }
                     }
                     Spacer()
-                    Button(action: {
-                        print("Requesting file list...")
-                        device.requestFileList(page: device.currentPage)
-                    }) {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Refresh")
+                    if isSelecting {
+                        Button("Cancel") { exitSelection() }
+                            .foregroundColor(.blue)
+                    } else {
+                        if !displayedFiles.isEmpty {
+                            Button("Select") { isSelecting = true }
+                                .foregroundColor(.blue)
+                                .padding(.trailing, 4)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
+                        Button(action: {
+                            print("Requesting file list...")
+                            device.requestFileList(page: device.currentPage)
+                        }) {
+                            HStack {
+                                Image(systemName: "arrow.clockwise")
+                                Text("Refresh")
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        }
                     }
                 }
                 .padding()
@@ -118,25 +169,36 @@ struct FileManagerView: View {
                 } else {
                     List {
                         ForEach(displayedFiles) { file in
-                            FileRow(
-                                file: file,
-                                onDelete: {
-                                    fileToDelete = file
-                                    showDeleteConfirm = true
-                                },
-                                onDownload: {
-                                    print("Download button tapped for: \(file.name)")
+                            if isSelecting {
+                                Button {
+                                    toggleSelection(file.name)
+                                } label: {
+                                    FileRow(file: file, onDelete: {}, onDownload: {},
+                                            device: device, selectionMode: true,
+                                            isSelected: selection.contains(file.name))
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                FileRow(
+                                    file: file,
+                                    onDelete: {
+                                        fileToDelete = file
+                                        showDeleteConfirm = true
+                                    },
+                                    onDownload: {
+                                        print("Download button tapped for: \(file.name)")
 
-                                    device.downloadAndCacheFlight(file.name) { success in
-                                        if success {
-                                            print("[DOWNLOAD] Success: \(file.name)")
-                                        } else {
-                                            print("[DOWNLOAD] Failed: \(file.name)")
+                                        device.downloadAndCacheFlight(file.name) { success in
+                                            if success {
+                                                print("[DOWNLOAD] Success: \(file.name)")
+                                            } else {
+                                                print("[DOWNLOAD] Failed: \(file.name)")
+                                            }
                                         }
-                                    }
-                                },
-                                device: device
-                            )
+                                    },
+                                    device: device
+                                )
+                            }
                         }
                     }
                     .listStyle(InsetGroupedListStyle())
@@ -156,41 +218,53 @@ struct FileManagerView: View {
                             Text("Are you sure you want to delete \"\(file.displayTitle)\" from the \(device.isBaseStation ? "base station" : "rocket")? This cannot be undone.")
                         }
                     }
+                    .alert("Delete \(selection.count) \(device.isBaseStation ? "LoRa Log" : "Flight")\(selection.count == 1 ? "" : "s")?",
+                           isPresented: $showBulkDeleteConfirm) {
+                        Button("Delete", role: .destructive) { deleteSelected() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Are you sure you want to delete \(selection.count) \(device.isBaseStation ? "log" : "flight")\(selection.count == 1 ? "" : "s") from the \(device.isBaseStation ? "base station" : "rocket")? This cannot be undone.")
+                    }
 
-                    // Pagination controls
-                    if device.currentPage > 0 || device.hasMoreFiles {
-                        HStack(spacing: 20) {
-                            Button(action: {
-                                device.previousPage()
-                            }) {
-                                HStack {
-                                    Image(systemName: "chevron.left")
-                                    Text("Previous")
+                    // Pagination — numbered page navigator so many saved files
+                    // are easy to jump through (not just Prev/Next one at a time).
+                    if showPagination {
+                        FilePageNavigator(
+                            currentPage: Int(device.currentPage),
+                            totalPages: totalFilePages,
+                            hasMore: device.hasMoreFiles,
+                            onSelect: { device.requestFileList(page: UInt8(clamping: $0)) }
+                        )
+                        .padding(.horizontal)
+                        .padding(.bottom, isSelecting ? 4 : 10)
+                    }
+
+                    // Multi-select action bar.
+                    if isSelecting {
+                        HStack {
+                            Button(allOnPageSelected ? "Deselect all" : "Select all") {
+                                if allOnPageSelected {
+                                    displayedFiles.forEach { selection.remove($0.name) }
+                                } else {
+                                    displayedFiles.forEach { selection.insert($0.name) }
                                 }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(device.currentPage > 0 ? Color.blue : Color.gray)
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
                             }
-                            .disabled(device.currentPage == 0)
+                            .foregroundColor(.blue)
 
                             Spacer()
 
-                            Button(action: {
-                                device.nextPage()
-                            }) {
-                                HStack {
-                                    Text("Next")
-                                    Image(systemName: "chevron.right")
+                            Button(action: { showBulkDeleteConfirm = true }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "trash")
+                                    Text("Delete\(selection.isEmpty ? "" : " (\(selection.count))")")
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(device.hasMoreFiles ? Color.blue : Color.gray)
+                                .background(selection.isEmpty ? Color.gray : Color.red)
                                 .foregroundColor(.white)
                                 .cornerRadius(8)
                             }
-                            .disabled(!device.hasMoreFiles)
+                            .disabled(selection.isEmpty)
                         }
                         .padding(.horizontal)
                         .padding(.bottom, 10)
@@ -214,6 +288,127 @@ struct FileManagerView: View {
             device.rebuildDownloadStates(for: files.map { $0.name })
         }
     }
+
+    private func toggleSelection(_ name: String) {
+        if selection.contains(name) { selection.remove(name) } else { selection.insert(name) }
+    }
+
+    private func exitSelection() {
+        isSelecting = false
+        selection.removeAll()
+    }
+
+    private func deleteSelected() {
+        let names = Array(selection)
+        device.deleteFiles(names)
+        exitSelection()
+        // Resync from the device: a bulk delete can empty the current page or
+        // shift the total, so jump back to the first page.
+        device.requestFileList(page: 0)
+    }
+}
+
+// Numbered page bar for the saved-files list. Tapping a number jumps straight
+// to that page; chevrons step one at a time. Two modes:
+//   • totalPages known (rocket, from flightCount) → fixed pills 1…N, so you can
+//     jump to any page including the last.
+//   • totalPages nil (base station reports no count) → pills are discovered as
+//     you page forward (1…current, plus a "…" while more remain).
+// The row scrolls horizontally and keeps the current page centered.
+struct FilePageNavigator: View {
+    let currentPage: Int          // 0-based
+    let totalPages: Int?          // nil when the device reports no total
+    let hasMore: Bool             // used only in the discovered (nil-total) mode
+    let onSelect: (Int) -> Void
+
+    // 0-based page indices to render.
+    private var pageIndices: [Int] {
+        Self.pageIndices(currentPage: currentPage, totalPages: totalPages, hasMore: hasMore)
+    }
+
+    private var canGoNext: Bool {
+        Self.canGoNext(currentPage: currentPage, totalPages: totalPages, hasMore: hasMore)
+    }
+
+    // --- Pure paging logic (unit-tested; see FilePageNavigatorTests) ---
+
+    /// Total pages for a known file count, paginated at `pageSize`. At least 1.
+    static func totalPages(forFileCount count: Int, pageSize: Int) -> Int {
+        guard pageSize > 0 else { return 1 }
+        return max(1, (count + pageSize - 1) / pageSize)
+    }
+
+    static func pageIndices(currentPage: Int, totalPages: Int?, hasMore: Bool) -> [Int] {
+        if let total = totalPages, total > 0 { return Array(0..<total) }
+        let last = currentPage + (hasMore ? 1 : 0)
+        return Array(0...max(0, last))
+    }
+
+    static func canGoNext(currentPage: Int, totalPages: Int?, hasMore: Bool) -> Bool {
+        if let total = totalPages { return currentPage < total - 1 }
+        return hasMore
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            chevron("chevron.left", enabled: currentPage > 0) {
+                onSelect(currentPage - 1)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pageIndices, id: \.self) { p in
+                            pagePill(p).id(p)
+                        }
+                        if totalPages == nil && hasMore {
+                            Text("…")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 2)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+                .onChange(of: currentPage) { p in
+                    withAnimation { proxy.scrollTo(p, anchor: .center) }
+                }
+                .onAppear { proxy.scrollTo(currentPage, anchor: .center) }
+            }
+
+            chevron("chevron.right", enabled: canGoNext) {
+                onSelect(currentPage + 1)
+            }
+        }
+    }
+
+    private func pagePill(_ p: Int) -> some View {
+        let isCurrent = (p == currentPage)
+        return Button {
+            if !isCurrent { onSelect(p) }
+        } label: {
+            Text("\(p + 1)")
+                .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                .frame(minWidth: 34, minHeight: 34)
+                .background(isCurrent ? Color.blue : Color(.systemGray5))
+                .foregroundColor(isCurrent ? .white : .primary)
+                .clipShape(Circle())
+        }
+        .disabled(isCurrent)
+        .accessibilityLabel("Page \(p + 1)")
+    }
+
+    private func chevron(_ system: String, enabled: Bool,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .frame(width: 34, height: 34)
+                .background(enabled ? Color.blue : Color(.systemGray4))
+                .foregroundColor(.white)
+                .clipShape(Circle())
+        }
+        .disabled(!enabled)
+    }
 }
 
 struct FileRow: View {
@@ -221,9 +416,20 @@ struct FileRow: View {
     let onDelete: () -> Void
     let onDownload: () -> Void
     @ObservedObject var device: BLEDevice
+    // In selection mode the per-row Download/Delete buttons give way to a leading
+    // checkmark and the whole row acts as a selection toggle (handled by the
+    // caller wrapping this in a Button).
+    var selectionMode: Bool = false
+    var isSelected: Bool = false
 
     var body: some View {
         HStack {
+            if selectionMode {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundColor(isSelected ? .blue : .secondary)
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 Text(file.displayTitle)
                     .font(.body)
@@ -235,21 +441,24 @@ struct FileRow: View {
 
             Spacer()
 
-            // Download button
-            Button(action: onDownload) {
-                downloadButtonContent
-            }
-            .buttonStyle(BorderlessButtonStyle())
-            .disabled(downloadButtonDisabled)
+            if !selectionMode {
+                // Download button
+                Button(action: onDownload) {
+                    downloadButtonContent
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                .disabled(downloadButtonDisabled)
 
-            // Delete button
-            Button(action: onDelete) {
-                Image(systemName: "trash")
-                    .foregroundColor(.red)
+                // Delete button
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(BorderlessButtonStyle())
             }
-            .buttonStyle(BorderlessButtonStyle())
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 
     // Download button content based on state

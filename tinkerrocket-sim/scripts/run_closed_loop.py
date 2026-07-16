@@ -680,6 +680,8 @@ if __name__ == "__main__":
         # Guidance
         guidance_enabled=GUIDANCE_ENABLED,
         guidance_mode=GUIDANCE_MODE,
+        guidance_debug=True,   # keep the interactive PN step printout
+
         pn_nav_gain=PN_NAV_GAIN,
         pn_max_tilt_deg=PN_MAX_TILT_DEG,
         pn_max_accel_mps2=PN_MAX_ACCEL_MPS2,

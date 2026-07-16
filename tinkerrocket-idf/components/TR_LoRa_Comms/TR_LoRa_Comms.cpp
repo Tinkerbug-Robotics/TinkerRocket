@@ -257,6 +257,27 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
         return false;
     }
 
+    // #520: rx_done_ is only a HINT. It has two racing writers — the DIO1 ISR
+    // (edge-triggered, fires once per packet) and pollDio1() (the missed-interrupt
+    // fallback, which latches on the DIO1 *level*). The radio holds DIO1 asserted
+    // until readData() below clears the RxDone IRQ, several SPI transactions after
+    // we clear rx_done_ — so there is a window where rx_done_ is false while DIO1
+    // is still high, and a level-based latch landing in it re-arms the flag for a
+    // packet we ALREADY consumed. The next call would then re-read the SX126x
+    // buffer, which still holds that packet, and hand back a byte-identical
+    // duplicate (bench: same seq, same RSSI/SNR to 0.1 dB, ~9 ms later).
+    //
+    // So ask the radio, not the flag. DIO1 is masked to RxDone only, so a set
+    // RX_DONE bit means a genuinely new packet is waiting.
+    if (!(radio_->getIrqFlags() & RADIOLIB_SX126X_IRQ_RX_DONE))
+    {
+        portDISABLE_INTERRUPTS();
+        rx_done_ = false;
+        portENABLE_INTERRUPTS();
+        stats_.rx_spurious++;
+        return false;
+    }
+
     // Clear the flag atomically w.r.t. the DIO1 ISR so we never lose
     // an rx_done_ that fires between the check above and this assignment.
     portDISABLE_INTERRUPTS();
@@ -337,7 +358,7 @@ void TR_LoRa_Comms::pollDio1()
     // Check DIO1 pin state directly
     if (gpio_get_level((gpio_num_t)dio1_pin_) == 1)
     {
-        isr_count_++;
+        isr_count_ = isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         if (rx_mode_)
         {
             rx_done_ = true;
@@ -460,12 +481,14 @@ bool TR_LoRa_Comms::reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_
     rx_mode_ = false;
     rx_done_ = false;
 
-    // Save old config for rollback on partial failure
+    // Save old config for rollback on partial failure. setOutputPower is the
+    // final step, so there's no successful step after it to unwind — its
+    // failure leaves the prior power setting untouched and nothing to restore
+    // (hence no old_pwr saved here).
     const float   old_bw   = cfg_bw_khz_;
     const uint8_t old_sf   = cfg_sf_;
     const float   old_freq = cfg_freq_mhz_;
     const uint8_t old_cr   = cfg_cr_;
-    const int8_t  old_pwr  = cfg_tx_power_;
     int steps_done = 0;
 
     // LLCC68 validates SF against the current BW, so set BW first
@@ -721,7 +744,7 @@ void IRAM_ATTR TR_LoRa_Comms::onDio1ISR()
 {
     if (instance_ != nullptr)
     {
-        instance_->isr_count_++;
+        instance_->isr_count_ = instance_->isr_count_ + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         if (instance_->rx_mode_)
         {
             instance_->rx_done_ = true;

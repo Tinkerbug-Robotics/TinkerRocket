@@ -9,19 +9,141 @@ CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 
+# (#524) Silence NimBLE's INFO chatter. #505 did this for the base station and
+# stopped there — the OC was left at INFO, where every ble_gatts_notify_custom()
+# call prints "GATT procedure initiated: notify". That is once per NOTIFICATION,
+# including the ones that fail with ENOMEM and get retried, so a download turned
+# into hundreds of console lines a second. Worse, they are emitted on the NimBLE
+# host task, which is the task that has to drain the controller queue we are
+# waiting on: the logging was throttling the very transfer it was reporting.
+# WARNING still surfaces anything that actually went wrong.
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# (#524) Deepen the mbuf pool used to queue notifications. A file-transfer chunk is
+# ~509 bytes and chains several blocks, so at the IDF defaults (MSYS_1 12x256,
+# MSYS_2 24x320) only a handful of notifications can be in flight before
+# ble_hs_mbuf_from_flat() returns NULL. That shallow pool is the congestion the old
+# fixed 30 ms per-chunk delay was dodging.
+#
+# Now that sendFileChunk applies real backpressure instead of dropping, a shallow
+# pool no longer loses data — it just makes us wait. A deeper one lets several
+# notifications ride each connection event, which is where the throughput is.
+# Cost is ~13 KB of heap; the OC has ~159 KB free.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48
+
 # === POWER MANAGEMENT ===
 # Compiled in but only activated at runtime during low-power mode
 CONFIG_PM_ENABLE=y
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
-CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
+
+# (#519) Light-sleep tick accounting. The first battery run panicked immediately:
+#
+#   assert failed: vTaskStepTick tasks.c:3068
+#     (( xTickCount + xTicksToJump ) <= xNextTaskUnblockTime)
+#   #3 vTaskStepTick (xTicksToJump=4)
+#   #4 pm_step_tick (xExpectedIdleTime=3)   <- allowed 3 ticks, actually slept 4
+#
+# Cause: FREERTOS_HZ is 1000, so a tick is 1 ms, and IDLE_TIME_BEFORE_SLEEP was 3
+# — we were dropping into light sleep for THREE MILLISECONDS at a time. The wakeup
+# overhead alone (cache misses, the 80/40 MHz DFS switch, flash latency — all three
+# named in esp_pm's own Kconfig help) is around a millisecond, so a 3 ms sleep
+# reliably overshoots by a tick, pm_step_tick tries to jump 4, and FreeRTOS aborts.
+# It only shows up on battery because USB holds the no-light-sleep lock.
+#
+# Two changes, one to remove the cause and one to survive it:
+#
+# 1. Don't take pointless naps. 3 ms of sleep against ~1 ms of entry/exit overhead
+#    is mostly waste even when it works. 10 ms means we only sleep when there is
+#    something to gain, and the overhead becomes a small fraction rather than a
+#    third. The OC idles for long stretches here (BLE at 200 ms interval, latency
+#    4; oc_loop wakes every 20 ms), so there is still plenty of sleep to be had.
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=10
+
+# 2. Belt and braces: this option exists for exactly this assert ("prevent
+#    vTaskStepTick() assertion failure when actual wakeup overhead exceeds
+#    estimation"). It clamps slept_ticks to the expected value when the overshoot
+#    is within tolerance. Default is OFF. Our measured overshoot was 1 tick;
+#    tolerance 3 leaves margin without being so loose that a genuine bug hides.
+#    Cost is that xTickCount can lag esp_timer by a tick in rare cases — which is
+#    acceptable HERE and only here: light sleep runs solely in the rail-off idle
+#    state. exitLowPowerMode() disables it and locks the CPU at full speed before
+#    anything flies, so tick accounting can never affect flight timing.
+CONFIG_PM_LIGHTSLEEP_TICK_OVERFLOW_PROTECTION=y
+CONFIG_PM_LIGHTSLEEP_TICK_OVERFLOW_TOLERANCE=3
+
+# Attack the overhead itself rather than only tolerating it: keep the sleep/wake
+# path in IRAM so it is not paying flash-cache misses on every wakeup. This is the
+# root cause the Kconfig help lists first, and shrinking it shrinks the overshoot.
+CONFIG_PM_SLP_IRAM_OPT=y
+CONFIG_PM_RTOS_IDLE_OPT=y
 
 # BLE controller modem sleep — radio powers down between BLE events
 CONFIG_BT_CTRL_MODEM_SLEEP=y
 CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
-CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
 
-# NimBLE host sleep support
-CONFIG_BT_NIMBLE_SLEEP_ENABLE=y
+# (#519) Run the BT low-power clock off the board's 32.768 kHz crystal instead of
+# the main XTAL. This is NOT just about powering down a crystal — read the
+# controller source (components/bt/controller/esp32c3/bt.c, which the S3 shares):
+#
+#     } else if (s_lp_cntl.lpclk_sel == ESP_BT_SLEEP_CLOCK_MAIN_XTAL) {
+#     #if !CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP
+#         s_lp_cntl.no_light_sleep = 1;
+#     #endif
+#
+# On MAIN_XTAL without that option — which is what we shipped — the controller sets
+# no_light_sleep, so LIGHT SLEEP IS BLOCKED ENTIRELY while BLE is on. PM_ENABLE and
+# tickless idle above were enabled but could never actually engage; the CPU just
+# idled at the DFS minimum (loop_oc's own comment says exactly this). With a working
+# 32 kHz crystal the controller never sets that flag, and light sleep becomes
+# possible with BLE active. THAT is the power win.
+#
+# Safe by construction: the controller verifies the crystal is really oscillating
+# (rtc_clk_slow_src_get() != SOC_RTC_SLOW_CLK_SRC_XTAL32K) and falls back to the
+# main XTAL with a warning if it is not — so an unpopulated or dead crystal degrades
+# to today's behaviour rather than breaking BLE. The boot log says which path was
+# taken, so this is self-diagnosing:
+#   OK  -> I BT: "Using external 32.768 kHz crystal/oscillator as clock source"
+#   BAD -> W BT: "32.768kHz XTAL not detected, fall back to main XTAL ..."
+# Likewise the RTC itself: "If the crystal could not start, it will be switched to
+# internal RC" (esp_hw_support Kconfig.rtc).
+#
+# EXT_32K_XTAL depends on the RTC slow clock being the crystal, so RTC_CLK_SRC must
+# be set first — no project in this repo had ever set it, so the whole fleet was
+# running its RTC on the internal RC and the crystal was unused hardware.
+CONFIG_RTC_CLK_SRC_EXT_CRYS=y
+CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL=y
+
+# (#519) Crystal watchdog. Making the 32.768 kHz crystal the RTC/BLE clock source
+# introduces a failure mode we did not have before: if it stops oscillating, the
+# BLE sleep-clock reference stops with it. A tuning-fork crystal is precisely the
+# part that can quit under launch shock and vibration, and this rides a rocket.
+# ESP_XT_WDT detects the oscillation failure in hardware and automatically switches
+# to BACKUP32K_CLK (plus an interrupt) rather than leaving the clock dead. Cheap
+# insurance; without it there is no recovery path.
+CONFIG_ESP_XT_WDT=y
+CONFIG_ESP_XT_WDT_BACKUP_CLK_ENABLE=y
+
+# NOTE if the bench boot log says "32.768kHz XTAL not detected": the first knob to
+# try is CONFIG_ESP_SYSTEM_RTC_EXT_XTAL_BOOTSTRAP_CYCLES (default 0 on S3), which
+# kicks the crystal with a 32 kHz square wave to help it start.
+
+# (#519) The other half of the reason light sleep was off. enterLowPowerMode()'s
+# comment cited "USB-Serial-JTAG incompatible" — which is true, the USJ peripheral
+# does not survive light sleep. But IDF solves it: with this option the USJ driver
+# holds an ESP_PM_NO_LIGHT_SLEEP lock for exactly as long as the USB port is
+# actually connected (it watches for SOF packets), and releases it on unplug. So
+# the serial console keeps working on the bench, and light sleep engages in flight
+# once USB is gone — which is the only time idle current matters.
+# Default is 'n', which is why we were carrying a hand-rolled "just don't sleep".
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+
+# (#518) CONFIG_BT_NIMBLE_SLEEP_ENABLE=y used to sit here under a "NimBLE host
+# sleep support" comment. No such kconfig symbol exists in ESP-IDF — it is not in
+# the bt component's Kconfig and not in its sdkconfig.rename map — so kconfgen
+# silently ignored it. The real knob is the controller-side BT_CTRL_MODEM_SLEEP
+# block above, which is already correct here. Removed rather than replaced: this
+# is a no-op for the generated config, verified by diffing sdkconfig.json.
 
 # PHY power down during sleep
 CONFIG_ESP_PHY_MAC_BB_PD=y

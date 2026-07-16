@@ -104,6 +104,12 @@ class SimConfig:
     servo_rate_limit: float = 923.0 # deg/s slew rate (= 60 / 0.065 s-per-60deg)
     servo_tau_s: float = 0.0325     # first-order lag time const (s); ~half the 60deg-travel time; 0 -> pure slew (legacy)
     servo_deadband_us: float = 2.0  # servo PWM deadband (us); 0 -> none
+    # Mechanical linkage lash between the servo horn and the fin: full gap
+    # width in deg of fin travel. The fin only engages after the horn crosses
+    # the half-gap; inside the gap the fin holds (linkage slack). 0 = rigid.
+    # Default off — healthy-servo lash is unmeasured (bench wiggle-test to
+    # calibrate); the known-bad servo 3 measured ~10 deg.
+    servo_backlash_deg: float = 0.0
 
     # Wind (constant ENU, m/s)
     wind_speed: float = 0.0             # m/s
@@ -118,6 +124,15 @@ class SimConfig:
     enable_gnss_updates: bool = True
     enable_baro_updates: bool = True
     enable_mag_updates: bool = True
+
+    # IMU fidelity knobs (None = off, preserving the ideal-range default).
+    # gyro_full_scale_dps: hard-clip the gyro at ±range (the 2026-05-17 flight
+    # ran ±4000 dps and saturated). imu_mounting_rotation_deg: (roll,pitch,yaw)
+    # ZYX Euler of the IMU relative to the airframe — injects a fixed
+    # misalignment the firmware constants do not undo (degrades the EKF).
+    gyro_full_scale_dps: Optional[float] = None
+    accel_full_scale_g: Optional[float] = None
+    imu_mounting_rotation_deg: Optional[tuple] = None
 
     # Truth injection: set the EKF quaternion to the true orientation at ignition
     # (removes AHRS convergence error, isolates pure IMU integration drift)
@@ -142,6 +157,7 @@ class SimConfig:
     # --- Guidance (PN + 3-axis control) ---
     guidance_enabled: bool = False  # False = roll-only (default), True = guided coast
     guidance_mode: str = 'pn'       # 'pn' = proportional navigation, 'attitude' = point-at-target
+    guidance_debug: bool = False    # print the first 20 PN steps (interactive use)
 
     # PN guidance parameters
     pn_nav_gain: float = 3.0
@@ -195,6 +211,24 @@ class SimResult:
     flight_time_s: float = 0.0
 
 
+def _backlash_step(output_deg: float, input_deg: float, gap_deg: float) -> float:
+    """One step of a mechanical backlash (linkage play) operator.
+
+    The output (fin) engages the input (servo horn) only once the input has
+    crossed the half-gap; inside the gap the linkage is slack and the output
+    holds. On a direction reversal the input must traverse the full gap before
+    the output moves again. gap_deg <= 0 is a rigid linkage (output = input).
+    """
+    if gap_deg <= 0.0:
+        return input_deg
+    half = 0.5 * gap_deg
+    if input_deg - output_deg > half:
+        return input_deg - half
+    if output_deg - input_deg > half:
+        return input_deg + half
+    return output_deg
+
+
 def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     """Run a full closed-loop simulation.
 
@@ -227,13 +261,18 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Initialize sensors
     def _seed(i):
         return None if config.sensor_seed is None else config.sensor_seed + i
+    _imu_fidelity = dict(
+        gyro_full_scale_dps=config.gyro_full_scale_dps,
+        accel_full_scale_g=config.accel_full_scale_g,
+        mounting_rotation_deg=config.imu_mounting_rotation_deg,
+    )
     if config.perfect_imu:
         imu = IMUModel(rate_hz=config.imu_rate,
                        accel_noise_sigma=0.0, gyro_noise_sigma=0.0,
                        accel_bias_sigma=0.0, gyro_bias_sigma=0.0,
-                       seed=_seed(0))
+                       seed=_seed(0), **_imu_fidelity)
     else:
-        imu = IMUModel(rate_hz=config.imu_rate, seed=_seed(0))
+        imu = IMUModel(rate_hz=config.imu_rate, seed=_seed(0), **_imu_fidelity)
     baro = BaroModel(rate_hz=config.baro_rate, seed=_seed(1))
     mag = MagModel(rate_hz=config.mag_rate, seed=_seed(2))
     gnss = GNSSModel(
@@ -343,16 +382,21 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     mag_sample_time_us = 0
     next_log = t
 
-    # Current actuator state
+    # Current actuator state. servo_horn_deg is the servo-horn position (the
+    # lag/slew dynamic state); fin_tab_actual is the fin behind the linkage
+    # lash. With servo_backlash_deg=0 they are identical.
     fin_tab_cmd = 0.0
     fin_tab_actual = 0.0
+    servo_horn_deg = 0.0
     roll_target_deg = None  # current angle target (for profile mode logging)
     current_roll_deg = None  # controller's regulated roll angle (azimuth, for logging)
     _roll_kicked = False
 
-    # 4-fin actuator state (guided mode)
+    # 4-fin actuator state (guided mode); fin_horns are the servo-horn
+    # positions ahead of the linkage lash, like servo_horn_deg above.
     fin_cmds = np.zeros(4)
     fin_actuals = np.zeros(4)
+    fin_horns = np.zeros(4)
     guidance_active = False
     guidance_tilt_inhibited = False  # tilt-limit safety latch (FC: guidance_tilt_inhibited)
     guidance_tilt_trip_t = None      # time the latch tripped (for reporting/plots)
@@ -760,7 +804,9 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             if not hasattr(config, '_guid_dbg_count'):
                                 config._guid_dbg_count = 0
                                 config._guid_dbg_t_next = 0.0
-                            if t >= config._guid_dbg_t_next and config._guid_dbg_count < 20:
+                            if (config.guidance_debug
+                                    and t >= config._guid_dbg_t_next
+                                    and config._guid_dbg_count < 20):
                                 config._guid_dbg_count += 1
                                 config._guid_dbg_t_next = t + 0.5
                                 print(f"  PN[{config._guid_dbg_count:2d}] t={t:.3f}s "
@@ -992,24 +1038,31 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
             # Actuator model: rate-limit the command
             max_delta = config.servo_rate_limit * imu_dt
             if guidance_active:
-                # 4-fin servo rate-limit model
+                # 4-fin servo rate-limit model; each fin follows its horn
+                # through the linkage lash.
                 for i in range(4):
-                    delta_i = fin_cmds[i] - fin_actuals[i]
+                    delta_i = fin_cmds[i] - fin_horns[i]
                     if abs(delta_i) > max_delta:
                         delta_i = max_delta if delta_i > 0 else -max_delta
-                    fin_actuals[i] += delta_i
+                    fin_horns[i] += delta_i
+                    fin_actuals[i] = _backlash_step(
+                        fin_actuals[i], fin_horns[i], config.servo_backlash_deg)
             else:
                 # Roll-fin servo: PWM deadband, then a first-order lag toward the
                 # command capped by the slew rate. Within the deadband the servo
                 # holds; servo_tau_s<=imu_dt collapses to the prior slew limiter.
-                err = fin_tab_cmd - fin_tab_actual
+                # The deadband and dynamics act on the HORN (the servo's own
+                # feedback loop); the fin follows the horn through the lash.
+                err = fin_tab_cmd - servo_horn_deg
                 if abs(err) >= _servo_deadband_deg:
                     rate = err / _servo_tau_eff
                     if rate > config.servo_rate_limit:
                         rate = config.servo_rate_limit
                     elif rate < -config.servo_rate_limit:
                         rate = -config.servo_rate_limit
-                    fin_tab_actual += rate * imu_dt
+                    servo_horn_deg += rate * imu_dt
+                fin_tab_actual = _backlash_step(
+                    fin_tab_actual, servo_horn_deg, config.servo_backlash_deg)
 
         # --- Logging ---
         if t >= next_log:

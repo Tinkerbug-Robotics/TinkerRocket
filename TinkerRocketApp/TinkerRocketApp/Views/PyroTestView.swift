@@ -29,8 +29,13 @@ class TickCounter: ObservableObject {
         stop()
         tick = 0
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            // Bind an immutable local here (in the timer's nonisolated closure)
+            // so the Task captures a `let`, not the mutable `[weak self]` var —
+            // referencing the captured var inside the concurrent Task is a Swift 6
+            // error.
+            guard let self else { return }
             Task { @MainActor in
-                self?.tick += 1
+                self.tick += 1
             }
         }
     }

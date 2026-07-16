@@ -79,6 +79,12 @@ struct TelemetryData: Codable {
     // LoRa signal quality (base station only)
     var rssi: Float?                  // LoRa RSSI dBm
     var snr: Float?                   // LoRa SNR dB
+    // #150: hop-state surface.  hop_channel only arrives while the BS is
+    // following a hop schedule; netid_drops only once the BS has dropped
+    // packets on a network-id mismatch (a rising count = a device is on
+    // the wrong network id — the failure that used to be silent).
+    var hop_channel: Int?
+    var netid_drops: Int?
 
     // Base station (base station only)
     var bs_soc: Float?                // Base station SOC %
@@ -254,6 +260,8 @@ struct TelemetryData: Codable {
         case roll_cmd = "rcmd"
         case q0, q1, q2, q3
         case rssi, snr
+        case hop_channel = "hch"
+        case netid_drops = "nidd"
         case bs_soc = "bsoc"
         case bs_voltage = "bvol"
         case bs_current = "bcur"
@@ -319,6 +327,8 @@ struct TelemetryData: Codable {
         q3 = try c.decodeIfPresent(Float.self, forKey: .q3)
         rssi = try c.decodeIfPresent(Float.self, forKey: .rssi)
         snr = try c.decodeIfPresent(Float.self, forKey: .snr)
+        hop_channel = try c.decodeIfPresent(Int.self, forKey: .hop_channel)
+        netid_drops = try c.decodeIfPresent(Int.self, forKey: .netid_drops)
         bs_soc = try c.decodeIfPresent(Float.self, forKey: .bs_soc)
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)

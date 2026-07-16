@@ -7,7 +7,11 @@
 //
 
 import Foundation
-import CoreBluetooth
+// CoreBluetooth predates Swift concurrency: CBPeripheral et al. aren't marked
+// Sendable, so capturing them in @Sendable closures (e.g. the OTA backpressure
+// continuation below) warns. @preconcurrency suppresses those module-level
+// Sendable warnings — the CB objects are only ever touched on the main actor.
+@preconcurrency import CoreBluetooth
 import Combine
 import UIKit
 
@@ -1077,9 +1081,6 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func nextPage() { requestFileList(page: currentPage + 1) }
-    func previousPage() { if currentPage > 0 { requestFileList(page: currentPage - 1) } }
-
     func deleteFile(_ filename: String) {
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else { return }
@@ -1090,6 +1091,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
         files.removeAll { $0.name == filename }
         downloadStates.removeValue(forKey: filename)
+    }
+
+    /// Bulk delete for multi-select. Each name is an independent cmd-3 write;
+    /// CoreBluetooth serializes the `.withResponse` writes on its own queue, so
+    /// the firmware processes them one at a time. The caller should refresh the
+    /// file list afterward (totals/pagination shift once the deletes land).
+    func deleteFiles(_ filenames: [String]) {
+        for name in filenames { deleteFile(name) }
     }
 
     func downloadFile(_ filename: String, completion: @escaping (URL?) -> Void) {
@@ -1125,6 +1134,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         let length = UInt16(data[4]) | (UInt16(data[5]) << 8)
         let flags = data[6]
         let isEOF = (flags & 0x01) != 0
+        let isAbort = (flags & 0x02) != 0   // #526
+
+        // #526: the firmware could not finish this transfer (rocket INFLIGHT, a
+        // flash read error, or a BLE send failure). The bytes we have are a
+        // truncated fragment, NOT a complete file. Fail the download and write
+        // nothing — previously an abort arrived as a bare EOF and the partial file
+        // was saved and cached as if it were whole.
+        if isEOF && isAbort {
+            downloadStallTimer?.invalidate()
+            downloadStallTimer = nil
+            print("[DOWNLOAD] ABORTED by device after \(downloadedData.count) bytes")
+            failDownload()
+            return
+        }
+
         if length > 0 && data.count >= 7 + Int(length) {
             let chunkData = data.subdata(in: 7..<(7 + Int(length)))
             downloadedData.append(chunkData)
@@ -1156,6 +1180,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self = self, self.isDownloading else { return }
             self.completeDownload(fromStallTimer: true)
         }
+    }
+
+    // #526: end a download in failure — write nothing, cache nothing, hand the
+    // caller nil. Used when the device signals an abort (EOF|ABORT). Mirrors the
+    // cleanup in completeDownload's failure branches so state can't leak.
+    private func failDownload() {
+        downloadStallTimer?.invalidate()
+        downloadStallTimer = nil
+        let handler = downloadCompletionHandler
+        downloadingFilename = nil
+        downloadedData = Data()
+        downloadCompletionHandler = nil
+        DispatchQueue.main.async { [weak self] in self?.isDownloading = false }
+        handler?(nil)
     }
 
     private func completeDownload(fromStallTimer: Bool = false) {
@@ -1461,6 +1499,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraCR = (dict["lcr"] as? Int).map { UInt8($0) }
             cfg.loraTxPower = (dict["lpw"] as? Int).map { Int8($0) }
             cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
+            cfg.loraHopDwell = dict["lhdw"] as? Int      // #150 (0 = hopping unavailable)
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode

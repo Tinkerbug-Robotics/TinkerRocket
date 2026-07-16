@@ -520,9 +520,19 @@ nonisolated class CSVGenerator {
         columns.append("State of Charge (%)")
 
         // NonSensor
-        columns.append("Roll (deg)")
-        columns.append("Pitch (deg)")
-        columns.append("Yaw (deg)")
+        // #514: the quaternion is the ONLY reconstructable attitude in this file.
+        // Roll below is the body-Z azimuth (matches the FC roll controller, doesn't
+        // gimbal-lock) while Pitch/Yaw are ZYX-Euler — two different conventions, so
+        // Roll/Pitch/Yaw is NOT a valid Euler triple and cannot be combined into an
+        // orientation. Anything needing the actual attitude must use q0..q3.
+        // Blank for legacy logs, whose wire format carried no quaternion.
+        columns.append("Quat q0")
+        columns.append("Quat q1")
+        columns.append("Quat q2")
+        columns.append("Quat q3")
+        columns.append("Roll (deg, body-Z azimuth)")
+        columns.append("Pitch (deg, ZYX Euler)")
+        columns.append("Yaw (deg, ZYX Euler)")
         columns.append("Roll Command (deg)")
         columns.append("Position East (m)")
         columns.append("Position North (m)")
@@ -621,6 +631,16 @@ nonisolated class CSVGenerator {
         values.append(power.map { String(format: "%.1f", $0.soc) } ?? "")
 
         // NonSensor
+        // #514: quaternion first — it is the only unambiguous attitude here.
+        // A zero (non-unit) quaternion means "absent" (legacy log) → write blanks.
+        let q = nonSensor.flatMap { ns -> (Double, Double, Double, Double)? in
+            let n = ns.q0*ns.q0 + ns.q1*ns.q1 + ns.q2*ns.q2 + ns.q3*ns.q3
+            return n > 0.5 ? (ns.q0, ns.q1, ns.q2, ns.q3) : nil
+        }
+        values.append(q.map { String(format: "%.5f", $0.0) } ?? "")
+        values.append(q.map { String(format: "%.5f", $0.1) } ?? "")
+        values.append(q.map { String(format: "%.5f", $0.2) } ?? "")
+        values.append(q.map { String(format: "%.5f", $0.3) } ?? "")
         values.append(nonSensor.map { String(format: "%.2f", $0.roll) } ?? "")
         values.append(nonSensor.map { String(format: "%.2f", $0.pitch) } ?? "")
         values.append(nonSensor.map { String(format: "%.2f", $0.yaw) } ?? "")
@@ -678,7 +698,9 @@ nonisolated struct FlightSummary: Codable, Sendable {
 
 /// Round a float32 to `digits` significant figures so the JSON shows clean
 /// gains (e.g. 0.04, not 0.039999999105930) instead of float32→Double noise.
-private func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
+/// `nonisolated` (pure math, no shared state) so the nonisolated `FlightSettings`
+/// initializers can call it without a main-actor hop under default MainActor isolation.
+private nonisolated func sigFig(_ v: Float, _ digits: Int = 6) -> Double {
     let d = Double(v)
     if d == 0 || !d.isFinite { return d }
     let mag = floor(log10(abs(d)))

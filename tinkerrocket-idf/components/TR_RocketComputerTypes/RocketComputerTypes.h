@@ -95,22 +95,28 @@ static inline bool shouldBeaconInState(RocketState s)
 }
 
 // Whether per-packet channel hopping should be active in this state.
-// PRELAUNCH and INFLIGHT only — ground states (READY/LANDED/INITIALIZATION)
-// stay on the static configured channel so configuration, recovery, and
-// initial handshake stay simple and predictable.
+// PRELAUNCH, INFLIGHT, and LANDED — every state where the rocket streams
+// telemetry at the full unconditional 2 Hz cadence.  Ground setup states
+// (READY/INITIALIZATION/MAG_CALIBRATION) stay on the static configured
+// channel so configuration and the initial handshake stay simple and
+// predictable.
 //
 // Hopping starts at PRELAUNCH (rather than INFLIGHT) so the behaviour gets
 // real ground-test airtime before the rocket leaves the pad — that's the
 // window where defects are cheap to find.
 //
-// Edge case: a post-flight LANDED → PRELAUNCH transition (rocket regains
-// GPS without a power cycle) would also activate hopping, which is
-// suboptimal for recovery.  The existing rendezvous fallback recovers
-// from this gracefully if it ever happens; revisit with a sticky
-// "post-flight" gate if it bites.
+// LANDED hops too (#150): telemetry keeps its 2 Hz cadence after landing,
+// and parking ~2.1 s of accumulated airtime per 10 s on ONE frequency is
+// 5x the FCC 15.247 FHSS occupancy bound (0.4 s per 10 s window).
+// Recovery is not hurt: the BS keeps following the schedule, and if the
+// BS power-cycles, the rocket's hop-silence fallback periodically
+// revisits the rendezvous channel where the rebooted BS is waiting.
+// This also erases the old LANDED → PRELAUNCH re-hop edge case that used
+// to be documented here — both states hop now, so the transition is a
+// no-op for the hop schedule.
 static inline bool shouldHopInState(RocketState s)
 {
-    return s == PRELAUNCH || s == INFLIGHT;
+    return s == PRELAUNCH || s == INFLIGHT || s == LANDED;
 }
 
 static inline bool shouldHopInState(uint8_t s)
@@ -130,10 +136,12 @@ static inline bool shouldHopInState(uint8_t s)
 // half-BW guard from its neighbours.  Channel 0 sits half a BW above the
 // low band edge; the last channel sits half a BW below the high edge.  The
 // US 902-928 MHz ISM band fits 35/69/130 channels at the Fast/250kHz/Max
-// Range presets respectively.  All three counts comfortably exceed the
-// FCC Part 15.247 FHSS thresholds (25 channels for BW > 250 kHz, 50 for
-// BW ≤ 250 kHz) — though we operate as digital modulation (DTS), not
-// FHSS, so those thresholds are headroom rather than a binding constraint.
+// Range presets respectively.  All three counts exceed the FCC Part
+// 15.247 FHSS minimums (25 channels at >= 250 kHz-wide channels, 50
+// below), which are BINDING whenever hopping is enabled (#150).  At
+// BW <= 250 kHz we additionally hold >= 50 active channels — the
+// threshold for the 1 W FHSS power tier.  See
+// docs/plans/150-fhss-reenable.md for the full compliance analysis.
 //
 // next_channel_idx in the LoRa header is 1 byte (0..N-1).  The sentinel
 // LORA_NEXT_CH_NO_HOP means "stay on the current channel for one more
@@ -142,7 +150,22 @@ static inline bool shouldHopInState(uint8_t s)
 static constexpr float   LORA_BAND_LO_MHZ        = 902.0f;  // US ISM band low edge
 static constexpr float   LORA_BAND_HI_MHZ        = 928.0f;  // US ISM band high edge
 static constexpr float   LORA_CHANNEL_SPACING_X  = 1.5f;    // spacing as multiple of BW
-static constexpr uint8_t LORA_NEXT_CH_NO_HOP     = 0xFF;    // sentinel: don't hop
+static constexpr uint8_t LORA_NEXT_CH_NO_HOP     = 0xFF;    // sentinel: not hopping
+
+// #150: second sentinel — "hop session active, but this frame is
+// momentarily off-schedule" (rendezvous visit or coordinated-scan pause).
+// Distinguishes a genuinely-fixed rocket (0xFF) from a hopping one that a
+// listening BS has lost: a fixed-mode BS hearing 0xFE has immediate
+// mode-mismatch evidence while the rocket is parked and LISTENING on the
+// shared rendezvous — exactly the window where a cmd-17 push can land —
+// and a hop-enabled BS knows to hold its channel for the rocket's return
+// rather than treating the frame as "not hopping".  Real channel indices
+// top out at 130 (BW125); loraChannelCount caps at 253 so neither
+// sentinel can collide.  Requires both ends flashed together (same
+// coordinated-re-flash rule the dwell change already imposes); an old BS
+// would misread 0xFE as a channel index and get a 0.0 MHz sentinel from
+// loraChannelMHz.
+static constexpr uint8_t LORA_NEXT_CH_HOP_OFFSCHEDULE = 0xFE;
 
 // ============================================================================
 // LoRa factory rendezvous (#105 follow-up): a single shared known-good config
@@ -184,7 +207,7 @@ static inline uint8_t loraChannelCount(float bw_khz)
     const float span     = max_f - min_f;
     const int   n        = (int)(span / spacing) + 1;
     if (n < 1)   return 0;
-    if (n > 255) return 255;  // cap so idx fits in the 1-byte header field
+    if (n > 253) return 253;  // cap below the 0xFE/0xFF header sentinels
     return (uint8_t)n;
 }
 
@@ -287,7 +310,7 @@ static inline float loraMinValidSnrDb(uint8_t sf)
 // Compute observed packet-loss between two consecutive RXes on the BS,
 // from the rocket's free-running TX sequence counter (#105).  Widened to
 // 16-bit seq in proto v4 (slow-hop seq-anchored hop schedule needs the
-// extra range — see LORA_HOP_DWELL_PACKETS).
+// extra range — see loraHopDwellForConfig()).
 //
 //   prev_seq_signed  : last seq seen (cast from uint16_t), or -1 if no
 //                      prior packet (first contact).  Caller stores as
@@ -347,10 +370,15 @@ static inline bool rocketLikelyHopping(bool hop_active,
     return shouldHopInState(last_rocket_state);
 }
 
-// FCC Part 15.247 minimum channel count for FHSS classification.  We
-// operate as digital modulation (DTS) so this isn't strictly binding,
-// but keeping ≥ this many channels active also preserves the diversity
-// that motivates hopping in the first place.
+// FCC Part 15.247 minimum active-channel floor for FHSS operation —
+// BINDING while hopping is enabled (#150).  The rule (15.247(a)(1)):
+// >= 25 hopping frequencies when the 20 dB channel bandwidth is
+// >= 250 kHz, >= 50 below that.  We hold a floor of 50 at BW <= 250 kHz
+// (stricter than the rule requires at BW250) because 50+ channels is
+// also what unlocks the 1 W FHSS power tier.  Note fixed-channel mode
+// is NOT the "DTS" alternative the old comment here claimed: DTS
+// requires >= 500 kHz of 6 dB bandwidth, which a 125/250 kHz LoRa
+// carrier does not have.  See docs/plans/150-fhss-reenable.md.
 static inline uint8_t loraFhssMinChannels(float bw_khz)
 {
     return (bw_khz <= 250.0f) ? 50 : 25;
@@ -365,6 +393,52 @@ static inline bool loraSkipMaskTest(const uint8_t* mask, uint8_t idx)
 static inline void loraSkipMaskSet(uint8_t* mask, uint8_t idx)
 {
     mask[idx >> 3] |= (uint8_t)(1u << (idx & 7));
+}
+
+// #150: index of the hop-grid channel whose center coincides with
+// freq_mhz (10 kHz tolerance), or -1.  The factory rendezvous 915.0 is
+// deliberately OFF the BW250 grid (channels sit at 902.125 + 0.375k),
+// but a scan-applied operating frequency can land exactly on a grid
+// channel.
+static inline int16_t loraGridIndexOfFreq(float bw_khz, float freq_mhz)
+{
+    const uint8_t n = loraChannelCount(bw_khz);
+    for (uint8_t i = 0; i < n; i++)
+    {
+        const float c = loraChannelMHz(bw_khz, i);
+        const float d = (c > freq_mhz) ? (c - freq_mhz) : (freq_mhz - c);
+        if (d < 0.010f) return (int16_t)i;
+    }
+    return -1;
+}
+
+// #150: implicit "home channel" skip.  Hop-session transition packets
+// (bootstraps after activation, rendezvous visits, scan pauses) transmit
+// on lora_freq_mhz OUTSIDE the seq-anchored schedule.  If that frequency
+// is also a grid channel the schedule visits, a transition packet plus a
+// scheduled dwell visit can stack inside one FCC window and exceed the
+// 400 ms occupancy line (e.g. SF8/BW250: 336 + 112 = 448 ms).  Fix: both
+// ends implicitly skip the coincident grid slot so the schedule never
+// dwells on the home frequency.  The skip is withheld when it would take
+// the active count below the FCC floor (that corner requires a
+// floor-tight mask AND an on-grid home — accept the residual and keep
+// the floor).  Apply to a caller-owned mask copy; returns true if a bit
+// was set.  Pure — both ends compute identically from (bw, home freq).
+static inline bool loraApplyHomeChannelSkip(uint8_t* mask, float bw_khz,
+                                            float home_freq_mhz)
+{
+    const int16_t idx = loraGridIndexOfFreq(bw_khz, home_freq_mhz);
+    if (idx < 0) return false;
+    if (loraSkipMaskTest(mask, (uint8_t)idx)) return false;
+    const uint8_t n = loraChannelCount(bw_khz);
+    uint8_t active = 0;
+    for (uint8_t i = 0; i < n; i++)
+    {
+        if (!loraSkipMaskTest(mask, i)) active++;
+    }
+    if (active <= loraFhssMinChannels(bw_khz)) return false;
+    loraSkipMaskSet(mask, (uint8_t)idx);
+    return true;
 }
 
 // Given the current channel index and a skip-mask, returns the next
@@ -384,6 +458,96 @@ static inline uint8_t loraNextActiveChannelIdx(
     return (uint8_t)((current_idx + 1) % n_channels);
 }
 
+// ============================================================================
+// LoRa time-on-air + FCC hop-dwell derivation (#150)
+// ============================================================================
+// Semtech AN1200.13 airtime formula, shared so the OC (which schedules
+// the hop), the BS (which follows it), and the host tests all compute
+// the SAME number.  bs_uplink_txwin.h delegates here for its TX-window
+// math — do not fork the formula.
+static inline uint32_t loraTimeOnAirMs(size_t payload_len, uint8_t sf, float bw_khz,
+                                       uint8_t cr /* 5..8 => 4/5..4/8 */,
+                                       uint16_t preamble_syms)
+{
+    if (sf < 6)   sf = 6;
+    if (sf > 12)  sf = 12;
+    if (bw_khz <= 0.0f) bw_khz = 125.0f;
+
+    // cr is the denominator form used in config (5 == 4/5). The formula wants 1..4.
+    int cr_idx = (int)cr - 4;
+    if (cr_idx < 1) cr_idx = 1;
+    if (cr_idx > 4) cr_idx = 4;
+
+    const float ts_ms = (float)(1u << sf) / bw_khz;      // symbol time, ms (bw in kHz)
+    const float preamble_ms = ((float)preamble_syms + 4.25f) * ts_ms;
+
+    // Low-data-rate optimise kicks in when a symbol is long (SF11/12 @125k).
+    const int de = (ts_ms >= 16.0f) ? 1 : 0;
+
+    const int num = 8 * (int)payload_len - 4 * (int)sf + 28 + 16;   // explicit header, CRC on
+    const int den = 4 * ((int)sf - 2 * de);
+    int n_payload = 0;
+    if (num > 0 && den > 0)
+    {
+        n_payload = ((num + den - 1) / den) * (cr_idx + 4);   // ceil(num/den) * (CR+4)
+    }
+    const float payload_ms = (float)(8 + n_payload) * ts_ms;
+
+    return (uint32_t)(preamble_ms + payload_ms + 0.5f);
+}
+
+// FCC 15.247 FHSS dwell rule: accumulated transmit airtime on any single
+// frequency must stay under 0.4 s within any 10 s window (channel BW
+// >= 250 kHz; 20 s window below 250 kHz).  For our schedule the bound is
+// the per-VISIT airtime — dwell packets in a row on one channel — since
+// the full-cycle revisit interval (n_active x dwell / TX rate) is far
+// longer than the window (the FullCycleRevisitBound gtest pins that).
+//
+// The budget is 390 ms, not 400: headroom for formula-vs-measured drift,
+// while still admitting the long-range SF10/BW250 rung whose single
+// 66-byte packet is ~386 ms.  Any frame growth pushes SF10 over budget
+// and the AdaptiveTable gtest will fail — that is deliberate: growing
+// the telemetry frame has a real regulatory cost and should be a
+// conscious decision.
+static constexpr uint32_t LORA_HOP_DWELL_BUDGET_MS = 390;
+static constexpr uint8_t  LORA_HOP_DWELL_MAX       = 4;   // #133 slow-hop robustness cap
+static constexpr uint16_t LORA_TELEM_PREAMBLE_SYMS = 12;  // = LORA_PREAMBLE_LEN in both config.h
+
+// Packets-per-channel dwell for the seq-anchored schedule, derived from
+// actual airtime so the FCC occupancy bound holds at every modulation
+// preset (#150).  Returns 0 when even a single packet exceeds the
+// budget => hopping is not permitted at this config (e.g. SF9+ @ BW125,
+// SF11+ @ BW250) — firmware refuses the cmd-17 enable and the app greys
+// the option (config JSON key "lhdw" == 0).
+static inline uint8_t loraHopDwellForConfig(uint8_t sf, float bw_khz,
+                                            size_t frame_len,
+                                            uint8_t cr = LORA_FACTORY_RENDEZVOUS_CR)
+{
+    const uint32_t toa = loraTimeOnAirMs(frame_len, sf, bw_khz, cr,
+                                         LORA_TELEM_PREAMBLE_SYMS);
+    if (toa == 0 || toa > LORA_HOP_DWELL_BUDGET_MS) return 0;
+    const uint32_t d = LORA_HOP_DWELL_BUDGET_MS / toa;
+    return (d > LORA_HOP_DWELL_MAX) ? LORA_HOP_DWELL_MAX : (uint8_t)d;
+}
+
+// Link-level dwell gate — what the firmware actually calls (#150 review).
+// sf/bw agreement is guaranteed by the cmd-10 transaction (a divergence
+// there kills the link and rolls back), but CR is NOT verifiable: the
+// explicit-header PHY decodes any payload coding rate, so the cmd-10
+// commit criterion is CR-blind and a one-sided CR-only commit leaves a
+// fully working link whose two ends would compute DIFFERENT dwells
+// (SF8/BW250: 3 at CR5 vs 2 at CR8 — schedule divergence with no heal
+// short of reboot).  Rather than make CR load-bearing, hopping is only
+// offered at the factory CR: any other CR computes dwell 0 (hopping
+// unavailable, app greys the option via "lhdw"), which no packet-loss
+// pattern can turn into a silent schedule split.
+static inline uint8_t loraHopDwellForLink(uint8_t sf, float bw_khz,
+                                          size_t frame_len, uint8_t cr)
+{
+    if (cr != LORA_FACTORY_RENDEZVOUS_CR) return 0;
+    return loraHopDwellForConfig(sf, bw_khz, frame_len, cr);
+}
+
 // Seq-anchored hop schedule (#105 follow-up).  Both sides compute the
 // physical channel for a given TX seq deterministically from this
 // function — no chained handoff via next_channel_idx.  If the BS misses
@@ -396,8 +560,8 @@ static inline uint8_t loraNextActiveChannelIdx(
 //
 // dwell == 1 reduces to the original "advance every TX" behaviour;
 // dwell >= 2 keeps the rocket on a channel for `dwell` consecutive
-// packets before advancing.  See LORA_HOP_DWELL_PACKETS for the
-// production value.
+// packets before advancing.  The production value is derived per
+// modulation preset by loraHopDwellForConfig() above (#150).
 //
 // Pure helper, host-testable.  O(n_channels) lookup — fine for n ≤ 144.
 static inline uint8_t loraHopChannelForSeq(
@@ -952,6 +1116,14 @@ typedef struct __attribute__((packed))
 static_assert(sizeof(RocketStorageStatsData) == 15,
               "RocketStorageStatsData must be 15 bytes");
 
+// RocketStorageStatsData.flags bits.  Wire-compatible: the app ignores unknown
+// bits, so new flags don't bump the format.
+static constexpr uint8_t RSS_FLAG_INITIALIZED  = (1u << 0);  // flight log up
+// #315: at least one oldest-flight auto-eviction has run since boot (rolling
+// buffer reclaimed space to arm a flight). Surfaces the event so a silently
+// dropped-then-reclaimed card is observable in the app's storage view.
+static constexpr uint8_t RSS_FLAG_AUTO_EVICTED = (1u << 1);
+
 // BS→app flash-space stats for the base station's own log filesystem.  Rides the
 // file_ops characteristic behind a 0xCD discriminator.  Bytes (not blocks) since
 // the backend may be SD/FAT (GB) or SPIFFS (MB).  reserved is FS overhead =
@@ -1305,7 +1477,26 @@ static_assert(sizeof(i24le_t) == 3, "i24le_t must be 3 bytes");
 //   v3: dropped rdv_mhz NVS key (rendezvous freq is now compile-time
 //       hardcoded to LORA_FACTORY_RENDEZVOUS_MHZ; cmd 15 no longer
 //       carries a rendezvous freq either).
-static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 3;
+//   v4: #150 hopping re-enable — boot no longer force-overrides
+//       lora_hop_disabled, and the NVS default flips to 1 (fixed mode).
+//       A stale hopdis=0 left over from pre-#150 cmd-17 developer
+//       experiments would otherwise silently boot the device straight
+//       into hopping; the wipe clears it.
+static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 4;
+
+// Identity NVS schema version (#150).  The "identity" namespace (unit
+// name `un`, network id `nid`, and on the OC `rid`) versions SEPARATELY
+// from the "lora" namespace, and on mismatch it MIGRATES rather than
+// wipes.  A wipe here is what caused the #133-era field regression: the
+// lora-namespace schema bump wiped storage, the BS came back on nid=0
+// while the rocket kept nid=180, and the network-id RX filter silently
+// dropped every packet.  Migration policy: never destroy `un` (user
+// data); reset `nid`/`rid` to compile-time defaults only if a future
+// version actually changes those keys' layout; always log the migration
+// loudly.
+//   v1: first versioned layout (un/nid/rid semantics unchanged from the
+//       unversioned era; absent/0 stored version just writes v1).
+static constexpr uint8_t IDENTITY_NVS_SCHEMA_VERSION = 1;
 
 // LoRa protocol version — bump on frame format changes.
 //   v1: original 60-byte frame with 2-byte routing header.
@@ -1319,20 +1510,24 @@ static constexpr uint8_t LORA_NVS_SCHEMA_VERSION = 3;
 //       16 bits covers any (BW, dwell) combination we'd reasonably pick.
 static constexpr uint8_t LORA_PROTO_VERSION = 4;
 
-// Slow-hop dwell — how many consecutive packets the rocket transmits on a
-// single channel before advancing.  At 2 Hz TX with dwell=4, channel
-// changes every 2 s instead of every 500 ms.  This gives the BS up to
-// (dwell-1) consecutive missed packets per channel before it falls out of
-// sync, eliminates BS-side TX-vs-retune races (heartbeat retries no
-// longer collide with hop boundaries), and reduces per-cycle radio churn
-// 4x.  Both rocket and BS compile against the same value; bumping it
-// requires a coordinated re-flash.
+// Slow-hop dwell (#133) — how many consecutive packets the rocket
+// transmits on a single channel before advancing.  Dwell > 1 gives the
+// BS up to (dwell-1) consecutive missed packets per channel before it
+// falls out of sync, eliminates BS-side TX-vs-retune races (heartbeat
+// retries no longer collide with hop boundaries), and reduces per-cycle
+// radio churn.
 //
-// FCC compliance: we operate as DTS, not FHSS, so there is no specific
-// per-channel dwell-time limit.  At dwell=4 + 2 Hz we still hit every
-// channel inside 140 s (BW=250, 69 channels), enough interference
-// diversity for our use case.
-static constexpr uint8_t LORA_HOP_DWELL_PACKETS = 4;
+// #150: the production dwell is no longer a compile-time constant — it
+// is derived per modulation preset by loraHopDwellForConfig() (defined
+// with the hop helpers above) so the FCC 15.247 FHSS occupancy bound
+// (< 0.4 s of airtime on any one frequency per window) holds at every
+// preset.  At SF8/BW250 with the 66-byte telemetry frame that yields
+// dwell 3 (~336 ms per channel visit).  The old fixed dwell=4 exceeded
+// the bound (~448 ms), and the comment that used to live here claiming
+// "we operate as DTS, so there is no dwell limit" was wrong on both
+// counts: hopping must satisfy the FHSS occupancy rule, and a fixed
+// 250 kHz LoRa carrier is not DTS-eligible either (DTS requires
+// >= 500 kHz of 6 dB bandwidth).  See docs/plans/150-fhss-reenable.md.
 
 // LoRa name beacon sync byte (distinguishes from telemetry by size + prefix)
 static constexpr uint8_t LORA_BEACON_SYNC = 0xBE;

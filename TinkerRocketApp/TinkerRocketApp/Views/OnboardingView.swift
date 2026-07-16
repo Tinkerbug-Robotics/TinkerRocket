@@ -20,12 +20,22 @@ func fnv1a8(_ string: String) -> UInt8 {
     return UInt8(folded)
 }
 
+/// #150: the wire network ID for a name.  0 is reserved — it's both the
+/// firmware factory default and the app's "unset" sentinel, so a name that
+/// happens to hash to 0 (1-in-256) would silently disable the provisioning
+/// push and the mismatch badge.  Remap it to 1.
+func networkIdForName(_ name: String) -> UInt8 {
+    let raw = fnv1a8(name)
+    return raw == 0 ? 1 : raw
+}
+
 struct OnboardingView: View {
     @AppStorage("networkName") private var networkName: String = ""
     @AppStorage("networkID") private var networkID: Int = -1
     @AppStorage("hasOnboarded") private var hasOnboarded: Bool = false
 
     @State private var nameInput: String = ""
+    @State private var previewID: UInt8 = 0   // #150: live fnv1a8 preview
 
     var body: some View {
         VStack(spacing: 32) {
@@ -53,11 +63,20 @@ struct OnboardingView: View {
                 TextField("e.g. My Backyard, Skyhawks Club", text: $nameInput)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .autocapitalization(.words)
+                    .onChange(of: nameInput) { newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        previewID = trimmed.isEmpty ? 0 : networkIdForName(trimmed)
+                    }
 
-                // Network ID preview hidden in #136 — both ends now force
-                // a hardcoded default network_id at boot.  Network name is
-                // kept as a friendly label for the user's setup but no
-                // longer maps to a wire ID until #150 brings hopping back.
+                // #150: live network-ID preview (restored from #136).  The
+                // ID is what actually goes over the air — devices are set
+                // to it during provisioning, and it now persists across
+                // reboots on the device side.
+                if !nameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Network ID: \(previewID)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding(.horizontal, 32)
 
@@ -65,7 +84,7 @@ struct OnboardingView: View {
                 let trimmed = nameInput.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
                 networkName = trimmed
-                networkID = Int(fnv1a8(trimmed))
+                networkID = Int(networkIdForName(trimmed))   // #150: never 0
                 hasOnboarded = true
             } label: {
                 Text("Continue")

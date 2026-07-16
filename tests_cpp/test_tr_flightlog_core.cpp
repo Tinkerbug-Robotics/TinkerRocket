@@ -1529,6 +1529,252 @@ TEST(TRFlightLogRename, UnknownFilenameReturnsNotFound) {
 }
 
 // ================================================================
+// #315 rolling-buffer auto-eviction. When Config::auto_evict_oldest is set,
+// prepareFlight reclaims space by deleting the oldest finalized flight(s) at
+// arm time — until the new flight fits, an index slot is free, and the
+// free-block headroom floor is restored. Off by default; never touches the
+// active flight; fails loudly (NoSpace) when nothing eligible remains.
+// ================================================================
+
+namespace {
+// Prepare + finalize a flight that KEEPS its whole prealloc range, so a small
+// flight region fills predictably. finalizeFlight trims the tail to the pages
+// actually spanned; passing final_bytes = (allocated blocks × block bytes)
+// keeps every block. Returns prepare's status on prepare failure, else
+// finalize's status.
+Status flyFullFlight(TR_FlightLog& fl, const char* name) {
+    uint32_t id = 0;
+    Status st = fl.prepareFlight(id);
+    if (st != Status::Ok) return st;
+    const uint32_t full_bytes =
+        fl.activeBlockCount() * NAND_PAGES_PER_BLK * NAND_PAGE_SIZE;
+    return fl.finalizeFlight(name, full_bytes);
+}
+
+// A tiny flight region that fits exactly `n_flights` full flights of `prealloc`
+// blocks each, so the "card full" boundary is deterministic.
+TR_FlightLog::Config smallRegionCfg(uint16_t prealloc, uint16_t n_flights) {
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks     = prealloc;
+    cfg.extend_blocks       = prealloc;   // unused here; keep it in-region
+    cfg.flight_region_start = 32;
+    cfg.flight_region_end   =
+        static_cast<uint16_t>(32 + prealloc * n_flights);
+    return cfg;
+}
+}  // namespace
+
+TEST(TRFlightLogAutoEvict, EvictOldestUntilFitReclaimsAndRecords) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 3);
+    cfg.auto_evict_oldest = true;   // target 0 → reclaim only just enough to fit
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    // Fill the card: 3 full flights, region now has no room for a 4th.
+    ASSERT_EQ(flyFullFlight(fl, "flight_001.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_002.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_003.bin"), Status::Ok);
+    ASSERT_EQ(fl.index().size(), 3u);
+
+    // Arm a 4th: with auto-evict, prepareFlight reclaims the oldest (id 1) and
+    // succeeds; the flight then finalizes normally.
+    ASSERT_EQ(flyFullFlight(fl, "flight_004.bin"), Status::Ok);
+
+    EXPECT_EQ(fl.autoEvictedCount(), 1u);
+    EXPECT_EQ(fl.lastEvictedFlightId(), 1u);
+    EXPECT_EQ(fl.index().findByFilename("flight_001.bin"), nullptr);  // evicted
+    EXPECT_NE(fl.index().findByFilename("flight_002.bin"), nullptr);  // survives
+    EXPECT_NE(fl.index().findByFilename("flight_004.bin"), nullptr);  // recorded
+    EXPECT_EQ(fl.index().size(), 3u);  // rolled: 2, 3, 4
+}
+
+TEST(TRFlightLogAutoEvict, NeverEvictsActiveFlight) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 3);
+    cfg.auto_evict_oldest = true;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    // Two finalized flights, then a 3rd left ACTIVE (prepared, not finalized) so
+    // the region is full with one flight in progress.
+    ASSERT_EQ(flyFullFlight(fl, "flight_001.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_002.bin"), Status::Ok);
+    uint32_t active_id = 0;
+    ASSERT_EQ(fl.prepareFlight(active_id), Status::Ok);
+    ASSERT_TRUE(fl.isFlightActive());
+    const uint32_t active_start = fl.activeStartBlock();
+
+    // A second prepareFlight while one is active must refuse (Error) BEFORE any
+    // eviction — the active flight and both finalized flights stay untouched.
+    uint32_t id2 = 0;
+    EXPECT_EQ(fl.prepareFlight(id2), Status::Error);
+    EXPECT_EQ(fl.autoEvictedCount(), 0u);
+    EXPECT_EQ(fl.index().size(), 2u);
+    EXPECT_NE(fl.index().findByFilename("flight_001.bin"), nullptr);
+    EXPECT_NE(fl.index().findByFilename("flight_002.bin"), nullptr);
+    for (uint32_t b = active_start; b < active_start + 4; ++b) {
+        EXPECT_EQ(fl.bitmap().get(b), BLOCK_ALLOCATED) << "block " << b;
+    }
+}
+
+TEST(TRFlightLogAutoEvict, IndexFullTriggersEviction) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks     = 1;
+    cfg.flight_region_start = 32;
+    cfg.flight_region_end   = 32 + 200;   // ample block space — index is the limit
+    cfg.auto_evict_oldest   = true;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    // Fill the index to capacity (128); block space is NOT the constraint.
+    for (size_t i = 0; i < FlightIndex::MAX_ENTRIES; ++i) {
+        char name[24];
+        std::snprintf(name, sizeof(name), "flight_%03zu.bin", i);
+        ASSERT_EQ(flyFullFlight(fl, name), Status::Ok);
+    }
+    ASSERT_EQ(fl.index().size(), FlightIndex::MAX_ENTRIES);
+
+    // One more flight: blocks are available but the index is full. Auto-evict
+    // must reclaim an index slot (deleting the oldest) so this flight records.
+    ASSERT_EQ(flyFullFlight(fl, "flight_new.bin"), Status::Ok);
+    EXPECT_EQ(fl.autoEvictedCount(), 1u);
+    EXPECT_EQ(fl.lastEvictedFlightId(), 1u);  // flight_000 got flight_id 1
+    EXPECT_EQ(fl.index().size(), FlightIndex::MAX_ENTRIES);  // still full, rolled
+    EXPECT_EQ(fl.index().findByFilename("flight_000.bin"), nullptr);
+    EXPECT_NE(fl.index().findByFilename("flight_new.bin"), nullptr);
+}
+
+TEST(TRFlightLogAutoEvict, NoEligibleFlightStillFailsLoud) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks     = 4;
+    cfg.flight_region_start = 32;
+    cfg.flight_region_end   = 40;         // 8 blocks
+    cfg.auto_evict_oldest   = true;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    // Fragment the region so no 4-block contiguous free run exists, with an
+    // EMPTY index (nothing eligible to evict).
+    ASSERT_EQ(fl.markBlockBad(34), Status::Ok);
+    ASSERT_EQ(fl.markBlockBad(38), Status::Ok);
+
+    uint32_t id = 0;
+    EXPECT_EQ(fl.prepareFlight(id), Status::NoSpace);  // loud, not a silent no-op
+    EXPECT_EQ(fl.autoEvictedCount(), 0u);
+    EXPECT_FALSE(fl.isFlightActive());
+}
+
+TEST(TRFlightLogAutoEvict, DisabledByDefaultLeavesFullCardFailing) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 3);   // auto_evict_oldest stays false (default)
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+
+    ASSERT_EQ(flyFullFlight(fl, "flight_001.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_002.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_003.bin"), Status::Ok);
+
+    uint32_t id = 0;
+    EXPECT_EQ(fl.prepareFlight(id), Status::NoSpace);
+    EXPECT_EQ(fl.autoEvictedCount(), 0u);
+    EXPECT_EQ(fl.index().size(), 3u);  // nothing deleted
+}
+
+TEST(TRFlightLogAutoEvict, FreeTargetReclaimsMultipleFlights) {
+    // Fill the region completely with auto-evict OFF, then reboot with the
+    // headroom floor ON so the first arm faces a full card and must evict
+    // MULTIPLE oldest flights at once to reach the target (not just enough to
+    // fit one prealloc). (With the floor on during a fill, eviction instead
+    // happens incrementally per-arm — the steady-state rolling buffer — which
+    // never presents a full card to a single arm; this reboot isolates the
+    // batch-reclaim path.)
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    {
+        TR_FlightLog fl;
+        auto cfg = smallRegionCfg(4, 6);   // region fits 6 full flights
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        for (int i = 1; i <= 6; ++i) {
+            char name[24];
+            std::snprintf(name, sizeof(name), "flight_%03d.bin", i);
+            ASSERT_EQ(flyFullFlight(fl, name), Status::Ok);
+        }
+        ASSERT_EQ(fl.index().size(), 6u);  // region full
+    }
+
+    TR_FlightLog fl2;
+    auto cfg2 = smallRegionCfg(4, 6);
+    cfg2.auto_evict_oldest = true;
+    cfg2.auto_evict_target_free_blocks = 8;  // keep 2 flights' worth free
+    ASSERT_EQ(fl2.begin(nand, cfg2, &store), Status::Ok);
+    ASSERT_EQ(fl2.index().size(), 6u);       // full card carried across reboot
+
+    // First arm: reaching the 8-free-block floor requires evicting the two
+    // oldest flights (ids 1 and 2), not just the single one needed to fit.
+    uint32_t id = 0;
+    ASSERT_EQ(fl2.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(fl2.autoEvictedCount(), 2u);
+    EXPECT_EQ(fl2.lastEvictedFlightId(), 2u);
+    EXPECT_EQ(fl2.index().findByFilename("flight_001.bin"), nullptr);
+    EXPECT_EQ(fl2.index().findByFilename("flight_002.bin"), nullptr);
+    EXPECT_NE(fl2.index().findByFilename("flight_003.bin"), nullptr);
+}
+
+TEST(TRFlightLogAutoEvict, DeferredPrepareAlsoEvicts) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 3);
+    cfg.auto_evict_oldest = true;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_001.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_002.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "flight_003.bin"), Status::Ok);
+
+    // The Core-0 deferred path (requestPrepareFlight + service) runs the same
+    // prepareFlightLocked, so it must evict too.
+    fl.requestPrepareFlight();
+    uint32_t id = 0;
+    Status st = Status::Error;
+    EXPECT_TRUE(fl.servicePendingPrepareFlight(id, st));
+    EXPECT_EQ(st, Status::Ok);
+    EXPECT_TRUE(fl.isFlightActive());
+    EXPECT_EQ(fl.autoEvictedCount(), 1u);
+    EXPECT_EQ(fl.lastEvictedFlightId(), 1u);
+}
+
+TEST(TRFlightLogAutoEvict, EvictionPersistsAcrossReboot) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    auto cfg = smallRegionCfg(4, 3);
+    cfg.auto_evict_oldest = true;
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        ASSERT_EQ(flyFullFlight(fl, "flight_001.bin"), Status::Ok);
+        ASSERT_EQ(flyFullFlight(fl, "flight_002.bin"), Status::Ok);
+        ASSERT_EQ(flyFullFlight(fl, "flight_003.bin"), Status::Ok);
+        ASSERT_EQ(flyFullFlight(fl, "flight_004.bin"), Status::Ok);  // evicts 001
+        ASSERT_EQ(fl.autoEvictedCount(), 1u);
+    }
+    // Reboot: the eviction (index remove + bitmap free) was persisted.
+    TR_FlightLog fl2;
+    ASSERT_EQ(fl2.begin(nand, cfg, &store), Status::Ok);
+    EXPECT_EQ(fl2.index().findByFilename("flight_001.bin"), nullptr);
+    EXPECT_NE(fl2.index().findByFilename("flight_004.bin"), nullptr);
+    EXPECT_EQ(fl2.index().size(), 3u);
+    EXPECT_EQ(fl2.autoEvictedCount(), 0u);  // per-session counter resets on begin
+}
+
+// ================================================================
 // writeFrame + brownout scanner / recovery
 // ================================================================
 

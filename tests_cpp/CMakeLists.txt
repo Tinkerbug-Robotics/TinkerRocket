@@ -349,6 +349,76 @@ target_include_directories(test_bs_uplink_policy PRIVATE
 target_link_libraries(test_bs_uplink_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_policy)
 
+# ---------- test_bs_uplink_queue ----------
+# Host-side test for the base-station uplink command FIFO (#502): the uplink was
+# a single slot, so a new command discarded the pending one's remaining retries —
+# and the uplink is blind, so those retries ARE the delivery mechanism.
+# bs_uplink_queue.h is pure, so the test just adds the base_station/main dir.
+add_executable(test_bs_uplink_queue test_bs_uplink_queue.cpp)
+target_include_directories(test_bs_uplink_queue PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_uplink_queue GTest::gtest_main)
+gtest_discover_tests(test_bs_uplink_queue)
+
+# ---------- test_bs_uplink_txwin ----------
+# Host-side test for the base-station uplink TX-window policy (#506): the radio is
+# half-duplex, and a downlink packet (~82 ms on air) cannot fit in the ~49 ms gap
+# between blind retries — so a burst lost essentially every packet that arrived
+# during it. bs_uplink_txwin.h is pure, so the test just adds base_station/main.
+add_executable(test_bs_uplink_txwin test_bs_uplink_txwin.cpp)
+target_include_directories(test_bs_uplink_txwin PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    # bs_uplink_txwin.h delegates its time-on-air to the shared
+    # loraTimeOnAirMs (#150) so BS window math and hop-dwell math agree
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_bs_uplink_txwin GTest::gtest_main)
+gtest_discover_tests(test_bs_uplink_txwin)
+
+# ---------- test_bs_battery_soc ----------
+# Host-side test for the base-station voltage-based SoC fallback (#501): the
+# BQ27Z746 reported 0% on a 4.17 V pack because its coulomb counter was never
+# calibrated. bs_battery_soc.h is pure, so the test just adds base_station/main.
+add_executable(test_bs_battery_soc test_bs_battery_soc.cpp)
+target_include_directories(test_bs_battery_soc PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_battery_soc GTest::gtest_main)
+gtest_discover_tests(test_bs_battery_soc)
+
+# ---------- test_ble_command_ring ----------
+# Host-side test for the shared BLE command intake ring (#517): the intake was a
+# single latch, so a back-to-back command burst (the app's ~13-command connect
+# sync, #366) collapsed to whichever command arrived last. BleCommandRing.h is
+# pure — TR_BLE_To_APP owns the NimBLE locking around it — so the test just adds
+# the component dir.
+add_executable(test_ble_command_ring test_ble_command_ring.cpp)
+target_include_directories(test_ble_command_ring PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_ble_command_ring GTest::gtest_main)
+gtest_discover_tests(test_ble_command_ring)
+
+# ---------- test_ble_chunk_size ----------
+# #524: BLE file downloads ran at ~17 kB/s because chunks were sized MTU-maximal
+# (502 B), which puts 516 octets on the wire and fragments as 251 + 251 + 14 — a
+# whole link-layer packet to carry fourteen bytes. Throughput here is bounded by
+# packets per connection event, so that stub cost ~a third of the download.
+# BleChunkSize.h is pure integer arithmetic over (ATT MTU, LL TX octets), so the
+# alignment — and the degenerate links it has to survive — are tested on the host.
+add_executable(test_ble_chunk_size test_ble_chunk_size.cpp)
+target_include_directories(test_ble_chunk_size PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_BLE_To_APP
+)
+target_link_libraries(test_ble_chunk_size GTest::gtest_main)
+gtest_discover_tests(test_ble_chunk_size)
+
 # ---------- test_bs_download_policy ----------
 # Host-side test for the base-station cooperative BLE download (#380): chunk
 # planning bounded by open-time file size + the 15 ms notify-drain pacing gate.
@@ -446,3 +516,26 @@ target_include_directories(test_mram_dirty_policy PRIVATE
 )
 target_link_libraries(test_mram_dirty_policy GTest::gtest_main)
 gtest_discover_tests(test_mram_dirty_policy)
+
+# ---------- test_sim_pad_align (#508) ----------
+# Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
+# compile — the alignment solve was extracted out of SensorCollectorSim precisely
+# so it could be tested on the host.
+add_executable(test_sim_pad_align test_sim_pad_align.cpp)
+target_include_directories(test_sim_pad_align PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_pad_align GTest::gtest_main)
+gtest_discover_tests(test_sim_pad_align)
+
+# ---------- test_sim_sensor_model (#512) ----------
+# Header-only pure math. Pins the rigid-body kinematic identity that the sim's
+# three synthetic sensors must jointly satisfy — the guard that was missing.
+add_executable(test_sim_sensor_model test_sim_sensor_model.cpp)
+target_include_directories(test_sim_sensor_model PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_Sensor_Collector_Sim
+)
+target_link_libraries(test_sim_sensor_model GTest::gtest_main)
+gtest_discover_tests(test_sim_sensor_model)

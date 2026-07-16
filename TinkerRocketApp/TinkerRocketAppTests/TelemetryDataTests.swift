@@ -37,6 +37,26 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(telemetry.state, "INFLIGHT")
     }
 
+    func testJSONDecode_HopStateKeys() throws {
+        // #150: "hch" (current hop channel) and "nidd" (network-id
+        // mismatch drops) ride the droppable tail of the telemetry JSON —
+        // present only while hopping / after drops, so both decode paths
+        // (present and absent) matter.
+        let with = """
+        {"st":"PRELAUNCH","hch":42,"nidd":7}
+        """.data(using: .utf8)!
+        let t1 = try JSONDecoder().decode(TelemetryData.self, from: with)
+        XCTAssertEqual(t1.hop_channel, 42)
+        XCTAssertEqual(t1.netid_drops, 7)
+
+        let without = """
+        {"st":"PRELAUNCH"}
+        """.data(using: .utf8)!
+        let t2 = try JSONDecoder().decode(TelemetryData.self, from: without)
+        XCTAssertNil(t2.hop_channel, "fixed-mode frames omit hch entirely")
+        XCTAssertNil(t2.netid_drops, "healthy-nid frames omit nidd entirely")
+    }
+
     func testJSONDecode_MissingOptionals_NoCrash() throws {
         let json = "{}".data(using: .utf8)!
         // Should not crash - optionals just nil, non-optionals fall back to

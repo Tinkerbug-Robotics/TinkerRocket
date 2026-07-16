@@ -294,10 +294,24 @@ static void flightlogFlushTaskHook(void* /*ctx*/)
 {
     uint32_t id = 0;
     tr_flightlog::Status st = tr_flightlog::Status::Ok;
+    const uint32_t evicted_before = flightlog.autoEvictedCount();
     if (flightlog.servicePendingPrepareFlight(id, st))
     {
         if (st == tr_flightlog::Status::Ok)
         {
+            // #315: if this arm auto-evicted to make room, surface it (never
+            // silent). The RSS_FLAG_AUTO_EVICTED storage-stats bit carries it to
+            // the app; this log line records which flight(s) went.
+            const uint32_t evicted_now = flightlog.autoEvictedCount() - evicted_before;
+            if (evicted_now > 0)
+            {
+                ESP_LOGW("FLIGHTLOG",
+                         "#315 auto-evict: reclaimed %u oldest flight(s) (last id=%u) "
+                         "to arm; %u free blocks remain",
+                         (unsigned)evicted_now,
+                         (unsigned)flightlog.lastEvictedFlightId(),
+                         (unsigned)flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE));
+            }
             ESP_LOGI("FLIGHTLOG",
                      "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
                      (unsigned)id,
@@ -562,11 +576,19 @@ static inline void updateFreqLockFromState(RocketState s)
 //                     currently tuned to (or, equivalently, the channel of
 //                     the packet most recently transmitted).  Meaningless
 //                     while inactive.
-// hop_first_pkt_    = true on the very first TX after activating: that
-//                     packet still goes out on the static lora_freq_mhz
-//                     channel with next_channel_idx = 0, so the BS sees
-//                     the transition and follows without needing time
-//                     sync.  Cleared after the packet is queued.
+// hop_bootstrap_left_ = remaining bootstrap packets to transmit on the
+//                     static lora_freq_mhz channel before entering the
+//                     schedule.  #150 bench finding: a SINGLE bootstrap
+//                     frame carried the whole BS handoff, and three
+//                     independent BS-deaf windows ate it on the bench
+//                     (its cmd-17 mirror-retry train, a heartbeat TX,
+//                     and a recovery reconfigure racing the transition).
+//                     Now every (re)bootstrap sends a full dwell-count
+//                     of packets — same per-visit occupancy as any
+//                     scheduled dwell, so the FCC math is unchanged —
+//                     each stamped with the SCHEDULE ENTRY channel so
+//                     any one of them lets the BS park where the rocket
+//                     will arrive.  0 = on-schedule (or inactive).
 // hop_needs_retune_ = a retune is owed (e.g. just transitioned, or just
 //                     finished a TX and need to step to the next channel).
 //                     Honoured at the top of serviceLoRa as soon as the
@@ -578,15 +600,29 @@ static inline void updateFreqLockFromState(RocketState s)
 // change so it can drop in without coordination.
 static bool    hop_active_        = false;
 static uint8_t hop_idx_           = 0;
-static bool    hop_first_pkt_     = false;
+static uint8_t hop_bootstrap_left_ = 0;
 static bool    hop_needs_retune_  = false;
-// Operator override: when true, hopping is suppressed even in PRELAUNCH /
-// INFLIGHT and we stay on lora_freq_mhz for the whole flight (#106).  Set
-// by the BS via LORA_CMD_SET_HOP_DISABLED (cmd 17).  NVS-backed so the
+// Link mode (#106 origin, user-facing since #150): when true, hopping is
+// suppressed even in PRELAUNCH/INFLIGHT/LANDED and we stay on
+// lora_freq_mhz.  Set by the BS via LORA_CMD_SET_HOP_DISABLED (cmd 17),
+// driven by the app's Fixed/Hopping link-mode picker.  NVS-backed so the
 // setting survives reboot.  Both sides must agree; the BS keeps its own
-// copy and pushes changes here.  Diagnostic / link-debugging mode only —
-// using a fixed frequency in flight is not FHSS-compliant.
-static bool    lora_hop_disabled  = false;
+// copy, mirrors changes here, and re-pushes on evidence of a mismatch.
+// Initialized true (fixed mode, the default) so the window between boot
+// and the NVS load can never report hop-enabled.
+static bool    lora_hop_disabled  = true;
+
+// #150 bench finding (2026-07-15): when the BS mirrors a cmd-17 ENABLE it
+// fires an 8 x 100 ms blind retry train and is deaf (half-duplex TX) for
+// most of that window.  Activating the hop immediately on first-retry
+// receipt made the bootstrap packet collide with retries 2-8: the BS
+// missed it and the link sat dark for ~60 s until the fallback visit
+// healed it.  Defer activation past the train so the bootstrap lands on
+// a listening BS.  0 = no deferred enable pending.  (A disable cancels
+// the defer; a state transition during the window may still activate
+// early via updateHopFromState — rare and self-healing.)
+static constexpr uint32_t HOP_ENABLE_DEFER_MS = 1500;
+static uint32_t hop_enable_apply_at_ms = 0;
 
 // Hop-silence rendezvous fallback state (#40 / #41 phase 2b).
 // Definitions of HOP_FALLBACK_*_MS constants and the serviceHopFallback()
@@ -619,27 +655,57 @@ static float   channel_set_bw_khz_ = 0.0f;     // BW the mask was built for
 // alongside the other LoRa-stats vars.
 static bool lora_in_rx_mode = false;
 
+// #150: packets-per-channel dwell for the CURRENT modulation, derived from
+// real airtime so the FCC occupancy bound holds at every preset.  0 means
+// hopping is not permitted at this (sf, bw, cr) and every hop entry point
+// below refuses to start.  Uses the link gate (not the raw config
+// function): CR-only changes are unverifiable over the air, so hopping is
+// only offered at the factory CR — see loraHopDwellForLink.
+static inline uint8_t currentHopDwell()
+{
+    return loraHopDwellForLink(lora_sf, lora_bw_khz, SIZE_OF_LORA_DATA, lora_cr);
+}
+
+// #150: effective skip mask for the hop schedule = the cmd-15 noise mask
+// (when valid for the current BW) + the implicit home-channel skip
+// (loraApplyHomeChannelSkip — keeps transition packets on lora_freq_mhz
+// from stacking with a scheduled visit to the same frequency inside one
+// FCC window).  `buf` must hold LORA_SKIP_MASK_MAX_BYTES.
+static const uint8_t* effectiveHopMask(uint8_t* buf, uint8_t n_channels)
+{
+    const bool mask_valid = (skip_mask_n_ == n_channels &&
+                              channel_set_bw_khz_ == lora_bw_khz);
+    if (mask_valid) memcpy(buf, skip_mask_, LORA_SKIP_MASK_MAX_BYTES);
+    else            memset(buf, 0, LORA_SKIP_MASK_MAX_BYTES);
+    (void)loraApplyHomeChannelSkip(buf, lora_bw_khz, lora_freq_mhz);
+    return buf;
+}
+
 static inline void updateHopFromState(RocketState s)
 {
-    // Operator override: in fixed-frequency mode (#106) we stay on
-    // lora_freq_mhz for every state.  Otherwise fall back to the
-    // shared per-state policy.
-    const bool want_active = !lora_hop_disabled && shouldHopInState(s);
+    // Fixed-frequency mode (#106/#150 link mode) stays on lora_freq_mhz
+    // for every state.  #150 also refuses to hop when the current
+    // modulation can't fit a dwell visit inside the FCC occupancy budget
+    // (currentHopDwell() == 0, e.g. BW125 @ SF9+).
+    const bool want_active = !lora_hop_disabled && currentHopDwell() > 0 &&
+                             shouldHopInState(s);
     if (want_active && !hop_active_)
     {
-        // OFF → ON.  Bootstrap: the next TX still goes out on
-        // lora_freq_mhz with next_channel_idx = 0 so the BS sees the
-        // transition; we retune to channel 0 only after that packet is
-        // in the air.
+        // OFF → ON.  Bootstrap: a dwell-count of packets still go out on
+        // lora_freq_mhz, each announcing the schedule-entry channel, so
+        // the BS can catch ANY one of them and park where we'll arrive
+        // (see hop_bootstrap_left_).
         hop_active_              = true;
-        hop_first_pkt_           = true;
+        hop_bootstrap_left_      = currentHopDwell();
+        if (hop_bootstrap_left_ == 0) hop_bootstrap_left_ = 1;  // want_active guarantees dwell>0
         hop_idx_                 = 0;
         hop_needs_retune_        = true;  // ensure we're on lora_freq_mhz before TXing
         hop_active_entered_ms    = millis();
         hop_session_uplink_count = 0;
         hop_fallback_state       = HopFallbackState::NORMAL;
-        ESP_LOGI("OC", "[HOP] Active: bootstrap on %.2f MHz, then idx=0 "
+        ESP_LOGI("OC", "[HOP] Active: %u bootstrap pkt(s) on %.2f MHz, then schedule "
                        "(%u channels at BW=%.0f kHz)",
+                 (unsigned)hop_bootstrap_left_,
                  (double)lora_freq_mhz, (unsigned)loraChannelCount(lora_bw_khz),
                  (double)lora_bw_khz);
     }
@@ -666,20 +732,20 @@ static inline void updateHopFromState(RocketState s)
             hop_fallback_state = HopFallbackState::NORMAL;
             hop_pause_until_ms = 0;
         }
-        hop_active_       = false;
-        hop_first_pkt_    = false;
-        hop_needs_retune_ = true;
+        hop_active_         = false;
+        hop_bootstrap_left_ = 0;
+        hop_needs_retune_   = true;
         ESP_LOGI("OC", "[HOP] Inactive: returning to %.2f MHz", (double)lora_freq_mhz);
     }
 }
 
 // Frequency the radio should currently be tuned to, given the hop state.
-// First-packet bootstrap, PAUSED_FOR_SCAN (#90), and inactive all stay on
+// Bootstrap packets, PAUSED_FOR_SCAN (#90), and inactive all stay on
 // lora_freq_mhz; the active steady state uses the channel table for the
 // current BW.
 static inline float hopTargetFreqMHz()
 {
-    if (hop_active_ && !hop_first_pkt_ &&
+    if (hop_active_ && hop_bootstrap_left_ == 0 &&
         hop_fallback_state == HopFallbackState::NORMAL)
     {
         const float f = loraChannelMHz(lora_bw_khz, hop_idx_);
@@ -782,12 +848,16 @@ static float max_speed_mps = 0.0f;
 
 static uint32_t lora_tx_ok = 0;
 static uint32_t lora_tx_fail = 0;
+// #150: uplinks dropped by the network-id filter.  Counted (and logged in
+// the periodic LoRa stats line) because the #133-era nid-drift regression
+// was invisible precisely because this drop path said nothing.
+static uint32_t lora_uplink_nid_drops = 0;
 static uint32_t last_lora_tx_ms = 0;
 
 // Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
 // on every actual transmit so the BS can compute observed-loss rates and
 // the slow-hop seq-anchored channel schedule.  Widened to 16 bits in
-// proto v4 — see LORA_HOP_DWELL_PACKETS for why u8 was insufficient.
+// proto v4 — see loraHopDwellForConfig() for why u8 was insufficient.
 // Wraps mod 65536; resets to 0 on reboot.
 static uint16_t lora_tx_seq = 0;
 // lora_in_rx_mode forward-declared up with the hop state.
@@ -965,6 +1035,40 @@ static void readINA230Power()
 }
 
 // ---------------------------------------------------------------------------
+//  #519 power-config guard — fail the BUILD, not the ammeter.
+//
+//  sdkconfig is generated and OVERRIDES sdkconfig.defaults, so a checkout whose
+//  sdkconfig predates a defaults change silently builds current source against
+//  the old config. Third bite of this trap (after #518, #519): on 2026-07-15 a
+//  rebuild from a stale sdkconfig shipped MAIN_XTAL as the BT low-power clock —
+//  the controller then holds a permanent no_light_sleep PM lock, light sleep
+//  never engages, and OC idle sat at ~7 mA instead of ~1 mA with no warning
+//  anywhere. Each symbol below is one the OC's idle-power contract rides on.
+//
+//  If this fires, do NOT edit sdkconfig — regenerate it from the authoritative
+//  defaults:  rm sdkconfig && idf.py build
+//  If you are intentionally changing the power config, change
+//  sdkconfig.defaults and update this guard in the same commit.
+// ---------------------------------------------------------------------------
+#if defined(ESP_PLATFORM)
+#if !defined(CONFIG_PM_ENABLE)
+#error "Stale sdkconfig: CONFIG_PM_ENABLE missing — DFS + light sleep compile out entirely. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_FREERTOS_USE_TICKLESS_IDLE)
+#error "Stale sdkconfig: CONFIG_FREERTOS_USE_TICKLESS_IDLE missing — esp_pm_configure(light_sleep_enable) will fail at runtime. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_RTC_CLK_SRC_EXT_CRYS)
+#error "Stale sdkconfig: RTC slow clock is not the 32.768 kHz crystal (CONFIG_RTC_CLK_SRC_EXT_CRYS) — prerequisite for the BT 32k LP clock. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL)
+#error "Stale sdkconfig: BT low-power clock is not the 32 kHz crystal (CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL) — the controller holds no_light_sleep forever and idle is ~7 mA, not ~1 mA. rm sdkconfig && idf.py build (#519)"
+#endif
+#if !defined(CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION)
+#error "Stale sdkconfig: CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION missing — light sleep will kill the USB console on the bench. rm sdkconfig && idf.py build (#519)"
+#endif
+#endif  // ESP_PLATFORM
+
+// ---------------------------------------------------------------------------
 //  Low-power mode helpers
 //  Called at boot and when power rail is turned OFF.
 //  NOTE: Light sleep, BT modem sleep, and reduced TX power disabled —
@@ -976,14 +1080,35 @@ static void enterLowPowerMode()
 {
 #if defined(CONFIG_PM_ENABLE)
     // Low-power idle: 80 MHz max (BLE needs 80 MHz APB), 40 MHz min via DFS.
-    // Light sleep disabled (btLS blocks it; USB-Serial-JTAG incompatible).
+    //
+    // #519: light sleep is now ENABLED here. It used to be off "because btLS
+    // blocks it; USB-Serial-JTAG incompatible" — both reasons are now handled:
+    //
+    //  - "btLS blocks it": the BT controller sets no_light_sleep when its
+    //    low-power clock is the MAIN_XTAL (bt.c). Pointing that clock at the
+    //    board's 32.768 kHz crystal instead (RTC_CLK_SRC_EXT_CRYS +
+    //    BT_CTRL_LPCLK_SEL_EXT_32K_XTAL) means it never sets that flag. This was
+    //    NOT a hardware limitation, it was a config we chose. Bench-confirmed:
+    //    "BLE_INIT: Using external 32.768 kHz crystal/oscillator as clock source".
+    //
+    //  - "USB-Serial-JTAG incompatible": true, but ESP-IDF handles it for us.
+    //    CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION makes the USJ driver hold an
+    //    ESP_PM_NO_LIGHT_SLEEP lock while the USB port is actually connected and
+    //    release it when it is unplugged. So the console keeps working on the
+    //    bench, and light sleep engages in flight when USB is gone — which is the
+    //    only time idle current matters anyway.
+    //
+    // MEASUREMENT GOTCHA: with USB plugged in, that lock is held and the chip will
+    // NOT light-sleep. Idle current has to be measured on battery, USB detached,
+    // or you will see no change and wrongly conclude this did nothing.
     esp_pm_config_t pm_cfg = {};
     pm_cfg.max_freq_mhz = 80;
     pm_cfg.min_freq_mhz = 40;
-    pm_cfg.light_sleep_enable = false;
+    pm_cfg.light_sleep_enable = true;
     esp_err_t pm_err = esp_pm_configure(&pm_cfg);
     if (pm_err == ESP_OK)
-        ESP_LOGI("PWR", "Low-power mode: 80/40 MHz DFS, light sleep OFF");
+        ESP_LOGI("PWR", "Low-power mode: 80/40 MHz DFS, light sleep ON "
+                        "(held off while USB is connected)");
     else
         ESP_LOGE("PWR", "esp_pm_configure failed: %s", esp_err_to_name(pm_err));
 
@@ -1014,32 +1139,104 @@ static void exitLowPowerMode()
     ESP_LOGI("PWR", "Full performance mode (%d MHz)", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
 }
 
-// Request slow BLE connection parameters for low-power idle.
-// Only called when a connection exists and power is OFF.
-static void requestSlowBLEParams(uint16_t conn_handle)
+// #519: both of these took a conn_handle argument and BOTH call sites passed a
+// literal 0 — while NimBLE had handed out handle 1. So every request failed with
+// "GAP update_params: connection not found; conn_handle=0x0000" and neither the
+// slow (low-power) nor the fast (file-transfer) parameters have EVER been applied.
+// They now take no handle and read the live one from the BLE layer.
+// #524: go through TR_BLE_To_APP rather than calling ble_gap_update_params() here.
+// It records the requested set, so when iOS rejects with a transaction collision the
+// retry re-asks for THE SAME set. Calling the HCI directly bypassed that: the retry
+// path had its own hardcoded 15-30 ms, so a SLOW request that lost a collision race
+// came back as a FAST one and silently cancelled low-power mode.
+//
+// The negotiated result is reported by TR_BLE_To_APP's CONN_UPDATE handler, which logs
+// the interval actually in force — the peer is free to counter (#503).
+static void applyBLEParams(const char* what, const struct ble_gap_upd_params& params)
+{
+    if (ble_app.connHandle() == 0xFFFF)
+    {
+        ESP_LOGW("BLE", "%s conn params skipped — not connected", what);
+        return;
+    }
+    ble_app.requestConnParams(params.itvl_min, params.itvl_max,
+                              params.latency, params.supervision_timeout, what);
+}
+
+// Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
+// lever on idle current. Within Apple's envelope: min >= 15 ms; max >= min + 15 ms;
+// latency <= 30; itvl_max * (latency + 1) = 1000 ms <= 2 s; supervision timeout
+// (4 s) > itvl_max * (latency + 1) * 3 = 3 s, and <= 6 s.
+static void requestSlowBLEParams()
 {
     struct ble_gap_upd_params params = {};
     params.itvl_min = 0x50;              // 100ms  (units of 1.25ms)
     params.itvl_max = 0xA0;              // 200ms
-    params.latency = 4;                  // Skip up to 4 connection events (~800ms effective)
+    params.latency = 4;                  // Skip up to 4 connection events (~1 s effective)
     params.supervision_timeout = 400;    // 4 seconds (units of 10ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
-    ble_gap_update_params(conn_handle, &params);
+    applyBLEParams("Slow (low-power)", params);
 }
 
-// Request fast BLE connection parameters for file transfer.
-// Called when power is turned ON and a connection already exists.
-static void requestFastBLEParams(uint16_t conn_handle)
+// Fast parameters for file transfer.
+// #503: this asked for itvl_min = 0x06 = 7.5 ms, which is BELOW iOS's 15 ms floor
+// and could never be granted — the same bug fixed in TR_BLE_To_APP, living on in a
+// second copy here. Now inside Apple's envelope (15-30 ms), like the shared path.
+static void requestFastBLEParams()
 {
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x06;              // 7.5ms  (units of 1.25ms)
-    params.itvl_max = 0x10;              // 20ms
+    params.itvl_min = 0x0C;              // 15ms — iOS minimum; below this is refused
+    params.itvl_max = 0x18;              // 30ms — must be >= min + 15 ms
     params.latency = 0;                  // No slave latency
     params.supervision_timeout = 200;    // 2 seconds (units of 10ms)
     params.min_ce_len = 0;
     params.max_ce_len = 0;
-    ble_gap_update_params(conn_handle, &params);
+    applyBLEParams("Fast (transfer)", params);
+}
+
+// #524: never start a transfer on the idle link.
+//
+// Bench 2026-07-14: the Power-On fast-param request lost a collision race with iOS
+// (status=554 x4), the retry budget ran out, and the link stayed at 200 ms / latency 4
+// — a ONE SECOND effective event period, 33x slower than the fast link. The download
+// that followed aborted after 5 kB of an 8.5 MB file.
+//
+// This is very likely also the original "~50% data loss" that the old fixed 30 ms
+// per-chunk delay was invented to hide: a download on the idle link drains 33x slower,
+// so of course the notify queue overflowed. The delay throttled the producer enough to
+// survive it, and we spent years believing the phone could not keep up.
+//
+// So: ask again, at the point where it actually matters, and give the peer a moment to
+// answer before streaming. Not fatal if it never lands — sendFileChunk's budget now
+// scales with the link, so a slow transfer completes rather than aborting — but say so.
+static constexpr uint32_t FAST_LINK_EVENT_MS_MAX = 60;    // 30 ms interval, latency 0, + slack
+static constexpr uint32_t FAST_LINK_WAIT_MS      = 3000;
+
+static void ensureFastLinkForTransfer()
+{
+    if (ble_app.effectiveEventMs() <= FAST_LINK_EVENT_MS_MAX) return;   // already fast
+
+    ESP_LOGW("BLE", "Link too slow for a transfer (%lu ms effective) — asking for fast params",
+             (unsigned long)ble_app.effectiveEventMs());
+    requestFastBLEParams();
+
+    // Waiting here is free: this is a ground operation, and oc_loop is already given
+    // over to the transfer.
+    const uint32_t deadline = millis() + FAST_LINK_WAIT_MS;
+    while ((int32_t)(deadline - millis()) > 0)
+    {
+        delay(50);
+        if (ble_app.effectiveEventMs() <= FAST_LINK_EVENT_MS_MAX)
+        {
+            ESP_LOGI("BLE", "Link now %lu ms effective — starting transfer",
+                     (unsigned long)ble_app.effectiveEventMs());
+            return;
+        }
+    }
+    ESP_LOGW("BLE", "Fast params never took (still %lu ms effective) — transfer will be SLOW "
+                    "but will complete",
+             (unsigned long)ble_app.effectiveEventMs());
 }
 
 static void updateDerivedAltitudeFromBMP()
@@ -1254,7 +1451,7 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
     const size_t next = (rx_head + 1U) % RX_STREAM_RING;
     if (next == rx_tail)
     {
-        rx_ring_overflow_drops++;
+        rx_ring_overflow_drops = rx_ring_overflow_drops + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
         return;
     }
     rx_ring[rx_head] = b;
@@ -1278,15 +1475,101 @@ static inline uint8_t rxPop()
     return b;
 }
 
+// #524: hold the CPU at full speed and out of light sleep while we are serving
+// the phone.
+//
+// A download runs for MINUTES entirely inside enterLowPowerMode()'s regime:
+// 80/40 MHz DFS with light sleep armed. Neither is free here. Throughput is set
+// by how many packets we land in each 30 ms connection event, and a core that is
+// asleep — or at 40 MHz — when the event opens cannot refill the controller's
+// queue in time to fill it.
+//
+// The 34.7 kB/s bench result was measured over USB, where
+// CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION holds a NO_LIGHT_SLEEP lock on our behalf,
+// so light sleep never actually engaged during that test. On battery it would,
+// and we would quietly hand part of the win back. Hold the locks ourselves rather
+// than depend on a USB cable being plugged in — the same "measure it on battery"
+// trap as #519, in mirror image.
+//
+// Costs nothing real: idle current only matters when nobody is talking to us, and
+// during a transfer the radio is busy regardless.
+#if defined(CONFIG_PM_ENABLE)
+static esp_pm_lock_handle_t s_phone_io_cpu_lock = nullptr;  // ESP_PM_CPU_FREQ_MAX
+static esp_pm_lock_handle_t s_phone_io_ls_lock  = nullptr;  // ESP_PM_NO_LIGHT_SLEEP
+
+// Did the locks actually engage? A silently-failed esp_pm_lock_create() would look
+// exactly like "light sleep was never the problem", and we would draw the opposite
+// conclusion from the same evidence. So report it rather than assume it.
+static bool s_phone_io_pm_held = false;
+
+static void phoneIoPmAcquire()
+{
+    if (s_phone_io_cpu_lock == nullptr && s_phone_io_ls_lock == nullptr)
+    {
+        const esp_err_t e1 = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX,   0,
+                                                "phone_io_cpu", &s_phone_io_cpu_lock);
+        const esp_err_t e2 = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0,
+                                                "phone_io_ls",  &s_phone_io_ls_lock);
+        if (e1 != ESP_OK || e2 != ESP_OK)
+        {
+            ESP_LOGE("PWR", "phone-IO PM lock create FAILED (cpu=%d ls=%d) — transfers "
+                            "will light-sleep on battery", (int)e1, (int)e2);
+        }
+    }
+    const esp_err_t a1 = s_phone_io_cpu_lock ? esp_pm_lock_acquire(s_phone_io_cpu_lock)
+                                             : ESP_FAIL;
+    const esp_err_t a2 = s_phone_io_ls_lock  ? esp_pm_lock_acquire(s_phone_io_ls_lock)
+                                             : ESP_FAIL;
+    s_phone_io_pm_held = (a1 == ESP_OK && a2 == ESP_OK);
+    if (!s_phone_io_pm_held)
+    {
+        ESP_LOGE("PWR", "phone-IO PM lock acquire FAILED (cpu=%d ls=%d)", (int)a1, (int)a2);
+    }
+}
+static void phoneIoPmRelease()
+{
+    if (s_phone_io_ls_lock)  esp_pm_lock_release(s_phone_io_ls_lock);
+    if (s_phone_io_cpu_lock) esp_pm_lock_release(s_phone_io_cpu_lock);
+    s_phone_io_pm_held = false;
+}
+#else
+static bool s_phone_io_pm_held = false;
+static inline void phoneIoPmAcquire() {}
+static inline void phoneIoPmRelease() {}
+#endif
+
+// #524: the XFER diagnostic is worthless if you cannot READ it — and on battery you
+// cannot, because the console is USB-Serial-JTAG: unplugging the cable takes the
+// console with it. That is exactly the run we most need to see (battery downloads
+// measured ~2.7x slower than USB).
+//
+// So latch the last transfer's summary and keep re-emitting it for a few minutes.
+// That is long enough to finish a battery download, plug USB back in, and attach a
+// monitor WITHOUT resetting the board:
+//
+//     idf.py -p <PORT> monitor --no-reset
+//
+// (a plain `idf.py monitor` resets the chip and you lose it).
+static char     s_xfer_summary[256]     = {0};
+static uint32_t s_xfer_reprint_until_ms = 0;
+static uint32_t s_xfer_next_reprint_ms  = 0;
+static constexpr uint32_t XFER_REPRINT_WINDOW_MS = 240000;  // 4 min to get a cable in
+static constexpr uint32_t XFER_REPRINT_EVERY_MS  = 15000;
+
 // beginPhoneIO / endPhoneIO — bracket a phone-serving operation (file
 // list / delete / download). Pauses both I2C servicing (flash_op_active)
 // and I2S ingest (i2s_ingest_paused), then drains the rx ring on resume
 // so stale sensor bytes from before the pause aren't processed as if
 // they were current. Must be called from a single task (oc_loop).
+//
+// esp_pm locks are counting, and every begin has a matching end on every path
+// (the download loop breaks out, it never returns), so the PM lock cannot leak
+// and strand us at full power.
 static inline void beginPhoneIO()
 {
     i2s_ingest_paused = true;
     flash_op_active   = true;
+    phoneIoPmAcquire();
 }
 static inline void endPhoneIO()
 {
@@ -1294,6 +1577,7 @@ static inline void endPhoneIO()
     rx_tail = rx_head;
     i2s_ingest_paused = false;
     flash_op_active   = false;
+    phoneIoPmRelease();
 }
 
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
@@ -2415,7 +2699,7 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     // declaration for rationale.
     if (i2s_ingest_paused) return false;
 
-    dma_cb_count++;
+    dma_cb_count = dma_cb_count + 1;  // volatile: '++' deprecated in C++20 (-Wvolatile)
     dma_total_bytes += len;
 
     // Count non-zero bytes for diagnostics
@@ -2554,16 +2838,35 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         }
         else
         {
-            // Skip-mask aware schedule.  When no valid mask is loaded
-            // (n_chan == 0 or BW mismatch) the empty mask makes
-            // loraHopChannelForSeq degenerate to (seq/dwell) % n.
-            const bool mask_valid = (skip_mask_n_ == n &&
-                                      channel_set_bw_khz_ == lora_bw_khz);
-            static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-            const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+            // Skip-mask aware schedule (cmd-15 noise mask + the #150
+            // implicit home-channel skip).  With no valid stored mask the
+            // empty mask makes loraHopChannelForSeq degenerate to
+            // (seq/dwell) % n.
+            //
+            // Bootstrap packets (#150) all announce the SCHEDULE ENTRY
+            // channel — the channel of the first on-schedule packet,
+            // whose seq is this seq plus the remaining bootstrap count —
+            // so the BS can decode ANY one of them and park where we
+            // will arrive.  On-schedule packets announce seq+1 as always.
+            uint8_t mask_buf[LORA_SKIP_MASK_MAX_BYTES];
+            const uint8_t* mask = effectiveHopMask(mask_buf, n);
+            const uint16_t anchor_seq = (hop_bootstrap_left_ > 0)
+                ? (uint16_t)(seq + hop_bootstrap_left_)
+                : (uint16_t)(seq + 1);
             lora.next_channel_idx = loraHopChannelForSeq(
-                (uint16_t)(seq + 1), LORA_HOP_DWELL_PACKETS, mask, n);
+                anchor_seq, currentHopDwell(), mask, n);
         }
+    }
+    else if (hop_active_)
+    {
+        // #150 (review): rendezvous visit / coordinated-scan pause — the
+        // hop session is live but this frame is off-schedule.  Tell the
+        // BS the truth (0xFE) instead of "not hopping" (0xFF): a
+        // fixed-mode BS gets immediate mode-mismatch evidence while we
+        // are parked HERE and listening — the one window where its
+        // cmd-17 push can land — and a lost BS parked on the rendezvous
+        // learns the session is still alive.
+        lora.next_channel_idx = LORA_NEXT_CH_HOP_OFFSCHEDULE;
     }
     else
     {
@@ -2725,12 +3028,13 @@ static void serviceLoRa()
         // the hop sequence.
         if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL)
         {
-            if (hop_first_pkt_)
+            if (hop_bootstrap_left_ > 0)
             {
-                // Bootstrap packet just went out on lora_freq_mhz.  Clear
-                // the first-packet flag; the next packet (seq just
-                // incremented) will go on its scheduled hop channel.
-                hop_first_pkt_ = false;
+                // A bootstrap packet just went out on lora_freq_mhz.
+                // Count it down; once it hits zero the retune below
+                // steps onto the schedule-entry channel every bootstrap
+                // frame announced.
+                hop_bootstrap_left_--;
             }
             // Recompute hop_idx_ from the just-incremented seq via the
             // seq-anchored schedule.  This MUST equal the next_channel_idx
@@ -2739,12 +3043,10 @@ static void serviceLoRa()
             const uint8_t n = loraChannelCount(lora_bw_khz);
             if (n > 0)
             {
-                const bool mask_valid = (skip_mask_n_ == n &&
-                                          channel_set_bw_khz_ == lora_bw_khz);
-                static const uint8_t empty_mask[LORA_SKIP_MASK_MAX_BYTES] = {0};
-                const uint8_t* mask = mask_valid ? skip_mask_ : empty_mask;
+                uint8_t mask_buf[LORA_SKIP_MASK_MAX_BYTES];
+                const uint8_t* mask = effectiveHopMask(mask_buf, n);
                 hop_idx_ = loraHopChannelForSeq(
-                    lora_tx_seq, LORA_HOP_DWELL_PACKETS, mask, n);
+                    lora_tx_seq, currentHopDwell(), mask, n);
             }
             hop_needs_retune_ = true;
         }
@@ -2773,6 +3075,14 @@ static void sendLoRaBeacon()
     // we don't change channel mid-flight anyway.  Logic shared with
     // tests via shouldBeaconInState() in RocketComputerTypes.h.
     if (!shouldBeaconInState(latest_rocket_state)) return;
+
+    // #150: no beacons while the hop schedule is running.  They would ride
+    // hop channels the BS already follows (it knows this rocket by then),
+    // and a beacon inside a dwell visit can blow the FCC occupancy budget
+    // (at SF10/BW250 a single beacon pushes the visit ~50% over — see the
+    // BeaconSuppressionDuringHopIsLoadBearing host test).  Rendezvous
+    // visits and scan pauses still beacon — that's their purpose.
+    if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL) return;
 
     const uint32_t now_ms = millis();
     if ((now_ms - last_beacon_ms) < 2000) return;
@@ -2916,6 +3226,9 @@ static void sendCurrentConfig()
     j += ",\"lcr\":"; j += itos(lora_cr);
     j += ",\"lpw\":"; j += itos(lora_tx_power);
     j += ",\"lhd\":"; j += lora_hop_disabled ? "true" : "false";  // #106
+    // #150: airtime-derived hop dwell for the current preset; 0 tells the
+    // app hopping is unavailable at this modulation (option greys out).
+    j += ",\"lhdw\":"; j += itos(currentHopDwell());
     j += "}";
     enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
     ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
@@ -3215,15 +3528,42 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // hopping off mid-PRELAUNCH or back on once the operator clears
         // the override.  Persist to NVS so the setting survives reboot.
         const bool new_disabled = (payload[0] != 0);
-        if (new_disabled != lora_hop_disabled)
+        if (!new_disabled && currentHopDwell() == 0)
+        {
+            // #150: this modulation can't fit one packet inside the FCC
+            // dwell budget — refuse the enable so we cannot be commanded
+            // into a non-compliant schedule.  The BS applies the same
+            // gate (and the app greys the option via "lhdw"==0), so
+            // reaching here means the two ends disagree on sf/bw; the
+            // cmd-10 config sync heals that, after which the enable can
+            // be retried.
+            ESP_LOGW("LORA", "UPLINK Hop enable REFUSED: dwell=0 at SF%u/BW%.0f",
+                     (unsigned)lora_sf, (double)lora_bw_khz);
+        }
+        else if (new_disabled != lora_hop_disabled)
         {
             lora_hop_disabled = new_disabled;
             prefs.begin("lora", false);
             prefs.putUChar("hopdis", lora_hop_disabled ? 1 : 0);
             prefs.end();
-            ESP_LOGI("LORA", "UPLINK Hop disable: %s — re-evaluating hop state",
-                     lora_hop_disabled ? "DISABLED (fixed freq)" : "ENABLED");
-            updateHopFromState(latest_rocket_state);
+            if (!lora_hop_disabled)
+            {
+                // #150 bench finding: don't activate while the BS is
+                // still blasting its cmd-17 mirror retries (it's deaf
+                // mid-TX and would miss our bootstrap, costing ~60 s of
+                // fallback healing).  The poll next to
+                // serviceHopFallback() applies the enable after the
+                // train finishes.
+                hop_enable_apply_at_ms = millis() + HOP_ENABLE_DEFER_MS;
+                ESP_LOGI("LORA", "UPLINK Hop disable: ENABLED — activating in %u ms (after BS retry train)",
+                         (unsigned)HOP_ENABLE_DEFER_MS);
+            }
+            else
+            {
+                hop_enable_apply_at_ms = 0;   // a disable cancels any pending enable
+                ESP_LOGI("LORA", "UPLINK Hop disable: DISABLED (fixed freq) — re-evaluating hop state");
+                updateHopFromState(latest_rocket_state);
+            }
         }
         else
         {
@@ -3477,6 +3817,10 @@ static void serviceLoRaUplink()
                     last_uplink_rx_ms = millis();
                     if (hop_active_) hop_session_uplink_count++;
                 }
+            }
+            else if (pkt_nid != network_id)
+            {
+                lora_uplink_nid_drops++;   // #150: no more silent nid drops
             }
         }
         // readPacket() internally re-enters RX mode after reading
@@ -3773,7 +4117,8 @@ static void serviceHopFallback()
             (void)lora_comms.startReceive();
             lora_in_rx_mode = true;
 
-            hop_first_pkt_    = true;
+            hop_bootstrap_left_ = currentHopDwell();
+            if (hop_bootstrap_left_ == 0) hop_bootstrap_left_ = 1;
             hop_idx_          = 0;
             hop_needs_retune_ = false;  // already on lora_freq_mhz from reconfigure
             hop_fallback_state = HopFallbackState::NORMAL;
@@ -3782,7 +4127,8 @@ static void serviceHopFallback()
             // arrives during this pass either).
             hop_active_entered_ms = now;
             hop_session_uplink_count = 0;
-            ESP_LOGI("OC", "[HOP] Visit done — resuming hop with fresh bootstrap");
+            ESP_LOGI("OC", "[HOP] Visit done — resuming hop (%u bootstrap pkt(s))",
+                     (unsigned)hop_bootstrap_left_);
             break;
         }
         case HopFallbackState::PAUSED_FOR_SCAN:
@@ -3795,14 +4141,16 @@ static void serviceHopFallback()
             // both sides re-enter the table cleanly.  Use signed delta
             // to handle millis() wrap.
             if ((int32_t)(now - hop_pause_until_ms) < 0) return;
-            hop_first_pkt_           = true;
+            hop_bootstrap_left_      = currentHopDwell();
+            if (hop_bootstrap_left_ == 0) hop_bootstrap_left_ = 1;
             hop_idx_                 = 0;
             hop_needs_retune_        = false;  // already on lora_freq_mhz
             hop_active_entered_ms    = now;
             hop_session_uplink_count = 0;
             hop_fallback_state       = HopFallbackState::NORMAL;
             hop_pause_until_ms       = 0;
-            ESP_LOGI("OC", "[HOP] Pause done — resuming hop with fresh bootstrap");
+            ESP_LOGI("OC", "[HOP] Pause done — resuming hop (%u bootstrap pkt(s))",
+                     (unsigned)hop_bootstrap_left_);
             break;
         }
     }
@@ -3950,6 +4298,17 @@ static inline void logTaskCpuDeltas(uint32_t) {}   // stats facility not compile
 static void printStats()
 {
     const uint32_t now = millis();
+
+    // #524: re-emit the last transfer's summary for a few minutes so a BATTERY
+    // download can still be read back — plug USB in afterwards and attach with
+    // `idf.py monitor --no-reset`. See s_xfer_summary.
+    if (s_xfer_summary[0] != '\0' && (int32_t)(s_xfer_reprint_until_ms - now) > 0 &&
+        (int32_t)(now - s_xfer_next_reprint_ms) >= 0)
+    {
+        s_xfer_next_reprint_ms = now + XFER_REPRINT_EVERY_MS;
+        ESP_LOGW("BLE", "%s", s_xfer_summary);
+    }
+
     if ((now - last_stats_ms) < config::STATS_PERIOD_MS)
     {
         return;
@@ -4045,7 +4404,9 @@ static void printStats()
                 rss.system_blocks = (uint16_t)(fcfg.flight_region_start + 4u);  // LFS region + 4 metadata
                 rss.flight_count  = (uint16_t)flightlog.index().size();
                 rss.block_size_kb = (uint16_t)(tr_flightlog::NAND_BLOCK_SIZE / 1024u);
-                rss.flags         = 0x01;  // initialized
+                rss.flags         = RSS_FLAG_INITIALIZED;
+                if (flightlog.autoEvictedCount() > 0)  // #315: rolling-buffer evicted this session
+                    rss.flags |= RSS_FLAG_AUTO_EVICTED;
             }
             ble_app.sendStorageStats(0xCC, reinterpret_cast<const uint8_t*>(&rss), sizeof(rss));
         }
@@ -4113,6 +4474,7 @@ static void printStats()
     const uint32_t d_ism6 = msg_count_ism6 - prev_msg_count_ism6;
     const uint32_t d_bmp = msg_count_bmp - prev_msg_count_bmp;
     const uint32_t d_mmc = msg_count_mmc - prev_msg_count_mmc;
+    const uint32_t d_iis2mdc = msg_count_iis2mdc - prev_msg_count_iis2mdc;
     const uint32_t d_gnss = msg_count_gnss - prev_msg_count_gnss;
     const uint32_t d_non_sensor = msg_count_non_sensor - prev_msg_count_non_sensor;
     const uint32_t d_power = msg_count_power - prev_msg_count_power;
@@ -4124,6 +4486,7 @@ static void printStats()
     const float hz_ism6 = (float)d_ism6 * hz_scale;
     const float hz_bmp = (float)d_bmp * hz_scale;
     const float hz_mmc = (float)d_mmc * hz_scale;
+    const float hz_iis2mdc = (float)d_iis2mdc * hz_scale;
     const float hz_gnss = (float)d_gnss * hz_scale;
     const float hz_non_sensor = (float)d_non_sensor * hz_scale;
     const float hz_power = (float)d_power * hz_scale;
@@ -4134,6 +4497,7 @@ static void printStats()
     prev_msg_count_ism6 = msg_count_ism6;
     prev_msg_count_bmp = msg_count_bmp;
     prev_msg_count_mmc = msg_count_mmc;
+    prev_msg_count_iis2mdc = msg_count_iis2mdc;
     prev_msg_count_gnss = msg_count_gnss;
     prev_msg_count_non_sensor = msg_count_non_sensor;
     prev_msg_count_power = msg_count_power;
@@ -4212,11 +4576,12 @@ static void printStats()
                   (double)((float)last_query_cfg.ism6_rot_z_cdeg / 100.0f),
                   (double)((float)last_query_cfg.mmc_rot_z_cdeg / 100.0f),
                   (unsigned)last_query_cfg.format_version);
-    ESP_LOGI("OC", "msg Hz q/ism6/bmp/mmc/gnss/ns/pwr/st/en/unk=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
+    ESP_LOGI("OC", "msg Hz q/ism6/bmp/mmc/iis2mdc/gnss/ns/pwr/st/en/unk=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
                   (double)hz_query,
                   (double)hz_ism6,
                   (double)hz_bmp,
                   (double)hz_mmc,
+                  (double)hz_iis2mdc,
                   (double)hz_gnss,
                   (double)hz_non_sensor,
                   (double)hz_power,
@@ -4242,7 +4607,7 @@ static void printStats()
     {
         static uint32_t prev_dma_cb = 0, prev_ring_ovf = 0,
                          prev_dedup_eq = 0, prev_dedup_lt = 0,
-                         prev_stale = 0, prev_parsed = 0;
+                         prev_stale = 0;
         static uint64_t prev_dma_bytes = 0;
         uint32_t d_cb = dma_cb_count - prev_dma_cb;
         uint64_t d_bytes = raw_i2c_bytes - prev_dma_bytes;
@@ -4253,7 +4618,7 @@ static void printStats()
         static uint32_t prev_replay = 0;
         uint32_t d_replay = dedup_replay_drops - prev_replay;
         prev_replay = dedup_replay_drops;
-        uint32_t d_parsed = msg_count_ism6 + msg_count_bmp + msg_count_mmc + msg_count_non_sensor + msg_count_gnss;
+        uint32_t d_parsed = msg_count_ism6 + msg_count_bmp + msg_count_mmc + msg_count_iis2mdc + msg_count_non_sensor + msg_count_gnss;
         static uint32_t prev_total_parsed = 0;
         uint32_t d_p = d_parsed - prev_total_parsed;
         // Calculate non-zero byte percentage
@@ -4294,7 +4659,7 @@ static void printStats()
         {
             TR_LoRa_Comms::Stats ls = {};
             lora_comms.getStats(ls);
-            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu rxmode=%c",
+            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu nid_drop=%lu rxmode=%c",
                           (unsigned long)ls.tx_ok,
                           (unsigned long)ls.tx_fail,
                           (unsigned long)ls.rx_count,
@@ -4302,6 +4667,7 @@ static void printStats()
                           (unsigned long)lora_low_snr_drops,
                           (unsigned long)ls.isr_count,
                           (unsigned long)lora_uplink_rx_count,
+                          (unsigned long)lora_uplink_nid_drops,
                           ls.rx_mode ? 'Y' : 'N');
         }
 
@@ -4559,6 +4925,19 @@ void initPeripherals()
         // blocks) — most flights then never extend mid-flight (the extend path's
         // NAND erase + bitmap persist is the in-flight hiccup we want to avoid).
         fl_cfg.prealloc_blocks = 80;
+        // #315: rolling-buffer auto-eviction. When the card fills, prepareFlight
+        // reclaims space at arm time by deleting the oldest finalized flight(s)
+        // — never the in-progress one — down to a free-block headroom floor, so
+        // the operator never hand-deletes and the pre-launch storage verdict
+        // stays green. Destructive by nature (an un-downloaded flight can be
+        // dropped), so it's a deliberate opt-in; it's surfaced via a log line +
+        // the RSS_FLAG_AUTO_EVICTED storage-stats bit, never silent. Target ~10%
+        // of the flight region (~2.5 preallocs of headroom).
+        constexpr uint32_t kAutoEvictTargetFreePct = 10;
+        fl_cfg.auto_evict_oldest = true;
+        fl_cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(
+            static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) *
+            kAutoEvictTargetFreePct / 100u);
         flightlog_bitmap_store.bind(&flightlog_backend,
                                     fl_cfg.metadata_blocks[2],
                                     fl_cfg.metadata_blocks[3]);
@@ -4660,6 +5039,7 @@ void initPeripherals()
             prefs.putFloat("bw",    config::LORA_BW_KHZ);
             prefs.putUChar("cr",    config::LORA_CR);
             prefs.putChar("txpwr",  config::LORA_TX_POWER_DBM);
+            prefs.putUChar("hopdis", 1);  // #150: fixed mode is the default
             ESP_LOGI("CFG", "LoRa NVS empty -- wrote config.h defaults");
         }
         lora_freq_mhz = prefs.getFloat("freq", config::LORA_FREQ_MHZ);
@@ -4667,23 +5047,24 @@ void initPeripherals()
         lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
         lora_cr        = prefs.getUChar("cr",   config::LORA_CR);
         lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
-        lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106 fixed-frequency override
+        lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
 
         // Issue #136: every rocket boot starts on the hardcoded
-        // rendezvous frequency + preset, hopping off, regardless of
-        // any NVS values left from prior sessions.  The BS reaches
-        // here on rendezvous, scans, and uses the cmd-10 transactional
-        // flow to move us to the picked channel.  cmd-10's NVS write
-        // still happens during a session for visibility, but boot
-        // always re-resets here so the rendezvous is reliable.
-        // Hopping is gated behind cmd 17 (developer flag); see the
-        // "Re-enable LoRa hopping" follow-up enhancement.
+        // rendezvous frequency + preset regardless of any NVS values
+        // left from prior sessions.  The BS reaches here on rendezvous
+        // and uses the cmd-10 transactional flow to move us as needed.
+        // cmd-10's NVS write still happens during a session for
+        // visibility, but boot always re-resets here so the rendezvous
+        // is reliable.
+        // #150: lora_hop_disabled is deliberately NOT in this override
+        // anymore — the link mode is user-selected (app picker → BS →
+        // uplink cmd 17) and honors NVS across reboots.  Schema v4
+        // wiped any stale pre-#150 hopdis, and the default is 1 (fixed).
         lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
         lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
         lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
         lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
         lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
-        lora_hop_disabled = true;
 
         // Channel-set restore (#40 / #41 phase 3): skip-mask pushed by
         // the BS via cmd 15.  Skip-mask is keyed off the BW it was
@@ -5048,7 +5429,7 @@ static void setup_oc()
             lora_bw_khz    = prefs.getFloat("bw",   config::LORA_BW_KHZ);
             lora_cr        = prefs.getUChar("cr",    config::LORA_CR);
             lora_tx_power  = (int8_t)prefs.getChar("txpwr", config::LORA_TX_POWER_DBM);
-            lora_hop_disabled = prefs.getUChar("hopdis", 0) != 0;  // #106
+            lora_hop_disabled = prefs.getUChar("hopdis", 1) != 0;  // #150: default fixed mode
             ESP_LOGI("CFG", "NVS LoRa early load (cached): %.1f MHz SF%u BW%.0f CR%u %d dBm hop_disabled=%d",
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power,
@@ -5056,16 +5437,17 @@ static void setup_oc()
         }
         prefs.end();
 
-        // Issue #136: same boot-time override as the later peripheral
-        // init.  Done here too so any code between this early load and
-        // initPeripherals() (e.g., config-readback construction) sees
-        // the rendezvous values rather than stale NVS.
+        // Issue #136: same boot-time rendezvous override as the later
+        // peripheral init.  Done here too so any code between this early
+        // load and initPeripherals() (e.g., config-readback construction)
+        // sees the rendezvous values rather than stale NVS.  #150: the
+        // hopdis override is gone — link mode honors NVS (see the
+        // peripheral-init comment).
         lora_freq_mhz     = LORA_FACTORY_RENDEZVOUS_MHZ;
         lora_sf           = LORA_FACTORY_RENDEZVOUS_SF;
         lora_bw_khz       = LORA_FACTORY_RENDEZVOUS_BW_KHZ;
         lora_cr           = LORA_FACTORY_RENDEZVOUS_CR;
         lora_tx_power     = LORA_FACTORY_RENDEZVOUS_TX_DBM;
-        lora_hop_disabled = true;
 
         prefs.begin("servo", false);
         if (prefs.isKey("b1"))
@@ -5102,6 +5484,43 @@ static void setup_oc()
                  mac[2], mac[3], mac[4], mac[5]);
 
         prefs.begin("identity", false);
+
+        // #150: the identity namespace versions SEPARATELY from the lora
+        // namespace and MIGRATES instead of wiping — a wipe here is what
+        // caused the #133-era regression (BS came back nid=0, rocket kept
+        // nid=180, network-id filter silently dropped everything).
+        //
+        // v0 -> v1 resets nid to the compile-time default ONCE (review
+        // finding): the #136 boot-force this branch removes was RAM-only,
+        // so fielded devices still store whatever nid the #133 era left
+        // behind — values that have been masked, divergent, and
+        // unreachable for months.  Making them live would kill the link
+        // on the first post-flash boot with no over-the-air recovery
+        // (both directions are nid-filtered).  The pre-upgrade EFFECTIVE
+        // nid was always the default, so resetting to it is the
+        // behavior-preserving migration.  `un` (user data) and `rid`
+        // (never boot-forced) are preserved.
+        {
+            const uint8_t stored_v = prefs.getUChar("schemv", 0);
+            if (stored_v != IDENTITY_NVS_SCHEMA_VERSION)
+            {
+                if (stored_v == 0)
+                {
+                    const uint8_t old_nid =
+                        prefs.getUChar("nid", config::DEFAULT_NETWORK_ID);
+                    if (old_nid != config::DEFAULT_NETWORK_ID)
+                    {
+                        ESP_LOGW("CFG", "Identity migration: stale masked nid=%u reset to default %u",
+                                 (unsigned)old_nid, (unsigned)config::DEFAULT_NETWORK_ID);
+                        prefs.putUChar("nid", config::DEFAULT_NETWORK_ID);
+                    }
+                }
+                ESP_LOGW("CFG", "Identity NVS schema %u -> %u (migrated)",
+                         (unsigned)stored_v, (unsigned)IDENTITY_NVS_SCHEMA_VERSION);
+                prefs.putUChar("schemv", IDENTITY_NVS_SCHEMA_VERSION);
+            }
+        }
+
         if (!prefs.isKey("un"))
         {
             char default_name[24];
@@ -5120,19 +5539,12 @@ static void setup_oc()
         rocket_id  = prefs.getUChar("rid", config::DEFAULT_ROCKET_ID);
         prefs.end();
 
-        // #136: force network_id back to default on every boot, matching
-        // the LoRa rendezvous override.  Stops BS and OC from drifting
-        // apart when one side's NVS gets wiped (e.g., the lora-namespace
-        // clear on a schema bump) while the other keeps an old nid.
-        // Cmd 9 still works at runtime for developers; on next boot the
-        // device returns to the hardcoded default.  Per-network IDs come
-        // back in #150 alongside hopping.
-        if (network_id != config::DEFAULT_NETWORK_ID)
-        {
-            ESP_LOGW("CFG", "NVS nid=%u differs from default %u — forcing default",
-                     (unsigned)network_id, (unsigned)config::DEFAULT_NETWORK_ID);
-            network_id = config::DEFAULT_NETWORK_ID;
-        }
+        // #150: the #136 boot-time force of network_id back to default is
+        // gone.  Per-network IDs are user-set again (BLE cmd 41 / the
+        // network-name UI), survive reboot, and drift is now VISIBLE
+        // instead of silent: both ends count nid-mismatch drops (the BS
+        // surfaces its count to the app as "nidd") and identity NVS
+        // migrates rather than wipes.
 
         ESP_LOGI("CFG", "Identity early load: uid=%s name=%s nid=%u rid=%u",
                  unit_id_hex, unit_name, (unsigned)network_id, (unsigned)rocket_id);
@@ -5183,6 +5595,20 @@ static void setup_oc()
         ESP_LOGW("PWR", "INA230 not found -- battery monitoring disabled");
     }
 
+    // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
+    // while the rail is off to save idle power, fast (30 ms) once it comes on for
+    // file transfer. TR_BLE_To_APP's own connect-time request is for the base
+    // station, which has no policy; here the two collide, and the bench caught it:
+    //
+    //   BLE: Slow (low-power) conn params requested (handle=1)
+    //   NimBLE: GAP update_params: update already in progress; conn_handle=0x0001
+    //   W BLE: Connection param update request failed to send, rc=2
+    //
+    // The OC won that race, but had it lost, the idle link would have stayed at
+    // 30 ms and thrown away most of the power saving. Take ownership instead of
+    // relying on who gets there first.
+    ble_app.setAutoConnParams(false);
+
     // Only BLE starts at boot — everything else is behind PWR_PIN
     if (!ble_app.begin())
     {
@@ -5211,13 +5637,16 @@ static void setup_oc()
 // LFS_TIMING / STALL_THRESHOLD_US instrumentation in TR_LogToFlash.cpp.
 static constexpr int64_t LOOP_STALL_THRESHOLD_US = 100'000;  // 100 ms
 
-// Idle (FC-off / low-power) loop period.  loop_oc drains the single-slot BLE
-// command buffer (pending_command_) once per iteration via ble_app.getCommand(),
-// so the loop must cycle faster than connect-time commands arrive (~60-90 ms
-// apart) or a burst overwrites itself — the root cause of #221 (was delay(1000)).
-// 20 ms keeps the loop responsive with negligible power cost (light sleep is
-// disabled while BLE is on, so the CPU idles at 40 MHz either way).  This is the
-// only knob: raise it if bench idle-current measurement ever shows it matters.
+// Idle (FC-off / low-power) loop period.  loop_oc drains ONE BLE command per
+// iteration via ble_app.getCommand().  This used to be a correctness
+// constraint: the BLE command buffer was a single slot, so a loop slower than
+// the ~60-90 ms connect-time command spacing let a burst overwrite itself —
+// the root cause of #221 (was delay(1000)).  #517 gave that buffer depth, so a
+// burst now queues instead of collapsing and correctness no longer rides on the
+// loop period.  20 ms stays for RESPONSIVENESS (a 16-deep ring still drains one
+// command per pass, and in-loop connection setup lagged up to 1 s at delay(1000)),
+// with negligible power cost — light sleep is disabled while BLE is on, so the
+// CPU idles at 40 MHz either way.
 static constexpr uint32_t IDLE_LOOP_DELAY_MS = 20;
 
 #define LOOP_STALL_INSTR(name, expr) do {                                       \
@@ -5384,6 +5813,16 @@ static void loop_oc()
         // station's Phase-A recovery has a meeting point (issue #71).
         LOOP_STALL_INSTR("serviceRocketRendezvous", serviceRocketRendezvous());
 
+        // #150: deferred hop-enable (see the cmd-17 handler) — activate
+        // once the BS's mirror-retry train has finished so the bootstrap
+        // packet lands on a listening BS.
+        if (hop_enable_apply_at_ms != 0 &&
+            (int32_t)(millis() - hop_enable_apply_at_ms) >= 0)
+        {
+            hop_enable_apply_at_ms = 0;
+            updateHopFromState(latest_rocket_state);
+        }
+
         // Hop-silence rendezvous: same idea but gated for the hopping
         // case (#40 / #41 phase 2b).  Active only while hop_active_ and
         // suppressed when slow_rendezvous owns the radio.
@@ -5425,15 +5864,15 @@ static void loop_oc()
             }
         }
 
-        // Yield to FreeRTOS.  This was delay(1000) for power, but the BLE
-        // command buffer (pending_command_) is single-slot and is only drained
-        // below via ble_app.getCommand() — a 1 s loop period let a connect-time
-        // command burst overwrite itself (only the last survived) and lagged
-        // in-loop connection setup up to 1 s, surfacing as flaky connects /
-        // dropped config+cal sync (#221).  Light sleep is disabled while BLE is
-        // on, so the CPU idles at 40 MHz (DFS min) regardless and the long delay
-        // saved little real power.  Stay responsive so the slot is drained as
-        // fast as commands arrive (~60-90 ms apart on connect).
+        // Yield to FreeRTOS.  This was delay(1000) for power; a 1 s loop period
+        // let a connect-time command burst overwrite the then-single-slot BLE
+        // command buffer (only the last survived) and lagged in-loop connection
+        // setup up to 1 s, surfacing as flaky connects / dropped config+cal sync
+        // (#221).  The buffer is now a ring (#517) so a burst queues rather than
+        // collapsing, but stay responsive anyway: one command drains per pass,
+        // and connection setup still runs in this loop.  Light sleep is disabled
+        // while BLE is on, so the CPU idles at 40 MHz (DFS min) regardless and
+        // the long delay saved little real power.
         delay(IDLE_LOOP_DELAY_MS);
 
     }
@@ -5458,7 +5897,7 @@ static void loop_oc()
             // slow params to save power (onConnect always requests fast params,
             // needed for file transfer when powered on).
             if (!pwr_pin_on) {
-                requestSlowBLEParams(0);
+                requestSlowBLEParams();
             }
         }
         ble_was_connected = ble_now;
@@ -5596,13 +6035,16 @@ static void loop_oc()
         // #383: a download pauses I2S ingest + I2C service for the whole
         // multi-second transfer — mid-flight that would blind the OC and
         // drop the flight data it exists to record. Terminate the request
-        // cleanly with an empty EOF chunk (the app sees a zero-length file
-        // instead of a hung transfer). INFLIGHT-only per design decision.
+        // cleanly. #526: send EOF|ABORT, not a bare EOF — a refusal is NOT a
+        // complete zero-length file. Without the abort bit the app writes the
+        // empty download to disk and reports success (completeDownload's
+        // short-transfer guard is gated on the stall timer, not this path).
+        // INFLIGHT-only per design decision.
         if (download_filename.length() > 0 && latest_rocket_state == INFLIGHT)
         {
             ESP_LOGW("BLE", "Download '%s' refused: rocket INFLIGHT",
                      download_filename.c_str());
-            ble_app.sendFileChunk(0, nullptr, 0, true);
+            ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             download_filename = "";
         }
         if (download_filename.length() > 0)
@@ -5610,14 +6052,36 @@ static void loop_oc()
             beginPhoneIO();  // pause I2C servicing + I2S ingest during blocking flash reads
             ESP_LOGI("BLE", "Download file request: %s", download_filename.c_str());
 
+            // #524: read RSSI on the QUIET link, before we put any load on it.
+            //
+            // The 2026-07-14 run reported -107 dBm with the phone six inches away and
+            // real antennas on both ends — which is ~60 dB of loss that the physics does
+            // not allow. So this is very likely NOT a weak link but a broken instrument:
+            // ble_gap_conn_rssi() issues HCI_Read_RSSI, a command inherited from Classic
+            // Bluetooth whose LE behaviour on the ESP32 controller we have never checked.
+            //
+            // This line settles it without a single guess: if the QUIET link also reads
+            // ~-107 at six inches, HCI_Read_RSSI is not usable here and every rssi= number
+            // in the XFER line must be thrown away. Cross-check against the app, which
+            // reads its own RSSI from CoreBluetooth (BLEDevice.connectedRSSI).
+            ESP_LOGI("BLE", "Link before transfer: %lu ms effective, rssi=%d dBm "
+                            "(cross-check against the app's own RSSI — if these disagree, "
+                            "believe the app)",
+                     (unsigned long)ble_app.effectiveEventMs(), (int)ble_app.connRssi());
+
+            // The link must be the fast one before we stream a single byte.
+            ensureFastLinkForTransfer();
+
             // Dynamic chunk size based on negotiated MTU (falls back to 170 if not yet negotiated)
             const size_t chunk_data_size = ble_app.getMaxChunkDataSize();
-            ESP_LOGI("BLE", "Chunk data size: %u", (unsigned)chunk_data_size);
+            ESP_LOGI("BLE", "Chunk data size: %u  (link %lu ms effective)",
+                     (unsigned)chunk_data_size, (unsigned long)ble_app.effectiveEventMs());
 
             if (chunk_data_size == 0)
             {
                 ESP_LOGE("BLE", "chunk data size is 0, aborting download");
-                ble_app.sendFileChunk(0, nullptr, 0, true);  // Send EOF to unblock app
+                // #526: this is a failure, not a completed empty file.
+                ble_app.sendFileChunk(0, nullptr, 0, true, /*abort=*/true);
             }
             else
             {
@@ -5647,23 +6111,48 @@ static void loop_oc()
             uint32_t start_ms = millis();
             bool eof = false;
 
-            // Delay between every BLE notification (matches Legacy base station
-            // pacing).  The bursty 3-at-a-time batch scheme overwhelmed the iOS
-            // BLE notification queue, causing ~50% data loss.  A consistent
-            // per-chunk delay keeps the queue shallow and reliable.
-            const unsigned long CHUNK_DELAY_MS = 30;
+            // #524 diagnostic: split the wall clock between the two things a
+            // download actually does. The NAND read path is bit-banged, so its
+            // share is a genuine unknown — if flash owns a meaningful slice of the
+            // transfer then no amount of BLE tuning will show up.
+            uint64_t flash_us = 0;
+            uint64_t ble_us   = 0;
+            ble_app.resetXferStats();
+
+            // #524: there is no per-chunk delay any more.
+            //
+            // There used to be a fixed 30 ms one, with this rationale: "the bursty
+            // 3-at-a-time batch scheme overwhelmed the iOS BLE notification queue,
+            // causing ~50% data loss. A consistent per-chunk delay keeps the queue
+            // shallow and reliable."
+            //
+            // The data loss was real, but the delay was treating the symptom. File
+            // chunks went out through the same best-effort notify path as telemetry,
+            // which retries 3 x 5 ms and then DROPS the notification — fine for a
+            // telemetry frame, data loss for a file. So the queue was kept shallow
+            // enough that the drop path never fired, which pinned the transfer to one
+            // notification per connection event: 502 B / 30 ms ~ 16 kB/s, with the
+            // radio idle ~90% of the time.
+            //
+            // sendFileChunk now applies real backpressure instead — it waits for the
+            // controller to drain rather than dropping — and returns false only if it
+            // genuinely could not send. So chunks can be fed as fast as the stack
+            // accepts them (several per connection event), with no drops.
+            bool send_failed = false;
 
             while (!eof)
             {
                 // Read next block from flash, appended after any carryover bytes
                 size_t flash_bytes_read = 0;
+                const uint32_t t_flash = micros();
                 bool read_ok = flightlogReadChunk(download_filename.c_str(), file_offset,
                                                   read_buf + carryover, FLASH_READ_SIZE,
                                                   flash_bytes_read, eof);
+                flash_us += (uint32_t)(micros() - t_flash);
                 if (!read_ok)
                 {
                     ESP_LOGE("BLE", "File read error, aborting download");
-                    ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+                    ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
                     break;
                 }
                 file_offset += flash_bytes_read;
@@ -5694,10 +6183,19 @@ static void loop_oc()
                     // Complete frame found — flush BLE buffer if this frame won't fit
                     if (ble_used > 0 && ble_used + frame_size > chunk_data_size)
                     {
-                        ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        const uint32_t t_ble = micros();
+                        const bool sent = ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, false);
+                        ble_us += (uint32_t)(micros() - t_ble);
+                        if (!sent)
+                        {
+                            // #524: could not send even after full backpressure. Do
+                            // NOT keep going — that would hand the app a file with a
+                            // hole in it and call it a success.
+                            send_failed = true;
+                            break;
+                        }
                         bytes_sent += ble_used;
                         ble_used = 0;
-                        delay(CHUNK_DELAY_MS);
                     }
 
                     // Append frame to BLE buffer
@@ -5707,6 +6205,8 @@ static void loop_oc()
                     pos += frame_size;
                 }
 
+                if (send_failed) break;   // #524: abort the transfer, don't limp on
+
                 // Move unparsed bytes to start of buffer for next iteration
                 carryover = buf_len - pos;
                 if (carryover > 0 && pos > 0)
@@ -5715,8 +6215,16 @@ static void loop_oc()
                 }
             }
 
+            if (send_failed)
+            {
+                // #526: EOF|ABORT, not a bare EOF. The app must REJECT the partial
+                // file, not save the truncated bytes and call it complete.
+                ESP_LOGE("BLE", "Download ABORTED after %lu bytes: BLE send failed",
+                         (unsigned long)bytes_sent);
+                ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
+            }
             // Send remaining data with EOF flag
-            if (ble_used > 0)
+            else if (ble_used > 0)
             {
                 ble_app.sendFileChunk(bytes_sent, ble_buf, ble_used, true);
                 bytes_sent += ble_used;
@@ -5726,17 +6234,100 @@ static void loop_oc()
                 ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
             }
 
-            // Redundant EOF in case the last notification was dropped
+            // Redundant EOF in case the last notification was dropped. #526: it
+            // must carry the SAME abort bit — otherwise a dropped abort-EOF
+            // followed by a bare redundant EOF would resurrect the truncation bug
+            // (the app would complete the partial file as if it were whole).
             delay(50);
-            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true);
+            ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/send_failed);
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
             ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s)",
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
                           elapsed_ms / 1000.0f, kbps);
+
+            // #524 diagnostic — where did the time go, and why can't we put more
+            // packets in each connection event?
+            //
+            //   flash% large        -> the bit-banged NAND read is a real cost and
+            //                          BLE tuning is chasing the wrong thing
+            //   qdepth ~2 chunks    -> the controller's outbound queue is the cap;
+            //                          there may be a knob
+            //   qdepth deep + slow  -> iOS just won't drain more per event, and the
+            //                          only way past it is an L2CAP channel (#526)
+            //
+            // pm= and rssi= exist to explain the battery-vs-USB gap (battery measured
+            // ~2.7x slower). They separate the two candidate causes, which point in
+            // opposite directions:
+            //   pm=0                -> the PM lock never engaged; we ARE light-sleeping
+            //                          through the transfer and the fix is here
+            //   pm=1 + rssi much
+            //   worse than on USB   -> PM is fine and the link is the problem (the LL
+            //                          is silently retransmitting, eating the per-event
+            //                          packet budget) — a rail/antenna issue, not code
+            const auto xs = ble_app.xferStats();
+            const float total_ms = (elapsed_ms > 0) ? (float)elapsed_ms : 1.0f;
+            const int rssi_avg = (xs.rssi_n > 0) ? (int)(xs.rssi_sum / (int32_t)xs.rssi_n) : 0;
+            snprintf(s_xfer_summary, sizeof(s_xfer_summary),
+                     "XFER: %.1f KB/s  flash=%llu ms (%.0f%%)  ble=%llu ms (%.0f%%)  |  "
+                     "chunks=%lu  waits=%lu (max %lu)  |  queue depth=%lu chunks  |  "
+                     "link=%lu ms pm=%d  rssi avg=%d min=%d max=%d dBm (n=%lu)",
+                     kbps,
+                     (unsigned long long)(flash_us / 1000),
+                     100.0f * (flash_us / 1000.0f) / total_ms,
+                     (unsigned long long)(ble_us / 1000),
+                     100.0f * (ble_us / 1000.0f) / total_ms,
+                     (unsigned long)xs.chunks, (unsigned long)xs.retries_total,
+                     (unsigned long)xs.retries_max, (unsigned long)xs.burst_max,
+                     (unsigned long)ble_app.effectiveEventMs(),
+                     s_phone_io_pm_held ? 1 : 0,
+                     rssi_avg, (int)xs.rssi_min, (int)xs.rssi_max,
+                     (unsigned long)xs.rssi_n);
+            ESP_LOGW("BLE", "%s", s_xfer_summary);
+
+            // JUDGE THE LINK BY max, NOT avg OR min. Bench 2026-07-14, phone six inches
+            // away: quiet link -64 dBm; during the transfer avg=-79 min=-113 max=-59
+            // over 74 samples.
+            //
+            // -113 dBm is BELOW the receiver's noise floor — it is not a measurement.
+            // HCI_Read_RSSI reports whatever the controller last saw, and under load that
+            // includes idle moments between connection events, so the low samples are
+            // junk. The MAX tracks the quiet-link reading (-59 vs -64), and that is the
+            // real link quality.
+            //
+            // This is not a nitpick: a single such outlier (-107) was used to explain away
+            // a slow run, and it explained nothing — three later runs on the same hardware
+            // all hit 35 KB/s. If you are about to blame RSSI for a slow transfer, look at
+            // max first, and check the app's own CoreBluetooth RSSI before believing it.
+            if (xs.rssi_n > 0 && xs.rssi_max < -85)
+            {
+                ESP_LOGW("BLE", "  ^ link genuinely WEAK (best sample %d dBm). The LL will "
+                                "be retransmitting, and every retransmit costs one of the "
+                                "~4 packet slots per connection event that the transfer "
+                                "rate is made of.", (int)xs.rssi_max);
+            }
+
+            // Keep saying it, so a battery run can be read back over USB afterwards.
+            s_xfer_reprint_until_ms = millis() + XFER_REPRINT_WINDOW_MS;
+            s_xfer_next_reprint_ms  = millis() + XFER_REPRINT_EVERY_MS;
             } // else (chunk_data_size > 0)
             endPhoneIO();
+
+            // #524 follow-up: ensureFastLinkForTransfer() above moves an FC-off
+            // download onto the FAST link, and nothing asked for the slow set back
+            // — the slow request only fires on the connect edge — so after one
+            // idle-time download the OC sat at the fast link's ~7 mA instead of
+            // ~1 mA until the app disconnected. Mirror the connect-edge policy:
+            // rail off -> slow link. Sits after endPhoneIO() so it also covers the
+            // abort paths (chunk size 0, flash read error, send_failed), which all
+            // run after the fast-link switch. A redundant ask when the link never
+            // left slow is one LL procedure, not a loop: requestConnParams records
+            // the intent and collision-retries the SAME set.
+            if (!pwr_pin_on && ble_app.isConnected())
+            {
+                requestSlowBLEParams();
+            }
         }
 
         // Flight simulator commands — relay to FlightComputer via I2C
@@ -5822,7 +6413,7 @@ static void loop_oc()
                 // Restore fast BLE connection params for file transfer
                 if (ble_app.isConnected())
                 {
-                    requestFastBLEParams(0);
+                    requestFastBLEParams();
                 }
             }
             else

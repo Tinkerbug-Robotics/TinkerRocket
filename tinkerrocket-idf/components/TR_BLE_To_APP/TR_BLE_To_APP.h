@@ -16,6 +16,7 @@ using String = std::string;     // API-compatible subset used by callers
 #include <cstdint>
 #include <cstddef>
 
+#include "BleCommandRing.h"      // #517: depth for the command intake
 #include "TR_OTA_Receiver.h"
 #include "TR_OTA_Backend_esp.h"
 
@@ -61,6 +62,15 @@ public:
         // LoRa signal quality (base station only, NaN for direct connection)
         float rssi;             // LoRa RSSI dBm
         float snr;              // LoRa SNR dB
+
+        // #150: hop-state surface (base station only; zero-defaults keep
+        // FC/OC direct connections silent).  hop_channel_idx is only
+        // meaningful while hop_active; netid_drops counts RX packets the
+        // network-id filter dropped (nid-drift diagnostic — the #133-era
+        // drift bug was invisible because these drops were silent).
+        bool     hop_active = false;
+        uint8_t  hop_channel_idx = 0;
+        uint32_t netid_drops = 0;
 
         // Base station (only meaningful when connected via base station)
         float bs_soc;           // Base station battery SOC %
@@ -129,6 +139,26 @@ public:
     // Check if a device is connected
     bool isConnected() const;
 
+    // Whether this component should request connection parameters itself on
+    // connect (#503). Default true, which is what the base station wants — it has
+    // no policy of its own.
+    //
+    // The out computer DOES have one (slow 200 ms while idle, fast 30 ms once the
+    // rail is on for file transfer), and the two collide: the bench logged
+    // "GAP update_params: update already in progress ... rc=2" as our deferred
+    // request landed on top of the OC's. The OC happened to win that race, but had
+    // it lost, the idle link would have sat at 30 ms and thrown away most of #519's
+    // power saving. So the OC turns this off and owns the policy end to end.
+    void setAutoConnParams(bool enabled) { auto_conn_params_ = enabled; }
+
+    // NimBLE's handle for the current connection; 0xFFFF when not connected.
+    // #519: the out computer was calling ble_gap_update_params(0, ...) with a
+    // HARDCODED zero because this was never exposed. NimBLE handed out handle 1,
+    // so every one of its connection-parameter requests failed with "connection
+    // not found; conn_handle=0x0000" — including the slow/low-power params that
+    // exist precisely to cut idle power. Callers must pass this, not a literal.
+    uint16_t connHandle() const { return device_connected_ ? conn_handle_ : 0xFFFF; }
+
     // Send telemetry update to connected device
     // Sends JSON via BLE notification
     void sendTelemetry(const TelemetryData& data);
@@ -146,8 +176,8 @@ public:
     // #384: return the loop-task snapshot taken atomically by getCommand(),
     // not the live latch — a second BLE write between getCommand() and this
     // call could otherwise swap (or tear) the payload under the command.
-    const uint8_t* getCommandPayload() const { return consumed_payload_; }
-    size_t getCommandPayloadLength() const { return consumed_payload_len_; }
+    const uint8_t* getCommandPayload() const { return consumed_.payload; }
+    size_t getCommandPayloadLength() const { return consumed_.payload_len; }
 
     // Get pending delete filename (empty if none)
     // Clears the filename after reading
@@ -198,7 +228,21 @@ public:
     // data: chunk data
     // len: chunk length
     // eof: true if this is the last chunk
-    void sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof);
+    // Send one file-transfer chunk. Returns false if the chunk could NOT be
+    // notified even after the full reliable backpressure budget (#524) — the
+    // caller must then abort the transfer rather than carry on and hand the app a
+    // file with a hole in it. Unlike telemetry, a dropped chunk is lost data.
+    // GATT file-transfer chunk header flag bits (byte 6 of the 7-byte header).
+    static constexpr uint8_t kChunkFlagEof   = 0x01;  // last chunk of the transfer
+    static constexpr uint8_t kChunkFlagAbort = 0x02;  // #526: transfer FAILED, discard it
+
+    // `abort=true` sets kChunkFlagAbort alongside EOF: the transfer ended because
+    // the firmware could not finish it (INFLIGHT refusal, flash read error, send
+    // failure), NOT because the file was fully sent. The app must FAIL the download
+    // instead of saving the bytes it has. Old apps ignore bit1 and behave as today.
+    // Defaulted so the base-station call sites are unchanged and byte-identical.
+    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof,
+                       bool abort = false);
 
     // Get the negotiated MTU (after connection established)
     // Returns 0 if not yet negotiated
@@ -220,9 +264,69 @@ public:
         return device_connected_ && effectiveMtu() > 23 && telem_notify_subscribed_;
     }
 
-    // Get max data bytes per BLE chunk (MTU - ATT overhead - our header)
-    // Falls back to 170 if MTU not yet negotiated
+    // Max data bytes per BLE file chunk. NOT simply "MTU minus headers" — that
+    // wastes a whole link-layer packet on a 14-byte stub. See BleChunkSize.h.
+    // Falls back to 170 if the MTU has not been negotiated yet.
     size_t getMaxChunkDataSize() const;
+
+    // #524 bench diagnostic. We know the transfer is bounded by packets per
+    // connection event (~4.4 of a possible ~21). What we do NOT know is WHY, and
+    // there are two very different answers:
+    //
+    //   - the controller's outbound queue is shallow, so we cannot keep enough
+    //     data staged for iOS to drain a full event  -> maybe tunable, or
+    //   - iOS simply refuses to pull more notifications per event  -> nothing we
+    //     do on this side matters, and the answer is an L2CAP channel.
+    //
+    // burst_max separates them: it is the longest run of chunks the stack accepted
+    // with ZERO waiting, i.e. how many chunks actually fit in the queue. If it is
+    // ~2, we are queue-limited. If it is deep and we are still slow, iOS is the cap.
+    struct XferStats
+    {
+        uint32_t chunks;         // notifications sent
+        uint32_t retries_total;  // summed backpressure waits
+        uint32_t retries_max;    // worst single chunk
+        uint32_t burst_max;      // longest run accepted with no wait == queue depth
+
+        // Link quality sampled DURING the transfer, not once at the end. A single
+        // end-of-run reading cannot tell a genuinely bad link from a stray sample,
+        // and the difference matters: at the sensitivity floor the link layer
+        // retransmits, and each retransmit burns one of the ~4 packet slots per
+        // connection event that the whole transfer rate is made of.
+        int8_t   rssi_min;
+        int8_t   rssi_max;
+        int32_t  rssi_sum;
+        uint32_t rssi_n;
+    };
+    void resetXferStats();
+    XferStats xferStats() const { return xfer_; }
+
+    // Ask the peer for a parameter set, and REMEMBER it so a collision retry re-asks
+    // for the same one. Units are raw BLE: interval in 1.25 ms, timeout in 10 ms.
+    // `what` is a label for the log ("Fast (transfer)", "Slow (low-power)").
+    void requestConnParams(uint16_t itvl_min, uint16_t itvl_max,
+                           uint16_t latency, uint16_t timeout, const char* what);
+
+    // How often the link ACTUALLY carries data, in ms: interval x (latency + 1).
+    //
+    // Latency is the number of connection events the peripheral may skip, so this —
+    // not the interval — is the real cadence. On the idle link (200 ms, latency 4)
+    // it is a FULL SECOND. Anything that waits on the controller draining must be
+    // measured against this, or it will time out on a perfectly healthy link.
+    // Returns 30 (the fast link) if the parameters are not known yet.
+    //
+    // Cached, NOT queried. It used to call ble_gap_conn_find() — which takes the
+    // NimBLE host lock — and sendFileChunk calls this once per chunk, so a download
+    // was grabbing the host stack's own lock ~19,000 times while that same host task
+    // was trying to drain the queue we were waiting on. The value only changes when
+    // the parameters change, so it is latched in onConnect/onConnParamsUpdated.
+    uint32_t effectiveEventMs() const { return eff_event_ms_; }
+
+    // Live RSSI of the phone link, dBm (0 if not connected / unavailable). A weak
+    // link means the link layer is silently retransmitting, which eats exactly the
+    // per-event packet budget the transfer is bounded by — so it is a candidate
+    // explanation any time throughput drops without the code changing.
+    int8_t connRssi() const;
 
     // True from OTA_BEGIN until the session ends (finish→reboot, abort, or
     // failure). main.cpp gates I2C battery-gauge polling on this so the
@@ -233,27 +337,39 @@ private:
     static constexpr size_t MAX_DEVICE_NAME_LEN = 29;   // BLE adv name limit
     char device_name_[MAX_DEVICE_NAME_LEN + 1];          // mutable, null-terminated
 
+    XferStats xfer_{};        // #524 diagnostic, reset at each download
+    uint32_t  xfer_burst_{0}; // current run of zero-wait sends
+
+    // Latched link cadence, interval x (latency + 1) ms. See effectiveEventMs().
+    volatile uint32_t eff_event_ms_ = 30;
+
+    // Sample RSSI every N chunks — often enough to see a link go bad mid-transfer,
+    // rare enough that taking the host lock for it costs nothing.
+    static constexpr uint32_t kRssiSampleEveryChunks = 256;
+
     volatile bool device_connected_;
     volatile uint16_t negotiated_mtu_;
+    // #524: LL max TX payload from BLE_GAP_EVENT_DATA_LEN_CHG. 27 is the pre-DLE
+    // minimum every link starts at, so it is the safe assumption until the peer
+    // agrees to more. getMaxChunkDataSize() sizes chunks to a whole number of
+    // these, which is where the download throughput is.
+    volatile uint16_t ll_tx_octets_;
     volatile bool telem_notify_subscribed_;  // central enabled notifications on telemetry/config char
     volatile uint16_t conn_handle_;          // NimBLE connection handle
-    // #384: every latch below is written on the NimBLE host task and read on
-    // bs_loop. They are all committed/consumed inside the same s_cmd_mux
-    // critical section as pending_command_, so a command and its payload/
-    // filename travel as one atomic unit. The filenames are fixed buffers —
-    // the old String members did heap operations from two tasks with no
-    // lock, which risks allocator corruption, not just a swapped name.
-    volatile uint8_t pending_command_;
-    volatile uint8_t pending_file_list_page_;
-    char pending_delete_filename_[64] = {};
-    char pending_download_filename_[64] = {};
-    uint8_t pending_payload_[80] = {};   // Raw payload for commands with data (max = RollProfileData 76 bytes)
-    size_t  pending_payload_len_ = 0;
-    // Loop-task-only snapshot of the payload, filled by getCommand() under
-    // the mux; getCommandPayload() reads this so later BLE writes can't
-    // mutate it mid-use.
-    uint8_t consumed_payload_[80] = {};
-    size_t  consumed_payload_len_ = 0;
+    // #517: a RING, not a single latch (see BleCommandRing.h). It used to be
+    // one slot overwritten by the NimBLE write callback, so two commands
+    // arriving between two loop polls lost the first outright.
+    //
+    // #384 (keep): the ring is written on the NimBLE host task and read on the
+    // loop task; push() and pop() each run inside the s_cmd_mux critical
+    // section, so a command and its payload/filename/page still travel as one
+    // atomic unit and can never be mismatched.
+    tr_ble::CommandRing cmd_ring_;
+
+    // Loop-task-only snapshot, filled by getCommand() under the mux. The
+    // payload/filename/page accessors read THIS, never the ring, so a later
+    // BLE write can't mutate what the current command's handler is using.
+    tr_ble::PendingCommand consumed_;
     String file_list_json_;              // Persistent storage for file list
     uint8_t* chunk_buffer_;              // Persistent storage for file chunks
     size_t chunk_buffer_size_;
@@ -296,6 +412,33 @@ private:
     // Set by the OTA_FINISH handler after the ready_to_boot notification
     // flushes so the iOS app sees the new partition selection.
     uint32_t ota_pending_restart_at_ms_ = 0;
+
+    // #503: deferred connection-parameter request. Firing it from the connect
+    // callback collided with iOS's own connection-update procedure (bench:
+    // status=554 = HCI 0x2A "different transaction collision"). Let the peer go
+    // first, then ask — and retry if we still lose the race.
+    uint32_t conn_param_due_ms_   = 0;   // 0 = nothing scheduled
+    uint8_t  conn_param_attempts_ = 0;
+    bool     auto_conn_params_    = true;  // see setAutoConnParams()
+
+    // #524: WHAT we last asked for, so a collision retry re-asks for the SAME set.
+    // The retry used to re-send a hardcoded 15-30 ms / latency 0 no matter what the
+    // caller had wanted — so a SLOW (low-power) request that lost a collision race
+    // would come back as a FAST one and silently undo low-power mode. Defaults are
+    // the fast set, which is what the shared/auto path asks for.
+    uint16_t cp_itvl_min_ = 0x0C;   // 15 ms (1.25 ms units)
+    uint16_t cp_itvl_max_ = 0x18;   // 30 ms
+    uint16_t cp_latency_  = 0;
+    uint16_t cp_timeout_  = 200;    // 2 s (10 ms units)
+    const char* cp_what_  = "Default";
+
+    static constexpr uint32_t kConnParamDelayMs = 1000;  // let iOS settle the link first
+    // #524: 0x2A means the PEER has a transaction in flight. Retrying straight back
+    // into the same window just collides again — the bench logged four in a row, then
+    // we gave up and ran a whole download on the 200 ms idle link. Back off instead
+    // (750, 1500, 2250 ...) and allow more tries.
+    static constexpr uint32_t kConnParamRetryMs = 750;
+    static constexpr uint8_t  kConnParamMaxAttempts = 6;
     // Throttle the per-chunk "writing" status notifications. Updated on
     // every successful chunk; we notify at most ~2 Hz so the BLE notify
     // queue isn't saturated mid-flash.
@@ -351,6 +494,11 @@ private:
     void onConnect(uint16_t conn_handle, const struct ble_gap_conn_desc* desc);
     void onDisconnect(uint16_t conn_handle, int reason);
     void onMtuChanged(uint16_t conn_handle, uint16_t mtu);
+    // #503: connection-parameter negotiation. Deferred out of the connect
+    // callback so it doesn't collide with the peer's own update procedure.
+    void requestConnParams();
+    static uint32_t effFromDesc(const struct ble_gap_conn_desc& desc);
+    void onConnParamsUpdated(uint16_t conn_handle, int status);
     void onCommandWrite(const uint8_t* data, size_t length);
 
     // Start/restart BLE advertising

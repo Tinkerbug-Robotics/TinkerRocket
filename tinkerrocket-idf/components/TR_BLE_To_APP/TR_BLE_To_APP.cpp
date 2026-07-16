@@ -13,13 +13,26 @@
 #include <nimble/nimble_port_freertos.h>
 #include <host/ble_hs.h>
 #include <host/ble_att.h>          // ble_att_mtu — authoritative live MTU (#283)
+#include "BleChunkSize.h"          // #524: LL-fragment-aligned chunk sizing
 #include <host/util/util.h>
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
 
 static const char* BLE_TAG = "BLE";
 
-// Spinlock protecting pending_command_ against races between the BLE
+// LE PHY name for logging (#519 follow-up: 2M doubles the raw data rate).
+static const char* phyName(uint8_t phy)
+{
+    switch (phy)
+    {
+        case BLE_GAP_LE_PHY_1M:    return "1M";
+        case BLE_GAP_LE_PHY_2M:    return "2M";
+        case BLE_GAP_LE_PHY_CODED: return "Coded";
+        default:                   return "?";
+    }
+}
+
+// Spinlock protecting the command ring (#517) against races between the BLE
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -110,12 +123,9 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 TR_BLE_To_APP::TR_BLE_To_APP(const char* device_name)
     : device_connected_(false),
       negotiated_mtu_(0),
+      ll_tx_octets_(27),  // #524: pre-DLE minimum until DATA_LEN_CHG says otherwise
       telem_notify_subscribed_(false),
       conn_handle_(0),
-      pending_command_(0),
-      pending_file_list_page_(0),
-      pending_delete_filename_(""),
-      pending_download_filename_(""),
       file_list_json_(""),
       chunk_buffer_(nullptr),
       chunk_buffer_size_(0),
@@ -211,9 +221,66 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         self->onMtuChanged(event->mtu.conn_handle, event->mtu.value);
         break;
 
+    case BLE_GAP_EVENT_DATA_LEN_CHG:
+        // #524: the LL payload size is not just a number to report — it is what we
+        // size chunks against, so latch it. 27 octets means DLE did not take and
+        // every notification is still fragmenting ~19 ways; downloads would stay
+        // slow while we assumed otherwise. Same discipline as the connection
+        // interval (#503) and the PHY.
+        self->ll_tx_octets_ = event->data_len_chg.max_tx_octets;
+
+        // Quote the resulting chunk size ONLY once the MTU is real. DLE and the
+        // MTU exchange race, and iOS runs DLE first: at this point effectiveMtu()
+        // is usually still 23, so a chunk size printed here would be the 170-byte
+        // pre-MTU fallback — which reads exactly like DLE having failed, on the
+        // very line you would check to see whether it worked. onMtuChanged() logs
+        // the settled size either way.
+        if (self->effectiveMtu() > tr_ble::kMinUsableMtu)
+        {
+            ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets "
+                              "-> chunk %u bytes",
+                     (unsigned)event->data_len_chg.max_tx_octets,
+                     (unsigned)event->data_len_chg.max_tx_time,
+                     (unsigned)event->data_len_chg.max_rx_octets,
+                     (unsigned)self->getMaxChunkDataSize());
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "LL data length now: TX=%u octets (%u us), RX=%u octets "
+                              "(chunk size pending MTU exchange)",
+                     (unsigned)event->data_len_chg.max_tx_octets,
+                     (unsigned)event->data_len_chg.max_tx_time,
+                     (unsigned)event->data_len_chg.max_rx_octets);
+        }
+        break;
+
+    case BLE_GAP_EVENT_PHY_UPDATE_COMPLETE:
+        // Report the PHY we ACTUALLY ended up on, not the one we asked for — the
+        // same lesson as the connection interval (#503). 2M doubles the raw rate;
+        // if the peer declines we silently stay on 1M and downloads stay slow, so
+        // this needs to be visible rather than assumed.
+        if (event->phy_updated.status == 0)
+        {
+            ESP_LOGI(BLE_TAG, "PHY now: TX=%s RX=%s",
+                     phyName(event->phy_updated.tx_phy),
+                     phyName(event->phy_updated.rx_phy));
+        }
+        else
+        {
+            ESP_LOGW(BLE_TAG, "PHY update failed, status=%d — staying on 1M",
+                     event->phy_updated.status);
+        }
+        break;
+
     case BLE_GAP_EVENT_CONN_UPDATE:
-        ESP_LOGI(BLE_TAG, "Connection parameters updated, status=%d",
-                 event->conn_update.status);
+        // #503: this used to log an unconditional "Connection parameters updated,
+        // status=%d" at INFO — which read as success even when it wasn't (the
+        // 2026-07-14 bench logged status=554 and nobody noticed), and which never
+        // said what interval we actually ENDED UP with. status=0 only means the
+        // procedure completed; the peer is free to counter with its own values,
+        // and iOS always will. Report the negotiated interval, not the request.
+        self->onConnParamsUpdated(event->conn_update.conn_handle,
+                                  event->conn_update.status);
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -248,36 +315,215 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     device_connected_ = true;
     conn_handle_ = conn_handle;
     negotiated_mtu_ = 0;  // Reset until MTU exchange completes
+    ll_tx_octets_   = 27; // #524: and back to the pre-DLE minimum until DATA_LEN_CHG
     telem_notify_subscribed_ = false;
+    // #524: latch the cadence the peer opened with. CONN_UPDATE only fires on a
+    // CHANGE, so without this the initial parameters would never be recorded.
+    eff_event_ms_ = (desc != nullptr) ? effFromDesc(*desc) : 30;
 
     ESP_LOGI(BLE_TAG, "Device connected! handle=%u", conn_handle);
 
-    // Request fast connection parameters from iOS for high-throughput transfer.
+    // #524: request Data Length Extension. We had never called this, so the link
+    // layer stayed at its 27-byte default PDU and every 502-byte notification was
+    // fragmented into ~19 LL packets, each with its own header and inter-frame
+    // spacing. 251 octets collapses that to two. Purely a request — if the peer
+    // declines, the link simply stays at 27 and nothing breaks.
+    const int dle_rc = ble_gap_set_data_len(conn_handle,
+                                            BLE_HCI_SET_DATALEN_TX_OCTETS_MAX,
+                                            BLE_HCI_SET_DATALEN_TX_TIME_MAX);
+    if (dle_rc != 0)
+    {
+        ESP_LOGW(BLE_TAG, "Data-length extension request failed, rc=%d "
+                          "— staying on 27-byte LL PDUs", dle_rc);
+    }
+
+    // Ask for the LE 2M PHY. This is the throughput lever, and we had never used
+    // it — the controller supports it (boot log: "Feature Config ... BLE_50:1") but
+    // nobody asked, so every connection ran on 1M.
+    //
+    // It matters because #503 made our connection-parameter request spec-legal, and
+    // that cost us speed: the old request was 7.5-20 ms — below iOS's 15 ms floor —
+    // which iOS accepted anyway (status=0) and served at ~15-20 ms. Apple's envelope
+    // (min >= 15 ms AND max >= min + 15 ms) means the tightest LEGAL ask is 15-30,
+    // and iOS grants the top of it: we measure exactly 30 ms. So file downloads got
+    // ~1.5-2x slower as the price of being correct.
+    //
+    // 2M doubles the raw PHY rate and is independent of the connection interval, so
+    // it more than buys that back without going back outside the spec. If the peer
+    // declines, the link simply stays on 1M — hence the PHY_UPDATE_COMPLETE handler,
+    // which logs what we actually got rather than what we hoped for.
+    const int phy_rc = ble_gap_set_prefered_le_phy(conn_handle,
+                                                   BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_CODED_ANY);
+    if (phy_rc != 0)
+    {
+        ESP_LOGW(BLE_TAG, "2M PHY request failed to send, rc=%d — staying on 1M", phy_rc);
+    }
+
+    // #503: do NOT request the parameter update from inside the connect callback.
+    // iOS runs its OWN connection-update procedure immediately after connecting,
+    // and firing ours into the middle of it collides: the 2026-07-14 bench logged
+    // status=554, which is NimBLE's HCI base (0x200) + 0x2A = "Different
+    // Transaction Collision". Schedule it instead and let the peer go first;
+    // loop() fires it once the link has settled.
+    conn_param_attempts_ = 0;
+    // Skip when the app owns the parameter policy (the OC does — see
+    // setAutoConnParams). Otherwise the two requests race and whichever lands
+    // second is rejected with "update already in progress".
+    conn_param_due_ms_   = auto_conn_params_ ? ((uint32_t)millis() + kConnParamDelayMs) : 0;
+}
+
+// #503: Apple's Accessory Design Guidelines are strict about what a peripheral may
+// ask for, and iOS rejects anything outside them. We were asking for 7.5 ms, which
+// is below iOS's 15 ms floor — so even without the collision it could never have
+// been granted, and the "Requested fast connection parameters (7.5-20ms)" log line
+// was describing something that was never going to happen.
+//
+//   interval min  >= 15 ms                        -> 0x0C (12 * 1.25 ms)
+//   interval max  >= interval min + 15 ms         -> 0x18 (24 * 1.25 ms = 30 ms)
+//   slave latency <= 30                           -> 0
+//   supervision timeout: <= 6 s, and greater than
+//     interval_max * (latency + 1) * 3 = 90 ms    -> 2 s (200 * 10 ms)
+// Public entry point: caller states what it wants, we remember it, then ask.
+void TR_BLE_To_APP::requestConnParams(uint16_t itvl_min, uint16_t itvl_max,
+                                      uint16_t latency, uint16_t timeout,
+                                      const char* what)
+{
+    cp_itvl_min_ = itvl_min;
+    cp_itvl_max_ = itvl_max;
+    cp_latency_  = latency;
+    cp_timeout_  = timeout;
+    cp_what_     = (what != nullptr) ? what : "Unnamed";
+
+    // A new intent supersedes any in-flight retry of the old one.
+    conn_param_attempts_ = 0;
+    requestConnParams();
+}
+
+// Send whatever the last stated intent was. This is also the collision-retry path,
+// which is exactly why it must NOT hardcode a parameter set (#524): re-asking for
+// 15-30 ms after a SLOW request collided would quietly cancel low-power mode.
+void TR_BLE_To_APP::requestConnParams()
+{
+    if (!device_connected_) { conn_param_due_ms_ = 0; return; }
+
     struct ble_gap_upd_params params = {};
-    params.itvl_min = 0x06;              // 7.5ms  (units of 1.25ms)
-    params.itvl_max = 0x10;              // 20ms   (units of 1.25ms)
-    params.latency = 0;                  // No slave latency
-    params.supervision_timeout = 200;    // 2 seconds (units of 10ms)
+    params.itvl_min = cp_itvl_min_;
+    params.itvl_max = cp_itvl_max_;
+    params.latency = cp_latency_;
+    params.supervision_timeout = cp_timeout_;
     params.min_ce_len = 0;
     params.max_ce_len = 0;
 
-    int rc = ble_gap_update_params(conn_handle, &params);
+    conn_param_attempts_++;
+    const int rc = ble_gap_update_params(conn_handle_, &params);
     if (rc == 0)
     {
-        ESP_LOGI(BLE_TAG, "Requested fast connection parameters (7.5-20ms interval)");
+        ESP_LOGI(BLE_TAG, "%s conn params requested (%u-%u ms, latency %u), attempt %u",
+                 cp_what_,
+                 (unsigned)(cp_itvl_min_ * 5 / 4), (unsigned)(cp_itvl_max_ * 5 / 4),
+                 (unsigned)cp_latency_, (unsigned)conn_param_attempts_);
+        conn_param_due_ms_ = 0;   // wait for the CONN_UPDATE event
     }
     else
     {
-        ESP_LOGW(BLE_TAG, "Connection param update request failed, rc=%d", rc);
+        ESP_LOGW(BLE_TAG, "%s conn param request failed to send, rc=%d", cp_what_, rc);
+        conn_param_due_ms_ = (conn_param_attempts_ < kConnParamMaxAttempts)
+                                 ? (uint32_t)millis() + kConnParamRetryMs
+                                 : 0;
     }
+}
+
+// conn_itvl is in 1.25 ms units. conn_latency is how many connection events the
+// peripheral may SKIP, so real data opportunities are (latency + 1) intervals apart —
+// on the idle link (200 ms, latency 4) that is a full second.
+uint32_t TR_BLE_To_APP::effFromDesc(const struct ble_gap_conn_desc& desc)
+{
+    const uint32_t itvl_ms = ((uint32_t)desc.conn_itvl * 5u) / 4u;
+    const uint32_t eff     = itvl_ms * ((uint32_t)desc.conn_latency + 1u);
+    return (eff > 0) ? eff : 30;
+}
+
+void TR_BLE_To_APP::onConnParamsUpdated(uint16_t conn_handle, int status)
+{
+    // Report what we ACTUALLY got. status==0 means the procedure completed, not
+    // that the peer honoured our request — iOS routinely counters with its own
+    // values, so the negotiated interval is the only number worth logging.
+    struct ble_gap_conn_desc desc;
+    const bool have_desc = (ble_gap_conn_find(conn_handle, &desc) == 0);
+
+    if (status == 0)
+    {
+        if (have_desc)
+        {
+            eff_event_ms_ = effFromDesc(desc);   // latch: this is the ONLY place it changes
+            ESP_LOGI(BLE_TAG, "Connection parameters now: interval=%.2f ms, latency=%u, "
+                              "timeout=%u ms (%lu ms effective)",
+                     (double)desc.conn_itvl * 1.25, (unsigned)desc.conn_latency,
+                     (unsigned)desc.supervision_timeout * 10,
+                     (unsigned long)eff_event_ms_);
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "Connection parameters updated (peer accepted)");
+        }
+        conn_param_due_ms_ = 0;
+        return;
+    }
+
+    // Decode the failure instead of printing a bare number. NimBLE returns HCI
+    // errors offset by BLE_HS_ERR_HCI_BASE (0x200), which is why the raw value
+    // looks like a nonsense "554".
+    const char* why = "unknown";
+    bool collision = false;
+    if (status >= BLE_HS_ERR_HCI_BASE && status < BLE_HS_ERR_HCI_BASE + 0x100)
+    {
+        switch (status - BLE_HS_ERR_HCI_BASE)
+        {
+            case 0x0C: why = "command disallowed"; break;
+            case 0x1E: why = "invalid LMP parameters"; break;
+            case 0x23: why = "LMP/LL transaction collision"; collision = true; break;
+            case 0x2A: why = "different transaction collision"; collision = true; break;
+            case 0x3B: why = "unacceptable connection parameters"; break;
+            default: break;
+        }
+    }
+
+    const bool retry = collision && (conn_param_attempts_ < kConnParamMaxAttempts);
+    ESP_LOGW(BLE_TAG, "Connection param update REJECTED: status=%d (HCI 0x%02X: %s)%s",
+             status,
+             (status >= BLE_HS_ERR_HCI_BASE) ? (unsigned)(status - BLE_HS_ERR_HCI_BASE) : 0u,
+             why,
+             retry ? " — retrying" : "");
+
+    if (have_desc)
+    {
+        ESP_LOGW(BLE_TAG, "  link stays at interval=%.2f ms (peer's choice)",
+                 (double)desc.conn_itvl * 1.25);
+    }
+
+    // #524: back off. 0x2A says the PEER already has a transaction in flight; firing
+    // straight back into the same window just collides again — the bench logged four
+    // in a row, then we gave up (kConnParamMaxAttempts) and ran an entire download on
+    // the 200 ms idle link. Give the peer's procedure room to finish.
+    conn_param_due_ms_ = retry
+        ? ((uint32_t)millis() + kConnParamRetryMs * (uint32_t)(conn_param_attempts_ + 1))
+        : 0;
 }
 
 void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
 {
     device_connected_ = false;
     negotiated_mtu_ = 0;
+    ll_tx_octets_ = 27;  // #524: DLE is per-connection; do not carry it into the next one
     telem_notify_subscribed_ = false;
     conn_handle_ = 0;
+    // #503: cancel any pending/retrying parameter request — it belongs to the
+    // connection that just went away, and firing it on the next one's handle
+    // would be wrong.
+    conn_param_due_ms_ = 0;
+    conn_param_attempts_ = 0;
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
 
     // Restart advertising so new devices can connect
@@ -374,7 +620,7 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     char    name_local[64];
     bool    have_delete = false, have_download = false;
     int     page_local  = -1;
-    uint8_t payload_local[sizeof(pending_payload_)];
+    uint8_t payload_local[tr_ble::kMaxPayload];
     size_t  payload_len_local = 0;
     bool    have_payload = false;
 
@@ -480,31 +726,39 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
         have_payload = true;
     }
 
-    // #384: commit the command AND everything that travels with it in one
-    // critical section, so bs_loop can never pair a command with a different
-    // write's payload/filename/page.
-    uint8_t overwritten = 0;
-    portENTER_CRITICAL(&s_cmd_mux);
-    overwritten = pending_command_;
+    // Build the entry in a local first — the parse/copy work stays OUT of the
+    // critical section, which now only has to do the ring push.
+    tr_ble::PendingCommand entry;   // zero-initialised: empty payload/name/page
+    entry.cmd = cmd;
     if (have_payload)
     {
-        memcpy(pending_payload_, payload_local, payload_len_local);
-        pending_payload_len_ = payload_len_local;
+        memcpy(entry.payload, payload_local, payload_len_local);
+        entry.payload_len = payload_len_local;
     }
-    if (page_local >= 0)   pending_file_list_page_ = (uint8_t)page_local;
-    if (have_delete)       strlcpy(pending_delete_filename_,   name_local, sizeof(pending_delete_filename_));
-    if (have_download)     strlcpy(pending_download_filename_, name_local, sizeof(pending_download_filename_));
-    pending_command_ = cmd;
+    if (page_local >= 0)   entry.file_list_page = (uint8_t)page_local;
+    if (have_delete)       strlcpy(entry.delete_name,   name_local, sizeof(entry.delete_name));
+    if (have_download)     strlcpy(entry.download_name, name_local, sizeof(entry.download_name));
+
+    // #384: the command and everything travelling with it are committed in ONE
+    // critical section, so the loop task can never pair a command with a
+    // different write's payload/filename/page.
+    // #517: append to the ring instead of overwriting a single latch.
+    portENTER_CRITICAL(&s_cmd_mux);
+    const bool   queued = cmd_ring_.push(entry);
+    const size_t depth  = cmd_ring_.size();
     portEXIT_CRITICAL(&s_cmd_mux);
-    if (overwritten != 0)
+
+    if (!queued)
     {
-        // Previous command not yet consumed — it was overwritten wholesale
-        // (command + latches together, so at least never mismatched).
-        ESP_LOGW(BLE_TAG, "Overwriting unconsumed cmd %u with %u",
-                 overwritten, cmd);
+        // The loop task isn't draining (a multi-second blocking op, or it died).
+        // Drop the NEWEST: the older commands are the ones the app sent first
+        // and is still waiting on, so rotating them out would be worse.
+        ESP_LOGE(BLE_TAG, "Command ring full (%u) — cmd %u DROPPED",
+                 (unsigned)tr_ble::kRingDepth, cmd);
+        return;
     }
 
-    ESP_LOGI(BLE_TAG, "Received command: %u", cmd);
+    ESP_LOGI(BLE_TAG, "Received command: %u (queued, depth=%u)", cmd, (unsigned)depth);
 }
 
 // ============================================================================
@@ -708,6 +962,21 @@ bool TR_BLE_To_APP::begin()
 
 void TR_BLE_To_APP::loop()
 {
+    // #503: deferred connection-parameter request. Fired from here, on the main
+    // loop, rather than from the connect callback — so it lands AFTER iOS has
+    // finished its own connection-update procedure instead of colliding with it.
+    if (conn_param_due_ms_ != 0 && device_connected_)
+    {
+        const uint32_t now = (uint32_t)millis();
+        // Same wraparound tolerance as the OTA timer below.
+        const bool elapsed = (now >= conn_param_due_ms_) ||
+                             ((conn_param_due_ms_ - now) > 0x7FFFFFFFu);
+        if (elapsed)
+        {
+            requestConnParams();
+        }
+    }
+
     // BLE stack handles events via callbacks on the NimBLE host task.
     // Only OTA's deferred-restart watchdog needs poll-style handling here.
     if (ota_pending_restart_at_ms_ != 0)
@@ -746,20 +1015,31 @@ size_t TR_BLE_To_APP::maxNotifyBytes() const
     return (mtu > 3) ? (size_t)(mtu - 3) : 20;
 }
 
+void TR_BLE_To_APP::resetXferStats()
+{
+    xfer_ = XferStats{};
+    xfer_.rssi_min = 127;    // so the first real sample wins
+    xfer_.rssi_max = -128;
+    xfer_burst_ = 0;
+}
+
+int8_t TR_BLE_To_APP::connRssi() const
+{
+    if (!device_connected_) return 0;
+    int8_t rssi = 0;
+    if (ble_gap_conn_rssi(conn_handle_, &rssi) != 0) return 0;
+    return rssi;
+}
+
 size_t TR_BLE_To_APP::getMaxChunkDataSize() const
 {
-    const size_t HEADER_SIZE = 7;   // offset(4) + length(2) + flags(1)
-    const size_t ATT_OVERHEAD = 3;  // ATT notification header
-
-    const uint16_t mtu = effectiveMtu();  // #283: live MTU, not the stale cache
-    if (mtu > (HEADER_SIZE + ATT_OVERHEAD + 20))
-    {
-        // Use negotiated MTU for chunk size
-        return mtu - ATT_OVERHEAD - HEADER_SIZE;
-    }
-
-    // Fallback: conservative 170 bytes (fits in iOS default 185-byte MTU)
-    return 170;
+    // #524: this used to return the MTU-maximal size (mtu - 3 - 7 = 502 at MTU
+    // 512). That is the largest chunk, but not the fastest one: it puts 516 bytes
+    // on the wire, which the link layer sends as 251 + 251 + 14 — a third packet
+    // for fourteen bytes. Throughput here is packets-per-connection-event bound,
+    // so that stub packet was costing ~a third of the download. See BleChunkSize.h.
+    return tr_ble::maxChunkDataSize(effectiveMtu(),  // #283: live MTU, not the stale cache
+                                    ll_tx_octets_);
 }
 
 bool TR_BLE_To_APP::isConnected() const
@@ -771,30 +1051,76 @@ bool TR_BLE_To_APP::isConnected() const
 // Helper: send a BLE notification on a given characteristic handle
 // ============================================================================
 
-static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
-                       const uint8_t* data, size_t len)
-{
-    // Keep retries short to avoid stalling the main loop.  The original
-    // 20 × 25 ms (500 ms worst-case) caused 50-60 ms gaps in INA230 power
-    // readings and other time-critical polling.  3 × 5 ms (15 ms max) is
-    // enough for transient BLE controller congestion; sustained congestion
-    // simply drops the notification — telemetry is best-effort anyway.
-    static constexpr int MAX_RETRIES = 3;
-    static constexpr int RETRY_DELAY_MS = 5;
+// #524: the retry budget is now the CALLER's choice, because the two kinds of
+// traffic want opposite things.
+//
+// BEST-EFFORT (telemetry, scan results, cal status): losing a frame is fine —
+// another one is along in a moment — but stalling the main loop is not. A 500 ms
+// retry budget used to blow 50-60 ms holes in INA230 polling and other
+// time-critical work, which is why this was cut to 3 x 5 ms.
+//
+// RELIABLE (file chunks): a dropped chunk is LOST DATA. Applying the best-effort
+// policy to a download meant chunks really were dropped under congestion (the
+// "~50% data loss" the old code fought), so the download loop compensated with a
+// fixed 30 ms delay per chunk to keep the queue too shallow for the drop path to
+// fire — capping transfers at ~16 kB/s and leaving the radio idle ~90% of the
+// time. We were throttling the transfer to hide a data-loss bug instead of fixing
+// it. Waiting is safe here: the OC pauses I2S ingest and I2C service for the whole
+// transfer (beginPhoneIO), so there is no time-critical polling to protect.
+//
+// Retry PACING matters as much as the budget. A blocked notification can only
+// clear when the controller drains, and the controller only drains at a
+// connection event — every ~30 ms. Retrying every 2 ms therefore made ~15
+// doomed attempts per event, and each attempt is not free: it allocates an
+// mbuf, copies ~500 bytes into it, calls into the host stack (which logs), and
+// frees it again. All of that runs on the NimBLE host task — the same task that
+// has to do the draining. We were competing with the thing we were waiting for.
+//
+// 5 ms still probes ~6 times per connection event, which is ample to refill the
+// queue promptly after a drain (there are ~25 ms of slack before the next
+// event), at a third of the churn.
+static constexpr int NOTIFY_BEST_EFFORT_RETRIES  = 3;
+static constexpr int NOTIFY_BEST_EFFORT_DELAY_MS = 5;
+static constexpr int NOTIFY_RELIABLE_DELAY_MS    = 5;
 
-    for (int attempt = 0; attempt < MAX_RETRIES; attempt++)
+// #524: the RELIABLE budget is no longer a constant, because a constant cannot know
+// how often the link actually carries data.
+//
+// It was 500 ms. Bench 2026-07-14: the fast-parameter request lost a collision race
+// with iOS (status=554 four times, then kConnParamMaxAttempts gave up), so a download
+// ran on the IDLE link — 200 ms interval, latency 4. Latency is events the peripheral
+// may SKIP, so the effective period was 200 x (4+1) = ONE SECOND. A 500 ms budget
+// cannot span even a single connection event on that link: every chunk exhausted its
+// retries, and the transfer aborted after 5 kB of an 8.5 MB file.
+//
+// Budget against the EFFECTIVE event period instead, so a slow link makes a download
+// slow rather than impossible:
+//     fast link (30 ms)  -> 240 ms, floored to 500 ms
+//     idle link (1000 ms)-> 8 s
+static constexpr uint32_t NOTIFY_RELIABLE_EVENTS        = 8;      // events worth of patience
+static constexpr uint32_t NOTIFY_RELIABLE_MIN_BUDGET_MS = 500;
+static constexpr uint32_t NOTIFY_RELIABLE_MAX_BUDGET_MS = 10000;  // a stuck link is still a bug
+
+static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
+                       const uint8_t* data, size_t len,
+                       int max_retries = NOTIFY_BEST_EFFORT_RETRIES,
+                       int retry_delay_ms = NOTIFY_BEST_EFFORT_DELAY_MS,
+                       int* attempts_out = nullptr)  // #524: how long we were blocked
+{
+    for (int attempt = 0; attempt < max_retries; attempt++)
     {
+        if (attempts_out) *attempts_out = attempt;
         struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
         if (!om)
         {
             // Out of mbufs — wait for BLE controller to drain and retry
-            if (attempt < MAX_RETRIES - 1)
+            if (attempt < max_retries - 1)
             {
-                vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+                vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));
                 continue;
             }
             ESP_LOGE("BLE", "ble_hs_mbuf_from_flat failed after %d retries (len=%u)",
-                     MAX_RETRIES, (unsigned)len);
+                     max_retries, (unsigned)len);
             return BLE_HS_ENOMEM;
         }
 
@@ -802,13 +1128,13 @@ static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
         if (rc == BLE_HS_ENOMEM)
         {
             // Controller queue full — wait and retry
-            if (attempt < MAX_RETRIES - 1)
+            if (attempt < max_retries - 1)
             {
-                vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
+                vTaskDelay(pdMS_TO_TICKS(retry_delay_ms));
                 continue;
             }
             ESP_LOGE("BLE", "ble_gatts_notify_custom failed after %d retries, rc=%d",
-                     MAX_RETRIES, rc);
+                     max_retries, rc);
         }
         if (rc != 0 && rc != BLE_HS_ENOMEM)
         {
@@ -816,7 +1142,12 @@ static int notify_data(uint16_t conn_handle, uint16_t attr_handle,
         }
         if (attempt > 0 && rc == 0)
         {
-            ESP_LOGI("BLE", "notify_data succeeded after %d retries", attempt);
+            // #524: was ESP_LOGI. Backpressure is the NORMAL state during a file
+            // transfer — every chunk waits for the controller — so at INFO this
+            // printed a console line per chunk, thousands of times, on the host
+            // task in the middle of the transfer's hot path. It is a debug detail,
+            // not news.
+            ESP_LOGD("BLE", "notify_data succeeded after %d retries", attempt);
         }
         return rc;
     }
@@ -878,47 +1209,56 @@ void TR_BLE_To_APP::sendTelemetry(const TelemetryData& data)
 
 uint8_t TR_BLE_To_APP::getCommand()
 {
-    // #384: consume the command and snapshot its payload in the SAME critical
-    // section — a later BLE write can then only replace the pending latch,
-    // never the copy this command's handler reads via getCommandPayload().
+    // #384: consume the command and snapshot everything travelling with it in
+    // the SAME critical section — a later BLE write can then only append to the
+    // ring, never mutate the copy this command's handler is about to read via
+    // getCommandPayload() / getDeleteFilename() / getDownloadFilename() /
+    // getFileListPage().
+    // #517: pop the OLDEST entry rather than clearing a single latch, so a
+    // burst of commands is delivered in order instead of collapsing to the last.
     portENTER_CRITICAL(&s_cmd_mux);
-    uint8_t cmd = pending_command_;
-    pending_command_ = 0;
-    consumed_payload_len_ = pending_payload_len_;
-    memcpy(consumed_payload_, pending_payload_, sizeof(consumed_payload_));
+    const bool got = cmd_ring_.pop(consumed_);
     portEXIT_CRITICAL(&s_cmd_mux);
-    return cmd;
+
+    if (!got)
+    {
+        consumed_ = tr_ble::PendingCommand{};   // no command: empty payload/name/page
+        return 0;
+    }
+    return consumed_.cmd;
 }
+
+// The three accessors below read the loop-task-only snapshot taken by
+// getCommand(), so they need no lock: the NimBLE task can no longer reach the
+// data this command's handler is using. (They used to read the live latch under
+// the mux, which still let a BLE write arriving mid-handler swap the filename
+// or page out from under it — the gap #384 left open.)
 
 uint8_t TR_BLE_To_APP::getFileListPage()
 {
-    portENTER_CRITICAL(&s_cmd_mux);
-    uint8_t page = pending_file_list_page_;
-    pending_file_list_page_ = 0;
-    portEXIT_CRITICAL(&s_cmd_mux);
+    uint8_t page = consumed_.file_list_page;
+    consumed_.file_list_page = 0;   // "clears after reading" contract
     return page;
 }
 
 String TR_BLE_To_APP::getDeleteFilename()
 {
-    // Copy out under the mux; build the String (heap) only after exiting the
-    // critical section.
-    char buf[sizeof(pending_delete_filename_)];
-    portENTER_CRITICAL(&s_cmd_mux);
-    strlcpy(buf, pending_delete_filename_, sizeof(buf));
-    pending_delete_filename_[0] = '\0';
-    portEXIT_CRITICAL(&s_cmd_mux);
-    return String(buf);
+    // Empty unless the command just consumed was a delete (cmd 3) — the name
+    // belongs to that entry, so it can't leak onto an unrelated command the
+    // way the shared latch could.
+    String name(consumed_.delete_name);
+    consumed_.delete_name[0] = '\0';   // "clears after reading" contract
+    return name;
 }
 
 String TR_BLE_To_APP::getDownloadFilename()
 {
-    char buf[sizeof(pending_download_filename_)];
-    portENTER_CRITICAL(&s_cmd_mux);
-    strlcpy(buf, pending_download_filename_, sizeof(buf));
-    pending_download_filename_[0] = '\0';
-    portEXIT_CRITICAL(&s_cmd_mux);
-    return String(buf);
+    // Empty unless the command just consumed was a download (cmd 4). The OC
+    // calls this on EVERY command (main.cpp: after the cmd dispatch chain), so
+    // a stale name here would kick off a spurious file transfer.
+    String name(consumed_.download_name);
+    consumed_.download_name[0] = '\0';   // "clears after reading" contract
+    return name;
 }
 
 void TR_BLE_To_APP::sendConfigJSON(const String& json)
@@ -1063,10 +1403,10 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
     }
 }
 
-void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
-                                   size_t len, bool eof)
+bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
+                                   size_t len, bool eof, bool abort)
 {
-    if (!device_connected_) return;
+    if (!device_connected_) return false;
 
     // Build chunk packet: [offset(4)][length(2)][flags(1)][data(N)]
     const size_t header_size = 7;
@@ -1093,8 +1433,9 @@ void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
     chunk_buffer_[4] = (len >> 0) & 0xFF;
     chunk_buffer_[5] = (len >> 8) & 0xFF;
 
-    // Flags (1 byte): bit 0 = EOF
-    chunk_buffer_[6] = eof ? 0x01 : 0x00;
+    // Flags (1 byte): bit 0 = EOF, bit 1 = ABORT (#526). ABORT only ever rides an
+    // EOF chunk — it means "this is the end AND it failed".
+    chunk_buffer_[6] = (uint8_t)((eof ? kChunkFlagEof : 0) | (abort ? kChunkFlagAbort : 0));
 
     // Data
     if (len > 0 && data != nullptr)
@@ -1102,12 +1443,58 @@ void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
         memcpy(chunk_buffer_ + header_size, data, len);
     }
 
-    // Send via BLE notification
-    int rc = notify_data(conn_handle_, file_transfer_val_handle_,
-                         chunk_buffer_, packet_size);
+    // #524: RELIABLE budget — wait for the controller to drain rather than drop.
+    // A dropped file chunk is lost data, unlike a dropped telemetry frame. Sized
+    // against the link's EFFECTIVE event period, not a constant (see above).
+    uint32_t budget_ms = effectiveEventMs() * NOTIFY_RELIABLE_EVENTS;
+    if (budget_ms < NOTIFY_RELIABLE_MIN_BUDGET_MS) budget_ms = NOTIFY_RELIABLE_MIN_BUDGET_MS;
+    if (budget_ms > NOTIFY_RELIABLE_MAX_BUDGET_MS) budget_ms = NOTIFY_RELIABLE_MAX_BUDGET_MS;
+
+    int attempts = 0;
+    const int rc = notify_data(conn_handle_, file_transfer_val_handle_,
+                               chunk_buffer_, packet_size,
+                               (int)(budget_ms / NOTIFY_RELIABLE_DELAY_MS),
+                               NOTIFY_RELIABLE_DELAY_MS,
+                               &attempts);
+
+    // #524 diagnostic. A run of zero-wait sends is the controller queue emptying
+    // into us; its length is the queue depth in chunks. See XferStats.
+    xfer_.chunks++;
+    xfer_.retries_total += (uint32_t)attempts;
+    if ((uint32_t)attempts > xfer_.retries_max) xfer_.retries_max = (uint32_t)attempts;
+    if (attempts == 0)
+    {
+        if (++xfer_burst_ > xfer_.burst_max) xfer_.burst_max = xfer_burst_;
+    }
+    else
+    {
+        xfer_burst_ = 0;
+    }
+
+    // Track the link, don't just read it once at the end. Bench 2026-07-14 finished a
+    // download at rssi=-107 dBm — the sensitivity floor — where the LL is retransmitting
+    // and each retransmit eats one of the ~4 packet slots per connection event that the
+    // transfer rate is made of. One sample cannot distinguish that from a stray reading.
+    if ((xfer_.chunks % kRssiSampleEveryChunks) == 1)
+    {
+        const int8_t r = connRssi();
+        if (r != 0)
+        {
+            if (r < xfer_.rssi_min) xfer_.rssi_min = r;
+            if (r > xfer_.rssi_max) xfer_.rssi_max = r;
+            xfer_.rssi_sum += r;
+            xfer_.rssi_n++;
+        }
+    }
+
     if (rc != 0)
     {
-        ESP_LOGW(BLE_TAG, "File chunk notify failed, rc=%d", rc);
+        // Report it. The caller must abort the transfer rather than carry on and
+        // hand the app a file with a hole in it.
+        ESP_LOGW(BLE_TAG, "File chunk notify FAILED after full backpressure, rc=%d "
+                          "(offset=%lu len=%u)",
+                 rc, (unsigned long)offset, (unsigned)len);
+        return false;
     }
 
     // Minimal debug: only log first and last chunks
@@ -1116,6 +1503,7 @@ void TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
         ESP_LOGI(BLE_TAG, "Chunk offset=%lu, len=%u, eof=%s",
                  (unsigned long)offset, (unsigned)len, eof ? "true" : "false");
     }
+    return true;
 }
 
 // ============================================================================
@@ -1347,6 +1735,17 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // LoRa signal quality (NaN on direct connection — will be omitted)
     addFloat("rssi", data.rssi, 0);
     addFloat("snr", data.snr, 1);
+
+    // #150: hop-state surface.  "hch" (current hop channel index) is only
+    // emitted while the BS is actually following a hop schedule; "nidd"
+    // (network-id mismatch drops) only once any occurred.  Fixed-mode
+    // frames with a healthy nid pay zero bytes for either.
+    if (data.hop_active) {
+        addUint("hch", data.hop_channel_idx);
+    }
+    if (data.netid_drops > 0) {
+        addUint("nidd", data.netid_drops);
+    }
 
     // Base station
     addFloat("bsoc", data.bs_soc, 1);

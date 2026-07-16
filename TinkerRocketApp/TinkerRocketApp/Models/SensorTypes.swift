@@ -807,9 +807,21 @@ nonisolated struct MMC5983MADataSI {
 nonisolated struct NonSensorDataSI {
     let time_us: UInt32
 
-    let roll: Double      // degrees
-    let pitch: Double
-    let yaw: Double
+    // #514: the raw attitude quaternion, carried through verbatim.
+    //
+    // roll/pitch/yaw below are NOT a reconstructable Euler triple: `roll` is the
+    // body-Z azimuth (it matches the FC roll controller and doesn't gimbal-lock),
+    // while `pitch`/`yaw` are ZYX-Euler. Mixing the two conventions silently
+    // produces a garbage attitude — so anything that needs the actual orientation
+    // must use the quaternion, which is unambiguous.
+    let q0: Double        // scalar-first, unit
+    let q1: Double
+    let q2: Double
+    let q3: Double
+
+    let roll: Double      // degrees — BODY-Z AZIMUTH, not the Euler roll (see above)
+    let pitch: Double     // degrees — ZYX Euler
+    let yaw: Double       // degrees — ZYX Euler
     let roll_cmd: Double
 
     let e_pos: Double     // meters

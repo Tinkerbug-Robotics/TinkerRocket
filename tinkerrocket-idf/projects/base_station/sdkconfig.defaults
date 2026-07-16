@@ -3,6 +3,12 @@ CONFIG_IDF_TARGET="esp32s3"
 # BLE / NimBLE
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
+# #505: at INFO, NimBLE emits three lines per telemetry notify (~2/s for the whole
+# session) — "GATT procedure initiated: notify; att_handle=16". In a 96 s bench run
+# that was the overwhelming majority of the console and it buried the BS's own
+# [RX]/[STATS]/[UPLINK]/[BATT] lines, which are the ones you actually watch during
+# a flight. Also costs CPU + UART bandwidth on the hot notify path.
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
@@ -14,8 +20,27 @@ CONFIG_PM_ENABLE=y
 CONFIG_PM_DFS_INIT_AUTO=y
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
 CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=3
-CONFIG_BT_NIMBLE_SLEEP_ENABLE=y
 CONFIG_ESP_PHY_MAC_BB_PD=y
+
+# BLE controller modem sleep — radio powers down between BLE events (#518).
+# This block used to be a single CONFIG_BT_NIMBLE_SLEEP_ENABLE=y, which is NOT a
+# real kconfig symbol (absent from the bt component's Kconfig AND from its
+# sdkconfig.rename map), so kconfgen silently dropped it and the BS shipped with
+# BT_CTRL_MODEM_SLEEP=0 — the controller never slept between BLE events. The
+# sleep knob is controller-side, not NimBLE-host-side. These are the same three
+# lines the out_computer has been running, so this is a proven config, not a new one.
+#
+# On the LPCLK choice: LPCLK_SEL_RTC_SLOW is ruled out by IDF's own help — the
+# internal 136 kHz RC is far outside the 500 ppm BLE needs to hold a connection.
+# LPCLK_SEL_EXT_32K_XTAL would use the board's 32.768 kHz crystal and is the
+# better answer for idle power (the main crystal can stay powered down), but it
+# needs CONFIG_RTC_CLK_SRC_EXT_CRYS=y, which no project has ever set — the whole
+# fleet runs the RTC on the internal RC. That is being addressed separately, and
+# on the OUT COMPUTER first, where low-power mode is actually used; the BS does
+# not use low-power mode, so MAIN_XTAL is the right trade here.
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
 
 # Flash
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

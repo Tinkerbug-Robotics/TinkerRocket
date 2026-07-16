@@ -352,6 +352,76 @@ bool TR_FlightLog::servicePendingPrepareFlight(uint32_t& id_out, Status& status_
     return true;
 }
 
+bool TR_FlightLog::evictOldestLocked() {
+    // Pick the smallest flight_id in the index — the oldest finalized flight.
+    // Skip the active flight defensively: it is never appended to the index
+    // until finalizeFlight, so in practice there is nothing to skip here, but
+    // the guard documents that an in-progress allocation is never a candidate.
+    size_t   best_idx = index_.size();
+    uint32_t best_id  = UINT32_MAX;
+    for (size_t i = 0; i < index_.size(); ++i) {
+        const FlightIndexEntry& e = index_.at(i);
+        if (flight_active_ && e.flight_id == active_flight_id_) continue;
+        if (e.flight_id < best_id) { best_id = e.flight_id; best_idx = i; }
+    }
+    if (best_idx >= index_.size()) return false;  // nothing eligible to evict
+
+    // Copy the filename out before delete: removeByFilename shifts + zeroes the
+    // entry array, invalidating the reference returned by index_.at().
+    char name[sizeof(index_.at(best_idx).filename)];
+    std::strncpy(name, index_.at(best_idx).filename, sizeof(name));
+    name[sizeof(name) - 1] = '\0';
+
+    if (deleteFlightLocked(name) != Status::Ok) return false;
+    ++auto_evicted_count_;
+    last_evicted_flight_id_ = best_id;
+    FL_LOGW("#315 auto-evict: deleted oldest flight id=%lu (%s)",
+            (unsigned long)best_id, name);
+    return true;
+}
+
+uint32_t TR_FlightLog::evictOldestToTargetLocked() {
+    // Cap the requested headroom at the region size so a mis-set target can't
+    // spin the loop forever trying to free more blocks than the region holds.
+    const uint32_t region_blocks =
+        static_cast<uint32_t>(cfg_.flight_region_end - cfg_.flight_region_start);
+    uint32_t target_free = cfg_.auto_evict_target_free_blocks;
+    if (target_free > region_blocks) target_free = region_blocks;
+
+    // Free blocks WITHIN the flight region — not bitmap_.countInState(BLOCK_FREE),
+    // which also counts the always-free pre-region (LFS) and metadata blocks and
+    // would let the target be met without ever evicting. Scoped so the headroom
+    // floor is measured against the space this layer actually manages.
+    auto region_free = [this]() -> uint32_t {
+        uint32_t f = 0;
+        for (uint32_t b = cfg_.flight_region_start; b < cfg_.flight_region_end; ++b) {
+            if (bitmap_.get(b) == BLOCK_FREE) ++f;
+        }
+        return f;
+    };
+
+    uint32_t evicted = 0;
+    while (true) {
+        // All three goals must hold for the pending flight to record cleanly:
+        //  - a contiguous prealloc run exists (else prepareFlight returns NoSpace)
+        //  - an index slot is free (else finalizeFlight can't append the entry)
+        //  - free-block headroom is at/above the rolling-buffer floor
+        uint32_t start = 0;
+        const bool have_run = bitmap_.findContiguousFree(
+            cfg_.prealloc_blocks, cfg_.flight_region_start,
+            cfg_.flight_region_end, start);
+        const bool index_room = index_.size() < FlightIndex::MAX_ENTRIES;
+        const bool meets_target = region_free() >= target_free;
+        if (have_run && index_room && meets_target) break;
+
+        // Reclaim one more oldest flight; stop if the index holds nothing
+        // eligible (prepareFlight then still fails loudly with NoSpace).
+        if (!evictOldestLocked()) break;
+        ++evicted;
+    }
+    return evicted;
+}
+
 Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
     FlightLogLockGuard guard(mutex_);
     return prepareFlightLocked(flight_id_out);
@@ -359,7 +429,18 @@ Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
 
 Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
     if (!initialized_) return Status::NotInitialized;
-    if (flight_active_)  return Status::Error;  // already flying
+    if (flight_active_)  return Status::Error;  // already flying — never evict an active flight
+
+    // #315: rolling-buffer auto-eviction. Before picking a range, reclaim space
+    // by deleting the oldest finalized flight(s) — enough for this prealloc to
+    // fit, for an index slot to be free, and to restore the free-block headroom
+    // floor. Off by default (opt-in). No flight is active here (guarded above),
+    // so eviction can never touch an in-progress allocation. Best-effort: if the
+    // index holds nothing eligible the findContiguousFree below still fails
+    // loudly with NoSpace rather than arming a flight that can't be logged.
+    if (cfg_.auto_evict_oldest) {
+        evictOldestToTargetLocked();
+    }
 
     uint32_t start = 0;
     if (!bitmap_.findContiguousFree(cfg_.prealloc_blocks,
@@ -690,6 +771,10 @@ Status TR_FlightLog::readFlightPage(const char* filename, uint32_t offset,
 
 Status TR_FlightLog::deleteFlight(const char* filename) {
     FlightLogLockGuard guard(mutex_);
+    return deleteFlightLocked(filename);
+}
+
+Status TR_FlightLog::deleteFlightLocked(const char* filename) {
     if (!initialized_)       return Status::NotInitialized;
     if (filename == nullptr) return Status::OutOfRange;
 
