@@ -17,8 +17,9 @@
 //  cached wind profile.  When a fresh GNSS fix is available, the snapshot
 //  position is taken from raw GNSS rather than EKF — bypasses the
 //  post-blackout EKF recovery oscillation seen in flight #176 replay.
-//  Ascent ballistic-with-drag and the uncertainty ellipse land in a
-//  follow-up branch.
+//  Each prediction carries an uncertainty radius (#191 item 2, see
+//  landingUncertainty below); ascent ballistic-with-drag lands in a
+//  follow-up branch (#191 item 1).
 //
 
 import Foundation
@@ -53,6 +54,12 @@ struct LandingPrediction: Equatable {
     /// now() - sampleAt.  Frozen at the last live sample once telemetry
     /// stops.
     let sampleAt: Date
+    /// Uncertainty radius (m) of `landing`, FIXED at compute time (#191
+    /// item 2).  The error budget is set by the snapshot altitude — how
+    /// much modeled descent remains — so it shrinks as re-predictions run
+    /// closer to the ground, and it does NOT grow with staleness once
+    /// latched: an old prediction is exactly as wrong as when it was made.
+    let uncertaintyMeters: Double
 
     static func == (lhs: LandingPrediction, rhs: LandingPrediction) -> Bool {
         // Equality used only to suppress redundant @Published emissions.
@@ -140,7 +147,8 @@ final class LandingPredictor: ObservableObject {
                     landing: last.landing, descentTrack: last.descentTrack,
                     snapshot: last.snapshot, snapshotAltAglFt: last.snapshotAltAglFt,
                     snapshotSource: .latched,
-                    computedAt: now, sampleAt: last.sampleAt
+                    computedAt: now, sampleAt: last.sampleAt,
+                    uncertaintyMeters: last.uncertaintyMeters
                 )
                 prediction = frozen
             }
@@ -178,7 +186,8 @@ final class LandingPredictor: ObservableObject {
             landing: landing, descentTrack: track,
             snapshot: snapshot, snapshotAltAglFt: altAglFt,
             snapshotSource: .gnss,    // we already required num_sats >= 4
-            computedAt: now, sampleAt: now
+            computedAt: now, sampleAt: now,
+            uncertaintyMeters: landingUncertainty(track: track, wind: windProfile)
         )
 
         // Suppress no-op republishes (avoids map redraw thrash when nothing
@@ -275,4 +284,35 @@ func simulateDescentForLanding(
         windProfile: windToUse,
         direction: "forward"
     )
+}
+
+// MARK: - Uncertainty model (#191 item 2)
+
+/// Fraction of the total applied wind drift charged as uncertainty: the
+/// winds-aloft model is the dominant descent error term, and ~20% of
+/// mean wind × descent time is the issue-#191 spec.
+private let windUncertaintyFraction = 0.2
+
+/// Wind speed (m/s) assumed for the error bound when no wind profile was
+/// ever fetched: the cast applied ZERO drift, so the full (unknown) drift
+/// is error — bound it at light-breeze scale rather than claiming 0.
+private let assumedWindWhenUnknownMps = 2.0
+
+/// Uncertainty radius for a descent prediction — fixed at compute time.
+///
+/// Descent branch only.  With a wind profile: `windUncertaintyFraction` of
+/// the total drift the cast applied (mean wind speed sampled at the track's
+/// altitudes × descent duration).  Without one: the whole drift is
+/// unmodeled, so charge `assumedWindWhenUnknownMps` across the descent
+/// instead.  Either way the radius scales with REMAINING descent time, so
+/// it shrinks as predictions re-run closer to the ground.  The ascent
+/// drag-spread term arrives with #191 item 1.
+func landingUncertainty(track: [TrackPoint], wind: WindProfile?) -> Double {
+    guard track.count >= 2,
+          let first = track.first, let last = track.last else { return 0 }
+    let descentS = max(0, last.timeS - first.timeS)
+    guard let wind = wind else { return assumedWindWhenUnknownMps * descentS }
+    let speeds = track.map { ktsToMps(wind.interpolate(altAglFt: $0.altAglFt).speedKts) }
+    let meanMps = speeds.reduce(0, +) / Double(speeds.count)
+    return windUncertaintyFraction * meanMps * descentS
 }

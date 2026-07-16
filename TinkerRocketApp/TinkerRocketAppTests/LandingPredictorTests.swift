@@ -108,4 +108,67 @@ final class LandingPredictorTests: XCTestCase {
         XCTAssertEqual(landing.lat, launchLat, accuracy: 1e-6)
         XCTAssertEqual(landing.lon, launchLon, accuracy: 1e-6)
     }
+
+    // MARK: - Uncertainty model (#191 item 2)
+
+    func testUncertaintyIsFractionOfMeanWindTimesDescentTime() {
+        // Constant 10 kts at every altitude, 100 s descent:
+        // mean = 5.14444 m/s, radius = 0.2 × 5.14444 × 100.
+        let wind = WindProfile(
+            layers: [WindLayer(altFt: 0, speedKts: 10, directionDeg: 250)],
+            groundElevFt: 0, fetchTime: "", location: (launchLat, launchLon)
+        )
+        let track = [
+            TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 1000, timeS: 0),
+            TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 0, timeS: 100),
+        ]
+        let u = landingUncertainty(track: track, wind: wind)
+        XCTAssertEqual(u, 0.2 * 5.14444 * 100, accuracy: 0.1)
+    }
+
+    func testNoWindDataChargesAssumedWindBound() {
+        // No wind profile → the cast applied zero drift, so the FULL
+        // (unknown) drift is error: 2 m/s assumed × 100 s descent.
+        let track = [
+            TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 1000, timeS: 0),
+            TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 0, timeS: 100),
+        ]
+        let u = landingUncertainty(track: track, wind: nil)
+        XCTAssertEqual(u, 200.0, accuracy: 1e-9)
+    }
+
+    func testUncertaintyGrowsWithTimeAloft() {
+        // Same wind, slower observed descent → longer time aloft → larger
+        // uncertainty, mirroring the drift behavior itself.
+        var profile = RocketProfile.makeDefault(name: "T")
+        profile.drogueRateFps = 60
+        let slow = simulateDescentForLanding(
+            startLat: launchLat, startLon: launchLon,
+            currentAltAglFt: 1500, observedVerticalRateMps: -3,
+            profile: profile, wind: sampleWind())
+        let fast = simulateDescentForLanding(
+            startLat: launchLat, startLon: launchLon,
+            currentAltAglFt: 1500, observedVerticalRateMps: -25,
+            profile: profile, wind: sampleWind())
+        XCTAssertGreaterThan(landingUncertainty(track: slow, wind: sampleWind()),
+                             landingUncertainty(track: fast, wind: sampleWind()))
+    }
+
+    func testUncertaintyShrinksAsAltitudeFalls() {
+        // The error budget is set by how much modeled descent REMAINS: the
+        // same rocket re-predicted from lower altitude must show a smaller
+        // radius — and a latched prediction keeps the radius from its
+        // snapshot altitude (it does not grow with staleness).
+        var profile = RocketProfile.makeDefault(name: "T")
+        let high = simulateDescentForLanding(
+            startLat: launchLat, startLon: launchLon,
+            currentAltAglFt: 1500, observedVerticalRateMps: -15,
+            profile: profile, wind: sampleWind())
+        let low = simulateDescentForLanding(
+            startLat: launchLat, startLon: launchLon,
+            currentAltAglFt: 400, observedVerticalRateMps: -15,
+            profile: profile, wind: sampleWind())
+        XCTAssertGreaterThan(landingUncertainty(track: high, wind: sampleWind()),
+                             landingUncertainty(track: low, wind: sampleWind()))
+    }
 }
