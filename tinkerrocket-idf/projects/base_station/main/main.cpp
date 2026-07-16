@@ -2381,6 +2381,13 @@ static void serviceRecovery()
 // state-machine enums it depends on are in scope.)
 
 static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 10000;  // every 10 s (#105)
+
+// #150 bench finding: a heartbeat TX can land exactly in the rocket's
+// post-enable bootstrap window and eat the handoff (the BS is deaf while
+// transmitting).  Hold heartbeats briefly after we send a cmd-17 ENABLE so
+// the bootstrap packets meet a listening receiver.
+static constexpr uint32_t HEARTBEAT_HOLD_AFTER_ENABLE_MS = 4000;
+static uint32_t heartbeat_hold_until_ms = 0;
 static constexpr uint32_t HEARTBEAT_RX_FRESH_MS = 5000;   // rocket "alive"
 static constexpr uint8_t  HEARTBEAT_RETRIES     = 2;
 static uint32_t last_heartbeat_tx_ms = 0;
@@ -2408,6 +2415,10 @@ static void serviceHeartbeat()
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (scan_passes_remaining_ != 0)           return;  // #136: don't TX mid-scan
     if (uplinkBusy())                          return;  // Don't compete with a real cmd
+    // #150: stay quiet through the rocket's post-enable bootstrap window
+    // so we can't be deaf (mid-TX) when the handoff packets arrive.
+    if (heartbeat_hold_until_ms != 0 &&
+        (int32_t)(millis() - heartbeat_hold_until_ms) < 0) return;
     // While hopping, only TX in the safe window right after a fresh
     // rocket RX — see HOP_BS_TX_SAFE_WINDOW_MS comment.  With slow-hop
     // dwell=4 (#105 follow-up) the rocket stays on a channel for 2 s,
@@ -2768,6 +2779,12 @@ static void serviceHopModeResync()
     ESP_LOGW(TAG, "[HOP] Mode mismatch evidence — re-pushing cmd 17 (%s, count=%lu)",
              lora_hop_disabled ? "disable" : "enable",
              (unsigned long)hop_mode_resync_count_);
+    if (!lora_hop_disabled)
+    {
+        // #150: same heartbeat hold as the BLE enable path — the resync
+        // enable also triggers a deferred bootstrap on the rocket.
+        heartbeat_hold_until_ms = millis() + HEARTBEAT_HOLD_AFTER_ENABLE_MS;
+    }
     buildUplinkPacket(LORA_CMD_SET_HOP_DISABLED, &desired, 1);
 }
 
@@ -4567,6 +4584,13 @@ static void loop_bs()
                         hop_needs_retune_ = true;
                     }
                     hop_mode_mismatch_streak_ = 0;  // fresh mode, fresh evidence
+                }
+                if (!new_disabled)
+                {
+                    // #150: hold heartbeats through the rocket's deferred
+                    // activation + bootstrap so we're listening when the
+                    // handoff packets arrive.
+                    heartbeat_hold_until_ms = millis() + HEARTBEAT_HOLD_AFTER_ENABLE_MS;
                 }
                 buildUplinkPacket(LORA_CMD_SET_HOP_DISABLED, payload, 1);
                 ESP_LOGI(TAG, "[BLE->UPLINK] Hop disable: %s",

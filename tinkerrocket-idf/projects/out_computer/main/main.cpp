@@ -576,11 +576,19 @@ static inline void updateFreqLockFromState(RocketState s)
 //                     currently tuned to (or, equivalently, the channel of
 //                     the packet most recently transmitted).  Meaningless
 //                     while inactive.
-// hop_first_pkt_    = true on the very first TX after activating: that
-//                     packet still goes out on the static lora_freq_mhz
-//                     channel with next_channel_idx = 0, so the BS sees
-//                     the transition and follows without needing time
-//                     sync.  Cleared after the packet is queued.
+// hop_bootstrap_left_ = remaining bootstrap packets to transmit on the
+//                     static lora_freq_mhz channel before entering the
+//                     schedule.  #150 bench finding: a SINGLE bootstrap
+//                     frame carried the whole BS handoff, and three
+//                     independent BS-deaf windows ate it on the bench
+//                     (its cmd-17 mirror-retry train, a heartbeat TX,
+//                     and a recovery reconfigure racing the transition).
+//                     Now every (re)bootstrap sends a full dwell-count
+//                     of packets — same per-visit occupancy as any
+//                     scheduled dwell, so the FCC math is unchanged —
+//                     each stamped with the SCHEDULE ENTRY channel so
+//                     any one of them lets the BS park where the rocket
+//                     will arrive.  0 = on-schedule (or inactive).
 // hop_needs_retune_ = a retune is owed (e.g. just transitioned, or just
 //                     finished a TX and need to step to the next channel).
 //                     Honoured at the top of serviceLoRa as soon as the
@@ -592,7 +600,7 @@ static inline void updateFreqLockFromState(RocketState s)
 // change so it can drop in without coordination.
 static bool    hop_active_        = false;
 static uint8_t hop_idx_           = 0;
-static bool    hop_first_pkt_     = false;
+static uint8_t hop_bootstrap_left_ = 0;
 static bool    hop_needs_retune_  = false;
 // Link mode (#106 origin, user-facing since #150): when true, hopping is
 // suppressed even in PRELAUNCH/INFLIGHT/LANDED and we stay on
@@ -603,6 +611,18 @@ static bool    hop_needs_retune_  = false;
 // Initialized true (fixed mode, the default) so the window between boot
 // and the NVS load can never report hop-enabled.
 static bool    lora_hop_disabled  = true;
+
+// #150 bench finding (2026-07-15): when the BS mirrors a cmd-17 ENABLE it
+// fires an 8 x 100 ms blind retry train and is deaf (half-duplex TX) for
+// most of that window.  Activating the hop immediately on first-retry
+// receipt made the bootstrap packet collide with retries 2-8: the BS
+// missed it and the link sat dark for ~60 s until the fallback visit
+// healed it.  Defer activation past the train so the bootstrap lands on
+// a listening BS.  0 = no deferred enable pending.  (A disable cancels
+// the defer; a state transition during the window may still activate
+// early via updateHopFromState — rare and self-healing.)
+static constexpr uint32_t HOP_ENABLE_DEFER_MS = 1500;
+static uint32_t hop_enable_apply_at_ms = 0;
 
 // Hop-silence rendezvous fallback state (#40 / #41 phase 2b).
 // Definitions of HOP_FALLBACK_*_MS constants and the serviceHopFallback()
@@ -671,19 +691,21 @@ static inline void updateHopFromState(RocketState s)
                              shouldHopInState(s);
     if (want_active && !hop_active_)
     {
-        // OFF → ON.  Bootstrap: the next TX still goes out on
-        // lora_freq_mhz with next_channel_idx = 0 so the BS sees the
-        // transition; we retune to channel 0 only after that packet is
-        // in the air.
+        // OFF → ON.  Bootstrap: a dwell-count of packets still go out on
+        // lora_freq_mhz, each announcing the schedule-entry channel, so
+        // the BS can catch ANY one of them and park where we'll arrive
+        // (see hop_bootstrap_left_).
         hop_active_              = true;
-        hop_first_pkt_           = true;
+        hop_bootstrap_left_      = currentHopDwell();
+        if (hop_bootstrap_left_ == 0) hop_bootstrap_left_ = 1;  // want_active guarantees dwell>0
         hop_idx_                 = 0;
         hop_needs_retune_        = true;  // ensure we're on lora_freq_mhz before TXing
         hop_active_entered_ms    = millis();
         hop_session_uplink_count = 0;
         hop_fallback_state       = HopFallbackState::NORMAL;
-        ESP_LOGI("OC", "[HOP] Active: bootstrap on %.2f MHz, then idx=0 "
+        ESP_LOGI("OC", "[HOP] Active: %u bootstrap pkt(s) on %.2f MHz, then schedule "
                        "(%u channels at BW=%.0f kHz)",
+                 (unsigned)hop_bootstrap_left_,
                  (double)lora_freq_mhz, (unsigned)loraChannelCount(lora_bw_khz),
                  (double)lora_bw_khz);
     }
@@ -710,20 +732,20 @@ static inline void updateHopFromState(RocketState s)
             hop_fallback_state = HopFallbackState::NORMAL;
             hop_pause_until_ms = 0;
         }
-        hop_active_       = false;
-        hop_first_pkt_    = false;
-        hop_needs_retune_ = true;
+        hop_active_         = false;
+        hop_bootstrap_left_ = 0;
+        hop_needs_retune_   = true;
         ESP_LOGI("OC", "[HOP] Inactive: returning to %.2f MHz", (double)lora_freq_mhz);
     }
 }
 
 // Frequency the radio should currently be tuned to, given the hop state.
-// First-packet bootstrap, PAUSED_FOR_SCAN (#90), and inactive all stay on
+// Bootstrap packets, PAUSED_FOR_SCAN (#90), and inactive all stay on
 // lora_freq_mhz; the active steady state uses the channel table for the
 // current BW.
 static inline float hopTargetFreqMHz()
 {
-    if (hop_active_ && !hop_first_pkt_ &&
+    if (hop_active_ && hop_bootstrap_left_ == 0 &&
         hop_fallback_state == HopFallbackState::NORMAL)
     {
         const float f = loraChannelMHz(lora_bw_khz, hop_idx_);
@@ -2786,10 +2808,19 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
             // implicit home-channel skip).  With no valid stored mask the
             // empty mask makes loraHopChannelForSeq degenerate to
             // (seq/dwell) % n.
+            //
+            // Bootstrap packets (#150) all announce the SCHEDULE ENTRY
+            // channel — the channel of the first on-schedule packet,
+            // whose seq is this seq plus the remaining bootstrap count —
+            // so the BS can decode ANY one of them and park where we
+            // will arrive.  On-schedule packets announce seq+1 as always.
             uint8_t mask_buf[LORA_SKIP_MASK_MAX_BYTES];
             const uint8_t* mask = effectiveHopMask(mask_buf, n);
+            const uint16_t anchor_seq = (hop_bootstrap_left_ > 0)
+                ? (uint16_t)(seq + hop_bootstrap_left_)
+                : (uint16_t)(seq + 1);
             lora.next_channel_idx = loraHopChannelForSeq(
-                (uint16_t)(seq + 1), currentHopDwell(), mask, n);
+                anchor_seq, currentHopDwell(), mask, n);
         }
     }
     else if (hop_active_)
@@ -2963,12 +2994,13 @@ static void serviceLoRa()
         // the hop sequence.
         if (hop_active_ && hop_fallback_state == HopFallbackState::NORMAL)
         {
-            if (hop_first_pkt_)
+            if (hop_bootstrap_left_ > 0)
             {
-                // Bootstrap packet just went out on lora_freq_mhz.  Clear
-                // the first-packet flag; the next packet (seq just
-                // incremented) will go on its scheduled hop channel.
-                hop_first_pkt_ = false;
+                // A bootstrap packet just went out on lora_freq_mhz.
+                // Count it down; once it hits zero the retune below
+                // steps onto the schedule-entry channel every bootstrap
+                // frame announced.
+                hop_bootstrap_left_--;
             }
             // Recompute hop_idx_ from the just-incremented seq via the
             // seq-anchored schedule.  This MUST equal the next_channel_idx
@@ -3480,9 +3512,24 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             prefs.begin("lora", false);
             prefs.putUChar("hopdis", lora_hop_disabled ? 1 : 0);
             prefs.end();
-            ESP_LOGI("LORA", "UPLINK Hop disable: %s — re-evaluating hop state",
-                     lora_hop_disabled ? "DISABLED (fixed freq)" : "ENABLED");
-            updateHopFromState(latest_rocket_state);
+            if (!lora_hop_disabled)
+            {
+                // #150 bench finding: don't activate while the BS is
+                // still blasting its cmd-17 mirror retries (it's deaf
+                // mid-TX and would miss our bootstrap, costing ~60 s of
+                // fallback healing).  The poll next to
+                // serviceHopFallback() applies the enable after the
+                // train finishes.
+                hop_enable_apply_at_ms = millis() + HOP_ENABLE_DEFER_MS;
+                ESP_LOGI("LORA", "UPLINK Hop disable: ENABLED — activating in %u ms (after BS retry train)",
+                         (unsigned)HOP_ENABLE_DEFER_MS);
+            }
+            else
+            {
+                hop_enable_apply_at_ms = 0;   // a disable cancels any pending enable
+                ESP_LOGI("LORA", "UPLINK Hop disable: DISABLED (fixed freq) — re-evaluating hop state");
+                updateHopFromState(latest_rocket_state);
+            }
         }
         else
         {
@@ -4036,7 +4083,8 @@ static void serviceHopFallback()
             (void)lora_comms.startReceive();
             lora_in_rx_mode = true;
 
-            hop_first_pkt_    = true;
+            hop_bootstrap_left_ = currentHopDwell();
+            if (hop_bootstrap_left_ == 0) hop_bootstrap_left_ = 1;
             hop_idx_          = 0;
             hop_needs_retune_ = false;  // already on lora_freq_mhz from reconfigure
             hop_fallback_state = HopFallbackState::NORMAL;
@@ -4045,7 +4093,8 @@ static void serviceHopFallback()
             // arrives during this pass either).
             hop_active_entered_ms = now;
             hop_session_uplink_count = 0;
-            ESP_LOGI("OC", "[HOP] Visit done — resuming hop with fresh bootstrap");
+            ESP_LOGI("OC", "[HOP] Visit done — resuming hop (%u bootstrap pkt(s))",
+                     (unsigned)hop_bootstrap_left_);
             break;
         }
         case HopFallbackState::PAUSED_FOR_SCAN:
@@ -4058,14 +4107,16 @@ static void serviceHopFallback()
             // both sides re-enter the table cleanly.  Use signed delta
             // to handle millis() wrap.
             if ((int32_t)(now - hop_pause_until_ms) < 0) return;
-            hop_first_pkt_           = true;
+            hop_bootstrap_left_      = currentHopDwell();
+            if (hop_bootstrap_left_ == 0) hop_bootstrap_left_ = 1;
             hop_idx_                 = 0;
             hop_needs_retune_        = false;  // already on lora_freq_mhz
             hop_active_entered_ms    = now;
             hop_session_uplink_count = 0;
             hop_fallback_state       = HopFallbackState::NORMAL;
             hop_pause_until_ms       = 0;
-            ESP_LOGI("OC", "[HOP] Pause done — resuming hop with fresh bootstrap");
+            ESP_LOGI("OC", "[HOP] Pause done — resuming hop (%u bootstrap pkt(s))",
+                     (unsigned)hop_bootstrap_left_);
             break;
         }
     }
@@ -5727,6 +5778,16 @@ static void loop_oc()
         // the rocket has been silent in READY for a long time, so the base
         // station's Phase-A recovery has a meeting point (issue #71).
         LOOP_STALL_INSTR("serviceRocketRendezvous", serviceRocketRendezvous());
+
+        // #150: deferred hop-enable (see the cmd-17 handler) — activate
+        // once the BS's mirror-retry train has finished so the bootstrap
+        // packet lands on a listening BS.
+        if (hop_enable_apply_at_ms != 0 &&
+            (int32_t)(millis() - hop_enable_apply_at_ms) >= 0)
+        {
+            hop_enable_apply_at_ms = 0;
+            updateHopFromState(latest_rocket_state);
+        }
 
         // Hop-silence rendezvous: same idea but gated for the hopping
         // case (#40 / #41 phase 2b).  Active only while hop_active_ and

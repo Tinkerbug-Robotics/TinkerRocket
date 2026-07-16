@@ -41,7 +41,7 @@ SERVICE_UUID   = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 TELEMETRY_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 COMMAND_UUID   = "cba1d466-344c-4be3-ab3f-189f80dd7518"
 
-SCAN_TIMEOUT_S = 8.0
+SCAN_TIMEOUT_S = 15.0   # generous: a marginal-RSSI BS at 1 Hz advertising needs headroom
 
 
 def build_payload(args) -> tuple[int, bytes]:
@@ -92,12 +92,18 @@ async def run(args):
         await scan(args.name)
         return
 
-    if not args.name:
-        raise SystemExit("--name <substring> required (e.g. --name TR-B)")
+    if not args.name and not args.address:
+        raise SystemExit("--name <substring> or --address <uuid> required")
 
     cmd, payload = build_payload(args)
-    dev = await find_device(args.name)
-    print(f"Connecting to {dev.name} ({dev.address}) ...")
+    if args.address:
+        # Connect by cached identifier — on macOS this can reach a known
+        # peripheral whose advertisements are too weak to scan reliably.
+        dev = args.address
+        print(f"Connecting by address {args.address} ...")
+    else:
+        dev = await find_device(args.name)
+        print(f"Connecting to {dev.name} ({dev.address}) ...")
 
     async with BleakClient(dev) as client:
         if args.listen > 0:
@@ -126,6 +132,8 @@ def main():
     p.add_argument("--scan", action="store_true",
                    help="list nearby TinkerRocket devices and exit")
     p.add_argument("--name", help="device name substring (e.g. TR-B, TR-R)")
+    p.add_argument("--address", help="connect by CoreBluetooth peripheral UUID "
+                                     "(works at RSSI too weak for name scans)")
     p.add_argument("--cmd", type=int, help="raw BLE command id")
     p.add_argument("--payload", default="", help="raw payload as hex string")
     p.add_argument("--hop", choices=["on", "off"],
