@@ -2445,7 +2445,16 @@ static inline bool inHopSafeWindow()
 
 static void serviceHeartbeat()
 {
-    if (freq_locked_for_flight)                return;  // No heartbeats in flight
+    // The flight freq-lock freezes radio PARAMETERS mid-flight (#106); a
+    // zero-payload broadcast heartbeat changes none, and while hopping the
+    // heartbeats are load-bearing: without them the rocket hears no uplink,
+    // its rendezvous fallback fires every 30 s (HOP_FALLBACK_TRIGGER_
+    // INITIAL_MS), and each 3 s visit trips our own 3 s silence teardown —
+    // ~8 packets lost per ~33 s, ~5% flight loss (2026-07-16 bench, three
+    // sim flights; loss <0.2% in every non-flight state). Fixed-channel
+    // flights keep the old behavior: no hop fallback to feed, and staying
+    // RX-only in flight costs nothing.
+    if (freq_locked_for_flight && !hop_active_) return;  // fixed-channel flight only
     if (lora_txn_state != LoRaTxnState::IDLE)  return;  // Don't interfere with txn
     if (recovery_state != RecoveryState::IDLE) return;  // Recovery owns the radio
     if (scan_passes_remaining_ != 0)           return;  // #136: don't TX mid-scan
