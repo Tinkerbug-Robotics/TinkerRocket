@@ -253,12 +253,61 @@ Standing reliability notes:
 
 ## 8. Bench evidence
 
-⏳ Seam A (firmware, pre-app): fixed-mode regression, SF8 dwell-3 soak ≥ 30 min
-(crc_fail / low_snr / TX-wdog / drift-repush / observed-loss), SF9 dwell-1
-soak with heartbeat traffic, OC-reboot resync heal, UART-modem pair soak,
-BS power-cycle during LANDED-hop.
+### Seam A — RUN 2026-07-15 (BS V2 + OC V7 full rocket stack, ~2.5 h): PASS
 
-⏳ Seam B (E2E with app): onboarding + provisioning with network name, mode
-picker both directions, mid-hop manual scan (cmd-16 pause → cmd-15 mask →
-floor holds), deliberate nid mismatch → `nidd` visible instead of silent
-blackout.
+- **Boot/migration**: schema-v4 wipe + identity-migration *effects* verified
+  (nid=0, hopdis=1 defaults, schema stamps current); the one-time migration
+  log lines raced past capture attach both times (USB-CDC port timing) —
+  verified via readback instead.
+- **Fixed-mode regression**: byte-identical to #136 — 2.4 Hz RX, 0 CRC
+  fail, 0 netid drop, heartbeats + TX-window (learned cadence 501–505 ms).
+- **SF8/dwell-3 soak**: 30 min, **3,596 packets, 0 loss, 0 CRC, 0 TX-wdog,
+  0 silence, 0 drift-repush** across ~1,200 live retunes (no #521-class
+  incident). Beacon suppression held the entire session (last beacon RX =
+  the second hopping engaged).
+- **SF9/dwell-1 sessions**: 1,123 + 593 + more packets, all 0 loss —
+  hop-every-packet timing holds. Adaptive dwell observed live: `lhdw`
+  3 ↔ 1 tracked cmd-10 SF changes, computed by the firmware itself.
+- **cmd-10 transactional moves**: SF8→SF9→SF8, verify-on-NEW + COMMIT both
+  directions.
+- **Graceful disable drain**: multiple clean passes — `draining retries on
+  the hop channel first` → rocket applied same-second → `drain complete —
+  fixed mode` ≤1.5 s.
+- **BS power-cycle mid-hop**: fully autonomous recovery in ~70 s (silence
+  fallback → rendezvous visit → post-visit bootstrap re-anchor), hop mode
+  persisted through the reboot via NVS.
+- **OC reboot mid-hop** (via reflash): BS silence-fallback fired, full
+  re-acquire after power-on + GPS refix; recovery push-home reconciled the
+  SF split (boot-forced SF8 rocket vs SF9 BS) as designed.
+- **0xFE machinery exercised live**: visit frames + post-visit bootstrap
+  rejoins after both power-cycle scenarios.
+- **Bench findings → fixed same session** (commit 51f134d): (1) enable
+  handoff collided with the BS's own cmd-17 mirror-retry train → rocket
+  now defers activation 1.5 s; (2) the single bootstrap frame was eaten by
+  three different BS-deaf windows (retry train, heartbeat TX, recovery
+  reconfigure racing a slow-rendezvous quiet window) → every (re)bootstrap
+  now sends a dwell-count of packets announcing the schedule-entry channel
+  (occupancy = one dwell visit, FCC-neutral); (3) heartbeat-vs-bootstrap
+  race → BS holds heartbeats 4 s after sending an enable. Post-fix enable
+  handoff measured at ~1 s (activation → BS follow).
+- **Open follow-up (issue chip filed)**: dwell-1 uplink *burst* delivery is
+  intermittent — two 8-retry cmd-17 trains were fully missed while
+  heartbeats delivered ~50%; self-heals ≤60 s via visit + resync, and the
+  flight-standard SF8/dwell-3 preset is unaffected (338/338-session uplink
+  health). Also observed (pre-existing, not #150): the BS recovery cycle
+  and the rocket slow-rendezvous duty cycle can starve each other's
+  windows around state transitions.
+- **Not run**: BS V3 + OC V8 UART-modem pair (V8 radio daughterboard
+  parked on the respin); a full LANDED sim-flight variant — the LANDED
+  machinery is identical to the PRELAUNCH cases exercised, deferred to
+  Seam B.
+- End state: both ends restored to flight-standard 915/SF8/fixed, all
+  counters clean.
+
+### Seam B — ⏳ pending (E2E with app, after Phases 4–5)
+
+Onboarding + provisioning with network name, mode picker both directions
+(now expecting ~1–3 s handoffs), mid-hop manual scan (cmd-16 pause →
+cmd-15 mask → floor holds), deliberate nid mismatch → `nidd` visible
+instead of silent blackout, LANDED sim flight, UART-modem pair when the
+V8 radio board returns.
