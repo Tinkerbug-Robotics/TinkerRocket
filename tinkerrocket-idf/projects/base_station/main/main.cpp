@@ -2542,7 +2542,14 @@ static constexpr uint32_t COORD_SCAN_PAUSE_GRACE_MS  = 500;
 static constexpr uint32_t COORD_SCAN_RESUMING_MAX_MS = 5000;
 // Slack on top of the computed scan + cmd 15 retry budget so the rocket's
 // pause comfortably outlasts our work window.
-static constexpr uint32_t COORD_SCAN_PAUSE_SLACK_MS  = 2000;
+// #150 Seam B finding: the rocket's pause clock starts at cmd-16 RECEIPT,
+// but the BS only starts spending the budget once it has confirmed the
+// park (~2 s later: remaining cmd-16 retries + grace).  With 2 s of slack
+// the cmd-15 mask push landed exactly at the rocket's resume deadline and
+// collided with its resume bootstraps (half-duplex), costing ~46 s of
+// fallback healing after every mid-hop scan.  5 s absorbs the start
+// latency + the push train with margin; the rocket-side cap is 60 s.
+static constexpr uint32_t COORD_SCAN_PAUSE_SLACK_MS  = 5000;
 // "Recent enough" window for treating a non-hop_active_ rocket as still
 // in a hop state (#90).  A packet within this window showing PRELAUNCH
 // or INFLIGHT means the rocket is conceptually hopping (possibly
