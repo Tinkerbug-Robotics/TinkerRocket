@@ -119,6 +119,15 @@ class SimConfig:
     enable_baro_updates: bool = True
     enable_mag_updates: bool = True
 
+    # IMU fidelity knobs (None = off, preserving the ideal-range default).
+    # gyro_full_scale_dps: hard-clip the gyro at ±range (the 2026-05-17 flight
+    # ran ±4000 dps and saturated). imu_mounting_rotation_deg: (roll,pitch,yaw)
+    # ZYX Euler of the IMU relative to the airframe — injects a fixed
+    # misalignment the firmware constants do not undo (degrades the EKF).
+    gyro_full_scale_dps: Optional[float] = None
+    accel_full_scale_g: Optional[float] = None
+    imu_mounting_rotation_deg: Optional[tuple] = None
+
     # Truth injection: set the EKF quaternion to the true orientation at ignition
     # (removes AHRS convergence error, isolates pure IMU integration drift)
     inject_truth_orientation_at_ignition: bool = False
@@ -227,13 +236,18 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Initialize sensors
     def _seed(i):
         return None if config.sensor_seed is None else config.sensor_seed + i
+    _imu_fidelity = dict(
+        gyro_full_scale_dps=config.gyro_full_scale_dps,
+        accel_full_scale_g=config.accel_full_scale_g,
+        mounting_rotation_deg=config.imu_mounting_rotation_deg,
+    )
     if config.perfect_imu:
         imu = IMUModel(rate_hz=config.imu_rate,
                        accel_noise_sigma=0.0, gyro_noise_sigma=0.0,
                        accel_bias_sigma=0.0, gyro_bias_sigma=0.0,
-                       seed=_seed(0))
+                       seed=_seed(0), **_imu_fidelity)
     else:
-        imu = IMUModel(rate_hz=config.imu_rate, seed=_seed(0))
+        imu = IMUModel(rate_hz=config.imu_rate, seed=_seed(0), **_imu_fidelity)
     baro = BaroModel(rate_hz=config.baro_rate, seed=_seed(1))
     mag = MagModel(rate_hz=config.mag_rate, seed=_seed(2))
     gnss = GNSSModel(
