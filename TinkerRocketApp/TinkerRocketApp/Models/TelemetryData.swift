@@ -27,6 +27,12 @@ struct TelemetryData: Codable {
     var altitude_rate: Float?         // Vertical rate m/s
     var gnss_alt: Float?              // GNSS altitude meters (from ECEF, base station only)
 
+    // EKF launch-relative ENU velocity (#191).  nil = firmware predates the
+    // fields or no FC data — the ascent landing prediction gates on these.
+    var vel_e: Float?                 // East m/s
+    var vel_n: Float?                 // North m/s
+    var vel_u: Float?                 // Up m/s (EKF channel; altitude_rate is the baro KF)
+
     // IMU data (ISM6HG256)
     var low_g_x: Float?               // Low-G accelerometer X m/s²
     var low_g_y: Float?               // Low-G accelerometer Y m/s²
@@ -112,6 +118,9 @@ struct TelemetryData: Codable {
     // -> fs bit 8).  Drives the sim banner / Stop-sim control so it survives BLE
     // reconnects, unlike the client-side simLaunched latch.
     var sim_active: Bool        { (flight_status_bits & 0x100) != 0 }
+    // #191: motor burnout detected (fs bit 9).  Gates the ascent landing
+    // prediction to post-burnout coast, where the ballistic model is valid.
+    var burnout_flag: Bool      { (flight_status_bits & 0x200) != 0 }
 
     // Source rocket identity (base station relay only, nil for direct BLE)
     var source_rocket_id: Int?        // rocket_id from LoRa header
@@ -248,6 +257,9 @@ struct TelemetryData: Codable {
         case pressure_alt = "palt"
         case altitude_rate = "arate"
         case gnss_alt = "galt"
+        case vel_e = "ve"      // #191 EKF ENU velocity
+        case vel_n = "vn"
+        case vel_u = "vu"
         case low_g_x = "lx"
         case low_g_y = "ly"
         case low_g_z = "lz"
@@ -311,6 +323,9 @@ struct TelemetryData: Codable {
         pressure_alt = try c.decodeIfPresent(Float.self, forKey: .pressure_alt)
         altitude_rate = try c.decodeIfPresent(Float.self, forKey: .altitude_rate)
         gnss_alt = try c.decodeIfPresent(Float.self, forKey: .gnss_alt)
+        vel_e = try c.decodeIfPresent(Float.self, forKey: .vel_e)
+        vel_n = try c.decodeIfPresent(Float.self, forKey: .vel_n)
+        vel_u = try c.decodeIfPresent(Float.self, forKey: .vel_u)
         low_g_x = try c.decodeIfPresent(Float.self, forKey: .low_g_x)
         low_g_y = try c.decodeIfPresent(Float.self, forKey: .low_g_y)
         low_g_z = try c.decodeIfPresent(Float.self, forKey: .low_g_z)
