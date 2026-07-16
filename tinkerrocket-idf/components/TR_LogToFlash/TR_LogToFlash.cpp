@@ -486,6 +486,10 @@ void TR_LogToFlash::getStats(TR_LogToFlashStats& out) const
     out.flush_iter_max_us = flush_iter_max_us_;
     out.spi_wait_max_us = spi_wait_max_us_;   // #398
     out.spi_hold_max_us = spi_hold_max_us_;   // #398
+    out.drain_pages = drain_pages_win_;       // #510
+    out.drain_bytes = drain_bytes_win_;       // #510
+    out.pop_sum_us = pop_us_win_;             // #510
+    out.write_sum_us = write_us_win_;         // #510
     out.syncs_performed = syncs_performed_;
 
     out.known_bad_blocks = countBadBlocks();
@@ -504,6 +508,10 @@ void TR_LogToFlash::resetIntervalTimings()
     flush_iter_max_us_ = 0;
     spi_wait_max_us_ = 0;   // #398
     spi_hold_max_us_ = 0;   // #398
+    drain_pages_win_ = 0;   // #510
+    drain_bytes_win_ = 0;   // #510
+    pop_us_win_ = 0;        // #510
+    write_us_win_ = 0;      // #510
 }
 
 void TR_LogToFlash::getRecoveryInfo(TR_LogToFlashRecoveryInfo& out) const
@@ -2305,7 +2313,8 @@ void TR_LogToFlash::flushRingToNand()
             break;
         }
 
-        // Issue #74 diagnostic: for the first 20 drains after activateLogging,
+        // Issue #74 diagnostic: for the first 4 drains after activateLogging
+        // (flush_log_remaining_ is armed to 4; the FL numbering starts at 16),
         // peek the first 8 bytes at rb_tail and log with pointer state.
         // `AA 55 AA 55 <type> <len>` = real frame; all-zero = post-clearRing
         // zeroed MRAM; anything else = stale prelaunch data being re-exposed.
@@ -2324,7 +2333,15 @@ void TR_LogToFlash::flushRingToNand()
             flush_log_remaining_--;
         }
 
+        // #510: MRAM-pop wall time. Deliberately excludes the FL print above —
+        // console cost must land in the ledger's drain-other bucket, not here.
+        const int64_t _p0 = esp_timer_get_time();
         const uint32_t popped = ringPop(page_buf + page_buf_idx, chunk);
+        {
+            const uint32_t _pdt = (uint32_t)(esp_timer_get_time() - _p0);
+            iter_ledger_.pop_us += _pdt;
+            pop_us_win_ += _pdt;
+        }
         if (popped == 0)
         {
             break;
@@ -2344,6 +2361,8 @@ void TR_LogToFlash::flushRingToNand()
                 ok = cfg.write_sink(cfg.write_sink_ctx, page_buf, chunk_target);
                 const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
                 if (_dt > write_max_us_) write_max_us_ = _dt;
+                iter_ledger_.write_us += _dt;   // #510
+                write_us_win_ += _dt;
                 if (_dt > (uint32_t)STALL_THRESHOLD_US)
                 {
                     ESP_LOGW(TAG, "STALL: write_sink took %lu us", (unsigned long)_dt);
@@ -2359,6 +2378,8 @@ void TR_LogToFlash::flushRingToNand()
                 lfs_ssize_t written = lfs_file_write(&lfs, &file, page_buf, NAND_PAGE_SIZE);
                 const uint32_t _dt = (uint32_t)(esp_timer_get_time() - _t0);
                 if (_dt > write_max_us_) write_max_us_ = _dt;
+                iter_ledger_.write_us += _dt;   // #510
+                write_us_win_ += _dt;
                 if (_dt > (uint32_t)STALL_THRESHOLD_US)
                 {
                     ESP_LOGW(TAG, "STALL: lfs_file_write took %lu us "
@@ -2390,6 +2411,10 @@ void TR_LogToFlash::flushRingToNand()
             nand_bytes_written += chunk_target;
             nand_prog_ops++;
             page_buf_idx = 0;
+            iter_ledger_.drain_pages++;              // #510
+            iter_ledger_.drain_bytes += chunk_target;
+            drain_pages_win_++;
+            drain_bytes_win_ += chunk_target;
 
             // Periodic LFS sync — only meaningful when LFS is the destination.
             // TR_FlightLog pages are self-describing (PageHeader + CRC32), so
@@ -2431,11 +2456,17 @@ void TR_LogToFlash::flushTaskLoop()
     while (!flush_task_stop_)
     {
         const int64_t iter_t0 = esp_timer_get_time();
+        // #510: per-iteration section accounting — see flush_iter_ledger.h.
+        iter_ledger_.reset();
 
         // Push any staged frames that have waited past the age bound, so
         // trickle-rate traffic still reaches the (brownout-durable) MRAM
         // ring promptly even when staging never fills.
-        flushStagingIfStale(STAGING_MAX_AGE_US);
+        {
+            const int64_t _s0 = esp_timer_get_time();
+            flushStagingIfStale(STAGING_MAX_AGE_US);
+            iter_ledger_.staging_us = (uint32_t)(esp_timer_get_time() - _s0);
+        }
 
         // Handle deferred pre-create request (from PRELAUNCH state).
         // #365: consume the request ONLY after observing it set.  The old
@@ -2447,7 +2478,9 @@ void TR_LogToFlash::flushTaskLoop()
         {
             if (!file_open && !logging_active)
             {
+                const int64_t _o0 = esp_timer_get_time();
                 openLogSession();   // Creates file on NAND (slow, but we're not in a hurry yet)
+                iter_ledger_.open_us += (uint32_t)(esp_timer_get_time() - _o0);
                 // #417: pre-create must NOT dirty the marker — the session isn't
                 // active yet. activateLogging() sets it at launch/manual-start.
                 dirty_policy_.onPreCreate();
@@ -2464,7 +2497,9 @@ void TR_LogToFlash::flushTaskLoop()
         // ring on Core 1 while this hook runs.
         if (cfg.flush_task_hook != nullptr)
         {
+            const int64_t _h0 = esp_timer_get_time();
             cfg.flush_task_hook(cfg.flush_task_hook_ctx);
+            iter_ledger_.hook_us = (uint32_t)(esp_timer_get_time() - _h0);
         }
 
         // Handle deferred start-logging request (launch detected).
@@ -2479,12 +2514,14 @@ void TR_LogToFlash::flushTaskLoop()
         {
             if (!logging_active)
             {
+                const int64_t _a0 = esp_timer_get_time();
                 if (!file_open)
                 {
                     // File not pre-created — create now (legacy path)
                     openLogSession();
                 }
                 activateLogging();  // Fast — flips flags + markDirty (#417), no NAND I/O
+                iter_ledger_.activate_us = (uint32_t)(esp_timer_get_time() - _a0);
             }
             // else: already logging — duplicate request; consume it.
             start_logging_requested = false;
@@ -2499,6 +2536,7 @@ void TR_LogToFlash::flushTaskLoop()
         // so the drain loop will terminate quickly.
         if (end_flight_requested && logging_active && file_open)
         {
+            const int64_t _e0 = esp_timer_get_time();
             uint32_t t0 = millis();
 
             // The last <=STAGING_SIZE of accepted frames may still sit in RAM
@@ -2538,6 +2576,7 @@ void TR_LogToFlash::flushTaskLoop()
                      (unsigned long)(t1 - t0),
                      (unsigned long)(t2 - t1),
                      (unsigned long)(t2 - t0));
+            iter_ledger_.endflight_us = (uint32_t)(esp_timer_get_time() - _e0);
         }
 
         // Normal flush: write ring buffer data to NAND.
@@ -2551,19 +2590,53 @@ void TR_LogToFlash::flushTaskLoop()
 
             if (avail > 0)
             {
+                const int64_t _d0 = esp_timer_get_time();
                 flushRingToNand();
+                iter_ledger_.drain_us = (uint32_t)(esp_timer_get_time() - _d0);
                 vTaskDelay(1);  // 1ms yield — enough for WDT, no BLE contention
             }
         }
 
         // Iteration wall time — peaks indicate the flush loop itself
         // blocked for a long time (not just a single LFS op).
+        // #510: classify against the section ledger. A long iteration the
+        // sections explain (arm-time erase in hook, activation ring drain)
+        // is designed work → INFO; only a genuine blind spot stays WARN,
+        // and both name where the time went.
         {
             uint32_t iter_dt = (uint32_t)(esp_timer_get_time() - iter_t0);
             if (iter_dt > flush_iter_max_us_) flush_iter_max_us_ = iter_dt;
-            if (iter_dt > (uint32_t)STALL_THRESHOLD_US) {
-                ESP_LOGW(TAG, "STALL: flushTaskLoop iteration took %lu us",
-                         (unsigned long)iter_dt);
+            const FlushIterLedger::Verdict v = FlushIterLedger::classify(
+                iter_dt, iter_ledger_.accountedUs(), (uint32_t)STALL_THRESHOLD_US);
+            if (v != FlushIterLedger::Verdict::Quiet)
+            {
+                const FlushIterLedger& L = iter_ledger_;
+                if (v == FlushIterLedger::Verdict::LongUnaccounted)
+                {
+                    ESP_LOGW(TAG, "STALL: flush iter %lu us, unaccounted %lu us "
+                                  "(staging=%lu open=%lu hook=%lu act=%lu drain=%lu "
+                                  "[pg=%lu pop=%lu wr=%lu oth=%lu] end=%lu)",
+                             (unsigned long)iter_dt,
+                             (unsigned long)L.unaccountedUs(iter_dt),
+                             (unsigned long)L.staging_us, (unsigned long)L.open_us,
+                             (unsigned long)L.hook_us, (unsigned long)L.activate_us,
+                             (unsigned long)L.drain_us, (unsigned long)L.drain_pages,
+                             (unsigned long)L.pop_us, (unsigned long)L.write_us,
+                             (unsigned long)L.drainOtherUs(), (unsigned long)L.endflight_us);
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "Long flush iteration (accounted): %lu us "
+                                  "(staging=%lu open=%lu hook=%lu act=%lu drain=%lu "
+                                  "[pg=%lu pop=%lu wr=%lu oth=%lu] end=%lu unacc=%lu)",
+                             (unsigned long)iter_dt,
+                             (unsigned long)L.staging_us, (unsigned long)L.open_us,
+                             (unsigned long)L.hook_us, (unsigned long)L.activate_us,
+                             (unsigned long)L.drain_us, (unsigned long)L.drain_pages,
+                             (unsigned long)L.pop_us, (unsigned long)L.write_us,
+                             (unsigned long)L.drainOtherUs(), (unsigned long)L.endflight_us,
+                             (unsigned long)L.unaccountedUs(iter_dt));
+                }
             }
         }
 
