@@ -705,8 +705,13 @@ struct DeviceChipBar: View {
 // #150: the three honest hop states the tile can report.  Derived from the
 // mode readback (lhd), the live-following signal (hch — only present while
 // the BS is actually walking the schedule), and the rocket state:
-//   armed    = mode on, rocket in READY/INIT — hopping starts at PRELAUNCH
-//              by design, nothing is wrong (this wait is usually GPS)
+//   armed    = mode on, rocket in READY/INIT — hopping starts at wire-state
+//              PRELAUNCH by design, nothing is wrong (this wait is usually
+//              GPS).  The label says "pad-ready" rather than "PRELAUNCH":
+//              #382 renders wire READY as "PRELAUNCH" on screen too, so
+//              naming the wire state here read as a contradiction ("in
+//              PRELAUNCH, starts at PRELAUNCH, not hopping") while the
+//              rocket was still acquiring GNSS.
 //   engaging = mode on, rocket in a hop state, schedule not followed yet —
 //              the handoff is in flight (normally 1-3 s; a missed bootstrap
 //              self-heals within ~60 s)
@@ -780,7 +785,7 @@ struct RocketStateView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.orange)
             case .armed:
-                Label("Hopping armed — starts at PRELAUNCH", systemImage: "dot.radiowaves.left.and.right")
+                Label("Hopping armed — starts when pad-ready", systemImage: "dot.radiowaves.left.and.right")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.secondary)
             case nil:
