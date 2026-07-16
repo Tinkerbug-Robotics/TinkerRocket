@@ -1495,6 +1495,12 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.altitude_rate = lora.altitude_rate;
     out.gnss_alt = isnan(gnss_alt_m) ? NAN : (float)gnss_alt_m;
 
+    // #191: EKF ENU velocity + burnout (ascent landing prediction)
+    out.vel_e = lora.vel_e;
+    out.vel_n = lora.vel_n;
+    out.vel_u = lora.vel_u;
+    out.burnout_flag = lora.burnout_detected;
+
     // IMU -- low-g only (high-g not in LoRa packet)
     out.low_g_x = lora.acc_x;
     out.low_g_y = lora.acc_y;
@@ -3873,7 +3879,7 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: SIZE_OF_LORA_DATA (66) bytes ---
+        // --- Telemetry packet: SIZE_OF_LORA_DATA (73) bytes ---
         else if (rx_len == SIZE_OF_LORA_DATA)
         {
             // Decode the telemetry packet

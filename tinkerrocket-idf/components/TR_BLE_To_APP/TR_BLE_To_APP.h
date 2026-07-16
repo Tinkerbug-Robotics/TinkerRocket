@@ -47,6 +47,12 @@ public:
         float altitude_rate;    // Vertical rate m/s
         float gnss_alt;         // GNSS altitude meters (from ECEF conversion)
 
+        // #191: EKF launch-relative ENU velocity (m/s) — the app's ascent
+        // landing prediction integrates [vE,vN,vU].  NAN = no FC data.
+        float vel_e;
+        float vel_n;
+        float vel_u;
+
         // IMU data (ISM6HG256) - SI converted
         float low_g_x, low_g_y, low_g_z;     // Low-G accelerometer m/s²
         float high_g_x, high_g_y, high_g_z;  // High-G accelerometer m/s²
@@ -90,6 +96,7 @@ public:
         bool alt_apogee_flag;   // Altitude apogee (alt started decreasing)
         bool alt_landed_flag;   // Landing detected
         bool sim_active;        // #393: simulated flight in progress (NSF_SIM_ACTIVE)
+        bool burnout_flag;      // #191: motor burnout detected (NSF_BURNOUT)
 
         // Power rail state
         bool pwr_pin_on;        // true = FlightComputer + sensors powered on

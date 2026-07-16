@@ -1649,7 +1649,7 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     //   b1  vel_u_apogee_flag     b5  camera_recording
     //   b2  alt_apogee_flag       b6  logging_active
     //   b3  alt_landed_flag       b7  bs_logging_active
-    //   b8  sim_active (#393)
+    //   b8  sim_active (#393)     b9  burnout_flag (#191)
     {
         uint16_t fs = (data.launch_flag        ? 0x001 : 0)
                     | (data.vel_u_apogee_flag  ? 0x002 : 0)
@@ -1659,7 +1659,8 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
                     | (data.camera_recording   ? 0x020 : 0)
                     | (data.logging_active     ? 0x040 : 0)
                     | (data.bs_logging_active  ? 0x080 : 0)
-                    | (data.sim_active         ? 0x100 : 0);
+                    | (data.sim_active         ? 0x100 : 0)
+                    | (data.burnout_flag       ? 0x200 : 0);
         addInt("fs", fs);
     }
 
@@ -1693,6 +1694,13 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("palt", data.pressure_alt, 1);
     addFloat("arate", data.altitude_rate, 1);
     addFloat("galt", data.gnss_alt, 1);
+
+    // #191: EKF ENU velocity — the ascent landing prediction integrates
+    // [vE,vN,vU], so these are recovery-critical like arate.  NAN (no FC
+    // data yet) is omitted by addFloat.
+    addFloat("ve", data.vel_e, 1);
+    addFloat("vn", data.vel_n, 1);
+    addFloat("vu", data.vel_u, 1);
 
     // Max values
     addFloat("malt", data.max_alt_m, 1);
