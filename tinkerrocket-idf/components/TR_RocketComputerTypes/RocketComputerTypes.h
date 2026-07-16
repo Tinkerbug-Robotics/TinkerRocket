@@ -1308,10 +1308,18 @@ typedef struct __attribute__((packed))
     // before relay (both OC-owned — the FC reads neither).
     uint32_t sensor_health;
 
+    // Free-running count of EKF update ticks (#529), wraps at 2^16.  Frozen at
+    // 0 until the EKF initializes (first good GNSS fix).  The loop rate is not
+    // otherwise recoverable from a flight log, so the EKF replay derives the
+    // achieved EKF rate from deltas of this counter against time_us instead of
+    // hand-maintaining an EKF_RATE_HZ constant that silently goes stale when
+    // the loop rate or EKF_DECIMATION moves.
+    uint16_t ekf_ticks;
+
 } NonSensorData;
 
-static_assert(sizeof(NonSensorData) == 48,
-              "NonSensorData must be 48 bytes");
+static_assert(sizeof(NonSensorData) == 50,
+              "NonSensorData must be 50 bytes");
 
 // ── Sensor health scorecard (#303) ──────────────────────────────────────────
 // 2 bits per item packed into NonSensorData.sensor_health (FC→OC) and
@@ -2381,7 +2389,7 @@ static_assert(offsetof(GNSSData, vel_u_mmps) == 36, "GNSSData.vel_u_mmps moved")
 static_assert(offsetof(GNSSData, h_acc_m) == 40, "GNSSData.h_acc_m moved");
 static_assert(offsetof(GNSSData, v_acc_m) == 41, "GNSSData.v_acc_m moved");
 
-static_assert(sizeof(NonSensorData) == 48, "NonSensorData wire size");
+static_assert(sizeof(NonSensorData) == 50, "NonSensorData wire size");
 static_assert(offsetof(NonSensorData, time_us) == 0, "NonSensorData.time_us moved");
 static_assert(offsetof(NonSensorData, q0) == 4, "NonSensorData.q0 moved");
 static_assert(offsetof(NonSensorData, q1) == 6, "NonSensorData.q1 moved");
@@ -2400,6 +2408,7 @@ static_assert(offsetof(NonSensorData, baro_alt_rate_dmps) == 40, "NonSensorData.
 static_assert(offsetof(NonSensorData, pyro_status) == 42, "NonSensorData.pyro_status moved");
 static_assert(offsetof(NonSensorData, apogee_flags) == 43, "NonSensorData.apogee_flags moved");
 static_assert(offsetof(NonSensorData, sensor_health) == 44, "NonSensorData.sensor_health moved");
+static_assert(offsetof(NonSensorData, ekf_ticks) == 48, "NonSensorData.ekf_ticks moved");
 
 static_assert(sizeof(OutStatusQueryData) == 28, "OutStatusQueryData wire size");
 static_assert(offsetof(OutStatusQueryData, ism6_low_g_fs_g) == 0, "OutStatusQueryData.ism6_low_g_fs_g moved");

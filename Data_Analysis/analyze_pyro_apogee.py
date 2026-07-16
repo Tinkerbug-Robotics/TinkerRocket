@@ -18,6 +18,7 @@ MSG_NON_SENSOR = 0xA5
 # <I hhhhh iii iii BB h B B
 #  time_us(4), q0-q3+roll_cmd(5*2=10), e/n/u_pos(3*4=12), e/n/u_vel(3*4=12),
 #  flags(1), rocket_state(1), baro_alt_rate_dmps(2), pyro_status(1), apogee_flags(1) = 44
+FMT_NONSENSOR_50 = '<I hhhhh iii iii BB h B B I H'  # +uint16 ekf_ticks (#529)
 FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'  # +uint32 sensor_health (#303)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'
@@ -115,7 +116,11 @@ def parse(filepath):
         stats["frames"] += 1
 
         if msg_type == MSG_NON_SENSOR:
-            if msg_len == 48:
+            if msg_len == 50:
+                fields = struct.unpack(FMT_NONSENSOR_50, payload)
+                pyro_status = fields[15]
+                apogee_flags = fields[16]
+            elif msg_len == 48:
                 fields = struct.unpack(FMT_NONSENSOR_48, payload)
                 pyro_status = fields[15]
                 apogee_flags = fields[16]

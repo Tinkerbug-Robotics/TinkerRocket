@@ -54,11 +54,60 @@ PAD_HEADING_DEG = 0.0
 # Driving the EKF on a clock instead of a sample counter is right for both, and
 # stays right the next time the IMU ODR moves.
 #
-# CAVEAT: the loop rate is not recorded in the flight log, so this constant cannot
-# be derived from the file — it has to track the firmware. Logging the EKF rate
-# (or a tick counter) would remove the last hand-maintained number here; see #515.
-EKF_RATE_HZ = 490.0
-EKF_PERIOD_US = 1e6 / EKF_RATE_HZ
+# #529 retired the hand-maintained rate: the firmware logs a free-running EKF
+# update-tick counter (NonSensorData.ekf_ticks, uint16 wrap), and
+# derive_ekf_rate_hz() below recovers the ACHIEVED rate from it — per log, no
+# constant to track (a real collect measured 474 Hz against the 490 target).
+# This value remains only as the fallback for logs that predate the field.
+DEFAULT_EKF_RATE_HZ = 490.0
+
+
+def derive_ekf_rate_hz(records):
+    """Achieved EKF rate from the logged ekf_ticks counter (#529), or None.
+
+    NonSensorData.ekf_ticks is a free-running uint16 count of actual EKF update
+    ticks. Summing wrap-aware deltas over consecutive NonSensor records — and
+    trimming the frozen head/tail (the counter sits at 0 until the EKF
+    initializes, before the first good GNSS fix) — gives ticks/second as the
+    vehicle actually ran, robust to loop-rate and EKF_DECIMATION changes.
+
+    Returns None when the log predates the field (records carry ekf_ticks=None)
+    or carries too little tick motion to trust.
+    """
+    ns = records.get("NonSensor") or []
+    pts = [(r["time_us"], r["ekf_ticks"]) for r in ns
+           if r.get("ekf_ticks") is not None]
+    if len(pts) < 2:
+        return None
+
+    # Per consecutive pair: wrap-aware tick delta + wall time. A pair is
+    # discarded (contributing neither ticks nor time) when time runs backwards,
+    # spans a logging hole > 10 s, or the delta is implausibly large — a huge
+    # "delta" is really the counter resetting across an in-flight reboot.
+    pairs = []
+    for (t0, k0), (t1, k1) in zip(pts, pts[1:]):
+        dt_us = t1 - t0
+        d_ticks = (k1 - k0) & 0xFFFF
+        if dt_us <= 0 or dt_us > 10_000_000 or d_ticks > 4096:
+            continue
+        pairs.append((dt_us, d_ticks))
+
+    # Trim to the window where the counter is actually moving, so the pre-init
+    # frozen-at-0 stretch does not dilute the average. d == 0 pairs INSIDE the
+    # window stay — they are the legitimate beat between the ~500 Hz NonSensor
+    # cadence and the ~490 Hz EKF cadence, and dropping them would skew high.
+    active = [i for i, (_, d) in enumerate(pairs) if d > 0]
+    if not active:
+        return None
+    window = pairs[active[0]:active[-1] + 1]
+    ticks = sum(d for _, d in window)
+    dur_s = sum(dt for dt, _ in window) / 1e6
+    if ticks < 100 or dur_s <= 0:
+        return None                       # too little motion to trust
+    rate = ticks / dur_s
+    if not (50.0 <= rate <= 5000.0):
+        return None                       # implausible — refuse, use fallback
+    return rate
 
 # RocketState::INFLIGHT (TR_RocketComputerTypes/RocketComputerTypes.h).
 # INITIALIZATION=0, READY=1, PRELAUNCH=2, INFLIGHT=3, LANDED=4, MAG_CALIBRATION=5
@@ -322,6 +371,19 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
     check_ekf_version(binary_file)
 
+    # #529: EKF cadence — from the log itself when the firmware recorded its
+    # tick counter; the hand-maintained constant only as a legacy fallback.
+    ekf_rate_hz = derive_ekf_rate_hz(records)
+    if ekf_rate_hz is not None:
+        print(f"  EKF rate: {ekf_rate_hz:.1f} Hz (derived from the logged "
+              f"ekf_ticks counter)")
+    else:
+        ekf_rate_hz = DEFAULT_EKF_RATE_HZ
+        print(f"  EKF rate: {ekf_rate_hz:.0f} Hz (constant fallback — log "
+              f"predates the #529 ekf_ticks field; verify it matches the "
+              f"firmware that flew)")
+    ekf_period_us = 1e6 / ekf_rate_hz
+
     # Detect flight phases
     imu_times = get_array(records["ISM6HG256"], "time_us")
     t0_us = imu_times[0]
@@ -339,11 +401,17 @@ def replay(binary_file, plot_dir=None, align_baro=True):
     # ---- Initialize EKF ----
     ekf = GpsInsEKF()
     ekf_initialized = False
-    next_ekf_us = None          # firmware-rate EKF clock (see EKF_RATE_HZ)
+    next_ekf_us = None          # firmware-rate EKF clock (see ekf_rate_hz above)
     # Firmware flight state, tracked from the log (drives the AHRS accel gate).
     # Default to a non-INFLIGHT state so a log with no NonSensor records behaves
     # like the pad — AHRS on — rather than silently disabling the gravity update.
     log_rocket_state = ROCKET_STATE_INFLIGHT - 1
+    # Master voted apogee_flag as logged (apogee_flags bit 2, #142/#143) —
+    # followed live, exactly like the firmware reads kinematics.apogee_flag.
+    log_apogee_master = False
+    log_has_master = False
+    # Fallback for pre-#143 logs (42/43-byte NonSensor): latched OR of the two
+    # voters that byte layout carried.
     log_apogee_latched = False
 
     # Track latest sensor data for EKF
@@ -425,6 +493,10 @@ def replay(binary_file, plot_dir=None, align_baro=True):
         elif etype == "nonsensor":
             # Track the firmware's own flight state — the AHRS gate reads it.
             log_rocket_state = rec["rocket_state"]
+            if rec.get("has_apogee_flags"):
+                # #529: the master voted apogee_flag is in the log — follow it.
+                log_apogee_master = rec["apogee_flag"]
+                log_has_master = True
             if rec["alt_apogee"] or rec["vel_apogee"]:
                 log_apogee_latched = True
 
@@ -584,12 +656,13 @@ def replay(binary_file, plot_dir=None, align_baro=True):
                 continue
 
             # Run the EKF on the firmware's CLOCK, not on every logged IMU sample
-            # (see EKF_RATE_HZ). The firmware feeds it the newest sample at ~490 Hz
-            # and never sees the rest, so this drops the intervening samples exactly
-            # as the flight loop does — imu_d here is already the latest one.
+            # (see ekf_rate_hz — logged since #529, constant fallback before). The
+            # firmware feeds it the newest sample at that cadence and never sees
+            # the rest, so this drops the intervening samples exactly as the
+            # flight loop does — imu_d here is already the latest one.
             if (next_ekf_us is not None) and (time_us < next_ekf_us):
                 continue
-            next_ekf_us = time_us + EKF_PERIOD_US
+            next_ekf_us = time_us + ekf_period_us
 
             # #514: AHRS accel gate — follow the LOGGED flight state.
             #
@@ -605,13 +678,14 @@ def replay(binary_file, plot_dir=None, align_baro=True):
             # flight_20260615_171305: a 70° divergence appearing right at launch,
             # on top of an otherwise <2° track.
             #
-            # rocket_state is logged exactly, so the first term is now exact.
-            # CAVEAT: kinematics.apogee_flag is a 4-voter quorum (vel / alt / gps
-            # / pitch) and only two of those voters reach the log, so post_apogee
-            # is reconstructed as a LATCHED OR of the two that do. It is the one
-            # term here that is still an approximation — logging the master flag
-            # (a spare NSF bit) would make this exact.
-            post_apogee = log_apogee_latched
+            # rocket_state is logged exactly, so the first term is exact. And
+            # since #529 the second is too: kinematics.apogee_flag — the 4-voter
+            # quorum (vel / alt / gps / pitch) — has been in the log all along
+            # (apogee_flags bit 2, #142/#143), so post_apogee follows the logged
+            # master directly. Only pre-#143 logs (42/43-byte NonSensor, no
+            # apogee_flags byte) fall back to the old approximation: a LATCHED OR
+            # of the two voters that layout carried.
+            post_apogee = log_apogee_master if log_has_master else log_apogee_latched
             use_ahrs_acc = (log_rocket_state != ROCKET_STATE_INFLIGHT) or post_apogee
 
             ekf.update_lla(use_ahrs_acc, imu_d, gnss_d, mag_d)
@@ -655,13 +729,13 @@ def replay(binary_file, plot_dir=None, align_baro=True):
 
     # Show the achieved EKF rate against the firmware's, so a rate mismatch is
     # visible rather than inferred — it is the single easiest way to make this
-    # tool silently wrong (see EKF_RATE_HZ).
+    # tool silently wrong (see derive_ekf_rate_hz / DEFAULT_EKF_RATE_HZ).
     span_s = (imu_times[-1] - imu_times[0]) / 1e6
     if span_s > 0:
         imu_hz = len(records["ISM6HG256"]) / span_s
         ekf_hz = n_imu / span_s
         print(f"  IMU logged at {imu_hz:.0f} Hz; EKF run at {ekf_hz:.0f} Hz "
-              f"(firmware target {EKF_RATE_HZ:.0f} Hz — the EKF sees "
+              f"(firmware {ekf_rate_hz:.0f} Hz — the EKF sees "
               f"1 in {imu_hz / max(ekf_hz, 1e-9):.1f} logged samples)")
 
     # ---- Convert to numpy ----
@@ -757,8 +831,8 @@ def replay(binary_file, plot_dir=None, align_baro=True):
                           "heading fusion, so a modern EKF cannot reproduce them.")
                     print("       • MATCHED → versions agree, so it's a real replay "
                           "gap: AHRS phase gate, GNSS velocity, EKF rate")
-                    print("                  (EKF_RATE_HZ), or units (EkfIMUData gyro "
-                          "is DEG/S, not rad/s).")
+                    print("                  (derive_ekf_rate_hz / fallback), or units "
+                          "(EkfIMUData gyro is DEG/S, not rad/s).")
     if fidelity is None:
         print("\n  ── Replay fidelity: no logged quaternion in this file "
               "(legacy log) — replay is UNVERIFIED ──")
