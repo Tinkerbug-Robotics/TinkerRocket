@@ -1837,10 +1837,27 @@ static void serviceUplink()
     // the quiet stretch between the rocket's ~500 ms telemetry packets instead.
     // Transmitting right after the rocket's own TX is also when it is listening,
     // so this should help uplink delivery too.
+    // #150: while following a hop, never transmit with a retune still
+    // pending — the radio is on the channel of the packet we just decoded,
+    // which at dwell-1 the rocket has ALREADY left (it steps to its next
+    // channel immediately after its own TX).  One deferred pass lets the
+    // top-of-loop retune land the attempt on the channel the rocket is
+    // actually listening on.
+    if (hop_active_ && hop_needs_retune_)
+    {
+        return;
+    }
+
     bs_uplink_txwin::Params win;
     win.period_ms     = rx_cadence.periodMs();
     win.tx_airtime_ms = bs_uplink_txwin::timeOnAirMs(tx->len, lora_sf, lora_bw_khz, lora_cr);
-    win.rx_reserve_ms = config::UPLINK_RX_RESERVE_MS;
+    // #150: reserve = the REAL downlink airtime at the live modulation plus
+    // margin.  The old flat 140 ms was sized for SF8's ~82 ms downlink and
+    // under-reserved at higher SFs, sanctioning attempts that collided with
+    // the head of the next downlink (see config.h UPLINK_RX_RESERVE_MARGIN_MS).
+    win.rx_reserve_ms = loraTimeOnAirMs(SIZE_OF_LORA_DATA, lora_sf, lora_bw_khz,
+                                        lora_cr, LORA_TELEM_PREAMBLE_SYMS)
+                        + config::UPLINK_RX_RESERVE_MARGIN_MS;
     win.link_stale_ms = config::UPLINK_LINK_STALE_MS;
     win.max_defer_ms  = config::UPLINK_MAX_DEFER_MS;
 
