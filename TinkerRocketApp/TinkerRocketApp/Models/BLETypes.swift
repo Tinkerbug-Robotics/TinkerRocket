@@ -111,6 +111,10 @@ struct RocketConfig {
     var loraCR: UInt8? = nil
     var loraTxPower: Int8? = nil
     var loraHopDisabled: Bool? = nil   // #106 fixed-frequency override (BS-controlled)
+    // #150: firmware-computed hop dwell for the current modulation.
+    // 0 = hopping not legally possible at this preset (GUI greys the
+    // option); nil = device doesn't report it (pre-#150 firmware).
+    var loraHopDwell: Int? = nil
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0

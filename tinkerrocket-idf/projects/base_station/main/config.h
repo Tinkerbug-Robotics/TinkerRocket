@@ -70,9 +70,20 @@ struct config : board_pins
     // 3 of 3). Rather than firing blind, transmit inside the quiet stretch between
     // the rocket's ~500 ms telemetry packets. See bs_uplink_txwin.h.
     //
-    // Air to keep clear ahead of the next expected downlink packet: its ~82 ms of
-    // time-on-air plus margin for cadence jitter and TX/RX turnaround.
-    static constexpr uint32_t UPLINK_RX_RESERVE_MS = 140;
+    // Air to keep clear ahead of the next expected downlink packet: its
+    // time-on-air plus this margin for cadence jitter and TX/RX turnaround.
+    //
+    // #150 bench root-cause (dwell-1 uplink misses): the reserve used to be a
+    // flat 140 ms — the SF8 downlink's ~82 ms plus margin baked into one
+    // number.  At SF9 the downlink is ~203 ms, so the flat reserve sanctioned
+    // uplink attempts that overlapped the head of the rocket's next TX; the
+    // resulting half-duplex collision blinded the BS to that packet, and at
+    // dwell-1 (channel change every packet) losing one packet breaks the
+    // hop-follow — the rest of the retry burst then fired onto stale
+    // channels (two full 8-retry cmd-17 bursts lost on the bench, ~50%
+    // heartbeat delivery).  serviceUplink now computes the reserve from the
+    // ACTUAL telemetry airtime at the live modulation and adds this margin.
+    static constexpr uint32_t UPLINK_RX_RESERVE_MARGIN_MS = 60;
     // No packet for this long => no downlink worth protecting; transmit freely.
     // Also the case where we most need to (silence recovery, rendezvous).
     static constexpr uint32_t UPLINK_LINK_STALE_MS = 2000;

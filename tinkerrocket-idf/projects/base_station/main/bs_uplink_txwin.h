@@ -36,42 +36,25 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "RocketComputerTypes.h"  // loraTimeOnAirMs — shared with the #150 hop-dwell math
+
 namespace bs_uplink_txwin {
 
 // ---------------------------------------------------------------------------
 // LoRa time-on-air (Semtech AN1200.13). Needed because the usable window shrinks
 // by however long OUR packet takes — a 33-byte channel-set push occupies the air
 // far longer than a 0-byte sim-start.
+//
+// #150: delegates to the shared implementation in RocketComputerTypes.h so the
+// TX-window math and the hop-dwell math cannot drift apart. The default
+// preamble stays 8 (pre-#150 behaviour of this call site); the hop-dwell path
+// pins the true telemetry preamble via LORA_TELEM_PREAMBLE_SYMS.
 // ---------------------------------------------------------------------------
 inline uint32_t timeOnAirMs(size_t payload_len, uint8_t sf, float bw_khz,
                             uint8_t cr /* 5..8 => 4/5..4/8 */,
                             uint8_t preamble_syms = 8)
 {
-    if (sf < 6)   sf = 6;
-    if (sf > 12)  sf = 12;
-    if (bw_khz <= 0.0f) bw_khz = 125.0f;
-
-    // cr is the denominator form used in config (5 == 4/5). The formula wants 1..4.
-    int cr_idx = (int)cr - 4;
-    if (cr_idx < 1) cr_idx = 1;
-    if (cr_idx > 4) cr_idx = 4;
-
-    const float ts_ms = (float)(1u << sf) / bw_khz;      // symbol time, ms (bw in kHz)
-    const float preamble_ms = ((float)preamble_syms + 4.25f) * ts_ms;
-
-    // Low-data-rate optimise kicks in when a symbol is long (SF11/12 @125k).
-    const int de = (ts_ms >= 16.0f) ? 1 : 0;
-
-    const int num = 8 * (int)payload_len - 4 * (int)sf + 28 + 16;   // explicit header, CRC on
-    const int den = 4 * ((int)sf - 2 * de);
-    int n_payload = 0;
-    if (num > 0 && den > 0)
-    {
-        n_payload = ((num + den - 1) / den) * (cr_idx + 4);   // ceil(num/den) * (CR+4)
-    }
-    const float payload_ms = (float)(8 + n_payload) * ts_ms;
-
-    return (uint32_t)(preamble_ms + payload_ms + 0.5f);
+    return loraTimeOnAirMs(payload_len, sf, bw_khz, cr, preamble_syms);
 }
 
 // ---------------------------------------------------------------------------

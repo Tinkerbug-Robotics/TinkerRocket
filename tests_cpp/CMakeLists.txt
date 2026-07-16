@@ -371,6 +371,9 @@ add_executable(test_bs_uplink_txwin test_bs_uplink_txwin.cpp)
 target_include_directories(test_bs_uplink_txwin PRIVATE
     ${SHIM_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+    # bs_uplink_txwin.h delegates its time-on-air to the shared
+    # loraTimeOnAirMs (#150) so BS window math and hop-dwell math agree
+    ${LIB_DIR}/TR_RocketComputerTypes
 )
 target_link_libraries(test_bs_uplink_txwin GTest::gtest_main)
 gtest_discover_tests(test_bs_uplink_txwin)

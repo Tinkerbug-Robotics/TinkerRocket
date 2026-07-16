@@ -64,6 +64,20 @@ TEST(BsUplinkTxwin, TimeOnAirHandlesDegenerateInputs) {
     EXPECT_GT(timeOnAirMs(22, 8, 0.0f, 5), 0u);         // bad BW falls back
 }
 
+TEST(BsUplinkTxwin, DelegatesToTheSharedLoraTimeOnAir) {
+    // #150 moved the formula into RocketComputerTypes.h so the hop-dwell
+    // math and the TX-window math cannot drift apart.  Pin the delegation
+    // (this call site keeps its historical preamble-8 default).
+    const size_t lens[] = {0, 6, 22, 46, 66};
+    for (uint8_t sf = 7; sf <= 11; sf++) {
+        for (size_t len : lens) {
+            EXPECT_EQ(timeOnAirMs(len, sf, 250.0f, 5),
+                      loraTimeOnAirMs(len, sf, 250.0f, 5, 8))
+                << "sf=" << (int)sf << " len=" << len;
+        }
+    }
+}
+
 // ---- The window ----
 
 // Right after a packet lands, the air is ours.

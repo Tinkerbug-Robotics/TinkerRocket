@@ -77,6 +77,18 @@ struct SettingsView: View {
     @State private var txPowerDbm: Int = 12
     @State private var txPowerSendWork: DispatchWorkItem?
 
+    // #150: link mode (BS only) — device state, NOT a profile field.  The
+    // picker pushes cmd 17 on change; hydration from the lhd readback
+    // snaps it back if the firmware refuses (e.g. lhdw == 0).
+    @State private var linkModeHopping = false
+    // A hop DISABLE commits ~1.5 s after the tap (the BS drains its uplink
+    // retries on the hop channel first) — readbacks arriving inside that
+    // window still say "hopping" and would flip the picker back against
+    // the user's tap.  Hold hydration briefly after a tap; the commit
+    // readback lands after the hold and settles the true state.
+    @State private var linkModeTouchedAt: Date?
+    private static let linkModeHydrationHoldS: TimeInterval = 3.0
+
     @FocusState private var focusedField: EditField?
     @State private var lastFocusedField: EditField?
 
@@ -252,10 +264,17 @@ struct SettingsView: View {
             .onChange(of: unitSystem) { _ in reloadPyroValueStrings() }
             .onDisappear { flushPendingEdits() }
             .onReceive(device.$rocketConfig.compactMap { $0 }) { cfg in
-                // Only LoRa TX power is hydrated from the rocket now — every
-                // other setting is owned by the profile (app is source of
-                // truth) so we no longer pull config back into local state.
+                // Only device-owned LoRa state is hydrated from readback —
+                // every other setting is owned by the profile (app is source
+                // of truth) so we no longer pull config back into local state.
                 if let pwr = cfg.loraTxPower { txPowerDbm = Int(pwr) }
+                // #150: skip lhd hydration inside the post-tap hold window
+                // (see linkModeTouchedAt) so mid-drain readbacks can't flip
+                // the picker against the user's tap.
+                if let hd = cfg.loraHopDisabled,
+                   linkModeTouchedAt.map({ Date().timeIntervalSince($0) > Self.linkModeHydrationHoldS }) ?? true {
+                    linkModeHopping = !hd
+                }
             }
         }
     }
@@ -292,6 +311,43 @@ struct SettingsView: View {
         }
 
         loRaSections
+        networkSection
+    }
+
+    // #150: Network (restored from #136, with the drift bug fixed).  The
+    // app stores the human-friendly name; the DEVICE's readback nid
+    // (config_identity) is the truth about what's on the air.  The old UI
+    // displayed only the app-local @AppStorage copy, which is exactly what
+    // made the #133 nid drift undebuggable — hence the mismatch badge and
+    // one-tap sync against the readback.
+    @ViewBuilder
+    private var networkSection: some View {
+        Section(header: Text("Network"), footer: Text(networkFooter)) {
+            HStack {
+                Text(appNetworkName.isEmpty ? "Not set" : appNetworkName)
+                Spacer()
+                Text("ID: \(appNetworkID)")
+                    .foregroundColor(.secondary)
+                    .font(.system(.body, design: .monospaced))
+            }
+            HStack {
+                Text("Device reports")
+                Spacer()
+                if deviceNidMismatch {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                }
+                Text("ID: \(device.networkID)")
+                    .foregroundColor(deviceNidMismatch ? .orange : .secondary)
+                    .font(.system(.body, design: .monospaced))
+            }
+            if deviceNidMismatch {
+                Button("Set device to \"\(appNetworkName)\" (ID \(appNetworkID))") {
+                    device.sendSetNetworkID(UInt8(clamping: appNetworkID))
+                }
+                .disabled(!device.isConnected)
+            }
+        }
     }
 
     // Firmware update entry. Shown for any connected device (#8): Phase 2
@@ -322,8 +378,21 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var loRaSections: some View {
+        // #150: Fixed vs Hopping link-mode picker.  Applies on change (no
+        // Apply button, #144); non-focusable control keeps this section
+        // safe next to live readback (#361).
+        Section(header: Text("Link Mode"), footer: Text(linkModeFooter)) {
+            Picker("Link Mode", selection: linkModeBinding) {
+                Text("Fixed Channel").tag(false)
+                Text("Frequency Hopping").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(device.autoApplyRefusalReason() != nil ||
+                      (hopUnavailable && !linkModeHopping))
+        }
+
         Section(header: Text("LoRa Frequency"),
-                footer: Text("Base station picks the quietest channel automatically at boot. Both devices should report the same frequency.")) {
+                footer: Text("Both devices meet on the factory channel at boot. Both should report the same frequency.")) {
             HStack {
                 Text("Current")
                 Spacer()
@@ -343,7 +412,10 @@ struct SettingsView: View {
                         .font(.system(.body, design: .monospaced))
                 }
             }
-            .disabled(device.autoApplyRefusalReason() != nil)
+            // #150: also locked while hopping — TX power rides cmd 10,
+            // which the firmware refuses mid-hop (a change would silently
+            // snap back).  Switch to Fixed first.
+            .disabled(device.autoApplyRefusalReason() != nil || linkModeHopping)
             .onChange(of: txPowerDbm) { scheduleTxPowerSend($0) }
         }
     }
@@ -383,7 +455,13 @@ struct SettingsView: View {
         case .control:  controlSections
         case .camera:   cameraSections
         case .pyro:     pyroSections
-        case .general:  generalSections
+        case .general:
+            generalSections
+            // #150: the network surface must exist on ROCKETS too — the
+            // cmd-41 sync only reaches the device the app is connected
+            // to, so a drifted rocket nid would otherwise be visible only
+            // as the BS's rising drop counter, with no in-app fix.
+            networkSection
         }
     }
 
@@ -1294,6 +1372,59 @@ struct SettingsView: View {
 
     // MARK: - LoRa TX power (base station only)
 
+    // #150: network identity (app side; onboarding writes these).
+    @AppStorage("networkName") private var appNetworkName: String = ""
+    @AppStorage("networkID") private var appNetworkID: Int = 0
+
+    private var deviceNidMismatch: Bool {
+        // unitID empty = no config_identity readback yet — don't render
+        // "identity unknown" as a confident mismatch at ID 0.
+        appNetworkID > 0 && !device.unitID.isEmpty &&
+        device.networkID != UInt8(clamping: appNetworkID)
+    }
+
+    private var networkFooter: String {
+        if deviceNidMismatch {
+            return "This device is on a different network ID than the app expects — it can't hear your other devices. Tap to sync it (a rising NetID Drops count on the dashboard is the same problem seen from the other side)."
+        }
+        return "Devices only hear each other on the same network ID. Set during onboarding; pushed to each device when provisioned."
+    }
+
+    // #150: hopping is unavailable when the firmware reports dwell 0 for
+    // the current modulation (a packet wouldn't fit the FCC occupancy
+    // window).  nil (pre-#150 firmware) is treated as available.
+    private var hopUnavailable: Bool {
+        (device.rocketConfig?.loraHopDwell ?? 1) == 0
+    }
+
+    private var linkModeFooter: String {
+        // Surface WHY the picker is locked (same pattern as txPowerFooter)
+        // instead of greying silently.
+        if let refusal = device.autoApplyRefusalReason() {
+            return refusal.rawValue
+        }
+        if hopUnavailable {
+            return "Frequency hopping isn't available at the current radio settings — a packet wouldn't fit the FCC dwell window."
+        }
+        return linkModeHopping
+            ? "FCC-compliant hopping across the channel set. The rocket follows automatically; switching modes takes a few seconds."
+            : "Single fixed channel — the default."
+    }
+
+    private var linkModeBinding: Binding<Bool> {
+        Binding(
+            get: { linkModeHopping },
+            set: { newValue in
+                guard newValue != linkModeHopping else { return }
+                linkModeHopping = newValue
+                linkModeTouchedAt = Date()   // #150: hold off hydration (see onReceive)
+                if device.isConnected {
+                    device.sendLoRaHopDisabled(!newValue)
+                }
+            }
+        )
+    }
+
     private func scheduleTxPowerSend(_ newValue: Int) {
         txPowerSendWork?.cancel()
         let work = DispatchWorkItem {
@@ -1308,6 +1439,9 @@ struct SettingsView: View {
     private var txPowerFooter: some View {
         if let refusal = device.autoApplyRefusalReason() {
             Text(refusal.rawValue).foregroundColor(.orange)
+        } else if linkModeHopping {
+            Text("TX power changes are locked while hopping — switch Link Mode to Fixed Channel first.")
+                .foregroundColor(.orange)
         } else {
             Text("Sets transmit power on both the base station and the rocket. The base station relays the change over LoRa, verifies the rocket joined the new setting, and rolls both sides back if it can't be reached.")
         }

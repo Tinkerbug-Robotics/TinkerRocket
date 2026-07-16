@@ -21,6 +21,7 @@ enum DashboardSheet: Identifiable {
     case settings
     case servoTest
     case driftCast
+    case frequencyScan   // #150: restored (removed in #136)
 
     var id: Int { hashValue }
 }
@@ -246,6 +247,14 @@ struct DashboardView: View {
                                       finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
                                       finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
                     }
+                case .frequencyScan:
+                    // #150: restored — the scan pipeline (cmd 60 → 0xAA
+                    // blob → scanSamples) survived #136 intact; while
+                    // hopping, the BS runs it as a coordinated scan and
+                    // pushes the resulting skip-mask via cmd 15.
+                    if let device = fleet.activeDevice {
+                        NavigationView { FrequencyScanView(device: device) }
+                    }
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
@@ -421,7 +430,12 @@ struct ConnectedDashboardView: View {
             }
 
             if showRocketViews {
-                RocketStateView(state: device.telemetry.state)
+                RocketStateView(state: device.telemetry.state,
+                                hopBadge: hopBadge(
+                                    isBaseStation: device.isBaseStation,
+                                    hopModeOn: device.rocketConfig?.loraHopDisabled == false,
+                                    hopChannel: device.telemetry.hop_channel,
+                                    state: device.telemetry.state))
                     .opacity(staleOpacity)
             }
 
@@ -688,8 +702,32 @@ struct DeviceChipBar: View {
     }
 }
 
+// #150: the three honest hop states the tile can report.  Derived from the
+// mode readback (lhd), the live-following signal (hch — only present while
+// the BS is actually walking the schedule), and the rocket state:
+//   armed    = mode on, rocket in READY/INIT — hopping starts at PRELAUNCH
+//              by design, nothing is wrong (this wait is usually GPS)
+//   engaging = mode on, rocket in a hop state, schedule not followed yet —
+//              the handoff is in flight (normally 1-3 s; a missed bootstrap
+//              self-heals within ~60 s)
+//   active   = the BS is following the schedule
+enum HopBadge {
+    case armed, engaging, active
+}
+
+func hopBadge(isBaseStation: Bool, hopModeOn: Bool,
+              hopChannel: Int?, state: String) -> HopBadge? {
+    guard isBaseStation, hopModeOn else { return nil }
+    if hopChannel != nil { return .active }
+    switch state {
+    case "PRELAUNCH", "INFLIGHT", "LANDED": return .engaging
+    default: return .armed
+    }
+}
+
 struct RocketStateView: View {
     let state: String
+    var hopBadge: HopBadge? = nil
 
     // #382 (display-only): the wire states READY and PRELAUNCH both mean "on
     // the pad" — READY is still waiting on the OC/GNSS gates, PRELAUNCH means
@@ -731,6 +769,22 @@ struct RocketStateView: View {
                 Label(text, systemImage: ready ? "checkmark.seal.fill" : "hourglass")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(ready ? .green : .orange)
+            }
+            switch hopBadge {
+            case .active:
+                Label("Frequency Hopping", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.blue)
+            case .engaging:
+                Label("Hopping — engaging…", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+            case .armed:
+                Label("Hopping armed — starts at PRELAUNCH", systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            case nil:
+                EmptyView()
             }
             Text("Rocket State")
                 .font(.caption)
@@ -2101,6 +2155,28 @@ struct TestingControlsView: View {
                     .cornerRadius(10)
                 }
                 .disabled(!canStartGroundTest)
+
+                // #150: Frequency Scan (restored from the #136 removal).
+                // BS-only — the scan runs on the base station's radio; in
+                // hopping mode the firmware coordinates a hop pause and
+                // pushes the resulting channel mask to the rocket.
+                if device.isBaseStation {
+                    Button {
+                        activeSheet = .frequencyScan
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform.badge.magnifyingglass")
+                            Text("Frequency Scan")
+                        }
+                        .font(.system(.body, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(.white)
+                        .background(device.isConnected ? Color.purple : Color.purple.opacity(0.4))
+                        .cornerRadius(10)
+                    }
+                    .disabled(!device.isConnected)
+                }
             }
         }
         .padding()
@@ -2386,6 +2462,16 @@ struct SignalStrengthView: View {
                     valueText: bleText
                 )
             }
+
+            // #150: network-id mismatch drops — the failure that used to be
+            // a silent "Searching for rocket…".  Only rendered once the BS
+            // reports a non-zero count.
+            if isBaseStation, let drops = telemetry.netid_drops, drops > 0 {
+                Label("NetID mismatch: \(drops) packets dropped — a device is on the wrong network ID (see Settings ▸ Network)",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
         }
         .padding()
         .frame(maxWidth: .infinity)
@@ -2397,6 +2483,11 @@ struct SignalStrengthView: View {
 
     private var loraText: String {
         guard let rssi = telemetry.rssi else { return "--" }
+        // #150: while hopping, show the live channel index next to the
+        // signal so the operator can see both ends walking the schedule.
+        if let hch = telemetry.hop_channel {
+            return String(format: "%.0f ch%d", rssi, hch)
+        }
         return String(format: "%.0f", rssi)
     }
 
