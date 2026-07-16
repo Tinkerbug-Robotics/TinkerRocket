@@ -4035,9 +4035,13 @@ static void serviceRocketRendezvous()
 // This mirrors slow_rendezvous (#71) but with hop-aware triggers:
 //   • Reference time is the most recent LoRa uplink during the
 //     current hop session (or hop entry, if no uplink heard yet).
-//     Heartbeats from the BS — newly safe-window-scheduled in this
-//     phase — bump last_uplink_rx_ms every 30 s in nominal operation,
-//     so this trigger fires only when comms have actually broken.
+//     Heartbeats from the BS — safe-window-scheduled, every 10 s
+//     (HEARTBEAT_INTERVAL_MS) — bump last_uplink_rx_ms in nominal
+//     operation, so this trigger fires only when comms have actually
+//     broken.  NOTE the BS must keep heartbeating IN FLIGHT for this
+//     to hold: gating heartbeats on freq_locked_for_flight starved
+//     this timer and tore the session down every ~33 s (2026-07-16
+//     bench; fixed BS-side in serviceHeartbeat).
 //   • Visit is a single short window (no on/off oscillation), then we
 //     re-bootstrap hopping with a fresh transition packet on
 //     lora_freq_mhz so the BS sees a clean re-entry.
