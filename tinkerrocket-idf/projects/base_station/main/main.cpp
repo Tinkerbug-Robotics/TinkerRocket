@@ -117,6 +117,14 @@ static uint32_t lora_low_snr_drops = 0;
 // drifts from the BS default (forced to 0 at boot, see #136).
 static uint32_t lora_netid_mismatch_drops = 0;
 
+// #150 (Seam B finding): the counter is lifetime-cumulative, so the app's
+// mismatch banner keyed on "drops > 0" never cleared after the link healed.
+// Report drops over BLE only while they are RECENT — the banner then
+// self-clears shortly after a fix, and a reconnecting app doesn't
+// resurrect a stale warning.  The log/stats lines keep the lifetime count.
+static constexpr uint32_t NETID_DROP_REPORT_WINDOW_MS = 30000;
+static uint32_t lora_netid_last_drop_ms = 0;
+
 // Base station battery (MAX17205G fuel gauge via I2C)
 static float bs_voltage = NAN;
 static float bs_soc = NAN;
@@ -1516,7 +1524,11 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     // with a healthy nid).
     out.hop_active      = hop_active_;
     out.hop_channel_idx = hop_idx_;
-    out.netid_drops     = lora_netid_mismatch_drops;
+    // Only surface nid drops while they're recent — see the counter's
+    // declaration for why (lifetime count kept for logs/stats).
+    out.netid_drops     = (lora_netid_mismatch_drops > 0 &&
+                           (millis() - lora_netid_last_drop_ms) < NETID_DROP_REPORT_WINDOW_MS)
+                          ? lora_netid_mismatch_drops : 0;
 
     // Base station battery (local measurement)
     out.bs_soc = bs_soc;
@@ -3869,6 +3881,7 @@ static void loop_bs()
                 // packet lands here and the flight log stays empty with no
                 // clue why.  Count it + a throttled warning so it's attributable.
                 lora_netid_mismatch_drops++;
+                lora_netid_last_drop_ms = millis();   // #150: recency for BLE reporting
                 if (lora_netid_mismatch_drops == 1 ||
                     lora_netid_mismatch_drops % 100 == 0)
                 {
