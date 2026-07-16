@@ -532,6 +532,20 @@ target_include_directories(test_bad_block_scan_policy PRIVATE
 target_link_libraries(test_bad_block_scan_policy GTest::gtest_main)
 gtest_discover_tests(test_bad_block_scan_policy)
 
+# ---------- test_flush_iter_ledger (#510) ----------
+# Host-side test for the flush-task per-iteration accounting: section sums,
+# clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification
+# (a long iteration the section timers explain — arm-time erase, activation
+# ring drain — logs INFO; a genuine blind spot stays WARN with a breakdown).
+# flush_iter_ledger.h is pure arithmetic, so the test just adds the dir.
+add_executable(test_flush_iter_ledger test_flush_iter_ledger.cpp)
+target_include_directories(test_flush_iter_ledger PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_LogToFlash
+)
+target_link_libraries(test_flush_iter_ledger GTest::gtest_main)
+gtest_discover_tests(test_flush_iter_ledger)
+
 # ---------- test_sim_pad_align (#508) ----------
 # Header-only pure math (no ESP/Arduino deps), so there is no component .cpp to
 # compile — the alignment solve was extracted out of SensorCollectorSim precisely
