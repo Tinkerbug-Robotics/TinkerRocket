@@ -404,11 +404,16 @@ struct ConnectedFleetView: View {
         UnitsBarView(fleet: fleet, subjects: subjects)
 
         if let bs = foregroundBS {
-            BaseStationStripView(bs: bs)
-                // Phone GPS drives the direction-to-rocket arrow — only
-                // useful while a base station is relaying positions.
-                .onAppear { locationManager.startUpdates() }
-                .onDisappear { locationManager.stopUpdates() }
+            NavigationLink(destination: BaseStationDetailView(bs: bs,
+                                                              fleet: fleet,
+                                                              activeSheet: $activeSheet)) {
+                BaseStationStripView(bs: bs)
+            }
+            .buttonStyle(.plain)
+            // Phone GPS drives the direction-to-rocket arrow — only
+            // useful while a base station is relaying positions.
+            .onAppear { locationManager.startUpdates() }
+            .onDisappear { locationManager.stopUpdates() }
         }
 
         ForEach(displayed) { subject in
@@ -432,6 +437,7 @@ struct ConnectedFleetView: View {
                                     collapsible: multi)
             } else if let relay = subject.freshestRelay {
                 RelayRocketSectionView(subject: subject,
+                                       via: relay.baseStation,
                                        remote: relay.remote,
                                        collapsible: multi)
             }
@@ -604,7 +610,14 @@ struct ConnectedDashboardView: View {
             // mid-sim; telemetry keeps the banner up as long as the sim runs.
             if device.simLaunched || device.telemetry.sim_active {
                 SimModeBannerView {
-                    device.sendCommand(7)
+                    // #390: stop the sim on the focused rocket only when the
+                    // link is a BS relay (broadcast stop would also hit a
+                    // neighboring rocket mid-sim).
+                    if device.isBaseStation, let rid = device.focusRocketID {
+                        device.sendRelayCommand(targetRocketID: rid, innerCommand: 7)
+                    } else {
+                        device.sendCommand(7)
+                    }
                     device.clearSimBanner()
                 }
             }
@@ -626,20 +639,20 @@ struct ConnectedDashboardView: View {
                 bleRSSI: device.connectedRSSI,
                 isBaseStation: device.isBaseStation,
                 locationManager: device.isBaseStation ? locationManager : nil,
-                rocketFix: device.isBaseStation ? device.lastValidRocketFix : nil
+                rocketFix: device.isBaseStation ? device.lastValidRocketFix : nil,
+                trackingHealthy: dataStatus == .live
             )
 
-            // BatteryView shows BS battery (always live) + rocket battery.
-            // When syncing/stale the rocket row is meaningless; we still
-            // render the view (BS battery row is useful) but dim it on
-            // stale to match the rest, and hide it entirely on syncing
-            // since both rows would be empty/cached.
+            // Rocket battery. The BS battery row moved to the BS strip +
+            // BaseStationDetailView (#390) — this section is about the
+            // rocket, whatever link carries it. On SYNCING (searching, no
+            // rocket data yet) keep the BS-only battery so the operator
+            // still has a live indicator.
             if device.isBaseStation && dataStatus == .syncing {
-                // BS-only: show a stripped view with just the BS battery row
                 BSOnlyBatteryView(telemetry: device.telemetry)
             } else {
                 BatteryView(telemetry: device.telemetry,
-                            isBaseStation: device.isBaseStation)
+                            isBaseStation: false)
                     .opacity(staleOpacity)
             }
 
@@ -1515,37 +1528,15 @@ struct StatusFlagsView: View {
                     label: isBaseStation ? "Rocket Log" : "Logging",
                     active: telemetry.rocketLoggingActive
                 )
-                if isBaseStation {
-                    StatusBadge(
-                        label: "Base Stn Log",
-                        active: telemetry.bs_logging_active
-                    )
-                }
             }
 
-            if !telemetry.active_file.isEmpty {
+            // The BS log badge + silence-close countdown moved to
+            // BaseStationDetailView (#390) — they describe the base
+            // station, not the rocket this section is about.
+            if !isBaseStation, !telemetry.active_file.isEmpty {
                 Text("File: \(telemetry.active_file)")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            }
-
-            // BS silence-close countdown.  Only rendered when the base
-            // station reports a remaining-seconds value, which the BS only
-            // sends while bs_logging_active=true (see TR_BLE_To_APP.cpp).
-            // Color tracks urgency: > 60 s green, 11..60 s orange, ≤ 10 s
-            // red so the operator can spot an imminent close at a glance.
-            if isBaseStation,
-               telemetry.bs_logging_active,
-               let remaining = telemetry.bs_log_silence_remaining_s {
-                let secs = Int(remaining)
-                let color: Color = secs > 60 ? .green : (secs > 10 ? .orange : .red)
-                HStack(spacing: 6) {
-                    Image(systemName: "timer")
-                        .foregroundColor(color)
-                    Text("Auto-close in \(formatElapsed(seconds: secs))")
-                        .font(.caption)
-                        .foregroundColor(color)
-                }
             }
         }
         .padding()
@@ -2081,7 +2072,19 @@ struct ControlsView: View {
                 .font(.headline)
 
             Button(action: {
-                device.sendCommand(1)
+                // #390: on a BS link, target the focused rocket explicitly
+                // (cmd 50 relay) with the desired state computed from ITS
+                // telemetry — the legacy BS camera toggle broadcast to every
+                // rocket in range and keyed its on/off decision off whichever
+                // rocket was heard last.
+                if device.isBaseStation, let rid = device.focusRocketID {
+                    let desired: UInt8 = device.telemetry.camera_recording ? 0 : 1
+                    device.sendRelayCommand(targetRocketID: rid,
+                                            innerCommand: 1,
+                                            innerPayload: Data([desired]))
+                } else {
+                    device.sendCommand(1)
+                }
             }) {
                 HStack {
                     Image(systemName: device.telemetry.camera_recording ? "video.fill" : "video")
@@ -2111,6 +2114,15 @@ struct ControlsView: View {
                 .background(isLogging ? Color.red : Color.orange)
                 .foregroundColor(.white)
                 .cornerRadius(10)
+            }
+
+            // #390: say why the rest of the controls aren't here instead of
+            // silently hiding capability.
+            if device.isBaseStation {
+                Label("Pyro, power, calibration and settings need a direct connection to the rocket.",
+                      systemImage: "info.circle")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .padding()
@@ -2188,20 +2200,24 @@ struct TestingControlsView: View {
                 .background(canLaunchSim ? Color.orange : Color.orange.opacity(0.4))
                 .cornerRadius(10)
 
-                // Ground Test button
-                Button(action: toggleGroundTest) {
-                    HStack {
-                        Image(systemName: device.groundTestActive ? "stop.fill" : "gyroscope")
-                        Text(device.groundTestActive ? "Stop Test" : "Ground Test")
+                // Ground Test button — direct links only (#390): the BS has
+                // no dispatch for cmds 15/16, so on a relay link this was a
+                // dead button that silently dropped the tap.
+                if !device.isBaseStation {
+                    Button(action: toggleGroundTest) {
+                        HStack {
+                            Image(systemName: device.groundTestActive ? "stop.fill" : "gyroscope")
+                            Text(device.groundTestActive ? "Stop Test" : "Ground Test")
+                        }
+                        .font(.system(.body, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(.white)
+                        .background(device.groundTestActive ? Color.red : (canStartGroundTest ? Color.blue : Color.blue.opacity(0.4)))
+                        .cornerRadius(10)
                     }
-                    .font(.system(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundColor(.white)
-                    .background(device.groundTestActive ? Color.red : (canStartGroundTest ? Color.blue : Color.blue.opacity(0.4)))
-                    .cornerRadius(10)
+                    .disabled(!canStartGroundTest && !device.groundTestActive)
                 }
-                .disabled(!canStartGroundTest && !device.groundTestActive)
 
                 // GPS status hint when ground test is active but no attitude data
                 if device.groundTestActive && device.telemetry.num_sats < 4 {
@@ -2232,27 +2248,9 @@ struct TestingControlsView: View {
                 }
                 .disabled(!canStartGroundTest)
 
-                // #150: Frequency Scan (restored from the #136 removal).
-                // BS-only — the scan runs on the base station's radio; in
-                // hopping mode the firmware coordinates a hop pause and
-                // pushes the resulting channel mask to the rocket.
-                if device.isBaseStation {
-                    Button {
-                        activeSheet = .frequencyScan(device)
-                    } label: {
-                        HStack {
-                            Image(systemName: "waveform.badge.magnifyingglass")
-                            Text("Frequency Scan")
-                        }
-                        .font(.system(.body, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .foregroundColor(.white)
-                        .background(device.isConnected ? Color.purple : Color.purple.opacity(0.4))
-                        .cornerRadius(10)
-                    }
-                    .disabled(!device.isConnected)
-                }
+                // #150's Frequency Scan button moved to
+                // BaseStationDetailView (#390) — it is a base-station tool,
+                // and this card now belongs to a rocket section.
             }
         }
         .padding()
@@ -2283,10 +2281,22 @@ struct TestingControlsView: View {
         payload.append(Data(bytes: &d, count: 4))
 
         device.sendTimeSync()  // Fresh phone time for unique sim filenames
-        device.sendRawCommand(5, payload: payload)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            device.markSimLaunched()
-            device.sendCommand(6)
+        // #390: on a BS link, target the focused rocket (cmd 50) instead of
+        // the legacy broadcast — a second powered rocket must not launch a
+        // sim because its neighbor did.
+        if device.isBaseStation, let rid = device.focusRocketID {
+            device.sendRelayCommand(targetRocketID: rid, innerCommand: 5,
+                                    innerPayload: payload)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                device.markSimLaunched()
+                device.sendRelayCommand(targetRocketID: rid, innerCommand: 6)
+            }
+        } else {
+            device.sendRawCommand(5, payload: payload)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                device.markSimLaunched()
+                device.sendCommand(6)
+            }
         }
     }
 
@@ -2447,6 +2457,9 @@ struct SignalStrengthView: View {
     let isBaseStation: Bool
     var locationManager: LocationManager? = nil
     var rocketFix: LastValidRocketFix? = nil
+    /// #390: true while the BS is live-tracking its focused rocket — the
+    /// netid-drops line renders as info instead of a warning then.
+    var trackingHealthy: Bool = false
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
 
     var body: some View {
@@ -2542,11 +2555,23 @@ struct SignalStrengthView: View {
             // #150: network-id mismatch drops — the failure that used to be
             // a silent "Searching for rocket…".  Only rendered once the BS
             // reports a non-zero count.
+            // #390: while the BS is successfully tracking its rocket, other-
+            // network packets are expected traffic (a second BS/rocket pair
+            // on its own network id at the same site), not a fault — render
+            // as info. The loud warning stays for the diagnostic case the
+            // counter exists for: drops while hearing NO rocket.
             if isBaseStation, let drops = telemetry.netid_drops, drops > 0 {
-                Label("NetID mismatch: \(drops) packets dropped — a device is on the wrong network ID (see Settings ▸ Network)",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundColor(.orange)
+                if trackingHealthy {
+                    Label("Hearing \(drops) packets from other networks (another pair nearby is normal)",
+                          systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    Label("NetID mismatch: \(drops) packets dropped — a device is on the wrong network ID (see Settings ▸ Network)",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
         }
         .padding()

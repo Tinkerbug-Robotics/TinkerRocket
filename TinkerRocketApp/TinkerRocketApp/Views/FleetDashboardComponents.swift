@@ -298,10 +298,13 @@ struct RocketSectionHeader: View {
 
 /// Telemetry cards for a relayed rocket that is NOT the one mirrored by
 /// the base-station link (the focused rocket renders the full interactive
-/// dashboard). Driven straight off its RemoteRocket stream. Controls are
-/// added by the capability-gated action row (phase 3) — data-only here.
+/// dashboard). Driven straight off its RemoteRocket stream; the action row
+/// targets THIS rocket through the carrying base station (cmd 50), with
+/// desired-state computed from this rocket's telemetry.
 struct RelayRocketSectionView: View {
     let subject: RocketSubject
+    /// The base station carrying this rocket's stream (command target).
+    let via: BLEDevice
     @ObservedObject var remote: RemoteRocket
     let collapsible: Bool
     @State private var collapsed = false
@@ -319,8 +322,64 @@ struct RelayRocketSectionView: View {
                 BatteryView(telemetry: remote.telemetry, isBaseStation: false)
                 GPSView(telemetry: remote.telemetry, compact: true)
                 LoRaSignalView(telemetry: remote.telemetry)
+                relayActions
             }
         }
+    }
+
+    /// Camera + rocket logging, targeted at this rocket only. Rocket
+    /// logging here is the rocket's own flash recording (LoRa cmd 23) —
+    /// the base station's SD log is controlled from the BS screen.
+    private var relayActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Controls")
+                .font(.headline)
+
+            Button {
+                let desired: UInt8 = remote.telemetry.camera_recording ? 0 : 1
+                via.sendRelayCommand(targetRocketID: remote.rocketID,
+                                     innerCommand: 1,
+                                     innerPayload: Data([desired]))
+            } label: {
+                HStack {
+                    Image(systemName: remote.telemetry.camera_recording ? "video.fill" : "video")
+                    Text(remote.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(remote.telemetry.camera_recording ? Color.red : Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+
+            Button {
+                let desired: UInt8 = remote.telemetry.rocketLoggingActive ? 0 : 1
+                via.sendRelayCommand(targetRocketID: remote.rocketID,
+                                     innerCommand: 23,
+                                     innerPayload: Data([desired]))
+            } label: {
+                HStack {
+                    Image(systemName: remote.telemetry.rocketLoggingActive
+                          ? "stop.circle.fill" : "record.circle")
+                    Text(remote.telemetry.rocketLoggingActive
+                         ? "Stop Rocket Logging" : "Start Rocket Logging")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(remote.telemetry.rocketLoggingActive ? Color.red : Color.orange)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+
+            Label("Pyro, power, calibration, sim and settings need the base station's focus or a direct connection.",
+                  systemImage: "info.circle")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6))
+        .cornerRadius(10)
     }
 }
 
