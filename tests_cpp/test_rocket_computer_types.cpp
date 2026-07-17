@@ -25,7 +25,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(ISM6HG256Data),  22u);
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
-    EXPECT_EQ(sizeof(NonSensorData),  48u);  // #303: +uint32 sensor_health (4 B)
+    EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
     EXPECT_EQ(sizeof(LoRaData),       66u);  // #303: +uint32 sensor_health (4 B)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
