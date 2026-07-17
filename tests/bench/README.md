@@ -23,7 +23,8 @@ simulated flight cycle.
    the flight computer via LoRa uplink
 5. The flight computer's `SensorCollectorSim` feeds synthetic GNSS / IMU /
    pressure to the state machine, driving:
-   `READY → PRELAUNCH → POWERED → COASTING → DESCENT → LANDED → READY`
+   `READY → PRELAUNCH → POWERED → COASTING → DESCENT → LANDED` (LANDED is
+   terminal — post_flight_lockout holds until reboot/power-cycle, #317)
 6. The rocket transmits real LoRa packets the whole time; the BS receives
    them and writes to SD
 7. After the cycle, downloads the newest `lora_*.csv` via BLE
@@ -98,9 +99,10 @@ log, and asserts on it.  Use this when you want to:
 6. Enter sim parameters and tap **Launch Sim**.  The app sends cmd 5
    (config) + cmd 6 (start) via the BS LoRa uplink.
 7. Watch the dashboard.  The rocket state field should sweep:
-   `READY → PRELAUNCH → INFLIGHT → LANDED → READY`.  Total ~30-60 s
-   depending on burn / descent parameters.
-8. After the state shows READY again, **wait ~5 s** for the BS to flush
+   `READY → PRELAUNCH → INFLIGHT → LANDED`.  Total ~30-60 s
+   depending on burn / descent parameters.  The rocket stays LANDED
+   until rebooted (#317) — that is the expected end state.
+8. After the state shows LANDED, **wait ~10 s** for the BS to flush
    the LANDED-close fsync to disk.  The BS will auto-open a *second*
    log file ("log B") for post-landing telemetry — that file stays
    open until 5 min of LoRa silence elapses
@@ -164,7 +166,7 @@ python3 tests/bench/test_lora_log_capture.py --help
 - `0`   — all assertions passed
 - `3`   — BLE scan found no base station
 - `4`   — connected but received no telemetry within 10 s
-- `5-8` — state-machine timeout (PRELAUNCH / INFLIGHT / LANDED / READY)
+- `5-7` — state-machine timeout (PRELAUNCH / INFLIGHT / LANDED)
 - `9`   — BS didn't respond to file-list request
 - `10`  — no `lora_*.csv` on the SD after the cycle
 - `11`  — newest log is suspiciously small
