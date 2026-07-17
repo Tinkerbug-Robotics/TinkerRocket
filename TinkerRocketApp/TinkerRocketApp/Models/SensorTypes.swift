@@ -16,7 +16,7 @@ enum MessageType: UInt8 {
     case imu = 0xA2        // ISM6HG256 (Mini, 22B) or ICM45686 (Legacy, 36B)
     case baro = 0xA3       // BMP585 (Mini, 12B) or MS5611 (Legacy, 10B)
     case mag = 0xA4        // MMC5983MA (Mini, 16B) or LIS3MDL (Legacy, 10B)
-    case nonSensor = 0xA5  // Computed data (Mini 38/40B, Legacy 65B)
+    case nonSensor = 0xA5  // Computed data (Mini 43–50B by fw era, Legacy 65B)
     case power = 0xA6      // Battery
     case startLogging = 0xA7
     case endFlight = 0xA8
@@ -497,7 +497,7 @@ nonisolated struct IIS2MDCData {
     }
 }
 
-// Non-Sensor Data (43 bytes)
+// Non-Sensor Data (43/44/48/50-byte layouts, oldest → newest)
 // Wire layout mirrors C++ NonSensorData in RocketComputerTypes.h — bump the
 // size guard + add the matching field here whenever a byte is appended.
 nonisolated struct NonSensorData {
@@ -547,10 +547,17 @@ nonisolated struct NonSensorData {
     // Older logs (43-byte struct) decode this field as 0.
     let apogee_flags: UInt8
 
+    // #529 (50-byte layout): free-running count of EKF update ticks, uint16
+    // wrap.  The EKF replay tool derives the achieved EKF rate from deltas of
+    // this counter, so it must survive into the CSV export.  nil on logs that
+    // predate the field — 0 is a real value (EKF not yet initialized).
+    let ekf_ticks: UInt16?
+
     init(from data: Data) throws {
-        // Accept both legacy 43-byte logs (pre #142/#143) and the current
-        // 44-byte layout.  apogee_flags reads as 0 on legacy logs, which
-        // matches the historical "we never recorded these bits" behavior.
+        // Accept every layout since 43 bytes (pre-#142/#143 legacy) — 44
+        // (+apogee_flags), 48 (+sensor_health), 50 (+ekf_ticks, #529).
+        // apogee_flags reads as 0 on legacy logs, which matches the
+        // historical "we never recorded these bits" behavior.
         guard data.count >= 43 else {
             throw ParseError.invalidSize(expected: 43, got: data.count)
         }
@@ -582,6 +589,15 @@ nonisolated struct NonSensorData {
         pyro_status = data.readUInt8(at: &offset)
 
         apogee_flags = has_apogee_flags ? data.readUInt8(at: &offset) : 0
+
+        // #529: ekf_ticks sits AFTER sensor_health (#303, 4 bytes, offset 44),
+        // which the app has never surfaced — skip over it.
+        if data.count >= 50 {
+            offset += 4  // sensor_health
+            ekf_ticks = data.readUInt16LE(at: &offset)
+        } else {
+            ekf_ticks = nil
+        }
     }
 }
 
@@ -864,6 +880,11 @@ nonisolated struct NonSensorDataSI {
     let pyro4_fired: Bool
     let reboot_recovery: Bool
     let guidance_enabled: Bool
+
+    // #529: free-running EKF update-tick counter (uint16 wrap), carried through
+    // verbatim for the CSV so the achieved EKF rate is recoverable from an app
+    // export.  nil on logs that predate the 50-byte layout.
+    let ekf_ticks: UInt16?
 }
 
 // MARK: - Parsing Errors
