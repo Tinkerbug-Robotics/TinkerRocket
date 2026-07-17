@@ -16,14 +16,25 @@ struct IdentifiableInt: Identifiable {
 }
 
 /// Which modal sheet is currently presented from the dashboard.
+/// #390: sheets carry their target device — with one section per rocket
+/// on screen, "the active device" no longer identifies which unit a
+/// sheet should talk to.
 enum DashboardSheet: Identifiable {
-    case simulator
-    case settings
-    case servoTest
+    case simulator(BLEDevice)
+    case settings(BLEDevice)
+    case servoTest(BLEDevice)
     case driftCast
-    case frequencyScan   // #150: restored (removed in #136)
+    case frequencyScan(BLEDevice)   // #150: restored (removed in #136)
 
-    var id: Int { hashValue }
+    var id: String {
+        switch self {
+        case .simulator(let d):     return "simulator-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .settings(let d):      return "settings-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .servoTest(let d):     return "servoTest-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .driftCast:            return "driftCast"
+        case .frequencyScan(let d): return "frequencyScan-\(d.peripheral?.identifier.uuidString ?? "")"
+        }
+    }
 }
 
 struct DashboardView: View {
@@ -67,11 +78,9 @@ struct DashboardView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
-                    if let device = fleet.activeDevice {
-                        ConnectedDashboardView(
-                            device: device,
+                    if fleet.isConnected {
+                        ConnectedFleetView(
                             fleet: fleet,
-                            flightAnnouncer: flightAnnouncer,
                             locationManager: locationManager,
                             activeSheet: $activeSheet
                         )
@@ -164,7 +173,10 @@ struct DashboardView: View {
                 }
 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if let device = fleet.activeDevice {
+                    // #390: toolbar screens (files/map/settings) target the
+                    // foreground base station when one is connected — it is
+                    // the session's infrastructure — else the first link.
+                    if let device = fleet.foregroundBaseStation ?? fleet.activeDevice {
                         HStack(spacing: 16) {
                             // Rocket icon → pick / manage rocket profiles (#132).
                             // Hidden on a base station: rocket selection is
@@ -203,7 +215,7 @@ struct DashboardView: View {
                             )
 
                             Button {
-                                activeSheet = .settings
+                                activeSheet = .settings(device)
                             } label: {
                                 Image(systemName: "gearshape")
                             }
@@ -251,6 +263,9 @@ struct DashboardView: View {
         .onChange(of: fleet.activeDevice?.deviceType) { _ in
             attachActiveDevice()
         }
+        .onChange(of: fleet.foregroundBSID) { _ in
+            attachActiveDevice()   // #390: voice follows the foreground pair
+        }
         .sheet(item: $activeSheet) { sheet in
             Group {
                 switch sheet {
@@ -259,24 +274,20 @@ struct DashboardView: View {
                 // view is the only part gated on an active connection.
                 case .driftCast:
                     DriftCastView(device: fleet.activeDevice)
-                case .simulator:
-                    if let device = fleet.activeDevice { SimulationView(device: device) }
-                case .settings:
-                    if let device = fleet.activeDevice { SettingsView(device: device) }
-                case .servoTest:
-                    if let device = fleet.activeDevice {
-                        ServoTestView(device: device,
-                                      finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
-                                      finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
-                    }
-                case .frequencyScan:
+                case .simulator(let device):
+                    SimulationView(device: device)
+                case .settings(let device):
+                    SettingsView(device: device)
+                case .servoTest(let device):
+                    ServoTestView(device: device,
+                                  finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
+                                  finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
+                case .frequencyScan(let device):
                     // #150: restored — the scan pipeline (cmd 60 → 0xAA
                     // blob → scanSamples) survived #136 intact; while
                     // hopping, the BS runs it as a coordinated scan and
                     // pushes the resulting skip-mask via cmd 15.
-                    if let device = fleet.activeDevice {
-                        NavigationView { FrequencyScanView(device: device) }
-                    }
+                    NavigationView { FrequencyScanView(device: device) }
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
@@ -321,22 +332,172 @@ struct DashboardView: View {
         }
     }
 
-    /// Point the profile syncer and the flight announcer at the current
-    /// active device (#375). Called from every lifecycle edge that can change
-    /// which BLEDevice object is active: appear, connect/disconnect, device
-    /// list changes (reconnects create a new object), and chip switches.
-    /// The announcer follows the active device only — it's cleared from the
-    /// others so a background rocket's telemetry can't interleave callouts.
+    /// Point the profile syncer and the flight announcer at the right links
+    /// (#375, #390). Called from every lifecycle edge that can change which
+    /// BLEDevice objects exist or matter: appear, connect/disconnect, device
+    /// list changes (reconnects create a new object), pair switches.
+    ///
+    /// Voice: the first direct rocket link when one exists (full frame
+    /// rate), else the foreground base station — whose stream is pinned to
+    /// its focused rocket, so callouts never interleave two rockets.
+    /// Sync: profiles only push over a direct rocket link.
     private func attachActiveDevice() {
-        guard let dev = fleet.activeDevice else {
-            syncer.detach()
-            return
+        let directRocket = fleet.devices.first {
+            $0.isConnected && $0.deviceType == .rocket
         }
-        for other in fleet.devices where other !== dev {
+        let voiceDevice = directRocket ?? fleet.foregroundBaseStation
+
+        for other in fleet.devices where other !== voiceDevice {
             other.flightAnnouncer = nil
         }
-        dev.flightAnnouncer = flightAnnouncer
-        syncer.attach(device: dev, store: profileStore)
+        voiceDevice?.flightAnnouncer = flightAnnouncer
+
+        if let rocket = directRocket {
+            syncer.attach(device: rocket, store: profileStore)
+        } else {
+            syncer.detach()
+        }
+    }
+}
+
+// MARK: - Connected fleet dashboard (#390)
+
+/// The rocket-centric dashboard: pair switcher (≥2 base stations), the
+/// always-visible units bar, the foreground base station's strip, then one
+/// section per displayed rocket. The base station stopped impersonating a
+/// rocket — its stream renders only the section of the rocket its link is
+/// focused on.
+struct ConnectedFleetView: View {
+    @ObservedObject var fleet: BLEFleet
+    @ObservedObject var locationManager: LocationManager
+    @Binding var activeSheet: DashboardSheet?
+
+    /// Roster scoped to what this screen is about: rockets carried by the
+    /// foreground base station, plus anything directly connected (an
+    /// explicit user action always shows), plus identifying links.
+    private var scopedSubjects: [RocketSubject] {
+        let foreground = fleet.foregroundBaseStation
+        return fleet.rockets.filter { subject in
+            if subject.direct != nil { return true }
+            guard let fg = foreground else { return false }
+            return subject.relays.contains { $0.baseStation === fg }
+        }
+    }
+
+    private var displayedSubjects: [RocketSubject] {
+        scopedSubjects.filter { subject in
+            guard let key = subject.key else { return true }
+            return !fleet.hiddenRocketKeys.contains(key)
+        }
+    }
+
+    var body: some View {
+        let subjects = scopedSubjects
+        let displayed = displayedSubjects
+        let multi = displayed.count > 1
+        let foregroundBS = fleet.foregroundBaseStation
+
+        if fleet.baseStations.count > 1 {
+            PairSwitcherView(fleet: fleet)
+        }
+
+        UnitsBarView(fleet: fleet, subjects: subjects)
+
+        if let bs = foregroundBS {
+            BaseStationStripView(bs: bs)
+                // Phone GPS drives the direction-to-rocket arrow — only
+                // useful while a base station is relaying positions.
+                .onAppear { locationManager.startUpdates() }
+                .onDisappear { locationManager.stopUpdates() }
+        }
+
+        ForEach(displayed) { subject in
+            if let direct = subject.direct {
+                DirectRocketSection(subject: subject,
+                                    device: direct,
+                                    fleet: fleet,
+                                    locationManager: locationManager,
+                                    activeSheet: $activeSheet,
+                                    collapsible: multi)
+            } else if let bs = foregroundBS,
+                      subject.key?.rocketID == bs.focusRocketID,
+                      subject.relays.contains(where: { $0.baseStation === bs }) {
+                // The focused rocket rides the BS link's pinned mirror —
+                // the full interactive dashboard.
+                FocusedRelaySection(subject: subject,
+                                    bs: bs,
+                                    fleet: fleet,
+                                    locationManager: locationManager,
+                                    activeSheet: $activeSheet,
+                                    collapsible: multi)
+            } else if let relay = subject.freshestRelay {
+                RelayRocketSectionView(subject: subject,
+                                       remote: relay.remote,
+                                       collapsible: multi)
+            }
+        }
+
+        // Base station connected but nothing heard yet: the searching
+        // state (SYNCING) renders through the BS device content.
+        if let bs = foregroundBS, bs.remoteRockets.isEmpty {
+            ConnectedDashboardView(device: bs,
+                                   fleet: fleet,
+                                   locationManager: locationManager,
+                                   activeSheet: $activeSheet)
+        }
+    }
+}
+
+/// Full interactive section for a directly connected rocket.
+private struct DirectRocketSection: View {
+    let subject: RocketSubject
+    @ObservedObject var device: BLEDevice
+    @ObservedObject var fleet: BLEFleet
+    @ObservedObject var locationManager: LocationManager
+    @Binding var activeSheet: DashboardSheet?
+    let collapsible: Bool
+    @State private var collapsed = false
+
+    var body: some View {
+        RocketSectionHeader(subject: subject,
+                            collapsible: collapsible,
+                            collapsed: $collapsed)
+        if collapsed {
+            CollapsedRocketSummary(telemetry: device.telemetry)
+        } else {
+            // Active rocket profile summary + sync status (#132).
+            ActiveRocketHeader(device: device)
+            ConnectedDashboardView(device: device,
+                                   fleet: fleet,
+                                   locationManager: locationManager,
+                                   activeSheet: $activeSheet)
+        }
+    }
+}
+
+/// Full interactive section for the base-station-focused rocket, driven by
+/// the BS link's pinned telemetry mirror.
+private struct FocusedRelaySection: View {
+    let subject: RocketSubject
+    @ObservedObject var bs: BLEDevice
+    @ObservedObject var fleet: BLEFleet
+    @ObservedObject var locationManager: LocationManager
+    @Binding var activeSheet: DashboardSheet?
+    let collapsible: Bool
+    @State private var collapsed = false
+
+    var body: some View {
+        RocketSectionHeader(subject: subject,
+                            collapsible: collapsible,
+                            collapsed: $collapsed)
+        if collapsed {
+            CollapsedRocketSummary(telemetry: bs.telemetry)
+        } else {
+            ConnectedDashboardView(device: bs,
+                                   fleet: fleet,
+                                   locationManager: locationManager,
+                                   activeSheet: $activeSheet)
+        }
     }
 }
 
@@ -345,39 +506,10 @@ struct DashboardView: View {
 struct ConnectedDashboardView: View {
     @ObservedObject var device: BLEDevice
     @ObservedObject var fleet: BLEFleet
-    @ObservedObject var flightAnnouncer: FlightAnnouncer
     @ObservedObject var locationManager: LocationManager
     @Binding var activeSheet: DashboardSheet?
 
     var body: some View {
-        // Active rocket profile summary + sync status (#132).
-        ActiveRocketHeader(device: device)
-            // Phone-location lifecycle lives here, on the view that actually
-            // @ObservedObject's the device. deviceType (→ isBaseStation) resolves
-            // a beat after connect, and BLEFleet doesn't forward child-device
-            // changes, so the outer DashboardView never sees it. Start phone GPS
-            // once the active device identifies as a base station; stop otherwise
-            // and on teardown (disconnect / leaving the dashboard).
-            .onAppear { if device.isBaseStation { locationManager.startUpdates() } }
-            .onChange(of: device.isBaseStation) { isBaseStation in
-                if isBaseStation { locationManager.startUpdates() }
-                else { locationManager.stopUpdates() }
-            }
-            .onDisappear { locationManager.stopUpdates() }
-
-        // Device chip bar (multi-device) or simple status (single device)
-        if fleet.devices.count > 1 {
-            DeviceChipBar(fleet: fleet, activeDevice: device)
-        } else {
-            ConnectionStatusView(
-                isConnected: true,
-                isScanning: fleet.isScanning,
-                statusMessage: fleet.statusMessage,
-                connectedDeviceName: device.displayName,
-                connectedDeviceType: device.deviceType
-            )
-        }
-
         if device.deviceType == .unknown {
             // --- Role not yet known (#330): neutral "identifying" state.
             //     The connected-device view used to fail *open* to the rocket
@@ -647,86 +779,6 @@ struct ConnectionStatusView: View {
         .frame(maxWidth: .infinity)
         .background(isConnected ? Color.green.opacity(0.1) : Color(.systemGray6))
         .cornerRadius(10)
-    }
-}
-
-/// Horizontal scroll of device "chips" for switching between connected devices.
-struct DeviceChipBar: View {
-    @ObservedObject var fleet: BLEFleet
-    @ObservedObject var activeDevice: BLEDevice
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(fleet.devices, id: \.peripheral?.identifier) { device in
-                    let isActive = device.peripheral?.identifier == activeDevice.peripheral?.identifier
-
-                    Button {
-                        fleet.activeDeviceID = device.peripheral?.identifier
-                    } label: {
-                        HStack(spacing: 6) {
-                            // .inherit: the chip's own foregroundColor
-                            // (white when active, primary otherwise) tints it.
-                            DeviceTypeIcon(type: device.deviceType,
-                                           size: 14, symbolFont: .caption, tint: .inherit)
-                            Text(device.displayName)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(isActive ? Color.blue : Color(.systemGray5))
-                        .foregroundColor(isActive ? .white : .primary)
-                        .cornerRadius(20)
-                    }
-                    .contextMenu {
-                        Button {
-                            fleet.disconnect(device)
-                        } label: {
-                            Label("Disconnect", systemImage: "xmark.circle")
-                        }
-                    }
-                }
-
-                // Remote rockets (seen via base station)
-                ForEach(fleet.remoteRockets) { remote in
-                    HStack(spacing: 6) {
-                        DeviceTypeIcon(type: .rocket, size: 14, tint: .inherit)
-                        Text(remote.displayName)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .lineLimit(1)
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.system(size: 8))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.orange.opacity(0.2))
-                    .foregroundColor(.orange)
-                    .cornerRadius(20)
-                }
-
-                // Scan button in chip bar
-                Button {
-                    fleet.startScanning(userInitiated: true)  // #394: explicit "Add" opens the sheet
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.caption)
-                        Text("Add")
-                            .font(.caption)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray5))
-                    .foregroundColor(.blue)
-                    .cornerRadius(20)
-                }
-            }
-            .padding(.horizontal, 4)
-        }
-        .padding(.vertical, 4)
     }
 }
 
@@ -2124,7 +2176,7 @@ struct TestingControlsView: View {
                         .background(Color.white.opacity(0.3))
 
                     Button {
-                        activeSheet = .simulator
+                        activeSheet = .simulator(device)
                     } label: {
                         Image(systemName: "gearshape")
                             .font(.body)
@@ -2165,7 +2217,7 @@ struct TestingControlsView: View {
 
                 // Servo Test button
                 Button {
-                    activeSheet = .servoTest
+                    activeSheet = .servoTest(device)
                 } label: {
                     HStack {
                         Image(systemName: "slider.horizontal.3")
@@ -2186,7 +2238,7 @@ struct TestingControlsView: View {
                 // pushes the resulting channel mask to the rocket.
                 if device.isBaseStation {
                     Button {
-                        activeSheet = .frequencyScan
+                        activeSheet = .frequencyScan(device)
                     } label: {
                         HStack {
                             Image(systemName: "waveform.badge.magnifyingglass")
