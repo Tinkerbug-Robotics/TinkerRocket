@@ -1120,6 +1120,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(50, payload: payload)
     }
 
+    /// #390: pin this base station's radio focus (cmd 45, payload [rid],
+    /// 0 = auto). RAM-only on the BS — re-sent on every connect. Firmware
+    /// without the handler ignores the unknown command; app-side pinning
+    /// still governs display and voice, so the pairing degrades gracefully.
+    func sendSetFocusRocket(_ rocketID: UInt8) {
+        sendRawCommand(45, payload: Data([rocketID]))
+    }
+
+    /// #390: BS-only CSV logging control (cmd 46, payload [on]) — unlike
+    /// legacy cmd 23 it never uplinks a rocket-logging command.
+    func sendSetBSLogging(_ on: Bool) {
+        sendRawCommand(46, payload: Data([on ? 1 : 0]))
+    }
+
     // MARK: - File operations
 
     func requestFileList(page: UInt8 = 0) {
@@ -1457,6 +1471,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.requestConfig()
+            // #390: re-assert the radio-focus pin after every (re)connect —
+            // the BS keeps it in RAM only, so a BS reboot (which bounces
+            // BLE) forgets it. The fleet seeded focusRocketID before
+            // characteristics were up; this is the earliest safe write.
+            if let self, self.isBaseStation, let focus = self.focusRocketID {
+                self.sendSetFocusRocket(focus)
+            }
         }
     }
 

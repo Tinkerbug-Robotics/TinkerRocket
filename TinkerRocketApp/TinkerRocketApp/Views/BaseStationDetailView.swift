@@ -136,7 +136,10 @@ struct BaseStationDetailView: View {
             }
 
             Button {
-                bs.sendToggleLogging()
+                // #390: decoupled BS-only toggle (cmd 46) — never uplinks a
+                // rocket-logging command. Rocket recording is controlled
+                // from each rocket's own section.
+                bs.sendSetBSLogging(!bs.telemetry.bs_logging_active)
             } label: {
                 let active = bs.telemetry.bs_logging_active
                 HStack {
@@ -149,8 +152,7 @@ struct BaseStationDetailView: View {
                 .foregroundColor(.white)
                 .cornerRadius(10)
             }
-            // Honest about the wire: cmd 23 is the legacy coupled toggle.
-            Text("Also starts/stops recording on the focused rocket.")
+            Text("Base-station CSV only — rocket recording is controlled from the rocket's section.")
                 .font(.caption2)
                 .foregroundColor(.secondary)
         }

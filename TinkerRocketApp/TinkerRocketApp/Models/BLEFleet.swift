@@ -151,16 +151,22 @@ class BLEFleet: NSObject, ObservableObject {
     /// Record a base station's sticky auto-focus (first rocket heard) so it
     /// survives that BLEDevice being recreated on reconnect. Never
     /// overwrites an existing choice — that's the point of stickiness.
+    /// Pushes the pin to the BS too: its own auto pick is the same
+    /// first-heard rocket, but pinning makes the agreement explicit and
+    /// disables the BS-side silent fallback while the app is attached.
     func noteAutoFocus(baseStation: BLEDevice, rocketID: UInt8) {
         guard let pid = baseStation.peripheral?.identifier else { return }
         if bsFocus[pid] == nil {
             bsFocus[pid] = rocketID
+            baseStation.sendSetFocusRocket(rocketID)
         }
     }
 
     /// User-driven focus switch for one base station. Re-pins the device's
     /// mirrored stream immediately (cached telemetry + latched fix) so the
-    /// dashboard doesn't wait for the next frame.
+    /// dashboard doesn't wait for the next frame, and pushes the pin to the
+    /// BS (cmd 45) so hop-follow / stale re-push / uplink targeting move
+    /// with it.
     func setFocus(baseStation: BLEDevice, rocketID: UInt8) {
         if let pid = baseStation.peripheral?.identifier {
             bsFocus[pid] = rocketID
@@ -172,8 +178,7 @@ class BLEFleet: NSObject, ObservableObject {
         let key = RocketKey(networkID: baseStation.networkID, rocketID: rocketID)
         baseStation.lastValidRocketFix = lastValidRocketFixes[key]
         baseStation.refreshFocusedRelayFreshness()
-        // SET_FOCUS_ROCKET push to the BS lands with the firmware half of
-        // #390 (cmd 45); until then the pin is app-side only.
+        baseStation.sendSetFocusRocket(rocketID)
     }
 
     // MARK: - Private state

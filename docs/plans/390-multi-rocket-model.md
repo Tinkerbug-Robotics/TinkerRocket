@@ -253,19 +253,38 @@ pair switcher as one-tap connect targets.
 
 ## 3. Implementation order (commits at bench-testable seams)
 
-1. App: RocketKey/roster merge + display set + per-BS focus state + pair
-   foreground + per-rocket streams (kill the `device.telemetry` relay
-   mirror; add `bsStatus`) + announcer filter + fix-cache re-key + unit
-   tests (pure merge/routing/focus logic testable without CoreBluetooth).
-2. App: pair switcher + units bar + sectioned dashboard + BS strip + BS
-   detail screen.
-3. App: per-section capability gating + targeted cmd-50 action routing
-   (works against current BS firmware) + netid_drops soften.
-4. BS fw: cmd 45 focus pin (+ sticky auto fallback) + cmd 46 decoupled SD
-   toggle + hop/heartbeat/re-push pinning + build + host-testable focus
-   helper where practical.
-5. App: push cmd 45 on BS connect + focus change; map multi-marker.
-6. Bench: BS + 2 rockets — both sections live in fixed mode, targeted
-   camera/logging per rocket, focus stickiness across silence, stale banner
-   describes the focused rocket. Two-BS pair switching if hardware allows
-   (V2 + V3 BS).
+1. ✅ App model (commit 4f8c32d): RocketKey/roster merge + display set +
+   per-BS focus state + pair foreground + sticky first-heard focus with the
+   relay mirror/announcer/fix-latch PINNED to it (the mirror stays as the
+   focused rocket's stream rather than being killed — every commit leaves a
+   working app) + `effectiveDataStatus` staleness overlay + fix-cache
+   re-key + unit tests.
+2. ✅ App GUI (commit 3cb547a): pair switcher + units bar + sectioned
+   dashboard (direct / focused-relay / relay sections, collapsible) + BS
+   strip; device-carrying sheets; DeviceChipBar removed.
+3. ✅ App gating + targeting (commit 8e34aba): BaseStationDetailView
+   (battery/storage/SD logging/focus picker/scan/files/settings), BS rows
+   out of rocket sections, targeted cmd-50 camera/logging/sim with
+   per-rocket desired state, Ground Test direct-only, capability
+   annotations, netid_drops info-vs-warning.
+4. ✅ BS fw: cmd 45 SET_FOCUS_ROCKET (pin + immediate re-push repoint),
+   sticky first-heard auto focus + 30 s one-way fallback, hop-follow gated
+   to the focused rocket (enter AND exit), focused-rocket camera/logging
+   toggle state + uplink targets, per-packet logging_active in the BLE
+   builder, focusedRocketState() for scan coordination, cmd 46
+   SET_BS_LOGGING (decoupled SD toggle). Wire-code checker green.
+5. ✅ App: cmd 45 pushed on BS connect (post-discovery, with the config
+   request), on auto-latch, and on user focus switch; BS screen logging
+   uses cmd 46.
+6. Bench (pending): BS + 2 rockets — both sections live in fixed mode,
+   targeted camera/logging per rocket, focus stickiness across silence,
+   stale banner describes the focused rocket, hop session unaffected by the
+   background rocket. Two-BS pair switching if hardware allows (V2 + V3
+   BS). NOTE: old-BS + new-app degrades gracefully (cmd 45/46 ignored;
+   display/voice still pinned app-side; camera/sim already targeted via
+   cmd 50), but the BS-side stale re-push and untargeted logging keep
+   last-heard semantics until the BS is re-flashed.
+
+Follow-ups spun out: map multi-marker for displayed rockets (fix cache is
+already (nid,rid)-keyed), Sim/Servo sheets for non-focused relay rockets,
+known-but-disconnected BSes in the pair switcher.

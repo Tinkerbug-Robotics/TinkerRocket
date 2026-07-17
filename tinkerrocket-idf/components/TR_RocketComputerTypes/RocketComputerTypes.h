@@ -277,6 +277,13 @@ static constexpr uint8_t BLE_BS_CMD_SERVO_TEST_ANGLES = 24;
 static constexpr uint8_t BLE_BS_CMD_SERVO_TEST_STOP   = 25;
 static constexpr uint8_t BLE_BS_CMD_SET_UNIT_NAME     = 40;
 static constexpr uint8_t BLE_BS_CMD_SET_NETWORK_ID    = 41;
+// #390: pin the BS's radio focus to one rocket ([rid]; 0 = auto sticky
+// first-heard). Hop-follow, stale re-push, and untargeted uplink defaults
+// key off the focused rocket instead of whichever packet arrived last.
+static constexpr uint8_t BLE_BS_CMD_SET_FOCUS_ROCKET  = 45;
+// #390: BS-only CSV logging toggle ([on]) — decoupled from the legacy
+// cmd 23, which also broadcasts a rocket-logging uplink.
+static constexpr uint8_t BLE_BS_CMD_SET_BS_LOGGING    = 46;
 static constexpr uint8_t BLE_BS_CMD_RELAY_TO_ROCKET   = 50;
 static constexpr uint8_t BLE_BS_CMD_FREQ_SCAN         = 60;
 
