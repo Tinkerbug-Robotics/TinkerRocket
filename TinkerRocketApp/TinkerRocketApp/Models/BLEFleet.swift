@@ -53,12 +53,35 @@ class BLEFleet: NSObject, ObservableObject {
     /// Which device the dashboard is currently showing.
     @Published var activeDeviceID: UUID?
 
-    /// Latest usable rocket GPS fix per rocketID.  Lives on the fleet
+    /// Latest usable rocket GPS fix per rocket.  Lives on the fleet
     /// (not on a BLEDevice) because BLEFleet destroys+recreates a
     /// BLEDevice on every BLE disconnect/reconnect — without an outer
     /// cache, the map would blank every time the phone briefly loses
     /// the base station.  In-memory only; cleared on app kill.  #140.
-    @Published var lastValidRocketFixes: [UInt8: LastValidRocketFix] = [:]
+    /// Keyed by (networkID, rocketID) — rocket IDs are only unique per
+    /// network, and two BS/rocket pairs on different networks may reuse
+    /// an id (#390). The key uses the LIVE networkID at record time, so
+    /// a fix recorded in the first ~second after connect (before the
+    /// identity readback populates networkID) can land under nid 0 and
+    /// be superseded once the real nid is known — harmless, the next
+    /// valid fix re-latches under the right key.
+    @Published var lastValidRocketFixes: [RocketKey: LastValidRocketFix] = [:]
+
+    /// #390: roster rockets the user chose to hide from the dashboard.
+    /// Everything discovered displays by default; hiding is a pure view
+    /// filter (it never changes radios or command routing).
+    @Published var hiddenRocketKeys: Set<RocketKey> = []
+
+    /// #390: which base station's "pair" (the BS + the rockets it carries)
+    /// the dashboard foregrounds. nil = auto (the first connected BS).
+    /// Only set explicitly by the user via the pair switcher.
+    @Published var foregroundBSID: UUID?
+
+    /// #390: per-base-station radio focus (rocketID), keyed by peripheral
+    /// identifier so it survives the BLEDevice recreation on reconnect.
+    /// Auto-latched to the first rocket a BS hears; switched explicitly by
+    /// the user. Pushed to the BS via SET_FOCUS_ROCKET when supported.
+    @Published var bsFocus: [UUID: UInt8] = [:]
 
     /// Per-device OTA driver (#8 phase 2, #15 second pass).  Same rationale
     /// as lastValidRocketFixes: BLEDevice is recreated on each reconnect,
@@ -95,6 +118,64 @@ class BLEFleet: NSObject, ObservableObject {
         !devices.isEmpty
     }
 
+    // MARK: - Rocket roster (#390)
+
+    /// Connected base-station links.
+    var baseStations: [BLEDevice] {
+        devices.filter { $0.isBaseStation && $0.isConnected }
+    }
+
+    /// The base station whose pair is on screen: the user's explicit pick
+    /// while that BS is still connected, else the first connected BS.
+    var foregroundBaseStation: BLEDevice? {
+        if let id = foregroundBSID,
+           let bs = baseStations.first(where: { $0.peripheral?.identifier == id }) {
+            return bs
+        }
+        return baseStations.first
+    }
+
+    /// Every rocket currently known, merged across links (#390).
+    var rockets: [RocketSubject] {
+        RocketRoster.build(devices: devices)
+    }
+
+    /// The roster minus rockets the user hid — what the dashboard shows.
+    var displayedRockets: [RocketSubject] {
+        rockets.filter { subject in
+            guard let key = subject.key else { return true }  // identifying…
+            return !hiddenRocketKeys.contains(key)
+        }
+    }
+
+    /// Record a base station's sticky auto-focus (first rocket heard) so it
+    /// survives that BLEDevice being recreated on reconnect. Never
+    /// overwrites an existing choice — that's the point of stickiness.
+    func noteAutoFocus(baseStation: BLEDevice, rocketID: UInt8) {
+        guard let pid = baseStation.peripheral?.identifier else { return }
+        if bsFocus[pid] == nil {
+            bsFocus[pid] = rocketID
+        }
+    }
+
+    /// User-driven focus switch for one base station. Re-pins the device's
+    /// mirrored stream immediately (cached telemetry + latched fix) so the
+    /// dashboard doesn't wait for the next frame.
+    func setFocus(baseStation: BLEDevice, rocketID: UInt8) {
+        if let pid = baseStation.peripheral?.identifier {
+            bsFocus[pid] = rocketID
+        }
+        baseStation.focusRocketID = rocketID
+        if let remote = baseStation.remoteRockets.first(where: { $0.rocketID == rocketID }) {
+            baseStation.telemetry = remote.telemetry
+        }
+        let key = RocketKey(networkID: baseStation.networkID, rocketID: rocketID)
+        baseStation.lastValidRocketFix = lastValidRocketFixes[key]
+        baseStation.refreshFocusedRelayFreshness()
+        // SET_FOCUS_ROCKET push to the BS lands with the firmware half of
+        // #390 (cmd 45); until then the pin is app-side only.
+    }
+
     // MARK: - Private state
 
     private var centralManager: CBCentralManager!
@@ -115,6 +196,28 @@ class BLEFleet: NSObject, ObservableObject {
     // forget to keep a reference to it?".  Held from connect() until the
     // connection resolves (didConnect / didFailToConnect / didDisconnect).
     private var connectingPeripherals: [UUID: CBPeripheral] = [:]
+
+    // #390: fleet-level views (roster, units bar) derive from state that
+    // lives on child objects (device.remoteRockets, identity readbacks).
+    // BLEFleet doesn't otherwise republish when a child mutates, so forward
+    // each device's objectWillChange while it is connected.
+    private var deviceObservers: [UUID: AnyCancellable] = [:]
+
+    /// Wire a freshly connected device into the fleet: back-reference,
+    /// focus re-seed (sticky across the BLEDevice recreation on reconnect),
+    /// and child-change forwarding for roster-derived views.
+    private func adopt(_ device: BLEDevice, peripheralID: UUID) {
+        device.fleet = self
+        // #547: seed the type from the known-device registry before the
+        // config_identity readback — renamed devices carry no TR- prefix
+        // and can mis-parse via the legacy substring check.
+        seedTypeFromRegistry(device, peripheralID: peripheralID)
+        if let focus = bsFocus[peripheralID] {
+            device.focusRocketID = focus
+        }
+        deviceObservers[peripheralID] = device.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+    }
 
     // MARK: - Init
 
@@ -204,8 +307,8 @@ class BLEFleet: NSObject, ObservableObject {
     /// peripheral.name is iOS-cached and can be nil/stale after a
     /// re-flash, while the scan response carried the real name.  The
     /// readback's "dt" still overrides everything ~1 s later.
-    private func seedTypeFromRegistry(_ device: BLEDevice, peripheral: CBPeripheral) {
-        let discovered = discoveredDevices.first { $0.id == peripheral.identifier }
+    private func seedTypeFromRegistry(_ device: BLEDevice, peripheralID: UUID) {
+        let discovered = discoveredDevices.first { $0.id == peripheralID }
         let advertisedName = discovered?.name ?? device.connectedDeviceName
         if let known = discovered?.knownType
             ?? knownDevices.deviceType(forAdvertisedName: advertisedName) {
@@ -223,12 +326,12 @@ class BLEFleet: NSObject, ObservableObject {
     /// packet has no GPS but a prior session cached one.
     @discardableResult
     func recordRocketFix(from telemetry: TelemetryData,
-                         rocketID: UInt8) -> LastValidRocketFix? {
-        if let fresh = LastValidRocketFix.fromTelemetry(telemetry, rocketID: rocketID) {
-            lastValidRocketFixes[rocketID] = fresh
+                         key: RocketKey) -> LastValidRocketFix? {
+        if let fresh = LastValidRocketFix.fromTelemetry(telemetry, rocketID: key.rocketID) {
+            lastValidRocketFixes[key] = fresh
             return fresh
         }
-        return lastValidRocketFixes[rocketID]
+        return lastValidRocketFixes[key]
     }
 }
 
@@ -256,8 +359,7 @@ extension BLEFleet: CBCentralManagerDelegate {
                 // fleet?.recordRocketFix() no-ops, so lastValidRocketFix never
                 // populates and the map marker / direction arrow / landing anchor
                 // stay blank for the whole restored session.
-                device.fleet = self
-                seedTypeFromRegistry(device, peripheral: p)
+                adopt(device, peripheralID: p.identifier)
                 device.onConnect()
                 devices.append(device)
                 activeDeviceID = p.identifier
@@ -326,8 +428,7 @@ extension BLEFleet: CBCentralManagerDelegate {
         connectingPeripherals[peripheral.identifier] = nil
 
         let device = BLEDevice(peripheral: peripheral, name: name)
-        device.fleet = self
-        seedTypeFromRegistry(device, peripheral: peripheral)
+        adopt(device, peripheralID: peripheral.identifier)
         device.onConnect()
         devices.append(device)
 
@@ -352,6 +453,7 @@ extension BLEFleet: CBCentralManagerDelegate {
         // No longer connecting/connected — drop the strong ref (the reconnect
         // path below re-adds it before its connect attempt) (#173).
         connectingPeripherals[peripheral.identifier] = nil
+        deviceObservers[peripheral.identifier] = nil  // #390
 
         // Update active device
         if activeDeviceID == peripheral.identifier {

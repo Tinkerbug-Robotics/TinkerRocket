@@ -443,13 +443,17 @@ struct ConnectedDashboardView: View {
             // a fake "INIT" rocket.  When STALE we keep the views visible
             // but dim them and show a banner with the age.  Direct rocket
             // connections always come through as .live (no banner, no dim).
-            let dataStatus = device.telemetry.data_status
+            // #390: effectiveDataStatus overlays app-computed staleness of
+            // the FOCUSED rocket — with the relay mirror pinned, the BS's
+            // re-push may describe a different rocket and get dropped, so
+            // the frame-carried status alone could freeze at .live.
+            let dataStatus = device.effectiveDataStatus
             let showRocketViews = dataStatus != .syncing
             let staleOpacity: Double = dataStatus == .stale ? 0.5 : 1.0
 
             if device.isBaseStation && dataStatus != .live {
                 TelemetryStatusBanner(status: dataStatus,
-                                      ageMs: device.telemetry.data_age_ms)
+                                      ageMs: device.effectiveDataAgeMs)
             }
 
             if showRocketViews {
