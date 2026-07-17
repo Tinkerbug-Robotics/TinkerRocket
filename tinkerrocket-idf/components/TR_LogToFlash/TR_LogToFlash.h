@@ -5,6 +5,8 @@
 #include <RocketComputerTypes.h>
 #include "lfs.h"
 #include "mram_dirty_policy.h"
+#include "bad_block_scan_policy.h"
+#include "flush_iter_ledger.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -105,6 +107,13 @@ struct TR_LogToFlashStats
     // multi-second parser_max stalls.
     uint32_t spi_wait_max_us = 0;      // max time blocked acquiring spi_mutex_
     uint32_t spi_hold_max_us = 0;      // max single spi_mutex_ hold
+    // #510: per-report-window SUMS complementing the maxima above — a burst
+    // of sub-threshold ops (e.g. the activation ring drain's ~24 page
+    // writes) is invisible to a max but shows up here.
+    uint32_t drain_pages = 0;          // pages shipped to NAND this window
+    uint32_t drain_bytes = 0;          // ring bytes drained this window
+    uint32_t pop_sum_us = 0;           // summed MRAM ringPop wall time
+    uint32_t write_sum_us = 0;         // summed write_sink/lfs_file_write time
     uint32_t syncs_performed = 0;      // cumulative lfs_file_sync calls since begin()
 
     // Persistent bad-block avoidance (#47): once a NAND block is known bad,
@@ -376,6 +385,16 @@ private:
     int64_t  spi_hold_start_us_ = 0;
     uint32_t syncs_performed_ = 0;
 
+    // #510: per-iteration section ledger (reset at the top of every
+    // flushTaskLoop pass) + per-report-window SUMS (reset alongside the
+    // maxima above). The maxima hide a burst of sub-threshold ops — the
+    // 7/14 activation drain (~24 page writes, 588 ms total) read as 11 ms.
+    FlushIterLedger iter_ledger_;
+    uint32_t drain_pages_win_ = 0;
+    uint32_t drain_bytes_win_ = 0;
+    uint32_t pop_us_win_ = 0;
+    uint32_t write_us_win_ = 0;
+
     // Cumulative LFS-callback op counters (#47 follow-up).  Used to break
     // down *what* a slow lfs_file_write actually did — lots of reads with
     // few writes points at a lookahead scan or CTZ walk; lots of writes
@@ -401,10 +420,24 @@ private:
     // bitmap is wiped — see nandInit().
     uint16_t bad_block_chip_id_ = 0;
 
+    // #511 boot-scan gate inputs. current_chip_id_/nand_dead_bus_ are set by
+    // nandInit()'s RDID read; the other two are captured by
+    // loadBadBlocksFromNVS() BEFORE nandInit() can rewrite bad_block_chip_id_
+    // (the "chip" key is written pre-scan and must not be trusted as a
+    // scan-completed signal — see bad_block_scan_policy.h).
+    uint16_t current_chip_id_ = 0;
+    bool     nand_dead_bus_ = false;
+    bool     bad_block_map_blob_ok_ = false;   // NVS "map" present, exact size
+    uint16_t bad_block_scanned_chip_ = 0;      // NVS "scanned" (0 = never)
+
     bool isBlockBad(uint32_t block) const;
     void markBlockBad(uint32_t block);
     void loadBadBlocksFromNVS();
     void persistBadBlocksIfDirty();
+    /// #511: record (NVS "bblk"/"scanned") that a boot scan completed for the
+    /// current chip. Written strictly AFTER scanBadBlocksAtBoot() so a power
+    /// cut mid-scan leaves the marker stale and the next boot rescans.
+    void markBootScanComplete();
     uint32_t countBadBlocks() const;
     /// Boot-time non-destructive bad-block scan: for every block not yet in
     /// the persistent map, PAGEREAD page 0 to catch NAND-reported read

@@ -4714,7 +4714,8 @@ static void printStats()
              "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
              "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
              "bad_blocks=%lu skips=%lu  "
-             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us",
+             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us  "
+             "dpg=%lu dby=%lu pop=%lu wsum=%lu m388=%lu/%lu us",
              (unsigned long)s.write_max_us,
              (unsigned long)s.sync_max_us,
              (unsigned long)s.erase_max_us,
@@ -4732,8 +4733,15 @@ static void printStats()
              (unsigned long)cur_rx_peak,
              (unsigned long)cur_parser,
              (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
-             (unsigned long)s.spi_hold_max_us);  // #398
+             (unsigned long)s.spi_hold_max_us,   // #398
+             (unsigned long)s.drain_pages,       // #510: window SUMS — a burst of
+             (unsigned long)s.drain_bytes,       //   sub-threshold page writes is
+             (unsigned long)s.pop_sum_us,        //   invisible to the maxima above
+             (unsigned long)s.write_sum_us,      // #510
+             (unsigned long)flightlog.writeLockWaitMaxUs(),   // #510: #388 max/sum —
+             (unsigned long)flightlog.writeLockWaitSumUs());  //   mutex share of wsum
     logger.resetIntervalTimings();
+    flightlog.resetLockWaitStats();  // #510: same window as the logger sums
 
     // #398: per-task CPU deltas over this same interval — pins the core-1 hog
     // that co-stalls loop_oc during the launch-activation window. Uses `dt`
