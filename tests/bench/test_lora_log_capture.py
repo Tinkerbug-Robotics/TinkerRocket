@@ -7,7 +7,8 @@ Drives a simulated flight on real hardware end-to-end:
 
 The flight computer's SensorCollectorSim provides synthetic GNSS / IMU /
 pressure that drive the rocket state machine through READY → PRELAUNCH →
-INFLIGHT → LANDED → READY, while the rocket transmits real LoRa packets
+INFLIGHT → LANDED (terminal: post_flight_lockout holds until a reboot /
+power-cycle, #317), while the rocket transmits real LoRa packets
 on the operating frequency.  The BS receives them and writes lora_*.csv
 to the SD card.  After the cycle, the test downloads the newest LoRa log
 via BLE and asserts:
@@ -48,7 +49,7 @@ Usage:
 
     # iOS-driven mode: skip the sim drive, just verify the newest log on the
     # BS SD.  Workflow: drive the sim from the iOS Simulation view, wait for
-    # rocket to return to READY, disconnect iOS, then run this.
+    # LANDED (terminal since #317), disconnect iOS, then run this.
     python3 tests/bench/test_lora_log_capture.py --skip-sim
 
     # Verify a specific file (e.g. a recovered log from a past flight)
@@ -326,30 +327,34 @@ async def run_test(args) -> int:
                 COMMAND_CHAR_UUID, bytes([CMD_SIM_START]), response=True)
 
             # Watch the state machine.  Timeouts are conservative — even a 10 s
-            # burn + 30 s descent should comfortably hit READY again within 90 s.
+            # burn + 30 s descent should comfortably hit LANDED within 90 s.
             if not await wait_for_state(
                     cap, "PRELAUNCH",  20, "READY → PRELAUNCH"): return 5
             if not await wait_for_state(
                     cap, "INFLIGHT",   30, "PRELAUNCH → INFLIGHT"): return 6
             if not await wait_for_state(
                     cap, "LANDED",     90, "INFLIGHT → LANDED"): return 7
+            # LANDED is the TERMINAL state for a sim cycle: since #317 the
+            # flight computer latches post_flight_lockout until a reboot /
+            # power-cycle, so the rocket deliberately never returns to READY.
+            # (An earlier version of this test waited for LANDED → READY here
+            # — a pre-#317 leftover that timed out on every modern run while
+            # everything upstream passed.)
+            #
             # After landing, the BS closes log A on the LANDED transition
             # and immediately auto-opens log B for any post-landing packets
             # (intentional — captures recovery telemetry).  Log A is on
             # disk; log B will close on its own once 5 min of silence
             # elapses (LOG_SILENCE_TIMEOUT_MS, #137).
-            await asyncio.sleep(5.0)
-            if not await wait_for_state(
-                    cap, "READY",      30, "LANDED → READY (sim done)"): return 8
-
-            # Short grace so the LANDED-close fsync has finished and log A
-            # is visible in the BLE file listing.  We deliberately do NOT
+            #
+            # Grace so the LANDED-close fsync has finished and log A is
+            # visible in the BLE file listing.  We deliberately do NOT
             # wait for log B's 5-min silence-close — we want the assertion
             # to run against log A (the file with PRELAUNCH/INFLIGHT/LANDED
             # rows).  The newest-by-name pick below selects log B if it's
             # opened with a later timestamp, so we use --file to force log
             # A when running back-to-back tests.
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(10.0)
 
         # ---- File list ----
         print("[ble]  requesting file list")
