@@ -124,9 +124,14 @@ CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL=y
 CONFIG_ESP_XT_WDT=y
 CONFIG_ESP_XT_WDT_BACKUP_CLK_ENABLE=y
 
-# NOTE if the bench boot log says "32.768kHz XTAL not detected": the first knob to
-# try is CONFIG_ESP_SYSTEM_RTC_EXT_XTAL_BOOTSTRAP_CYCLES (default 0 on S3), which
-# kicks the crystal with a 32 kHz square wave to help it start.
+# NOTE if the bench boot log says "32.768kHz XTAL not detected": do NOT reach for
+# CONFIG_ESP_SYSTEM_RTC_EXT_XTAL_BOOTSTRAP_CYCLES — on the S3 that knob is a STUB
+# (rtc_clk_32k_bootstrap() ignores its argument; the kick-start only exists on
+# classic ESP32). IDF gives the crystal exactly 2 × ~92 ms calibration attempts
+# (RTC_XTAL_CAL_RETRY is a hardcoded #define in clk.c), which a warm marginal
+# crystal can miss. The real remediation is retry32kCrystal() in main.cpp (#541):
+# an app-level second chance of up to 2 s before BT init, with a LOUD failure log.
+# Persistent failures indicate hardware (crystal drive / load caps) — see #541.
 
 # (#519) The other half of the reason light sleep was off. enterLowPowerMode()'s
 # comment cited "USB-Serial-JTAG incompatible" — which is true, the USJ peripheral
