@@ -1304,6 +1304,16 @@ static void applyBLEParams(const char* what, const struct ble_gap_upd_params& pa
                               params.latency, params.supervision_timeout, what);
 }
 
+// #542: how long after the connect-time config push to keep the FAST link
+// before dropping to the low-power idle set. The app's connect burst (identity,
+// config readbacks, MagCal read, profile sync) keeps issuing commands for a few
+// seconds past the push; dropping to 200 ms/latency-4 mid-burst made every
+// remaining exchange cost ~500 ms (measured: first command 57 ms, then
+// 300-800 ms — 5-8 s of "connecting…" in the app). 8 s covers the burst with
+// generous margin (the whole burst takes ~1-2 s on a fast link) and costs ~8 s
+// of fast-interval idle current once per connection — negligible.
+static constexpr uint32_t kSlowParamsDeferMs = 8000;
+
 // Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
 // lever on idle current. Within Apple's envelope: min >= 15 ms; max >= min + 15 ms;
 // latency <= 30; itvl_max * (latency + 1) = 1000 ms <= 2 s; supervision timeout
@@ -6044,16 +6054,34 @@ static void loop_oc()
     {
         static bool ble_was_connected = false;
         static bool config_push_pending = false;
+        static uint32_t slow_params_due_ms = 0;   // #542: deferred idle-param drop
         bool ble_now = ble_app.isConnected();
         if (ble_now && !ble_was_connected) config_push_pending = true;    // arm on connect
-        if (!ble_now)                      config_push_pending = false;   // disarm on disconnect
+        if (!ble_now) {                                                   // disarm on disconnect
+            config_push_pending = false;
+            slow_params_due_ms = 0;
+        }
         if (config_push_pending && ble_app.isReadyForNotify()) {
             config_push_pending = false;
             sendCurrentConfig();
-            // In low-power mode, override the fast params set by onConnect with
-            // slow params to save power (onConnect always requests fast params,
-            // needed for file transfer when powered on).
+            // #542: in low-power mode, SCHEDULE the slow (idle) params instead
+            // of requesting them here. This point is ~1 s after connect — the
+            // middle of the app's connect burst — and dropping to the 200 ms/
+            // latency-4 set here made every remaining handshake exchange cost
+            // ~500 ms (see kSlowParamsDeferMs). Let the burst run on the fast
+            // params onConnect requested, then drop.
             if (!pwr_pin_on) {
+                slow_params_due_ms = (uint32_t)millis() + kSlowParamsDeferMs;
+            }
+        }
+        // #542: fire the deferred drop once the burst window has passed.
+        // Rail-on cancels it (fast params are the powered-on policy — see the
+        // transfer paths); disconnect cancels above.
+        if (slow_params_due_ms != 0 && ble_now) {
+            if (pwr_pin_on) {
+                slow_params_due_ms = 0;
+            } else if ((int32_t)((uint32_t)millis() - slow_params_due_ms) >= 0) {
+                slow_params_due_ms = 0;
                 requestSlowBLEParams();
             }
         }
