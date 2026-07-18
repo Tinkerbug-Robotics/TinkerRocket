@@ -181,6 +181,8 @@ void TR_BLE_To_APP::on_ble_hs_sync()
 
     if (s_instance_)
     {
+        // #541: boot counts as a "someone may be trying to connect" moment.
+        s_instance_->armFastAdvWindow();
         s_instance_->startAdvertising();
     }
 }
@@ -284,8 +286,14 @@ int TR_BLE_To_APP::gap_event_cb(struct ble_gap_event* event, void* arg)
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        // Advertising ended (e.g. timeout); restart it
-        self->startAdvertising();
+        // Advertising ended. With the #541 fast window this fires at the fast
+        // phase's duration expiry — startAdvertising() then picks the slow
+        // 1000 ms phase (deadline passed). Skip while connected: we advertise
+        // for ONE central; re-advertising mid-connection would invite a second.
+        if (!self->device_connected_)
+        {
+            self->startAdvertising();
+        }
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
@@ -526,7 +534,9 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     conn_param_attempts_ = 0;
     ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
 
-    // Restart advertising so new devices can connect
+    // Restart advertising so new devices can connect. Disconnect re-opens the
+    // fast window (#541): reconnects are the common case right here.
+    armFastAdvWindow();
     startAdvertising();
     ESP_LOGI(BLE_TAG, "Advertising restarted");
 }
@@ -845,15 +855,47 @@ void TR_BLE_To_APP::registerGattServices()
 // Advertising
 // ============================================================================
 
+void TR_BLE_To_APP::armFastAdvWindow()
+{
+    // #541: (re)open the fast-advertising window. Called at host sync (boot)
+    // and on disconnect — the two moments a central is likely to be trying to
+    // find us. startAdvertising() picks the phase from this deadline.
+    fast_adv_until_ms_ = (uint32_t)millis() + kFastAdvWindowMs;
+}
+
 void TR_BLE_To_APP::startAdvertising()
 {
     struct ble_gap_adv_params adv_params = {};
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  // Undirected connectable
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;  // General discoverable
 
-    // Advertising interval: 1000 ms (in 0.625 ms units = 1600)
-    adv_params.itvl_min = 0x0640;   // 1000 ms
-    adv_params.itvl_max = 0x0640;   // 1000 ms
+    // #541: two-phase advertising. A fixed 1000 ms interval made discovery
+    // and connection latency poor on every central — each connect attempt
+    // waits for an adv event, so a 1 s interval adds up to a second before
+    // the CONNECT_IND can even be sent (and made this Mac's duty-cycled
+    // scanner miss the boards in a large fraction of scan windows). Advertise
+    // FAST (152.5 ms, an Apple-recommended value) for the first
+    // kFastAdvWindowMs after boot and after every disconnect — exactly when
+    // someone is trying to connect — then drop back to the 1000 ms power
+    // interval for the long idle wait. The fast phase uses NimBLE's duration
+    // so BLE_GAP_EVENT_ADV_COMPLETE hands us the phase transition for free.
+    const uint32_t now_ms = (uint32_t)millis();
+    const bool fast = (fast_adv_until_ms_ != 0) &&
+                      ((int32_t)(fast_adv_until_ms_ - now_ms) > 0);
+    int32_t duration_ms = BLE_HS_FOREVER;
+    if (fast)
+    {
+        adv_params.itvl_min = 0x00F4;   // 244 * 0.625 ms = 152.5 ms
+        adv_params.itvl_max = 0x00F4;
+        duration_ms = (int32_t)(fast_adv_until_ms_ - now_ms);
+        if (duration_ms < 100) duration_ms = 100;
+    }
+    else
+    {
+        // Advertising interval: 1000 ms (in 0.625 ms units = 1600)
+        adv_params.itvl_min = 0x0640;   // 1000 ms
+        adv_params.itvl_max = 0x0640;   // 1000 ms
+    }
 
     // Build advertising data: flags + complete 128-bit service UUID
     struct ble_hs_adv_fields fields = {};
@@ -888,11 +930,16 @@ void TR_BLE_To_APP::startAdvertising()
         ESP_LOGW(BLE_TAG, "ble_gap_adv_rsp_set_fields failed, rc=%d", rc);
     }
 
-    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, BLE_HS_FOREVER,
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, duration_ms,
                            &adv_params, gap_event_cb, this);
     if (rc != 0 && rc != BLE_HS_EALREADY)
     {
         ESP_LOGE(BLE_TAG, "ble_gap_adv_start failed, rc=%d", rc);
+    }
+    else if (fast)
+    {
+        ESP_LOGI(BLE_TAG, "Advertising FAST (152.5 ms interval) for %ld ms, "
+                          "then 1000 ms", (long)duration_ms);
     }
     else
     {
