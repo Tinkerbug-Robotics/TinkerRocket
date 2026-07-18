@@ -11,14 +11,19 @@
 //  walk has a target.
 //
 //  Algorithm mirrors the Python validation tool at
-//  `Data_Analysis/landing_predictor.py`.  v1 ships the descent branch
-//  (alt_apo flag set, or vu <= 0): drift-cast forward from the current
-//  position using the active RocketProfile's drogue/main rates and the
-//  cached wind profile.  When a fresh GNSS fix is available, the snapshot
-//  position is taken from raw GNSS rather than EKF — bypasses the
+//  `Data_Analysis/landing_predictor.py`.
+//  Descent branch (alt_apo flag set, or vu <= 0): drift-cast forward from
+//  the current position using the active RocketProfile's drogue/main rates
+//  and the cached wind profile.  When a fresh GNSS fix is available, the
+//  snapshot position is taken from raw GNSS rather than EKF — bypasses the
 //  post-blackout EKF recovery oscillation seen in flight #176 replay.
-//  Ascent ballistic-with-drag and the uncertainty ellipse land in a
-//  follow-up branch.
+//  Ascent branch (#191 item 1, post-burnout coast ONLY): integrate
+//  ballistic-with-drag on the telemetry EKF velocity to apogee, then the
+//  standard descent cast.  Boost is deliberately never predicted — the
+//  model has no thrust term, so a motor-burning snapshot is garbage-in;
+//  telemetry lost during boost latches the last GNSS fix, as before.
+//  Each prediction carries an uncertainty radius, fixed at compute time
+//  (#191 item 2, see landingUncertainty / ascentDragSpreadMeters below).
 //
 
 import Foundation
@@ -53,6 +58,12 @@ struct LandingPrediction: Equatable {
     /// now() - sampleAt.  Frozen at the last live sample once telemetry
     /// stops.
     let sampleAt: Date
+    /// Uncertainty radius (m) of `landing`, FIXED at compute time (#191
+    /// item 2).  The error budget is set by the snapshot altitude — how
+    /// much modeled descent remains — so it shrinks as re-predictions run
+    /// closer to the ground, and it does NOT grow with staleness once
+    /// latched: an old prediction is exactly as wrong as when it was made.
+    let uncertaintyMeters: Double
 
     static func == (lhs: LandingPrediction, rhs: LandingPrediction) -> Bool {
         // Equality used only to suppress redundant @Published emissions.
@@ -140,7 +151,8 @@ final class LandingPredictor: ObservableObject {
                     landing: last.landing, descentTrack: last.descentTrack,
                     snapshot: last.snapshot, snapshotAltAglFt: last.snapshotAltAglFt,
                     snapshotSource: .latched,
-                    computedAt: now, sampleAt: last.sampleAt
+                    computedAt: now, sampleAt: last.sampleAt,
+                    uncertaintyMeters: last.uncertaintyMeters
                 )
                 prediction = frozen
             }
@@ -148,10 +160,10 @@ final class LandingPredictor: ObservableObject {
         }
 
         // Phase: descent if the apogee flag is set OR vertical rate is non-
-        // positive.  v1 only predicts during descent.
+        // positive; post-burnout coast predicts via the ascent ballistic
+        // (#191 item 1).  Boost never predicts — no thrust model.
         let vU = Double(t.altitude_rate ?? 0)
         let descending = t.alt_apo || vU <= 0.5
-        guard descending else { return }
 
         guard let profile = profileStore?.activeProfile else { return }
 
@@ -161,14 +173,53 @@ final class LandingPredictor: ObservableObject {
         // prediction.  Wind profile is also AGL, so units match.
         let altAglFt = mToFt(Double(t.pressure_alt ?? 0))
 
-        let track = simulateDescentForLanding(
-            startLat: snapshot.latitude,
-            startLon: snapshot.longitude,
-            currentAltAglFt: altAglFt,
-            observedVerticalRateMps: vU,
-            profile: profile,
-            wind: windProfile
-        )
+        let track: [TrackPoint]
+        let source: LandingSnapshotSource
+        let uncertainty: Double
+
+        if descending {
+            track = simulateDescentForLanding(
+                startLat: snapshot.latitude,
+                startLon: snapshot.longitude,
+                currentAltAglFt: altAglFt,
+                observedVerticalRateMps: vU,
+                profile: profile,
+                wind: windProfile
+            )
+            source = .gnss    // we already required num_sats >= 4
+            uncertainty = landingUncertainty(track: track, wind: windProfile)
+        } else if t.launch_flag, t.burnout_flag,
+                  let ve = t.vel_e, let vn = t.vel_n {
+            // Post-burnout coast: position anchors on the GNSS fix (gated
+            // fresh above), velocity on the EKF — GNSS velocity is the
+            // boost casualty, and pre-#191 firmware sends no ve/vn at all,
+            // so this branch simply never runs there.  vu prefers the EKF
+            // channel, falling back to the baro-KF rate.
+            let vu = Double(t.vel_u.map(Double.init) ?? vU)
+            // Apogee straddle (baro says climbing, EKF says not): skip —
+            // the next packet classifies as descent.
+            guard vu > 0.5 else { return }
+            let vel = (e: Double(ve), n: Double(vn), u: vu)
+            let k = profile.ballisticDragK
+
+            let cast = simulateAscentThenDescent(
+                startLat: snapshot.latitude, startLon: snapshot.longitude,
+                currentAltAglFt: altAglFt, velocityENUMps: vel,
+                profile: profile, dragK: k, wind: windProfile)
+            track = cast.track
+            source = .ekf
+            // Wind term over the DESCENT segment only, plus the drag-model
+            // spread (issue spec: k ± 50%) — both fixed at compute time,
+            // consistent with the item-2 model.
+            uncertainty = landingUncertainty(track: cast.descent, wind: windProfile)
+                        + ascentDragSpreadMeters(
+                              startLat: snapshot.latitude, startLon: snapshot.longitude,
+                              currentAltAglFt: altAglFt, velocityENUMps: vel,
+                              profile: profile, dragK: k, wind: windProfile,
+                              nominalLanding: cast.track.last)
+        } else {
+            return
+        }
 
         guard let landing = track.last.map({
             CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
@@ -177,8 +228,9 @@ final class LandingPredictor: ObservableObject {
         let newPrediction = LandingPrediction(
             landing: landing, descentTrack: track,
             snapshot: snapshot, snapshotAltAglFt: altAglFt,
-            snapshotSource: .gnss,    // we already required num_sats >= 4
-            computedAt: now, sampleAt: now
+            snapshotSource: source,
+            computedAt: now, sampleAt: now,
+            uncertaintyMeters: uncertainty
         )
 
         // Suppress no-op republishes (avoids map redraw thrash when nothing
@@ -275,4 +327,151 @@ func simulateDescentForLanding(
         windProfile: windToUse,
         direction: "forward"
     )
+}
+
+// MARK: - Uncertainty model (#191 item 2)
+
+/// Fraction of the total applied wind drift charged as uncertainty: the
+/// winds-aloft model is the dominant descent error term, and ~20% of
+/// mean wind × descent time is the issue-#191 spec.
+private let windUncertaintyFraction = 0.2
+
+/// Wind speed (m/s) assumed for the error bound when no wind profile was
+/// ever fetched: the cast applied ZERO drift, so the full (unknown) drift
+/// is error — bound it at light-breeze scale rather than claiming 0.
+private let assumedWindWhenUnknownMps = 2.0
+
+/// Uncertainty radius for a descent prediction — fixed at compute time.
+///
+/// Descent branch only.  With a wind profile: `windUncertaintyFraction` of
+/// the total drift the cast applied (mean wind speed sampled at the track's
+/// altitudes × descent duration).  Without one: the whole drift is
+/// unmodeled, so charge `assumedWindWhenUnknownMps` across the descent
+/// instead.  Either way the radius scales with REMAINING descent time, so
+/// it shrinks as predictions re-run closer to the ground.  The ascent
+/// drag-spread term arrives with #191 item 1.
+func landingUncertainty(track: [TrackPoint], wind: WindProfile?) -> Double {
+    guard track.count >= 2,
+          let first = track.first, let last = track.last else { return 0 }
+    let descentS = max(0, last.timeS - first.timeS)
+    guard let wind = wind else { return assumedWindWhenUnknownMps * descentS }
+    let speeds = track.map { ktsToMps(wind.interpolate(altAglFt: $0.altAglFt).speedKts) }
+    let meanMps = speeds.reduce(0, +) / Double(speeds.count)
+    return windUncertaintyFraction * meanMps * descentS
+}
+
+// MARK: - Ascent ballistic (#191 item 1)
+
+/// Integration step / cap for the coast-to-apogee propagation.  Mirrors
+/// `landing_predictor.predict_landing`'s ascent branch (dt 0.05 s, 120 s
+/// cap ≈ far beyond any coast this airframe class can fly).
+private let ascentDtS = 0.05
+private let ascentMaxCoastS = 120.0
+private let gMps2 = 9.80665
+
+/// Integrate the post-burnout coast from a position + EKF-velocity snapshot
+/// to apogee under gravity + quadratic drag (a = −g·ẑ − k·|v|·v).
+/// Returns the ascent track, snapshot → apogee (last point has vU ≤ 0);
+/// `dragK` is RocketProfile.ballisticDragK (1/m), 0 = gravity-only.
+/// Semi-implicit Euler like the Python reference: velocity first, then
+/// position with the updated velocity.
+func simulateAscentToApogee(
+    startLat: Double, startLon: Double,
+    currentAltAglFt: Double,
+    velocityENUMps: (e: Double, n: Double, u: Double),
+    dragK: Double
+) -> [TrackPoint] {
+    var lat = startLat, lon = startLon
+    var uM = ftToM(currentAltAglFt)
+    var (ve, vn, vu) = velocityENUMps
+    var t = 0.0
+    var track = [TrackPoint(lat: lat, lon: lon,
+                            altAglFt: currentAltAglFt, timeS: 0)]
+    let maxSteps = Int(ascentMaxCoastS / ascentDtS)
+    for _ in 0..<maxSteps {
+        let vMag = (ve * ve + vn * vn + vu * vu).squareRoot()
+        ve += -dragK * vMag * ve * ascentDtS
+        vn += -dragK * vMag * vn * ascentDtS
+        vu += (-gMps2 - dragK * vMag * vu) * ascentDtS
+
+        let dE = ve * ascentDtS, dN = vn * ascentDtS
+        uM += vu * ascentDtS
+        t += ascentDtS
+        let dist = (dE * dE + dN * dN).squareRoot()
+        if dist > 0 {
+            let bearing = atan2(dE, dN) * 180.0 / .pi
+            let p = forwardProject(lat: lat, lon: lon,
+                                   bearingDeg: bearing, distanceM: dist)
+            lat = p.lat; lon = p.lon
+        }
+        track.append(TrackPoint(lat: lat, lon: lon,
+                                altAglFt: mToFt(uM), timeS: t))
+        if vu <= 0 { break }
+    }
+    return track
+}
+
+/// Full ascent prediction: coast to apogee, then the standard descent cast
+/// from the apogee point (profile rates — there is no observed fall rate at
+/// a future apogee).  Returns the stitched track (descent timeS offset so
+/// the combined track is time-continuous) plus the raw descent segment,
+/// which the uncertainty model needs separately (its wind term charges
+/// descent duration only).
+func simulateAscentThenDescent(
+    startLat: Double, startLon: Double,
+    currentAltAglFt: Double,
+    velocityENUMps: (e: Double, n: Double, u: Double),
+    profile: RocketProfile,
+    dragK: Double,
+    wind: WindProfile?
+) -> (track: [TrackPoint], descent: [TrackPoint]) {
+    let ascent = simulateAscentToApogee(
+        startLat: startLat, startLon: startLon,
+        currentAltAglFt: currentAltAglFt,
+        velocityENUMps: velocityENUMps, dragK: dragK)
+    guard let apogee = ascent.last else { return ([], []) }
+
+    let descent = simulateDescentForLanding(
+        startLat: apogee.lat, startLon: apogee.lon,
+        currentAltAglFt: apogee.altAglFt,
+        observedVerticalRateMps: 0,
+        profile: profile, wind: wind)
+
+    let t0 = apogee.timeS
+    let stitched = ascent + descent.dropFirst().map {
+        TrackPoint(lat: $0.lat, lon: $0.lon,
+                   altAglFt: $0.altAglFt, timeS: $0.timeS + t0)
+    }
+    return (stitched, descent)
+}
+
+/// Drag-model term of the ascent uncertainty (#191 item 2 spec: drag
+/// coefficient ± 50%): re-run the full cast at 0.5k and 1.5k and take the
+/// largest displacement from the nominal landing.  k = 0 (gravity-only)
+/// degenerates to 0 spread, correctly — there is no drag model to be
+/// wrong about.
+func ascentDragSpreadMeters(
+    startLat: Double, startLon: Double,
+    currentAltAglFt: Double,
+    velocityENUMps: (e: Double, n: Double, u: Double),
+    profile: RocketProfile,
+    dragK: Double,
+    wind: WindProfile?,
+    nominalLanding: TrackPoint?
+) -> Double {
+    guard let nominal = nominalLanding else { return 0 }
+    let nominalLoc = CLLocation(latitude: nominal.lat, longitude: nominal.lon)
+    var worst = 0.0
+    for kVariant in [dragK * 0.5, dragK * 1.5] {
+        let cast = simulateAscentThenDescent(
+            startLat: startLat, startLon: startLon,
+            currentAltAglFt: currentAltAglFt,
+            velocityENUMps: velocityENUMps,
+            profile: profile, dragK: kVariant, wind: wind)
+        guard let l = cast.track.last else { continue }
+        let d = CLLocation(latitude: l.lat, longitude: l.lon)
+            .distance(from: nominalLoc)
+        worst = max(worst, d)
+    }
+    return worst
 }

@@ -28,6 +28,10 @@ struct RocketMapView: UIViewRepresentable {
     var predictedLandingSubtitle: String?
     /// Descent path from snapshot → landing (dashed line overlay).
     var predictedDescentTrack: [CLLocationCoordinate2D] = []
+    /// Uncertainty radius (m) drawn as a circle around the predicted-landing
+    /// pin (#191).  Fixed per prediction — it shrinks as re-predictions run
+    /// lower, and stays frozen once latched; 0 draws nothing.
+    var predictedUncertaintyRadiusM: Double = 0
     @Binding var region: MKCoordinateRegion
 
     func makeUIView(context: Context) -> MKMapView {
@@ -66,6 +70,13 @@ struct RocketMapView: UIViewRepresentable {
             annotation.title = "Predicted Landing"
             annotation.subtitle = predictedLandingSubtitle
             mapView.addAnnotation(annotation)
+
+            // Uncertainty circle (#191).  Added before the descent polyline
+            // so the dashed track renders on top of the fill.
+            if predictedUncertaintyRadiusM > 0 {
+                mapView.addOverlay(MKCircle(center: landing,
+                                            radius: predictedUncertaintyRadiusM))
+            }
         }
 
         if predictedDescentTrack.count >= 2 {
@@ -171,6 +182,16 @@ struct RocketMapView: UIViewRepresentable {
                 r.lineDashPattern = [6, 6]  // dashed = "this is a prediction"
                 return r
             }
+            if let circle = overlay as? MKCircle {
+                // Uncertainty disc around the predicted-landing pin (#191):
+                // prediction-green like the pin/track, near-transparent fill
+                // so the basemap stays readable during a recovery walk.
+                let r = MKCircleRenderer(circle: circle)
+                r.strokeColor = .systemGreen.withAlphaComponent(0.7)
+                r.lineWidth = 1.5
+                r.fillColor = .systemGreen.withAlphaComponent(0.12)
+                return r
+            }
             return MKOverlayRenderer(overlay: overlay)
         }
     }
@@ -213,6 +234,7 @@ struct MapView: View {
                     predictedLandingCoordinate: landingPredictor.prediction?.landing,
                     predictedLandingSubtitle: predictedSubtitle(now: context.date),
                     predictedDescentTrack: descentTrackCoords(),
+                    predictedUncertaintyRadiusM: landingPredictor.prediction?.uncertaintyMeters ?? 0,
                     region: $region
                 )
             }
@@ -347,7 +369,9 @@ struct MapView: View {
         guard let p = landingPredictor.prediction else { return nil }
         let age = max(0, Int(now.timeIntervalSince(p.sampleAt)))
         let basis = (p.snapshotSource == .latched) ? "latched" : "live"
-        return "From telemetry \(formatAge(age)) ago (\(basis))"
+        let r = p.uncertaintyMeters
+        let radius = r > 0 ? String(format: " ±%.0f m", r) : ""
+        return "From telemetry \(formatAge(age)) ago (\(basis))\(radius)"
     }
 
     /// Polyline coordinates for the predicted descent track.  The track

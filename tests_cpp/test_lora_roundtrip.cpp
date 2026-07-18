@@ -58,6 +58,11 @@ protected:
         si.q2 = 0.0f;
         si.q3 = 0.707f;
         si.speed = 95.0f;
+        // #191: EKF ENU velocity + burnout
+        si.vel_e = 4.2f;
+        si.vel_n = -7.8f;
+        si.vel_u = 93.4f;
+        si.burnout_detected = true;
         return si;
     }
 };
@@ -107,16 +112,48 @@ TEST_F(LoRaRoundtripTest, NominalFlight_Roundtrip) {
     EXPECT_NEAR(out.max_alt, 420.0f, 1.0f);
     EXPECT_NEAR(out.max_speed, 95.0f, 1.0f);
 
-    // Angles (centidegree -> 0.01 deg resolution)
-    EXPECT_NEAR(out.roll, -12.5f, 0.01f);
-    EXPECT_NEAR(out.pitch, 85.3f, 0.01f);
-    EXPECT_NEAR(out.yaw, 45.0f, 0.01f);
+    // #191: Euler left the wire — unpack derives it from the packed
+    // quaternion, so the in.roll/pitch/yaw set above are deliberately
+    // ignored.  q=(0.707, 0, 0, 0.707) is a pure ~90° yaw.
+    EXPECT_NEAR(out.roll, 0.0f, 0.1f);
+    EXPECT_NEAR(out.pitch, 0.0f, 0.1f);
+    EXPECT_NEAR(out.yaw, 90.0f, 0.1f);
 
     // Quaternion (×10000 -> 0.0001 resolution)
     EXPECT_NEAR(out.q0, 0.707f, 0.0001f);
     EXPECT_NEAR(out.q3, 0.707f, 0.0001f);
 
-    EXPECT_NEAR(out.speed, 95.0f, 1.0f);
+    // #191: speed = |v| of the transmitted components (in.speed ignored):
+    // sqrt(4.2² + 7.8² + 93.4²) ≈ 93.82 — sharper than the old 1 m/s wire.
+    EXPECT_NEAR(out.speed, 93.82f, 0.1f);
+
+    // #191: EKF ENU velocity (dm/s -> 0.1 resolution) + burnout flag
+    EXPECT_NEAR(out.vel_e, 4.2f, 0.05f);
+    EXPECT_NEAR(out.vel_n, -7.8f, 0.05f);
+    EXPECT_NEAR(out.vel_u, 93.4f, 0.05f);
+    EXPECT_TRUE(out.burnout_detected);
+}
+
+// #191: burnout=false must not bleed in from other flags (it lives in the
+// new flags2 byte, not flags_state), and velocity must sign-roundtrip.
+TEST_F(LoRaRoundtripTest, VelocityAndBurnout_IndependentOfFlagsState) {
+    LoRaDataSI in = makeNominal();
+    in.burnout_detected = false;   // every flags_state bit stays set-ish
+    in.vel_e = -321.7f;
+    in.vel_n = 0.0f;
+    in.vel_u = -45.6f;             // descending
+
+    LoRaData packed{};
+    conv.packLoRa(in, packed);
+    EXPECT_EQ(packed.flags2, 0);
+
+    LoRaDataSI out{};
+    conv.unpackLoRa(packed, out);
+    EXPECT_FALSE(out.burnout_detected);
+    EXPECT_TRUE(out.launch_flag);  // flags_state untouched by flags2
+    EXPECT_NEAR(out.vel_e, -321.7f, 0.05f);
+    EXPECT_NEAR(out.vel_n, 0.0f, 0.05f);
+    EXPECT_NEAR(out.vel_u, -45.6f, 0.05f);
 }
 
 TEST_F(LoRaRoundtripTest, ExtremeValues_NoOverflow) {
@@ -273,7 +310,9 @@ TEST_F(LoRaRoundtripTest, Seq_FullU16Range) {
         in.rocket_id        = 7;
         in.next_channel_idx = 99;
         in.num_sats         = 12;
-        in.speed            = 1234.0f;
+        // Payload canary: vel_e is a transmitted field (#191 — speed is
+        // now derived on unpack, so it can no longer serve here).
+        in.vel_e            = 1234.0f;
 
         LoRaData packed{};
         conv.packLoRa(in, packed);
@@ -285,6 +324,6 @@ TEST_F(LoRaRoundtripTest, Seq_FullU16Range) {
         EXPECT_EQ(out.rocket_id,   7)          << "seq=" << s;
         EXPECT_EQ(out.next_channel_idx, 99)    << "seq=" << s;
         EXPECT_EQ(out.num_sats, 12)            << "seq=" << s;
-        EXPECT_NEAR(out.speed, 1234.0f, 1.0f)  << "seq=" << s;
+        EXPECT_NEAR(out.vel_e, 1234.0f, 0.05f) << "seq=" << s;
     }
 }

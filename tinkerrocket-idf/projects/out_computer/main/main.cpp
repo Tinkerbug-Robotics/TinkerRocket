@@ -900,46 +900,6 @@ static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
     return (flags & mask) != 0U;
 }
 
-// Cached Euler angles derived from NonSensorData quaternion
-static float ns_roll_deg  = 0.0f;
-static float ns_pitch_deg = 0.0f;
-static float ns_yaw_deg   = 0.0f;
-
-// Convert packed quaternion (int16 * 10000) from NonSensorData to display angles.
-// Quaternion convention: scalar-first [q0, q1, q2, q3], body-to-NED (FRD body).
-//
-// Roll uses the gimbal-lock-free body-Z azimuth method: the azimuthal angle
-// of the body Z-axis projected into the NED horizontal plane.  This is the
-// same formula the angle controller uses and is well-defined at all pitch
-// angles, unlike the standard ZYX Euler roll which is degenerate at ±90° pitch.
-// Pitch and yaw use standard Euler ZYX (both are well-behaved near vertical).
-static void updateEulerFromNonSensor()
-{
-    if (!latest_non_sensor_valid) return;
-
-    const float qw = (float)latest_non_sensor.q0 / 10000.0f;
-    const float qx = (float)latest_non_sensor.q1 / 10000.0f;
-    const float qy = (float)latest_non_sensor.q2 / 10000.0f;
-    const float qz = (float)latest_non_sensor.q3 / 10000.0f;
-
-    // Roll — gimbal-lock-free: azimuth of body Z-axis in NED horizontal plane
-    float z_n = 2.0f * (qx * qz + qw * qy);
-    float z_e = 2.0f * (qy * qz - qw * qx);
-    ns_roll_deg = -atan2f(z_e, z_n) * (180.0f / (float)M_PI);
-
-    // Pitch (rotation about Y) — standard Euler, well-defined at vertical
-    float sinp = 2.0f * (qw * qy - qz * qx);
-    if (fabsf(sinp) >= 1.0f)
-        ns_pitch_deg = copysignf(90.0f, sinp);
-    else
-        ns_pitch_deg = asinf(sinp) * (180.0f / (float)M_PI);
-
-    // Yaw (rotation about Z) — standard Euler
-    ns_yaw_deg = atan2f(2.0f * (qw * qz + qx * qy),
-                        1.0f - 2.0f * (qy * qy + qz * qz))
-                 * (180.0f / (float)M_PI);
-}
-
 // Read INA230 and populate latest_power_raw so that the existing telemetry
 // pipeline (BLE, LoRa, web) picks up the values automatically.
 // Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
@@ -2611,7 +2571,6 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             // KF-filtered altitude rate from FlightComputer (or sim equivalent)
             pressure_alt_rate_mps = (float)latest_non_sensor.baro_alt_rate_dmps * 0.1f;
-            updateEulerFromNonSensor();
             updateDerivedSpeedFromNonSensor();
 
             // Adopt the FlightComputer's live guidance_enabled state (carried
@@ -3044,9 +3003,6 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
 
     if (latest_non_sensor_valid)
     {
-        lora.roll = ns_roll_deg;
-        lora.pitch = ns_pitch_deg;
-        lora.yaw = ns_yaw_deg;
         lora.q0 = (float)latest_non_sensor.q0 / 10000.0f;
         lora.q1 = (float)latest_non_sensor.q1 / 10000.0f;
         lora.q2 = (float)latest_non_sensor.q2 / 10000.0f;
@@ -3056,10 +3012,16 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         lora.alt_apogee_flag = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
         lora.alt_landed_flag = nsFlagSet(latest_non_sensor.flags, NSF_ALT_LANDED);
 
-        const float e = (float)latest_non_sensor.e_vel / 100.0f;
-        const float n = (float)latest_non_sensor.n_vel / 100.0f;
-        const float u = (float)latest_non_sensor.u_vel / 100.0f;
-        lora.speed = sqrtf(e * e + n * n + u * u);
+        // #191: EKF ENU velocity components — the app's ascent landing
+        // prediction integrates [vE,vN,vU].  Euler angles + instantaneous
+        // speed left the wire in the same change (the BS re-derives them
+        // from the quaternion / these components in unpackLoRa), which is
+        // what keeps the frame at 65 B ≤ the 66 B the #150 dwell table
+        // was validated at.
+        lora.vel_e = (float)latest_non_sensor.e_vel / 100.0f;
+        lora.vel_n = (float)latest_non_sensor.n_vel / 100.0f;
+        lora.vel_u = (float)latest_non_sensor.u_vel / 100.0f;
+        lora.burnout_detected = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
     }
 
     if (latest_ism6_valid)
@@ -4515,6 +4477,10 @@ static void printStats()
         ble_telem.max_speed_mps = NAN;
         ble_telem.pressure_alt = NAN;
         ble_telem.altitude_rate = NAN;
+        ble_telem.vel_e = NAN;
+        ble_telem.vel_n = NAN;
+        ble_telem.vel_u = NAN;
+        ble_telem.burnout_flag = false;
         ble_telem.rssi = NAN;
         ble_telem.snr = NAN;
         ble_telem.roll = NAN;
@@ -4935,6 +4901,12 @@ static void printStats()
     ble_telem.max_speed_mps = max_speed_mps;
     ble_telem.pressure_alt = pressure_alt_m;
     ble_telem.altitude_rate = pressure_alt_rate_mps;
+    // #191: EKF ENU velocity + burnout for the app's ascent prediction
+    // (direct-BLE path; the LoRa path relays the same via LoRaData).
+    ble_telem.vel_e = (float)latest_non_sensor.e_vel / 100.0f;
+    ble_telem.vel_n = (float)latest_non_sensor.n_vel / 100.0f;
+    ble_telem.vel_u = (float)latest_non_sensor.u_vel / 100.0f;
+    ble_telem.burnout_flag = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
     if (latest_ism6_valid)
     {
         ISM6HG256DataSI ism_si = {};
