@@ -402,7 +402,8 @@ nonisolated class SensorConverter {
             pyro3_fired: false,
             pyro4_fired: false,
             reboot_recovery: false,
-            guidance_enabled: false
+            guidance_enabled: false,
+            ekf_ticks: nil
         )
     }
 
@@ -511,7 +512,8 @@ nonisolated class SensorConverter {
             pyro3_fired:      (raw.pyro_status & PSF_CH3_FIRED) != 0,
             pyro4_fired:      (raw.pyro_status & PSF_CH4_FIRED) != 0,
             reboot_recovery:  reboot_recovery,
-            guidance_enabled: guidance_enabled
+            guidance_enabled: guidance_enabled,
+            ekf_ticks:        raw.ekf_ticks   // #529
         )
     }
 }

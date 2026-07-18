@@ -14,6 +14,9 @@
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
+#include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
+#include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
+#include <esp_timer.h>          // #541: boot USB-enumeration light-sleep grace timer
 #include "freertos/queue.h"
 #include "freertos/semphr.h"    // oc_i2s_mutex for the Phase 4 Layer 3 I2S flip
 #include "host/ble_gap.h"       // ble_gap_update_params
@@ -897,46 +900,6 @@ static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
     return (flags & mask) != 0U;
 }
 
-// Cached Euler angles derived from NonSensorData quaternion
-static float ns_roll_deg  = 0.0f;
-static float ns_pitch_deg = 0.0f;
-static float ns_yaw_deg   = 0.0f;
-
-// Convert packed quaternion (int16 * 10000) from NonSensorData to display angles.
-// Quaternion convention: scalar-first [q0, q1, q2, q3], body-to-NED (FRD body).
-//
-// Roll uses the gimbal-lock-free body-Z azimuth method: the azimuthal angle
-// of the body Z-axis projected into the NED horizontal plane.  This is the
-// same formula the angle controller uses and is well-defined at all pitch
-// angles, unlike the standard ZYX Euler roll which is degenerate at ±90° pitch.
-// Pitch and yaw use standard Euler ZYX (both are well-behaved near vertical).
-static void updateEulerFromNonSensor()
-{
-    if (!latest_non_sensor_valid) return;
-
-    const float qw = (float)latest_non_sensor.q0 / 10000.0f;
-    const float qx = (float)latest_non_sensor.q1 / 10000.0f;
-    const float qy = (float)latest_non_sensor.q2 / 10000.0f;
-    const float qz = (float)latest_non_sensor.q3 / 10000.0f;
-
-    // Roll — gimbal-lock-free: azimuth of body Z-axis in NED horizontal plane
-    float z_n = 2.0f * (qx * qz + qw * qy);
-    float z_e = 2.0f * (qy * qz - qw * qx);
-    ns_roll_deg = -atan2f(z_e, z_n) * (180.0f / (float)M_PI);
-
-    // Pitch (rotation about Y) — standard Euler, well-defined at vertical
-    float sinp = 2.0f * (qw * qy - qz * qx);
-    if (fabsf(sinp) >= 1.0f)
-        ns_pitch_deg = copysignf(90.0f, sinp);
-    else
-        ns_pitch_deg = asinf(sinp) * (180.0f / (float)M_PI);
-
-    // Yaw (rotation about Z) — standard Euler
-    ns_yaw_deg = atan2f(2.0f * (qw * qz + qx * qy),
-                        1.0f - 2.0f * (qy * qy + qz * qz))
-                 * (180.0f / (float)M_PI);
-}
-
 // Read INA230 and populate latest_power_raw so that the existing telemetry
 // pipeline (BLE, LoRa, web) picks up the values automatically.
 // Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
@@ -1076,6 +1039,139 @@ static void readINA230Power()
 //  These optimisations are active in the ESP-IDF build (tinkerrocket-idf)
 //  which has proper sdkconfig support.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #541: light-sleep grace so USB enumeration can finish.
+//
+// Light sleep is held off by exactly two locks: the BT controller's (only when
+// its LP clock fell back to main XTAL) and the USJ driver's
+// USJ_NO_AUTO_LS_ON_CONNECTION lock — which is only taken once a USB
+// connection is DETECTED. Right after a chip reset, host re-enumeration takes
+// ~1 s; on a 32k-crystal boot (BT lock absent) nothing holds sleep off during
+// that window, and losing the race wedges the USJ so the host never sees the
+// port again until a physical re-plug (bench 2026-07-17: 2 transient + 3
+// re-plug-required incidents in one day, all immediately after resets; the BS,
+// which runs no light sleep, has never dropped once).
+//
+// Hold ESP_PM_NO_LIGHT_SLEEP for the first kBootUsjGraceMs after light sleep
+// is enabled, then release. On battery (no host) this delays the first
+// possible sleep by 10 s once per boot — irrelevant to flight power.
+// ---------------------------------------------------------------------------
+#if defined(CONFIG_PM_ENABLE)
+static esp_pm_lock_handle_t s_boot_usj_grace_lock = nullptr;
+static esp_timer_handle_t   s_boot_usj_grace_timer = nullptr;
+static bool                 s_boot_usj_grace_held = false;
+static constexpr uint32_t   kBootUsjGraceMs = 10000;
+
+static void bootUsjGraceExpired(void*)
+{
+    if (s_boot_usj_grace_held)
+    {
+        s_boot_usj_grace_held = false;
+        esp_pm_lock_release(s_boot_usj_grace_lock);
+        ESP_LOGI("PWR", "USB-enumeration grace over — light sleep unblocked");
+    }
+}
+
+static void holdBootUsjGrace()
+{
+    if (s_boot_usj_grace_lock == nullptr &&
+        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usj_boot_grace",
+                           &s_boot_usj_grace_lock) != ESP_OK)
+    {
+        return;  // lock unavailable — no grace, same behavior as before #541
+    }
+    if (s_boot_usj_grace_timer == nullptr)
+    {
+        const esp_timer_create_args_t args = {
+            .callback = bootUsjGraceExpired,
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "usj_grace",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &s_boot_usj_grace_timer) != ESP_OK)
+        {
+            return;
+        }
+    }
+    if (!s_boot_usj_grace_held)
+    {
+        s_boot_usj_grace_held = true;
+        esp_pm_lock_acquire(s_boot_usj_grace_lock);
+    }
+    esp_timer_stop(s_boot_usj_grace_timer);
+    esp_timer_start_once(s_boot_usj_grace_timer,
+                         (uint64_t)kBootUsjGraceMs * 1000ULL);
+    ESP_LOGI("PWR", "Light sleep held %lu ms for USB enumeration (#541)",
+             (unsigned long)kBootUsjGraceMs);
+}
+#endif  // CONFIG_PM_ENABLE
+
+// ---------------------------------------------------------------------------
+// #541: second chance for the 32.768 kHz crystal, BEFORE BT init.
+//
+// IDF's boot-time selection gives the crystal exactly RTC_XTAL_CAL_RETRY(=1)+1
+// calibration attempts of ~92 ms each (RTC_CLK_CAL_CYCLES=3000) before
+// silently falling back to the internal 150 kHz RC — and the BT controller
+// then picks main XTAL as its LP clock, quietly reverting the whole #519
+// power win ("light sleep will not be able to apply"). Bench data (#541):
+// this board's crystal starts 7/7 COLD but intermittently fails WARM, and a
+// warm tuning-fork crystal can need hundreds of ms — more than IDF's window.
+//
+// The knobs that don't work: ESP_SYSTEM_RTC_EXT_XTAL_BOOTSTRAP_CYCLES is a
+// STUB on S3 (rtc_clk_32k_bootstrap() ignores its argument), and the retry
+// count is a hardcoded #define in IDF's clk.c. So: if the slow clock fell
+// back, re-enable the crystal here and give it up to 2 s of extra attempts.
+// On success, adopt it (source switch + fresh calibration) so BT and light
+// sleep still get the crystal; on failure, say so LOUDLY — before this, the
+// only tell was one easily-missed BT_INIT info line.
+// ---------------------------------------------------------------------------
+static void retry32kCrystal()
+{
+#if defined(CONFIG_RTC_CLK_SRC_EXT_CRYS)
+    if (rtc_clk_slow_src_get() == SOC_RTC_SLOW_CLK_SRC_XTAL32K)
+    {
+        return;  // crystal came up during boot — nothing to do
+    }
+    ESP_LOGW("PWR", "32k crystal failed at boot (RTC fell back to internal RC) "
+                    "— retrying up to 2 s before BT init (#541)");
+    rtc_clk_32k_enable(true);
+    uint32_t cal = 0;
+    int attempts = 0;
+    const int64_t deadline_us = esp_timer_get_time() + 2000000;
+    while (esp_timer_get_time() < deadline_us)
+    {
+        attempts++;
+        // Times out (returns 0) in ~100 ms if the crystal isn't oscillating.
+        cal = rtc_clk_cal(CLK_CAL_32K_XTAL, CONFIG_RTC_CLK_CAL_CYCLES);
+        if (cal != 0) break;
+    }
+    if (cal != 0)
+    {
+        rtc_clk_slow_src_set(SOC_RTC_SLOW_CLK_SRC_XTAL32K);
+        // Recalibrate against the now-selected source and publish the period
+        // so RTC timekeeping stays consistent (same pair of calls IDF's own
+        // select_rtc_slow_clk() makes).
+        const uint32_t slow_cal =
+            rtc_clk_cal(CLK_CAL_RTC_SLOW, CONFIG_RTC_CLK_CAL_CYCLES);
+        if (slow_cal != 0)
+        {
+            esp_clk_slowclk_cal_set(slow_cal);
+        }
+        ESP_LOGI("PWR", "32k crystal recovered on attempt %d — RTC and BT LP "
+                        "clock will use the crystal after all (#541)", attempts);
+    }
+    else
+    {
+        rtc_clk_32k_enable(false);
+        ESP_LOGE("PWR", "32k CRYSTAL DID NOT START after +2 s of retries "
+                        "(#541 warm-start failure?) — BT LP clock falls back "
+                        "to main XTAL; #519 light sleep is INERT this boot. "
+                        "Hardware check (drive/load caps) indicated.");
+    }
+#endif  // CONFIG_RTC_CLK_SRC_EXT_CRYS
+}
+
 static void enterLowPowerMode()
 {
 #if defined(CONFIG_PM_ENABLE)
@@ -1111,6 +1207,11 @@ static void enterLowPowerMode()
                         "(held off while USB is connected)");
     else
         ESP_LOGE("PWR", "esp_pm_configure failed: %s", esp_err_to_name(pm_err));
+
+    // #541: give USB enumeration a sleep-free window (see holdBootUsjGrace).
+    // Re-armed on every low-power entry — a rail-off transition can coincide
+    // with a fresh host attach on the bench, same race.
+    holdBootUsjGrace();
 
     // BLE TX power reduction handled by NimBLE config in sdkconfig
 #else
@@ -1162,6 +1263,16 @@ static void applyBLEParams(const char* what, const struct ble_gap_upd_params& pa
     ble_app.requestConnParams(params.itvl_min, params.itvl_max,
                               params.latency, params.supervision_timeout, what);
 }
+
+// #542: how long after the connect-time config push to keep the FAST link
+// before dropping to the low-power idle set. The app's connect burst (identity,
+// config readbacks, MagCal read, profile sync) keeps issuing commands for a few
+// seconds past the push; dropping to 200 ms/latency-4 mid-burst made every
+// remaining exchange cost ~500 ms (measured: first command 57 ms, then
+// 300-800 ms — 5-8 s of "connecting…" in the app). 8 s covers the burst with
+// generous margin (the whole burst takes ~1-2 s on a fast link) and costs ~8 s
+// of fast-interval idle current once per connection — negligible.
+static constexpr uint32_t kSlowParamsDeferMs = 8000;
 
 // Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
 // lever on idle current. Within Apple's envelope: min >= 15 ms; max >= min + 15 ms;
@@ -2460,7 +2571,6 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             // KF-filtered altitude rate from FlightComputer (or sim equivalent)
             pressure_alt_rate_mps = (float)latest_non_sensor.baro_alt_rate_dmps * 0.1f;
-            updateEulerFromNonSensor();
             updateDerivedSpeedFromNonSensor();
 
             // Adopt the FlightComputer's live guidance_enabled state (carried
@@ -2893,9 +3003,6 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
 
     if (latest_non_sensor_valid)
     {
-        lora.roll = ns_roll_deg;
-        lora.pitch = ns_pitch_deg;
-        lora.yaw = ns_yaw_deg;
         lora.q0 = (float)latest_non_sensor.q0 / 10000.0f;
         lora.q1 = (float)latest_non_sensor.q1 / 10000.0f;
         lora.q2 = (float)latest_non_sensor.q2 / 10000.0f;
@@ -2905,10 +3012,16 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         lora.alt_apogee_flag = nsFlagSet(latest_non_sensor.flags, NSF_ALT_APOGEE);
         lora.alt_landed_flag = nsFlagSet(latest_non_sensor.flags, NSF_ALT_LANDED);
 
-        const float e = (float)latest_non_sensor.e_vel / 100.0f;
-        const float n = (float)latest_non_sensor.n_vel / 100.0f;
-        const float u = (float)latest_non_sensor.u_vel / 100.0f;
-        lora.speed = sqrtf(e * e + n * n + u * u);
+        // #191: EKF ENU velocity components — the app's ascent landing
+        // prediction integrates [vE,vN,vU].  Euler angles + instantaneous
+        // speed left the wire in the same change (the BS re-derives them
+        // from the quaternion / these components in unpackLoRa), which is
+        // what keeps the frame at 65 B ≤ the 66 B the #150 dwell table
+        // was validated at.
+        lora.vel_e = (float)latest_non_sensor.e_vel / 100.0f;
+        lora.vel_n = (float)latest_non_sensor.n_vel / 100.0f;
+        lora.vel_u = (float)latest_non_sensor.u_vel / 100.0f;
+        lora.burnout_detected = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
     }
 
     if (latest_ism6_valid)
@@ -4035,9 +4148,13 @@ static void serviceRocketRendezvous()
 // This mirrors slow_rendezvous (#71) but with hop-aware triggers:
 //   • Reference time is the most recent LoRa uplink during the
 //     current hop session (or hop entry, if no uplink heard yet).
-//     Heartbeats from the BS — newly safe-window-scheduled in this
-//     phase — bump last_uplink_rx_ms every 30 s in nominal operation,
-//     so this trigger fires only when comms have actually broken.
+//     Heartbeats from the BS — safe-window-scheduled, every 10 s
+//     (HEARTBEAT_INTERVAL_MS) — bump last_uplink_rx_ms in nominal
+//     operation, so this trigger fires only when comms have actually
+//     broken.  NOTE the BS must keep heartbeating IN FLIGHT for this
+//     to hold: gating heartbeats on freq_locked_for_flight starved
+//     this timer and tore the session down every ~33 s (2026-07-16
+//     bench; fixed BS-side in serviceHeartbeat).
 //   • Visit is a single short window (no on/off oscillation), then we
 //     re-bootstrap hopping with a fresh transition packet on
 //     lora_freq_mhz so the BS sees a clean re-entry.
@@ -4360,6 +4477,10 @@ static void printStats()
         ble_telem.max_speed_mps = NAN;
         ble_telem.pressure_alt = NAN;
         ble_telem.altitude_rate = NAN;
+        ble_telem.vel_e = NAN;
+        ble_telem.vel_n = NAN;
+        ble_telem.vel_u = NAN;
+        ble_telem.burnout_flag = false;
         ble_telem.rssi = NAN;
         ble_telem.snr = NAN;
         ble_telem.roll = NAN;
@@ -4710,7 +4831,8 @@ static void printStats()
              "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
              "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
              "bad_blocks=%lu skips=%lu  "
-             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us",
+             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us  "
+             "dpg=%lu dby=%lu pop=%lu wsum=%lu m388=%lu/%lu us",
              (unsigned long)s.write_max_us,
              (unsigned long)s.sync_max_us,
              (unsigned long)s.erase_max_us,
@@ -4728,8 +4850,15 @@ static void printStats()
              (unsigned long)cur_rx_peak,
              (unsigned long)cur_parser,
              (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
-             (unsigned long)s.spi_hold_max_us);  // #398
+             (unsigned long)s.spi_hold_max_us,   // #398
+             (unsigned long)s.drain_pages,       // #510: window SUMS — a burst of
+             (unsigned long)s.drain_bytes,       //   sub-threshold page writes is
+             (unsigned long)s.pop_sum_us,        //   invisible to the maxima above
+             (unsigned long)s.write_sum_us,      // #510
+             (unsigned long)flightlog.writeLockWaitMaxUs(),   // #510: #388 max/sum —
+             (unsigned long)flightlog.writeLockWaitSumUs());  //   mutex share of wsum
     logger.resetIntervalTimings();
+    flightlog.resetLockWaitStats();  // #510: same window as the logger sums
 
     // #398: per-task CPU deltas over this same interval — pins the core-1 hog
     // that co-stalls loop_oc during the launch-activation window. Uses `dt`
@@ -4772,6 +4901,12 @@ static void printStats()
     ble_telem.max_speed_mps = max_speed_mps;
     ble_telem.pressure_alt = pressure_alt_m;
     ble_telem.altitude_rate = pressure_alt_rate_mps;
+    // #191: EKF ENU velocity + burnout for the app's ascent prediction
+    // (direct-BLE path; the LoRa path relays the same via LoRaData).
+    ble_telem.vel_e = (float)latest_non_sensor.e_vel / 100.0f;
+    ble_telem.vel_n = (float)latest_non_sensor.n_vel / 100.0f;
+    ble_telem.vel_u = (float)latest_non_sensor.u_vel / 100.0f;
+    ble_telem.burnout_flag = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
     if (latest_ism6_valid)
     {
         ISM6HG256DataSI ism_si = {};
@@ -5609,6 +5744,10 @@ static void setup_oc()
     // relying on who gets there first.
     ble_app.setAutoConnParams(false);
 
+    // #541: must run BEFORE ble_app.begin() — the BT controller samples the
+    // RTC slow-clock source once at init to choose its low-power clock.
+    retry32kCrystal();
+
     // Only BLE starts at boot — everything else is behind PWR_PIN
     if (!ble_app.begin())
     {
@@ -5887,16 +6026,34 @@ static void loop_oc()
     {
         static bool ble_was_connected = false;
         static bool config_push_pending = false;
+        static uint32_t slow_params_due_ms = 0;   // #542: deferred idle-param drop
         bool ble_now = ble_app.isConnected();
         if (ble_now && !ble_was_connected) config_push_pending = true;    // arm on connect
-        if (!ble_now)                      config_push_pending = false;   // disarm on disconnect
+        if (!ble_now) {                                                   // disarm on disconnect
+            config_push_pending = false;
+            slow_params_due_ms = 0;
+        }
         if (config_push_pending && ble_app.isReadyForNotify()) {
             config_push_pending = false;
             sendCurrentConfig();
-            // In low-power mode, override the fast params set by onConnect with
-            // slow params to save power (onConnect always requests fast params,
-            // needed for file transfer when powered on).
+            // #542: in low-power mode, SCHEDULE the slow (idle) params instead
+            // of requesting them here. This point is ~1 s after connect — the
+            // middle of the app's connect burst — and dropping to the 200 ms/
+            // latency-4 set here made every remaining handshake exchange cost
+            // ~500 ms (see kSlowParamsDeferMs). Let the burst run on the fast
+            // params onConnect requested, then drop.
             if (!pwr_pin_on) {
+                slow_params_due_ms = (uint32_t)millis() + kSlowParamsDeferMs;
+            }
+        }
+        // #542: fire the deferred drop once the burst window has passed.
+        // Rail-on cancels it (fast params are the powered-on policy — see the
+        // transfer paths); disconnect cancels above.
+        if (slow_params_due_ms != 0 && ble_now) {
+            if (pwr_pin_on) {
+                slow_params_due_ms = 0;
+            } else if ((int32_t)((uint32_t)millis() - slow_params_due_ms) >= 0) {
+                slow_params_due_ms = 0;
                 requestSlowBLEParams();
             }
         }

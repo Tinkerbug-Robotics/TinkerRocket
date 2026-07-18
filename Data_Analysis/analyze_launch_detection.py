@@ -57,7 +57,7 @@ MSG_EXPECTED_LEN = {
     MSG_ISM6HG256:        22,
     MSG_BMP585:           12,
     MSG_MMC5983MA:        16,
-    MSG_NON_SENSOR:       (42, 43, 44, 48),
+    MSG_NON_SENSOR:       (42, 43, 44, 48, 50),
     MSG_POWER:            10,
     MSG_START_LOGGING:    None,
     MSG_END_FLIGHT:       None,
@@ -72,6 +72,7 @@ FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'
 FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'
+FMT_NONSENSOR_50 = '<I hhhhh iii iii BB h B B I H'  # +uint16 ekf_ticks (#529)
 FMT_STATUS_QUERY = '<B H H hh B hhh'
 
 ROCKET_STATES = {
@@ -230,7 +231,9 @@ def parse_file(filepath):
                 # (centideg); the old layout's 4 Euler int16 are gone. Pick the
                 # FMT by length and derive Euler from the quaternion, mirroring
                 # plot_flight_data_mini.parse_binary_file.
-                if msg_len == 48:
+                if msg_len == 50:
+                    fields = struct.unpack(FMT_NONSENSOR_50, payload)
+                elif msg_len == 48:
                     fields = struct.unpack(FMT_NONSENSOR_48, payload)
                 elif msg_len == 44:
                     fields = struct.unpack(FMT_NONSENSOR_44, payload)

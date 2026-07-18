@@ -225,6 +225,10 @@ static uint32_t lt_ekf_max_us = 0;
 static uint32_t lt_ekf_count = 0;
 static uint32_t lt_loop_count = 0;
 static uint32_t lt_loop_max_us __attribute__((unused)) = 0;
+// Free-running EKF update-tick counter (#529) — unlike the lt_* diagnostics
+// above it is never reset.  Published as NonSensorData.ekf_ticks (uint16 wrap)
+// so the flight log records the achieved EKF cadence for the replay tool.
+static uint32_t ekf_tick_counter = 0;
 
 // --- Converted SI values (latest sample of each sensor) ---
 static ISM6HG256DataSI ism6_latest_si = {};
@@ -2867,8 +2871,10 @@ static void setup_fc()
             // leaves the tabs off the trimmed straight position.  Drive through
             // the same setServoAngles() path the flight/servo-test neutral uses
             // so the boot rest position matches exactly what was trimmed.
-            const float neutral[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            servo_control.setServoAngles(neutral);
+            // #407: settle via the anti-backlash approach (overshoot then back)
+            // so the boot rest position is repeatable on a slightly worn servo;
+            // the per-tick serviceNeutralSettle() below completes it.
+            servo_control.beginNeutralSettle(time_ms());
             // Hold that trimmed neutral briefly before the pad relax kicks in, so
             // the operator can see/verify the tabs sit straight on boot instead
             // of going limp the instant READY starts.
@@ -3932,6 +3938,7 @@ static void loop_fc()
                 const uint32_t ekf_us = time_us() - ekf_t0;
                 lt_ekf_total_us += ekf_us;
                 lt_ekf_count++;
+                ekf_tick_counter++;
                 if (ekf_us > lt_ekf_max_us) lt_ekf_max_us = ekf_us;
             }
 
@@ -4226,8 +4233,11 @@ static void loop_fc()
                         // and flight neutral use — so the preview shows the tab
                         // exactly where a 0-command holds it, not the raw pulse
                         // midpoint (which differs under an asymmetric fin cal).
-                        const float neutral[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                        servo_control.setServoAngles(neutral);
+                        // #407: approach it anti-backlash (overshoot then settle)
+                        // so the preview is repeatable even on a slightly worn
+                        // servo; serviceNeutralSettle() completes it over the next
+                        // ticks, inside the wake window armed just below.
+                        servo_control.beginNeutralSettle(now_ms);
                         servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
                     }
 
@@ -5308,8 +5318,15 @@ static void loop_fc()
             else if (out_pending_command == SERVO_TEST_STOP)
             {
                 servo_test_active = false;
-                servo_control.stowControl();
-                ESP_LOGI(TAG, "[SERVO TEST] Stopped - servos stowed");
+                // #407: stow via the anti-backlash approach (overshoot then
+                // settle to the fin-cal neutral, same as boot/trim) and arm the
+                // pad wake window so the stowed neutral stays driven ~6 s.
+                // Without the wake window the next READY/PRELAUNCH tick idle()s
+                // the servos and a loaded linkage droops within a tick, so the
+                // operator never sees where the test actually stowed.
+                servo_control.beginNeutralSettle(now_ms);
+                servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+                ESP_LOGI(TAG, "[SERVO TEST] Stopped - servos stowed (anti-backlash), wake armed");
             }
             else if (out_pending_command == ROLL_PROFILE_PENDING)
             {
@@ -5766,6 +5783,11 @@ static void loop_fc()
             }
             case READY:
             {
+                // Advance an in-progress anti-backlash neutral settle (#407)
+                // started by boot-settle or a pad trim; a no-op otherwise.  Runs
+                // before the relax gate so it completes within the wake window.
+                if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
+
                 // Relax the servos on the pad: cut the pulse train so the
                 // digital servos stop drawing ~150 mA of holding current while
                 // we wait for GNSS/launch.  Re-asserted each tick (idempotent);
@@ -5812,6 +5834,10 @@ static void loop_fc()
             }
             case PRELAUNCH:
             {
+                // Advance an in-progress anti-backlash neutral settle (#407),
+                // e.g. a trim applied while sitting in PRELAUNCH; no-op otherwise.
+                if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
+
                 // Stay relaxed through the pad wait; the INFLIGHT control path
                 // re-drives (and so re-energises) the servos the instant
                 // launch_flag flips below.  Held off during the pad-trim wake
@@ -6272,6 +6298,8 @@ static void loop_fc()
 
         // Publish non-sensor summary (SI -> packed) for downstream logging/telem.
         non_sensor_data.time_us = logic_now_us;
+        // #529: achieved-EKF-cadence witness; stays 0 until the EKF initializes.
+        non_sensor_data.ekf_ticks = (uint16_t)ekf_tick_counter;
         if (ekf_initialized) {
             float imu_quat[4];
             ekf.getQuaternion(imu_quat);

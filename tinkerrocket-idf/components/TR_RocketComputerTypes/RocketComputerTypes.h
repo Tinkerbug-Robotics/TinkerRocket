@@ -1308,10 +1308,18 @@ typedef struct __attribute__((packed))
     // before relay (both OC-owned — the FC reads neither).
     uint32_t sensor_health;
 
+    // Free-running count of EKF update ticks (#529), wraps at 2^16.  Frozen at
+    // 0 until the EKF initializes (first good GNSS fix).  The loop rate is not
+    // otherwise recoverable from a flight log, so the EKF replay derives the
+    // achieved EKF rate from deltas of this counter against time_us instead of
+    // hand-maintaining an EKF_RATE_HZ constant that silently goes stale when
+    // the loop rate or EKF_DECIMATION moves.
+    uint16_t ekf_ticks;
+
 } NonSensorData;
 
-static_assert(sizeof(NonSensorData) == 48,
-              "NonSensorData must be 48 bytes");
+static_assert(sizeof(NonSensorData) == 50,
+              "NonSensorData must be 50 bytes");
 
 // ── Sensor health scorecard (#303) ──────────────────────────────────────────
 // 2 bits per item packed into NonSensorData.sensor_health (FC→OC) and
@@ -1587,23 +1595,32 @@ typedef struct __attribute__((packed))
 
     int16_t max_speed;       // m/s
 
-    int16_t roll_cd;         // centideg
-    int16_t pitch_cd;
-    int16_t yaw_cd;
-
     int16_t q0;              // quaternion × 10000
     int16_t q1;
     int16_t q2;
     int16_t q3;
 
-    int16_t speed;           // m/s
-
     uint32_t sensor_health;  // #303 scorecard bitfield (see SH_*_SHIFT)
+
+    // #191: EKF launch-relative ENU velocity, dm/s = 0.1 m/s (i16 spans
+    // ±3276.7 m/s).  Paid for by dropping roll/pitch/yaw_cd and the
+    // instantaneous speed from the wire — all derivable on the ground
+    // (Euler from the quaternion above, speed = |v|; unpackLoRa does
+    // both) — which holds the frame at 65 B: airtime-identical to the
+    // 66 B layout the #150 FHSS dwell table was validated at.  Growing
+    // past 66 B is a REGULATORY decision: at 73 B the SF10/BW250
+    // long-range rung crosses the FCC 400 ms occupancy line.
+    int16_t vel_e_dms;
+    int16_t vel_n_dms;
+    int16_t vel_u_dms;
+
+    // Second flag byte (#191) — flags_state is full (5 flags + 3-bit state).
+    uint8_t flags2;          // bit 0: burnout_detected; bits 1-7 reserved
 
 } LoRaData;
 
-static_assert(sizeof(LoRaData) == 66,
-              "LoRaData must be 66 bytes (62 + uint32 sensor_health, #303)");
+static_assert(sizeof(LoRaData) == 65,
+              "LoRaData must be 65 bytes (#191: +ENU velocity +flags2, -derived Euler/speed)");
 
 static constexpr uint8_t LORA_LAUNCH      = (1u << 0);  // bit 0
 static constexpr uint8_t LORA_VEL_APOGEE  = (1u << 1);  // bit 1
@@ -1614,6 +1631,9 @@ static constexpr uint8_t LORA_CAMERA_REC  = (1u << 7);  // bit 7: camera recordi
 
 // logging_active is packed into the MSB of num_sats (real range 0-40, 7 bits plenty)
 static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
+
+// LoRaData.flags2 bit masks (#191).
+static constexpr uint8_t LORA2_BURNOUT = (1u << 0);   // NSF_BURNOUT relay
 
 // Readable LoRa data structure
 typedef struct
@@ -1652,12 +1672,16 @@ typedef struct
     float   altitude_rate;          // 1 m/s        : -2000 to 2000
     float   max_alt;                // 1 m          : -1000 to 400000
     float   max_speed;              // 1 m/s        : 0 to 4000
-    float   roll;                   // int16_t      : -180 to 180
-    float   pitch;                  // int16_t      : -90 to 90
-    float   yaw;                    // int16_t      : -180 to 180
+    float   roll;                   // DERIVED (#191): from quaternion on unpack, not on the wire
+    float   pitch;                  // DERIVED (#191)
+    float   yaw;                    // DERIVED (#191)
     float   q0, q1, q2, q3;        // quaternion   : -1 to 1
-    float   speed;                  // 1 m/s        : 0 to 4000
+    float   speed;                  // DERIVED (#191): |vel| on unpack, not on the wire
     uint32_t sensor_health;         // #303 scorecard bitfield (see SH_*_SHIFT)
+    float   vel_e;                  // 0.1 m/s      : #191 EKF ENU velocity
+    float   vel_n;                  // 0.1 m/s
+    float   vel_u;                  // 0.1 m/s
+    bool    burnout_detected;       // #191 NSF_BURNOUT relay (flags2 bit 0)
 } LoRaDataSI;
 
 
@@ -2324,7 +2348,7 @@ static constexpr size_t SIZE_OF_NON_SENSOR_DATA = sizeof(NonSensorData);
 // of the wire format. Pin every field offset so any layout change is a
 // loud compile error on firmware and host builds alike. Values were
 // derived from the declared layouts; the compiler proves each line.
-static_assert(sizeof(LoRaData) == 66, "LoRaData wire size");
+static_assert(sizeof(LoRaData) == 65, "LoRaData wire size");
 static_assert(offsetof(LoRaData, network_id) == 0, "LoRaData.network_id moved");
 static_assert(offsetof(LoRaData, rocket_id) == 1, "LoRaData.rocket_id moved");
 static_assert(offsetof(LoRaData, next_channel_idx) == 2, "LoRaData.next_channel_idx moved");
@@ -2350,15 +2374,15 @@ static_assert(offsetof(LoRaData, pressure_alt_m) == 36, "LoRaData.pressure_alt_m
 static_assert(offsetof(LoRaData, altitude_rate) == 39, "LoRaData.altitude_rate moved");
 static_assert(offsetof(LoRaData, max_alt_m) == 41, "LoRaData.max_alt_m moved");
 static_assert(offsetof(LoRaData, max_speed) == 44, "LoRaData.max_speed moved");
-static_assert(offsetof(LoRaData, roll_cd) == 46, "LoRaData.roll_cd moved");
-static_assert(offsetof(LoRaData, pitch_cd) == 48, "LoRaData.pitch_cd moved");
-static_assert(offsetof(LoRaData, yaw_cd) == 50, "LoRaData.yaw_cd moved");
-static_assert(offsetof(LoRaData, q0) == 52, "LoRaData.q0 moved");
-static_assert(offsetof(LoRaData, q1) == 54, "LoRaData.q1 moved");
-static_assert(offsetof(LoRaData, q2) == 56, "LoRaData.q2 moved");
-static_assert(offsetof(LoRaData, q3) == 58, "LoRaData.q3 moved");
-static_assert(offsetof(LoRaData, speed) == 60, "LoRaData.speed moved");
-static_assert(offsetof(LoRaData, sensor_health) == 62, "LoRaData.sensor_health moved");
+static_assert(offsetof(LoRaData, q0) == 46, "LoRaData.q0 moved");
+static_assert(offsetof(LoRaData, q1) == 48, "LoRaData.q1 moved");
+static_assert(offsetof(LoRaData, q2) == 50, "LoRaData.q2 moved");
+static_assert(offsetof(LoRaData, q3) == 52, "LoRaData.q3 moved");
+static_assert(offsetof(LoRaData, sensor_health) == 54, "LoRaData.sensor_health moved");
+static_assert(offsetof(LoRaData, vel_e_dms) == 58, "LoRaData.vel_e_dms moved");
+static_assert(offsetof(LoRaData, vel_n_dms) == 60, "LoRaData.vel_n_dms moved");
+static_assert(offsetof(LoRaData, vel_u_dms) == 62, "LoRaData.vel_u_dms moved");
+static_assert(offsetof(LoRaData, flags2) == 64, "LoRaData.flags2 moved");
 
 static_assert(sizeof(GNSSData) == 42, "GNSSData wire size");
 static_assert(offsetof(GNSSData, time_us) == 0, "GNSSData.time_us moved");
@@ -2381,7 +2405,7 @@ static_assert(offsetof(GNSSData, vel_u_mmps) == 36, "GNSSData.vel_u_mmps moved")
 static_assert(offsetof(GNSSData, h_acc_m) == 40, "GNSSData.h_acc_m moved");
 static_assert(offsetof(GNSSData, v_acc_m) == 41, "GNSSData.v_acc_m moved");
 
-static_assert(sizeof(NonSensorData) == 48, "NonSensorData wire size");
+static_assert(sizeof(NonSensorData) == 50, "NonSensorData wire size");
 static_assert(offsetof(NonSensorData, time_us) == 0, "NonSensorData.time_us moved");
 static_assert(offsetof(NonSensorData, q0) == 4, "NonSensorData.q0 moved");
 static_assert(offsetof(NonSensorData, q1) == 6, "NonSensorData.q1 moved");
@@ -2400,6 +2424,7 @@ static_assert(offsetof(NonSensorData, baro_alt_rate_dmps) == 40, "NonSensorData.
 static_assert(offsetof(NonSensorData, pyro_status) == 42, "NonSensorData.pyro_status moved");
 static_assert(offsetof(NonSensorData, apogee_flags) == 43, "NonSensorData.apogee_flags moved");
 static_assert(offsetof(NonSensorData, sensor_health) == 44, "NonSensorData.sensor_health moved");
+static_assert(offsetof(NonSensorData, ekf_ticks) == 48, "NonSensorData.ekf_ticks moved");
 
 static_assert(sizeof(OutStatusQueryData) == 28, "OutStatusQueryData wire size");
 static_assert(offsetof(OutStatusQueryData, ism6_low_g_fs_g) == 0, "OutStatusQueryData.ism6_low_g_fs_g moved");

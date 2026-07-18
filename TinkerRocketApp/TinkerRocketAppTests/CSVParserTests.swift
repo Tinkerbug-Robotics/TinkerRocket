@@ -47,4 +47,34 @@ final class CSVParserTests: XCTestCase {
         XCTAssertEqual(data.columns["c0"], [0.0, 0.0])
         XCTAssertEqual(data.columns["c35"]?.count, 2)        // all columns aligned
     }
+
+    /// Exports from 2026-07-14…07-16 app builds have unquoted commas in the
+    /// three #514 attitude names, so the header row carries three more tokens
+    /// than every data row and all later columns load shifted. The parser must
+    /// re-join those tokens into the current semicolon names so the values
+    /// land under the right columns.
+    func testParse_SplitAttitudeHeaderNames_AreRepairedAndAligned() throws {
+        let header = "Quat q3,Roll (deg, body-Z azimuth),Pitch (deg, ZYX Euler),"
+                   + "Yaw (deg, ZYX Euler),Roll Command (deg),Position Up (m)"
+        let data = try parse("\(header)\n0.5,10,20,30,0.04,407.2\n")
+        XCTAssertEqual(data.headers, [
+            "Quat q3",
+            "Roll (deg; body-Z azimuth)", "Pitch (deg; ZYX Euler)", "Yaw (deg; ZYX Euler)",
+            "Roll Command (deg)", "Position Up (m)",
+        ])
+        XCTAssertEqual(data.columns["Quat q3"], [0.5])
+        XCTAssertEqual(data.columns["Roll (deg; body-Z azimuth)"], [10.0])
+        XCTAssertEqual(data.columns["Roll Command (deg)"], [0.04])
+        XCTAssertEqual(data.columns["Position Up (m)"], [407.2])   // not shifted
+    }
+
+    /// Headers without the broken comma names pass through untouched — a
+    /// lone "Roll (deg)" (pre-#514) or the current semicolon names must not
+    /// trigger the repair.
+    func testParse_CurrentAndLegacyHeaders_NotRewritten() throws {
+        let data = try parse("Roll (deg; body-Z azimuth),Roll (deg),Yaw (deg)\n1,2,3\n")
+        XCTAssertEqual(data.headers,
+                       ["Roll (deg; body-Z azimuth)", "Roll (deg)", "Yaw (deg)"])
+        XCTAssertEqual(data.columns["Roll (deg)"], [2.0])
+    }
 }

@@ -526,13 +526,20 @@ nonisolated class CSVGenerator {
         // Roll/Pitch/Yaw is NOT a valid Euler triple and cannot be combined into an
         // orientation. Anything needing the actual attitude must use q0..q3.
         // Blank for legacy logs, whose wire format carried no quaternion.
+        //
+        // Column names must never contain a comma: this writer does not quote
+        // fields, and the readers (CSVParser here, pandas/awk in Data_Analysis)
+        // split rows blind. The original #514 names carried commas, so the
+        // header row had three more tokens than every data row and every
+        // column after "Quat q3" loaded shifted (exports 2026-07-14…07-16;
+        // CSVParser.repairSplitHeaderNames rescues those files on read).
         columns.append("Quat q0")
         columns.append("Quat q1")
         columns.append("Quat q2")
         columns.append("Quat q3")
-        columns.append("Roll (deg, body-Z azimuth)")
-        columns.append("Pitch (deg, ZYX Euler)")
-        columns.append("Yaw (deg, ZYX Euler)")
+        columns.append("Roll (deg; body-Z azimuth)")
+        columns.append("Pitch (deg; ZYX Euler)")
+        columns.append("Yaw (deg; ZYX Euler)")
         columns.append("Roll Command (deg)")
         columns.append("Position East (m)")
         columns.append("Position North (m)")
@@ -563,6 +570,10 @@ nonisolated class CSVGenerator {
         columns.append("Pyro 4 Fired")
         columns.append("Reboot Recovery")
         columns.append("FC Guidance Enabled")
+        // #529: free-running EKF update-tick counter (uint16 wrap). Deltas of
+        // this against Time give the achieved EKF rate — the number the EKF
+        // replay tool needs. Blank on logs predating the 50-byte NonSensorData.
+        columns.append("EKF Ticks")
 
         return columns.joined(separator: ",") + "\n"
     }
@@ -671,6 +682,7 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.pyro4_fired ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.reboot_recovery ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.guidance_enabled ? "1" : "0" } ?? "")
+        values.append(nonSensor.flatMap { $0.ekf_ticks.map(String.init) } ?? "")
 
         return values.joined(separator: ",") + "\n"
     }

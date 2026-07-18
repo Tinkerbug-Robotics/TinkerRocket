@@ -132,11 +132,12 @@ FMT_NONSENSOR_42 = '<I hhhhh iii iii BB h'     # legacy (no pyro_status)
 FMT_NONSENSOR_43 = '<I hhhhh iii iii BB h B'  # +pyro_status byte (#34)
 FMT_NONSENSOR_44 = '<I hhhhh iii iii BB h B B'  # +apogee_flags byte (#142/#143)
 FMT_NONSENSOR_48 = '<I hhhhh iii iii BB h B B I'  # +uint32 sensor_health (#303)
+FMT_NONSENSOR_50 = '<I hhhhh iii iii BB h B B I H'  # +uint16 ekf_ticks (#529)
 # #296: lengths we know how to decode. An unrecognized NonSensor length means the
 # struct grew without updating this parser — warn loudly (once each) below instead
 # of silently dropping every record (the #227 failure shape). Add the new length
 # + a FMT_NONSENSOR_<len> when NonSensorData grows.
-NONSENSOR_KNOWN_LENS = (42, 43, 44, 48)
+NONSENSOR_KNOWN_LENS = (42, 43, 44, 48, 50)
 _warned_nonsensor_lens = set()
 # OutStatusQueryData: 16 bytes (v2) / 26 bytes (v3, +b2r orientation)
 FMT_STATUS_QUERY = '<B H H hh B hhh'
@@ -480,7 +481,16 @@ def parse_binary_file(filepath):
                 })
 
             elif msg_type == MSG_NON_SENSOR and msg_len in NONSENSOR_KNOWN_LENS:
-                if msg_len == 48:
+                # apogee_flags_b is None (not 0) when the log predates the
+                # apogee_flags byte — lets consumers distinguish "voted False"
+                # from "never recorded" (#529 replay gate fallback).
+                ekf_ticks = None
+                if msg_len == 50:
+                    fields = struct.unpack(FMT_NONSENSOR_50, payload)
+                    pyro_status = fields[15]
+                    apogee_flags_b = fields[16]
+                    ekf_ticks = fields[18]
+                elif msg_len == 48:
                     fields = struct.unpack(FMT_NONSENSOR_48, payload)
                     pyro_status = fields[15]
                     apogee_flags_b = fields[16]
@@ -491,10 +501,13 @@ def parse_binary_file(filepath):
                 elif msg_len == 43:
                     fields = struct.unpack(FMT_NONSENSOR_43, payload)
                     pyro_status = fields[15]
-                    apogee_flags_b = 0
+                    apogee_flags_b = None
                 else:
                     fields = struct.unpack(FMT_NONSENSOR_42, payload)
                     pyro_status = 0
+                    apogee_flags_b = None
+                has_apogee_flags = apogee_flags_b is not None
+                if apogee_flags_b is None:
                     apogee_flags_b = 0
                 q0 = fields[1] / 10000.0
                 q1 = fields[2] / 10000.0
@@ -561,13 +574,19 @@ def parse_binary_file(filepath):
                     "pyro1_armed":   bool(flags & NSF_PYRO_ARMED),
                     "pyro2_armed":   bool(flags & NSF_PYRO_ARMED),
                     # #142/#143: full apogee detector set + master vote.
-                    # Legacy 42/43-byte logs decode all three as False.
+                    # Legacy 42/43-byte logs decode all three as False and
+                    # has_apogee_flags as False (byte never recorded).
+                    "has_apogee_flags":   has_apogee_flags,
                     "gps_apogee":         bool(apogee_flags_b & NSF2_GPS_APOGEE),
                     "pitch_apogee":       bool(apogee_flags_b & NSF2_PITCH_APOGEE),
                     "apogee_flag":        bool(apogee_flags_b & NSF2_MASTER_APOGEE),
                     "reboot_recovery":    bool(apogee_flags_b & NSF2_REBOOT_RECOVERY),
                     "guidance_enabled":   bool(apogee_flags_b & NSF2_GUIDANCE_ENABLED),
                     "fc_imu_drop":        bool(apogee_flags_b & NSF2_FC_IMU_DROP),
+                    # #529: free-running EKF update-tick counter (uint16 wrap);
+                    # None on logs that predate the field.  The replay derives
+                    # the achieved EKF rate from this instead of a constant.
+                    "ekf_ticks":          ekf_ticks,
                 })
 
             elif msg_type == MSG_NON_SENSOR:

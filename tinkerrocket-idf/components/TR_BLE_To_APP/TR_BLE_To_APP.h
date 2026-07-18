@@ -47,6 +47,12 @@ public:
         float altitude_rate;    // Vertical rate m/s
         float gnss_alt;         // GNSS altitude meters (from ECEF conversion)
 
+        // #191: EKF launch-relative ENU velocity (m/s) — the app's ascent
+        // landing prediction integrates [vE,vN,vU].  NAN = no FC data.
+        float vel_e;
+        float vel_n;
+        float vel_u;
+
         // IMU data (ISM6HG256) - SI converted
         float low_g_x, low_g_y, low_g_z;     // Low-G accelerometer m/s²
         float high_g_x, high_g_y, high_g_z;  // High-G accelerometer m/s²
@@ -90,6 +96,7 @@ public:
         bool alt_apogee_flag;   // Altitude apogee (alt started decreasing)
         bool alt_landed_flag;   // Landing detected
         bool sim_active;        // #393: simulated flight in progress (NSF_SIM_ACTIVE)
+        bool burnout_flag;      // #191: motor burnout detected (NSF_BURNOUT)
 
         // Power rail state
         bool pwr_pin_on;        // true = FlightComputer + sensors powered on
@@ -501,8 +508,16 @@ private:
     void onConnParamsUpdated(uint16_t conn_handle, int status);
     void onCommandWrite(const uint8_t* data, size_t length);
 
-    // Start/restart BLE advertising
+    // Start/restart BLE advertising. Two-phase since #541: FAST (152.5 ms
+    // interval) for kFastAdvWindowMs after boot and after every disconnect —
+    // the moments a central is actually trying to find us — then the 1000 ms
+    // power interval for the long idle wait. A fixed 1 s interval made every
+    // central's discovery/connect slow (each connect attempt waits for an adv
+    // event) and made duty-cycled scanners (macOS) miss the boards outright.
     void startAdvertising();
+    void armFastAdvWindow();
+    static constexpr uint32_t kFastAdvWindowMs = 30000;
+    uint32_t fast_adv_until_ms_ = 0;   // 0 = window never armed (slow phase)
 
     // Register GATT services with the NimBLE host
     void registerGattServices();

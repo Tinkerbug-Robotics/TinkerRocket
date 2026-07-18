@@ -297,6 +297,32 @@ void SensorConverter::convertIIS2MDCData(const IIS2MDCData& in, IIS2MDCDataSI& o
 }
 
 // --- NonSensor ---
+// Display Euler angles from a body-to-NED quaternion (scalar-first).
+// Roll uses the gimbal-lock-free body-Z azimuth (the angle-controller
+// formula, well-defined at all pitch angles); pitch/yaw use standard ZYX
+// Euler (both well-behaved near vertical).  Shared by the NonSensorData
+// path and the LoRa unpack — #191 dropped Euler from the LoRa wire, so
+// the BS derives it here from the quaternion that is transmitted.
+static void eulerFromQuat(float qw, float qx, float qy, float qz,
+                          float& roll, float& pitch, float& yaw)
+{
+    // Roll — azimuth of body Z-axis in NED horizontal plane (gimbal-lock-free)
+    float z_n = 2.0f * (qx * qz + qw * qy);
+    float z_e = 2.0f * (qy * qz - qw * qx);
+    roll = -atan2f(z_e, z_n) * (180.0f / (float)M_PI);
+
+    // Pitch — standard Euler (well-defined at vertical)
+    float sinp = 2.0f * (qw * qy - qz * qx);
+    pitch = (fabsf(sinp) >= 1.0f)
+            ? copysignf(90.0f, sinp)
+            : asinf(sinp) * (180.0f / (float)M_PI);
+
+    // Yaw — standard Euler
+    yaw = atan2f(2.0f * (qw * qz + qx * qy),
+                 1.0f - 2.0f * (qy * qy + qz * qz))
+          * (180.0f / (float)M_PI);
+}
+
 void SensorConverter::convertNonSensorData(const NonSensorData& in, NonSensorDataSI& out)
 {
     out.time_us  = in.time_us;
@@ -307,26 +333,8 @@ void SensorConverter::convertNonSensorData(const NonSensorData& in, NonSensorDat
     out.q2 = (float)in.q2 / 10000.0f;
     out.q3 = (float)in.q3 / 10000.0f;
 
-    // Derive display angles from quaternion.
-    // Roll uses gimbal-lock-free body-Z azimuth (well-defined at all pitch angles).
-    // Pitch and yaw use standard ZYX Euler (both well-behaved near vertical).
-    const float qw = out.q0, qx = out.q1, qy = out.q2, qz = out.q3;
-
-    // Roll — azimuth of body Z-axis in NED horizontal plane (gimbal-lock-free)
-    float z_n = 2.0f * (qx * qz + qw * qy);
-    float z_e = 2.0f * (qy * qz - qw * qx);
-    out.roll  = -atan2f(z_e, z_n) * (180.0f / (float)M_PI);
-
-    // Pitch — standard Euler (well-defined at vertical)
-    float sinp = 2.0f * (qw * qy - qz * qx);
-    out.pitch = (fabsf(sinp) >= 1.0f)
-                ? copysignf(90.0f, sinp)
-                : asinf(sinp) * (180.0f / (float)M_PI);
-
-    // Yaw — standard Euler
-    out.yaw   = atan2f(2.0f * (qw * qz + qx * qy),
-                       1.0f - 2.0f * (qy * qy + qz * qz))
-                * (180.0f / (float)M_PI);
+    eulerFromQuat(out.q0, out.q1, out.q2, out.q3,
+                  out.roll, out.pitch, out.yaw);
 
     out.roll_cmd = (float)in.roll_cmd / 100.0f;
 
@@ -462,17 +470,9 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
         out.max_speed = (int16_t)lroundf(ms);
     }
 
-    // roll/pitch/yaw -> i16 centidegrees
-    auto enc_angle_cd = [](float a, float lim)->int16_t {
-        if (a >  lim) a =  lim;
-        if (a < -lim) a = -lim;
-        return (int16_t)lroundf(a * 100.f);
-    };
-    out.roll_cd  = enc_angle_cd(in.roll,  180.f);
-    out.pitch_cd = enc_angle_cd(in.pitch,  90.f);
-    out.yaw_cd   = enc_angle_cd(in.yaw,   180.f);
-
-    // quaternion × 10000 → i16
+    // quaternion × 10000 → i16.  (#191: roll/pitch/yaw and speed are no
+    // longer packed — the RX side derives them from the quaternion and the
+    // velocity components in unpackLoRa.)
     auto enc_quat = [](float q)->int16_t {
         q = SensorConverter::clampf(q, -1.f, 1.f);
         return (int16_t)lroundf(q * 10000.f);
@@ -482,13 +482,17 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.q2 = enc_quat(in.q2);
     out.q3 = enc_quat(in.q3);
 
-    // speed → i16
-    {
-        float sp = clampf(in.speed, 0.f, 4000.f);
-        out.speed = (int16_t)lroundf(sp);
-    }
-
     out.sensor_health = in.sensor_health;  // #303 raw bitfield, no encoding
+
+    // #191: EKF ENU velocity (m/s → dm/s i16) + burnout flag
+    auto enc_vel_dms = [](float v)->int16_t {
+        v = SensorConverter::clampf(v, -3276.7f, 3276.7f);
+        return (int16_t)lroundf(v * 10.f);
+    };
+    out.vel_e_dms = enc_vel_dms(in.vel_e);
+    out.vel_n_dms = enc_vel_dms(in.vel_n);
+    out.vel_u_dms = enc_vel_dms(in.vel_u);
+    out.flags2 = in.burnout_detected ? LORA2_BURNOUT : 0;
 }
 
 void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
@@ -535,17 +539,27 @@ void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
     out.max_alt       = (float)i24_to_i32(in.max_alt_m);
     out.max_speed     = (float)in.max_speed;
 
-    out.roll  = (float)in.roll_cd  / 100.0f;
-    out.pitch = (float)in.pitch_cd / 100.0f;
-    out.yaw   = (float)in.yaw_cd   / 100.0f;
-
     out.q0 = (float)in.q0 / 10000.0f;
     out.q1 = (float)in.q1 / 10000.0f;
     out.q2 = (float)in.q2 / 10000.0f;
     out.q3 = (float)in.q3 / 10000.0f;
 
-    out.speed = (float)in.speed;
     out.sensor_health = in.sensor_health;  // #303
+
+    // #191: EKF ENU velocity (dm/s → m/s) + burnout flag
+    out.vel_e = (float)in.vel_e_dms * 0.1f;
+    out.vel_n = (float)in.vel_n_dms * 0.1f;
+    out.vel_u = (float)in.vel_u_dms * 0.1f;
+    out.burnout_detected = (in.flags2 & LORA2_BURNOUT) != 0;
+
+    // #191: Euler + instantaneous speed left the wire — derive them from
+    // the quaternion / velocity components so every downstream consumer
+    // (BS CSV, TelemetryData) keeps its values.
+    eulerFromQuat(out.q0, out.q1, out.q2, out.q3,
+                  out.roll, out.pitch, out.yaw);
+    out.speed = sqrtf(out.vel_e * out.vel_e +
+                      out.vel_n * out.vel_n +
+                      out.vel_u * out.vel_u);
 
     // Not transmitted in LoRaData (superset fields)
     out.base_station_voltage = 0.0f;

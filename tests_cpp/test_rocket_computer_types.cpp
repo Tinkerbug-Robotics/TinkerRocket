@@ -25,8 +25,8 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(ISM6HG256Data),  22u);
     EXPECT_EQ(sizeof(MMC5983MAData),  16u);
     EXPECT_EQ(sizeof(POWERData),      10u);
-    EXPECT_EQ(sizeof(NonSensorData),  48u);  // #303: +uint32 sensor_health (4 B)
-    EXPECT_EQ(sizeof(LoRaData),       66u);  // #303: +uint32 sensor_health (4 B)
+    EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
+    EXPECT_EQ(sizeof(LoRaData),       65u);  // #191: +ENU vel +flags2, -derived Euler/speed
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
 }
@@ -1051,9 +1051,11 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
 // shared airtime formula that the OC scheduler and BS follower use.
 
 namespace fhss150 {
-// Production telemetry frame: sizeof(LoRaData), pinned at 66 by the
-// header's static_asserts.  Growing the frame has a real regulatory cost —
-// it pushes the SF10/BW250 long-range rung over the dwell budget first —
+// Production telemetry frame: sizeof(LoRaData), pinned at 65 by the
+// header's static_asserts (#191 repack: 65 B is airtime-identical to the
+// 66 B frame these numbers were derived at — LoRa symbol-block
+// quantization).  Growing the frame has a real regulatory cost — at 73 B
+// the SF10/BW250 long-range rung crosses the FCC 400 ms occupancy line —
 // so the table below fails deliberately if it changes.
 constexpr size_t  kTelemFrameLen = SIZE_OF_LORA_DATA;
 constexpr uint8_t kCr            = LORA_FACTORY_RENDEZVOUS_CR;  // 4/5 on both ends
