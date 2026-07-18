@@ -64,4 +64,21 @@ final class SensorTypesTests: XCTestCase {
         XCTAssertNotNil(raw)
         XCTAssertEqual(raw?.apogee_flags, 0)
     }
+
+    func testNonSensorData_Size50_EkfTicksDecodes() throws {
+        // #529: 50-byte layout appends uint16 ekf_ticks after the uint32
+        // sensor_health (#303, offset 44, never surfaced by the app).
+        var bytes = [UInt8](repeating: 0, count: 50)
+        bytes[48] = 0x34  // little-endian 0x1234 = 4660
+        bytes[49] = 0x12
+        let raw = try NonSensorData(from: Data(bytes))
+        XCTAssertEqual(raw.ekf_ticks, 0x1234)
+    }
+
+    func testNonSensorData_PreEkfTicksLayoutsDecodeNil() throws {
+        // 44- and 48-byte layouts predate ekf_ticks: decode nil (not 0 —
+        // 0 is a real counter value, meaning "EKF not yet initialized").
+        XCTAssertNil(try NonSensorData(from: Data(count: 44)).ekf_ticks)
+        XCTAssertNil(try NonSensorData(from: Data(count: 48)).ekf_ticks)
+    }
 }

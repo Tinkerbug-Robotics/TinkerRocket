@@ -570,6 +570,10 @@ nonisolated class CSVGenerator {
         columns.append("Pyro 4 Fired")
         columns.append("Reboot Recovery")
         columns.append("FC Guidance Enabled")
+        // #529: free-running EKF update-tick counter (uint16 wrap). Deltas of
+        // this against Time give the achieved EKF rate — the number the EKF
+        // replay tool needs. Blank on logs predating the 50-byte NonSensorData.
+        columns.append("EKF Ticks")
 
         return columns.joined(separator: ",") + "\n"
     }
@@ -678,6 +682,7 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.pyro4_fired ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.reboot_recovery ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.guidance_enabled ? "1" : "0" } ?? "")
+        values.append(nonSensor.flatMap { $0.ekf_ticks.map(String.init) } ?? "")
 
         return values.joined(separator: ",") + "\n"
     }

@@ -14,6 +14,9 @@
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
+#include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
+#include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
+#include <esp_timer.h>          // #541: boot USB-enumeration light-sleep grace timer
 #include "freertos/queue.h"
 #include "freertos/semphr.h"    // oc_i2s_mutex for the Phase 4 Layer 3 I2S flip
 #include "host/ble_gap.h"       // ble_gap_update_params
@@ -1036,6 +1039,139 @@ static void readINA230Power()
 //  These optimisations are active in the ESP-IDF build (tinkerrocket-idf)
 //  which has proper sdkconfig support.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #541: light-sleep grace so USB enumeration can finish.
+//
+// Light sleep is held off by exactly two locks: the BT controller's (only when
+// its LP clock fell back to main XTAL) and the USJ driver's
+// USJ_NO_AUTO_LS_ON_CONNECTION lock — which is only taken once a USB
+// connection is DETECTED. Right after a chip reset, host re-enumeration takes
+// ~1 s; on a 32k-crystal boot (BT lock absent) nothing holds sleep off during
+// that window, and losing the race wedges the USJ so the host never sees the
+// port again until a physical re-plug (bench 2026-07-17: 2 transient + 3
+// re-plug-required incidents in one day, all immediately after resets; the BS,
+// which runs no light sleep, has never dropped once).
+//
+// Hold ESP_PM_NO_LIGHT_SLEEP for the first kBootUsjGraceMs after light sleep
+// is enabled, then release. On battery (no host) this delays the first
+// possible sleep by 10 s once per boot — irrelevant to flight power.
+// ---------------------------------------------------------------------------
+#if defined(CONFIG_PM_ENABLE)
+static esp_pm_lock_handle_t s_boot_usj_grace_lock = nullptr;
+static esp_timer_handle_t   s_boot_usj_grace_timer = nullptr;
+static bool                 s_boot_usj_grace_held = false;
+static constexpr uint32_t   kBootUsjGraceMs = 10000;
+
+static void bootUsjGraceExpired(void*)
+{
+    if (s_boot_usj_grace_held)
+    {
+        s_boot_usj_grace_held = false;
+        esp_pm_lock_release(s_boot_usj_grace_lock);
+        ESP_LOGI("PWR", "USB-enumeration grace over — light sleep unblocked");
+    }
+}
+
+static void holdBootUsjGrace()
+{
+    if (s_boot_usj_grace_lock == nullptr &&
+        esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usj_boot_grace",
+                           &s_boot_usj_grace_lock) != ESP_OK)
+    {
+        return;  // lock unavailable — no grace, same behavior as before #541
+    }
+    if (s_boot_usj_grace_timer == nullptr)
+    {
+        const esp_timer_create_args_t args = {
+            .callback = bootUsjGraceExpired,
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "usj_grace",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &s_boot_usj_grace_timer) != ESP_OK)
+        {
+            return;
+        }
+    }
+    if (!s_boot_usj_grace_held)
+    {
+        s_boot_usj_grace_held = true;
+        esp_pm_lock_acquire(s_boot_usj_grace_lock);
+    }
+    esp_timer_stop(s_boot_usj_grace_timer);
+    esp_timer_start_once(s_boot_usj_grace_timer,
+                         (uint64_t)kBootUsjGraceMs * 1000ULL);
+    ESP_LOGI("PWR", "Light sleep held %lu ms for USB enumeration (#541)",
+             (unsigned long)kBootUsjGraceMs);
+}
+#endif  // CONFIG_PM_ENABLE
+
+// ---------------------------------------------------------------------------
+// #541: second chance for the 32.768 kHz crystal, BEFORE BT init.
+//
+// IDF's boot-time selection gives the crystal exactly RTC_XTAL_CAL_RETRY(=1)+1
+// calibration attempts of ~92 ms each (RTC_CLK_CAL_CYCLES=3000) before
+// silently falling back to the internal 150 kHz RC — and the BT controller
+// then picks main XTAL as its LP clock, quietly reverting the whole #519
+// power win ("light sleep will not be able to apply"). Bench data (#541):
+// this board's crystal starts 7/7 COLD but intermittently fails WARM, and a
+// warm tuning-fork crystal can need hundreds of ms — more than IDF's window.
+//
+// The knobs that don't work: ESP_SYSTEM_RTC_EXT_XTAL_BOOTSTRAP_CYCLES is a
+// STUB on S3 (rtc_clk_32k_bootstrap() ignores its argument), and the retry
+// count is a hardcoded #define in IDF's clk.c. So: if the slow clock fell
+// back, re-enable the crystal here and give it up to 2 s of extra attempts.
+// On success, adopt it (source switch + fresh calibration) so BT and light
+// sleep still get the crystal; on failure, say so LOUDLY — before this, the
+// only tell was one easily-missed BT_INIT info line.
+// ---------------------------------------------------------------------------
+static void retry32kCrystal()
+{
+#if defined(CONFIG_RTC_CLK_SRC_EXT_CRYS)
+    if (rtc_clk_slow_src_get() == SOC_RTC_SLOW_CLK_SRC_XTAL32K)
+    {
+        return;  // crystal came up during boot — nothing to do
+    }
+    ESP_LOGW("PWR", "32k crystal failed at boot (RTC fell back to internal RC) "
+                    "— retrying up to 2 s before BT init (#541)");
+    rtc_clk_32k_enable(true);
+    uint32_t cal = 0;
+    int attempts = 0;
+    const int64_t deadline_us = esp_timer_get_time() + 2000000;
+    while (esp_timer_get_time() < deadline_us)
+    {
+        attempts++;
+        // Times out (returns 0) in ~100 ms if the crystal isn't oscillating.
+        cal = rtc_clk_cal(CLK_CAL_32K_XTAL, CONFIG_RTC_CLK_CAL_CYCLES);
+        if (cal != 0) break;
+    }
+    if (cal != 0)
+    {
+        rtc_clk_slow_src_set(SOC_RTC_SLOW_CLK_SRC_XTAL32K);
+        // Recalibrate against the now-selected source and publish the period
+        // so RTC timekeeping stays consistent (same pair of calls IDF's own
+        // select_rtc_slow_clk() makes).
+        const uint32_t slow_cal =
+            rtc_clk_cal(CLK_CAL_RTC_SLOW, CONFIG_RTC_CLK_CAL_CYCLES);
+        if (slow_cal != 0)
+        {
+            esp_clk_slowclk_cal_set(slow_cal);
+        }
+        ESP_LOGI("PWR", "32k crystal recovered on attempt %d — RTC and BT LP "
+                        "clock will use the crystal after all (#541)", attempts);
+    }
+    else
+    {
+        rtc_clk_32k_enable(false);
+        ESP_LOGE("PWR", "32k CRYSTAL DID NOT START after +2 s of retries "
+                        "(#541 warm-start failure?) — BT LP clock falls back "
+                        "to main XTAL; #519 light sleep is INERT this boot. "
+                        "Hardware check (drive/load caps) indicated.");
+    }
+#endif  // CONFIG_RTC_CLK_SRC_EXT_CRYS
+}
+
 static void enterLowPowerMode()
 {
 #if defined(CONFIG_PM_ENABLE)
@@ -1071,6 +1207,11 @@ static void enterLowPowerMode()
                         "(held off while USB is connected)");
     else
         ESP_LOGE("PWR", "esp_pm_configure failed: %s", esp_err_to_name(pm_err));
+
+    // #541: give USB enumeration a sleep-free window (see holdBootUsjGrace).
+    // Re-armed on every low-power entry — a rail-off transition can coincide
+    // with a fresh host attach on the bench, same race.
+    holdBootUsjGrace();
 
     // BLE TX power reduction handled by NimBLE config in sdkconfig
 #else
@@ -1122,6 +1263,16 @@ static void applyBLEParams(const char* what, const struct ble_gap_upd_params& pa
     ble_app.requestConnParams(params.itvl_min, params.itvl_max,
                               params.latency, params.supervision_timeout, what);
 }
+
+// #542: how long after the connect-time config push to keep the FAST link
+// before dropping to the low-power idle set. The app's connect burst (identity,
+// config readbacks, MagCal read, profile sync) keeps issuing commands for a few
+// seconds past the push; dropping to 200 ms/latency-4 mid-burst made every
+// remaining exchange cost ~500 ms (measured: first command 57 ms, then
+// 300-800 ms — 5-8 s of "connecting…" in the app). 8 s covers the burst with
+// generous margin (the whole burst takes ~1-2 s on a fast link) and costs ~8 s
+// of fast-interval idle current once per connection — negligible.
+static constexpr uint32_t kSlowParamsDeferMs = 8000;
 
 // Slow parameters for low-power idle: fewer BLE wakeups is the single biggest
 // lever on idle current. Within Apple's envelope: min >= 15 ms; max >= min + 15 ms;
@@ -5593,6 +5744,10 @@ static void setup_oc()
     // relying on who gets there first.
     ble_app.setAutoConnParams(false);
 
+    // #541: must run BEFORE ble_app.begin() — the BT controller samples the
+    // RTC slow-clock source once at init to choose its low-power clock.
+    retry32kCrystal();
+
     // Only BLE starts at boot — everything else is behind PWR_PIN
     if (!ble_app.begin())
     {
@@ -5871,16 +6026,34 @@ static void loop_oc()
     {
         static bool ble_was_connected = false;
         static bool config_push_pending = false;
+        static uint32_t slow_params_due_ms = 0;   // #542: deferred idle-param drop
         bool ble_now = ble_app.isConnected();
         if (ble_now && !ble_was_connected) config_push_pending = true;    // arm on connect
-        if (!ble_now)                      config_push_pending = false;   // disarm on disconnect
+        if (!ble_now) {                                                   // disarm on disconnect
+            config_push_pending = false;
+            slow_params_due_ms = 0;
+        }
         if (config_push_pending && ble_app.isReadyForNotify()) {
             config_push_pending = false;
             sendCurrentConfig();
-            // In low-power mode, override the fast params set by onConnect with
-            // slow params to save power (onConnect always requests fast params,
-            // needed for file transfer when powered on).
+            // #542: in low-power mode, SCHEDULE the slow (idle) params instead
+            // of requesting them here. This point is ~1 s after connect — the
+            // middle of the app's connect burst — and dropping to the 200 ms/
+            // latency-4 set here made every remaining handshake exchange cost
+            // ~500 ms (see kSlowParamsDeferMs). Let the burst run on the fast
+            // params onConnect requested, then drop.
             if (!pwr_pin_on) {
+                slow_params_due_ms = (uint32_t)millis() + kSlowParamsDeferMs;
+            }
+        }
+        // #542: fire the deferred drop once the burst window has passed.
+        // Rail-on cancels it (fast params are the powered-on policy — see the
+        // transfer paths); disconnect cancels above.
+        if (slow_params_due_ms != 0 && ble_now) {
+            if (pwr_pin_on) {
+                slow_params_due_ms = 0;
+            } else if ((int32_t)((uint32_t)millis() - slow_params_due_ms) >= 0) {
+                slow_params_due_ms = 0;
                 requestSlowBLEParams();
             }
         }

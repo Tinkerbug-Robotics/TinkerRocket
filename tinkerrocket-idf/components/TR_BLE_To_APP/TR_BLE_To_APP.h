@@ -508,8 +508,16 @@ private:
     void onConnParamsUpdated(uint16_t conn_handle, int status);
     void onCommandWrite(const uint8_t* data, size_t length);
 
-    // Start/restart BLE advertising
+    // Start/restart BLE advertising. Two-phase since #541: FAST (152.5 ms
+    // interval) for kFastAdvWindowMs after boot and after every disconnect —
+    // the moments a central is actually trying to find us — then the 1000 ms
+    // power interval for the long idle wait. A fixed 1 s interval made every
+    // central's discovery/connect slow (each connect attempt waits for an adv
+    // event) and made duty-cycled scanners (macOS) miss the boards outright.
     void startAdvertising();
+    void armFastAdvWindow();
+    static constexpr uint32_t kFastAdvWindowMs = 30000;
+    uint32_t fast_adv_until_ms_ = 0;   // 0 = window never armed (slow phase)
 
     // Register GATT services with the NimBLE host
     void registerGattServices();

@@ -225,6 +225,10 @@ static uint32_t lt_ekf_max_us = 0;
 static uint32_t lt_ekf_count = 0;
 static uint32_t lt_loop_count = 0;
 static uint32_t lt_loop_max_us __attribute__((unused)) = 0;
+// Free-running EKF update-tick counter (#529) — unlike the lt_* diagnostics
+// above it is never reset.  Published as NonSensorData.ekf_ticks (uint16 wrap)
+// so the flight log records the achieved EKF cadence for the replay tool.
+static uint32_t ekf_tick_counter = 0;
 
 // --- Converted SI values (latest sample of each sensor) ---
 static ISM6HG256DataSI ism6_latest_si = {};
@@ -3934,6 +3938,7 @@ static void loop_fc()
                 const uint32_t ekf_us = time_us() - ekf_t0;
                 lt_ekf_total_us += ekf_us;
                 lt_ekf_count++;
+                ekf_tick_counter++;
                 if (ekf_us > lt_ekf_max_us) lt_ekf_max_us = ekf_us;
             }
 
@@ -6293,6 +6298,8 @@ static void loop_fc()
 
         // Publish non-sensor summary (SI -> packed) for downstream logging/telem.
         non_sensor_data.time_us = logic_now_us;
+        // #529: achieved-EKF-cadence witness; stays 0 until the EKF initializes.
+        non_sensor_data.ekf_ticks = (uint16_t)ekf_tick_counter;
         if (ekf_initialized) {
             float imu_quat[4];
             ekf.getQuaternion(imu_quat);
