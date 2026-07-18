@@ -89,6 +89,21 @@ struct DashboardView: View {
                             .cornerRadius(10)
                         }
 
+                        // One place to rename any known rocket/base station and
+                        // manage network IDs — including while they're offline
+                        // (edits queue and apply on the next connect).
+                        NavigationLink(destination: DeviceManagerView(fleet: fleet)) {
+                            HStack {
+                                Image(systemName: "list.bullet.rectangle")
+                                Text("My Devices")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+
                         Button {
                             activeSheet = .driftCast
                         } label: {
@@ -264,7 +279,7 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showProvisioning) {
             if let device = fleet.activeDevice {
-                DeviceProvisioningSheet(device: device)
+                DeviceProvisioningSheet(device: device, store: fleet.knownDevices)
             }
         }
         .sheet(isPresented: Binding(
@@ -293,7 +308,7 @@ struct DashboardView: View {
             // When config_identity readback populates the unitID,
             // show provisioning sheet if this is a new device.
             guard let id = newID, !id.isEmpty,
-                  !DeviceProvisioningSheet.isDeviceKnown(id),
+                  !fleet.knownDevices.isProvisioned(id),
                   !showProvisioning else { return }
             showProvisioning = true
         }

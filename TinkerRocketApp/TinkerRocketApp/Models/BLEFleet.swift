@@ -37,6 +37,19 @@ class BLEFleet: NSObject, ObservableObject {
     /// Currently connected devices (for now, max 1 — multi-connect in PR #4).
     @Published var devices: [BLEDevice] = []
 
+    /// Registry of every device ever provisioned/seen, keyed by hardware
+    /// unitID.  Lives on the fleet (not a view) because BLEDevice feeds it
+    /// on every config_identity readback — including for non-active devices.
+    let knownDevices = KnownDeviceStore()
+
+    /// The live BLEDevice for a hardware unitID, if that device is currently
+    /// connected AND has completed its identity readback.  Used by the
+    /// device manager to decide push-now vs queue-for-next-connect.
+    func connectedDevice(unitID: String) -> BLEDevice? {
+        guard !unitID.isEmpty else { return nil }
+        return devices.first { $0.unitID == unitID }
+    }
+
     /// Which device the dashboard is currently showing.
     @Published var activeDeviceID: UUID?
 

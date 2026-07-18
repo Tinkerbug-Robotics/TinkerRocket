@@ -1551,6 +1551,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             if let fw = dict["fw"] as? String { firmwareVersion = fw }
             print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue) fw=\(firmwareVersion)")
+            // Fold the readback into the known-device registry and let it
+            // push any edits queued while this device was offline.  The
+            // firmware echoes a fresh config_identity after each identity-set
+            // command, so pushed values confirm through this same path.
+            fleet?.knownDevices.deviceDidReportIdentity(
+                unitID: unitID, name: unitName, deviceType: deviceType,
+                networkID: networkID, rocketID: rocketID, pusher: self)
             return
         }
 
