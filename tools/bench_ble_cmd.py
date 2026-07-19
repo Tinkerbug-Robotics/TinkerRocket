@@ -61,15 +61,21 @@ def build_payload(args) -> tuple[int, bytes]:
 
 async def scan(name_filter: str | None):
     print(f"Scanning {SCAN_TIMEOUT_S:.0f}s ...")
-    devices = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S)
+    found = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S, return_adv=True)
     hits = 0
-    for d in devices:
+    for d, ad in found.values():
         name = d.name or ""
-        if name_filter and name_filter.lower() not in name.lower():
+        # Renamed devices advertise the raw user-set unit name (no TR-
+        # prefix), so a name gate hides them — the service UUID is the
+        # real membership test (same bug/fix as the app's scanner).
+        advertises_service = SERVICE_UUID.lower() in [u.lower() for u in (ad.service_uuids or [])]
+        if name_filter:
+            if name_filter.lower() not in name.lower():
+                continue
+        elif not (advertises_service or name.startswith("TR-") or "Base" in name):
             continue
-        if not name_filter and not (name.startswith("TR-") or "Base" in name):
-            continue
-        print(f"  {d.address}  rssi={getattr(d, 'rssi', '?')}  {name}")
+        tag = "svc" if advertises_service else "   "
+        print(f"  {d.address}  rssi={ad.rssi}  {tag}  {name}")
         hits += 1
     if hits == 0:
         print("  no matching devices (is it powered? is the app connected to it?)")

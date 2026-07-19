@@ -354,7 +354,15 @@ struct SettingsView: View {
             }
             if deviceNidMismatch {
                 Button("Set device to \"\(appNetworkName)\" (ID \(appNetworkID))") {
-                    device.sendSetNetworkID(UInt8(clamping: appNetworkID))
+                    // Route through the known-device registry (the single
+                    // writer for identity edits) so the My Devices record
+                    // updates immediately, not only via the readback echo.
+                    if let store = device.fleet?.knownDevices {
+                        store.setNetworkID(UInt8(clamping: appNetworkID),
+                                           for: device.unitID, pusher: device)
+                    } else {
+                        device.sendSetNetworkID(UInt8(clamping: appNetworkID))
+                    }
                 }
                 .disabled(!device.isConnected)
             }
@@ -1440,9 +1448,11 @@ struct SettingsView: View {
 
     private var networkFooter: String {
         if deviceNidMismatch {
-            return "This device is on a different network ID than the app expects — it can't hear your other devices. Tap to sync it (a rising NetID Drops count on the dashboard is the same problem seen from the other side)."
+            return NetworkCopy.deviceMismatchWarning
+                + " Tap to sync it (a rising NetID Drops count on the dashboard is the same problem seen from the other side)."
         }
-        return "Devices only hear each other on the same network ID. Set during onboarding; pushed to each device when provisioned."
+        return NetworkCopy.sameNetworkExplainer
+            + " Set during onboarding; pushed to each device when provisioned."
     }
 
     // #150: hopping is unavailable when the firmware reports dwell 0 for

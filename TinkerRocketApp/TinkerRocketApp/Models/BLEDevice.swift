@@ -1044,7 +1044,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // MARK: - Identity commands
 
     func sendSetUnitName(_ name: String) {
-        guard let data = name.prefix(20).data(using: .utf8) else { return }
+        // Byte clamp, not char clamp: the firmware rejects plen > 20 outright
+        // (no write, no echo), and 20 chars of multibyte UTF-8 can exceed it.
+        guard let data = name.utf8Clamped(maxBytes: 20).data(using: .utf8) else { return }
         sendRawCommand(40, payload: data)
     }
 
@@ -1551,6 +1553,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             if let fw = dict["fw"] as? String { firmwareVersion = fw }
             print("[CFG] Identity: uid=\(unitID) name=\(unitName) nid=\(networkID) rid=\(rocketID) type=\(deviceType.rawValue) fw=\(firmwareVersion)")
+            // Fold the readback into the known-device registry and let it
+            // push any edits queued while this device was offline.  The
+            // firmware echoes a fresh config_identity after each identity-set
+            // command, so pushed values confirm through this same path.
+            fleet?.knownDevices.deviceDidReportIdentity(
+                unitID: unitID, name: unitName, deviceType: deviceType,
+                networkID: networkID, rocketID: rocketID, pusher: self)
             return
         }
 

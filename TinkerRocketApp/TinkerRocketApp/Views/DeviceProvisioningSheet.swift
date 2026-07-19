@@ -10,6 +10,7 @@ import SwiftUI
 
 struct DeviceProvisioningSheet: View {
     @ObservedObject var device: BLEDevice
+    @ObservedObject var store: KnownDeviceStore
     @Environment(\.dismiss) var dismiss
 
     @State private var nameInput: String = ""
@@ -44,9 +45,10 @@ struct DeviceProvisioningSheet: View {
                     TextField("Name (max 20 chars)", text: $nameInput)
                         .autocapitalization(.words)
                         .onChange(of: nameInput) { newValue in
-                            if newValue.count > 20 {
-                                nameInput = String(newValue.prefix(20))
-                            }
+                            // Firmware limit is 20 UTF-8 BYTES (multibyte
+                            // names hit it before 20 chars).
+                            let clamped = newValue.utf8Clamped(maxBytes: 20)
+                            if clamped != newValue { nameInput = clamped }
                         }
                 }
 
@@ -62,7 +64,8 @@ struct DeviceProvisioningSheet: View {
                 // guards against the #133-era silent drift).
                 if networkID > 0 {
                     Section(header: Text("Network"),
-                            footer: Text("All your devices are set to this network. Devices only hear each other on the same network ID.")) {
+                            footer: Text("All your devices are set to this network. "
+                                         + NetworkCopy.sameNetworkExplainer)) {
                         HStack {
                             Text(networkName.isEmpty ? "Not set" : networkName)
                             Spacer()
@@ -115,45 +118,28 @@ struct DeviceProvisioningSheet: View {
         let trimmed = nameInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // Send name to device
-        device.sendSetUnitName(trimmed)
+        // All edits go through the known-device registry, which pushes to the
+        // connected device and keeps the "My Devices" record in sync.
+
+        store.setName(trimmed, for: device.unitID, pusher: device)
 
         // #150: push the network ID (cmd 41) — the firmware persists it in
         // identity NVS across reboots now, so the push is durable.  The
         // Settings Network section verifies via the device's readback.
         if networkID > 0 {
-            device.sendSetNetworkID(UInt8(clamping: networkID))
+            store.setNetworkID(UInt8(clamping: networkID), for: device.unitID, pusher: device)
         }
 
-        // Send rocket ID (rockets only)
         if !device.isBaseStation {
-            device.sendSetRocketID(UInt8(rocketIDInput))
+            store.setRocketID(UInt8(rocketIDInput), for: device.unitID, pusher: device)
         }
 
-        // Mark as known
-        markDeviceKnown(device.unitID)
+        store.markProvisioned(device.unitID)
         dismiss()
     }
 
     private func skipAndDismiss() {
-        markDeviceKnown(device.unitID)
+        store.markProvisioned(device.unitID)
         dismiss()
-    }
-
-    // MARK: - Known devices persistence
-
-    static func isDeviceKnown(_ unitID: String) -> Bool {
-        guard !unitID.isEmpty else { return true }  // Don't prompt for empty IDs
-        let known = UserDefaults.standard.stringArray(forKey: "knownDeviceIDs") ?? []
-        return known.contains(unitID)
-    }
-
-    private func markDeviceKnown(_ unitID: String) {
-        guard !unitID.isEmpty else { return }
-        var known = UserDefaults.standard.stringArray(forKey: "knownDeviceIDs") ?? []
-        if !known.contains(unitID) {
-            known.append(unitID)
-            UserDefaults.standard.set(known, forKey: "knownDeviceIDs")
-        }
     }
 }

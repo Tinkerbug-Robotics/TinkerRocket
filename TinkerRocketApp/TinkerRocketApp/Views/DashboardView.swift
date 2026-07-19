@@ -89,6 +89,21 @@ struct DashboardView: View {
                             .cornerRadius(10)
                         }
 
+                        // One place to rename any known rocket/base station and
+                        // manage network IDs — including while they're offline
+                        // (edits queue and apply on the next connect).
+                        NavigationLink(destination: DeviceManagerView(fleet: fleet)) {
+                            HStack {
+                                Image(systemName: "list.bullet.rectangle")
+                                Text("My Devices")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+
                         Button {
                             activeSheet = .driftCast
                         } label: {
@@ -229,6 +244,13 @@ struct DashboardView: View {
         .onChange(of: fleet.activeDeviceID) { _ in
             attachActiveDevice()
         }
+        // A renamed device can mis-parse its role from the BLE name until
+        // config_identity lands; the syncer re-evaluates on a role flip
+        // (attachedAsBaseStation), but only if attach is called again —
+        // this edge is what calls it.
+        .onChange(of: fleet.activeDevice?.deviceType) { _ in
+            attachActiveDevice()
+        }
         .sheet(item: $activeSheet) { sheet in
             Group {
                 switch sheet {
@@ -264,7 +286,7 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showProvisioning) {
             if let device = fleet.activeDevice {
-                DeviceProvisioningSheet(device: device)
+                DeviceProvisioningSheet(device: device, store: fleet.knownDevices)
             }
         }
         .sheet(isPresented: Binding(
@@ -293,7 +315,7 @@ struct DashboardView: View {
             // When config_identity readback populates the unitID,
             // show provisioning sheet if this is a new device.
             guard let id = newID, !id.isEmpty,
-                  !DeviceProvisioningSheet.isDeviceKnown(id),
+                  !fleet.knownDevices.isProvisioned(id),
                   !showProvisioning else { return }
             showProvisioning = true
         }
@@ -351,7 +373,8 @@ struct ConnectedDashboardView: View {
                 isConnected: true,
                 isScanning: fleet.isScanning,
                 statusMessage: fleet.statusMessage,
-                connectedDeviceName: device.displayName
+                connectedDeviceName: device.displayName,
+                connectedDeviceType: device.deviceType
             )
         }
 
@@ -581,6 +604,17 @@ struct ConnectionStatusView: View {
     let isScanning: Bool
     let statusMessage: String
     var connectedDeviceName: String = ""
+    // Resolved role, not a name-substring guess: renamed devices carry no
+    // type hint in the name, and a rocket called "SUBSONIC" contains "BS".
+    var connectedDeviceType: BLEDeviceType = .unknown
+
+    private var roleLabel: String {
+        switch connectedDeviceType {
+        case .rocket: return "Rocket"
+        case .baseStation: return "Base Station"
+        case .unknown: return "TinkerRocket device"
+        }
+    }
 
     var body: some View {
         HStack {
@@ -591,7 +625,7 @@ struct ConnectionStatusView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(connectedDeviceName)
                         .font(.headline)
-                    Text((connectedDeviceName.contains("Base") || connectedDeviceName.contains("BS")) ? "Base Station" : "Rocket")
+                    Text(roleLabel)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -627,16 +661,10 @@ struct DeviceChipBar: View {
                         fleet.activeDeviceID = device.peripheral?.identifier
                     } label: {
                         HStack(spacing: 6) {
-                            if device.isBaseStation {
-                                Image(systemName: "antenna.radiowaves.left.and.right")
-                                    .font(.caption)
-                            } else {
-                                Image("RocketIcon")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(height: 14)
-                            }
+                            // .inherit: the chip's own foregroundColor
+                            // (white when active, primary otherwise) tints it.
+                            DeviceTypeIcon(type: device.deviceType,
+                                           size: 14, symbolFont: .caption, tint: .inherit)
                             Text(device.displayName)
                                 .font(.caption)
                                 .fontWeight(.medium)
@@ -660,11 +688,7 @@ struct DeviceChipBar: View {
                 // Remote rockets (seen via base station)
                 ForEach(fleet.remoteRockets) { remote in
                     HStack(spacing: 6) {
-                        Image("RocketIcon")
-                            .resizable()
-                            .renderingMode(.template)
-                            .aspectRatio(contentMode: .fit)
-                            .frame(height: 14)
+                        DeviceTypeIcon(type: .rocket, size: 14, tint: .inherit)
                         Text(remote.displayName)
                             .font(.caption)
                             .fontWeight(.medium)
@@ -1508,20 +1532,11 @@ struct DevicePickerView: View {
                     if !alreadyConnected { fleet.connect(to: device) }
                 }) {
                     HStack {
-                        Group {
-                            if device.isBaseStation {
-                                Image(systemName: "antenna.radiowaves.left.and.right")
-                                    .font(.title2)
-                            } else {
-                                Image("RocketIcon")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(height: 24)
-                            }
-                        }
-                        .foregroundColor(device.isBaseStation ? .orange : .blue)
-                        .frame(width: 36)
+                        // Resolved type: registry hint for renamed devices,
+                        // name prefix for factory defaults, honest question
+                        // mark when neither knows.
+                        DeviceTypeIcon(type: device.deviceType, symbolFont: .title2)
+                            .frame(width: 36)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(device.name)

@@ -82,4 +82,44 @@ final class ActiveRocketSyncerLifecycleTests: XCTestCase {
         syncer.detach()
         XCTAssertEqual(syncer.syncState, .idle)
     }
+
+    // MARK: - Role flip after a late config_identity (renamed devices)
+
+    func testRoleFlipToRocket_ReattachesInsteadOfStayingLatched() {
+        // A rocket renamed "SUBSONIC" parses as .baseStation via the legacy
+        // "BS" substring check, so the first attach idles it.  When the
+        // config_identity readback corrects the type, a re-attach for the
+        // SAME device object must break through the idempotence guard —
+        // otherwise profile sync stays silently dead all session (#375's
+        // failure mode through a different door).
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let device = BLEDevice(peripheral: nil, name: "SUBSONIC")
+        device.isConnected = true
+        device.deviceType = .baseStation   // as the name parse / a stale seed left it
+
+        syncer.attach(device: device, store: store)
+        XCTAssertEqual(syncer.syncState, .idle)
+
+        device.deviceType = .rocket        // config_identity "dt" correction
+        syncer.attach(device: device, store: store)
+        XCTAssertEqual(syncer.syncState, .awaitingSync,
+                       "role correction must re-run the rocket attach path")
+    }
+
+    func testRoleFlipToBaseStation_DropsRocketSubscriptions() {
+        // Mirror image: a base station mis-seeded as a rocket must fall back
+        // to the read-only .idle role once the readback says "B".
+        let syncer = ActiveRocketSyncer()
+        let store = makeStore()
+        let device = makeRocket()
+
+        syncer.attach(device: device, store: store)
+        XCTAssertEqual(syncer.syncState, .awaitingSync)
+
+        device.deviceType = .baseStation
+        syncer.attach(device: device, store: store)
+        XCTAssertEqual(syncer.syncState, .idle,
+                       "a corrected base station must not keep a rocket sync pipeline")
+    }
 }

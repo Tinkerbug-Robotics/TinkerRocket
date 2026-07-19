@@ -30,11 +30,9 @@ struct ActiveRocketHeader: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Image("RocketIcon")
-                    .resizable().renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 20, height: 20)
-                    .foregroundColor(.accentColor)
+                // Always the rocket glyph (this header is about the active
+                // rocket profile), accent-tinted to read as tappable.
+                DeviceTypeIcon(type: .rocket, size: 20, tint: .custom(.accentColor))
                 Text(store.activeProfile?.name ?? "No rocket selected")
                     .font(.headline)
                     .foregroundColor(.primary)

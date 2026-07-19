@@ -75,12 +75,28 @@ struct DiscoveredDevice: Identifiable {
     let name: String
     var rssi: Int
 
+    /// Type recovered from the known-device registry at discovery time
+    /// (matched by advertised name).  nil when the device isn't in the
+    /// registry — e.g. a fresh app install, or a board renamed on another
+    /// phone.
+    var knownType: BLEDeviceType? = nil
+
+    /// Registry hint first; the TR-R-/TR-B- name heuristic only works for
+    /// factory-default names (the firmware advertises the raw unit name).
+    var deviceType: BLEDeviceType {
+        knownType ?? BLEDeviceType.from(name: name)
+    }
+
     var isBaseStation: Bool {
-        name.hasPrefix("TR-B-") || name.contains("Base") || name.contains("BS")
+        deviceType == .baseStation
     }
 
     var typeLabel: String {
-        isBaseStation ? "Base Station" : "Rocket"
+        switch deviceType {
+        case .rocket: return "Rocket"
+        case .baseStation: return "Base Station"
+        case .unknown: return "TinkerRocket device"
+        }
     }
 }
 

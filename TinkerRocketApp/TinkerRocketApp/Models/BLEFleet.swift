@@ -37,6 +37,19 @@ class BLEFleet: NSObject, ObservableObject {
     /// Currently connected devices (for now, max 1 — multi-connect in PR #4).
     @Published var devices: [BLEDevice] = []
 
+    /// Registry of every device ever provisioned/seen, keyed by hardware
+    /// unitID.  Lives on the fleet (not a view) because BLEDevice feeds it
+    /// on every config_identity readback — including for non-active devices.
+    let knownDevices = KnownDeviceStore()
+
+    /// The live BLEDevice for a hardware unitID, if that device is currently
+    /// connected AND has completed its identity readback.  Used by the
+    /// device manager to decide push-now vs queue-for-next-connect.
+    func connectedDevice(unitID: String) -> BLEDevice? {
+        guard !unitID.isEmpty else { return nil }
+        return devices.first { $0.unitID == unitID }
+    }
+
     /// Which device the dashboard is currently showing.
     @Published var activeDeviceID: UUID?
 
@@ -180,6 +193,26 @@ class BLEFleet: NSObject, ObservableObject {
         devices.first { $0.peripheral?.identifier == peripheral.identifier }
     }
 
+    /// Seed a just-created BLEDevice's type from what we already know,
+    /// BEFORE the config_identity readback arrives.  Registry knowledge
+    /// wins over BLEDevice.init's name parse (mirrors DiscoveredDevice's
+    /// precedence): the firmware advertises the raw user-set name, so a
+    /// renamed device either parses .unknown or — worse — mis-parses via
+    /// the legacy substring check (a rocket called "SUBSONIC" reads as a
+    /// base station), and a wrong role at connect latches the profile
+    /// syncer (#375).  Prefers the scan-time DiscoveredDevice identity:
+    /// peripheral.name is iOS-cached and can be nil/stale after a
+    /// re-flash, while the scan response carried the real name.  The
+    /// readback's "dt" still overrides everything ~1 s later.
+    private func seedTypeFromRegistry(_ device: BLEDevice, peripheral: CBPeripheral) {
+        let discovered = discoveredDevices.first { $0.id == peripheral.identifier }
+        let advertisedName = discovered?.name ?? device.connectedDeviceName
+        if let known = discovered?.knownType
+            ?? knownDevices.deviceType(forAdvertisedName: advertisedName) {
+            device.deviceType = known
+        }
+    }
+
     // MARK: - Last-valid rocket fix cache (#140)
 
     /// Called by BLEDevice on every telemetry packet.  Updates the
@@ -224,6 +257,7 @@ extension BLEFleet: CBCentralManagerDelegate {
                 // populates and the map marker / direction arrow / landing anchor
                 // stay blank for the whole restored session.
                 device.fleet = self
+                seedTypeFromRegistry(device, peripheral: p)
                 device.onConnect()
                 devices.append(device)
                 activeDeviceID = p.identifier
@@ -258,8 +292,12 @@ extension BLEFleet: CBCentralManagerDelegate {
         let name = advertisedName ?? peripheral.name ?? "Unknown"
         print("Discovered: \(name) RSSI: \(RSSI)")
 
-        // Only list Tinker devices (legacy "TinkerRocket"/"TinkerBaseStation" + new "TR-R-"/"TR-B-")
-        guard name.hasPrefix("TR-") || name.contains("Tinker") else { return }
+        // No name filter here: the scan is already service-UUID-filtered
+        // (scanForPeripherals(withServices:)), so anything delivered to this
+        // callback IS a TinkerRocket board.  The old belt-and-suspenders
+        // TR-*/Tinker name guard silently dropped every device renamed
+        // through My Devices — the firmware advertises the raw user-set
+        // unit name; only factory defaults carry the TR-R-/TR-B- prefix.
 
         if let idx = discoveredDevices.firstIndex(where: { $0.id == peripheral.identifier }) {
             discoveredDevices[idx].rssi = RSSI.intValue
@@ -268,7 +306,11 @@ extension BLEFleet: CBCentralManagerDelegate {
                 id: peripheral.identifier,
                 peripheral: peripheral,
                 name: name,
-                rssi: RSSI.intValue
+                rssi: RSSI.intValue,
+                // Renames happen through this app, so a renamed device's
+                // advertised name matches its registry record — recover the
+                // type the name prefix no longer carries.
+                knownType: knownDevices.deviceType(forAdvertisedName: name)
             )
             discoveredDevices.append(device)
         }
@@ -285,6 +327,7 @@ extension BLEFleet: CBCentralManagerDelegate {
 
         let device = BLEDevice(peripheral: peripheral, name: name)
         device.fleet = self
+        seedTypeFromRegistry(device, peripheral: peripheral)
         device.onConnect()
         devices.append(device)
 
