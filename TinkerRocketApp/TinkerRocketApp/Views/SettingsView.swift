@@ -354,7 +354,15 @@ struct SettingsView: View {
             }
             if deviceNidMismatch {
                 Button("Set device to \"\(appNetworkName)\" (ID \(appNetworkID))") {
-                    device.sendSetNetworkID(UInt8(clamping: appNetworkID))
+                    // Route through the known-device registry (the single
+                    // writer for identity edits) so the My Devices record
+                    // updates immediately, not only via the readback echo.
+                    if let store = device.fleet?.knownDevices {
+                        store.setNetworkID(UInt8(clamping: appNetworkID),
+                                           for: device.unitID, pusher: device)
+                    } else {
+                        device.sendSetNetworkID(UInt8(clamping: appNetworkID))
+                    }
                 }
                 .disabled(!device.isConnected)
             }

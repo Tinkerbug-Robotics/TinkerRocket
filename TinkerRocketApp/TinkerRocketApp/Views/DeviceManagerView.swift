@@ -303,7 +303,10 @@ struct KnownDeviceDetailView: View {
                 }
             }
 
-            if rec.deviceType != .baseStation {
+            // Positively-identified rockets only: a legacy-migrated record is
+            // .unknown until its next readback and may really be a base
+            // station, which has no rocket ID to edit.
+            if rec.deviceType == .rocket {
                 rocketIDSection(rec, connected: connected)
             }
 
@@ -377,16 +380,29 @@ struct KnownDeviceDetailView: View {
                 footer: Text(connected
                              ? "Unique ID within your network (1–254). Each rocket needs a different ID."
                              : "Unique ID within your network (1–254). Changes apply on the next connect.")) {
-            Stepper("ID: \(displayRocketID(rec))\(rec.pendingRocketID != nil ? "  (queued)" : "")",
-                    value: Binding(
-                        get: { Int(displayRocketID(rec)) },
-                        set: { store.setRocketID(UInt8(clamping: $0), for: unitID, pusher: live) }
-                    ), in: 1...254)
+            Stepper {
+                Text(rocketIDLabel(rec))
+            } onIncrement: {
+                bumpRocketID(rec, by: +1)
+            } onDecrement: {
+                bumpRocketID(rec, by: -1)
+            }
         }
     }
 
-    private func displayRocketID(_ rec: KnownDevice) -> UInt8 {
-        rec.effectiveRocketID == 0 ? 1 : rec.effectiveRocketID
+    private func rocketIDLabel(_ rec: KnownDevice) -> String {
+        guard rec.effectiveRocketID > 0 else { return "ID: not set" }
+        return "ID: \(rec.effectiveRocketID)\(rec.pendingRocketID != nil ? "  (queued)" : "")"
+    }
+
+    /// Unset (0) becomes 1 on the first tap in either direction — a
+    /// value-bound Stepper pinned at its minimum could display 1 but never
+    /// actually assign it.  Thereafter steps clamp to the firmware's 1–254.
+    private func bumpRocketID(_ rec: KnownDevice, by delta: Int) {
+        let current = Int(rec.effectiveRocketID)
+        let next = current == 0 ? 1 : min(254, max(1, current + delta))
+        guard next != current else { return }
+        store.setRocketID(UInt8(next), for: unitID, pusher: live)
     }
 
     private func networkSection(_ rec: KnownDevice, mismatch: Bool, connected: Bool) -> some View {

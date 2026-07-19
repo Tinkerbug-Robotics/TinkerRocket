@@ -1044,7 +1044,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // MARK: - Identity commands
 
     func sendSetUnitName(_ name: String) {
-        guard let data = name.prefix(20).data(using: .utf8) else { return }
+        // Byte clamp, not char clamp: the firmware rejects plen > 20 outright
+        // (no write, no echo), and 20 chars of multibyte UTF-8 can exceed it.
+        guard let data = name.utf8Clamped(maxBytes: 20).data(using: .utf8) else { return }
         sendRawCommand(40, payload: data)
     }
 

@@ -45,9 +45,10 @@ struct DeviceProvisioningSheet: View {
                     TextField("Name (max 20 chars)", text: $nameInput)
                         .autocapitalization(.words)
                         .onChange(of: nameInput) { newValue in
-                            if newValue.count > 20 {
-                                nameInput = String(newValue.prefix(20))
-                            }
+                            // Firmware limit is 20 UTF-8 BYTES (multibyte
+                            // names hit it before 20 chars).
+                            let clamped = newValue.utf8Clamped(maxBytes: 20)
+                            if clamped != newValue { nameInput = clamped }
                         }
                 }
 

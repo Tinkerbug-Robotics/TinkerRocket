@@ -30,6 +30,18 @@ extension BLEDevice: DeviceIdentityPusher {}
 
 extension BLEDeviceType: Codable {}
 
+extension String {
+    /// Longest prefix that fits `maxBytes` of UTF-8 without splitting a
+    /// Character.  The firmware identity handlers hard-reject longer
+    /// payloads (plen > 20) with no write and no readback echo, so a
+    /// character-count clamp is not enough for multibyte names.
+    func utf8Clamped(maxBytes: Int) -> String {
+        var s = self
+        while s.utf8.count > maxBytes { s.removeLast() }
+        return s
+    }
+}
+
 /// One physical device as last seen over BLE, plus queued offline edits.
 struct KnownDevice: Identifiable, Codable, Equatable {
     let unitID: String              // immutable hardware id — the key
@@ -135,28 +147,32 @@ final class KnownDeviceStore: ObservableObject {
             rec.rocketID = rocketID
             rec.lastSeen = Date()
 
-            if let pendingName = rec.pendingName {
-                rec.pendingName = nil
-                if pendingName != name {
-                    rec.name = pendingName
-                    pusher?.sendSetUnitName(pendingName)
-                }
-            }
-            if let pendingNid = rec.pendingNetworkID {
-                rec.pendingNetworkID = nil
-                if pendingNid != networkID {
-                    rec.networkID = pendingNid
-                    pusher?.sendSetNetworkID(pendingNid)
-                }
-            }
-            if let pendingRid = rec.pendingRocketID {
-                rec.pendingRocketID = nil
-                if pendingRid != rocketID {
-                    rec.rocketID = pendingRid
-                    pusher?.sendSetRocketID(pendingRid)
-                }
-            }
+            applyPending(&rec, readback: name,
+                         current: \.name, pending: \.pendingName,
+                         push: pusher.map { p in { p.sendSetUnitName($0) } })
+            applyPending(&rec, readback: networkID,
+                         current: \.networkID, pending: \.pendingNetworkID,
+                         push: pusher.map { p in { p.sendSetNetworkID($0) } })
+            applyPending(&rec, readback: rocketID,
+                         current: \.rocketID, pending: \.pendingRocketID,
+                         push: pusher.map { p in { p.sendSetRocketID($0) } })
         }
+    }
+
+    /// Apply one queued offline edit against a fresh readback.  The queue is
+    /// cleared BEFORE pushing so the firmware's echo readback runs this as a
+    /// plain upsert — no re-push loop even if the device rejects or clamps
+    /// the value.  A queued value the device already has is just dropped.
+    private func applyPending<V: Equatable>(_ rec: inout KnownDevice,
+                                            readback: V,
+                                            current: WritableKeyPath<KnownDevice, V>,
+                                            pending: WritableKeyPath<KnownDevice, V?>,
+                                            push: ((V) -> Void)?) {
+        guard let queued = rec[keyPath: pending] else { return }
+        rec[keyPath: pending] = nil
+        guard queued != readback else { return }
+        rec[keyPath: current] = queued
+        push?(queued)
     }
 
     /// Called by the provisioning sheet on Save/Skip so the device stops
@@ -170,43 +186,43 @@ final class KnownDeviceStore: ObservableObject {
 
     /// Rename.  With a live pusher the new name is sent immediately and the
     /// record updated optimistically (the firmware's readback echo confirms);
-    /// offline it's queued for the next connect.
+    /// offline it's queued for the next connect.  Clamped to the firmware's
+    /// 20-byte payload limit so the device can never silently reject it.
     func setName(_ newName: String, for unitID: String, pusher: DeviceIdentityPusher?) {
-        let trimmed = String(newName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(20))
-        guard !trimmed.isEmpty, !unitID.isEmpty else { return }
-        withRecord(unitID) { rec in
-            if let pusher {
-                pusher.sendSetUnitName(trimmed)
-                rec.name = trimmed
-                rec.pendingName = nil
-            } else {
-                rec.pendingName = trimmed == rec.name ? nil : trimmed
-            }
-        }
+        let clamped = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+            .utf8Clamped(maxBytes: 20)
+        guard !clamped.isEmpty, !unitID.isEmpty else { return }
+        applyEdit(clamped, for: unitID, current: \.name, pending: \.pendingName,
+                  push: pusher.map { p in { p.sendSetUnitName($0) } })
     }
 
     func setNetworkID(_ nid: UInt8, for unitID: String, pusher: DeviceIdentityPusher?) {
         guard nid > 0, !unitID.isEmpty else { return }   // 0 is the unset sentinel (#150)
-        withRecord(unitID) { rec in
-            if let pusher {
-                pusher.sendSetNetworkID(nid)
-                rec.networkID = nid
-                rec.pendingNetworkID = nil
-            } else {
-                rec.pendingNetworkID = nid == rec.networkID ? nil : nid
-            }
-        }
+        applyEdit(nid, for: unitID, current: \.networkID, pending: \.pendingNetworkID,
+                  push: pusher.map { p in { p.sendSetNetworkID($0) } })
     }
 
     func setRocketID(_ rid: UInt8, for unitID: String, pusher: DeviceIdentityPusher?) {
         guard (1...254).contains(rid), !unitID.isEmpty else { return }  // firmware rejects 0/255
+        applyEdit(rid, for: unitID, current: \.rocketID, pending: \.pendingRocketID,
+                  push: pusher.map { p in { p.sendSetRocketID($0) } })
+    }
+
+    /// Shared push-now-vs-queue tail for the setters above.  Connected:
+    /// push + optimistic record update + clear any stale queue.  Offline:
+    /// queue the target, where queueing the device's current value just
+    /// clears the queue (a changed-my-mind no-op).
+    private func applyEdit<V: Equatable>(_ value: V, for unitID: String,
+                                         current: WritableKeyPath<KnownDevice, V>,
+                                         pending: WritableKeyPath<KnownDevice, V?>,
+                                         push: ((V) -> Void)?) {
         withRecord(unitID) { rec in
-            if let pusher {
-                pusher.sendSetRocketID(rid)
-                rec.rocketID = rid
-                rec.pendingRocketID = nil
+            if let push {
+                push(value)
+                rec[keyPath: current] = value
+                rec[keyPath: pending] = nil
             } else {
-                rec.pendingRocketID = rid == rec.rocketID ? nil : rid
+                rec[keyPath: pending] = value == rec[keyPath: current] ? nil : value
             }
         }
     }

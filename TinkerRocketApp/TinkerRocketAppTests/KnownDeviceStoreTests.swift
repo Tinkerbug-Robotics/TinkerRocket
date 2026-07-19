@@ -162,12 +162,19 @@ final class KnownDeviceStoreTests: XCTestCase {
         XCTAssertEqual(store.device(for: "a1b2c3d4")?.name, "Atlas")
     }
 
-    func testNameClampedTo20Chars() {
+    func testNameClampedTo20Bytes() {
         let store = makeStore()
         report(store)
         let spy = PusherSpy()
         store.setName(String(repeating: "x", count: 30), for: "a1b2c3d4", pusher: spy)
         XCTAssertEqual(spy.names, [String(repeating: "x", count: 20)])
+
+        // The firmware limit is 20 UTF-8 BYTES, not characters — it rejects
+        // longer payloads silently (no write, no echo), so the clamp must
+        // count bytes and never split a character.  🚀 is 4 bytes.
+        store.setName(String(repeating: "🚀", count: 10), for: "a1b2c3d4", pusher: spy)
+        XCTAssertEqual(spy.names.last, String(repeating: "🚀", count: 5))
+        XCTAssertLessThanOrEqual(spy.names.last!.utf8.count, 20)
     }
 
     // MARK: - Offline edits (queue, then apply on next readback)
