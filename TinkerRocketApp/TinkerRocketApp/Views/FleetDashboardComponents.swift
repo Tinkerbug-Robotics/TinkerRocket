@@ -190,6 +190,25 @@ struct BaseStationStripView: View {
         return remote?.displayName ?? "Rocket \(focus)"
     }
 
+    /// Level-matched battery symbol for the strip's SoC glance.
+    private var batteryGlyph: String {
+        guard let soc = bs.telemetry.bs_soc else { return "battery.0" }
+        switch soc {
+        case 87.5...: return "battery.100"
+        case 62.5..<87.5: return "battery.75"
+        case 37.5..<62.5: return "battery.50"
+        case 12.5..<37.5: return "battery.25"
+        default: return "battery.0"
+        }
+    }
+
+    private var batteryColor: Color {
+        guard let soc = bs.telemetry.bs_soc else { return .secondary }
+        if soc < 20 { return .red }
+        if soc < 40 { return .orange }
+        return .secondary
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "antenna.radiowaves.left.and.right")
@@ -211,8 +230,16 @@ struct BaseStationStripView: View {
                 }
             }
             Spacer()
-            Text(bs.telemetry.bsSocDisplay)
-                .font(.system(.caption, design: .monospaced))
+            // Battery glyph so the % reads as BS charge at a glance (the
+            // bare number was ambiguous); full charge/voltage/current live
+            // in the Battery card's "Base Stn" row below the rocket stats.
+            HStack(spacing: 4) {
+                Image(systemName: batteryGlyph)
+                    .font(.caption)
+                    .foregroundColor(batteryColor)
+                Text(bs.telemetry.bsSocDisplay)
+                    .font(.system(.caption, design: .monospaced))
+            }
             Image(systemName: "chevron.right")
                 .font(.caption2)
                 .foregroundColor(.secondary)
@@ -319,7 +346,12 @@ struct RelayRocketSectionView: View {
             } else {
                 RocketStateView(state: remote.telemetry.state)
                 FlightSummaryView(telemetry: remote.telemetry)
-                BatteryView(telemetry: remote.telemetry, isBaseStation: false)
+                // isBaseStation: relayed frames carry the relaying BS's own
+                // battery fields, so the card shows the Rocket row AND the
+                // "Base Stn" row (charge/voltage/current) — same layout as
+                // the pre-#390 dashboard.  The strip's % is just a glance;
+                // this card is the real numbers.
+                BatteryView(telemetry: remote.telemetry, isBaseStation: true)
                 GPSView(telemetry: remote.telemetry, compact: true)
                 LoRaSignalView(telemetry: remote.telemetry)
                 relayActions
