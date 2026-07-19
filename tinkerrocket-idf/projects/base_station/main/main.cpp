@@ -4837,10 +4837,16 @@ static void loop_bs()
                 // waiting for its next packet.
                 active_rocket_idx = (uint8_t)fslot;
             }
+            // Log the EFFECTIVE focus: on a pin-clear the subject falls back
+            // to the auto rid, whose tracked-ness is what matters (checking
+            // the cleared pin's slot printed "not heard yet" for a rocket
+            // the BS was actively receiving).
+            const uint8_t log_rid = focus_rid_pinned ? focus_rid_pinned : focus_rid_auto;
+            const int log_slot = log_rid ? slotOfRid(log_rid) : -1;
             ESP_LOGI(TAG, "[FOCUS] %s rid=%u (%s)",
                      focus_rid_pinned ? "Pinned to" : "Auto (pin cleared),",
-                     (unsigned)(focus_rid_pinned ? focus_rid_pinned : focus_rid_auto),
-                     fslot >= 0 ? "tracked" : "not heard yet");
+                     (unsigned)log_rid,
+                     log_slot >= 0 ? "tracked" : "not heard yet");
         }
     }
     else if (ble_cmd == BLE_BS_CMD_SET_BS_LOGGING)
