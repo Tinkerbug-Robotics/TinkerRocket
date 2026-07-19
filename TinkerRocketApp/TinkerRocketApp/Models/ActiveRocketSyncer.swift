@@ -67,19 +67,35 @@ final class ActiveRocketSyncer: ObservableObject {
     private var magCalReadPending = false
     private var sensorCalReadPending = false
 
+    /// Which role the current attach ran under.  A renamed device can
+    /// mis-parse its type from the BLE name until config_identity lands
+    /// (e.g. a rocket called "SUBSONIC" reads as a base station via the
+    /// legacy substring check), so the role at attach time isn't final —
+    /// see the re-evaluation in attach().
+    private var attachedAsBaseStation = false
+
     // MARK: - Lifecycle
 
     func attach(device: BLEDevice, store: RocketProfileStore) {
-        // Idempotent for the same device+store pair (#375): the dashboard now
+        // Idempotent for the same device+store pair (#375): the dashboard
         // re-attaches on every device-list / active-device change, and a
         // redundant call must not tear down subscriptions or reset a .synced
         // state back through the pipeline. A NEW device object (reconnects
         // create one) intentionally falls through to a full re-attach.
-        if device === self.device && store === self.store { return }
+        //
+        // Exception: if the device's ROLE changed since we attached (the
+        // config_identity readback corrected a name-based mis-parse), fall
+        // through and re-attach under the right role — otherwise a rocket
+        // first mis-read as a base station keeps profile sync silently
+        // disabled for the whole session (the #375 failure mode, back
+        // through a different door).
+        if device === self.device && store === self.store
+            && attachedAsBaseStation == device.isBaseStation { return }
 
         detach()
         self.device = device
         self.store = store
+        attachedAsBaseStation = device.isBaseStation
 
         guard !device.isBaseStation else {
             // Base station is a read-only display of the active rocket; it
@@ -130,6 +146,7 @@ final class ActiveRocketSyncer: ObservableObject {
         cancellables.removeAll()
         device = nil
         store = nil
+        attachedAsBaseStation = false
         magCalReadPending = false
         sensorCalReadPending = false
         syncState = .idle

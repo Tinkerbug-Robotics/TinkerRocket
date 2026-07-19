@@ -322,6 +322,34 @@ final class KnownDeviceStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.isProvisioned("a1b2c3d4"))
     }
 
+    // MARK: - Scan-time type recovery (renamed devices lose the TR- prefix)
+
+    func testDeviceTypeForAdvertisedName() {
+        // The firmware advertises the raw unit name, so a device renamed to
+        // "Atlas" no longer carries the TR-R- prefix the name heuristic
+        // needs — the registry is the only thing that still knows its type.
+        let store = makeStore()
+        report(store, unitID: "r1", name: "Atlas", type: .rocket)
+        report(store, unitID: "bs1", name: "Pad Station", type: .baseStation)
+
+        XCTAssertEqual(store.deviceType(forAdvertisedName: "Atlas"), .rocket)
+        XCTAssertEqual(store.deviceType(forAdvertisedName: "Pad Station"), .baseStation)
+        XCTAssertNil(store.deviceType(forAdvertisedName: "TR-R-1a2b"))  // not in registry
+        XCTAssertNil(store.deviceType(forAdvertisedName: ""))
+    }
+
+    func testDeviceTypeForAdvertisedName_AmbiguousOrUnknownGivesNil() {
+        let store = makeStore()
+        // Two devices sharing a name: no unambiguous answer.
+        report(store, unitID: "r1", name: "Atlas", type: .rocket)
+        report(store, unitID: "bs1", name: "Atlas", type: .baseStation)
+        XCTAssertNil(store.deviceType(forAdvertisedName: "Atlas"))
+
+        // A record whose own type is unknown can't type a scan result.
+        report(store, unitID: "x1", name: "Mystery", type: .unknown)
+        XCTAssertNil(store.deviceType(forAdvertisedName: "Mystery"))
+    }
+
     // MARK: - Ordering
 
     func testRocketsSortBeforeBaseStations() {

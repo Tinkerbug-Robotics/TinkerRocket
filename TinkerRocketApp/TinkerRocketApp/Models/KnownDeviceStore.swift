@@ -123,6 +123,18 @@ final class KnownDeviceStore: ObservableObject {
         return device(for: unitID)?.provisioned ?? false
     }
 
+    /// Best-effort device type for a scan result, matched by advertised
+    /// name.  The firmware advertises the raw unit name, and renames happen
+    /// through this app, so a renamed device's adv name equals its record's
+    /// name.  nil when there's no single unambiguous match (unknown name,
+    /// or two records sharing one).
+    func deviceType(forAdvertisedName name: String) -> BLEDeviceType? {
+        guard !name.isEmpty else { return nil }
+        let matches = devices.filter { $0.name == name && $0.deviceType != .unknown }
+        guard matches.count == 1 else { return nil }
+        return matches[0].deviceType
+    }
+
     // MARK: - Readback intake
 
     /// Fold a config_identity readback into the registry, then push any

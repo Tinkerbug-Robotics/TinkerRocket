@@ -244,6 +244,13 @@ struct DashboardView: View {
         .onChange(of: fleet.activeDeviceID) { _ in
             attachActiveDevice()
         }
+        // A renamed device can mis-parse its role from the BLE name until
+        // config_identity lands; the syncer re-evaluates on a role flip
+        // (attachedAsBaseStation), but only if attach is called again —
+        // this edge is what calls it.
+        .onChange(of: fleet.activeDevice?.deviceType) { _ in
+            attachActiveDevice()
+        }
         .sheet(item: $activeSheet) { sheet in
             Group {
                 switch sheet {
@@ -366,7 +373,8 @@ struct ConnectedDashboardView: View {
                 isConnected: true,
                 isScanning: fleet.isScanning,
                 statusMessage: fleet.statusMessage,
-                connectedDeviceName: device.displayName
+                connectedDeviceName: device.displayName,
+                connectedDeviceType: device.deviceType
             )
         }
 
@@ -596,6 +604,17 @@ struct ConnectionStatusView: View {
     let isScanning: Bool
     let statusMessage: String
     var connectedDeviceName: String = ""
+    // Resolved role, not a name-substring guess: renamed devices carry no
+    // type hint in the name, and a rocket called "SUBSONIC" contains "BS".
+    var connectedDeviceType: BLEDeviceType = .unknown
+
+    private var roleLabel: String {
+        switch connectedDeviceType {
+        case .rocket: return "Rocket"
+        case .baseStation: return "Base Station"
+        case .unknown: return "TinkerRocket device"
+        }
+    }
 
     var body: some View {
         HStack {
@@ -606,7 +625,7 @@ struct ConnectionStatusView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(connectedDeviceName)
                         .font(.headline)
-                    Text((connectedDeviceName.contains("Base") || connectedDeviceName.contains("BS")) ? "Base Station" : "Rocket")
+                    Text(roleLabel)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -644,7 +663,7 @@ struct DeviceChipBar: View {
                         HStack(spacing: 6) {
                             // .inherit: the chip's own foregroundColor
                             // (white when active, primary otherwise) tints it.
-                            DeviceTypeIcon(type: device.isBaseStation ? .baseStation : .rocket,
+                            DeviceTypeIcon(type: device.deviceType,
                                            size: 14, symbolFont: .caption, tint: .inherit)
                             Text(device.displayName)
                                 .font(.caption)
@@ -1513,8 +1532,10 @@ struct DevicePickerView: View {
                     if !alreadyConnected { fleet.connect(to: device) }
                 }) {
                     HStack {
-                        DeviceTypeIcon(type: device.isBaseStation ? .baseStation : .rocket,
-                                       symbolFont: .title2)
+                        // Resolved type: registry hint for renamed devices,
+                        // name prefix for factory defaults, honest question
+                        // mark when neither knows.
+                        DeviceTypeIcon(type: device.deviceType, symbolFont: .title2)
                             .frame(width: 36)
 
                         VStack(alignment: .leading, spacing: 2) {
