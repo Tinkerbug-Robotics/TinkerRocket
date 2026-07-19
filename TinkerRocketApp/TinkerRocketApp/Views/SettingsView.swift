@@ -61,6 +61,14 @@ struct SettingsView: View {
     // Pyro trigger values edited as strings (seconds or meters by mode).
     @State private var sPyroValue: [String] = ["", "", "", ""]
 
+    // Recovery descent profile edited as strings (#191).  App-only fields:
+    // consumed by the live landing predictor and Drift Cast, never sent to
+    // the flight computer.
+    @State private var sDrogueRate = ""
+    @State private var sMainRate = ""
+    @State private var sMainDeployAlt = ""
+    @State private var sDragK = ""
+
     // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
     // readout state lives in the PyroChannelTestControls child view.)
     @State private var pyroTestChannel: Int?
@@ -143,6 +151,7 @@ struct SettingsView: View {
         case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
+        case drogueRate, mainRate, mainDeployAlt, dragK
     }
 
     /// Fin-angle range implied by the pulse + travel fields as they are being
@@ -170,7 +179,7 @@ struct SettingsView: View {
         .font(.subheadline)
     }
 
-    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro }
+    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro, recovery }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
@@ -180,6 +189,7 @@ struct SettingsView: View {
         case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
+        case .drogueRate, .mainRate, .mainDeployAlt, .dragK: return .recovery
         case nil: return nil
         }
     }
@@ -192,6 +202,7 @@ struct SettingsView: View {
         case .guidance: applyGuidanceConfig()
         case .rollWaypoints: applyRollProfile()
         case .pyro: applyPyroConfig()
+        case .recovery: applyRecoveryConfig()
         }
     }
 
@@ -534,6 +545,26 @@ struct SettingsView: View {
         pyroChannelSection(4)
         Section {
             Text("Single shared arm FET arms momentarily for each fire pulse. Test continuity and test-fire from the rocket dashboard before flight.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+        recoverySection
+    }
+
+    // Recovery descent profile (#191).  These fields live only in the app
+    // profile (landing-prediction + drift-cast inputs) and are never sent to
+    // the rocket — hence no "Sent" badge and no BLE push on apply.  The
+    // static header also keeps this section free of telemetry-driven
+    // re-renders next to a focused TextField (#361).
+    @ViewBuilder
+    private var recoverySection: some View {
+        Section(header: Text("Recovery")) {
+            stringRow("Drogue Rate", text: $sDrogueRate, field: .drogueRate, unit: "fps", decimal: true)
+            stringRow("Main Rate", text: $sMainRate, field: .mainRate, unit: "fps", decimal: true)
+            stringRow("Main Deploy", text: $sMainDeployAlt, field: .mainDeployAlt, unit: "ft", decimal: true)
+            Text("Descent profile for the live landing prediction and Drift Cast: drogue rate above the main-deploy altitude (AGL), main rate below it. Stored per rocket in the app \u{2014} not sent to the flight computer.")
+                .font(.caption).foregroundColor(.secondary)
+            stringRow("Drag k", text: $sDragK, field: .dragK, unit: "1/m", decimal: true)
+            Text("Quadratic drag coefficient for the coast-to-apogee ballistic prediction (a = \u{2212}k\u{00B7}|v|\u{00B7}v). \u{2248}0.0005 for typical 54\u{2013}65 mm airframes; 0 = gravity-only.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1132,6 +1163,10 @@ struct SettingsView: View {
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg))
         }
+        sDrogueRate = formatInt(p.drogueRateFps)
+        sMainRate = formatInt(p.mainRateFps)
+        sMainDeployAlt = formatInt(p.mainDeployAltAglFt)
+        sDragK = formatDecimal(p.ballisticDragK)
         reloadPyroValueStrings()
     }
 
@@ -1285,6 +1320,24 @@ struct SettingsView: View {
             }
         }
         showApplied($pyroApplied)
+    }
+
+    // Recovery fields are app-only (#191): "apply" is just parse + persist —
+    // no BLE push, no "Sent" badge.  Non-positive rates/altitudes are
+    // rejected: simulateDescent degrades a rate ≤ 0.1 fps to a one-point
+    // track, which the live predictor would render as "lands where it is".
+    // Drag k legitimately accepts 0 (= gravity-only ballistic).
+    private func applyRecoveryConfig() {
+        let dr = parseDouble(sDrogueRate, fallback: profile.drogueRateFps)
+        let mr = parseDouble(sMainRate, fallback: profile.mainRateFps)
+        let md = parseDouble(sMainDeployAlt, fallback: profile.mainDeployAltAglFt)
+        let k = parseDouble(sDragK, fallback: profile.ballisticDragK)
+        updateProfile {
+            if dr > 0 { $0.drogueRateFps = dr }
+            if mr > 0 { $0.mainRateFps = mr }
+            if md > 0 { $0.mainDeployAltAglFt = md }
+            if k >= 0 { $0.ballisticDragK = k }
+        }
     }
 
     private func applyPIDConfig() {
