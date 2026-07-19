@@ -119,7 +119,8 @@ struct DeviceManagerView: View {
             let n = mismatchedDevices.count
             return "\(n) device\(n == 1 ? " is" : "s are") on a different network ID and can't hear the others. Moving them pushes connected devices right away and queues the rest for their next connect."
         }
-        return "Devices only hear each other on the same network ID. Edits to offline devices are queued and apply automatically the next time each one connects."
+        return NetworkCopy.sameNetworkExplainer
+            + " Edits to offline devices are queued and apply automatically the next time each one connects."
     }
 
     // MARK: - Devices
@@ -151,6 +152,7 @@ struct DeviceManagerView: View {
         let mismatch = networkID > 0 && rec.effectiveNetworkID != appNid
         return HStack(spacing: 12) {
             DeviceTypeIcon(type: rec.deviceType)
+                .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(rec.effectiveName.isEmpty ? "Unnamed" : rec.effectiveName)
@@ -203,34 +205,6 @@ struct DeviceManagerView: View {
     }
 }
 
-/// Rocket / base-station / unknown glyph, sized for a list row.
-private struct DeviceTypeIcon: View {
-    let type: BLEDeviceType
-
-    var body: some View {
-        Group {
-            switch type {
-            case .baseStation:
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .font(.title3)
-                    .foregroundColor(.orange)
-            case .rocket:
-                Image("RocketIcon")
-                    .resizable()
-                    .renderingMode(.template)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(height: 24)
-                    .foregroundColor(.blue)
-            case .unknown:
-                Image(systemName: "questionmark.circle")
-                    .font(.title3)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .frame(width: 32)
-    }
-}
-
 // MARK: - Detail / editor
 
 struct KnownDeviceDetailView: View {
@@ -280,6 +254,7 @@ struct KnownDeviceDetailView: View {
                     : Text("")) {
                 HStack(spacing: 12) {
                     DeviceTypeIcon(type: rec.deviceType)
+                        .frame(width: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(rec.effectiveName.isEmpty ? "Unnamed" : rec.effectiveName)
                             .font(.headline)
@@ -437,10 +412,10 @@ struct KnownDeviceDetailView: View {
 
     private func networkSectionFooter(_ rec: KnownDevice, mismatch: Bool, connected: Bool) -> String {
         if mismatch {
-            return connected
-                ? "This device is on a different network ID than the app expects — it can't hear your other devices. Tap to sync it now."
-                : "This device is on a different network ID than the app expects. Syncing queues the change for its next connect."
+            return NetworkCopy.deviceMismatchWarning + (connected
+                ? " Tap to sync it now."
+                : " Syncing queues the change for its next connect.")
         }
-        return "Devices only hear each other on the same network ID."
+        return NetworkCopy.sameNetworkExplainer
     }
 }

@@ -148,21 +148,8 @@ struct FlightLogRow: View {
     var body: some View {
         HStack(spacing: 12) {
             // Type icon
-            Group {
-                if flight.type == .rocket {
-                    Image("RocketIcon")
-                        .resizable()
-                        .renderingMode(.template)
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 24, height: 24)
-                        .foregroundColor(.blue)
-                } else {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.title3)
-                        .foregroundColor(.orange)
-                }
-            }
-            .frame(width: 32)
+            DeviceTypeIcon(type: flight.type == .rocket ? .rocket : .baseStation)
+                .frame(width: 32)
 
             // Title and subtitle
             VStack(alignment: .leading, spacing: 4) {

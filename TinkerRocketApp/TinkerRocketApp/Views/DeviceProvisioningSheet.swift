@@ -64,7 +64,8 @@ struct DeviceProvisioningSheet: View {
                 // guards against the #133-era silent drift).
                 if networkID > 0 {
                     Section(header: Text("Network"),
-                            footer: Text("All your devices are set to this network. Devices only hear each other on the same network ID.")) {
+                            footer: Text("All your devices are set to this network. "
+                                         + NetworkCopy.sameNetworkExplainer)) {
                         HStack {
                             Text(networkName.isEmpty ? "Not set" : networkName)
                             Spacer()

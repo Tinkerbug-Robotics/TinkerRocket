@@ -642,16 +642,10 @@ struct DeviceChipBar: View {
                         fleet.activeDeviceID = device.peripheral?.identifier
                     } label: {
                         HStack(spacing: 6) {
-                            if device.isBaseStation {
-                                Image(systemName: "antenna.radiowaves.left.and.right")
-                                    .font(.caption)
-                            } else {
-                                Image("RocketIcon")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(height: 14)
-                            }
+                            // .inherit: the chip's own foregroundColor
+                            // (white when active, primary otherwise) tints it.
+                            DeviceTypeIcon(type: device.isBaseStation ? .baseStation : .rocket,
+                                           size: 14, symbolFont: .caption, tint: .inherit)
                             Text(device.displayName)
                                 .font(.caption)
                                 .fontWeight(.medium)
@@ -675,11 +669,7 @@ struct DeviceChipBar: View {
                 // Remote rockets (seen via base station)
                 ForEach(fleet.remoteRockets) { remote in
                     HStack(spacing: 6) {
-                        Image("RocketIcon")
-                            .resizable()
-                            .renderingMode(.template)
-                            .aspectRatio(contentMode: .fit)
-                            .frame(height: 14)
+                        DeviceTypeIcon(type: .rocket, size: 14, tint: .inherit)
                         Text(remote.displayName)
                             .font(.caption)
                             .fontWeight(.medium)
@@ -1523,20 +1513,9 @@ struct DevicePickerView: View {
                     if !alreadyConnected { fleet.connect(to: device) }
                 }) {
                     HStack {
-                        Group {
-                            if device.isBaseStation {
-                                Image(systemName: "antenna.radiowaves.left.and.right")
-                                    .font(.title2)
-                            } else {
-                                Image("RocketIcon")
-                                    .resizable()
-                                    .renderingMode(.template)
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(height: 24)
-                            }
-                        }
-                        .foregroundColor(device.isBaseStation ? .orange : .blue)
-                        .frame(width: 36)
+                        DeviceTypeIcon(type: device.isBaseStation ? .baseStation : .rocket,
+                                       symbolFont: .title2)
+                            .frame(width: 36)
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(device.name)
