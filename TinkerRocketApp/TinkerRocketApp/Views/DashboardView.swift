@@ -2134,23 +2134,52 @@ struct ControlsView: View {
                 .cornerRadius(10)
             }
 
+            // Rocket flash recording and the BS CSV are separate controls
+            // (phone-tested): the rocket starts NOT logging while the BS
+            // auto-starts on first contact, so the old coupled cmd-23
+            // toggle was always fighting one side's state.
             Button(action: {
-                device.sendCommand(23)
+                if device.isBaseStation, let rid = device.focusRocketID {
+                    // Same targeted-relay pattern as the camera button.
+                    let desired: UInt8 = device.telemetry.rocketLoggingActive ? 0 : 1
+                    device.sendRelayCommand(targetRocketID: rid,
+                                            innerCommand: 23,
+                                            innerPayload: Data([desired]))
+                } else {
+                    device.sendCommand(23)   // direct link: OC toggle
+                }
             }) {
-                // Cmd 23 starts/stops logging on BOTH rocket and base station, so
-                // reflect "logging in progress" if either side reports active.
-                // The rocket side is gated on rocket state (#137 follow-up) — see
-                // rocketLoggingActive on TelemetryData for why.
-                let isLogging = device.telemetry.rocketLoggingActive || device.telemetry.bs_logging_active
+                let active = device.telemetry.rocketLoggingActive
                 HStack {
-                    Image(systemName: isLogging ? "stop.circle.fill" : "record.circle")
-                    Text(isLogging ? "Stop Logging" : "Start Logging")
+                    Image(systemName: active ? "stop.circle.fill" : "record.circle")
+                    Text(device.isBaseStation
+                         ? (active ? "Stop Rocket Log" : "Start Rocket Log")
+                         : (active ? "Stop Logging" : "Start Logging"))
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(isLogging ? Color.red : Color.orange)
+                .background(active ? Color.red : Color.orange)
                 .foregroundColor(.white)
                 .cornerRadius(10)
+            }
+            .disabled(device.isBaseStation && device.focusRocketID == nil)
+
+            // BS-only CSV logging (cmd 46) — never uplinks to the rocket.
+            if device.isBaseStation {
+                Button(action: {
+                    device.sendSetBSLogging(!device.telemetry.bs_logging_active)
+                }) {
+                    let active = device.telemetry.bs_logging_active
+                    HStack {
+                        Image(systemName: active ? "stop.circle.fill" : "record.circle")
+                        Text(active ? "Stop Base Stn Log" : "Start Base Stn Log")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(active ? Color.red : Color.orange)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
             }
 
         }
