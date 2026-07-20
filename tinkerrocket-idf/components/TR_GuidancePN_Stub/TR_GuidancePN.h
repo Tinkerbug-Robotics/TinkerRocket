@@ -32,9 +32,26 @@ class TR_GuidancePN {
 public:
     TR_GuidancePN() = default;
 
+    /// Mirrors the real class's guidance law selection.  MODE_STATION_KEEP is
+    /// declared so #534's flight-computer call sites compile on public builds;
+    /// getMode() below always reports MODE_PN because nothing ever runs.
+    enum Mode : uint8_t { MODE_PN = 0, MODE_STATION_KEEP = 1 };
+
     void configure(float /*nav_gain*/,
                    float /*max_accel_mps2*/,
                    float /*target_alt_m*/) {}
+
+    void configureStationKeep(float /*kp_pos_per_s2*/,
+                              float /*kd_vel_per_s*/,
+                              float /*max_accel_mps2*/) {}
+
+    /// Accepts and discards the Drift-Cast (#435) horizontal aim point.
+    /// Returns true — the real class returns false only for non-finite input,
+    /// and a public build has no guidance to protect.
+    bool setHorizontalTarget(float /*target_e_m*/,
+                             float /*target_n_m*/) { return true; }
+
+    Mode getMode() const { return MODE_PN; }
 
     bool update(const float /*pos_enu*/[3],
                 const float /*vel_ned*/[3],
@@ -47,6 +64,9 @@ public:
     float getClosingVelocity() const { return 0.0f; }
     float getRange()           const { return 0.0f; }
     float getLateralOffset()   const { return 0.0f; }
+    float getTargetEast()      const { return 0.0f; }
+    float getTargetNorth()     const { return 0.0f; }
+    float getTargetOffset()    const { return 0.0f; }
     bool  isActive()           const { return false; }
     bool  isCpaReached()       const { return false; }
 
