@@ -1825,6 +1825,15 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("hy", data.high_g_y, 1);
     addFloat("hz", data.high_g_z, 1);
 
+    // #390: rocket's board→rocket mounting orientation, packed
+    // (mode << 5) | code.  Static per-flight context for the BS view —
+    // rides the droppable tail, and is omitted entirely when the rocket
+    // hasn't reported one (mode 0: pre-#390 firmware or FC not up yet).
+    if (data.imu_orient_mode != 0) {
+        addUint("imo", (uint32_t)(((data.imu_orient_mode & 0x3u) << 5)
+                                  | (data.imu_orient_code & 0x1Fu)));
+    }
+
     // Unit name + active log filename — variable-length and not needed live;
     // these are the first real bytes to fall off the tail under MTU pressure
     // (#282 explicitly calls out af/run as in-flight-droppable).

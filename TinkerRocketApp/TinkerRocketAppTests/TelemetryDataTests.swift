@@ -267,4 +267,51 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(trimmed.state, "INFLIGHT")
         XCTAssertTrue(trimmed.launch_flag)   // tail trim must not corrupt earlier fields
     }
+
+    // MARK: - Relayed IMU orientation (#390: "imo" = (mode << 5) | code)
+
+    private func decodeIMO(_ imo: Int?) throws -> TelemetryData {
+        let body = imo.map { "\"imo\": \($0)," } ?? ""
+        let json = "{ \(body) \"st\": \"PRELAUNCH\" }".data(using: .utf8)!
+        return try JSONDecoder().decode(TelemetryData.self, from: json)
+    }
+
+    func testRelayedOrientation_AutoSnapCode() throws {
+        // mode 3 (auto), code 21 = -Z r90: (3 << 5) | 21 = 117
+        let t = try decodeIMO(117)
+        XCTAssertEqual(t.relayedOrientationMode, .autoSnap)
+        XCTAssertEqual(t.relayedOrientationName, "-Z r90")
+    }
+
+    func testRelayedOrientation_ManualAndDefault() throws {
+        let manual = try decodeIMO((2 << 5) | 0)     // manual, +X
+        XCTAssertEqual(manual.relayedOrientationMode, .manual)
+        XCTAssertEqual(manual.relayedOrientationName, "+X")
+
+        let def = try decodeIMO((1 << 5) | 0)        // default mounting
+        XCTAssertEqual(def.relayedOrientationMode, .defaultMounting)
+        XCTAssertEqual(def.relayedOrientationName, "+X")
+    }
+
+    func testRelayedOrientation_AutoExactSentinel() throws {
+        // Code 31 = auto-exact, no discrete code — must still produce a
+        // non-empty name (the IMU card's line gates on it), not "?" or "".
+        let t = try decodeIMO((3 << 5) | 31)
+        XCTAssertEqual(t.relayedOrientationMode, .autoExact)
+        XCTAssertEqual(t.relayedOrientationName, "custom")
+    }
+
+    func testRelayedOrientation_AbsentOrLegacyIsUnknown() throws {
+        // Missing key (pre-#390 rocket firmware / trimmed tail) → unknown,
+        // empty name → the BS view renders no orientation line at all.
+        let absent = try decodeIMO(nil)
+        XCTAssertEqual(absent.relayedOrientationMode, .unknown)
+        XCTAssertEqual(absent.relayedOrientationName, "")
+
+        // Wire mode 0 should never be emitted, but a zero must not render
+        // as a confident "+X default".
+        let zero = try decodeIMO(0)
+        XCTAssertEqual(zero.relayedOrientationMode, .unknown)
+        XCTAssertEqual(zero.relayedOrientationName, "")
+    }
 }

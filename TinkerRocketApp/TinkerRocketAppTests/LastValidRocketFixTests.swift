@@ -80,6 +80,13 @@ final class LastValidRocketFixTests: XCTestCase {
 
     // MARK: - BLEFleet.recordRocketFix cache behaviour
 
+    /// Fix-cache keys are network-scoped (#390) — rocket IDs are only
+    /// unique per network id. nid 5 is arbitrary; the tests just need a
+    /// consistent one.
+    private func key(_ rid: UInt8, nid: UInt8 = 5) -> RocketKey {
+        RocketKey(networkID: nid, rocketID: rid)
+    }
+
     func testRecordRocketFix_ValidPacket_PopulatesCache() throws {
         let fleet = BLEFleet()
         var t = TelemetryData()
@@ -87,8 +94,8 @@ final class LastValidRocketFixTests: XCTestCase {
         t.longitude = -118.4
         t.num_sats = 8
 
-        XCTAssertNotNil(fleet.recordRocketFix(from: t, rocketID: 1))
-        let cached = try XCTUnwrap(fleet.lastValidRocketFixes[1])
+        XCTAssertNotNil(fleet.recordRocketFix(from: t, key: key(1)))
+        let cached = try XCTUnwrap(fleet.lastValidRocketFixes[key(1)])
         XCTAssertEqual(cached.latitude, 33.7, accuracy: 1e-9)
     }
 
@@ -101,14 +108,14 @@ final class LastValidRocketFixTests: XCTestCase {
         valid.latitude = 33.7
         valid.longitude = -118.4
         valid.num_sats = 8
-        fleet.recordRocketFix(from: valid, rocketID: 1)
+        fleet.recordRocketFix(from: valid, key: key(1))
 
         let gpsless = TelemetryData()  // no lat/lon, no sats
-        let result = try XCTUnwrap(fleet.recordRocketFix(from: gpsless, rocketID: 1))
+        let result = try XCTUnwrap(fleet.recordRocketFix(from: gpsless, key: key(1)))
         XCTAssertEqual(result.latitude, 33.7, accuracy: 1e-9,
                        "Cache must survive a GPS-less packet")
 
-        let cached = try XCTUnwrap(fleet.lastValidRocketFixes[1])
+        let cached = try XCTUnwrap(fleet.lastValidRocketFixes[key(1)])
         XCTAssertEqual(cached.latitude, 33.7, accuracy: 1e-9)
     }
 
@@ -120,15 +127,15 @@ final class LastValidRocketFixTests: XCTestCase {
         first.latitude = 33.7
         first.longitude = -118.4
         first.num_sats = 4
-        fleet.recordRocketFix(from: first, rocketID: 1)
+        fleet.recordRocketFix(from: first, key: key(1))
 
         var second = TelemetryData()
         second.latitude = 34.0
         second.longitude = -118.5
         second.num_sats = 10
-        fleet.recordRocketFix(from: second, rocketID: 1)
+        fleet.recordRocketFix(from: second, key: key(1))
 
-        let cached = try XCTUnwrap(fleet.lastValidRocketFixes[1])
+        let cached = try XCTUnwrap(fleet.lastValidRocketFixes[key(1)])
         XCTAssertEqual(cached.latitude, 34.0, accuracy: 1e-9)
         XCTAssertEqual(cached.numSats, 10)
     }
@@ -139,16 +146,39 @@ final class LastValidRocketFixTests: XCTestCase {
         rocketA.latitude = 33.7
         rocketA.longitude = -118.4
         rocketA.num_sats = 8
-        fleet.recordRocketFix(from: rocketA, rocketID: 1)
+        fleet.recordRocketFix(from: rocketA, key: key(1))
 
         var rocketB = TelemetryData()
         rocketB.latitude = 47.6
         rocketB.longitude = -122.3
         rocketB.num_sats = 6
-        fleet.recordRocketFix(from: rocketB, rocketID: 2)
+        fleet.recordRocketFix(from: rocketB, key: key(2))
 
-        let cachedA = try XCTUnwrap(fleet.lastValidRocketFixes[1])
-        let cachedB = try XCTUnwrap(fleet.lastValidRocketFixes[2])
+        let cachedA = try XCTUnwrap(fleet.lastValidRocketFixes[key(1)])
+        let cachedB = try XCTUnwrap(fleet.lastValidRocketFixes[key(2)])
+        XCTAssertEqual(cachedA.latitude, 33.7, accuracy: 1e-9)
+        XCTAssertEqual(cachedB.latitude, 47.6, accuracy: 1e-9)
+    }
+
+    func testRecordRocketFix_SameRidDifferentNetwork_IndependentSlots() throws {
+        // #390 two-pair support: "rocket 1" on network 5 and "rocket 1" on
+        // network 9 are different physical rockets and must never share a
+        // cache slot.
+        let fleet = BLEFleet()
+        var pairA = TelemetryData()
+        pairA.latitude = 33.7
+        pairA.longitude = -118.4
+        pairA.num_sats = 8
+        fleet.recordRocketFix(from: pairA, key: key(1, nid: 5))
+
+        var pairB = TelemetryData()
+        pairB.latitude = 47.6
+        pairB.longitude = -122.3
+        pairB.num_sats = 6
+        fleet.recordRocketFix(from: pairB, key: key(1, nid: 9))
+
+        let cachedA = try XCTUnwrap(fleet.lastValidRocketFixes[key(1, nid: 5)])
+        let cachedB = try XCTUnwrap(fleet.lastValidRocketFixes[key(1, nid: 9)])
         XCTAssertEqual(cachedA.latitude, 33.7, accuracy: 1e-9)
         XCTAssertEqual(cachedB.latitude, 47.6, accuracy: 1e-9)
     }
@@ -157,7 +187,7 @@ final class LastValidRocketFixTests: XCTestCase {
         let fleet = BLEFleet()
         let gpsless = TelemetryData()
 
-        XCTAssertNil(fleet.recordRocketFix(from: gpsless, rocketID: 1))
-        XCTAssertNil(fleet.lastValidRocketFixes[1])
+        XCTAssertNil(fleet.recordRocketFix(from: gpsless, key: key(1)))
+        XCTAssertNil(fleet.lastValidRocketFixes[key(1)])
     }
 }

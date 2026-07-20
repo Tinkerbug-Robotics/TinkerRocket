@@ -63,6 +63,9 @@ protected:
         si.vel_n = -7.8f;
         si.vel_u = 93.4f;
         si.burnout_detected = true;
+        // #390: board→rocket orientation in flags2 bits 1-7
+        si.imu_orient_code = 21;               // -Z r90
+        si.imu_orient_mode = LORA2_OMODE_AUTO; // auto-snap
         return si;
     }
 };
@@ -132,6 +135,10 @@ TEST_F(LoRaRoundtripTest, NominalFlight_Roundtrip) {
     EXPECT_NEAR(out.vel_n, -7.8f, 0.05f);
     EXPECT_NEAR(out.vel_u, 93.4f, 0.05f);
     EXPECT_TRUE(out.burnout_detected);
+
+    // #390: orientation must roundtrip exactly (flags2 bits 1-7)
+    EXPECT_EQ(out.imu_orient_code, 21);
+    EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_AUTO);
 }
 
 // #191: burnout=false must not bleed in from other flags (it lives in the
@@ -145,7 +152,10 @@ TEST_F(LoRaRoundtripTest, VelocityAndBurnout_IndependentOfFlagsState) {
 
     LoRaData packed{};
     conv.packLoRa(in, packed);
-    EXPECT_EQ(packed.flags2, 0);
+    // burnout bit clear; the #390 orientation bits (code 21, auto) remain.
+    EXPECT_EQ(packed.flags2,
+              (uint8_t)((21u << LORA2_ORIENT_CODE_SHIFT)
+                        | (LORA2_OMODE_AUTO << LORA2_ORIENT_MODE_SHIFT)));
 
     LoRaDataSI out{};
     conv.unpackLoRa(packed, out);
@@ -154,6 +164,43 @@ TEST_F(LoRaRoundtripTest, VelocityAndBurnout_IndependentOfFlagsState) {
     EXPECT_NEAR(out.vel_e, -321.7f, 0.05f);
     EXPECT_NEAR(out.vel_n, 0.0f, 0.05f);
     EXPECT_NEAR(out.vel_u, -45.6f, 0.05f);
+}
+
+// #390: orientation field semantics — the wire sentinels are load-bearing.
+// A pre-#390 frame (flags2 orientation bits zero-filled) must unpack as
+// "not reported", never as a confident "+X default"; auto-exact's no-code
+// sentinel must survive; burnout must not bleed into the code field.
+TEST_F(LoRaRoundtripTest, Orientation_SentinelsAndLegacyFrames) {
+    // Legacy / not-reported: everything zero except burnout.
+    LoRaDataSI in = makeNominal();
+    in.imu_orient_code = 0;
+    in.imu_orient_mode = LORA2_OMODE_NONE;
+
+    LoRaData packed{};
+    conv.packLoRa(in, packed);
+    EXPECT_EQ(packed.flags2, LORA2_BURNOUT);   // orientation bits all zero
+
+    LoRaDataSI out{};
+    conv.unpackLoRa(packed, out);
+    EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_NONE);
+    EXPECT_TRUE(out.burnout_detected);
+
+    // Auto-exact: code sentinel 31 roundtrips.
+    in.imu_orient_code = LORA2_ORIENT_CODE_NONE;
+    in.imu_orient_mode = LORA2_OMODE_AUTO;
+    conv.packLoRa(in, packed);
+    conv.unpackLoRa(packed, out);
+    EXPECT_EQ(out.imu_orient_code, LORA2_ORIENT_CODE_NONE);
+    EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_AUTO);
+
+    // Manual code 0 (+X nose) is distinguishable from "not reported"
+    // purely by the mode bits.
+    in.imu_orient_code = 0;
+    in.imu_orient_mode = LORA2_OMODE_MANUAL;
+    conv.packLoRa(in, packed);
+    conv.unpackLoRa(packed, out);
+    EXPECT_EQ(out.imu_orient_code, 0);
+    EXPECT_EQ(out.imu_orient_mode, LORA2_OMODE_MANUAL);
 }
 
 TEST_F(LoRaRoundtripTest, ExtremeValues_NoOverflow) {

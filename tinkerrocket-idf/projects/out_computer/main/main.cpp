@@ -3024,6 +3024,34 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
         lora.burnout_detected = nsFlagSet(latest_non_sensor.flags, NSF_BURNOUT);
     }
 
+    // #390: board→rocket orientation rides flags2 bits 1-7 so the base
+    // station can display the mounting without a BLE link to this rocket.
+    // Source is last_query_cfg — the LIVE FC status-query cache, refreshed
+    // every poll regardless of BLE state.  (NOT imu_orient_pub_*: those
+    // latch only on app-BLE-connected paths, so they're absent in the
+    // BS-only field case and go stale if the FC re-orients on the pad
+    // after the app disconnects — a confidently WRONG display.)
+    // Wire mode 0 = "not reported" (also what pre-#390 firmware and a
+    // zero-init last_query_cfg produce), so nothing false can render.
+    if (last_query_cfg.format_version < 3)
+    {
+        lora.imu_orient_mode = LORA2_OMODE_NONE;   // FC not up / pre-v3 FC
+        lora.imu_orient_code = 0;
+    }
+    else if (last_query_cfg.b2r_mode == ORIENT_MODE_AUTO_EXACT)
+    {
+        lora.imu_orient_mode = LORA2_OMODE_AUTO;
+        lora.imu_orient_code = LORA2_ORIENT_CODE_NONE;  // no discrete code
+    }
+    else
+    {
+        lora.imu_orient_mode =
+            (last_query_cfg.b2r_mode == ORIENT_MODE_MANUAL)    ? LORA2_OMODE_MANUAL :
+            (last_query_cfg.b2r_mode == ORIENT_MODE_AUTO_SNAP) ? LORA2_OMODE_AUTO
+                                                               : LORA2_OMODE_DEFAULT;
+        lora.imu_orient_code = (uint8_t)(last_query_cfg.b2r_code & LORA2_ORIENT_CODE_MASK);
+    }
+
     if (latest_ism6_valid)
     {
         ISM6HG256DataSI ism_si = {};

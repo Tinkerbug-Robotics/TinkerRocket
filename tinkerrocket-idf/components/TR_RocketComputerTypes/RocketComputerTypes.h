@@ -277,6 +277,13 @@ static constexpr uint8_t BLE_BS_CMD_SERVO_TEST_ANGLES = 24;
 static constexpr uint8_t BLE_BS_CMD_SERVO_TEST_STOP   = 25;
 static constexpr uint8_t BLE_BS_CMD_SET_UNIT_NAME     = 40;
 static constexpr uint8_t BLE_BS_CMD_SET_NETWORK_ID    = 41;
+// #390: pin the BS's radio focus to one rocket ([rid]; 0 = auto sticky
+// first-heard). Hop-follow, stale re-push, and untargeted uplink defaults
+// key off the focused rocket instead of whichever packet arrived last.
+static constexpr uint8_t BLE_BS_CMD_SET_FOCUS_ROCKET  = 45;
+// #390: BS-only CSV logging toggle ([on]) — decoupled from the legacy
+// cmd 23, which also broadcasts a rocket-logging uplink.
+static constexpr uint8_t BLE_BS_CMD_SET_BS_LOGGING    = 46;
 static constexpr uint8_t BLE_BS_CMD_RELAY_TO_ROCKET   = 50;
 static constexpr uint8_t BLE_BS_CMD_FREQ_SCAN         = 60;
 
@@ -1615,7 +1622,13 @@ typedef struct __attribute__((packed))
     int16_t vel_u_dms;
 
     // Second flag byte (#191) — flags_state is full (5 flags + 3-bit state).
-    uint8_t flags2;          // bit 0: burnout_detected; bits 1-7 reserved
+    // bit 0: burnout_detected
+    // bits 1-5 (#390): board→rocket orientation code (0-23; 31 = auto-exact,
+    //                  no discrete code)
+    // bits 6-7 (#390): orientation report mode — 0 = not reported (pre-#390
+    //                  firmware zero-fills, so stale rockets can never render
+    //                  a false orientation), 1 = default, 2 = manual, 3 = auto
+    uint8_t flags2;
 
 } LoRaData;
 
@@ -1634,6 +1647,19 @@ static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
 
 // LoRaData.flags2 bit masks (#191).
 static constexpr uint8_t LORA2_BURNOUT = (1u << 0);   // NSF_BURNOUT relay
+
+// LoRaData.flags2 board→rocket orientation fields (#390): lets the base
+// station display the rocket's IMU mounting without a BLE link to it.
+static constexpr uint8_t LORA2_ORIENT_CODE_SHIFT = 1;     // bits 1-5
+static constexpr uint8_t LORA2_ORIENT_CODE_MASK  = 0x1Fu;
+static constexpr uint8_t LORA2_ORIENT_CODE_NONE  = 31u;   // auto-exact: no discrete code
+static constexpr uint8_t LORA2_ORIENT_MODE_SHIFT = 6;     // bits 6-7
+static constexpr uint8_t LORA2_ORIENT_MODE_MASK  = 0x03u;
+// Wire mode values (NOT ORIENT_MODE_* — 0 must mean "absent" on the wire):
+static constexpr uint8_t LORA2_OMODE_NONE    = 0;  // not reported (legacy firmware)
+static constexpr uint8_t LORA2_OMODE_DEFAULT = 1;
+static constexpr uint8_t LORA2_OMODE_MANUAL  = 2;
+static constexpr uint8_t LORA2_OMODE_AUTO    = 3;  // snap when code < 31, exact at 31
 
 // Readable LoRa data structure
 typedef struct
@@ -1682,6 +1708,8 @@ typedef struct
     float   vel_n;                  // 0.1 m/s
     float   vel_u;                  // 0.1 m/s
     bool    burnout_detected;       // #191 NSF_BURNOUT relay (flags2 bit 0)
+    uint8_t imu_orient_code;        // #390: b2r code 0-23; LORA2_ORIENT_CODE_NONE = none
+    uint8_t imu_orient_mode;        // #390: LORA2_OMODE_* (0 = not reported)
 } LoRaDataSI;
 
 

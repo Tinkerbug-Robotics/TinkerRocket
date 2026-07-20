@@ -153,6 +153,56 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Rockets seen via this device's LoRa relay (base station only)
     @Published var remoteRockets: [RemoteRocket] = []
 
+    /// #390: which relayed rocket this base-station link is pinned to.
+    /// `telemetry`, the announcer, and the device-level fix latch follow
+    /// ONLY this rocket — a second rocket in range no longer flip-flops
+    /// every dashboard card at packet rate. Latches onto the FIRST rocket
+    /// heard (sticky); the fleet re-seeds it across reconnects and the user
+    /// switches it explicitly. nil = no rocket heard yet this session.
+    @Published var focusRocketID: UInt8?
+
+    /// When the last telemetry frame (any kind) was decoded on this link.
+    /// Roster freshness for direct rocket links reads this.
+    private(set) var lastTelemetryAt: Date?
+
+    /// #390: with the relay mirror pinned to the focused rocket, the BS's
+    /// periodic stale re-push can describe a DIFFERENT rocket (old firmware
+    /// re-pushes the last-heard one) and get dropped by the pin — freezing
+    /// `telemetry.data_status` at .live while the focused rocket is silent.
+    /// This is the app-computed age of the focused rocket's stream,
+    /// refreshed on the 2 s RSSI tick; `effectiveDataStatus` overlays it.
+    @Published private(set) var focusedRelayAgeMs: UInt32?
+
+    /// Mirrors the BS firmware's BLE_TELEMETRY_STALE_MS.
+    static let relayStaleThresholdMs: UInt32 = 3000
+
+    /// Freshness the dashboard should trust for this link's rocket stream:
+    /// the frame-carried status, worsened by the app-computed focused-rocket
+    /// age when that is staler (never improved — a BS-reported STALE stays).
+    var effectiveDataStatus: TelemetryData.DataStatus {
+        guard isBaseStation, telemetry.data_status != .syncing,
+              let age = focusedRelayAgeMs, age > Self.relayStaleThresholdMs
+        else { return telemetry.data_status }
+        return .stale
+    }
+
+    var effectiveDataAgeMs: UInt32 {
+        guard isBaseStation, let age = focusedRelayAgeMs,
+              age > telemetry.data_age_ms else { return telemetry.data_age_ms }
+        return age
+    }
+
+    func refreshFocusedRelayFreshness(now: Date = Date()) {
+        guard isBaseStation, let focus = focusRocketID,
+              let remote = remoteRockets.first(where: { $0.rocketID == focus })
+        else {
+            if focusedRelayAgeMs != nil { focusedRelayAgeMs = nil }
+            return
+        }
+        let age = UInt32(clamping: Int(now.timeIntervalSince(remote.lastSeen) * 1000))
+        if focusedRelayAgeMs != age { focusedRelayAgeMs = age }
+    }
+
     /// Latched copy of the most recent usable rocket GPS fix (#140).
     /// Stays populated when a telemetry packet arrives without fresh
     /// GPS so the map marker doesn't blank — only a newer valid fix
@@ -265,6 +315,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         rssiTimer?.invalidate()
         rssiTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.peripheral?.readRSSI()
+            // #390: piggyback the focused-rocket staleness overlay on the
+            // same tick so it advances even when no frames arrive.
+            self?.refreshFocusedRelayFreshness()
         }
     }
 
@@ -1067,6 +1120,20 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(50, payload: payload)
     }
 
+    /// #390: pin this base station's radio focus (cmd 45, payload [rid],
+    /// 0 = auto). RAM-only on the BS — re-sent on every connect. Firmware
+    /// without the handler ignores the unknown command; app-side pinning
+    /// still governs display and voice, so the pairing degrades gracefully.
+    func sendSetFocusRocket(_ rocketID: UInt8) {
+        sendRawCommand(45, payload: Data([rocketID]))
+    }
+
+    /// #390: BS-only CSV logging control (cmd 46, payload [on]) — unlike
+    /// legacy cmd 23 it never uplinks a rocket-logging command.
+    func sendSetBSLogging(_ on: Bool) {
+        sendRawCommand(46, payload: Data([on ? 1 : 0]))
+    }
+
     // MARK: - File operations
 
     func requestFileList(page: UInt8 = 0) {
@@ -1404,6 +1471,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.requestConfig()
+            // #390: re-assert the radio-focus pin after every (re)connect —
+            // the BS keeps it in RAM only, so a BS reboot (which bounces
+            // BLE) forgets it. The fleet seeded focusRocketID before
+            // characteristics were up; this is the earliest safe write.
+            if let self, self.isBaseStation, let focus = self.focusRocketID {
+                self.sendSetFocusRocket(focus)
+            }
         }
     }
 
@@ -1603,9 +1677,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if !self.hasReceivedTelemetry {
                 self.hasReceivedTelemetry = true
             }
+            self.lastTelemetryAt = Date()
 
             // If telemetry has a source_rocket_id, it's relayed via base station
-            // → route to RemoteRocket instead of updating our own telemetry
+            // → route to RemoteRocket; only the FOCUSED rocket mirrors into
+            // this device's own telemetry/announcer/fix latch (#390 — a
+            // second rocket in range used to flip-flop all of them).
             if let rid = newTelemetry.source_rocket_id, rid > 0, isBaseStation {
                 let bsID = peripheral?.identifier ?? UUID()
                 let rocketID = UInt8(rid)
@@ -1622,19 +1699,38 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     print("[BS] New remote rocket: rid=\(rocketID) name=\(remote.unitName)")
                     triggerAutoChannelSelectIfNeeded()
                 }
-                self.telemetry = newTelemetry
-                // Mirror the latched fix (#140).  Only assign when the
-                // cache returns a non-nil value so a GPS-less first
-                // packet for a newly-relayed rocket can't blank a fix
-                // this device just mirrored for a different rocketID.
-                if let fix = fleet?.recordRocketFix(from: newTelemetry, rocketID: rocketID) {
-                    self.lastValidRocketFix = fix
+
+                // #390: sticky first-heard focus. Never moves on its own after
+                // this — the user switches it (or the fleet re-seeds it on
+                // reconnect). This is what kills the last-heard recency race.
+                if focusRocketID == nil {
+                    focusRocketID = rocketID
+                    fleet?.noteAutoFocus(baseStation: self, rocketID: rocketID)
                 }
-                // The relayed JSON carries the full rocket state (st/aapo/lnch/
-                // land/mspd/palt — see TR_BLE_To_APP.cpp).  Without this call
-                // voice callouts only fire when paired directly to the rocket,
-                // never during a real flight (phone↔BS↔LoRa↔rocket).  #138.
-                self.flightAnnouncer?.processTelemetry(newTelemetry)
+
+                // Record the fix for EVERY relayed rocket (map/roster read the
+                // fleet cache), keyed by (networkID, rocketID) — rocket IDs
+                // are only unique per network (#390 two-pair support). The BS
+                // only forwards packets matching its own network id, so its
+                // networkID is the right scope for its relayed rockets.
+                let fix = fleet?.recordRocketFix(
+                    from: newTelemetry,
+                    key: RocketKey(networkID: networkID, rocketID: rocketID))
+
+                if rocketID == focusRocketID {
+                    self.telemetry = newTelemetry
+                    // Mirror the latched fix (#140).  Only assign when the
+                    // cache returns a non-nil value so a GPS-less packet
+                    // can't blank the marker.
+                    if let fix { self.lastValidRocketFix = fix }
+                    // The relayed JSON carries the full rocket state (st/aapo/
+                    // lnch/land/mspd/palt — see TR_BLE_To_APP.cpp).  Without
+                    // this call voice callouts only fire when paired directly
+                    // to the rocket, never during a real flight (#138).
+                    // Focused rocket only — two interleaved flights' callouts
+                    // are noise (#390).
+                    self.flightAnnouncer?.processTelemetry(newTelemetry)
+                }
                 return
             }
 
@@ -1660,7 +1756,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // through to here without a source_rocket_id) doesn't nil out
             // a fix this device just mirrored from a relay packet.
             if self.rocketID > 0,
-               let fix = fleet?.recordRocketFix(from: newTelemetry, rocketID: self.rocketID) {
+               let fix = fleet?.recordRocketFix(
+                   from: newTelemetry,
+                   key: RocketKey(networkID: networkID, rocketID: rocketID)) {
                 self.lastValidRocketFix = fix
             }
             self.flightAnnouncer?.processTelemetry(newTelemetry)

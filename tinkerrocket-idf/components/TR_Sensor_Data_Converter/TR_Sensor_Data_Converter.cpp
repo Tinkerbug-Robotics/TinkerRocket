@@ -492,7 +492,9 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.vel_e_dms = enc_vel_dms(in.vel_e);
     out.vel_n_dms = enc_vel_dms(in.vel_n);
     out.vel_u_dms = enc_vel_dms(in.vel_u);
-    out.flags2 = in.burnout_detected ? LORA2_BURNOUT : 0;
+    out.flags2 = (uint8_t)((in.burnout_detected ? LORA2_BURNOUT : 0)
+        | ((in.imu_orient_code & LORA2_ORIENT_CODE_MASK) << LORA2_ORIENT_CODE_SHIFT)
+        | ((in.imu_orient_mode & LORA2_ORIENT_MODE_MASK) << LORA2_ORIENT_MODE_SHIFT));
 }
 
 void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
@@ -551,6 +553,8 @@ void SensorConverter::unpackLoRa(const LoRaData& in, LoRaDataSI& out)
     out.vel_n = (float)in.vel_n_dms * 0.1f;
     out.vel_u = (float)in.vel_u_dms * 0.1f;
     out.burnout_detected = (in.flags2 & LORA2_BURNOUT) != 0;
+    out.imu_orient_code = (uint8_t)((in.flags2 >> LORA2_ORIENT_CODE_SHIFT) & LORA2_ORIENT_CODE_MASK);
+    out.imu_orient_mode = (uint8_t)((in.flags2 >> LORA2_ORIENT_MODE_SHIFT) & LORA2_ORIENT_MODE_MASK);
 
     // #191: Euler + instantaneous speed left the wire — derive them from
     // the quaternion / velocity components so every downstream consumer

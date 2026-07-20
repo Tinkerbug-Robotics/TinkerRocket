@@ -497,6 +497,77 @@ struct TrackedRocket {
 static TrackedRocket tracked_rockets[MAX_TRACKED_ROCKETS];
 static uint8_t active_rocket_idx = 0;  // Which rocket the BLE telemetry currently shows
 
+// ── Radio focus (#390) ──
+// One rocket owns this BS's radio: hop-follow, the stale re-push subject
+// (active_rocket_idx), and the default target for untargeted uplinks.
+// Before #390 all of those keyed off "whichever packet arrived last",
+// which flip-flopped at packet rate with two rockets in range.
+//   focus_rid_pinned — app's explicit pin (cmd 45); survives until the app
+//                      changes it or BLE resets us (RAM-only by design:
+//                      the app re-sends on every connect).
+//   focus_rid_auto   — sticky FIRST-heard rocket. One-way fallback to a
+//                      fresh rocket only after the sticky one has been
+//                      silent > FOCUS_AUTO_FALLBACK_MS; never ping-pongs
+//                      between two live rockets.
+static uint8_t focus_rid_pinned = 0;   // 0 = auto
+static uint8_t focus_rid_auto   = 0;   // 0 = nothing heard yet
+static constexpr uint32_t FOCUS_AUTO_FALLBACK_MS = 30000;
+
+static uint8_t effectiveFocusRid()
+{
+    return focus_rid_pinned != 0 ? focus_rid_pinned : focus_rid_auto;
+}
+
+/// Tracker slot of a rocket id, or -1.
+static int slotOfRid(uint8_t rid)
+{
+    for (int i = 0; i < MAX_TRACKED_ROCKETS; i++)
+        if (tracked_rockets[i].active && tracked_rockets[i].rocket_id == rid)
+            return i;
+    return -1;
+}
+
+/// True when `rid` is the rocket this BS's radio is dedicated to.  With no
+/// focus at all yet (nothing heard, no pin) every rocket qualifies — the
+/// first packet then latches the auto focus.
+static bool isFocusedRocket(uint8_t rid)
+{
+    const uint8_t f = effectiveFocusRid();
+    return f == 0 || f == rid;
+}
+
+/// Uplink target for rocket-directed commands: the focused rocket, or
+/// broadcast while nothing has been heard yet (pre-#390 behaviour).
+static uint8_t focusTargetRid()
+{
+    const uint8_t f = effectiveFocusRid();
+    return f != 0 ? f : 0xFF;
+}
+
+/// Fold one received packet into the focus state: latch the first-heard
+/// rocket, and (auto mode only) fall back one-way to a fresh rocket when
+/// the sticky one has gone silent past the fallback window.
+static void updateFocusOnPacket(uint8_t rid, uint32_t now_ms)
+{
+    if (focus_rid_auto == 0)
+    {
+        focus_rid_auto = rid;
+        ESP_LOGI(TAG, "[FOCUS] Auto focus latched on rocket %u (first heard)",
+                 (unsigned)rid);
+        return;
+    }
+    if (focus_rid_pinned != 0 || rid == focus_rid_auto) return;
+    const int fslot = slotOfRid(focus_rid_auto);
+    if (fslot < 0 ||
+        (now_ms - tracked_rockets[fslot].last_seen_ms) > FOCUS_AUTO_FALLBACK_MS)
+    {
+        ESP_LOGW(TAG, "[FOCUS] Auto focus fallback: rocket %u silent > %u s, following rocket %u",
+                 (unsigned)focus_rid_auto,
+                 (unsigned)(FOCUS_AUTO_FALLBACK_MS / 1000), (unsigned)rid);
+        focus_rid_auto = rid;
+    }
+}
+
 /// Find or allocate a tracker slot for a given rocket_id.
 /// Returns index, or -1 if all slots full.
 static int findOrAllocRocket(uint8_t rid) {
@@ -561,6 +632,17 @@ static uint8_t lastSeenRocketState()
         }
     }
     return state;
+}
+
+/// State of the FOCUSED rocket when it is tracked, else fall back to the
+/// most recently heard one (#390).  Radio coordination (scan pauses) should
+/// reason about the rocket that owns the hop, not whoever spoke last.
+static uint8_t focusedRocketState()
+{
+    const int fslot = slotOfRid(effectiveFocusRid());
+    if (fslot >= 0 && tracked_rockets[fslot].log_state.have_seen_first)
+        return tracked_rockets[fslot].log_state.last_state;
+    return lastSeenRocketState();
 }
 static char log_filename[64] = "";
 
@@ -1444,8 +1526,11 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
 
     // Camera recording (from LoRa downlink flags)
     out.camera_recording = lora.camera_recording;
-    // Rocket logging state (actual, from LoRa downlink)
-    out.logging_active = last_known_rocket_logging;
+    // Rocket logging state (actual, from LoRa downlink).  #390: read the
+    // packet's own flag, not the last_known_* global — the global tracks
+    // whichever rocket spoke last, which is wrong for a re-push of a
+    // different (focused) rocket's cached frame.
+    out.logging_active = lora.logging_active;
     // Surface the BS log basename as a heartbeat so the operator can
     // confirm logging is live before each flight (#107).  The rocket-side
     // filename isn't shipped over LoRa, so this slot is otherwise unused
@@ -1500,6 +1585,10 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.vel_n = lora.vel_n;
     out.vel_u = lora.vel_u;
     out.burnout_flag = lora.burnout_detected;
+
+    // #390: board→rocket orientation from flags2 (0 = not reported)
+    out.imu_orient_code = lora.imu_orient_code;
+    out.imu_orient_mode = lora.imu_orient_mode;
 
     // IMU -- low-g only (high-g not in LoRa packet)
     out.low_g_x = lora.acc_x;
@@ -4099,7 +4188,13 @@ static void loop_bs()
                 // (currentHopDwell() == 0) — the cmd-17 refusal should
                 // make that unreachable, but the gate keeps a bad state
                 // from chasing a non-compliant schedule.
+                // #390: ONE radio can follow ONE schedule — only the
+                // focused rocket drives hop state.  A second hopping
+                // rocket's packets (heard when channels coincide) must not
+                // retune us mid-dwell; before this gate, two hopping
+                // rockets made the BS chase whichever spoke last.
                 if (!lora_hop_disabled && currentHopDwell() > 0 &&
+                    isFocusedRocket(decoded.rocket_id) &&
                     shouldHopInState(decoded.rocket_state))
                 {
                     if (decoded.next_channel_idx == LORA_NEXT_CH_HOP_OFFSCHEDULE)
@@ -4206,11 +4301,13 @@ static void loop_bs()
                         }
                     }
                 }
-                else if (hop_active_)
+                else if (hop_active_ && isFocusedRocket(decoded.rocket_id))
                 {
-                    // Rocket is no longer in a hop state — return to the
-                    // static configured channel so recovery / ground
-                    // comms resume on a known frequency.
+                    // The FOCUSED rocket is no longer in a hop state —
+                    // return to the static configured channel so recovery /
+                    // ground comms resume on a known frequency.  Gated on
+                    // focus (#390): a background rocket's LANDED packet must
+                    // not tear down the followed rocket's hop session.
                     hop_active_       = false;
                     hop_needs_retune_ = true;
                     const uint32_t dur_ms = (hop_session_started_ms != 0)
@@ -4242,7 +4339,12 @@ static void loop_bs()
                     tracked_rockets[slot].last_lon_deg = lon_deg;
                     tracked_rockets[slot].last_alt_m   = alt_m;
                     tracked_rockets[slot].last_seen_ms = millis();
-                    active_rocket_idx = (uint8_t)slot;
+                    // #390: the stale re-push subject follows the FOCUSED
+                    // rocket, not whichever packet arrived last — two live
+                    // rockets used to flip active_rocket_idx per packet.
+                    updateFocusOnPacket(decoded.rocket_id, millis());
+                    if (decoded.rocket_id == effectiveFocusRid())
+                        active_rocket_idx = (uint8_t)slot;
                 }
 
                 // Forward telemetry to BLE app (with rocket_id for app-side demux)
@@ -4447,26 +4549,43 @@ static void loop_bs()
     {
         // Camera toggle: send desired state (inverse of last known) so LoRa
         // retries are idempotent — won't toggle back and forth on the rocket.
-        uint8_t desired = last_known_camera_recording ? 0 : 1;
-        buildUplinkPacket(1, &desired, 1);
-        ESP_LOGI(TAG, "[BLE->UPLINK] Camera %s", desired ? "START" : "STOP");
+        // #390: keyed to the FOCUSED rocket (state + target) — the old
+        // globals read whichever rocket spoke last and broadcast to all.
+        const uint8_t frid  = effectiveFocusRid();
+        const int     fslot = frid ? slotOfRid(frid) : -1;
+        const bool recording = (fslot >= 0)
+            ? tracked_rockets[fslot].last_data.camera_recording
+            : last_known_camera_recording;
+        uint8_t desired = recording ? 0 : 1;
+        buildUplinkPacket(1, &desired, 1, frid ? frid : 0xFF);
+        ESP_LOGI(TAG, "[BLE->UPLINK] Camera %s -> rid=%u",
+                 desired ? "START" : "STOP", (unsigned)(frid ? frid : 0xFF));
     }
     else if (ble_cmd == BLE_BS_CMD_LOGGING_TOGGLE)
     {
         // Logging toggle: starts/stops BOTH rocket flash recording (via LoRa
         // uplink) and base station SD card logging simultaneously.
         // Base station logging state is the toggle authority — rocket follows.
+        // #390: the rocket half keys state + target off the FOCUSED rocket
+        // (globals tracked whichever rocket spoke last, and the uplink hit
+        // every rocket in range).
+        const uint8_t frid  = effectiveFocusRid();
+        const int     fslot = frid ? slotOfRid(frid) : -1;
+        const bool rocket_logging = (fslot >= 0)
+            ? tracked_rockets[fslot].last_data.logging_active
+            : last_known_rocket_logging;
         if (!logging_active)
         {
             log_manual_inhibit = false;  // explicit start clears any prior inhibit (#107)
             startLogging();
             ESP_LOGI(TAG, "[LOG] Base station logging started (manual)");
 
-            if (!last_known_rocket_logging)
+            if (!rocket_logging)
             {
                 uint8_t desired = 1;
-                buildUplinkPacket(23, &desired, 1);
-                ESP_LOGI(TAG, "[BLE->UPLINK] Rocket logging START");
+                buildUplinkPacket(23, &desired, 1, frid ? frid : 0xFF);
+                ESP_LOGI(TAG, "[BLE->UPLINK] Rocket logging START -> rid=%u",
+                         (unsigned)(frid ? frid : 0xFF));
             }
         }
         else
@@ -4478,11 +4597,12 @@ static void loop_bs()
             log_manual_inhibit = true;
             ESP_LOGI(TAG, "[LOG] Base station logging stopped (manual; auto-restart inhibited until state change)");
 
-            if (last_known_rocket_logging)
+            if (rocket_logging)
             {
                 uint8_t desired = 0;
-                buildUplinkPacket(23, &desired, 1);
-                ESP_LOGI(TAG, "[BLE->UPLINK] Rocket logging STOP");
+                buildUplinkPacket(23, &desired, 1, frid ? frid : 0xFF);
+                ESP_LOGI(TAG, "[BLE->UPLINK] Rocket logging STOP -> rid=%u",
+                         (unsigned)(frid ? frid : 0xFF));
             }
         }
     }
@@ -4493,15 +4613,15 @@ static void loop_bs()
         const size_t plen = ble_app.getCommandPayloadLength();
         if (plen >= 8)
         {
-            buildUplinkPacket(24, payload, 8);
-            ESP_LOGI(TAG, "[BLE->UPLINK] Servo test angles");
+            buildUplinkPacket(24, payload, 8, focusTargetRid());   // #390: focused rocket
+            ESP_LOGI(TAG, "[BLE->UPLINK] Servo test angles -> rid=%u", (unsigned)focusTargetRid());
         }
     }
     else if (ble_cmd == BLE_BS_CMD_SERVO_TEST_STOP)
     {
         // Servo test stop: relay to OutComputer via LoRa uplink
-        buildUplinkPacket(25, nullptr, 0);
-        ESP_LOGI(TAG, "[BLE->UPLINK] Servo test stop");
+        buildUplinkPacket(25, nullptr, 0, focusTargetRid());   // #390: focused rocket
+        ESP_LOGI(TAG, "[BLE->UPLINK] Servo test stop -> rid=%u", (unsigned)focusTargetRid());
     }
     else if (ble_cmd == BLE_BS_CMD_SIM_CONFIG)
     {
@@ -4510,7 +4630,7 @@ static void loop_bs()
         const uint8_t* payload = ble_app.getCommandPayload();
         size_t payload_len = ble_app.getCommandPayloadLength();
         if (payload_len > 16) payload_len = 16;
-        buildUplinkPacket(5, payload, payload_len);
+        buildUplinkPacket(5, payload, payload_len, focusTargetRid());   // #390: focused rocket
 
         if (payload_len >= 12)
         {
@@ -4529,13 +4649,13 @@ static void loop_bs()
     }
     else if (ble_cmd == BLE_BS_CMD_SIM_START)
     {
-        buildUplinkPacket(6, nullptr, 0);
-        ESP_LOGI(TAG, "[BLE->UPLINK] Sim start");
+        buildUplinkPacket(6, nullptr, 0, focusTargetRid());   // #390: focused rocket
+        ESP_LOGI(TAG, "[BLE->UPLINK] Sim start -> rid=%u", (unsigned)focusTargetRid());
     }
     else if (ble_cmd == BLE_BS_CMD_SIM_STOP)
     {
-        buildUplinkPacket(7, nullptr, 0);
-        ESP_LOGI(TAG, "[BLE->UPLINK] Sim stop");
+        buildUplinkPacket(7, nullptr, 0, focusTargetRid());   // #390: focused rocket
+        ESP_LOGI(TAG, "[BLE->UPLINK] Sim stop -> rid=%u", (unsigned)focusTargetRid());
     }
     else if (ble_cmd == BLE_BS_CMD_TIME_SYNC)
     {
@@ -4702,6 +4822,61 @@ static void loop_bs()
             ESP_LOGI(TAG, "[BLE] Network ID set: %u", (unsigned)network_id);
         }
     }
+    else if (ble_cmd == BLE_BS_CMD_SET_FOCUS_ROCKET)
+    {
+        // #390: pin the radio focus to one rocket. Payload: [rid], 0 = back
+        // to auto (sticky first-heard). RAM-only on purpose — the app owns
+        // the choice and re-sends it on every BLE connect, so a BS reboot
+        // can't resurrect a stale pin.
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen >= 1)
+        {
+            focus_rid_pinned = payload[0];
+            const int fslot = focus_rid_pinned ? slotOfRid(focus_rid_pinned) : -1;
+            if (fslot >= 0)
+            {
+                // Re-point the BLE re-push subject immediately so the app's
+                // stale banner describes the newly focused rocket without
+                // waiting for its next packet.
+                active_rocket_idx = (uint8_t)fslot;
+            }
+            // Log the EFFECTIVE focus: on a pin-clear the subject falls back
+            // to the auto rid, whose tracked-ness is what matters (checking
+            // the cleared pin's slot printed "not heard yet" for a rocket
+            // the BS was actively receiving).
+            const uint8_t log_rid = focus_rid_pinned ? focus_rid_pinned : focus_rid_auto;
+            const int log_slot = log_rid ? slotOfRid(log_rid) : -1;
+            ESP_LOGI(TAG, "[FOCUS] %s rid=%u (%s)",
+                     focus_rid_pinned ? "Pinned to" : "Auto (pin cleared),",
+                     (unsigned)log_rid,
+                     log_slot >= 0 ? "tracked" : "not heard yet");
+        }
+    }
+    else if (ble_cmd == BLE_BS_CMD_SET_BS_LOGGING)
+    {
+        // #390: BS-only CSV logging control for the app's base-station
+        // screen. Payload: [on]. Unlike legacy cmd 23 this never uplinks a
+        // rocket-logging command; same manual-inhibit semantics (#107).
+        const uint8_t* payload = ble_app.getCommandPayload();
+        const size_t plen = ble_app.getCommandPayloadLength();
+        if (plen >= 1)
+        {
+            const bool want_on = (payload[0] != 0);
+            if (want_on && !logging_active)
+            {
+                log_manual_inhibit = false;
+                startLogging();
+                ESP_LOGI(TAG, "[LOG] Base station logging started (manual, BS-only cmd)");
+            }
+            else if (!want_on && logging_active)
+            {
+                stopLogging();
+                log_manual_inhibit = true;
+                ESP_LOGI(TAG, "[LOG] Base station logging stopped (manual, BS-only cmd; auto-restart inhibited until state change)");
+            }
+        }
+    }
     else if (ble_cmd == BLE_BS_CMD_RELAY_TO_ROCKET)
     {
         // Relay command to a specific rocket via LoRa uplink
@@ -4754,7 +4929,7 @@ static void loop_bs()
             // stall) where pre-#150 the scan ran directly.
             const bool need_coord = !lora_hop_disabled && rocketLikelyHopping(
                 hop_active_, last_packet_ms, millis(),
-                lastSeenRocketState(), COORD_HOP_RECENT_MS);
+                focusedRocketState(), COORD_HOP_RECENT_MS);   // #390
 
             if (!need_coord)
             {
