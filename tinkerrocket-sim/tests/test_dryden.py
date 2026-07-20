@@ -258,9 +258,11 @@ def test_gust_off_leaves_the_sim_bit_for_bit_unchanged():
 
 
 def _n_nonfinite(result):
-    """Count non-finite cells. Stated differentially against a calm run rather
-    than as an absolute zero: baro_alt is already NaN in the first logged row
-    of every flight, gust or not (the row precedes the first baro sample)."""
+    """Count non-finite cells. A poisoned wind vector propagates into
+    v_air_mag, which silently switches off both the aero and fin-torque gates
+    rather than raising, so this is the check that the gust reached the
+    physics intact. (This was a differential count against a calm run until
+    the row-0 baro_alt hole was fixed; see tests/test_log_columns.py.)"""
     num = result.df.select_dtypes('number').to_numpy(dtype=float)
     return int((~np.isfinite(num)).sum())
 
@@ -271,7 +273,8 @@ def test_gust_perturbs_angle_of_attack():
     calm = _short_flight()
     windy = _short_flight(gust_w20_mps=W20_MODERATE)
     assert windy.df['alpha_deg'].max() > calm.df['alpha_deg'].max()
-    assert _n_nonfinite(windy) == _n_nonfinite(calm)
+    assert _n_nonfinite(calm) == 0
+    assert _n_nonfinite(windy) == 0
     # Still a plausible flight, not a force-free coast from a poisoned wind.
     assert 0.5 * calm.apogee_m < windy.apogee_m < 1.5 * calm.apogee_m
 
@@ -290,4 +293,4 @@ def test_gust_composes_with_steady_wind():
     both = _short_flight(wind_speed=5.0, wind_direction_deg=90.0,
                          gust_w20_mps=W20_MODERATE)
     assert both.df['alpha_deg'].max() != steady.df['alpha_deg'].max()
-    assert _n_nonfinite(both) == _n_nonfinite(steady)
+    assert _n_nonfinite(both) == 0

@@ -445,7 +445,17 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Latest IMU measurement and true specific force (for logging at log rate)
     latest_imu_meas = None
     latest_true_accel_body = None
-    latest_baro_alt = None
+    # Seeded rather than left None: the first log row is emitted on the same
+    # tick that initializes the EKF, and the baro is only sampled in the
+    # *other* branch of that if/elif, so no reading exists yet. Left as None
+    # the row omits the key entirely and pandas backfills NaN for it, poking a
+    # one-sample hole in the column that any numpy-side consumer inherits.
+    # The seed is the noiseless ISA inversion at the starting altitude —
+    # exactly what the sampler computes, minus the sensor noise it has not
+    # drawn yet — so it costs no RNG draw and shifts no baseline.
+    latest_baro_alt = 44330.0 * (
+        1.0 - (atm.pressure(state[2] + config.ref_alt_m) / 101325.0)
+        ** (1.0 / 5.255))
     latest_mach = 0.0
     latest_gnss_valid = True
     latest_baro_valid = True
