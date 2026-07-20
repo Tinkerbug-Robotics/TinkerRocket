@@ -67,33 +67,97 @@ def test_no_wind_or_gust_keys_masquerading_as_config(path):
     assert not [k for k in keys if "gust" in k or "wind" in k]
 
 
-def test_sim_config_values_reach_the_rocket_definition():
-    """The sections we kept must genuinely round-trip, not just parse."""
+def _perturb(node):
+    """Copy a parsed YAML tree with every numeric leaf changed."""
+    if isinstance(node, dict):
+        return {k: _perturb(v) for k, v in node.items()}
+    if isinstance(node, bool):
+        return not node
+    if isinstance(node, (int, float)):
+        return node * 3.0 + 1.0
+    return node
+
+
+def _fingerprint(obj, depth=0):
+    """Flatten an object's scalar attributes so two of them can be diffed."""
+    if depth > 3 or not hasattr(obj, "__dict__"):
+        return {}
+    out = {}
+    for name, value in vars(obj).items():
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            out[name] = value
+        else:
+            for sub, sv in _fingerprint(value, depth + 1).items():
+                out[f"{name}.{sub}"] = sv
+    return out
+
+
+@pytest.mark.parametrize("section", sorted(CONSUMED_SIM_SECTIONS))
+def test_every_sim_config_section_actually_reaches_the_rocket(section, tmp_path):
+    """Behavioral, not declarative: perturb one section's values and require
+    the RocketDefinition to change.
+
+    Asserting `rd.Cd == cfg["aerodynamics"]["Cd"]` would NOT do this — the
+    checked-in values happen to equal the dataclass defaults, so that
+    assertion passes even with the reader deleted. Perturbing proves a reader
+    exists and applies the value, so deleting one fails here.
+    """
     cfg = _load(SIM_CONFIG)
-    rd = from_yaml(SIM_CONFIG)
-    assert rd.fin_tabs.Kt_ref == cfg["fin_tabs"]["Kt_ref"]
-    assert rd.fin_tabs.n_tabs == cfg["fin_tabs"]["n_tabs"]
-    assert rd.I_roll_launch == cfg["mass_overrides"]["I_roll_launch"]
-    assert rd.Cd == cfg["aerodynamics"]["Cd"]
+    perturbed = dict(cfg)
+    perturbed[section] = _perturb(cfg[section])
+
+    path = tmp_path / "perturbed.yaml"
+    path.write_text(yaml.safe_dump(perturbed))
+
+    base = _fingerprint(from_yaml(SIM_CONFIG))
+    after = _fingerprint(from_yaml(path))
+    changed = [k for k in base if base[k] != after.get(k)]
+    assert changed, (
+        f"perturbing the '{section}' section changed nothing in the "
+        f"RocketDefinition — it has no live reader"
+    )
 
 
-def test_launch_site_values_reach_the_environment():
-    cfg = _load(LAUNCH_SITE)["launch_site"]
-    site = _load_site_config(LAUNCH_SITE)
+def test_launch_site_values_reach_the_environment(tmp_path):
+    """Same reasoning: use values that differ from the loader's defaults, so
+    the assertion fails if the file is ignored."""
+    path = tmp_path / "site.yaml"
+    path.write_text(yaml.safe_dump({"launch_site": {
+        "latitude_deg": 12.5, "longitude_deg": -77.25, "elevation_m": 1234.0,
+    }}))
+    site = _load_site_config(path)
+    assert site["latitude_deg"] == 12.5
+    assert site["longitude_deg"] == -77.25
+    assert site["elevation_m"] == 1234.0
+
+    # ...and the checked-in file still parses into that same shape.
+    real = _load_site_config(LAUNCH_SITE)
     for key in ("latitude_deg", "longitude_deg", "elevation_m"):
-        assert site[key] == cfg[key]
+        assert real[key] == _load(LAUNCH_SITE)["launch_site"][key]
 
 
-def test_site_loader_survives_an_empty_file(tmp_path):
-    """yaml.safe_load returns None for an empty or comment-only file, which
-    used to reach .get() and raise. Deleting a top-level block is exactly the
-    edit that makes this reachable."""
-    for content in ("", "# only a comment\n"):
-        p = tmp_path / "site.yaml"
-        p.write_text(content)
-        site = _load_site_config(p)
-        assert site["latitude_deg"] == 38.0
-        assert site["elevation_m"] == 0.0
+@pytest.mark.parametrize("content", [
+    "",                                          # empty file
+    "# only a comment\n",                        # comment-only -> safe_load None
+    "launch_site:\n",                            # key present, body null
+    "launch_site:\n  # latitude_deg: 38.0\n",    # body commented out
+    "other_section:\n  a: 1\n",                  # key absent entirely
+])
+def test_site_loader_falls_back_to_defaults(content, tmp_path):
+    """Every degenerate shape must fall back, not raise.
+
+    Two distinct traps here: safe_load returns None for an empty file, and a
+    present-but-null block parses to {'launch_site': None} — where a .get()
+    default does NOT apply, because the key exists. Commenting out the body
+    while leaving the key is the natural editing accident, and this file now
+    carries a long prose comment under that key.
+    """
+    p = tmp_path / "site.yaml"
+    p.write_text(content)
+    site = _load_site_config(p)
+    assert site["latitude_deg"] == 38.0
+    assert site["longitude_deg"] == -122.0
+    assert site["elevation_m"] == 0.0
 
 
 def test_site_loader_handles_a_missing_file(tmp_path):

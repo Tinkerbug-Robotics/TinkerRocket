@@ -205,6 +205,39 @@ def test_zero_intensity_rejected():
         DrydenGust(0.0)
 
 
+def test_gust_is_continuous_across_an_altitude_change():
+    """The gain must stay INSIDE the recursion, not be hoisted out as a
+    unit-variance filter scaled by sigma(h) at the output.
+
+    sigma_u varies with altitude below 1000 ft, so a hoisted gain rescales the
+    whole carried state the instant h changes — the gust velocity teleports.
+    Physically it must decay toward the new intensity at the filter's own rate.
+
+    Taking the altitude step with a very short dt makes this a wide-margin
+    check rather than a statistical one: the only change the true filter can
+    make in that step is the noise it injects, of order sigma*sqrt(2*V*dt/L)
+    (~0.1% here), whereas a hoisted gain jumps by the full sigma ratio (~46%).
+    The 2% threshold sits about 20x above the former and 20x below the latter.
+
+    This is the one invariant the module docstring singles out as its reason
+    for existing, and it is invisible to every constant-altitude test: with h
+    fixed, hoisting the gain is mathematically exact.
+    """
+    h_low, h_high, v = H_FLOOR_M, 900.0 * _FT, 90.0
+    sigma_low = dryden_scales(h_low, W20_MODERATE)[2]
+    sigma_high = dryden_scales(h_high, W20_MODERATE)[2]
+    assert sigma_low > 1.8 * sigma_high      # the altitudes really do differ
+
+    g = DrydenGust(W20_MODERATE, seed=17)
+    for _ in range(4000):                     # build up state at low altitude
+        before = g.step(1e-2, v, h_low)
+    after = g.step(1e-6, v, h_high)           # same instant, new altitude
+
+    assert abs(before[0]) > 0.5 * sigma_low   # there is real state to rescale
+    assert after[0] == pytest.approx(before[0], rel=0.02)
+    assert after[1] == pytest.approx(before[1], rel=0.02)
+
+
 # --- integration with the closed-loop sim ----------------------------------
 
 def _short_flight(**overrides):
