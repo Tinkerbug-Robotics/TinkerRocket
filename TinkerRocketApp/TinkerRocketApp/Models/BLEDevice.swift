@@ -842,11 +842,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(32, payload: Data([enabled ? 0x01 : 0x00]))
     }
 
-    /// Full PN guidance config (GuidanceConfigData = 36 bytes, cmd 65). Floats
-    /// LE in struct order, then coast_delay(u16), enable(u8), target_mode(u8).
+    /// Full guidance config (GuidanceConfigData = 45 bytes, cmd 65).  v1 floats LE
+    /// in struct order, then coast_delay(u16), enable(u8), target_mode(u8); #534
+    /// appended kp_pos(f32), kd_vel(f32), guidance_law(u8).  THE FIRST 36 BYTES
+    /// ARE FROZEN — the FC parses by offset, so append only, never insert.
+    ///
+    /// Both laws' parameters are sent unconditionally, every time, regardless of
+    /// which law is selected or which fields the UI is showing: the FC keeps the
+    /// unused law fully configured so switching laws never flies an untuned one.
+    ///
+    /// A 45-byte-era FC REJECTS a 36-byte frame outright (length check) and logs
+    /// it, so app and firmware must ship in lockstep.
     func sendGuidanceConfig(enabled: Bool, navGain: Float, maxAccel: Float, accelToFin: Float,
                             maxFinDeg: Float, minSpeed: Float, coastDelayMs: UInt16,
-                            targetMode: UInt8, targetE: Float, targetN: Float, targetAlt: Float) {
+                            targetMode: UInt8, targetE: Float, targetN: Float, targetAlt: Float,
+                            kpPos: Float, kdVel: Float, guidanceLaw: UInt8) {
         var payload = Data()
         var ng = navGain, ma = maxAccel, a2f = accelToFin, mf = maxFinDeg, ms = minSpeed
         var te = targetE, tn = targetN, ta = targetAlt
@@ -861,7 +871,15 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         var cd = coastDelayMs; payload.append(Data(bytes: &cd, count: 2))
         payload.append(enabled ? 0x01 : 0x00)
         payload.append(targetMode)
-        sendRawCommand(65, payload: payload)   // GuidanceConfigData = 36 bytes
+        // --- appended #534 (offsets 36/40/44) ---
+        var kp = kpPos, kd = kdVel
+        payload.append(Data(bytes: &kp, count: 4))
+        payload.append(Data(bytes: &kd, count: 4))
+        payload.append(guidanceLaw)
+        #if DEBUG
+        assert(payload.count == 45, "GuidanceConfigData must be 45 bytes, built \(payload.count)")
+        #endif
+        sendRawCommand(65, payload: payload)   // GuidanceConfigData = 45 bytes
         if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
     }
 

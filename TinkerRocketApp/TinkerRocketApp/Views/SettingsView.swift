@@ -54,6 +54,8 @@ struct SettingsView: View {
     @State private var sPnAccelToFin = ""
     @State private var sPnMaxFin = ""
     @State private var sPnMinSpeed = ""
+    @State private var sPnKpPos = ""
+    @State private var sPnKdVel = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String)] = []
@@ -149,6 +151,7 @@ struct SettingsView: View {
         case kpAngle
         case integralSep
         case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed
+        case guidKpPos, guidKdVel
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
         case drogueRate, mainRate, mainDeployAlt, dragK
@@ -186,7 +189,8 @@ struct SettingsView: View {
         case .bias1, .bias2, .bias3, .bias4, .servoHz, .servoMin, .servoMax, .finTravel: return .servo
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rateCap, .kpAngle, .integralSep: return .rollControl
-        case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed: return .guidance
+        case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed,
+             .guidKpPos, .guidKdVel: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case .drogueRate, .mainRate, .mainDeployAlt, .dragK: return .recovery
@@ -921,13 +925,40 @@ struct SettingsView: View {
         }
     }
 
+    // The section body is split into three @ViewBuilder pieces purely to stay
+    // under SwiftUI's 10-subview ViewBuilder limit now that the law picker and
+    // the per-law field set live here.
     private var guidanceSection: some View {
-        Section(header: configHeader("PN Guidance", applied: guidanceApplied)) {
+        Section(header: configHeader("Guidance", applied: guidanceApplied)) {
+            guidanceIntroCopy
+            guidanceLawFields
+            guidanceSharedFields
+        }
+    }
+
+    @ViewBuilder private var guidanceIntroCopy: some View {
+        Group {
             Text("Roll axis is rate-nulled (held at zero spin) \u{2014} the roll profile is not followed in Guidance mode.")
                 .font(.caption).foregroundColor(.secondary)
-            Text("Proportional-navigation steering toward the target. Engages at the Activation Delay after launch (shared with roll control), not after burnout. Phase 1 target: directly over the launch pad (overhead).")
+            Text("Engages at the Activation Delay after launch (shared with roll control), not after burnout.")
                 .font(.caption).foregroundColor(.secondary)
 
+            Picker("Guidance Law", selection: guidanceLawBinding) {
+                Text("Proportional Nav").tag(UInt8(0))
+                Text("Station-Keep").tag(UInt8(1))
+            }
+            .pickerStyle(.segmented)
+            Text("Station-keep is a PD regulator that flies straight up over the aim point \u{2014} no closest-approach singularity. PN steers toward a target altitude and is the legacy law.")
+                .font(.caption).foregroundColor(.secondary)
+            Text("Aim point is currently the pad (overhead); wind-compensated aim points arrive with Drift-Cast.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    /// Per-law tuning. The other law's values stay in the profile and keep
+    /// going out on the wire, so switching laws never zeroes its tune.
+    @ViewBuilder private var guidanceLawFields: some View {
+        if profile.pnGuidanceLaw == 0 {
             HStack {
                 Text("Target Altitude")
                 Spacer()
@@ -946,6 +977,31 @@ struct SettingsView: View {
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
                     .focused($focusedField, equals: .guidNavGain)
             }
+        } else {
+            HStack {
+                Text("Pos Gain (kp)")
+                Spacer()
+                TextField("0.8", text: $sPnKpPos)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidKpPos)
+                Text("1/s\u{00B2}").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Vel Gain (kd)")
+                Spacer()
+                TextField("1.5", text: $sPnKdVel)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidKdVel)
+                Text("1/s").foregroundColor(.secondary)
+            }
+            Text("Lateral accel = \u{2212}kp\u{00D7}offset \u{2212} kd\u{00D7}velocity. Both must be in (0, 10]; the rocket rejects anything outside and keeps its previous tune.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    /// Shared by both laws.
+    @ViewBuilder private var guidanceSharedFields: some View {
+        Group {
             HStack {
                 Text("Max Accel")
                 Spacer()
@@ -985,9 +1041,11 @@ struct SettingsView: View {
                     .focused($focusedField, equals: .rollDelay)
                 Text("ms").foregroundColor(.secondary)
             }
-            Text("Milliseconds after launch before control activates \u{2014} roll-rate-null and PN guidance both engage at this delay, keeping fins neutral through initial boost.")
+            Text("Milliseconds after launch before control activates \u{2014} roll-rate-null and guidance both engage at this delay, keeping fins neutral through initial boost.")
                 .font(.caption).foregroundColor(.secondary)
-            Text("Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority. Stored in the rocket profile.")
+            Text(profile.pnGuidanceLaw == 0
+                 ? "Nav gain = PN aggressiveness (3\u{2013}5). Min speed gates guidance off below useful fin authority. Stored in the rocket profile."
+                 : "Min speed gates guidance off below useful fin authority. Stored in the rocket profile.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1120,6 +1178,18 @@ struct SettingsView: View {
             })
     }
 
+    /// Guidance law: 0 = proportional navigation, 1 = station-keep.  Applies on
+    /// change (#144) — no Apply button.  Both laws' parameters ride in every
+    /// frame, so flipping the picker never drops the other law's tune.
+    private var guidanceLawBinding: Binding<UInt8> {
+        Binding(
+            get: { profile.pnGuidanceLaw },
+            set: { newValue in
+                updateProfile { $0.pnGuidanceLaw = newValue }
+                applyGuidanceConfig()
+            })
+    }
+
     // Pyro enable / mode apply immediately (like toggles); the trigger value
     // commits on focus loss via the .pyro EditGroup.
     private func pyroEnabledBinding(_ ch: Int) -> Binding<Bool> {
@@ -1168,6 +1238,8 @@ struct SettingsView: View {
         sPnAccelToFin = formatDecimal(Double(p.pnAccelToFin))
         sPnMaxFin = formatDecimal(Double(p.pnMaxFinDeg))
         sPnMinSpeed = formatDecimal(Double(p.pnMinSpeed))
+        sPnKpPos = formatDecimal(Double(p.pnKpPos))
+        sPnKdVel = formatDecimal(Double(p.pnKdVel))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg))
         }
@@ -1401,10 +1473,16 @@ struct SettingsView: View {
         let minSpeed   = max(0, Float(sPnMinSpeed)   ?? profile.pnMinSpeed)
         let coastDelay = profile.pnCoastDelayMs  // inert in FW; guidance activation = rollDelayMs (Activation Delay)
         let targetAlt  = max(0, Float(sPnTargetAlt)  ?? profile.pnTargetAltM)
+        // Station-keep gains (#534).  Same floor-of-0 idiom as the rest — note
+        // Float("nan") survives it; the FC's (0, 10] gates are the real guard and
+        // they log on rejection.  Both laws' values are sent every time.
+        let kpPos      = max(0, Float(sPnKpPos)      ?? profile.pnKpPos)
+        let kdVel      = max(0, Float(sPnKdVel)      ?? profile.pnKdVel)
         updateProfile {
             $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
             $0.pnMaxFinDeg = maxFin; $0.pnMinSpeed = minSpeed; $0.pnCoastDelayMs = coastDelay
             $0.pnTargetAltM = targetAlt
+            $0.pnKpPos = kpPos; $0.pnKdVel = kdVel
         }
         if device.isConnected {
             device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
@@ -1412,7 +1490,9 @@ struct SettingsView: View {
                                       maxFinDeg: maxFin, minSpeed: minSpeed, coastDelayMs: coastDelay,
                                       targetMode: profile.pnTargetMode,
                                       targetE: profile.pnTargetE, targetN: profile.pnTargetN,
-                                      targetAlt: targetAlt)
+                                      targetAlt: targetAlt,
+                                      kpPos: kpPos, kdVel: kdVel,
+                                      guidanceLaw: profile.pnGuidanceLaw)
         }
         showApplied($guidanceApplied)
     }

@@ -120,8 +120,13 @@ TEST(RocketComputerTypes, PyroConfigData_FourChannelLayout) {
 }
 
 TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
-    // 8 floats (32) + u16 coast_delay (2) + 2 u8 (2) = 36, naturally aligned (no pad).
-    EXPECT_EQ(sizeof(GuidanceConfigData), 36u);
+    // v1 prefix: 8 floats (32) + u16 coast_delay (2) + 2 u8 (2) = 36.
+    // #534 appended: 2 floats (8) + u8 guidance_law (1) = 45.
+    // The append deliberately breaks the "floats first" ordering so that the
+    // offsets 0..35 below stay FROZEN — that is what lets a 36-byte-era peer
+    // parse a 45-byte frame's prefix instead of misparsing it.  Do not
+    // "tidy" this by moving kp/kd up with the other floats.
+    EXPECT_EQ(sizeof(GuidanceConfigData), 45u);
     EXPECT_EQ(offsetof(GuidanceConfigData, nav_gain),         0u);
     EXPECT_EQ(offsetof(GuidanceConfigData, max_accel_mps2),   4u);
     EXPECT_EQ(offsetof(GuidanceConfigData, accel_to_fin_deg), 8u);
@@ -133,6 +138,22 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
     EXPECT_EQ(offsetof(GuidanceConfigData, coast_delay_ms),   32u);
     EXPECT_EQ(offsetof(GuidanceConfigData, enable),           34u);
     EXPECT_EQ(offsetof(GuidanceConfigData, target_mode),      35u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, kp_pos_per_s2),    36u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, kd_vel_per_s),     40u);
+    EXPECT_EQ(offsetof(GuidanceConfigData, guidance_law),     44u);
+    // The 45-byte frame must still fit the OC->FC combined-read window:
+    // framed = 4 (sync/hdr) + 1 (type) + 1 (len) + 45 + 2 (crc) = 53, staged
+    // after a 10-byte status response inside FC_COMBINED_READ_SIZE (96).
+    EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigData) + 2u, 96u);
+}
+
+TEST(RocketComputerTypes, GuidanceLawCodes_MatchGuidanceLibrary) {
+    // Wire codes mirror TR_GuidancePN::Mode by value.  The library is not
+    // linked into the host test build, so this pins the wire side only; the
+    // FC pins the pair with a static_assert at each configure site.
+    EXPECT_EQ(GUIDE_LAW_PN,           0u);
+    EXPECT_EQ(GUIDE_LAW_STATION_KEEP, 1u);
+    EXPECT_EQ(GUIDE_LAW_MAX,          GUIDE_LAW_STATION_KEEP);
 }
 
 TEST(RocketComputerTypes, GuidanceTelemData_Layout) {
@@ -925,8 +946,9 @@ TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
                             (1u << FlightSettingsData::F_GUIDANCE) |
                             (1u << FlightSettingsData::F_SERVO_ENABLED) |
                             (1u << FlightSettingsData::F_FW_DIRTY) |
-                            (1u << FlightSettingsData::F_SOUNDS));
-    EXPECT_EQ(all, 0x3Fu);  // bits 0-5, no overlap
+                            (1u << FlightSettingsData::F_SOUNDS) |
+                            (1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP));
+    EXPECT_EQ(all, 0x7Fu);  // bits 0-6, no overlap
 }
 
 // ============================================================================
