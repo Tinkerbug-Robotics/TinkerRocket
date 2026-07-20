@@ -12,11 +12,14 @@ the estimate low by roughly 2*tau/T.
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tinkerrocket_sim.physics.dryden import (
     DrydenGust, dryden_scales, L_FREE_AIR_M, W20_MODERATE, H_FLOOR_M,
 )
+from tinkerrocket_sim.simulation.closed_loop_sim import SimConfig, run_closed_loop
+from tinkerrocket_sim.simulation.scenarios import build_rollypolly_iii
 
 _FT = 0.3048
 
@@ -200,3 +203,58 @@ def test_reset_burn_in_leaves_filter_stationary():
 def test_zero_intensity_rejected():
     with pytest.raises(ValueError):
         DrydenGust(0.0)
+
+
+# --- integration with the closed-loop sim ----------------------------------
+
+def _short_flight(**overrides):
+    cfg = dict(pad_time=0.0, duration=6.0, physics_dt=1e-3,
+               launch_angle_deg=85.0, control_enabled=False,
+               guidance_enabled=False, enable_mag_updates=False,
+               pad_heading_deg=0.0, sensor_seed=0)
+    cfg.update(overrides)
+    return run_closed_loop(build_rollypolly_iii(), SimConfig(**cfg))
+
+
+def test_gust_off_leaves_the_sim_bit_for_bit_unchanged():
+    """The knob defaults off, and off must mean the gust model is not merely
+    quiet but absent — otherwise every existing scenario baseline moves."""
+    a = _short_flight()
+    b = _short_flight(gust_w20_mps=0.0, gust_vertical=False)
+    pd.testing.assert_frame_equal(a.df, b.df)
+
+
+def _n_nonfinite(result):
+    """Count non-finite cells. Stated differentially against a calm run rather
+    than as an absolute zero: baro_alt is already NaN in the first logged row
+    of every flight, gust or not (the row precedes the first baro sample)."""
+    num = result.df.select_dtypes('number').to_numpy(dtype=float)
+    return int((~np.isfinite(num)).sum())
+
+
+def test_gust_perturbs_angle_of_attack():
+    """The gust has to actually reach the aerodynamics. AoA is the signal it
+    drives (a uniform gust exerts no roll moment on a symmetric airframe)."""
+    calm = _short_flight()
+    windy = _short_flight(gust_w20_mps=W20_MODERATE)
+    assert windy.df['alpha_deg'].max() > calm.df['alpha_deg'].max()
+    assert _n_nonfinite(windy) == _n_nonfinite(calm)
+    # Still a plausible flight, not a force-free coast from a poisoned wind.
+    assert 0.5 * calm.apogee_m < windy.apogee_m < 1.5 * calm.apogee_m
+
+
+def test_gust_is_reproducible_and_seed_dependent():
+    a = _short_flight(gust_w20_mps=W20_MODERATE, sensor_seed=3)
+    b = _short_flight(gust_w20_mps=W20_MODERATE, sensor_seed=3)
+    c = _short_flight(gust_w20_mps=W20_MODERATE, sensor_seed=4)
+    pd.testing.assert_frame_equal(a.df, b.df)
+    assert a.df['alpha_deg'].max() != c.df['alpha_deg'].max()
+
+
+def test_gust_composes_with_steady_wind():
+    """Steady wind and gust are independent knobs that add."""
+    steady = _short_flight(wind_speed=5.0, wind_direction_deg=90.0)
+    both = _short_flight(wind_speed=5.0, wind_direction_deg=90.0,
+                         gust_w20_mps=W20_MODERATE)
+    assert both.df['alpha_deg'].max() != steady.df['alpha_deg'].max()
+    assert _n_nonfinite(both) == _n_nonfinite(steady)

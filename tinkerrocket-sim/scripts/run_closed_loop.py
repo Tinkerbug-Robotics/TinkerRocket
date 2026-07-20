@@ -75,6 +75,11 @@ SERVO_RATE_LIMIT = 923.0    # servo slew rate (deg/s)
 # --- Wind ---
 WIND_SPEED = 0.0            # m/s (0 = calm)
 WIND_DIRECTION = 0.0        # direction wind comes FROM in degrees (0=N, 90=E)
+# Dryden turbulence on top of the steady wind: the 20 ft reference wind that
+# sets the intensity. 0 = smooth air; ~7.7 light, ~15.4 moderate, ~23.2 severe.
+# Stresses pitch/yaw, AoA and dispersion — not the roll loop (a uniform gust
+# exerts no roll moment on a symmetric airframe).
+GUST_W20 = 0.0              # m/s (0 = no turbulence)
 
 # --- Simulation ---
 PAD_TIME = 2.0              # pre-launch pad warmup (s) for EKF convergence
@@ -659,6 +664,7 @@ if __name__ == "__main__":
         heading_deg=HEADING_DEG,
         wind_speed=WIND_SPEED,
         wind_direction_deg=WIND_DIRECTION,
+        gust_w20_mps=GUST_W20,
         imu_rate=IMU_RATE,
         baro_rate=BARO_RATE,
         mag_rate=MAG_RATE,
@@ -740,6 +746,8 @@ if __name__ == "__main__":
         print(f"  Guidance: OFF (roll-only)")
     if WIND_SPEED > 0:
         print(f"  Wind: {WIND_SPEED:.1f} m/s from {WIND_DIRECTION:.0f}°")
+    if GUST_W20 > 0:
+        print(f"  Turbulence: Dryden, W20={GUST_W20:.1f} m/s")
 
     # EKF mode summary
     ekf_flags = []
