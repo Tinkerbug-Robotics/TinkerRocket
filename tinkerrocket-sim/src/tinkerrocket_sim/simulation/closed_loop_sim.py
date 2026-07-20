@@ -30,6 +30,7 @@ from ..sensors.baro_model import BaroModel
 from ..sensors.mag_model import MagModel
 from ..sensors.gnss_model import GNSSModel
 from ..control.controller import RollController
+from ..physics.dryden import DrydenGust
 
 
 @dataclass
@@ -114,6 +115,20 @@ class SimConfig:
     # Wind (constant ENU, m/s)
     wind_speed: float = 0.0             # m/s
     wind_direction_deg: float = 0.0     # direction wind comes FROM (0=North, 90=East)
+
+    # Dryden atmospheric turbulence (physics/dryden.py), added on top of the
+    # steady wind above and independent of it — a gust may be flown with zero
+    # mean wind. gust_w20_mps is the wind speed at the 20 ft reference height,
+    # which sets the turbulence intensity: ~7.7 light, ~15.4 moderate, ~23.2
+    # severe (W20_LIGHT / W20_MODERATE / W20_SEVERE). 0 = off, and with it off
+    # no filter is built and the wind vector is exactly what it was before the
+    # gust model existed. gust_vertical=False drops the Up component, which is
+    # the one that perturbs axial velocity and so moves apogee.
+    # NOTE: a uniform gust exerts NO roll moment on this symmetric airframe —
+    # it stresses pitch/yaw, AoA, the EKF and dispersion, not the roll loop.
+    # Use roll_misalign_deg / roll_kick_dps for roll disturbances.
+    gust_w20_mps: float = 0.0
+    gust_vertical: bool = True
 
     # Launch site (for GNSS)
     ref_lat_deg: float = 38.0
@@ -250,13 +265,16 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Wind vector in ENU
     # wind_direction_deg is where wind comes FROM (meteorological convention)
     # so wind blows TOWARD the opposite direction
-    wind_enu = None
+    wind_steady_enu = None
     if config.wind_speed > 0:
         wind_from_rad = math.radians(config.wind_direction_deg)
         # Wind FROM north (0°) → blows south → negative North → negative ENU-y
         wind_east = -config.wind_speed * math.sin(wind_from_rad)
         wind_north = -config.wind_speed * math.cos(wind_from_rad)
-        wind_enu = np.array([wind_east, wind_north, 0.0])
+        wind_steady_enu = np.array([wind_east, wind_north, 0.0])
+    # With the gust off this is never rebound, so wind_enu keeps its None
+    # sentinel and every downstream consumer behaves exactly as before.
+    wind_enu = wind_steady_enu
 
     # Initialize sensors
     def _seed(i):
@@ -282,6 +300,15 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         ref_alt_m=config.ref_alt_m,
         seed=_seed(3),
     )
+
+    # Dryden turbulence. Seed index 4 — 0..3 are taken by the sensor models
+    # above, and sharing one would both correlate the gust with sensor noise
+    # and shift the existing scenarios' noise streams.
+    gust = None
+    if config.gust_w20_mps > 0.0:
+        gust = DrydenGust(config.gust_w20_mps, seed=_seed(4),
+                          vertical=config.gust_vertical)
+        gust.reset(h_agl_m=0.0, v_mps=30.0)
 
     # Initialize controller
     controller = RollController(
@@ -418,7 +445,17 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
     # Latest IMU measurement and true specific force (for logging at log rate)
     latest_imu_meas = None
     latest_true_accel_body = None
-    latest_baro_alt = None
+    # Seeded rather than left None: the first log row is emitted on the same
+    # tick that initializes the EKF, and the baro is only sampled in the
+    # *other* branch of that if/elif, so no reading exists yet. Left as None
+    # the row omits the key entirely and pandas backfills NaN for it, poking a
+    # one-sample hole in the column that any numpy-side consumer inherits.
+    # The seed is the noiseless ISA inversion at the starting altitude —
+    # exactly what the sampler computes, minus the sensor noise it has not
+    # drawn yet — so it costs no RNG draw and shifts no baseline.
+    latest_baro_alt = 44330.0 * (
+        1.0 - (atm.pressure(state[2] + config.ref_alt_m) / 101325.0)
+        ** (1.0 / 5.255))
     latest_mach = 0.0
     latest_gnss_valid = True
     latest_baro_valid = True
@@ -436,6 +473,21 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
         speed = np.linalg.norm(vel)
 
         in_pad_phase = (t < 0.0)
+
+        # Advance the gust before anything reads the wind this step, so the
+        # IMU derivative, the logged row and the RK4 step all see the same
+        # value at the same t. (Unlike the roll kick at the bottom of the
+        # loop, which deliberately applies after t advances.)
+        #
+        # Held off during the pad phase: wind is inert there anyway (IMU accel
+        # is forced to zero and the physics step is skipped), and integrating
+        # through it would make the gust at t=0 depend on pad_time, coupling
+        # two knobs that are currently independent. reset()'s burn-in already
+        # starts the filter stationary.
+        if gust is not None and not in_pad_phase:
+            gust_enu = gust.step(config.physics_dt, float(speed), float(alt))
+            wind_enu = (gust_enu if wind_steady_enu is None
+                        else wind_steady_enu + gust_enu)
 
         # Termination conditions (only during flight, not pad phase)
         if not in_pad_phase:

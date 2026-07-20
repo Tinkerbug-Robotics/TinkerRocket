@@ -246,7 +246,7 @@ class SimGUI:
         'roll_disturbance': 0.0,
         'gain_v_ref': 95.0, 'gain_v_min': 30.0, 'gain_max_scale': 3.0,
         'defl_min': -10.0, 'defl_max': 10.0, 'servo_rate': 500.0,
-        'wind_speed': 0.0, 'wind_dir': 0.0,
+        'wind_speed': 0.0, 'wind_dir': 0.0, 'gust_w20': 0.0,
         'pad_time': 2.0, 'duration': 16.0, 'physics_dt': 0.001,
         'launch_angle': 89.0, 'heading': 0.0,
         'imu_rate': 1200.0, 'baro_rate': 500.0,
@@ -420,6 +420,10 @@ class SimGUI:
                          self.DEFAULTS['wind_speed'], 0)
         self._make_entry(grp, "From (°):", 'wind_dir',
                          self.DEFAULTS['wind_dir'], 1)
+        # Dryden turbulence intensity, as the 20 ft reference wind.
+        # 0 = smooth; ~7.7 light, ~15.4 moderate, ~23.2 severe.
+        self._make_entry(grp, "Gust W20 (m/s):", 'gust_w20',
+                         self.DEFAULTS['gust_w20'], 2)
 
         # --- Disturbance ---
         grp = ttk.LabelFrame(parent, text="Disturbances", padding=5)
@@ -571,6 +575,7 @@ class SimGUI:
             servo_rate_limit=self._get_float('servo_rate', 500.0),
             wind_speed=self._get_float('wind_speed', 0.0),
             wind_direction_deg=self._get_float('wind_dir', 0.0),
+            gust_w20_mps=self._get_float('gust_w20', 0.0),
         )
 
     def _load_rocket(self):

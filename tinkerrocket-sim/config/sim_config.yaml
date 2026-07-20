@@ -1,15 +1,33 @@
 # TinkerRocket Simulation Configuration
-# Parameters not defined in the .ork file (fin tabs, sensors, control, inertia)
+#
+# SCOPE: this file is read by rocket.definition._apply_yaml_overrides, which
+# consumes exactly the three sections below (fin_tabs, mass_overrides,
+# aerodynamics) and applies them to a RocketDefinition. Its only caller is
+# scripts/run_passive_sim.py --config. Nothing else in the repo reads it.
+#
+# In particular the closed-loop sim does NOT read this file. Controller gains,
+# actuator limits, sensor models and simulation timing all come from SimConfig
+# (src/tinkerrocket_sim/simulation/closed_loop_sim.py) — see the reference
+# block at the bottom for where each of those actually lives.
 
 # Fin tab aerodynamic model (from CFD analysis)
 fin_tabs:
+  # STALE: this is the retired 57.4 mm design and the sign is POSITIVE. The
+  # current 67 mm CFD value is 5.34e-3, and the firmware roll controller needs
+  # it NEGATIVE in the sim body frame to be stabilizing — see
+  # simulation/scenarios.py:build_rollypolly_iii, which is the source of truth
+  # for the flown vehicle. Left as-is because changing it would change
+  # run_passive_sim.py --config results.
   Kt_ref: 4.20e-3         # N-m/deg at V_ref, per tab
   V_ref: 95.0             # m/s reference velocity
   n_tabs: 4               # number of fin tabs (all deflect identically)
   deflection_min: -20.0   # deg
   deflection_max: 20.0    # deg
 
-# Mass & inertia overrides (from CFD report component breakdown)
+# Mass & inertia overrides (from CFD report component breakdown).
+# .ork-derived. The measured RollyPolly III values used by the canonical
+# scenarios are in simulation/scenarios.py (I_roll 2.0e-3, I_transverse 0.10)
+# and differ from these by ~2.4x and ~5x.
 mass_overrides:
   I_roll_launch: 8.3e-4       # kg-m^2 (at launch, full propellant)
   I_roll_burnout: 8.237e-4    # kg-m^2 (at burnout)
@@ -18,66 +36,60 @@ mass_overrides:
 
 # Aerodynamic overrides
 aerodynamics:
+  # Reaches the RocketPy passive path only. The 6-DOF engine computes Cd from
+  # the Barrowman component buildup (physics/drag.compute_Cd) and ignores this.
   Cd: 0.5    # drag coefficient
 
-# PID roll controller
-control:
-  pid:
-    kp: 0.10
-    ki: 0.0
-    kd: 0.0
-    setpoint_dps: 0.0      # target roll rate (deg/s)
-    min_cmd_deg: -20.0
-    max_cmd_deg: 20.0
-  gain_schedule:
-    enabled: true
-    v_ref: 95.0            # m/s
-    v_min: 30.0            # m/s (floor)
-    max_scale: 3.0         # cap on gain multiplier
-  actuator:
-    servo_rate_hz: 50      # servo PWM update rate
-    rate_limit_dps: 500.0  # servo slew rate (deg/s)
 
-# Sensor specifications (matching ISM6HG256, BMP585, MMC5983MA, GNSS)
-sensors:
-  imu:
-    update_rate_hz: 1200
-    accel_noise_sigma: 0.05       # m/s^2
-    accel_bias_sigma: 0.01        # m/s^2
-    accel_bias_tau: 100.0         # s (Markov correlation time)
-    gyro_noise_sigma: 0.00175     # rad/s
-    gyro_bias_sigma: 0.00025      # rad/s
-    gyro_bias_tau: 50.0           # s
-    accel_low_range: 16.0         # g (±16g)
-    accel_high_range: 256.0       # g (±256g)
-    gyro_range: 4000.0            # deg/s
-    accel_low_lsb: 0.00488        # m/s^2 per LSB
-    accel_high_lsb: 0.0781        # m/s^2 per LSB
-    gyro_lsb: 0.122               # deg/s per LSB
-    mounting_rotation_z_deg: -45.0  # sensor frame rotation
-  barometer:
-    update_rate_hz: 500
-    pressure_noise_sigma: 5.0     # Pa
-    temperature_noise_sigma: 0.1  # K
-  magnetometer:
-    update_rate_hz: 1000
-    noise_sigma: 0.5              # uT per axis
-    mounting_rotation_z_deg: 180.0
-    # Earth field at ~38N (approximate)
-    earth_field_x_uT: 22.0       # North
-    earth_field_y_uT: 5.0        # East
-    earth_field_z_uT: 42.0       # Down
-  gnss:
-    update_rate_hz: 25
-    pos_noise_ne_m: 3.0           # horizontal position sigma
-    pos_noise_d_m: 6.0            # vertical position sigma
-    vel_noise_ne_mps: 0.5         # horizontal velocity sigma
-    vel_noise_d_mps: 1.0          # vertical velocity sigma
-
-# Simulation settings
-simulation:
-  physics_dt: 1.0e-4       # s (10 kHz)
-  control_dt: 8.333e-4     # s (1200 Hz, matches IMU)
-  duration: 30.0            # s total simulation time
-  launch_rail_length: 1.0   # m
-  launch_angle_deg: 85.0    # from horizontal (90 = vertical)
+# ============================================================================
+# NOT CONFIGURATION — hardware and tuning reference only.
+#
+# `control:`, `sensors:` and `simulation:` sections used to appear below as
+# real-looking YAML keys. Nothing has ever read any of them, and several were
+# actively misleading: control.pid.kp: 0.10 contradicted the flight-proven
+# tune (kp 0.02), sensors.imu.gyro_range: 4000 contradicted the deliberate
+# 100 dps clip in the sensor-degradation scenario, and simulation.physics_dt:
+# 1.0e-4 contradicted the 1e-3 every scenario actually runs at. Reading any of
+# them as live config would have silently broken those.
+#
+# The values are kept here as commented reference because the hardware specs
+# exist nowhere else in the repo. Where each concern is actually configured:
+#
+#   roll/guidance gains, actuator limits, sim timing, sensor rates
+#       -> SimConfig, simulation/closed_loop_sim.py
+#   the flight-proven roll tune shipped to firmware config.h
+#       -> scenarios.FLOWN_ROLL_GAINS, simulation/scenarios.py
+#   sensor noise and bias parameters
+#       -> the constructor defaults in sensors/*.py
+#
+# --- PID roll controller (superseded by SimConfig + FLOWN_ROLL_GAINS) -------
+#   pid:        kp 0.10, ki 0.0, kd 0.0, setpoint_dps 0.0
+#               min_cmd_deg -20.0, max_cmd_deg 20.0
+#   gain_sched: enabled true, v_ref 95.0, v_min 30.0, max_scale 3.0
+#   actuator:   servo_rate_hz 50, rate_limit_dps 500.0
+#               (the measured PTK 7308 slew is 923 deg/s — SimConfig default)
+#
+# --- Sensor hardware specs (ISM6HG256, BMP585, MMC5983MA, GNSS) ------------
+#   imu:  update_rate_hz 1200
+#         accel_noise_sigma 0.05 m/s^2, accel_bias_sigma 0.01, tau 100 s
+#         gyro_noise_sigma 0.00175 rad/s, gyro_bias_sigma 0.00025, tau 50 s
+#         accel_low_range 16 g, accel_high_range 256 g, gyro_range 4000 dps
+#         accel_low_lsb 0.00488 m/s^2, accel_high_lsb 0.0781, gyro_lsb 0.122
+#         mounting_rotation_z_deg -45.0
+#         NOTE the LSB values imply a quantization stage IMUModel does not
+#         have, and SimConfig.imu_mounting_rotation_deg is a FAULT-INJECTION
+#         knob (a misalignment the firmware constants do NOT undo), not a
+#         declaration of how the board is mounted — they are not the same
+#         thing, which is why -45.0 was never wired to it.
+#   baro: update_rate_hz 500, pressure_noise_sigma 5.0 Pa,
+#         temperature_noise_sigma 0.1 K
+#   mag:  update_rate_hz 1000, noise_sigma 0.5 uT, mounting_rotation_z_deg 180
+#         earth field at ~38N: x 22.0, y 5.0, z 42.0 uT (N/E/D)
+#         NOTE MagModel has no mounting-rotation parameter at all.
+#   gnss: update_rate_hz 25, pos_noise_ne_m 3.0, pos_noise_d_m 6.0,
+#         vel_noise_ne_mps 0.5, vel_noise_d_mps 1.0
+#
+# --- Simulation settings (superseded by SimConfig) -------------------------
+#   physics_dt 1.0e-4, control_dt 8.333e-4, duration 30.0,
+#   launch_rail_length 1.0 m, launch_angle_deg 85.0
+# ============================================================================
