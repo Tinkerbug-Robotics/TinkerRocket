@@ -1542,15 +1542,42 @@ struct StatusFlagsView: View {
                     label: isBaseStation ? "Rocket Log" : "Logging",
                     active: telemetry.rocketLoggingActive
                 )
+                // Pre-#390 layout, restored by phone-test feedback: the BS
+                // log badge + countdown live HERE with the other recording
+                // state, not only on the detail screen — during a flight
+                // the operator watches this card, and an imminent BS log
+                // close is exactly what they need to catch.
+                if isBaseStation {
+                    StatusBadge(
+                        label: "Base Stn Log",
+                        active: telemetry.bs_logging_active
+                    )
+                }
             }
 
-            // The BS log badge + silence-close countdown moved to
-            // BaseStationDetailView (#390) — they describe the base
-            // station, not the rocket this section is about.
-            if !isBaseStation, !telemetry.active_file.isEmpty {
+            if !telemetry.active_file.isEmpty {
                 Text("File: \(telemetry.active_file)")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+
+            // BS silence-close countdown.  Only rendered when the base
+            // station reports a remaining-seconds value, which the BS only
+            // sends while bs_logging_active=true (see TR_BLE_To_APP.cpp).
+            // Color tracks urgency: > 60 s green, 11..60 s orange, ≤ 10 s
+            // red so the operator can spot an imminent close at a glance.
+            if isBaseStation,
+               telemetry.bs_logging_active,
+               let remaining = telemetry.bs_log_silence_remaining_s {
+                let secs = Int(remaining)
+                let color: Color = secs > 60 ? .green : (secs > 10 ? .orange : .red)
+                HStack(spacing: 6) {
+                    Image(systemName: "timer")
+                        .foregroundColor(color)
+                    Text("Auto-close in \(formatElapsed(seconds: secs))")
+                        .font(.caption)
+                        .foregroundColor(color)
+                }
             }
         }
         .padding()
