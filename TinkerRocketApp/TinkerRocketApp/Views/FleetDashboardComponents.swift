@@ -197,26 +197,16 @@ struct BaseStationStripView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(bs.displayName)
                     .font(.subheadline.weight(.semibold))
-                HStack(spacing: 8) {
-                    if bs.focusRocketID != nil {
-                        Label(focusName, systemImage: "scope")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    if bs.telemetry.bs_logging_active {
-                        Label("Logging", systemImage: "record.circle")
-                            .font(.caption2)
-                            .foregroundColor(.red)
-                    }
+                // Just the followed rocket — battery lives in the Battery
+                // card's "Base Stn" row and logging state on the Status
+                // card (phone-tested: the strip is a label, not a control).
+                if bs.focusRocketID != nil {
+                    Label(focusName, systemImage: "scope")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
             Spacer()
-            // No battery % here — phone-tested as ambiguous.  BS battery
-            // lives in the Battery card's "Base Stn" row (with the rocket's)
-            // and in BaseStationDetailView.
-            Image(systemName: "chevron.right")
-                .font(.caption2)
-                .foregroundColor(.secondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

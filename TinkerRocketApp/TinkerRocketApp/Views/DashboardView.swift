@@ -404,16 +404,15 @@ struct ConnectedFleetView: View {
         UnitsBarView(fleet: fleet, subjects: subjects)
 
         if let bs = foregroundBS {
-            NavigationLink(destination: BaseStationDetailView(bs: bs,
-                                                              fleet: fleet,
-                                                              activeSheet: $activeSheet)) {
-                BaseStationStripView(bs: bs)
-            }
-            .buttonStyle(.plain)
-            // Phone GPS drives the direction-to-rocket arrow — only
-            // useful while a base station is relaying positions.
-            .onAppear { locationManager.startUpdates() }
-            .onDisappear { locationManager.stopUpdates() }
+            // Passive display, deliberately not a navigation entry: the
+            // operator's model is "select the device you want to act on" —
+            // the strip only says which rocket this BS follows.  BS tools
+            // live in the toolbar (settings/logs) and the Controls card.
+            BaseStationStripView(bs: bs)
+                // Phone GPS drives the direction-to-rocket arrow — only
+                // useful while a base station is relaying positions.
+                .onAppear { locationManager.startUpdates() }
+                .onDisappear { locationManager.stopUpdates() }
         }
 
         ForEach(displayed) { subject in
@@ -2278,9 +2277,28 @@ struct TestingControlsView: View {
                 }
                 .disabled(!canStartGroundTest)
 
-                // #150's Frequency Scan button moved to
-                // BaseStationDetailView (#390) — it is a base-station tool,
-                // and this card now belongs to a rocket section.
+                // #150: Frequency Scan, back on this card (the #390 detail
+                // screen it briefly moved to was cut — the strip is a
+                // passive label now).  BS-only: the scan runs on the base
+                // station's radio; in hopping mode the firmware coordinates
+                // a hop pause and pushes the channel mask to the rocket.
+                if device.isBaseStation {
+                    Button {
+                        activeSheet = .frequencyScan(device)
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform.badge.magnifyingglass")
+                            Text("Frequency Scan")
+                        }
+                        .font(.system(.body, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(.white)
+                        .background(device.isConnected ? Color.purple : Color.purple.opacity(0.4))
+                        .cornerRadius(10)
+                    }
+                    .disabled(!device.isConnected)
+                }
             }
         }
         .padding()
