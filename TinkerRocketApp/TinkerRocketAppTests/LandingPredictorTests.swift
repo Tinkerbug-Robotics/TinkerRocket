@@ -123,7 +123,8 @@ final class LandingPredictorTests: XCTestCase {
             TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 0, timeS: 100),
         ]
         let u = landingUncertainty(track: track, wind: wind)
-        XCTAssertEqual(u, 0.2 * 5.14444 * 100, accuracy: 0.1)
+        XCTAssertEqual(u, snapshotPositionErrorMeters + 0.2 * 5.14444 * 100,
+                       accuracy: 0.1)
     }
 
     func testNoWindDataChargesAssumedWindBound() {
@@ -134,7 +135,45 @@ final class LandingPredictorTests: XCTestCase {
             TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 0, timeS: 100),
         ]
         let u = landingUncertainty(track: track, wind: nil)
-        XCTAssertEqual(u, 200.0, accuracy: 1e-9)
+        XCTAssertEqual(u, snapshotPositionErrorMeters + 200.0, accuracy: 1e-9)
+    }
+
+    func testUncertaintyFloorsAtGnssErrorNotZero() {
+        // A prediction computed essentially at the ground has no remaining
+        // descent, so the wind term vanishes — but the rocket's own fix is
+        // still only good to GNSS accuracy.  The circle must converge on
+        // that floor rather than collapsing to a false 0 m.
+        let atGround = [
+            TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 0, timeS: 0),
+            TrackPoint(lat: launchLat, lon: launchLon, altAglFt: 0, timeS: 0),
+        ]
+        XCTAssertEqual(landingUncertainty(track: atGround, wind: sampleWind()),
+                       snapshotPositionErrorMeters, accuracy: 1e-9)
+        XCTAssertEqual(landingUncertainty(track: atGround, wind: nil),
+                       snapshotPositionErrorMeters, accuracy: 1e-9)
+        // Degenerate/empty tracks floor too — never 0.
+        XCTAssertEqual(landingUncertainty(track: [], wind: sampleWind()),
+                       snapshotPositionErrorMeters, accuracy: 1e-9)
+    }
+
+    func testUncertaintyShrinksMonotonicallyTowardTheFloor() {
+        // Re-predicting from progressively lower altitudes must narrow the
+        // circle — the "shrinks as packets arrive" property — and never
+        // dip below the floor.
+        var profile = RocketProfile.makeDefault(name: "T")
+        profile.drogueRateFps = 60
+        let radii = [3000.0, 2000.0, 1000.0, 300.0, 50.0].map { alt in
+            landingUncertainty(
+                track: simulateDescentForLanding(
+                    startLat: launchLat, startLon: launchLon,
+                    currentAltAglFt: alt, observedVerticalRateMps: -15,
+                    profile: profile, wind: sampleWind()),
+                wind: sampleWind())
+        }
+        for (hi, lo) in zip(radii, radii.dropFirst()) {
+            XCTAssertGreaterThan(hi, lo)
+        }
+        XCTAssertGreaterThan(radii.last!, snapshotPositionErrorMeters)
     }
 
     func testUncertaintyGrowsWithTimeAloft() {

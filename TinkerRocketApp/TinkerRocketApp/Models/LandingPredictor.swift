@@ -59,10 +59,17 @@ struct LandingPrediction: Equatable {
     /// stops.
     let sampleAt: Date
     /// Uncertainty radius (m) of `landing`, FIXED at compute time (#191
-    /// item 2).  The error budget is set by the snapshot altitude — how
-    /// much modeled descent remains — so it shrinks as re-predictions run
-    /// closer to the ground, and it does NOT grow with staleness once
-    /// latched: an old prediction is exactly as wrong as when it was made.
+    /// item 2) — the set of places the rocket could still come down.
+    ///
+    /// The budget is set by how much modeled descent remains, so it is
+    /// widest just after burnout and shrinks as re-predictions run closer
+    /// to the ground, bottoming out at `snapshotPositionErrorMeters` (the
+    /// fix under the rocket is the last thing left to be unsure about).
+    ///
+    /// It does NOT grow with staleness once latched: losing packets does
+    /// not widen the rocket's options, it only ages our knowledge of them.
+    /// The reachable set from the last known state is what it was — the
+    /// map's staleness badge, not the radius, carries "how old is this".
     let uncertaintyMeters: Double
 
     static func == (lhs: LandingPrediction, rhs: LandingPrediction) -> Bool {
@@ -208,9 +215,10 @@ final class LandingPredictor: ObservableObject {
                 profile: profile, dragK: k, wind: windProfile)
             track = cast.track
             source = .ekf
-            // Wind term over the DESCENT segment only, plus the drag-model
-            // spread (issue spec: k ± 50%) — both fixed at compute time,
-            // consistent with the item-2 model.
+            // GNSS floor + wind term over the DESCENT segment only (both
+            // inside landingUncertainty), plus the drag-model spread
+            // (issue spec: k ± 50%) — all fixed at compute time, per the
+            // item-2 model.
             uncertainty = landingUncertainty(track: cast.descent, wind: windProfile)
                         + ascentDragSpreadMeters(
                               startLat: snapshot.latitude, startLon: snapshot.longitude,
@@ -341,23 +349,48 @@ private let windUncertaintyFraction = 0.2
 /// is error — bound it at light-breeze scale rather than claiming 0.
 private let assumedWindWhenUnknownMps = 2.0
 
-/// Uncertainty radius for a descent prediction — fixed at compute time.
+/// Horizontal position error of the snapshot every cast starts from — the
+/// FLOOR the radius converges to, never subtracted away by a short descent.
 ///
-/// Descent branch only.  With a wind profile: `windUncertaintyFraction` of
-/// the total drift the cast applied (mean wind speed sampled at the track's
-/// altitudes × descent duration).  Without one: the whole drift is
-/// unmodeled, so charge `assumedWindWhenUnknownMps` across the descent
-/// instead.  Either way the radius scales with REMAINING descent time, so
-/// it shrinks as predictions re-run closer to the ground.  The ascent
-/// drag-spread term arrives with #191 item 1.
+/// The circle answers "where could the rocket land"; as the remaining
+/// descent (and therefore its wind drift) goes to zero, that set collapses
+/// onto the rocket's own reported position — which is itself only known to
+/// GNSS accuracy.  Without this term a prediction computed just above the
+/// ground draws a ~0 m circle, claiming meter-perfect knowledge the fix
+/// does not have.
+///
+/// Constant rather than live: horizontal accuracy is not on the telemetry
+/// wire (the frame carries `num_sats` but no hAcc/pDOP), so this is the
+/// typical 3D-fix figure for this GNSS rather than the per-packet value.
+/// If hAcc ever joins the frame, read it here instead of this constant.
+let snapshotPositionErrorMeters = 3.0
+
+/// Uncertainty radius for a prediction — fixed at compute time.
+///
+/// Two terms, summed:
+///   1. `snapshotPositionErrorMeters` — the GNSS floor, always present.
+///   2. Wind drift over the REMAINING descent.  With a wind profile:
+///      `windUncertaintyFraction` of the total drift the cast applied (mean
+///      wind speed sampled at the track's altitudes × descent duration).
+///      Without one: the whole drift is unmodeled, so charge
+///      `assumedWindWhenUnknownMps` across the descent instead.
+///
+/// Term 2 scales with remaining descent time, so the radius shrinks as
+/// predictions re-run closer to the ground and converges on term 1 at
+/// touchdown.  The ascent branch adds `ascentDragSpreadMeters` on top,
+/// which is why the circle is widest just after burnout.
 func landingUncertainty(track: [TrackPoint], wind: WindProfile?) -> Double {
     guard track.count >= 2,
-          let first = track.first, let last = track.last else { return 0 }
+          let first = track.first, let last = track.last else {
+        return snapshotPositionErrorMeters
+    }
     let descentS = max(0, last.timeS - first.timeS)
-    guard let wind = wind else { return assumedWindWhenUnknownMps * descentS }
+    guard let wind = wind else {
+        return snapshotPositionErrorMeters + assumedWindWhenUnknownMps * descentS
+    }
     let speeds = track.map { ktsToMps(wind.interpolate(altAglFt: $0.altAglFt).speedKts) }
     let meanMps = speeds.reduce(0, +) / Double(speeds.count)
-    return windUncertaintyFraction * meanMps * descentS
+    return snapshotPositionErrorMeters + windUncertaintyFraction * meanMps * descentS
 }
 
 // MARK: - Ascent ballistic (#191 item 1)
