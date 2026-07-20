@@ -141,6 +141,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var imuOrientationName: String = ""
     @Published var imuOrientationMode: IMUOrientationMode = .unknown
 
+    /// Live guidance-target echo (#435): FC-authoritative state of the
+    /// station-keep aim point ("guid_target" frames relayed by the OC).
+    /// nil until the first frame — which also means "pre-#435 firmware,
+    /// echo unsupported" (the OC only emits it for format_version >= 5
+    /// FCs). The Drift-Cast send button gates success on this; nothing
+    /// else should infer target state from a send having "gone through".
+    @Published var guidanceTargetEcho: GuidanceTargetEcho?
+
     /// Display name: unitName if set, otherwise connectedDeviceName
     var displayName: String {
         unitName.isEmpty ? connectedDeviceName : unitName
@@ -292,6 +300,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // republishes IDLE on reconnect anyway.
         magCalStatus = nil
         sensorCalStatus = nil
+        // #435: the guidance-target echo is per-connection live state; the
+        // OC re-pushes it in the connect-time config readback, so a stale
+        // copy must not bridge sessions (it could "confirm" a send made
+        // over a new connection to a rebooted FC).
+        guidanceTargetEcho = nil
         // Power state is unknown again until the next session's first frame
         // (#377). Reconnects build a new BLEDevice anyway; this covers the
         // state-restoration path that reuses one.
@@ -1070,12 +1083,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendCommand(23)
     }
 
-    /// #376/#435: cmd 28 is NOT handled by any firmware — the OC dispatch
-    /// doesn't include it and the BS doesn't relay it, so this vanishes
-    /// silently. The Drift-Cast "Send to Unit" button that called this is
-    /// disabled until #435 implements the handler end-to-end. Do not wire
-    /// this to UI again without gating success on a firmware readback echo.
+    /// #435: Drift-Cast guidance aim point, BLE cmd 28 — handled end-to-end
+    /// since #435. The OC queues the 20-byte GuidancePointData to the FC,
+    /// which converts geodetic → pad-relative ENU and (when the state / law /
+    /// GNSS-ref / 100 m-radius gates all pass) retargets station-keep.
+    /// Sending proves NOTHING by itself: success is gated on the
+    /// "guid_target" readback echo (`guidanceTargetEcho`) — the FC bumps its
+    /// seq on every processed upload, accept or reject. DriftCastSendButton
+    /// owns the confirm/timeout state machine; keep any new caller behind
+    /// the same echo gate.
     func sendGuidancePoint(lat: Double, lon: Double, altitudeM: Float) {
+        sendRawCommand(28, payload: Self.guidancePointPayload(
+            lat: lat, lon: lon, altitudeM: altitudeM))
+    }
+
+    /// Wire payload for cmd 28: {lat f64, lon f64, alt f32} little-endian,
+    /// 20 bytes — byte-for-byte the firmware's GuidancePointData. Shared by
+    /// the direct and BS-relay paths.
+    static func guidancePointPayload(lat: Double, lon: Double, altitudeM: Float) -> Data {
         var payload = Data()
         var latVal = lat
         var lonVal = lon
@@ -1083,7 +1108,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         payload.append(Data(bytes: &latVal, count: 8))
         payload.append(Data(bytes: &lonVal, count: 8))
         payload.append(Data(bytes: &altVal, count: 4))
-        sendRawCommand(28, payload: payload)
+        return payload
+    }
+
+    /// #435 BS path: the same cmd-28 payload wrapped in relay cmd 50 for a
+    /// base-station link. Fire-and-forget: BS uplink has no rocket ACK
+    /// (#285) and the guid_target echo only rides the direct OC BLE link,
+    /// so a relayed point can NEVER be confirmed — callers must show a
+    /// permanent "sent, unconfirmed" state, never success.
+    func sendGuidancePointViaRelay(rid: UInt8, lat: Double, lon: Double, altitudeM: Float) {
+        sendRelayCommand(targetRocketID: rid, innerCommand: 28,
+                         innerPayload: Self.guidancePointPayload(
+                             lat: lat, lon: lon, altitudeM: altitudeM))
     }
 
     func requestConfig() {
@@ -1130,11 +1166,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     /// Relay a command to a specific rocket via this base station.
-    /// Command 50: [target_rid:1][inner_cmd:1][inner_payload:0..18]
-    /// The base station unpacks this and queues a LoRa uplink.
+    /// Command 50: [target_rid:1][inner_cmd:1][inner_payload:0..33]
+    /// The base station unpacks this and queues a LoRa uplink. The inner
+    /// cap is bs_uplink_queue::kMaxPayload = 33 (#435 widened the stale 18
+    /// so the 20-byte cmd-28 guidance point fits; the OC's uplink RX buffer
+    /// further caps delivered payloads at 26 — keep inner payloads ≤26).
     func sendRelayCommand(targetRocketID: UInt8, innerCommand: UInt8, innerPayload: Data = Data()) {
         var payload = Data([targetRocketID, innerCommand])
-        payload.append(innerPayload.prefix(18))
+        payload.append(innerPayload.prefix(33))
         sendRawCommand(50, payload: payload)
     }
 
@@ -1682,6 +1721,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 rocketConfig = cfg
             }
             print("[CFG] IMU orientation: \(imuOrientationName) (\(imuOrientationMode.label))")
+            return
+        }
+
+        // Guidance-target echo: "type":"guid_target" (#435) — FC-authoritative
+        // aim-point state (OutStatusQueryData v5 tail), relayed by the OC on
+        // connect, on every processed cmd 28, and on any cmd-65 apply that
+        // changes it. Live state, not part of rocketConfig: the Drift-Cast
+        // send button gates its success on this echo, and the "Unit target"
+        // row tracks it (e.g. a connect-time profile push visibly wiping a
+        // previously sent Drift-Cast point back to "none / overhead").
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let echo = GuidanceTargetEcho(json: dict) {
+            guidanceTargetEcho = echo
+            print("[CFG] Guidance target: seq=\(echo.seq) st=\(echo.status) rc=\(echo.lastRc) " +
+                  String(format: "lat=%.6f lon=%.6f alt=%dm", echo.lat, echo.lon, echo.altM))
             return
         }
 

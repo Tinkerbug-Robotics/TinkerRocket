@@ -20,6 +20,7 @@
 #include <TR_GuidancePN.h>
 #include <TR_ControlMixer.h>
 #include <RocketComputerTypes.h>
+#include <GuidancePointGate.h>    // #435: pure cmd-28 acceptance gate (host-tested)
 #include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
 #include <TR_OTA_Backend_esp.h>
 #include <esp_system.h>           // esp_restart after a verified relayed OTA
@@ -390,6 +391,24 @@ static float    pn_target_alt     = config::PN_TARGET_ALT_M;
 static float    pn_kp_pos         = config::PN_KP_POS_PER_S2;
 static float    pn_kd_vel         = config::PN_KD_VEL_PER_S;
 static uint8_t  pn_guidance_law   = config::GUIDANCE_LAW_DEFAULT;  // GUIDE_LAW_*
+// Drift-Cast geodetic aim point (#435, BLE cmd 28).  RAM ONLY — deliberately
+// never persisted to NVS: a stale wind-compensated target self-applying on a
+// later boot is the hazard; Drift-Cast targets are per-flight ephemeral (the
+// NVS gte/gtn/gta keys stay owned exclusively by cmd 65).  The echo state
+// lives directly in out_status_query_data.tgt_* (single writer: loop_fc), so
+// every OUT_STATUS_QUERY poll carries it for free.
+static bool   guid_point_valid   = false;
+static double guid_point_lat_deg = 0.0;
+static double guid_point_lon_deg = 0.0;
+static float  guid_point_alt_m   = 0.0f;
+// Shadow of the cmd-65/NVS-OWNED aim point.  pn_target_e/n temporarily
+// diverge from these while a Drift-Cast (cmd-28) point is active; every
+// path that drops the cmd-28 point outside a flight (cmd-65 reject-keep-
+// previous, sim start/stop reset) reverts pn_target_e/n to these — NEVER
+// leaving the wind-compensated conversion behind where the unconditional
+// cmd-65 NVS persist (or a sim run) could adopt it as a profile point.
+static float  pn_profile_target_e = config::PN_TARGET_E_M;
+static float  pn_profile_target_n = config::PN_TARGET_N_M;
 // Last commanded pre-mix fin deflections from guidance, carried from the
 // guidance compute block to the ~10 Hz GuidanceTelemData emit. Only meaningful
 // while guidance_active (the only condition under which they are logged).
@@ -1601,6 +1620,23 @@ static void applyGuidanceConfig()
     guidance.setHorizontalTarget(pn_target_e, pn_target_n);   // inert in MODE_PN
 }
 
+// #435: convert a WGS84 geodetic point to pad-relative ENU.  The math is the
+// pure host-tested guidanceLlaToEnu() in GuidancePointGate.h (pinned against
+// known geodesy values — it must agree with the EKF position path in
+// loop_fc's imu_pos block or the flown miss distance silently differs from
+// the commanded one); this wrapper only binds the launch-site reference
+// statics.  Inputs in degrees; ref_* are radians.  Returns false (and leaves
+// e/n untouched) when no launch-site reference exists yet.
+static bool guidanceLlaToEnu(double lat_deg, double lon_deg, float& e, float& n)
+{
+    if (!have_ref_pos)
+    {
+        return false;
+    }
+    guidanceLlaToEnu(lat_deg, lon_deg, ref_lat_rad, ref_lon_rad, ref_alt_m, e, n);
+    return true;
+}
+
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
 // the live PID gains from servo_control (these can be NVS- or BLE-overridden),
 // the runtime override globals, the config:: defaults for the compile-time-only
@@ -1676,6 +1712,13 @@ static void buildFlightSettings(FlightSettingsData& s)
     for (int i = 0; i < 4; ++i) {
         s.b2r_q[i] = (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
     }
+
+    // Flown guidance target (v6+, #435).  Emitted at launch+0/100/200 ms —
+    // AFTER enterInflight()'s re-conversion — so a cmd-28 point lands here
+    // with the flown E/N values.  src records where the point came from.
+    s.guid_tgt_e_m = pn_target_e;
+    s.guid_tgt_n_m = pn_target_n;
+    s.guid_tgt_src = guidanceFlownTargetSrc(guid_point_valid, pn_target_mode);
 }
 
 static void sendFlightSettings()
@@ -2551,6 +2594,10 @@ static void setup_fc()
     pn_target_e       = prefs.getFloat("gte", config::PN_TARGET_E_M);
     pn_target_n       = prefs.getFloat("gtn", config::PN_TARGET_N_M);
     pn_target_alt     = prefs.getFloat("gta", config::PN_TARGET_ALT_M);
+    // The NVS record IS the profile-owned aim point — seed the shadows the
+    // cmd-65 reject path / sim reset revert to (see pn_profile_target_*).
+    pn_profile_target_e = pn_target_e;
+    pn_profile_target_n = pn_target_n;
     pn_kp_pos       = prefs.getFloat("gkp", config::PN_KP_POS_PER_S2);
     pn_kd_vel       = prefs.getFloat("gkd", config::PN_KD_VEL_PER_S);
     pn_guidance_law = prefs.getUChar("glw", config::GUIDANCE_LAW_DEFAULT);
@@ -2805,7 +2852,16 @@ static void setup_fc()
     // v3: adds board→rocket orientation (b2r_* fields, filled by
     // applyBoardToRocketOrientation above and on any runtime change).
     // v4: adds per-chip iis2mdc_rot_z_cdeg (#204).
-    out_status_query_data.format_version = 4;
+    // v5: adds the guidance-target echo (#435).
+    out_status_query_data.format_version = 5;
+    // Guidance-target echo boot state (#435): no cmd 28 processed yet; the
+    // current target is whatever cmd 65 left in NVS (restored above).
+    out_status_query_data.tgt_seq     = 0;
+    out_status_query_data.tgt_last_rc = GUID_RC_NONE;
+    out_status_query_data.tgt_status  = guidanceFlownTargetSrc(false, pn_target_mode);
+    out_status_query_data.tgt_lat_deg = 0.0f;
+    out_status_query_data.tgt_lon_deg = 0.0f;
+    out_status_query_data.tgt_alt_m   = 0;
 
     // NOTE: Do NOT drain the slave TX buffer here.  With the new
     // i2c_slave driver, reading when the slave has no TX data queued
@@ -3187,6 +3243,25 @@ static void resetFlightStateForSim(const char* edge)
     reboot_recovery = false;
     reboot_recovery_telem = false;
     clearFlightSnapshot();
+    // #435: a sim start/stop is the sim's equivalent of a reboot, and a real
+    // reboot drops the (RAM-only) Drift-Cast point.  The ref just discarded
+    // above is also the frame the point's receipt-time conversion used — the
+    // sim's synthetic GNSS rebuilds a DIFFERENT reference, so keeping the
+    // point would either fly a bogus E/N or hit the enterInflight fail-safe
+    // while the echo kept asserting GEO_ACTIVE.  Drop it, revert the target
+    // to the profile-owned point, and refresh the echo so the app SEES the
+    // drop (supersede bumps tgt_seq -> the OC's change-detect republishes).
+    if (guid_point_valid) {
+        guid_point_valid = false;
+        pn_target_e = pn_profile_target_e;
+        pn_target_n = pn_profile_target_n;
+        applyGuidanceConfig();   // re-runs the radius gate + setHorizontalTarget
+        ESP_LOGW(TAG, "[GUID PT] sim %s dropped the Drift-Cast point — "
+                      "target reverted to profile (%.1f,%.1f)",
+                 edge, (double)pn_target_e, (double)pn_target_n);
+    }
+    (void)guidanceTargetEchoSupersede(
+        out_status_query_data, guidanceFlownTargetSrc(false, pn_target_mode));
     ESP_LOGI(TAG, "[STATE] Sim %s -> READY", edge);
 }
 
@@ -3217,6 +3292,49 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
         ref_pos_frozen = true;
         ESP_LOGI(TAG, "[EKF] Ref pos frozen (launch): n=%lu",
                       (unsigned long)ref_pos_count);
+    }
+    // #435: re-convert the Drift-Cast geodetic aim point against the just-
+    // frozen reference — the receipt-time conversion used the then-current
+    // running pad average, which keeps drifting (normally centimetres) until
+    // the freeze.  Runs BEFORE the first sendFlightSettings emit below
+    // (launch+0/100/200 ms) so the logged FlightSettings carries the FLOWN
+    // E/N.  If have_ref_pos is false here (READY degraded launch), the
+    // receipt-time conversion could never have happened (NOREF gate) and
+    // resetFlightStateForSim() clears the point whenever it discards the
+    // reference — so guid_point_valid is false and the guard is consistent.
+    if (guid_point_valid && have_ref_pos) {
+        // Keep-vs-wipe policy is the pure host-tested guidanceLaunchReconvert()
+        // (GuidancePointGate.h) — same conversion + REJECT-never-clamp radius
+        // rule as the receipt gate.
+        const GuidanceLaunchTarget lt = guidanceLaunchReconvert(
+            guid_point_lat_deg, guid_point_lon_deg,
+            ref_lat_rad, ref_lon_rad, ref_alt_m,
+            config::GUIDANCE_MAX_AIM_RADIUS_M);
+        if (lt.point_kept) {
+            ESP_LOGI(TAG, "[GUID PT] launch re-convert: E=%.2f N=%.2f (was %.2f,%.2f)",
+                     (double)lt.e_m, (double)lt.n_m,
+                     (double)pn_target_e, (double)pn_target_n);
+            pn_target_e = lt.e_m;
+            pn_target_n = lt.n_m;
+        } else {
+            // Should be unreachable (accepted at receipt, pad average moves
+            // centimetres) — but a boundary point + drift could cross the
+            // gate.  Fail SAFE to overhead rather than fly an out-of-policy
+            // point; drop guid_point_valid so the settings snapshot records
+            // what actually flies, and refresh the echo so the app's Unit
+            // target row stops asserting a point that no longer flies (the
+            // OC only sees it after landing — the FC skips polls INFLIGHT —
+            // but the post-flight state must not lie).
+            ESP_LOGW(TAG, "[GUID PT] launch re-convert exceeds %.0f m — "
+                          "forcing (0,0) overhead",
+                     (double)config::GUIDANCE_MAX_AIM_RADIUS_M);
+            pn_target_e = 0.0f;
+            pn_target_n = 0.0f;
+            guid_point_valid = false;
+            (void)guidanceTargetEchoSupersede(out_status_query_data,
+                                              GUID_TGT_NONE);
+        }
+        guidance.setHorizontalTarget(pn_target_e, pn_target_n);
     }
     // #297: do NOT re-capture ground pressure here.  launch_flag
     // lags real liftoff, so bmp_latest_si is already a few m up and
@@ -5529,8 +5647,18 @@ static void loop_fc()
                             pn_target_e = g.target_e_m;
                             pn_target_n = g.target_n_m;
                         } else {
+                            // "Keep the previous point" means the previous
+                            // PROFILE point (the shadows) — NOT the live
+                            // pn_target_e/n, which may hold a Drift-Cast
+                            // (cmd-28) conversion that the unconditional NVS
+                            // persist below would otherwise adopt as a
+                            // profile point and self-apply on the next boot
+                            // (the exact hazard the cmd-28 RAM-only rule
+                            // exists to exclude).
+                            pn_target_e = pn_profile_target_e;
+                            pn_target_n = pn_profile_target_n;
                             ESP_LOGW(TAG, "[GUID CFG] aim point (%.1f,%.1f) r=%.1f m REJECTED "
-                                          "(limit %.0f m) — keeping (%.1f,%.1f)",
+                                          "(limit %.0f m) — keeping profile (%.1f,%.1f)",
                                           (double)g.target_e_m, (double)g.target_n_m, (double)r,
                                           (double)config::GUIDANCE_MAX_AIM_RADIUS_M,
                                           (double)pn_target_e, (double)pn_target_n);
@@ -5541,8 +5669,24 @@ static void loop_fc()
                         pn_target_e = 0.0f;
                         pn_target_n = 0.0f;
                     }
+                    // pn_target_e/n are now profile-owned again in every
+                    // branch — refresh the shadows in lockstep.
+                    pn_profile_target_e = pn_target_e;
+                    pn_profile_target_n = pn_target_n;
                     // Law first, aim point second — see applyGuidanceConfig().
                     applyGuidanceConfig();
+                    // #435: every applied cmd-65 guidance config supersedes a
+                    // Drift-Cast geodetic point (pn_target_e/n were just
+                    // overwritten above).  Refresh the echo so the app SEES
+                    // the wipe — e.g. the connect-time profile push asserting
+                    // OVERHEAD over a previously-sent Drift-Cast point.  Bump
+                    // tgt_seq ONLY when the echo content actually changed,
+                    // so a no-op connect-time push (no cmd-28 point in play)
+                    // doesn't churn the app's seq baseline.
+                    guid_point_valid = false;
+                    (void)guidanceTargetEchoSupersede(
+                        out_status_query_data,
+                        guidanceFlownTargetSrc(false, pn_target_mode));
                     ESP_LOGI(TAG, "[GUID CFG] en=%s law=%s N=%.1f maxA=%.0f a2f=%.1f maxFin=%.0f "
                                   "minV=%.0f mode=%u alt=%.0f kp=%.2f kd=%.2f aim=(%.1f,%.1f)",
                                   guidance_enabled ? "ON" : "OFF",
@@ -5581,6 +5725,80 @@ static void loop_fc()
                                   "If the FC is healthy this is an OUT-OF-DATE APP: guidance "
                                   "config was NOT applied and the previous config still flies.",
                                   (unsigned)cfg_len, (unsigned)sizeof(GuidanceConfigData));
+                }
+            }
+            else if (out_pending_command == GUIDANCE_POINT_PENDING)
+            {
+                // Drift-Cast guidance aim point (#435, BLE cmd 28): 20-byte
+                // geodetic GuidancePointData.  Accept/reject policy is the
+                // pure guidancePointRc() gate (host-tested, GuidancePointGate.h);
+                // the result rides back to the app in the OUT_STATUS_QUERY
+                // echo (tgt_* fields) every poll.  RAM only — never NVS.
+                delay_ms(1);
+                uint8_t cfg_payload[sizeof(GuidancePointData)];
+                size_t  cfg_len = 0;
+                if (readConfigFrame(GUIDANCE_POINT_MSG, sizeof(GuidancePointData),
+                                    cfg_payload, sizeof(cfg_payload), cfg_len)
+                    && cfg_len >= sizeof(GuidancePointData))
+                {
+                    GuidancePointData gp;
+                    memcpy(&gp, cfg_payload, sizeof(gp));
+                    // Convert at receipt (running pad average; re-converted at
+                    // the launch freeze in enterInflight()).  With no reference
+                    // the gate rejects NOREF before ever consulting r.
+                    float e = 0.0f, n = 0.0f;
+                    const bool converted = guidanceLlaToEnu(gp.lat_deg, gp.lon_deg, e, n);
+                    const float r = converted ? sqrtf(e * e + n * n) : 0.0f;
+                    const bool ready_or_prelaunch =
+                        (rocket_state == READY || rocket_state == PRELAUNCH);
+                    // State gate note: the FC skips I2C polls during INFLIGHT,
+                    // so a cmd 28 queued just before launch is delivered after
+                    // landing — LANDED (+ post_flight_lockout) refuses it here.
+                    const uint8_t rc = guidancePointRc(
+                        ready_or_prelaunch, post_flight_lockout, pn_guidance_law,
+                        have_ref_pos, gp.lat_deg, gp.lon_deg, gp.alt_m, r,
+                        config::GUIDANCE_MAX_AIM_RADIUS_M);
+                    // Echo transition + "apply iff ACCEPTED" are the pure
+                    // host-tested guidancePointEchoApply() (GuidancePointGate.h):
+                    // seq bumps on EVERY processed cmd 28, a reject leaves the
+                    // display fields (still-active previous target) unchanged,
+                    // and the flight target updates ONLY on its true return.
+                    if (guidancePointEchoApply(out_status_query_data, rc,
+                                               gp.lat_deg, gp.lon_deg, gp.alt_m))
+                    {
+                        guid_point_valid   = true;
+                        guid_point_lat_deg = gp.lat_deg;
+                        guid_point_lon_deg = gp.lon_deg;
+                        guid_point_alt_m   = gp.alt_m;
+                        // RAM only — deliberately NO prefs.put of gte/gtn/gta
+                        // (a stale wind-compensated target self-applying on the
+                        // next boot is the hazard).  pn_target_mode/pn_target_alt
+                        // untouched: alt is stored + echoed only.  The profile
+                        // shadows (pn_profile_target_*) are NOT touched either —
+                        // they keep the cmd-65/NVS-owned point for the revert
+                        // paths.
+                        pn_target_e = e;
+                        pn_target_n = n;
+                        // Law-first ordering + belt-and-braces radius gate both
+                        // re-run inside; idempotent.
+                        applyGuidanceConfig();
+                    }
+                    ESP_LOGI(TAG, "[GUID PT] RX lat=%.7f lon=%.7f alt=%.1f -> "
+                                  "E=%.2f N=%.2f r=%.2f (ref n=%lu frozen=%d) "
+                                  "rc=%u seq=%u",
+                             gp.lat_deg, gp.lon_deg, (double)gp.alt_m,
+                             (double)e, (double)n, (double)r,
+                             (unsigned long)ref_pos_count, (int)ref_pos_frozen,
+                             (unsigned)rc,
+                             (unsigned)out_status_query_data.tgt_seq);
+                }
+                else
+                {
+                    // Mirror the #534 skew diagnostic: echo the lengths so a
+                    // short frame is diagnosable from the log.
+                    ESP_LOGW(TAG, "[GUID PT] readConfigFrame FAILED — got %u bytes, "
+                                  "need %u. Guidance point NOT applied.",
+                                  (unsigned)cfg_len, (unsigned)sizeof(GuidancePointData));
                 }
             }
             else if (out_pending_command == FIN_CONFIG_PENDING)

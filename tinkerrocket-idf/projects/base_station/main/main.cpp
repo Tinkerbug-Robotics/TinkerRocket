@@ -4880,7 +4880,9 @@ static void loop_bs()
     else if (ble_cmd == BLE_BS_CMD_RELAY_TO_ROCKET)
     {
         // Relay command to a specific rocket via LoRa uplink
-        // Payload: [target_rid:1][inner_cmd:1][inner_payload:0..18]
+        // Payload: [target_rid:1][inner_cmd:1][inner_payload:0..33 (bs_uplink_queue::kMaxPayload)]
+        // (was documented as 0..18 — stale; the queue accepts 33, and #435's
+        // cmd-28 guidance point needs a 20-byte inner payload.)
         const uint8_t* payload = ble_app.getCommandPayload();
         const size_t plen = ble_app.getCommandPayloadLength();
         if (plen >= 2)

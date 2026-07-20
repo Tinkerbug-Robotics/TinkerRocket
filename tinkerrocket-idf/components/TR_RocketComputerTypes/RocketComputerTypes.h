@@ -758,6 +758,7 @@ typedef struct __attribute__((packed))
                                   //   2 = has HG bias
                                   //   3 = has board→rocket orientation
                                   //   4 = has IIS2MDC rotation
+                                  //   5 = has guidance-target echo (#435)
     int16_t  hg_bias_x_cmss;     // high-g bias X, centi-m/s² (0.01 m/s² units)
     int16_t  hg_bias_y_cmss;     // high-g bias Y, centi-m/s²
     int16_t  hg_bias_z_cmss;     // high-g bias Z, centi-m/s²
@@ -776,9 +777,23 @@ typedef struct __attribute__((packed))
     // from the MMC5983MA's (mmc_rot_z_cdeg).  Consumers must apply THIS to
     // IIS2MDC data — using mmc_rot_z_cdeg gives a 180° (or worse) heading error.
     int16_t  iis2mdc_rot_z_cdeg; // centi-deg
+
+    // Guidance-target echo (format_version >= 5, #435).  f32 degrees: ulp is
+    // ~0.4 m at mid-latitudes — fine for the app's send-verify, NOT for
+    // navigation (the FC keeps the f64 originals).  tgt_status describes the
+    // CURRENT target; tgt_last_rc the result of the LAST processed cmd 28.
+    // They are separate fields so a rejected upload does not erase the
+    // display of a still-active previous target.
+    float   tgt_lat_deg;   // WGS84 (0 when no cmd-28 geodetic point)
+    float   tgt_lon_deg;
+    int16_t tgt_alt_m;     // stored/echoed only — station-keep ignores altitude
+    uint8_t tgt_seq;       // ++ on EVERY processed cmd 28 (accept or reject)
+                           // and on any cmd-65 apply that changes the echo
+    uint8_t tgt_status;    // GUID_TGT_*
+    uint8_t tgt_last_rc;   // GUID_RC_*
 } OutStatusQueryData;
-static_assert(sizeof(OutStatusQueryData) == 28,
-              "OutStatusQueryData must be 28 bytes");
+static_assert(sizeof(OutStatusQueryData) == 41,
+              "OutStatusQueryData must be 41 bytes");
 
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
@@ -1896,6 +1911,13 @@ static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigDa
 // the 44100 Hz I2S link can carry (3840 ≈ 156 of 176 KB/s framed).
 static constexpr uint8_t IMU_RATE_CONFIG_PENDING = 0xF5;  // OC→FC: payload follows as IMU_RATE_CONFIG_MSG
 static constexpr uint8_t IMU_RATE_CONFIG_MSG     = 0xF6;  // 2-byte ImuRateConfigData
+// Drift-Cast guidance aim point (#435, BLE cmd 28): OC→FC two-phase like the
+// other config pairs.  Payload is byte-for-byte the app's 20-byte
+// {lat f64, lon f64, alt f32} LE frame (GuidancePointData).  0xF7-0xFD were
+// free — the contiguous config block ended at 0xF6; stay clear of 0xFE/0xFF
+// (LoRa-namespace sentinels, a separate code space, but don't tempt fate).
+static constexpr uint8_t GUIDANCE_POINT_PENDING  = 0xF7;  // OC→FC: payload follows as GUIDANCE_POINT_MSG
+static constexpr uint8_t GUIDANCE_POINT_MSG      = 0xF8;  // 20-byte GuidancePointData
 
 // #402: FC→OC over I2C, sent as a master WRITE (writes still work while the
 // slave TX ring is desynced by an aborted read).  On receipt the OC resets its
@@ -2035,6 +2057,20 @@ static constexpr uint8_t GUIDE_LAW_PN           = 0;  // proportional navigation
 static constexpr uint8_t GUIDE_LAW_STATION_KEEP = 1;  // overhead PD regulator (#335)
 static constexpr uint8_t GUIDE_LAW_MAX          = 1;  // highest defined law (validation bound)
 
+// Guidance-target echo codes (OutStatusQueryData v5 tgt_status / tgt_last_rc,
+// #435).  Shared FC/OC via this header; the app mirrors them as a Swift enum.
+static constexpr uint8_t GUID_TGT_NONE       = 0;  // no aim point (overhead / cleared)
+static constexpr uint8_t GUID_TGT_GEO_ACTIVE = 1;  // cmd-28 geodetic point active
+static constexpr uint8_t GUID_TGT_EN_ACTIVE  = 2;  // cmd-65 profile E/N point active
+// tgt_last_rc: result of the last processed cmd 28.
+static constexpr uint8_t GUID_RC_NONE       = 0;  // no cmd 28 processed since boot
+static constexpr uint8_t GUID_RC_ACCEPTED   = 1;
+static constexpr uint8_t GUID_RC_REJ_RADIUS = 2;  // converted point > GUIDANCE_MAX_AIM_RADIUS_M
+static constexpr uint8_t GUID_RC_REJ_STATE  = 3;  // not READY/PRELAUNCH, or post-flight lockout
+static constexpr uint8_t GUID_RC_REJ_LAW    = 4;  // law is PN — a point would be silently inert (#376)
+static constexpr uint8_t GUID_RC_REJ_NOREF  = 5;  // no GNSS launch-site reference yet
+static constexpr uint8_t GUID_RC_REJ_BADVAL = 6;  // non-finite / out-of-range lat/lon/alt
+
 // App-configurable guidance (PN and station-keep share this frame).
 // ENU metres are relative to the launch pad, matching the FC's imu_pos frame
 // (no conversion).
@@ -2075,6 +2111,19 @@ typedef struct __attribute__((packed))
                                 //   (mirrors TR_GuidancePN::Mode by value)
 } GuidanceConfigData;
 static_assert(sizeof(GuidanceConfigData) == 45, "GuidanceConfigData must be 45 bytes");
+
+// Drift-Cast guidance aim point (#435, BLE cmd 28).  Byte-for-byte the app
+// payload built by BLEDevice.sendGuidancePoint: {lat f64, lon f64, alt f32} LE.
+// The FC converts to pad-relative ENU at receipt (and re-converts when the
+// reference freezes at launch); it is held in RAM only — never NVS — so a
+// stale wind-compensated target can't self-apply on a later boot.
+typedef struct __attribute__((packed)) {
+    double lat_deg;   // WGS84
+    double lon_deg;
+    float  alt_m;     // profile apogee (m). Stored + echoed only — station-keep
+                      // does not consume a target altitude (see FC handler).
+} GuidancePointData;
+static_assert(sizeof(GuidancePointData) == 20, "GuidancePointData must be 20 bytes");
 
 // App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
 // driven by servo i:
@@ -2190,7 +2239,8 @@ struct __attribute__((packed)) FlightSettingsData
     //  free flags bit, bit 6.  Layout is byte-identical, so VERSION stays 5 —
     //  bumping it would force a sweep of the Data_Analysis parsers, which
     //  hardcode message lengths, for a bit that older readers already ignore.)
-    static constexpr uint8_t VERSION = 5;
+    // v6: appended the flown guidance target (guid_tgt_* tail, #435).
+    static constexpr uint8_t VERSION = 6;
 
     // flags bit positions
     static constexpr uint8_t F_USE_ANGLE_CONTROL = 0;  // cascaded angle vs rate-only
@@ -2267,8 +2317,23 @@ struct __attribute__((packed)) FlightSettingsData
 
     // IMU logging rate that actually flew (v5+): the ISM6HG256 ODR in Hz.
     uint16_t ism6_update_rate_hz;
+
+    // Flown guidance target (v6+, #435).  ENU metres relative to the pad —
+    // the frame guidance actually flies.  A cmd-28 geodetic point is snapped
+    // here AFTER the launch-time re-conversion against the frozen reference,
+    // so these are the FLOWN values (the receipt-time geodetic original lives
+    // in the OutStatusQueryData echo + the app's record; serial log lines
+    // don't persist).  guid_tgt_src = GUID_TGT_* (0 = overhead/none,
+    // 1 = cmd-28 geodetic point, 2 = cmd-65 profile E/N point).  Kept to
+    // E/N + src (9 B, sizeof 219) deliberately: a lat/lon+E/N tail would
+    // cross MAX_PAYLOAD (224, FlightSnapshotData-bound) and force an I2S
+    // frame-size ripple across FC+OC.
+    float    guid_tgt_e_m;
+    float    guid_tgt_n_m;
+    uint8_t  guid_tgt_src;
 };
-static_assert(sizeof(FlightSettingsData) == 210, "FlightSettingsData layout check");
+static_assert(sizeof(FlightSettingsData) == 219,
+              "FlightSettingsData layout check (v6: flown guidance target, #435)");
 
 // --- Log Buffer Stats Data (OC self-emitted, ~1 Hz while logging) -----------
 // Snapshot of the OC's ring-buffer health written into the flight log so the
@@ -2490,7 +2555,7 @@ static_assert(offsetof(NonSensorData, apogee_flags) == 43, "NonSensorData.apogee
 static_assert(offsetof(NonSensorData, sensor_health) == 44, "NonSensorData.sensor_health moved");
 static_assert(offsetof(NonSensorData, ekf_ticks) == 48, "NonSensorData.ekf_ticks moved");
 
-static_assert(sizeof(OutStatusQueryData) == 28, "OutStatusQueryData wire size");
+static_assert(sizeof(OutStatusQueryData) == 41, "OutStatusQueryData wire size");
 static_assert(offsetof(OutStatusQueryData, ism6_low_g_fs_g) == 0, "OutStatusQueryData.ism6_low_g_fs_g moved");
 static_assert(offsetof(OutStatusQueryData, ism6_high_g_fs_g) == 1, "OutStatusQueryData.ism6_high_g_fs_g moved");
 static_assert(offsetof(OutStatusQueryData, ism6_gyro_fs_dps) == 3, "OutStatusQueryData.ism6_gyro_fs_dps moved");
@@ -2504,6 +2569,13 @@ static_assert(offsetof(OutStatusQueryData, b2r_code) == 16, "OutStatusQueryData.
 static_assert(offsetof(OutStatusQueryData, b2r_mode) == 17, "OutStatusQueryData.b2r_mode moved");
 static_assert(offsetof(OutStatusQueryData, b2r_q) == 18, "OutStatusQueryData.b2r_q moved");
 static_assert(offsetof(OutStatusQueryData, iis2mdc_rot_z_cdeg) == 26, "OutStatusQueryData.iis2mdc_rot_z_cdeg moved");
+// v5 guidance-target echo tail (#435).
+static_assert(offsetof(OutStatusQueryData, tgt_lat_deg) == 28, "OutStatusQueryData.tgt_lat_deg moved");
+static_assert(offsetof(OutStatusQueryData, tgt_lon_deg) == 32, "OutStatusQueryData.tgt_lon_deg moved");
+static_assert(offsetof(OutStatusQueryData, tgt_alt_m)   == 36, "OutStatusQueryData.tgt_alt_m moved");
+static_assert(offsetof(OutStatusQueryData, tgt_seq)     == 38, "OutStatusQueryData.tgt_seq moved");
+static_assert(offsetof(OutStatusQueryData, tgt_status)  == 39, "OutStatusQueryData.tgt_status moved");
+static_assert(offsetof(OutStatusQueryData, tgt_last_rc) == 40, "OutStatusQueryData.tgt_last_rc moved");
 
 static_assert(sizeof(ServoConfigData) == 22, "ServoConfigData wire size");
 static_assert(offsetof(ServoConfigData, bias_us) == 0, "ServoConfigData.bias_us moved");

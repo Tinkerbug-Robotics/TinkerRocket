@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include "RocketComputerTypes.h"
+#include "GuidancePointGate.h"
 
 // Verify packed struct sizes match the SIZE_OF_* constants.
 // These must stay in sync because the I2S framing, binary log parser,
@@ -891,7 +893,12 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // by the FC (flight_computer/main.cpp) at byte-exact offsets. Lock the layout
 // here so a struct edit can't silently desync the cross-language decode.
 TEST(RocketComputerTypes, FlightSettingsData_Layout) {
-    EXPECT_EQ(sizeof(FlightSettingsData), 210u);  // v2: +12 b2r orientation; v3: +8 fin cal; v5: +2 imu rate
+    // v2: +12 b2r orientation; v3: +8 fin cal; v5: +2 imu rate;
+    // v6: +9 flown guidance target (#435).
+    EXPECT_EQ(sizeof(FlightSettingsData), 219u);
+    // 219 <= MAX_PAYLOAD (224, FlightSnapshotData-bound) — the v6 tail was
+    // deliberately E/N+src, not lat/lon+E/N, to stay under this ceiling
+    // WITHOUT growing the I2S frame bound.
     EXPECT_LE(sizeof(FlightSettingsData), MAX_PAYLOAD);
 
     EXPECT_EQ(offsetof(FlightSettingsData, time_us),            0u);
@@ -938,6 +945,13 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     EXPECT_EQ(offsetof(FlightSettingsData, fin_min_deg),       200u);
     EXPECT_EQ(offsetof(FlightSettingsData, fin_max_deg),       204u);
     EXPECT_EQ(offsetof(FlightSettingsData, ism6_update_rate_hz), 208u);
+
+    // v6 flown-guidance-target tail (#435) — appended after
+    // ism6_update_rate_hz (208 + 2 = 210) so v1-v5 parsers decode their
+    // prefix unchanged.
+    EXPECT_EQ(offsetof(FlightSettingsData, guid_tgt_e_m),      210u);
+    EXPECT_EQ(offsetof(FlightSettingsData, guid_tgt_n_m),      214u);
+    EXPECT_EQ(offsetof(FlightSettingsData, guid_tgt_src),      218u);
 }
 
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
@@ -949,6 +963,315 @@ TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
                             (1u << FlightSettingsData::F_SOUNDS) |
                             (1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP));
     EXPECT_EQ(all, 0x7Fu);  // bits 0-6, no overlap
+}
+
+// ============================================================================
+// #435: Drift-Cast guidance point (BLE cmd 28)
+// ============================================================================
+// The 20-byte GuidancePointData must be byte-for-byte the payload the iOS app
+// builds in BLEDevice.sendGuidancePoint ({lat f64, lon f64, alt f32} LE) —
+// there is no version field, so the layout IS the contract.
+TEST(RocketComputerTypes, GuidancePointData_Layout) {
+    EXPECT_EQ(sizeof(GuidancePointData), 20u);
+    EXPECT_EQ(offsetof(GuidancePointData, lat_deg), 0u);
+    EXPECT_EQ(offsetof(GuidancePointData, lon_deg), 8u);
+    EXPECT_EQ(offsetof(GuidancePointData, alt_m),   16u);
+}
+
+// OutStatusQueryData v5 guidance-target echo tail: the authoritative
+// sizeof/offsetof static_asserts live in RocketComputerTypes.h itself (this
+// test target recompiles the header, so they fire in CI); pin the version
+// semantics here so a format bump can't ship without a conscious edit.
+TEST(RocketComputerTypes, OutStatusQuery_GuidTargetEcho_V5) {
+    EXPECT_EQ(sizeof(OutStatusQueryData), 41u);  // v5: +13 guidance-target echo (#435)
+}
+
+// The FC's cmd-28 acceptance gate (GuidancePointGate.h) as a pure function —
+// each reject path, the gate ORDER, and the radius boundary are pinned here
+// (MramDirtyPolicy precedent: policy-as-pure-function, host-tested).
+namespace {
+constexpr float kMaxR = 100.0f;  // config::GUIDANCE_MAX_AIM_RADIUS_M
+
+// All-pass baseline; individual tests break one input at a time.
+uint8_t gateWith(bool ready_or_prelaunch = true, bool lockout = false,
+                 uint8_t law = GUIDE_LAW_STATION_KEEP, bool have_ref = true,
+                 double lat = 38.0, double lon = -122.0, float alt = 250.0f,
+                 float r = 15.0f, float max_r = kMaxR) {
+    return guidancePointRc(ready_or_prelaunch, lockout, law, have_ref,
+                           lat, lon, alt, r, max_r);
+}
+}  // namespace
+
+TEST(GuidancePointGate, AcceptsBaseline) {
+    EXPECT_EQ(gateWith(), GUID_RC_ACCEPTED);
+}
+
+TEST(GuidancePointGate, RejectsWrongStateAndLockout) {
+    EXPECT_EQ(gateWith(/*ready_or_prelaunch=*/false), GUID_RC_REJ_STATE);
+    EXPECT_EQ(gateWith(true, /*lockout=*/true),       GUID_RC_REJ_STATE);
+    // Both wrong: still STATE (single code for the whole class).
+    EXPECT_EQ(gateWith(false, true),                  GUID_RC_REJ_STATE);
+}
+
+TEST(GuidancePointGate, RejectsBadValues) {
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       NAN, -122.0),                     GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, INFINITY),                  GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, NAN),               GUID_RC_REJ_BADVAL);
+    // alt has NO range bound, so isfinite is the ONLY check standing between
+    // an infinite altitude and (int16_t)lround(INFINITY) in the echo —
+    // infinities pass isnan-only mutants, hence pinned explicitly.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, INFINITY),          GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, -INFINITY),         GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       90.001, -122.0),                  GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       -90.001, -122.0),                 GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, 180.001),                   GUID_RC_REJ_BADVAL);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -180.001),                  GUID_RC_REJ_BADVAL);
+    // Boundary coordinates are valid.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       90.0, 180.0),                     GUID_RC_ACCEPTED);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       -90.0, -180.0),                   GUID_RC_ACCEPTED);
+}
+
+TEST(GuidancePointGate, RejectsPnLaw) {
+    // Accepting a point PN silently ignores would recreate the #376 lie.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_PN), GUID_RC_REJ_LAW);
+}
+
+TEST(GuidancePointGate, RejectsNoReference) {
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP,
+                       /*have_ref=*/false),        GUID_RC_REJ_NOREF);
+}
+
+TEST(GuidancePointGate, RadiusBoundary_RejectNeverClamp) {
+    // <= max accepts: the 100.0 m boundary point is valid.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, 250.0f, 100.0f),  GUID_RC_ACCEPTED);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, 250.0f, 100.01f), GUID_RC_REJ_RADIUS);
+    // A non-finite radius (garbage conversion) must reject, not accept.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, 250.0f, NAN),     GUID_RC_REJ_RADIUS);
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, 250.0f, INFINITY), GUID_RC_REJ_RADIUS);
+}
+
+TEST(GuidancePointGate, GateOrder_StateBeatsBadvalBeatsLawBeatsNorefBeatsRadius) {
+    // Everything wrong at once: STATE wins.
+    EXPECT_EQ(gateWith(false, true, GUIDE_LAW_PN, false,
+                       NAN, 999.0, NAN, 1e9f),            GUID_RC_REJ_STATE);
+    // State ok, rest wrong: BADVAL wins.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_PN, false,
+                       NAN, 999.0, NAN, 1e9f),            GUID_RC_REJ_BADVAL);
+    // Values ok too: LAW wins over NOREF and RADIUS.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_PN, false,
+                       38.0, -122.0, 250.0f, 1e9f),       GUID_RC_REJ_LAW);
+    // Law ok: NOREF wins over RADIUS (r is meaningless without a reference).
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, false,
+                       38.0, -122.0, 250.0f, 1e9f),       GUID_RC_REJ_NOREF);
+    // Only the radius left: RADIUS.
+    EXPECT_EQ(gateWith(true, false, GUIDE_LAW_STATION_KEEP, true,
+                       38.0, -122.0, 250.0f, 1e9f),       GUID_RC_REJ_RADIUS);
+}
+
+// ============================================================================
+// guidanceLlaToEnu (GuidancePointGate.h) — the ONLY conversion on the cmd-28
+// flight path (receipt + launch re-convert).  An E/N transpose is exactly
+// radius-invariant (r is symmetric in e/n) so no runtime gate can see it, and
+// a degrees-as-radians slip only fails at runtime via the 100 m gate — both
+// mutations must die HERE, pinned against hand-computed flat-earth geodesy.
+namespace {
+constexpr double kRefLatDeg = 38.0;
+constexpr double kRefLonDeg = -122.0;
+constexpr double kDeg2Rad   = 0.017453292519943295;
+constexpr double kRefLatRad = kRefLatDeg * kDeg2Rad;
+constexpr double kRefLonRad = kRefLonDeg * kDeg2Rad;
+// 1e-4 deg of latitude on the R=6378137 sphere:
+//   N = 1e-4 * pi/180 * 6378137 = 11.131949 m
+// and the same arc of longitude scales by cos(38 deg) = 0.788011:
+//   E = 11.131949 * cos(38 deg) = 8.772097 m
+constexpr double kArcPerLatTick = 11.131949;   // m per 1e-4 deg, ref_alt = 0
+constexpr double kArcPerLonTick = 8.772097;    // m per 1e-4 deg at 38N
+}  // namespace
+
+TEST(GuidanceLlaToEnu, NorthOffsetMapsToNOnly) {
+    float e = -1.0f, n = -1.0f;
+    guidanceLlaToEnu(kRefLatDeg + 1e-4, kRefLonDeg,
+                     kRefLatRad, kRefLonRad, 0.0, e, n);
+    EXPECT_NEAR(n, kArcPerLatTick, 2e-3);
+    EXPECT_NEAR(e, 0.0, 1e-6);
+}
+
+TEST(GuidanceLlaToEnu, EastOffsetMapsToEOnly_CosLatScaled) {
+    float e = -1.0f, n = -1.0f;
+    guidanceLlaToEnu(kRefLatDeg, kRefLonDeg + 1e-4,
+                     kRefLatRad, kRefLonRad, 0.0, e, n);
+    EXPECT_NEAR(e, kArcPerLonTick, 2e-3);   // cos(lat)-scaled — kills E/N swap
+    EXPECT_NEAR(n, 0.0, 1e-6);
+}
+
+TEST(GuidanceLlaToEnu, SignsFollowSouthAndWest) {
+    float e = 0.0f, n = 0.0f;
+    guidanceLlaToEnu(kRefLatDeg - 1e-4, kRefLonDeg - 1e-4,
+                     kRefLatRad, kRefLonRad, 0.0, e, n);
+    EXPECT_NEAR(n, -kArcPerLatTick, 2e-3);
+    EXPECT_NEAR(e, -kArcPerLonTick, 2e-3);
+}
+
+TEST(GuidanceLlaToEnu, RefPointIsOrigin) {
+    float e = 99.0f, n = 99.0f;
+    guidanceLlaToEnu(kRefLatDeg, kRefLonDeg, kRefLatRad, kRefLonRad, 250.0, e, n);
+    EXPECT_EQ(e, 0.0f);
+    EXPECT_EQ(n, 0.0f);
+}
+
+TEST(GuidanceLlaToEnu, RefAltitudeGrowsTheSphere) {
+    // The EKF formula scales by (R_EARTH + ref_alt): 1000 m of pad altitude
+    // stretches the arc by 1 + 1000/6378137 = 1.5678e-4.
+    float e = 0.0f, n = 0.0f;
+    guidanceLlaToEnu(kRefLatDeg + 1e-4, kRefLonDeg,
+                     kRefLatRad, kRefLonRad, 1000.0, e, n);
+    EXPECT_NEAR(n, kArcPerLatTick * (1.0 + 1000.0 / 6378137.0), 2e-3);
+}
+
+TEST(GuidanceLlaToEnu, RadiansContract_DegreesInputWouldExplode) {
+    // Passing DEGREES where the formula multiplies by the earth radius gives
+    // km-scale garbage; the pinned metre-scale values above already kill that
+    // mutant, but pin the magnitude bound explicitly too.
+    float e = 0.0f, n = 0.0f;
+    guidanceLlaToEnu(kRefLatDeg + 1e-4, kRefLonDeg + 1e-4,
+                     kRefLatRad, kRefLonRad, 0.0, e, n);
+    EXPECT_LT(std::hypot(e, n), 20.0f);
+}
+
+// ============================================================================
+// guidanceLaunchReconvert (GuidancePointGate.h) — the launch-time keep-vs-wipe
+// policy.  A comparison flip here silently flies overhead on every Drift-Cast
+// flight while the pre-flight echo stays green, so keep/wipe/boundary are
+// host-pinned like the receipt gate.
+TEST(GuidanceLaunchReconvert, KeepsInRangePoint) {
+    const auto lt = guidanceLaunchReconvert(kRefLatDeg + 1e-4, kRefLonDeg,
+                                            kRefLatRad, kRefLonRad, 0.0, 100.0f);
+    EXPECT_TRUE(lt.point_kept);
+    EXPECT_NEAR(lt.n_m, kArcPerLatTick, 2e-3);
+    EXPECT_NEAR(lt.e_m, 0.0, 1e-6);
+}
+
+TEST(GuidanceLaunchReconvert, WipesOutOfRangePointToOverhead) {
+    // ~1113 m north — e.g. a point accepted against a REAL pad reference,
+    // re-converted after a sim reset rebuilt a synthetic one.
+    const auto lt = guidanceLaunchReconvert(kRefLatDeg + 1e-2, kRefLonDeg,
+                                            kRefLatRad, kRefLonRad, 0.0, 100.0f);
+    EXPECT_FALSE(lt.point_kept);
+    EXPECT_EQ(lt.e_m, 0.0f);
+    EXPECT_EQ(lt.n_m, 0.0f);
+}
+
+TEST(GuidanceLaunchReconvert, BoundaryRadiusKeeps_RejectNeverClamp) {
+    // <= accepts: compute the exact converted radius, then use it as max_r.
+    float e = 0.0f, n = 0.0f;
+    guidanceLlaToEnu(kRefLatDeg + 1e-4, kRefLonDeg + 1e-4,
+                     kRefLatRad, kRefLonRad, 0.0, e, n);
+    const float r = std::sqrt(e * e + n * n);
+    EXPECT_TRUE(guidanceLaunchReconvert(kRefLatDeg + 1e-4, kRefLonDeg + 1e-4,
+                                        kRefLatRad, kRefLonRad, 0.0, r)
+                    .point_kept);
+    EXPECT_FALSE(guidanceLaunchReconvert(kRefLatDeg + 1e-4, kRefLonDeg + 1e-4,
+                                         kRefLatRad, kRefLonRad, 0.0,
+                                         r * 0.999f)
+                     .point_kept);
+}
+
+// ============================================================================
+// Guidance-target echo transitions (GuidancePointGate.h) — the cmd-28 handler
+// wiring rules: honor the gate verdict (a reject NEVER applies the point),
+// bump seq on rejects too, leave the still-active display unchanged on
+// reject, and supersede-bumps only on real content changes.
+namespace {
+OutStatusQueryData echoWithAcceptedPoint() {
+    OutStatusQueryData q{};
+    EXPECT_TRUE(guidancePointEchoApply(q, GUID_RC_ACCEPTED, 38.1, -122.2, 249.6f));
+    return q;
+}
+}  // namespace
+
+TEST(GuidTargetEchoApply, AcceptUpdatesDisplayAndSeqAndRc) {
+    const OutStatusQueryData q = echoWithAcceptedPoint();
+    EXPECT_EQ(q.tgt_status, GUID_TGT_GEO_ACTIVE);
+    EXPECT_FLOAT_EQ(q.tgt_lat_deg, 38.1f);
+    EXPECT_FLOAT_EQ(q.tgt_lon_deg, -122.2f);
+    EXPECT_EQ(q.tgt_alt_m, 250);   // rounded, not truncated
+    EXPECT_EQ(q.tgt_seq, 1);
+    EXPECT_EQ(q.tgt_last_rc, GUID_RC_ACCEPTED);
+}
+
+TEST(GuidTargetEchoApply, RejectBumpsSeqButNeverAppliesOrTouchesDisplay) {
+    for (uint8_t rc : {GUID_RC_REJ_RADIUS, GUID_RC_REJ_STATE, GUID_RC_REJ_LAW,
+                       GUID_RC_REJ_NOREF, GUID_RC_REJ_BADVAL}) {
+        OutStatusQueryData q = echoWithAcceptedPoint();
+        // Returns false -> the caller must NOT move the flight target (the
+        // inverted-#376 lie: app shows "rejected" while the target moved).
+        EXPECT_FALSE(guidancePointEchoApply(q, rc, 40.0, -100.0, 10.0f))
+            << "rc=" << (int)rc;
+        // Display = the still-active PREVIOUS point, seq/rc = the verdict.
+        EXPECT_EQ(q.tgt_status, GUID_TGT_GEO_ACTIVE);
+        EXPECT_FLOAT_EQ(q.tgt_lat_deg, 38.1f);
+        EXPECT_FLOAT_EQ(q.tgt_lon_deg, -122.2f);
+        EXPECT_EQ(q.tgt_alt_m, 250);
+        EXPECT_EQ(q.tgt_seq, 2);
+        EXPECT_EQ(q.tgt_last_rc, rc);
+    }
+}
+
+TEST(GuidTargetEchoSupersede, WipesDisplayBumpsSeqKeepsRc) {
+    OutStatusQueryData q = echoWithAcceptedPoint();
+    EXPECT_TRUE(guidanceTargetEchoSupersede(q, GUID_TGT_EN_ACTIVE));
+    EXPECT_EQ(q.tgt_status, GUID_TGT_EN_ACTIVE);
+    EXPECT_EQ(q.tgt_lat_deg, 0.0f);
+    EXPECT_EQ(q.tgt_lon_deg, 0.0f);
+    EXPECT_EQ(q.tgt_alt_m, 0);
+    EXPECT_EQ(q.tgt_seq, 2);
+    // rc is "result of the LAST processed cmd 28" — a supersede isn't one.
+    EXPECT_EQ(q.tgt_last_rc, GUID_RC_ACCEPTED);
+}
+
+TEST(GuidTargetEchoSupersede, NoOpDoesNotChurnSeq) {
+    // Connect-time profile push with no cmd-28 point in play: seq must NOT
+    // move, or every reconnect would shift the app's send baseline.
+    OutStatusQueryData q{};
+    q.tgt_status = GUID_TGT_NONE;
+    EXPECT_FALSE(guidanceTargetEchoSupersede(q, GUID_TGT_NONE));
+    EXPECT_EQ(q.tgt_seq, 0);
+    // Same status twice in a row after a real wipe: second one is a no-op.
+    OutStatusQueryData g = echoWithAcceptedPoint();
+    EXPECT_TRUE(guidanceTargetEchoSupersede(g, GUID_TGT_NONE));
+    EXPECT_FALSE(guidanceTargetEchoSupersede(g, GUID_TGT_NONE));
+    EXPECT_EQ(g.tgt_seq, 2);
+}
+
+TEST(GuidTargetEchoSupersede, StatusChangeAloneBumps) {
+    // Sim-reset / cmd-65 path where only the status differs (display already
+    // clear): the app still needs to SEE the transition.
+    OutStatusQueryData q{};
+    q.tgt_status = GUID_TGT_EN_ACTIVE;
+    EXPECT_TRUE(guidanceTargetEchoSupersede(q, GUID_TGT_NONE));
+    EXPECT_EQ(q.tgt_seq, 1);
+}
+
+TEST(GuidFlownTargetSrc, GeoWinsThenModeDecides) {
+    EXPECT_EQ(guidanceFlownTargetSrc(true,  GUIDE_TARGET_OVERHEAD), GUID_TGT_GEO_ACTIVE);
+    EXPECT_EQ(guidanceFlownTargetSrc(true,  GUIDE_TARGET_POINT),    GUID_TGT_GEO_ACTIVE);
+    EXPECT_EQ(guidanceFlownTargetSrc(false, GUIDE_TARGET_POINT),    GUID_TGT_EN_ACTIVE);
+    EXPECT_EQ(guidanceFlownTargetSrc(false, GUIDE_TARGET_OVERHEAD), GUID_TGT_NONE);
 }
 
 // ============================================================================
@@ -1034,6 +1357,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(FIN_CONFIG_PENDING),       MT(FIN_CONFIG_MSG),
         // IMU logging rate config (BLE cmd 67).
         MT(IMU_RATE_CONFIG_PENDING),  MT(IMU_RATE_CONFIG_MSG),
+        // #435 Drift-Cast guidance point (BLE cmd 28).
+        MT(GUIDANCE_POINT_PENDING),   MT(GUIDANCE_POINT_MSG),
         // #402: FC->OC slave TX-ring desync recovery trigger.
         MT(I2C_TX_RESYNC),
     };
@@ -1057,7 +1382,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // -- the uniqueness check is only as strong as the list it walks.
     // 87 = 80 prior + guidance/fin config pair codes (were missing, #386 gap)
     //    + I2C_TX_RESYNC (#402) + IMU rate config pair (BLE cmd 67).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 87u)
+    // 89 = 87 + Drift-Cast guidance point pair (#435, BLE cmd 28).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 89u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
