@@ -377,10 +377,6 @@ struct RelayRocketSectionView: View {
                 .cornerRadius(10)
             }
 
-            Label("Pyro, power, calibration, sim and settings need the base station's focus or a direct connection.",
-                  systemImage: "info.circle")
-                .font(.caption2)
-                .foregroundColor(.secondary)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)

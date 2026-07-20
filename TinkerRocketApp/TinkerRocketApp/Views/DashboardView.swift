@@ -898,9 +898,6 @@ struct RocketStateView: View {
             case nil:
                 EmptyView()
             }
-            Text("Rocket State")
-                .font(.caption)
-                .foregroundColor(.secondary)
         }
         .padding()
         .frame(maxWidth: .infinity)
@@ -2157,14 +2154,6 @@ struct ControlsView: View {
                 .cornerRadius(10)
             }
 
-            // #390: say why the rest of the controls aren't here instead of
-            // silently hiding capability.
-            if device.isBaseStation {
-                Label("Pyro, power, calibration and settings need a direct connection to the rocket.",
-                      systemImage: "info.circle")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
