@@ -1,9 +1,20 @@
 """Dryden gust model tests (#170).
 
-The statistical tests drive the filter at a FIXED airspeed and altitude and at
-a coarse dt: the recursions are exact at any step size, so a 100 Hz record
-gives the same statistics as a 10 kHz one for a thousandth of the runtime.
-dt-independence is asserted separately rather than assumed.
+Most statistical tests here drive the filter at a FIXED airspeed and altitude
+and at a coarse dt: the recursions are exact at any step size, so a 100 Hz
+record gives the same statistics as a 10 kHz one for a thousandth of the
+runtime. dt-independence is asserted separately rather than assumed.
+
+BUT constant-parameter tests are structurally blind to the thing this model is
+built around. The filter's gains are recomputed every step from live airspeed
+and altitude, and with those held fixed an implementation that hoists the gain
+out of the recursion is mathematically IDENTICAL to the correct one — so the
+whole suite below can pass while the central design invariant is violated.
+That is not hypothetical: it is exactly what an adversarial review found after
+this file already had 21 passing tests.
+
+So the time-varying path gets its own section at the end of this file, and
+anything asserting a property of the varying-parameter dynamics belongs there.
 
 Variances use mean(x**2), not np.var: the process mean is known to be zero,
 and subtracting the *sample* mean of a strongly autocorrelated record biases
@@ -205,6 +216,20 @@ def test_zero_intensity_rejected():
         DrydenGust(0.0)
 
 
+# --- TIME-VARYING PARAMETERS ------------------------------------------------
+#
+# Everything above holds V and h fixed. These do not, and they are the only
+# tests here capable of failing when the varying-parameter path is wrong: with
+# constant parameters, hoisting the gain out of the recursion produces bitwise
+# identical output, so no amount of variance/autocorrelation testing at a
+# fixed operating point can see it.
+#
+# Three independent properties, cheapest first:
+#   1. the gust does not teleport when a parameter jumps
+#   2. it relaxes toward the new intensity at the Dryden rate, not instantly
+#   3. airspeed enters only as distance travelled through the gust field
+
+
 def test_gust_is_continuous_across_an_altitude_change():
     """The gain must stay INSIDE the recursion, not be hoisted out as a
     unit-variance filter scaled by sigma(h) at the output.
@@ -236,6 +261,91 @@ def test_gust_is_continuous_across_an_altitude_change():
     assert abs(before[0]) > 0.5 * sigma_low   # there is real state to rescale
     assert after[0] == pytest.approx(before[0], rel=0.02)
     assert after[1] == pytest.approx(before[1], rel=0.02)
+
+
+def test_variance_relaxes_at_the_dryden_rate_after_an_altitude_change():
+    """Not just "does not teleport" — it must relax at the RIGHT rate.
+
+    Step an ensemble from h_low to h_high and watch the ensemble variance
+    decay from sigma_low^2 toward sigma_high^2. For the exact OU transition
+    the discrete solution is closed-form:
+
+        Var(t) = sigma_hi^2 + (Var(0) - sigma_hi^2) * exp(-2*V*t/L_hi)
+
+    (variance relaxes at twice the amplitude rate, hence the 2).
+
+    The rate is recovered by FITTING the whole decay rather than checking
+    individual points. Per-point assertions were tried first and are the wrong
+    shape: as the excess decays, the remaining signal shrinks while the
+    sampling noise does not, so late points swing wildly (one seed block came
+    out 27% off a 15% tolerance). A log-linear fit over the well-conditioned
+    part of the curve lands within 14% across every seed block tried.
+
+    The two failure modes this separates:
+      - hoisted gain  -> Var(0) is already sigma_hi^2, i.e. no relaxation at
+        all. Part 1 catches it with a >3x margin.
+      - right initial value, wrong dynamics (a stale or hard-coded L or V in
+        the coefficient) -> part 2. A mutant using the free-air scale length
+        everywhere fits at 0.57x the true rate, well outside the 0.30 band.
+    """
+    v = 90.0
+    h_low, h_high = H_FLOOR_M, 900.0 * _FT
+    L_low, _, sigma_low, _ = dryden_scales(h_low, W20_MODERATE)
+    L_high, _, sigma_high, _ = dryden_scales(h_high, W20_MODERATE)
+
+    # A large ensemble is what makes the rate fit meaningful; the sampling
+    # spread of a variance estimate goes as sqrt(2/N). The burn-in is the
+    # expensive part, so it runs at 3 s -- ~6 relaxation times at h_low
+    # (tau = L_low/v = 0.49 s), which leaves a residual of order 1e-5.
+    n_members, dt, n_steps = 1200, 5e-3, 300
+    members = [DrydenGust(W20_MODERATE, seed=90000 + i) for i in range(n_members)]
+    for g in members:
+        g.reset(h_agl_m=h_low, v_mps=v, burn_in_s=3.0)
+    assert 3.0 > 6.0 * (L_low / v)          # burn-in really is long enough
+
+    var = np.empty(n_steps)
+    for k in range(n_steps):
+        var[k] = np.mean([g.step(dt, v, h_high)[0] ** 2 for g in members])
+
+    # 1. The carried state is still at the OLD intensity right after the jump.
+    assert var[0] / sigma_high**2 > 2.5           # correct ~3.5, hoisted ~1.0
+    assert var[0] == pytest.approx(sigma_low**2, rel=0.20)
+
+    # 2. ...and decays toward the new one at the Dryden rate. Fit only where
+    # the excess is still well above the noise; beyond that the log is
+    # dominated by sampling error.
+    t = np.arange(1, n_steps + 1) * dt
+    excess = var - sigma_high**2
+    usable = excess > 0.25 * excess[0]
+    assert usable.sum() > 100                     # enough lever arm to fit
+    fitted_rate = -np.polyfit(t[usable], np.log(excess[usable]), 1)[0]
+    assert fitted_rate == pytest.approx(2.0 * v / L_high, rel=0.30)
+
+    # 3. Sanity: it decayed, and toward the right target rather than past it.
+    assert var[-1] < 0.75 * var[0]
+    assert var[-1] > sigma_high**2
+
+
+def test_airspeed_enters_only_as_distance_travelled():
+    """Every filter coefficient depends on V and dt only through their product
+    — Taylor's frozen-field hypothesis: what matters is how far the vehicle
+    moved through the gust field, not how fast or for how long separately.
+
+    So halving dt while doubling V must reproduce the record exactly, sample
+    for sample, given the same noise draws. This is an EXACT equality with no
+    statistics, and it pins the airspeed dependence that no constant-V test
+    can: a hard-coded or stale V still passes every fixed-operating-point
+    test in this file, but breaks this one immediately.
+    """
+    h = 200.0
+    slow = _record(W20_MODERATE, 45.0, h, 4e-3, 500, seed=4)
+    fast = _record(W20_MODERATE, 90.0, h, 2e-3, 500, seed=4)
+    assert np.array_equal(slow, fast)
+
+    # Guard against a degenerate pass: V must actually be doing something, so
+    # changing it WITHOUT compensating dt has to change the record.
+    uncompensated = _record(W20_MODERATE, 90.0, h, 4e-3, 500, seed=4)
+    assert not np.allclose(slow, uncompensated)
 
 
 # --- integration with the closed-loop sim ----------------------------------
