@@ -1,13 +1,25 @@
 # Launch site configuration
+#
+# Read by rocketpy_passive._load_site_config, whose only caller is
+# scripts/run_passive_sim.py --site. The 6-DOF closed-loop sim does NOT read
+# this file at all.
 launch_site:
   latitude_deg: 38.0
   longitude_deg: -122.0
   elevation_m: 0.0
+  # NOT consumed: the RocketPy environment is set to "standard_atmosphere" and
+  # the 6-DOF engine uses the ISA model in physics/atmosphere.py. Kept as a
+  # record of the reference conditions both assume.
   ground_pressure_pa: 101325.0
   ground_temperature_k: 293.15   # 20 C
 
-# Wind model
-wind:
-  speed_mps: 0.0           # steady wind speed
-  direction_deg: 0.0       # wind FROM direction (0=North)
-  gust_sigma_mps: 0.0      # gust standard deviation
+# Wind and turbulence are NOT configured here — they never were. This file's
+# only reader consumes the launch_site: block above and always flies calm.
+# The 6-DOF sim takes both from SimConfig
+# (src/tinkerrocket_sim/simulation/closed_loop_sim.py):
+#     wind_speed / wind_direction_deg   steady wind
+#     gust_w20_mps / gust_vertical      Dryden turbulence (physics/dryden.py)
+#
+# A `wind:` block used to sit here with speed_mps, direction_deg and
+# gust_sigma_mps. Nothing had ever read any of the three, and gust_sigma_mps
+# advertised a turbulence model that did not exist until #170.

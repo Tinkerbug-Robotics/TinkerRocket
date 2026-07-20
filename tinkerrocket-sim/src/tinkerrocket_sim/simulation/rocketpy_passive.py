@@ -130,6 +130,11 @@ def _load_site_config(config_path: Optional[str | Path]) -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f)
 
+    # safe_load returns None for an empty or comment-only file — matches the
+    # guard _apply_yaml_overrides already has.
+    if not cfg:
+        return defaults
+
     site = cfg.get("launch_site", {})
     for key in defaults:
         if key not in site:
