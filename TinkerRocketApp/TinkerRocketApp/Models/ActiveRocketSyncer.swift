@@ -208,7 +208,9 @@ final class ActiveRocketSyncer: ObservableObject {
                                   minSpeed: profile.pnMinSpeed, coastDelayMs: profile.pnCoastDelayMs,
                                   targetMode: profile.pnTargetMode,
                                   targetE: profile.pnTargetE, targetN: profile.pnTargetN,
-                                  targetAlt: profile.pnTargetAltM)
+                                  targetAlt: profile.pnTargetAltM,
+                                  kpPos: profile.pnKpPos, kdVel: profile.pnKdVel,
+                                  guidanceLaw: profile.pnGuidanceLaw)
         device.sendFinConfig(ringMode: profile.finRingMode,
                              servoAtSlot: profile.finServoAtSlot,
                              reverse: profile.finReverse,

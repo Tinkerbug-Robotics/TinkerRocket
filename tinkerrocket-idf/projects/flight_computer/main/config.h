@@ -352,6 +352,50 @@ struct config : board_pins
     static constexpr float   PN_TARGET_E_M  = 0.0f;
     static constexpr float   PN_TARGET_N_M  = 0.0f;
 
+    // --- Guidance law selection (#534) ---------------------------------
+    // Which law the FC configures at boot.  GUIDE_LAW_PN (0) preserves every
+    // flight flown to date; GUIDE_LAW_STATION_KEEP (1) is the PD regulator
+    // from #335 (no 1/range singularity, degrades gracefully).  Overridden at
+    // runtime by NVS "glw" and by the app's GuidanceConfigData push, so this
+    // is only the factory default.  FLIPPING THIS TO 1 IS A ONE-LINE CHANGE
+    // AND IS DELIBERATELY DEFERRED to #534's acceptance sim A/B — do not flip
+    // it until the sim run says station-keep beats PN on this airframe.
+    static constexpr uint8_t GUIDANCE_LAW_DEFAULT = 0;  // GUIDE_LAW_PN
+
+    // Station-keep PD gains: a_lat = -kp*offset - kd*vel (ENU horizontal).
+    // Seeded from the 6-DOF sim's guidance scenario, NOT from the library
+    // constructor (which is 0.5 / 1.5) and NOT from the closed_loop_sim
+    // dataclass defaults (0.5 / 1.0) — the scenario is the only one of the
+    // three that has actually been flown in the sim:
+    //   tinkerrocket-sim/src/tinkerrocket_sim/simulation/scenarios.py:164-165
+    //     pn_kp_pos=0.8, pn_kd_vel=1.5
+    // Damping check at these values: wn = sqrt(kp) = 0.89 rad/s,
+    // zeta = kd / (2*sqrt(kp)) = 0.84 — slightly under critical, ~7 s natural
+    // period, which is long compared to a ~15 s coast.  PROVISIONAL: final
+    // gains are pending the #534 acceptance sim A/B (PN vs station-keep on the
+    // same scenario); keep these in lockstep with scenarios.py and with
+    // RocketProfile.swift's pnKpPos/pnKdVel defaults.
+    static constexpr float PN_KP_POS_PER_S2 = 0.8f;
+    static constexpr float PN_KD_VEL_PER_S  = 1.5f;
+
+    // Max horizontal aim-point radius from the pad (m), station-keep only.
+    // The FC owns magnitude policy — TR_GuidancePN.h explicitly refuses to
+    // range-limit the aim point because a silent library clamp would make the
+    // FLOWN target disagree with the uploaded and logged one.
+    //
+    // Why 100 m: the PD term alone saturates long before that.  At
+    // kp = 0.8 /s^2 an offset of 25 m commands 0.8*25 = 20 m/s^2, i.e. the
+    // ENTIRE PN_MAX_ACCEL_MPS2 budget, and this airframe cannot deliver even
+    // that — the 67 mm fin tabs give near-negligible pitch/yaw authority on a
+    // G80 (surface size is the lever, not stability margin).  Past ~25 m the
+    // law is a saturated open-loop lean, so the limit is not a control bound
+    // but a SANITY bound: 4x the saturation radius leaves ample room for a
+    // real Drift-Cast (#435) wind offset (a ~600 m apogee flight drifts tens
+    // of metres) while making a unit error, a garbage float, or a latitude
+    // accidentally sent as metres impossible to fly.
+    // REJECT, never clamp — see the handler.
+    static constexpr float GUIDANCE_MAX_AIM_RADIUS_M = 100.0f;
+
     // ### Burnout Detection ###
     // Consecutive samples of negative body-X accel required to latch
     // burnout_detected. The IMU runs at ~1 kHz so 50 samples ≈ 50 ms of

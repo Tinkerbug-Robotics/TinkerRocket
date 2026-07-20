@@ -33,5 +33,14 @@ PYBIND11_MODULE(_guidance, m) {
         .def("get_lateral_offset", &TR_GuidancePN::getLateralOffset)
         .def("is_active", &TR_GuidancePN::isActive)
         .def("is_cpa_reached", &TR_GuidancePN::isCpaReached)
+        // #435 Drift-Cast horizontal aim point.  A separate named setter, not
+        // extra args on configure_station_keep: C++ default arguments are
+        // invisible through &TR_GuidancePN::configureStationKeep, so widening
+        // that arity would break the py::arg annotations above at COMPILE time.
+        .def("set_horizontal_target", &TR_GuidancePN::setHorizontalTarget,
+             py::arg("target_e_m"), py::arg("target_n_m"))
+        .def("get_target_east", &TR_GuidancePN::getTargetEast)
+        .def("get_target_north", &TR_GuidancePN::getTargetNorth)
+        .def("get_target_offset", &TR_GuidancePN::getTargetOffset)
         .def("reset", &TR_GuidancePN::reset);
 }

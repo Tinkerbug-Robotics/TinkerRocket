@@ -115,3 +115,46 @@ def test_scenario_a_guidance_cpa_improvement():
     final_g = float(np.hypot(df_g['x'].iloc[-1], df_g['y'].iloc[-1]))
     final_u = float(np.hypot(df_u['x'].iloc[-1], df_u['y'].iloc[-1]))
     assert final_g < 0.6 * final_u
+
+
+# --- (a2) station-keep A/B: #534 acceptance pin -------------------------------
+
+def test_scenario_a2_station_keep_beats_pn_no_cpa():
+    """#534 acceptance: station-keep <= PN drift on the canonical guided
+    scenario, with no CPA (singularity-path) quit.  Invariants, not constants:
+    the full 144-run study lives in docs/plans/534-station-keep-sim-ab.md and
+    scripts/ab534_pn_vs_station_keep.py regenerates it."""
+    pytest.importorskip(
+        "tinkerrocket_sim._guidance",
+        reason="TR_GuidancePN submodule not initialized — _guidance extension "
+               "not built. Enable: git submodule update --init "
+               "tinkerrocket-idf/components/TR_GuidancePN",
+    )
+    cfg = S.guidance_coast_config()
+    df_pn = _run_to_apogee(cfg)
+    df_sk = _run_to_apogee(dataclasses.replace(cfg, guidance_mode='station_keep'))
+
+    assert 300.0 < df_sk['altitude'].max() < 420.0
+
+    # Both laws guided for the bulk of coast (neither latched out).
+    assert (df_sk['guidance_active'] == True).mean() > 0.5
+    assert (df_pn['guidance_active'] == True).mean() > 0.5
+
+    # Station-keep must not do worse than PN on apogee drift (the #534
+    # criterion), and must in fact materially beat it on this scenario
+    # (study: 3.0 m median vs 13.8 m over 5 seeds; margin below is generous).
+    final_sk = float(np.hypot(df_sk['x'].iloc[-1], df_sk['y'].iloc[-1]))
+    final_pn = float(np.hypot(df_pn['x'].iloc[-1], df_pn['y'].iloc[-1]))
+    assert final_sk <= final_pn
+    assert final_sk < 0.6 * final_pn
+
+    # No singularity behavior: station-keep never rides the closing-velocity
+    # CPA path (the library hard-codes cpa_reached_ False in this law), so its
+    # guided window must run to the low-speed gate near apogee, and its late
+    # accel commands stay far from the 20 m/s^2 clamp that a 1/range blow-up
+    # pins (study: PN with a reachable target pins 20.0; SK shows ~2.7).
+    guided_sk = df_sk[df_sk['guidance_active'] == True]
+    late = guided_sk[guided_sk['time'] > guided_sk['time'].iloc[-1] - 1.5]
+    late_a = np.hypot(late['pn_a_e'], late['pn_a_n']).max()
+    assert late_a < 10.0
+    assert float(guided_sk['speed'].iloc[-1]) < 12.0  # exited via the speed gate

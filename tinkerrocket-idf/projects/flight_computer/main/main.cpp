@@ -374,8 +374,9 @@ static TR_ControlMixer control_mixer;
 static TR_PID roll_rate_pid_standalone(config::KP, config::KI, config::KD,
                                        config::MAX_CMD, config::MIN_CMD);
 static bool guidance_enabled = config::GUIDANCE_ENABLED;
-// Runtime-tunable PN guidance params (seeded from config::, overridden by NVS / the
-// app's GuidanceConfigData push). Phase 1 uses OVERHEAD (target_e/n forced 0).
+// Runtime-tunable guidance params (seeded from config::, overridden by NVS /
+// the app's GuidanceConfigData push).  pn_target_e/n are the station-keep aim
+// point; MODE_PN ignores them by library contract.
 static float    pn_nav_gain       = config::PN_NAV_GAIN;
 static float    pn_max_accel      = config::PN_MAX_ACCEL_MPS2;
 static float    pn_accel_to_fin   = config::PN_ACCEL_TO_FIN_DEG;
@@ -386,6 +387,9 @@ static uint8_t  pn_target_mode    = config::PN_TARGET_MODE;
 static float    pn_target_e       = config::PN_TARGET_E_M;
 static float    pn_target_n       = config::PN_TARGET_N_M;
 static float    pn_target_alt     = config::PN_TARGET_ALT_M;
+static float    pn_kp_pos         = config::PN_KP_POS_PER_S2;
+static float    pn_kd_vel         = config::PN_KD_VEL_PER_S;
+static uint8_t  pn_guidance_law   = config::GUIDANCE_LAW_DEFAULT;  // GUIDE_LAW_*
 // Last commanded pre-mix fin deflections from guidance, carried from the
 // guidance compute block to the ~10 Hz GuidanceTelemData emit. Only meaningful
 // while guidance_active (the only condition under which they are logged).
@@ -1562,6 +1566,41 @@ static void handleOrientationEstimate(const float up_rocket[3])
     }
 }
 
+// Push the guidance law, its gains and the horizontal aim point into the
+// guidance object.  ORDER IS LOAD-BEARING: configure()/configureStationKeep()
+// set mode_, and TR_GuidancePN consumes the aim point in MODE_STATION_KEEP
+// ONLY — setting the aim point before the law would leave it inert on a
+// PN->station-keep switch.  Law first, aim point second, always.
+static void applyGuidanceConfig()
+{
+    static_assert((uint8_t)TR_GuidancePN::MODE_PN           == GUIDE_LAW_PN,
+                  "GUIDE_LAW_PN must mirror TR_GuidancePN::MODE_PN");
+    static_assert((uint8_t)TR_GuidancePN::MODE_STATION_KEEP == GUIDE_LAW_STATION_KEEP,
+                  "GUIDE_LAW_STATION_KEEP must mirror TR_GuidancePN::MODE_STATION_KEEP");
+
+    if (pn_guidance_law == GUIDE_LAW_STATION_KEEP) {
+        guidance.configureStationKeep(pn_kp_pos, pn_kd_vel, pn_max_accel);
+    } else {
+        // OVERHEAD PN: target = (0,0,pn_target_alt); the 3-arg form pins
+        // horizontal at (0,0) and ignores the aim point set below.
+        guidance.configure(pn_nav_gain, pn_max_accel, pn_target_alt);
+    }
+
+    // Belt-and-braces magnitude gate.  The wire handler already rejects an
+    // over-radius aim point, so the only way to arrive here out of range is a
+    // corrupt / stale NVS record; fail SAFE to the pad rather than fly it.
+    const float r = sqrtf(pn_target_e * pn_target_e + pn_target_n * pn_target_n);
+    if (!std::isfinite(r) || r > config::GUIDANCE_MAX_AIM_RADIUS_M) {
+        ESP_LOGW(TAG, "[GUID CFG] stored aim point (%.1f,%.1f) r=%.1f m exceeds %.0f m "
+                      "limit — forcing (0,0) overhead",
+                      (double)pn_target_e, (double)pn_target_n, (double)r,
+                      (double)config::GUIDANCE_MAX_AIM_RADIUS_M);
+        pn_target_e = 0.0f;
+        pn_target_n = 0.0f;
+    }
+    guidance.setHorizontalTarget(pn_target_e, pn_target_n);   // inert in MODE_PN
+}
+
 // Build a snapshot of the active roll-control / IMU settings (#165).  Reads
 // the live PID gains from servo_control (these can be NVS- or BLE-overridden),
 // the runtime override globals, the config:: defaults for the compile-time-only
@@ -1580,6 +1619,8 @@ static void buildFlightSettings(FlightSettingsData& s)
     if (servo_enabled)      flags |= (uint8_t)(1u << FlightSettingsData::F_SERVO_ENABLED);
     if (FW_GIT_DIRTY)       flags |= (uint8_t)(1u << FlightSettingsData::F_FW_DIRTY);
     if (enable_sounds)      flags |= (uint8_t)(1u << FlightSettingsData::F_SOUNDS);
+    if (pn_guidance_law == GUIDE_LAW_STATION_KEEP)
+                            flags |= (uint8_t)(1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP);
     s.flags = flags;
     s.roll_delay_ms = roll_delay_ms;
 
@@ -2510,6 +2551,14 @@ static void setup_fc()
     pn_target_e       = prefs.getFloat("gte", config::PN_TARGET_E_M);
     pn_target_n       = prefs.getFloat("gtn", config::PN_TARGET_N_M);
     pn_target_alt     = prefs.getFloat("gta", config::PN_TARGET_ALT_M);
+    pn_kp_pos       = prefs.getFloat("gkp", config::PN_KP_POS_PER_S2);
+    pn_kd_vel       = prefs.getFloat("gkd", config::PN_KD_VEL_PER_S);
+    pn_guidance_law = prefs.getUChar("glw", config::GUIDANCE_LAW_DEFAULT);
+    if (pn_guidance_law > GUIDE_LAW_MAX) {          // corrupt/forward NVS record
+        ESP_LOGW(TAG, "[GUID CFG] stored law %u unknown — falling back to PN",
+                      (unsigned)pn_guidance_law);
+        pn_guidance_law = GUIDE_LAW_PN;
+    }
     // Fin→servo layout (servo azimuth + reverse), shared by every mix site.
     float fin_az[4] = {
         prefs.getFloat("fa0", config::FIN_AZIMUTH_0_DEG),
@@ -2528,14 +2577,23 @@ static void setup_fc()
                   use_angle_control ? "ON" : "OFF", (unsigned)roll_delay_ms,
                   (double)kp_angle_rate_cap_dps);
 #if TR_GUIDANCE_AVAILABLE
-    ESP_LOGI(TAG, "PN Guidance: %s (compiled in)", guidance_enabled ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Guidance: %s  law=%s (compiled in)",
+                  guidance_enabled ? "ON" : "OFF",
+                  pn_guidance_law == GUIDE_LAW_STATION_KEEP ? "STATION_KEEP" : "PN");
+    if (pn_guidance_law == GUIDE_LAW_STATION_KEEP) {
+        ESP_LOGI(TAG, "  station-keep: kp=%.2f /s^2 kd=%.2f /s maxA=%.0f m/s^2 aim=(%.1f,%.1f) m",
+                      (double)pn_kp_pos, (double)pn_kd_vel, (double)pn_max_accel,
+                      (double)pn_target_e, (double)pn_target_n);
+    } else {
+        ESP_LOGI(TAG, "  PN: N=%.1f maxA=%.0f m/s^2 alt=%.0f m (aim point ignored by this law)",
+                      (double)pn_nav_gain, (double)pn_max_accel, (double)pn_target_alt);
+    }
 #else
-    ESP_LOGW(TAG, "PN Guidance: NOT COMPILED IN (TR_GuidancePN submodule not initialized — stub active)");
+    ESP_LOGW(TAG, "Guidance: NOT COMPILED IN (TR_GuidancePN submodule not initialized — stub active)");
 #endif
 
-    // Configure guidance and control mixer
-    // OVERHEAD: target = (0,0,pn_target_alt); the 3-arg form keeps horizontal at (0,0).
-    guidance.configure(pn_nav_gain, pn_max_accel, pn_target_alt);
+    // Configure guidance and control mixer (law + gains + aim point).
+    applyGuidanceConfig();
     control_mixer.configure(config::PN_PITCH_KP, config::PN_PITCH_KI, config::PN_PITCH_KD,
                             config::PN_YAW_KP,   config::PN_YAW_KI,   config::PN_YAW_KD,
                             config::PN_MAX_FIN_DEG,
@@ -5435,16 +5493,65 @@ static void loop_fc()
                     if (g.min_speed_mps   >= 0.0f && g.min_speed_mps   <= 200.0f)  pn_min_speed    = g.min_speed_mps;
                     if (g.target_alt_m     > 0.0f)                                 pn_target_alt   = g.target_alt_m;
                     pn_coast_delay_ms = g.coast_delay_ms;
-                    pn_target_mode    = g.target_mode;
-                    // OVERHEAD forces horizontal (0,0) so a stale POINT push can't pollute it.
-                    pn_target_e = (g.target_mode == GUIDE_TARGET_POINT) ? g.target_e_m : 0.0f;
-                    pn_target_n = (g.target_mode == GUIDE_TARGET_POINT) ? g.target_n_m : 0.0f;
-                    // Phase 1: OVERHEAD via the 3-arg form (horizontal stays 0,0).
-                    guidance.configure(pn_nav_gain, pn_max_accel, pn_target_alt);
-                    ESP_LOGI(TAG, "[GUID CFG] en=%s N=%.1f maxA=%.0f a2f=%.1f maxFin=%.0f minV=%.0f mode=%u alt=%.0f",
-                                  guidance_enabled ? "ON" : "OFF", (double)pn_nav_gain,
-                                  (double)pn_max_accel, (double)pn_accel_to_fin, (double)pn_max_fin_deg,
-                                  (double)pn_min_speed, (unsigned)pn_target_mode, (double)pn_target_alt);
+                    // Station-keep PD gains (#534).  Same convention as above:
+                    // positive/sane overrides, out-of-range keeps the prior value.
+                    // Upper bounds are saturation bounds, not stability bounds —
+                    // at kp = 10 /s^2 a 2 m offset already commands the whole
+                    // 20 m/s^2 accel budget, and kd = 10 /s is zeta ~ 5.6 at the
+                    // default kp (hopelessly overdamped).  Anything past these is
+                    // a typo, not a tune.  kd == 0 is REJECTED on purpose: an
+                    // undamped PD regulator oscillates.
+                    if (g.kp_pos_per_s2 > 0.0f && g.kp_pos_per_s2 <= 10.0f) pn_kp_pos = g.kp_pos_per_s2;
+                    else ESP_LOGW(TAG, "[GUID CFG] kp %.3f out of (0,10] — keeping %.3f",
+                                       (double)g.kp_pos_per_s2, (double)pn_kp_pos);
+                    if (g.kd_vel_per_s  > 0.0f && g.kd_vel_per_s  <= 10.0f) pn_kd_vel = g.kd_vel_per_s;
+                    else ESP_LOGW(TAG, "[GUID CFG] kd %.3f out of (0,10] — keeping %.3f",
+                                       (double)g.kd_vel_per_s, (double)pn_kd_vel);
+                    // Law: an UNKNOWN value must never select an undefined law.
+                    // Whitelist, keep the previous law on anything else.
+                    if (g.guidance_law <= GUIDE_LAW_MAX) pn_guidance_law = g.guidance_law;
+                    else ESP_LOGW(TAG, "[GUID CFG] law %u unknown — keeping %u",
+                                       (unsigned)g.guidance_law, (unsigned)pn_guidance_law);
+                    // Target mode is now branched on, so whitelist it too
+                    // (previously stored raw).
+                    if (g.target_mode == GUIDE_TARGET_OVERHEAD ||
+                        g.target_mode == GUIDE_TARGET_POINT)   pn_target_mode = g.target_mode;
+                    else ESP_LOGW(TAG, "[GUID CFG] target_mode %u unknown — keeping %u",
+                                       (unsigned)g.target_mode, (unsigned)pn_target_mode);
+                    // Aim point.  The FC — not the library — owns magnitude
+                    // policy (TR_GuidancePN.h).  REJECT and keep the previous
+                    // point; do NOT clamp, so the flown aim point always equals
+                    // the uploaded and logged one.
+                    if (pn_target_mode == GUIDE_TARGET_POINT) {
+                        const float r = sqrtf(g.target_e_m * g.target_e_m +
+                                              g.target_n_m * g.target_n_m);
+                        if (std::isfinite(r) && r <= config::GUIDANCE_MAX_AIM_RADIUS_M) {
+                            pn_target_e = g.target_e_m;
+                            pn_target_n = g.target_n_m;
+                        } else {
+                            ESP_LOGW(TAG, "[GUID CFG] aim point (%.1f,%.1f) r=%.1f m REJECTED "
+                                          "(limit %.0f m) — keeping (%.1f,%.1f)",
+                                          (double)g.target_e_m, (double)g.target_n_m, (double)r,
+                                          (double)config::GUIDANCE_MAX_AIM_RADIUS_M,
+                                          (double)pn_target_e, (double)pn_target_n);
+                        }
+                    } else {
+                        // OVERHEAD forces horizontal (0,0) so a stale POINT push
+                        // can't pollute it.
+                        pn_target_e = 0.0f;
+                        pn_target_n = 0.0f;
+                    }
+                    // Law first, aim point second — see applyGuidanceConfig().
+                    applyGuidanceConfig();
+                    ESP_LOGI(TAG, "[GUID CFG] en=%s law=%s N=%.1f maxA=%.0f a2f=%.1f maxFin=%.0f "
+                                  "minV=%.0f mode=%u alt=%.0f kp=%.2f kd=%.2f aim=(%.1f,%.1f)",
+                                  guidance_enabled ? "ON" : "OFF",
+                                  pn_guidance_law == GUIDE_LAW_STATION_KEEP ? "STATION_KEEP" : "PN",
+                                  (double)pn_nav_gain, (double)pn_max_accel, (double)pn_accel_to_fin,
+                                  (double)pn_max_fin_deg, (double)pn_min_speed,
+                                  (unsigned)pn_target_mode, (double)pn_target_alt,
+                                  (double)pn_kp_pos, (double)pn_kd_vel,
+                                  (double)pn_target_e, (double)pn_target_n);
                     prefs.begin("servo", false);
                     prefs.putBool("guid_en", guidance_enabled);
                     prefs.putFloat("gng", pn_nav_gain);
@@ -5457,12 +5564,23 @@ static void loop_fc()
                     prefs.putFloat("gte", pn_target_e);
                     prefs.putFloat("gtn", pn_target_n);
                     prefs.putFloat("gta", pn_target_alt);
+                    prefs.putFloat("gkp", pn_kp_pos);
+                    prefs.putFloat("gkd", pn_kd_vel);
+                    prefs.putUChar("glw", pn_guidance_law);
                     prefs.end();
                     ESP_LOGI(TAG, "[GUID CFG] Saved to NVS");
                 }
                 else
                 {
-                    ESP_LOGW(TAG, "[GUID CFG] readConfigFrame failed");
+                    // #534: this is now ALSO the "app is older than the
+                    // firmware" path — a 36-byte-era app frame fails the
+                    // cfg_len >= sizeof(GuidanceConfigData) gate.  Echo the
+                    // lengths so a version skew is diagnosable from the log
+                    // instead of looking like an I2C fault.
+                    ESP_LOGW(TAG, "[GUID CFG] readConfigFrame FAILED — got %u bytes, need %u. "
+                                  "If the FC is healthy this is an OUT-OF-DATE APP: guidance "
+                                  "config was NOT applied and the previous config still flies.",
+                                  (unsigned)cfg_len, (unsigned)sizeof(GuidanceConfigData));
                 }
             }
             else if (out_pending_command == FIN_CONFIG_PENDING)

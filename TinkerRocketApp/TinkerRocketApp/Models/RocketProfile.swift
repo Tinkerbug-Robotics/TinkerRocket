@@ -112,6 +112,15 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var pnTargetMode: UInt8 = 0         // GUIDE_TARGET_OVERHEAD (Phase 1: locked)
     var pnTargetE: Float = 0
     var pnTargetN: Float = 0
+    // Station-keep PD gains + law selector (#534). Defaults MUST equal config.h
+    // (PN_KP_POS_PER_S2 / PN_KD_VEL_PER_S / GUIDANCE_LAW_DEFAULT) — the profile is
+    // pushed on connect and overrides the FC, so a mismatch silently re-tunes
+    // guidance. The gains are PROVISIONAL (seeded from the sim's guidance
+    // scenario, pending the #534 acceptance A/B); keep them in lockstep with
+    // config.h and tinkerrocket-sim scenarios.py.
+    var pnKpPos: Float = 0.8            // config::PN_KP_POS_PER_S2
+    var pnKdVel: Float = 1.5            // config::PN_KD_VEL_PER_S
+    var pnGuidanceLaw: UInt8 = 0        // config::GUIDANCE_LAW_DEFAULT (0 = PN, 1 = station-keep)
     var cameraType: UInt8 = 2          // 0=None, 1=GoPro, 2=RunCam
     /// IMU mounting orientation: 0xFF = auto (pad-gravity detect), 0..23 =
     /// manual board→rocket code. Manual fixes the roll clocking the control
@@ -304,6 +313,9 @@ extension RocketProfile {
         pnTargetMode = try c.decodeIfPresent(UInt8.self, forKey: .pnTargetMode) ?? defaults.pnTargetMode
         pnTargetE = try c.decodeIfPresent(Float.self, forKey: .pnTargetE) ?? defaults.pnTargetE
         pnTargetN = try c.decodeIfPresent(Float.self, forKey: .pnTargetN) ?? defaults.pnTargetN
+        pnKpPos = try c.decodeIfPresent(Float.self, forKey: .pnKpPos) ?? defaults.pnKpPos
+        pnKdVel = try c.decodeIfPresent(Float.self, forKey: .pnKdVel) ?? defaults.pnKdVel
+        pnGuidanceLaw = try c.decodeIfPresent(UInt8.self, forKey: .pnGuidanceLaw) ?? defaults.pnGuidanceLaw
         cameraType = try c.decodeIfPresent(UInt8.self, forKey: .cameraType) ?? defaults.cameraType
         imuOrientSetting = try c.decodeIfPresent(UInt8.self, forKey: .imuOrientSetting) ?? defaults.imuOrientSetting
         imuRateHz = try c.decodeIfPresent(UInt16.self, forKey: .imuRateHz) ?? defaults.imuRateHz

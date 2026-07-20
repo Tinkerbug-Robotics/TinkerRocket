@@ -1887,7 +1887,7 @@ static constexpr uint8_t FC_IDENTITY         = 0xEC;
 static constexpr uint8_t ORIENT_CONFIG_PENDING = 0xED;  // OC→FC: payload follows as ORIENT_CONFIG_MSG
 static constexpr uint8_t ORIENT_CONFIG_MSG     = 0xEE;  // 1-byte ImuOrientConfigData
 static constexpr uint8_t GUIDANCE_CONFIG_PENDING = 0xEF;  // OC→FC: payload follows as GUIDANCE_CONFIG_MSG
-static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 36-byte GuidanceConfigData
+static constexpr uint8_t GUIDANCE_CONFIG_MSG     = 0xF0;  // 45-byte GuidanceConfigData
 static constexpr uint8_t FIN_CONFIG_PENDING      = 0xF2;  // OC→FC: payload follows as FIN_CONFIG_MSG
 static constexpr uint8_t FIN_CONFIG_MSG          = 0xF3;  // 18-byte FinConfigData
 // IMU logging rate (user setting, BLE cmd 67): the ISM6HG256 ODR the FC
@@ -2027,24 +2027,54 @@ static_assert(sizeof(PIDConfigData) == 20, "PIDConfigData must be 20 bytes");
 static constexpr uint8_t GUIDE_TARGET_OVERHEAD = 0;  // directly over the pad: (0,0,target_alt)
 static constexpr uint8_t GUIDE_TARGET_POINT    = 1;  // configured point: (target_e,target_n,target_alt)
 
-// App-configurable PN guidance.  Floats first so every field is naturally aligned
-// inside the packed struct (no internal padding) -> sizeof == 36.  ENU meters are
-// relative to the launch pad, matching the FC's imu_pos frame (no conversion).
+// Guidance law selector.  Values MIRROR TR_GuidancePN::Mode by value; the two
+// are pinned together by the FC's static_asserts at the configure sites.  The
+// wire type is declared here so the OC/app/tests never include the guidance
+// library (the OC EXCLUDE_COMPONENTS it entirely).
+static constexpr uint8_t GUIDE_LAW_PN           = 0;  // proportional navigation (legacy)
+static constexpr uint8_t GUIDE_LAW_STATION_KEEP = 1;  // overhead PD regulator (#335)
+static constexpr uint8_t GUIDE_LAW_MAX          = 1;  // highest defined law (validation bound)
+
+// App-configurable guidance (PN and station-keep share this frame).
+// ENU metres are relative to the launch pad, matching the FC's imu_pos frame
+// (no conversion).
+//
+// LAYOUT NOTE (#534): the first 36 bytes are FROZEN and the v1 "floats first,
+// naturally aligned" ordering is DELIBERATELY BROKEN past offset 35 — the
+// station-keep fields are APPENDED after the two u8s rather than inserted with
+// the other floats.  Rationale: the FC accepts any frame with
+// cfg_len >= sizeof(GuidanceConfigData) (flight_computer/main.cpp), so an
+// append leaves a 36-byte-era FC reading a 45-byte app frame correctly (it
+// parses the prefix and ignores the tail), whereas inserting floats mid-struct
+// would make it silently MISPARSE every field after the insertion point.
+// Silent misparse of nav_gain/max_accel is a flight-safety hazard; a truncated
+// tail is not.  kp_pos_per_s2/kd_vel_per_s land at offsets 36/40 — both are
+// 4-byte aligned by luck of 36 % 4 == 0, so the packed struct still has no
+// internal padding and sizeof == 45 exactly.
+//
+// Compatibility is ONE-DIRECTIONAL and accepted: a 45-byte-era FC rejects a
+// 36-byte app frame outright (length check) and logs it loudly.  The app must
+// ship in lockstep.
 typedef struct __attribute__((packed))
 {
-    float    nav_gain;          // PN navigation constant N (3-5)
-    float    max_accel_mps2;    // lateral accel command clamp (m/s^2)
-    float    accel_to_fin_deg;  // accel (m/s^2) -> fin (deg) scale
+    float    nav_gain;          // MODE_PN: navigation constant N (3-5)
+    float    max_accel_mps2;    // lateral accel command clamp (m/s^2), BOTH laws
+    float    accel_to_fin_deg;  // accel (m/s^2) -> fin (deg) scale (FC-side, both laws)
     float    max_fin_deg;       // per-fin deflection clamp in guided mode (deg)
     float    min_speed_mps;     // airspeed gate below which guidance is inactive
     float    target_e_m;        // POINT: East rel. pad (m); OVERHEAD: ignored (0)
     float    target_n_m;        // POINT: North rel. pad (m); OVERHEAD: ignored (0)
-    float    target_alt_m;      // target altitude above pad (m), both modes
-    uint16_t coast_delay_ms;    // delay after burnout before guidance engages (ms)
+    float    target_alt_m;      // MODE_PN: target altitude above pad (m)
+    uint16_t coast_delay_ms;    // delay after burnout before guidance engages (ms; inert)
     uint8_t  enable;            // 0/1 runtime guidance master enable
     uint8_t  target_mode;       // GUIDE_TARGET_OVERHEAD / _POINT
+    // --- appended #534 (v2 of this frame) ---
+    float    kp_pos_per_s2;     // MODE_STATION_KEEP: position gain (1/s^2)
+    float    kd_vel_per_s;      // MODE_STATION_KEEP: velocity gain (1/s)
+    uint8_t  guidance_law;      // GUIDE_LAW_PN / GUIDE_LAW_STATION_KEEP
+                                //   (mirrors TR_GuidancePN::Mode by value)
 } GuidanceConfigData;
-static_assert(sizeof(GuidanceConfigData) == 36, "GuidanceConfigData must be 36 bytes");
+static_assert(sizeof(GuidanceConfigData) == 45, "GuidanceConfigData must be 45 bytes");
 
 // App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
 // driven by servo i:
@@ -2156,6 +2186,10 @@ struct __attribute__((packed)) FlightSettingsData
     //     (Pre-v4 firmware stepped to the NEXT waypoint's angle and honored
     //     per-waypoint null_rate modes — analysis must branch on this.)
     // v5: appended ism6_update_rate_hz (user-configurable IMU logging rate).
+    // (no version bump for #534: F_GUIDANCE_STATION_KEEP claims a previously
+    //  free flags bit, bit 6.  Layout is byte-identical, so VERSION stays 5 —
+    //  bumping it would force a sweep of the Data_Analysis parsers, which
+    //  hardcode message lengths, for a bit that older readers already ignore.)
     static constexpr uint8_t VERSION = 5;
 
     // flags bit positions
@@ -2165,6 +2199,8 @@ struct __attribute__((packed)) FlightSettingsData
     static constexpr uint8_t F_SERVO_ENABLED     = 3;  // servo/roll control enabled at all
     static constexpr uint8_t F_FW_DIRTY          = 4;  // build had uncommitted changes
     static constexpr uint8_t F_SOUNDS            = 5;  // piezo sounds enabled
+    static constexpr uint8_t F_GUIDANCE_STATION_KEEP = 6;  // guidance law: 1 = station-keep, 0 = PN
+                                                           // (meaningful only when F_GUIDANCE set)
 
     uint32_t time_us;            // micros() at snapshot
     uint8_t  version;            // = VERSION
