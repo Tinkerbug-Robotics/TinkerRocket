@@ -1586,6 +1586,10 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.vel_u = lora.vel_u;
     out.burnout_flag = lora.burnout_detected;
 
+    // #390: board→rocket orientation from flags2 (0 = not reported)
+    out.imu_orient_code = lora.imu_orient_code;
+    out.imu_orient_mode = lora.imu_orient_mode;
+
     // IMU -- low-g only (high-g not in LoRa packet)
     out.low_g_x = lora.acc_x;
     out.low_g_y = lora.acc_y;

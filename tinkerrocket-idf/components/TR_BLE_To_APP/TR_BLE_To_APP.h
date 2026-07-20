@@ -98,6 +98,12 @@ public:
         bool sim_active;        // #393: simulated flight in progress (NSF_SIM_ACTIVE)
         bool burnout_flag;      // #191: motor burnout detected (NSF_BURNOUT)
 
+        // #390: rocket's board→rocket mounting orientation, relayed over
+        // LoRa flags2 so the BS view can display it.  mode 0 = not reported
+        // (pre-#390 rocket firmware, or the FC hasn't published yet).
+        uint8_t imu_orient_code;  // 0-23; 31 = auto-exact (no discrete code)
+        uint8_t imu_orient_mode;  // 0 none / 1 default / 2 manual / 3 auto
+
         // Power rail state
         bool pwr_pin_on;        // true = FlightComputer + sensors powered on
 

@@ -101,6 +101,13 @@ struct TelemetryData: Codable {
     // otherwise) — nil here = no countdown to show.
     var bs_log_silence_remaining_s: UInt16?
 
+    // #390: rocket board→rocket mounting orientation relayed over LoRa
+    // flags2, packed (mode << 5) | code ("imo" key).  nil = not reported:
+    // pre-#390 rocket firmware, FC not up yet, or the key fell off the
+    // MTU-trimmed tail.  Direct links ignore this and use the richer
+    // imu_orient config message on BLEDevice.
+    var imu_orient_packed: Int?
+
     // Packed flight-status bits ("fs" JSON key, decoded in init).  Replaces
     // 8 separate boolean keys to keep the BLE notify payload under MTU —
     // see TR_BLE_To_APP.cpp:buildTelemetryJSON.  Bit layout must stay in
@@ -278,6 +285,7 @@ struct TelemetryData: Codable {
         case bs_voltage = "bvol"
         case bs_current = "bcur"
         case bs_log_silence_remaining_s = "slrm"
+        case imu_orient_packed = "imo"
         // Packed flight-status bitfield (replaces lnch/vapo/aapo/land/pwr/
         // cam/log/bslog).  Bit layout mirrors TR_BLE_To_APP.cpp.
         case flight_status_bits = "fs"
@@ -348,6 +356,7 @@ struct TelemetryData: Codable {
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
         bs_log_silence_remaining_s = try c.decodeIfPresent(UInt16.self, forKey: .bs_log_silence_remaining_s)
+        imu_orient_packed = flexInt(.imu_orient_packed)   // #293: tolerant, like fs/ps
         flight_status_bits = flexInt(.flight_status_bits) ?? 0   // #293: tolerant
         pyro_status_bits = flexInt(.pyro_status_bits) ?? 0       // #293: tolerant
         sensor_health = try c.decodeIfPresent(Int.self, forKey: .sensor_health) ?? 0
@@ -526,6 +535,31 @@ struct TelemetryData: Codable {
     var rocketLoggingActive: Bool {
         if state == "LANDED" { return false }
         return logging_active
+    }
+
+    // ── Relayed IMU orientation (#390) ─────────────────────────────────────
+    // Wire layout mirrors LORA2_ORIENT_* in RocketComputerTypes.h:
+    // bits 0-4 = discrete code (31 = auto-exact, no code), bits 5-6 = mode
+    // (1 default / 2 manual / 3 auto; 0 never arrives — the BS omits "imo").
+
+    var relayedOrientationMode: IMUOrientationMode {
+        guard let packed = imu_orient_packed else { return .unknown }
+        let code = packed & 0x1F
+        switch (packed >> 5) & 0x3 {
+        case 1: return .defaultMounting
+        case 2: return .manual
+        case 3: return code == 31 ? .autoExact : .autoSnap
+        default: return .unknown
+        }
+    }
+
+    var relayedOrientationName: String {
+        guard let packed = imu_orient_packed,
+              relayedOrientationMode != .unknown else { return "" }
+        let code = UInt8(packed & 0x1F)
+        // Auto-exact carries no discrete code — name it so the IMU card's
+        // line still renders (it gates on a non-empty name).
+        return code < 24 ? FlightSettingsData.b2rName(code: code) : "custom"
     }
 }
 

@@ -670,10 +670,17 @@ struct ConnectedDashboardView: View {
             }
 
             if showRocketViews {
+                // Orientation on a BS link comes from the LoRa-relayed
+                // flags2 field (#390) — before that the BS had no way to
+                // know it and this line was blanked deliberately.
                 IMUView(telemetry: device.telemetry,
                         isBaseStation: device.isBaseStation,
-                        orientationName: device.isBaseStation ? "" : device.imuOrientationName,
-                        orientationMode: device.imuOrientationMode)
+                        orientationName: device.isBaseStation
+                            ? device.telemetry.relayedOrientationName
+                            : device.imuOrientationName,
+                        orientationMode: device.isBaseStation
+                            ? device.telemetry.relayedOrientationMode
+                            : device.imuOrientationMode)
                     .opacity(staleOpacity)
             }
 
