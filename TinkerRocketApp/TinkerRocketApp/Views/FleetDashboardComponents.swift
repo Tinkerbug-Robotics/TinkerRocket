@@ -190,25 +190,6 @@ struct BaseStationStripView: View {
         return remote?.displayName ?? "Rocket \(focus)"
     }
 
-    /// Level-matched battery symbol for the strip's SoC glance.
-    private var batteryGlyph: String {
-        guard let soc = bs.telemetry.bs_soc else { return "battery.0" }
-        switch soc {
-        case 87.5...: return "battery.100"
-        case 62.5..<87.5: return "battery.75"
-        case 37.5..<62.5: return "battery.50"
-        case 12.5..<37.5: return "battery.25"
-        default: return "battery.0"
-        }
-    }
-
-    private var batteryColor: Color {
-        guard let soc = bs.telemetry.bs_soc else { return .secondary }
-        if soc < 20 { return .red }
-        if soc < 40 { return .orange }
-        return .secondary
-    }
-
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "antenna.radiowaves.left.and.right")
@@ -230,16 +211,9 @@ struct BaseStationStripView: View {
                 }
             }
             Spacer()
-            // Battery glyph so the % reads as BS charge at a glance (the
-            // bare number was ambiguous); full charge/voltage/current live
-            // in the Battery card's "Base Stn" row below the rocket stats.
-            HStack(spacing: 4) {
-                Image(systemName: batteryGlyph)
-                    .font(.caption)
-                    .foregroundColor(batteryColor)
-                Text(bs.telemetry.bsSocDisplay)
-                    .font(.system(.caption, design: .monospaced))
-            }
+            // No battery % here — phone-tested as ambiguous.  BS battery
+            // lives in the Battery card's "Base Stn" row (with the rocket's)
+            // and in BaseStationDetailView.
             Image(systemName: "chevron.right")
                 .font(.caption2)
                 .foregroundColor(.secondary)

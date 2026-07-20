@@ -465,9 +465,15 @@ private struct DirectRocketSection: View {
     @State private var collapsed = false
 
     var body: some View {
-        RocketSectionHeader(subject: subject,
-                            collapsible: collapsible,
-                            collapsed: $collapsed)
+        // Header only when it does real work: separating sections and
+        // hosting the collapse control with 2+ rockets displayed. Solo,
+        // the units-bar chip and (via BS) the strip already name the
+        // rocket — phone-tested as pure redundancy.
+        if collapsible {
+            RocketSectionHeader(subject: subject,
+                                collapsible: collapsible,
+                                collapsed: $collapsed)
+        }
         if collapsed {
             CollapsedRocketSummary(telemetry: device.telemetry)
         } else {
@@ -493,9 +499,13 @@ private struct FocusedRelaySection: View {
     @State private var collapsed = false
 
     var body: some View {
-        RocketSectionHeader(subject: subject,
-                            collapsible: collapsible,
-                            collapsed: $collapsed)
+        // Same solo-redundancy rule as DirectRocketSection: the BS strip
+        // right above already says which rocket its radio follows.
+        if collapsible {
+            RocketSectionHeader(subject: subject,
+                                collapsible: collapsible,
+                                collapsed: $collapsed)
+        }
         if collapsed {
             CollapsedRocketSummary(telemetry: bs.telemetry)
         } else {
@@ -651,8 +661,12 @@ struct ConnectedDashboardView: View {
             if device.isBaseStation && dataStatus == .syncing {
                 BSOnlyBatteryView(telemetry: device.telemetry)
             } else {
+                // Rocket row + "Base Stn" row on a BS link, same as
+                // pre-#390: the strip-tile bare % phone-tested as ambiguous,
+                // and splitting battery info across two places wasn't worth
+                // a shorter card.
                 BatteryView(telemetry: device.telemetry,
-                            isBaseStation: false)
+                            isBaseStation: device.isBaseStation)
                     .opacity(staleOpacity)
             }
 
