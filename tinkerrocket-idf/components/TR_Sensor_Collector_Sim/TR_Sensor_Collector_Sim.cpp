@@ -233,6 +233,27 @@ bool SensorCollectorSim::getISM6HG256Data(ISM6HG256Data& data_out)
     sim_time_s_ += clamped_dt;
 
     stepPhysics(clamped_dt);
+
+#if defined(TR_SIM_DEAD_IMU) && TR_SIM_DEAD_IMU
+    // #556 bench validation: emulate an IMU that dies at burnout.  The flight
+    // physics are stepped above, so baro/GNSS keep flying the FULL trajectory
+    // (ascent -> apogee -> descent); but from the boost->coast boundary on we
+    // stop DELIVERING fresh IMU samples.  The main loop derives IMU freshness
+    // from this getter returning true, so ism6 goes stale, burnout_detected
+    // never latches, and the burnout-gated apogee vote never runs — leaving the
+    // baro-only Layer-2 backstop as the ONLY path to apogee.  That is exactly
+    // the dead-IMU condition #556 must survive.  The IMU stays live through
+    // PRELAUNCH/POWERED so launch still latches normally (launch detection
+    // requires acc_mag > 20).  Compile-guarded AND sim-only: it can never
+    // affect a real flight or a normal sim run.
+    if (phase_ >= SIM_COASTING)
+    {
+        static bool announced = false;
+        if (!announced) { announced = true; Serial.println("[SIM] DEAD-IMU: withholding IMU from coast (#556)"); }
+        return false;
+    }
+#endif
+
     encodeISM6(now_us, data_out);
     return true;
 }

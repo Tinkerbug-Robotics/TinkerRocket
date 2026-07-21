@@ -587,35 +587,55 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 apogee_flag = true;
             }
         }
-
-        // --- Layer 2: baro-only descent backstop (#257) ---
-        // Last-resort net for the degraded case where the primary vote cannot
-        // reach quorum (e.g. an unhealthy EKF leaves < 2 healthy voters).  A
-        // healthy, mach-unlocked baro that has fallen >= APOGEE_BACKSTOP_DROP_M
-        // below the running peak while still descending is unambiguously past
-        // apogee — a condition unreachable during a normal boost, so there is
-        // no false-positive exposure.  alt_est / d_alt_est_ come from the
-        // baro-only KF, so this still works with a dead EKF (and dead IMU).
-        // Latches apogee_flag exactly like the vote, enabling the full
-        // drogue + main sequence; apogee_backstop_flag records that Layer 2
-        // (not the vote) was the path that fired, for post-flight diagnostics.
-        if (baro_healthy && !baro_locked_out &&
-            alt_est > 15.0f &&
-            alt_est <= max_altitude - APOGEE_BACKSTOP_DROP_M &&
-            d_alt_est_ < 0.0f)
-        {
-            if (backstop_descent_count_ < APOGEE_COUNT_MAX) backstop_descent_count_++;
-        }
-        else if (backstop_descent_count_ > 0)
-        {
-            backstop_descent_count_--;
-        }
-        if (backstop_descent_count_ >= APOGEE_COUNT_HI && !apogee_flag)
-        {
-            apogee_flag = true;
-            apogee_backstop_flag = true;
-        }
     } // end burnout gate
+
+    // --- Layer 2: baro-only descent backstop (#257; decoupled from burnout, #556) ---
+    // Last-resort net for the degraded case where the primary vote cannot
+    // reach quorum (e.g. an unhealthy EKF leaves < 2 healthy voters).  A
+    // healthy baro that has fallen >= APOGEE_BACKSTOP_DROP_M below the running
+    // peak while still descending is unambiguously past apogee — a condition
+    // unreachable during a normal boost, so there is no false-positive
+    // exposure.  alt_est / d_alt_est_ / max_altitude all come from the
+    // baro-only KF and are updated every call, so this works with a dead EKF
+    // *and* a dead IMU.
+    //
+    // #556: this block is deliberately OUTSIDE the burnout_detected gate above.
+    // burnout_detected only ever latches from a fresh-IMU accel sample
+    // (main.cpp burnoutDetectStep, gated on ism6_fresh).  If the IMU dies
+    // during boost before burnout latches, the gated vote never runs — and
+    // while this backstop was still nested inside that gate, apogee was never
+    // declared, so drogue/main never fired and the vehicle came in ballistic.
+    //
+    // #556 (bench-found): the backstop must ALSO ignore baro_locked_out (the
+    // transonic mach lockout).  That lockout is driven by the EKF velocity,
+    // which a dead IMU freezes/corrupts — so it latches true and never releases
+    // (it clears only when speed < BARO_MACH_LOCKOUT_OFF), silently vetoing the
+    // very backstop meant to survive a dead IMU.  The vote's baro test (above)
+    // still honours the lockout; the backstop does not need it — the
+    // 30 m-below-peak + descending + APOGEE_COUNT_HI debounce is self-gating
+    // against any ascent / boost / transonic transient (a sustained 30 m drop
+    // below the running max cannot occur while climbing), so dropping the
+    // lockout gate here removes no real protection and restores the dead-IMU
+    // recovery path.  Latches apogee_flag exactly like the vote, enabling the
+    // full drogue + main sequence; apogee_backstop_flag records that Layer 2
+    // (not the vote) was the path that fired, for post-flight diagnostics.
+    if (launch_flag &&
+        baro_healthy &&
+        alt_est > 15.0f &&
+        alt_est <= max_altitude - APOGEE_BACKSTOP_DROP_M &&
+        d_alt_est_ < 0.0f)
+    {
+        if (backstop_descent_count_ < APOGEE_COUNT_MAX) backstop_descent_count_++;
+    }
+    else if (backstop_descent_count_ > 0)
+    {
+        backstop_descent_count_--;
+    }
+    if (backstop_descent_count_ >= APOGEE_COUNT_HI && !apogee_flag)
+    {
+        apogee_flag = true;
+        apogee_backstop_flag = true;
+    }
 
     // ### Apogee rising edge: reset landing sub-flag counters (#192) ###
     // The 1 Hz sub-detectors above accumulate evidence regardless of

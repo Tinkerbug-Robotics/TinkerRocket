@@ -141,20 +141,72 @@ TEST_F(KinematicChecksTest, MaxAltitude_SpikeRejection) {
     EXPECT_LT(kc.max_altitude, 135.0f);
 }
 
-TEST_F(KinematicChecksTest, Apogee_GatedOnBurnout) {
-    // Force launch
+TEST_F(KinematicChecksTest, Apogee_VoteGatedOnBurnout) {
+    // The 4-test apogee VOTE is gated on burnout_detected.  With burnout never
+    // latched, a descent too shallow to trip the (burnout-independent, #556)
+    // baro backstop must NOT declare apogee.  The backstop's own dead-IMU path
+    // is covered by Apogee_DeadIMUInBoost_BaroBackstopStillFires below.
     for (int i = 0; i < 80; i++) {
         setMockMillis(i * 2);
         callFlight(float(i), 25.0f, 10.0f);
     }
     ASSERT_TRUE(kc.launch_flag);
 
-    // Now descending, but burnout NOT detected
+    // Genuine but shallow descent (~15 m) from the ~79 m launch peak, burnout
+    // NOT detected.  vel/pitch here would satisfy the vote had burnout latched.
     for (int i = 0; i < 50; i++) {
         setMockMillis(160 + i * 2);
-        callFlight(100.0f - i, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.2f, false);
+        callFlight(79.0f - i * 0.3f, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.2f, /*burnout*/false);
     }
-    EXPECT_FALSE(kc.apogee_flag); // gated on burnout
+    // Guard: confirm the descent stayed within APOGEE_BACKSTOP_DROP_M (30 m), so
+    // the assertion below tests the burnout gate — not an insufficient descent.
+    EXPECT_LT(kc.max_altitude - kc.alt_est, 30.0f);
+    EXPECT_FALSE(kc.apogee_flag) << "vote is burnout-gated; a sub-backstop descent must not fire";
+}
+
+TEST_F(KinematicChecksTest, Apogee_DeadIMUInBoost_BaroBackstopStillFires) {
+    // #556 regression: if the IMU dies during boost, burnout_detected never
+    // latches (it only latches from a fresh-IMU accel sample).  Before the fix
+    // the whole apogee block — including the baro-only Layer-2 backstop that is
+    // documented to survive a dead IMU — was nested under the burnout gate, so
+    // apogee was never declared and drogue/main never fired (ballistic).  This
+    // mirrors Apogee_EKFUnhealthy_BaroBackstopFires but with burnout==false
+    // (dead IMU) rather than a merely-unhealthy EKF: the backstop must still fire.
+    kc.launch_flag = true;
+
+    // Seed the baro KF at a 140 m apogee, then pin the running peak.  burnout is
+    // NEVER set (the IMU stopped producing fresh samples during boost).
+    for (int i = 0; i < 250; i++) {
+        setMockMillis(i * 2);
+        callFlight(140.0f, 9.81f, 0.0f, 0.0f, 0.0f, false, 1.0f, /*burnout*/false);
+    }
+    ASSERT_GT(kc.alt_est, 130.0f);
+    ASSERT_FALSE(kc.apogee_flag) << "no apogee at the top of coast";
+    kc.max_altitude = 140.0f;
+
+    // Descend ~0.5 m/call (inside the baro rate-gate), burnout still FALSE AND
+    // baro_locked_out=TRUE.  This is the exact dead-IMU failure mode found on the
+    // bench (2026-07-21): a dead IMU freezes the EKF velocity, so the transonic
+    // mach lockout latches true and never releases (it clears only below
+    // BARO_MACH_LOCKOUT_OFF) — which vetoed the backstop and left the vehicle
+    // ballistic.  The backstop must NOT be gated on the lockout and must fire
+    // anyway.  Stays silent until > 30 m below the peak, then latches.
+    uint32_t t = 600;
+    float alt = 140.0f;
+    bool fired_too_high = false;
+    for (int i = 0; i < 160; i++, t += 2) {
+        alt -= 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f,
+                   /*burnout*/false, /*baro_lockout*/true);
+        if (kc.apogee_flag && (140.0f - kc.alt_est) < 28.0f) fired_too_high = true;
+    }
+    EXPECT_TRUE(kc.apogee_flag)
+        << "baro backstop must declare apogee without burnout (dead-IMU boost dropout, #556)";
+    EXPECT_TRUE(kc.apogee_backstop_flag)
+        << "Layer-2 backstop should be the firing path";
+    EXPECT_FALSE(fired_too_high)
+        << "backstop must not fire < 30 m below the peak";
 }
 
 TEST_F(KinematicChecksTest, Apogee_WithBurnout_DetectsApogee) {
