@@ -79,7 +79,9 @@ MSG_NAMES = {
 
 # Expected payload sizes for validation
 MSG_EXPECTED_LEN = {
-    MSG_OUT_STATUS_QUERY: 1,
+    # Legacy logs carried a 1-byte query; later firmware grew it (v2 16,
+    # v3 26, v4 28, v5 41 — #435).  Tuple-aware check below.
+    MSG_OUT_STATUS_QUERY: (1, 16, 26, 28, 41),
     MSG_GNSS:             42,
     MSG_ICM45686:         36,
     MSG_MS5611:           10,
@@ -225,7 +227,8 @@ def parse_binary_file(filepath):
         # Validate: known type with expected length
         if msg_type in MSG_EXPECTED_LEN:
             expected = MSG_EXPECTED_LEN[msg_type]
-            if msg_len != expected:
+            valid = expected if isinstance(expected, tuple) else (expected,)
+            if msg_len not in valid:
                 # Bad length — probably false sync, skip one byte
                 pos -= 1
                 continue

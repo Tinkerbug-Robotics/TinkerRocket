@@ -23,7 +23,7 @@ enum MessageType: UInt8 {
     case h3lis331 = 0xA9   // Legacy-only high-G accelerometer (10B)
     case cameraStart = 0xAA
     case cameraStop = 0xAB
-    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3) — runtime settings snapshot at launch (#165)
+    case flightSettings = 0xE1  // FlightSettingsData (188B v1 / 200B v2 / 208B v3 / 210B v5 / 219B v6) — runtime settings snapshot at launch (#165)
     case iis2mdc = 0xD1    // IIS2MDC magnetometer (new Mini PCB rev, 10B)
     case lora = 0xF1
 }
@@ -171,6 +171,16 @@ nonisolated struct FlightSettingsData {
     /// v5+: IMU logging rate (ISM6HG256 ODR, Hz) that actually flew.
     let ism6_update_rate_hz: UInt16?
 
+    /// v6+ (#435): the horizontal guidance aim point that actually FLEW —
+    /// pad-relative ENU meters, re-converted from the frozen GNSS reference
+    /// at launch (so it can differ slightly from the receipt-time echo).
+    /// `guid_tgt_src` is the GUID_TGT_* code: 0 none/overhead, 1 cmd-28
+    /// geodetic (Drift-Cast) point, 2 cmd-65 profile E/N point. nil on
+    /// pre-v6 frames.
+    let guid_tgt_e_m: Float?
+    let guid_tgt_n_m: Float?
+    let guid_tgt_src: UInt8?
+
     let b2r_code: UInt8?
     let b2r_mode: UInt8?            // 0 default, 1 manual, 2 auto-snap, 3 auto-exact
     let b2r_residual_deg: Float?    // auto-snap residual angle
@@ -303,6 +313,18 @@ nonisolated struct FlightSettingsData {
             ism6_update_rate_hz = data.readUInt16LE(at: &o)
         } else {
             ism6_update_rate_hz = nil
+        }
+
+        // v6 flown-guidance-target tail at fixed offset 210 (#435).
+        if version >= 6 && data.count >= 219 {
+            var o = 210
+            guid_tgt_e_m = data.readFloat32LE(at: &o)
+            guid_tgt_n_m = data.readFloat32LE(at: &o)
+            guid_tgt_src = data.readUInt8(at: &o)
+        } else {
+            guid_tgt_e_m = nil
+            guid_tgt_n_m = nil
+            guid_tgt_src = nil
         }
     }
 }

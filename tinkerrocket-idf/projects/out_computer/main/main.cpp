@@ -895,6 +895,16 @@ static volatile bool imu_orient_dirty    = false;
 static uint8_t       imu_orient_pub_code = 0xFF;   // last published (0xFF = never)
 static uint8_t       imu_orient_pub_mode = 0xFF;
 
+// FC's guidance-target echo (#435), mirrored from the v5 status query and
+// re-published as a compact "guid_target" JSON frame whenever it changes —
+// the app's cmd-28 send confirmation is gated on seeing this echo advance.
+// 0xFF sentinels = never published (tgt_seq starts at 0 on the FC, so the
+// first real query always looks changed and pushes an initial frame).
+static volatile bool guid_target_dirty   = false;
+static uint8_t       guid_tgt_pub_seq    = 0xFF;
+static uint8_t       guid_tgt_pub_status = 0xFF;
+static uint8_t       guid_tgt_pub_rc     = 0xFF;
+
 static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
 {
     return (flags & mask) != 0U;
@@ -2150,6 +2160,8 @@ static bool isKnownMessageType(uint8_t type)
         case ROLL_CTRL_CONFIG_MSG:
         case GUIDANCE_CONFIG_PENDING:
         case GUIDANCE_CONFIG_MSG:
+        case GUIDANCE_POINT_PENDING:  // Drift-Cast aim point (#435) — OC→FC only,
+        case GUIDANCE_POINT_MSG:      // listed like the guidance-config pair
         case FIN_CONFIG_PENDING:
         case FIN_CONFIG_MSG:
         case GUIDANCE_ENABLE:
@@ -2396,6 +2408,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                         ESP_LOGI("CFG", "Re-staged MANUAL IMU orientation %u to FC",
                                  (unsigned)cfg_imu_orient);
                     }
+                }
+            }
+            // Guidance-target echo (#435, format v5+): surface changes to the
+            // app.  seq alone would suffice for cmd-28 results (it bumps on
+            // every processed upload); status/rc are compared too as belt-and-
+            // braces against a missed frame.
+            if (last_query_cfg.format_version >= 5)
+            {
+                if (last_query_cfg.tgt_seq     != guid_tgt_pub_seq ||
+                    last_query_cfg.tgt_status  != guid_tgt_pub_status ||
+                    last_query_cfg.tgt_last_rc != guid_tgt_pub_rc)
+                {
+                    guid_target_dirty = true;
                 }
             }
         }
@@ -3334,6 +3359,38 @@ static void sendImuOrientation()
              (unsigned)last_query_cfg.b2r_mode);
 }
 
+// Publish the FC's guidance-target echo (#435) as its own compact config
+// message.  This is the app's cmd-28 send confirmation: DriftCast captures
+// the seq baseline before sending and confirms on seq-advance + rc + a
+// lat/lon tolerance match.  Kept tiny per the fc_identity/imu_orient
+// pattern — sendConfigJSON silently drops frames over MTU-3, so this must
+// NEVER be folded into the big "config" frame.  6-decimal degrees keep the
+// f32 echo's full precision (~0.11 m/digit at the equator).
+static void sendGuidTarget()
+{
+    if (last_query_cfg.format_version < 5) return;  // pre-#435 FC — the app
+                                                    // treats absence as
+                                                    // unsupported firmware
+    char buf[144];
+    snprintf(buf, sizeof(buf),
+             "{\"type\":\"guid_target\",\"seq\":%u,\"st\":%u,\"rc\":%u,"
+             "\"lat\":%.6f,\"lon\":%.6f,\"alt\":%d}",
+             (unsigned)last_query_cfg.tgt_seq,
+             (unsigned)last_query_cfg.tgt_status,
+             (unsigned)last_query_cfg.tgt_last_rc,
+             (double)last_query_cfg.tgt_lat_deg,
+             (double)last_query_cfg.tgt_lon_deg,
+             (int)last_query_cfg.tgt_alt_m);
+    enqueueConfigReadback(String(buf));   // #398 item 3: paced drain
+    guid_tgt_pub_seq    = last_query_cfg.tgt_seq;
+    guid_tgt_pub_status = last_query_cfg.tgt_status;
+    guid_tgt_pub_rc     = last_query_cfg.tgt_last_rc;
+    ESP_LOGI("CFG", "Queued guid_target (seq=%u st=%u rc=%u)",
+             (unsigned)last_query_cfg.tgt_seq,
+             (unsigned)last_query_cfg.tgt_status,
+             (unsigned)last_query_cfg.tgt_last_rc);
+}
+
 static void sendCurrentConfig()
 {
     // Split config into two smaller JSON messages to stay within MTU limits.
@@ -3409,10 +3466,12 @@ static void sendCurrentConfig()
     ESP_LOGI("CFG", "Queued identity readback (%u bytes)", (unsigned)id_json.length());
 
     // Also push the relayed FC firmware version as its own small message (#8),
-    // then the FC's board→rocket mounting orientation (pre-arm display). Both
+    // then the FC's board→rocket mounting orientation (pre-arm display), then
+    // the guidance-target echo (#435 — covers connect AND cmd 20).  All
     // enqueue too, so the whole readback drains from loop_oc without blocking.
     sendFcIdentity();
     sendImuOrientation();
+    sendGuidTarget();
 }
 
 // Cache servo config to NVS (mirrors what FlightComputer stores)
@@ -3495,7 +3554,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // state change that never happened, and the stale command fired on the
     // ground after landing. Refuse honestly instead (per design decision);
     // the operator re-sends after landing if still wanted.
-    if ((cmd == 1 || cmd == 23) && latest_rocket_state == INFLIGHT)
+    // cmd 28 (#435) joins the list: a guidance point queued mid-flight would
+    // be delivered after landing and refused by the FC's state gate — but the
+    // LoRa path has no echo (#285, blind fire-and-retry), so refusing here is
+    // the only honest answer.
+    if ((cmd == 1 || cmd == 23 || cmd == 28) && latest_rocket_state == INFLIGHT)
     {
         uplink_inflight_refusals++;
         ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
@@ -3566,6 +3629,18 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Servo test stop
         setPendingCommand(SERVO_TEST_STOP);
         ESP_LOGI("LORA", "UPLINK Servo test stop");
+    }
+    else if (cmd == 28 && payload_len >= sizeof(GuidancePointData))
+    {
+        // Drift-Cast guidance point (#435) relayed via base station (BS cmd
+        // 50 wrap).  Frame math: uplink [0xCA][nid][rid][ch][cmd][len] + 20 B
+        // payload = 26 B, exactly inside the 32-byte RX buffer — this is why
+        // cmd 28 is uplink-viable where the 45-byte GuidanceConfigData is not
+        // (#383 note above).  NO acceptance feedback reaches the BS/app over
+        // LoRa; operators must verify by direct connection before flight.
+        setPendingCommandWithConfig(GUIDANCE_POINT_PENDING, GUIDANCE_POINT_MSG,
+                                    payload, sizeof(GuidancePointData));
+        ESP_LOGI("LORA", "UPLINK Guidance point queued");
     }
     else if (cmd == 5 && payload_len >= 12)
     {
@@ -6107,6 +6182,16 @@ static void loop_oc()
         sendImuOrientation();
     }
 
+    // Same pattern for the guidance-target echo (#435): the FC bumps tgt_seq
+    // on every processed cmd 28 (and on echo-changing cmd-65 applies), the
+    // status-query ingest flags the change, and this pushes the fresh
+    // "guid_target" frame the app's send confirmation is waiting on.
+    if (guid_target_dirty && ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        guid_target_dirty = false;
+        sendGuidTarget();
+    }
+
     // Service the BLE library's poll-style work — currently just the OTA
     // deferred-restart watchdog. handleOtaFinish() sets the boot partition and
     // schedules esp_restart() ~500 ms out, but the reboot only fires from here.
@@ -6818,6 +6903,28 @@ static void loop_oc()
             // Roll profile clear (no payload)
             setPendingCommand(ROLL_PROFILE_CLEAR);
             ESP_LOGI("BLE", "Roll profile CLEAR -> FlightComputer");
+        }
+        else if (ble_cmd == 28)
+        {
+            // Drift-Cast guidance point (#435): relay the 20-byte
+            // GuidancePointData {lat f64, lon f64, alt f32} LE to the FC.
+            // No OC-side INFLIGHT gate here: the FC's state gate is
+            // authoritative and its rejection is VISIBLE to the app via the
+            // guid_target echo (unlike the LoRa path, which refuses INFLIGHT
+            // below because it has no echo).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(GuidancePointData))
+            {
+                setPendingCommandWithConfig(GUIDANCE_POINT_PENDING, GUIDANCE_POINT_MSG,
+                                            payload, sizeof(GuidancePointData));
+                ESP_LOGI("BLE", "Guidance point queued for RocketComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Guidance point payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(GuidancePointData));
+            }
         }
         else if (ble_cmd == 29)
         {

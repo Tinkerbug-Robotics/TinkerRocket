@@ -181,6 +181,12 @@ class SimConfig:
     pn_blend_radius_m: float = 5.0
     pn_kp_pos: float = 0.5
     pn_kd_vel: float = 1.0
+    # Station-keep horizontal aim point, ENU meters relative to the pad (#435;
+    # mirrors the FC's cmd-28 GuidancePointData after its LLA->ENU conversion).
+    # (0,0) = overhead.  Consumed only in STATION_KEEP; inert in MODE_PN,
+    # exactly like the firmware.
+    pn_target_e_m: float = 0.0
+    pn_target_n_m: float = 0.0
 
     # Pitch/yaw outer loop angle P gains
     pn_kp_pitch_angle: float = 4.0
@@ -365,6 +371,10 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
             guidance.configure(
                 config.pn_nav_gain, config.pn_max_accel_mps2,
                 config.pn_target_alt_m)  # OVERHEAD: aim straight up over the pad
+        # Horizontal aim point AFTER the law config, mirroring the FC's
+        # applyGuidanceConfig() ordering (law first — configure* resets the
+        # target; #435).  Inert in MODE_PN, exactly like the firmware.
+        guidance.set_horizontal_target(config.pn_target_e_m, config.pn_target_n_m)
 
         control_mixer = ControlMixer()
         control_mixer.configure(

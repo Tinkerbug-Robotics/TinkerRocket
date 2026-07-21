@@ -1159,36 +1159,267 @@ struct DriftCastView: View {
 /// `@ObservedObject` device — while the parent DriftCastView runs device-free
 /// (#42).  Only rendered when a device is present.
 ///
-/// #376: DISABLED pending firmware support (#435). The button used to send
-/// BLE cmd 28 — which no firmware handles (the OC dispatch doesn't include it
-/// and the BS doesn't relay it) — and then unconditionally reported
-/// "Guidance point sent". An operator would wind-compensate the aim point,
-/// see success, and fly believing the target moved, while the rocket guided
-/// to the profile's overhead target. Until cmd 28 exists end-to-end, show the
-/// computed point with an honest "not supported yet" note instead of a
-/// dangerous no-op button.
+/// #435: cmd 28 is now handled end-to-end, and success here is gated on the
+/// FC's "guid_target" readback echo — NEVER on the send having gone through
+/// (#376 taught us an unacknowledged "sent!" is a lie the operator flies on).
+/// Direct rocket link: send (enabled only while connected AND after the FC's
+/// target echo arrived — the baseline that makes frames attributable), then
+/// wait up to 6 s. Verdicts come from the pure GuidanceSendFlow: ACCEPTED +
+/// GEO_ACTIVE + matching coordinates → green immediately; rejections and
+/// mismatches are PROVISIONAL (an interleaved cmd-65 apply also bumps seq
+/// with a stale rc) and settle at the timeout unless a genuine accept
+/// upgrades them; silence → timeout.
+/// Base-station link: relayed via cmd 50, but BS uplink is fire-and-retry
+/// with no rocket ACK (#285) and the echo only rides the direct OC link —
+/// so the BS path lands in a PERMANENT amber "sent, unconfirmed" state and
+/// must never show green.
 private struct DriftCastSendButton: View {
     @ObservedObject var device: BLEDevice
     let result: GuidanceResult
     let unitSystem: UnitSystem
 
+    private enum SendState: Equatable {
+        case idle
+        /// Waiting on the echo. The pure GuidanceSendFlow (BLETypes.swift,
+        /// unit-tested) owns ALL verdict attribution: baseline adoption,
+        /// interleaved-cmd-65 provisional failures, confirm upgrades.
+        case sending(GuidanceSendFlow)
+        case confirmed
+        case failed(String)
+        /// BS relay fired; delivery/acceptance unknowable (#285). Terminal.
+        case sentUnconfirmedBS
+    }
+
+    @State private var sendState: SendState = .idle
+    /// Invalidates in-flight timeout closures when a new send (or a result
+    /// recompute) supersedes them.
+    @State private var sendGeneration = 0
+
+    /// Identity of the computed point — a recompute resets the state machine
+    /// so a stale "accepted" can't hang next to a fresh, unsent point.
+    private var resultKey: String {
+        "\(result.guidanceLat),\(result.guidanceLon),\(result.apogeeFt)"
+    }
+
+    private var isSending: Bool {
+        if case .sending = sendState { return true }
+        return false
+    }
+
+    private var canSend: Bool {
+        // isConnected: sendRawCommand silently drops when disconnected, and a
+        // "sent" that never left the phone must not be able to turn green off
+        // a stale reconnect echo.
+        guard result.feasible, !isSending, device.isConnected else { return false }
+        if device.isBaseStation { return device.focusRocketID != nil }
+        // Direct link: require the FC's target echo before allowing a send —
+        // it IS the confirmation channel (pre-#435 firmware never sends it,
+        // and sending without a baseline invites stale-frame misattribution).
+        return device.guidanceTargetEcho != nil
+    }
+
     var body: some View {
         VStack(spacing: 6) {
-            Label("Send to Unit", systemImage: "antenna.radiowaves.left.and.right")
-                .fontWeight(.bold)
+            Button(action: send) {
+                HStack {
+                    if isSending { ProgressView().tint(.white) }
+                    Label(buttonTitle, systemImage: buttonIcon)
+                        .fontWeight(.bold)
+                }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(Color.gray)
-                .foregroundColor(.white.opacity(0.7))
+                .background(buttonColor)
+                .foregroundColor(.white)
                 .cornerRadius(10)
-            Label("Not supported by the rocket firmware yet (#435) — the unit always guides to the profile's target. Use the computed point manually.",
+            }
+            .disabled(!canSend)
+
+            statusCaption
+
+            if !result.feasible {
+                Label("Result is infeasible — recompute before sending.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if device.isBaseStation && device.focusRocketID == nil {
+                Label("Base station has no focused rocket — select one on the dashboard first.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if !device.isConnected {
+                Label("Not connected — reconnect before sending.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if !device.isBaseStation && device.guidanceTargetEcho == nil {
+                Label("Waiting for the rocket's target state — sending unlocks once it arrives (a firmware without the #435 echo cannot confirm an aim point).",
+                      systemImage: "hourglass")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // Live FC-side target state (#435 decision 5): the connect-time
+            // profile push asserting its own target visibly wipes a
+            // previously sent Drift-Cast point right here.
+            if let echo = device.guidanceTargetEcho {
+                HStack {
+                    Text("Unit target")
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(unitTargetLabel(echo))
+                        .fontWeight(.medium)
+                }
+                .font(.caption)
+            }
+
+            if device.rocketConfig?.guidanceEnabled == false {
+                Label("Rocket guidance is OFF — enable it or the aim point won't fly.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.bottom, 20)
+        .onReceive(device.$guidanceTargetEcho) { echo in
+            handleEcho(echo)
+        }
+        .onChange(of: resultKey) { _ in
+            sendGeneration += 1
+            sendState = .idle
+        }
+    }
+
+    // MARK: State-dependent chrome
+
+    private var buttonTitle: String {
+        switch sendState {
+        case .idle, .failed:      return "Send to Unit"
+        case .sending:            return "Waiting for rocket…"
+        case .confirmed:          return "Accepted by rocket"
+        case .sentUnconfirmedBS:  return "Sent via radio — unconfirmed"
+        }
+    }
+
+    private var buttonIcon: String {
+        switch sendState {
+        case .idle, .failed, .sending: return "antenna.radiowaves.left.and.right"
+        case .confirmed:               return "checkmark.circle.fill"
+        case .sentUnconfirmedBS:       return "questionmark.circle"
+        }
+    }
+
+    private var buttonColor: Color {
+        if !canSend && !isSending && sendState != .confirmed
+            && sendState != .sentUnconfirmedBS { return .gray }
+        switch sendState {
+        case .idle, .failed:      return .red
+        case .sending:            return .gray
+        case .confirmed:          return .green
+        case .sentUnconfirmedBS:  return .orange
+        }
+    }
+
+    @ViewBuilder
+    private var statusCaption: some View {
+        switch sendState {
+        case .idle, .sending:
+            EmptyView()
+        case .confirmed:
+            // "Accepted", never "locked": the FC re-converts against the
+            // frozen GNSS reference at launch, and a later profile push can
+            // still overwrite the point (watch the Unit target row).
+            Label("Rocket accepted the aim point for station-keep. A settings push or reboot clears it — recheck the Unit target row before launch.",
+                  systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundColor(.green)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .failed(let reason):
+            Label(reason, systemImage: "xmark.octagon")
+                .font(.caption)
+                .foregroundColor(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .sentUnconfirmedBS:
+            Label("Sent via base station — delivery and acceptance UNCONFIRMED (no acknowledgment over the radio link). Verify with a direct connection, or fly the profile target.",
                   systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundColor(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal)
-        .padding(.bottom, 20)
+    }
+
+    private func unitTargetLabel(_ echo: GuidanceTargetEcho) -> String {
+        switch echo.status {
+        case GuidanceTargetEcho.statusGeoActive:
+            return String(format: "%.6f, %.6f (%@)", echo.lat, echo.lon,
+                          UnitFormatter.altitude(Double(echo.altM), system: unitSystem))
+        case GuidanceTargetEcho.statusEnActive:
+            return "profile E/N point"
+        default:
+            return "none (overhead)"
+        }
+    }
+
+    // MARK: Actions
+
+    private func send() {
+        guard canSend else { return }
+        sendGeneration += 1
+        let generation = sendGeneration
+        let sentLat = result.guidanceLat
+        let sentLon = result.guidanceLon
+        let altM = Float(ftToM(result.apogeeFt))
+
+        if device.isBaseStation {
+            guard let rid = device.focusRocketID else { return }
+            device.sendGuidancePointViaRelay(rid: rid, lat: sentLat, lon: sentLon,
+                                             altitudeM: altM)
+            sendState = .sentUnconfirmedBS   // terminal — never green (#285)
+            return
+        }
+
+        // Direct rocket link: capture the baseline BEFORE sending. canSend
+        // guarantees an echo exists, so the baseline is real; the -1 branch
+        // stays as a defensive fallback the flow turns into baseline
+        // adoption, never a verdict.
+        let baseline = device.guidanceTargetEcho?.seq ?? -1
+        sendState = .sending(GuidanceSendFlow(baselineSeq: baseline,
+                                              sentLat: sentLat, sentLon: sentLon))
+        device.sendGuidancePoint(lat: sentLat, lon: sentLon, altitudeM: altM)
+
+        // 6 s budget: FC poll ~251 ms + status-query round trip + 20 ms JSON
+        // pace, surviving one dropped poll cycle. Also when a provisional
+        // rejection/mismatch was recorded (it may have been an interleaved
+        // cmd-65 frame, not our verdict) — it settles as the failure HERE
+        // unless a genuine accept upgraded the flow first.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            guard sendGeneration == generation,
+                  case .sending(var flow) = sendState else { return }
+            flow.onTimeout()
+            applyVerdict(of: flow)
+        }
+    }
+
+    private func handleEcho(_ echo: GuidanceTargetEcho?) {
+        guard let echo, case .sending(var flow) = sendState else { return }
+        flow.onEcho(echo)
+        applyVerdict(of: flow)
+    }
+
+    private func applyVerdict(of flow: GuidanceSendFlow) {
+        switch flow.verdict {
+        case .waiting:
+            sendState = .sending(flow)   // keep the (possibly updated) flow
+        case .confirmed:
+            sendState = .confirmed
+        case .failed(let reason):
+            sendState = .failed(reason)
+        }
     }
 }
 

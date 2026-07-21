@@ -52,7 +52,7 @@ MSG_NAMES = {
 }
 
 MSG_EXPECTED_LEN = {
-    MSG_OUT_STATUS_QUERY: (16, 26),  # v2 / v3 (+b2r orientation)
+    MSG_OUT_STATUS_QUERY: (16, 26, 28, 41),  # v2 / v3 (+b2r) / v4 (+iis2mdc rot) / v5 (+guid target echo, #435)
     MSG_GNSS:             42,
     MSG_ISM6HG256:        22,
     MSG_BMP585:           12,

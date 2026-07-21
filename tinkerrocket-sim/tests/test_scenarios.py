@@ -158,3 +158,50 @@ def test_scenario_a2_station_keep_beats_pn_no_cpa():
     late_a = np.hypot(late['pn_a_e'], late['pn_a_n']).max()
     assert late_a < 10.0
     assert float(guided_sk['speed'].iloc[-1]) < 12.0  # exited via the speed gate
+
+
+# --- (a3) station-keep with an OFFSET aim point: #435 SIL pin ------------------
+
+def test_scenario_a3_station_keep_offset_target():
+    """#435 SIL: station-keep converges toward a commanded off-pad aim point
+    (the sim-side twin of BLE cmd 28 -> LLA->ENU -> setHorizontalTarget).
+    This is the mutation of a2's fixed-(0,0)-target assumption: a regression
+    that ignores the target and converges on the pad fails the toward-target
+    invariants below.  Invariants, not constants."""
+    pytest.importorskip(
+        "tinkerrocket_sim._guidance",
+        reason="TR_GuidancePN submodule not initialized — _guidance extension "
+               "not built. Enable: git submodule update --init "
+               "tinkerrocket-idf/components/TR_GuidancePN",
+    )
+    # r = 15 m: inside the FC's 100 m aim-radius gate, large vs a2's ~3 m
+    # overhead residual, well inside the vehicle's coast authority.
+    target_e, target_n = 12.0, -9.0
+    cfg = S.guidance_coast_config()
+    df = _run_to_apogee(dataclasses.replace(
+        cfg, guidance_mode='station_keep',
+        pn_target_e_m=target_e, pn_target_n_m=target_n))
+
+    # Same flight sanity as a2.
+    assert 300.0 < df['altitude'].max() < 420.0
+    assert (df['guidance_active'] == True).mean() > 0.5
+
+    # Load-bearing pair: it converged toward the POINT, not the pad.
+    dist_to_target = float(np.hypot(df['x'].iloc[-1] - target_e,
+                                    df['y'].iloc[-1] - target_n))
+    dist_to_pad = float(np.hypot(df['x'].iloc[-1], df['y'].iloc[-1]))
+    assert dist_to_target < 7.5           # 0.5*r (a2 overhead residual ~3 m)
+    assert dist_to_target < dist_to_pad   # demonstrably steered off-vertical
+
+    # Redundant magnitude bracket on the pad-relative offset (~= r = 15 m).
+    assert 7.5 < dist_to_pad < 22.5
+
+    # No CPA/singularity path (a2 pattern): late guided accel stays far from
+    # the clamp and the guided window runs to low speed near apogee (observed:
+    # coast tilt latch at 20 deg fires at ~10 m/s — an offset target demands
+    # more tilt as speed drops; that is a low-speed exit, NOT an early
+    # CPA/singularity quit, which the speed bound below would catch).
+    guided = df[df['guidance_active'] == True]
+    late = guided[guided['time'] > guided['time'].iloc[-1] - 1.5]
+    assert np.hypot(late['pn_a_e'], late['pn_a_n']).max() < 10.0
+    assert float(guided['speed'].iloc[-1]) < 12.0
