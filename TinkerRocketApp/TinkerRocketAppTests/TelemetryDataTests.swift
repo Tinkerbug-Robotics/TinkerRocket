@@ -169,6 +169,11 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(onlyGnss.pyroHealth(channel: 1), .na)
         // BAD encodes as 0b11 in-place (verifies the 2-bit mask).
         XCTAssertEqual(try decode(health: 3 << 4).ekfHealth, .bad)
+        // #557: GNSS-absent degraded-flight flag at shift 22 (SH_BAD = active),
+        // distinct from the gnss fix-health item at shift 8.
+        XCTAssertTrue(try decode(health: 3 << 22).gnssAbsentMode)
+        XCTAssertFalse(try decode(health: 1 << 8).gnssAbsentMode)   // fix health ≠ absent mode
+        XCTAssertFalse(try decode(health: 0).gnssAbsentMode)
     }
 
     /// Missing "h" (older firmware / BS self-frame) → no scorecard, unknown.

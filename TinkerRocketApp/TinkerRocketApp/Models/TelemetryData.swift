@@ -193,6 +193,12 @@ struct TelemetryData: Codable {
     var gnssHealth: SensorHealth { shState(8) }
     var battHealth: SensorHealth { shState(10) }
     var storageHealth: SensorHealth { shState(20) }   // #281/#278: flight-log NAND — BAD = full/failing, won't record
+    // #557: GNSS-absent degraded flight (shift 22) — DISTINCT from gnssHealth
+    // (fix health, shift 8).  .bad = the FC initialized the EKF on the baro+IMU
+    // path because the module failed bring-up (dead/deaf UART), so there is no
+    // absolute position and guidance is off.  Rides sensor_health, so it reaches
+    // the app on both the direct-BLE and base-station-relay paths.
+    var gnssAbsentMode: Bool { shState(22) == .bad }
     func pyroHealth(channel: Int) -> SensorHealth {   // channel 1...4; .na = not configured
         guard (1...4).contains(channel) else { return .na }
         return shState(12 + (channel - 1) * 2)
