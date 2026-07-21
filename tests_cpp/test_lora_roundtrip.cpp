@@ -166,6 +166,26 @@ TEST_F(LoRaRoundtripTest, VelocityAndBurnout_IndependentOfFlagsState) {
     EXPECT_NEAR(out.vel_u, -45.6f, 0.05f);
 }
 
+// #557: the GNSS-absent degraded-flight verdict rides the raw sensor_health
+// bitfield over LoRa to the base station (packLoRa copies it verbatim), so the
+// BS-relayed app session shows the degraded banner too.  Pin that the new slot
+// (bits 22-23) survives the round-trip and does not bleed into a neighbour.
+TEST_F(LoRaRoundtripTest, GnssAbsentHealthSlot_Roundtrip) {
+    LoRaDataSI in = makeNominal();
+    in.sensor_health = shSet(0u, SH_GNSS_ABSENT_SHIFT, SH_BAD);   // degraded active
+    in.sensor_health = shSet(in.sensor_health, SH_STORAGE_SHIFT, SH_OK);  // neighbour
+    in.sensor_health = shSet(in.sensor_health, SH_GNSS_SHIFT, SH_DEGRADED);
+
+    LoRaData packed{};
+    conv.packLoRa(in, packed);
+    LoRaDataSI out{};
+    conv.unpackLoRa(packed, out);
+
+    EXPECT_EQ(shGet(out.sensor_health, SH_GNSS_ABSENT_SHIFT), SH_BAD);
+    EXPECT_EQ(shGet(out.sensor_health, SH_STORAGE_SHIFT),     SH_OK);
+    EXPECT_EQ(shGet(out.sensor_health, SH_GNSS_SHIFT),        SH_DEGRADED);
+}
+
 // #390: orientation field semantics — the wire sentinels are load-bearing.
 // A pre-#390 frame (flags2 orientation bits zero-filled) must unpack as
 // "not reported", never as a confident "+X default"; auto-exact's no-code

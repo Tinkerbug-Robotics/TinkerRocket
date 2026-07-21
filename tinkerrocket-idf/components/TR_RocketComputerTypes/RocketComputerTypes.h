@@ -1364,7 +1364,15 @@ static constexpr uint8_t SH_PYRO_SHIFT[4] = { 12, 14, 16, 18 };
 // battery.  BAD = a full or write-failing NAND that will NOT record the flight
 // — the silent failure mode that lost the 2026-06-25 guided flight.
 static constexpr uint8_t SH_STORAGE_SHIFT = 20;
-// bits 22-31 reserved
+// #557: GNSS-absent degraded flight mode.  DISTINCT from SH_GNSS (shift 8,
+// which reports fix health): this reports that the FC committed to the
+// baro+IMU-only EKF path because the module failed bring-up (dead/deaf UART),
+// so there is no absolute position, guidance is forced off, and roll control is
+// rate-null only.  Encoded SH_BAD = degraded mode active, SH_NA = normal.  Rides
+// the existing sensor_health carrier to the app on BOTH the direct-BLE and
+// LoRa/BS-relay paths (BLE JSON key "h") — no new wire field needed.
+static constexpr uint8_t SH_GNSS_ABSENT_SHIFT = 22;
+// bits 24-31 reserved
 static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st) {
     return (field & ~(uint32_t)(0x3u << shift)) | ((uint32_t)st << shift);
 }
