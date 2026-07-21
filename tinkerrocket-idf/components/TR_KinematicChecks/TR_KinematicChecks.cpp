@@ -592,12 +592,12 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // --- Layer 2: baro-only descent backstop (#257; decoupled from burnout, #556) ---
     // Last-resort net for the degraded case where the primary vote cannot
     // reach quorum (e.g. an unhealthy EKF leaves < 2 healthy voters).  A
-    // healthy, mach-unlocked baro that has fallen >= APOGEE_BACKSTOP_DROP_M
-    // below the running peak while still descending is unambiguously past
-    // apogee — a condition unreachable during a normal boost, so there is
-    // no false-positive exposure.  alt_est / d_alt_est_ / max_altitude all
-    // come from the baro-only KF and are updated every call, so this works
-    // with a dead EKF *and* a dead IMU.
+    // healthy baro that has fallen >= APOGEE_BACKSTOP_DROP_M below the running
+    // peak while still descending is unambiguously past apogee — a condition
+    // unreachable during a normal boost, so there is no false-positive
+    // exposure.  alt_est / d_alt_est_ / max_altitude all come from the
+    // baro-only KF and are updated every call, so this works with a dead EKF
+    // *and* a dead IMU.
     //
     // #556: this block is deliberately OUTSIDE the burnout_detected gate above.
     // burnout_detected only ever latches from a fresh-IMU accel sample
@@ -605,15 +605,22 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // during boost before burnout latches, the gated vote never runs — and
     // while this backstop was still nested inside that gate, apogee was never
     // declared, so drogue/main never fired and the vehicle came in ballistic.
-    // The 30 m-below-peak + descending + APOGEE_COUNT_HI debounce is
-    // self-gating against any ascent/boost transient (including the burnout
-    // bay-pressure snap-back, which is <= ~16 m), so running it on launch_flag
-    // alone is safe and restores a real dead-IMU recovery path.  Latches
-    // apogee_flag exactly like the vote, enabling the full drogue + main
-    // sequence; apogee_backstop_flag records that Layer 2 (not the vote) was
-    // the path that fired, for post-flight diagnostics.
+    //
+    // #556 (bench-found): the backstop must ALSO ignore baro_locked_out (the
+    // transonic mach lockout).  That lockout is driven by the EKF velocity,
+    // which a dead IMU freezes/corrupts — so it latches true and never releases
+    // (it clears only when speed < BARO_MACH_LOCKOUT_OFF), silently vetoing the
+    // very backstop meant to survive a dead IMU.  The vote's baro test (above)
+    // still honours the lockout; the backstop does not need it — the
+    // 30 m-below-peak + descending + APOGEE_COUNT_HI debounce is self-gating
+    // against any ascent / boost / transonic transient (a sustained 30 m drop
+    // below the running max cannot occur while climbing), so dropping the
+    // lockout gate here removes no real protection and restores the dead-IMU
+    // recovery path.  Latches apogee_flag exactly like the vote, enabling the
+    // full drogue + main sequence; apogee_backstop_flag records that Layer 2
+    // (not the vote) was the path that fired, for post-flight diagnostics.
     if (launch_flag &&
-        baro_healthy && !baro_locked_out &&
+        baro_healthy &&
         alt_est > 15.0f &&
         alt_est <= max_altitude - APOGEE_BACKSTOP_DROP_M &&
         d_alt_est_ < 0.0f)

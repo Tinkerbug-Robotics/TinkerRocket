@@ -184,15 +184,21 @@ TEST_F(KinematicChecksTest, Apogee_DeadIMUInBoost_BaroBackstopStillFires) {
     ASSERT_FALSE(kc.apogee_flag) << "no apogee at the top of coast";
     kc.max_altitude = 140.0f;
 
-    // Descend ~0.5 m/call (inside the baro rate-gate), burnout still FALSE.  The
-    // backstop must stay silent until > 30 m below the peak, then latch apogee.
+    // Descend ~0.5 m/call (inside the baro rate-gate), burnout still FALSE AND
+    // baro_locked_out=TRUE.  This is the exact dead-IMU failure mode found on the
+    // bench (2026-07-21): a dead IMU freezes the EKF velocity, so the transonic
+    // mach lockout latches true and never releases (it clears only below
+    // BARO_MACH_LOCKOUT_OFF) — which vetoed the backstop and left the vehicle
+    // ballistic.  The backstop must NOT be gated on the lockout and must fire
+    // anyway.  Stays silent until > 30 m below the peak, then latches.
     uint32_t t = 600;
     float alt = 140.0f;
     bool fired_too_high = false;
     for (int i = 0; i < 160; i++, t += 2) {
         alt -= 0.5f;
         setMockMillis(t);
-        callFlight(alt, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f, /*burnout*/false);
+        callFlight(alt, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f,
+                   /*burnout*/false, /*baro_lockout*/true);
         if (kc.apogee_flag && (140.0f - kc.alt_est) < 28.0f) fired_too_high = true;
     }
     EXPECT_TRUE(kc.apogee_flag)
