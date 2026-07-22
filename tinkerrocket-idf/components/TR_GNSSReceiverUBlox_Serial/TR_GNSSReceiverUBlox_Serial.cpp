@@ -150,6 +150,13 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         const size_t n = sizeof(probe_bauds) / sizeof(probe_bauds[0]);
         for (size_t i = 0; i < n; i++)
         {
+            // #557: bail mid-sweep on the bring-up deadline.  A removed module
+            // whose UART floats reads noise, so hasSerialActivity() trips and
+            // each baud runs a double begin() (~5 s) — a full 12-baud sweep is
+            // ~60 s.  Checking the deadline only *between* whole sweeps let a
+            // dead/noisy module spin ~100 s (bench 2026-07-21); a per-baud check
+            // bounds bring-up to roughly the deadline + one baud probe.
+            if (beginExpired()) return false;
             const uint32_t baud = probe_bauds[i];
             ESP_LOGI(TAG, "Trying %lu baud (RX=%d, TX=%d)",
                      (unsigned long)baud, rx_pin, tx_pin);
