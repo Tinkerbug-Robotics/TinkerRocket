@@ -325,13 +325,19 @@ struct TelemetryData: Codable {
         voltage = try c.decodeIfPresent(Float.self, forKey: .voltage)
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
-        num_sats = try c.decodeIfPresent(Int.self, forKey: .num_sats) ?? 0
+        // #571: complete the #293 hardening — every integer key goes through
+        // flexInt. The stragglers below were still strict decodeIfPresent, so
+        // ONE field emitted as float/string (firmware-contract drift) threw in
+        // init(from:) and the caller's catch discarded the WHOLE frame — on a
+        // BS-relayed stream that made the rocket vanish from the dashboard
+        // instead of degrading one field.
+        num_sats = flexInt(.num_sats) ?? 0
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "UNKNOWN"
         active_file = try c.decodeIfPresent(String.self, forKey: .active_file) ?? ""
         rx_kbs = try c.decodeIfPresent(Float.self, forKey: .rx_kbs)
         wr_kbs = try c.decodeIfPresent(Float.self, forKey: .wr_kbs)
-        frames_rx = try c.decodeIfPresent(UInt32.self, forKey: .frames_rx) ?? 0
-        frames_drop = try c.decodeIfPresent(UInt32.self, forKey: .frames_drop) ?? 0
+        frames_rx = UInt32(clamping: flexInt(.frames_rx) ?? 0)      // #571
+        frames_drop = UInt32(clamping: flexInt(.frames_drop) ?? 0)  // #571
         max_alt_m = try c.decodeIfPresent(Float.self, forKey: .max_alt_m)
         max_speed_mps = try c.decodeIfPresent(Float.self, forKey: .max_speed_mps)
         pressure_alt = try c.decodeIfPresent(Float.self, forKey: .pressure_alt)
@@ -356,20 +362,20 @@ struct TelemetryData: Codable {
         q3 = try c.decodeIfPresent(Float.self, forKey: .q3)
         rssi = try c.decodeIfPresent(Float.self, forKey: .rssi)
         snr = try c.decodeIfPresent(Float.self, forKey: .snr)
-        hop_channel = try c.decodeIfPresent(Int.self, forKey: .hop_channel)
-        netid_drops = try c.decodeIfPresent(Int.self, forKey: .netid_drops)
+        hop_channel = flexInt(.hop_channel)                          // #571
+        netid_drops = flexInt(.netid_drops)                          // #571
         bs_soc = try c.decodeIfPresent(Float.self, forKey: .bs_soc)
         bs_voltage = try c.decodeIfPresent(Float.self, forKey: .bs_voltage)
         bs_current = try c.decodeIfPresent(Float.self, forKey: .bs_current)
-        bs_log_silence_remaining_s = try c.decodeIfPresent(UInt16.self, forKey: .bs_log_silence_remaining_s)
+        bs_log_silence_remaining_s = flexInt(.bs_log_silence_remaining_s).map { UInt16(clamping: $0) }  // #571
         imu_orient_packed = flexInt(.imu_orient_packed)   // #293: tolerant, like fs/ps
         flight_status_bits = flexInt(.flight_status_bits) ?? 0   // #293: tolerant
         pyro_status_bits = flexInt(.pyro_status_bits) ?? 0       // #293: tolerant
-        sensor_health = try c.decodeIfPresent(Int.self, forKey: .sensor_health) ?? 0
-        source_rocket_id = try c.decodeIfPresent(Int.self, forKey: .source_rocket_id)
+        sensor_health = flexInt(.sensor_health) ?? 0                 // #571
+        source_rocket_id = flexInt(.source_rocket_id)                // #571: rid is the demux key
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
         // #95: missing "ds" → .live (older firmware doesn't emit it)
-        let dsRaw = try c.decodeIfPresent(Int.self, forKey: .data_status) ?? 0
+        let dsRaw = flexInt(.data_status) ?? 0                       // #571
         data_status = DataStatus(rawValue: dsRaw) ?? .live
         data_age_ms = UInt32(clamping: flexInt(.data_age_ms) ?? 0)   // #293: tolerant
         fields_trimmed = (flexInt(.fields_trimmed) ?? 0) != 0        // #282

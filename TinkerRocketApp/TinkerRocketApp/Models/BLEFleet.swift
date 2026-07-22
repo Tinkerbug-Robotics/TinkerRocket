@@ -191,7 +191,11 @@ class BLEFleet: NSObject, ObservableObject {
     private let maxReconnectAttempts = 8   // #291: was 3 (~7 s); raised for flight dropouts
     private var lastPeripheralIdentifier: UUID?
     private var userInitiatedDisconnect = false
-    private var reconnectingPeripheral: CBPeripheral?
+    // #571: ALL peripherals handed back by CoreBluetooth state restoration —
+    // a BS + direct-rocket session restores two, and keeping only .first
+    // silently lost the second (it never reappeared because the restored
+    // link's isConnected suppressed the scan trigger).
+    private var reconnectingPeripherals: [CBPeripheral] = []
 
     // Strong references to peripherals while a connection is in flight (#173).
     // CBCentralManager only retains peripherals weakly, so without our own
@@ -346,10 +350,14 @@ extension BLEFleet: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager,
                        willRestoreState dict: [String: Any]) {
+        // #571: keep EVERY restored peripheral, not just .first — a two-device
+        // session (BS + direct rocket) restores both, and dropping one here
+        // lost it for the whole relaunched session.
         if let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
-           let restored = peripherals.first {
-            print("[BLE] State restoration: holding reference to \(restored.name ?? "unknown")")
-            reconnectingPeripheral = restored
+           !peripherals.isEmpty {
+            print("[BLE] State restoration: holding \(peripherals.count) peripheral(s): "
+                  + peripherals.map { $0.name ?? "unknown" }.joined(separator: ", "))
+            reconnectingPeripherals = peripherals
         }
     }
 
@@ -357,8 +365,18 @@ extension BLEFleet: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             statusMessage = "Bluetooth ready"
-            if let p = reconnectingPeripheral, p.state == .connected {
-                print("[BLE] Restored peripheral still connected — resuming")
+            // #571: resume every restored peripheral that is still connected.
+            var resumedAny = false
+            var anyNotConnected = false
+            for p in reconnectingPeripherals {
+                guard p.state == .connected else {
+                    // Restored but the link didn't survive — the scan below
+                    // picks it back up (this is the case the old single-slot
+                    // code silently lost for the second device).
+                    anyNotConnected = true
+                    continue
+                }
+                print("[BLE] Restored peripheral still connected — resuming \(p.name ?? "unknown")")
                 let device = BLEDevice(peripheral: p, name: p.name ?? "Restored")
                 // #290: mirror the didConnect path. Without the fleet backref,
                 // fleet?.recordRocketFix() no-ops, so lastValidRocketFix never
@@ -367,9 +385,15 @@ extension BLEFleet: CBCentralManagerDelegate {
                 adopt(device, peripheralID: p.identifier)
                 device.onConnect()
                 devices.append(device)
-                activeDeviceID = p.identifier
-                reconnectingPeripheral = nil
-            } else {
+                if activeDeviceID == nil { activeDeviceID = p.identifier }
+                resumedAny = true
+            }
+            reconnectingPeripherals = []
+            // Scan when anything is missing: nothing restored at all, or a
+            // restored link that didn't survive the relaunch. (When every
+            // restored link resumed, behave as before — no scan while
+            // connected.)
+            if !resumedAny || anyNotConnected {
                 startScanning()
             }
         case .poweredOff:
