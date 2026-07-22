@@ -1676,6 +1676,16 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
 
     // ── Tier 1: recovery + dashboard-critical (never sacrificed) ──────────
 
+    // #570: source rocket id FIRST — it is the multi-rocket DEMUX KEY. The BS
+    // relays every rocket on one characteristic and the app attributes each
+    // frame by "rid"; it used to ride Tier 2, where a peak-payload frame
+    // (boost + GPS fix under a small MTU) could trim it and the app would
+    // book rocket B's telemetry to the selected rocket A. ~6 B, never
+    // droppable. (Direct FC/OC connections have no rid — omitted as before.)
+    if (data.source_rocket_id > 0) {
+        addInt("rid", data.source_rocket_id);
+    }
+
     // State
     addString("st", data.state);
 
@@ -1759,12 +1769,7 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("vol", data.voltage, 2);
 
     // ── Tier 2: attitude + IMU detail (dropped only under MTU pressure) ───
-
-    // Source rocket identity (numeric id; base station relay only).  The
-    // longer unit-name string ("run") is deferred to the droppable tail.
-    if (data.source_rocket_id > 0) {
-        addInt("rid", data.source_rocket_id);
-    }
+    // ("rid" moved to the head of Tier 1 — #570: it is the demux key.)
 
     // Roll command + quaternion — quat at 3 decimals gives ~0.06° angle
     // error in the derived Euler display, well under the dashboard's
@@ -1800,6 +1805,11 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     }
     if (data.netid_drops > 0) {
         addUint("nidd", data.netid_drops);
+    }
+    // #570: size-mismatch drops (mixed-flash SIZE_OF_LORA_DATA trap) — the
+    // sibling of "nidd". Zero bytes on a healthy link.
+    if (data.size_drops > 0) {
+        addUint("szd", data.size_drops);
     }
 
     // Base station
