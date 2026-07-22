@@ -6421,8 +6421,18 @@ static void loop_oc()
                 flash_us += (uint32_t)(micros() - t_flash);
                 if (!read_ok)
                 {
-                    ESP_LOGE("BLE", "File read error, aborting download");
-                    ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
+                    // #558: funnel through the unified post-loop abort handler
+                    // instead of emitting an inline abort-EOF here. The inline
+                    // abort-EOF did NOT set send_failed, so the post-loop fell
+                    // through to a BARE EOF and the final redundant EOF also
+                    // carried abort=false — so if this one inline abort-EOF was
+                    // dropped on the link the app saw only bare EOFs and saved the
+                    // truncated flight as complete, defeating #526's redundant-
+                    // abort drop guard. Set the flag + break; the post-loop emits
+                    // the abort-EOF AND a matching redundant one.
+                    ESP_LOGE("BLE", "File read error at offset %lu, aborting download",
+                             (unsigned long)file_offset);
+                    send_failed = true;
                     break;
                 }
                 file_offset += flash_bytes_read;
@@ -6461,6 +6471,7 @@ static void loop_oc()
                             // #524: could not send even after full backpressure. Do
                             // NOT keep going — that would hand the app a file with a
                             // hole in it and call it a success.
+                            ESP_LOGE("BLE", "BLE send failed mid-transfer, aborting download");
                             send_failed = true;
                             break;
                         }
@@ -6488,8 +6499,11 @@ static void loop_oc()
             if (send_failed)
             {
                 // #526: EOF|ABORT, not a bare EOF. The app must REJECT the partial
-                // file, not save the truncated bytes and call it complete.
-                ESP_LOGE("BLE", "Download ABORTED after %lu bytes: BLE send failed",
+                // file, not save the truncated bytes and call it complete. #558:
+                // this branch now covers a flash read error as well as a BLE send
+                // failure, so the specific cause is logged at each break point
+                // rather than named here.
+                ESP_LOGE("BLE", "Download ABORTED after %lu bytes",
                          (unsigned long)bytes_sent);
                 ble_app.sendFileChunk(bytes_sent, nullptr, 0, true, /*abort=*/true);
             }
