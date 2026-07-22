@@ -133,7 +133,17 @@ static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload
 // it visible on the pre-launch go/no-go and the live downlink instead.
 static SensorHealthState ocStorageHealth()
 {
-    if (!flightlog.isInitialized()) return SH_NA;
+    // #566: an uninitialized flight log is the MOST severe storage state, not
+    // an inapplicable one. flightlog.begin() failing at boot (corrupt index /
+    // metadata read error) is deliberately non-fatal, so the OC runs — but
+    // flightlogWriteSink() then refuses every frame and the #271 drop path
+    // discards ALL flight data. Returning SH_NA here hid exactly the silent
+    // loss this fold-in exists to surface: the app hides the Storage row on
+    // NA and excludes it from the go/no-go, so the operator saw a green
+    // board. There is no logger-disabled OC build (begin() is unconditional),
+    // so NA is never legitimate once boot completes — report BAD and let the
+    // scorecard go red.
+    if (!flightlog.isInitialized()) return SH_BAD;
     TR_LogToFlashStats s = {};
     logger.getStats(s);
     const uint32_t free_blocks = flightlog.bitmap().countInState(tr_flightlog::BLOCK_FREE);
@@ -5190,7 +5200,12 @@ void initPeripherals()
         }
         else
         {
-            ESP_LOGE("FLIGHTLOG", "begin failed: %s",
+            // #566: deliberately non-fatal (BLE/downlink still run so the fault
+            // is reachable), but flight logging is DEAD this boot — every frame
+            // will be dropped. ocStorageHealth() reports SH_BAD for this state
+            // so the pre-launch scorecard goes red instead of grey N/A.
+            ESP_LOGE("FLIGHTLOG", "begin failed: %s — flight logging DEAD this "
+                     "boot (all frames will drop); storage health = BAD",
                      tr_flightlog::to_string(st));
         }
     }
