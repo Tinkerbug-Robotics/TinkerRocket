@@ -897,6 +897,22 @@ void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
     // 0: No Fix, 1: Dead Reckoning, 2: 2D Fix, 3: 3D Fix,
     // 4:GNSS + Dead Reckoning, 5: Time Only
     gnss_data.fix_mode = gnss.getFixType();
+
+    // #562: fixType alone is not enough to trust a fix. u-blox marks a fix
+    // INVALID without dropping fixType below 3 — by clearing gnssFixOK (fix
+    // outside the configured DOP/accuracy masks) or setting invalidLlh
+    // (lat/lon/height not valid). gnssFixOK is ALSO how it signals a COCOM
+    // violation (>515 m/s or >18 km) — exactly the transonic / high-altitude
+    // regime the apogee GPS voter and guidance/landing-prediction run in. Zero
+    // fix_mode so every downstream `fix_mode >= 3` consumer treats it as "no
+    // fix" (same contract as the staleness gate below). maxWait=0 keeps this
+    // non-blocking: both flags come from the NAV-PVT that pollNewPVT already
+    // parsed this cycle. See open #491 (COCOM bench-test).
+    if (!gnss.getGnssFixOk(0) || gnss.getInvalidLlh(0))
+    {
+        gnss_data.fix_mode = 0;
+    }
+
     gnss_data.num_sats = gnss.getSIV();
 
     // SparkFun u-blox returns PDOP as scale 0.01. Convert to x10 for packed type.
