@@ -270,9 +270,54 @@ TEST_F(LoRaRoundtripTest, ExtremeValues_NoOverflow) {
     EXPECT_TRUE(out.logging_active);
     EXPECT_EQ(out.rocket_state, 4);
     EXPECT_NEAR(out.acc_x, 400.0f, 0.1f);
+    // #563: gyro_x=4500 dps exceeds the ×10 int16 wire range — it must SATURATE
+    // at 3276.7, not wrap to a sign-flipped value. (This assertion was missing,
+    // so the overflow went unnoticed despite the test packing an extreme rate.)
+    EXPECT_NEAR(out.gyro_x, 3276.7f, 0.1f);
     EXPECT_NEAR(out.voltage, 10.0f, 0.05f);
     EXPECT_NEAR(out.soc, 125.0f, 1.0f);
     EXPECT_LE(out.speed, 4000.0f);
+}
+
+// #563: gyro is encoded ×10 into an int16, so the wire range is ±3276.7 dps.
+// The pack clamp used to be the sensor's ±4500 dps full-scale, so any
+// |rate| > 3276.7 dps (~546 rpm) overflowed the int16 and wrapped to a
+// SIGN-FLIPPED value — a spin-up read as a spin-down on the ground station.
+// Guard the saturation: values in range round-trip accurately; values above it
+// saturate at ±3276.7 with the correct sign, never wrapping.
+TEST_F(LoRaRoundtripTest, GyroOverflow_SaturatesInsteadOfWrapping) {
+    // Just inside the wire range still round-trips accurately.
+    {
+        LoRaDataSI in = makeNominal();
+        in.gyro_x = 3200.0f;
+        in.gyro_y = -3200.0f;
+        LoRaData packed{};
+        conv.packLoRa(in, packed);
+        LoRaDataSI out{};
+        conv.unpackLoRa(packed, out);
+        EXPECT_NEAR(out.gyro_x, 3200.0f, 0.1f);
+        EXPECT_NEAR(out.gyro_y, -3200.0f, 0.1f);
+    }
+    // Above the range — the default ±4000 dps FS and beyond: saturate at
+    // ±3276.7, same sign, no wrap.
+    for (float rate : {3277.0f, 4000.0f, 4500.0f}) {
+        LoRaDataSI in = makeNominal();
+        in.gyro_x = rate;    // fast spin one way
+        in.gyro_y = -rate;   // fast spin the other way
+        in.gyro_z = rate;
+        LoRaData packed{};
+        conv.packLoRa(in, packed);
+        LoRaDataSI out{};
+        conv.unpackLoRa(packed, out);
+
+        // The bug's signature was a positive rate returning negative.
+        EXPECT_GT(out.gyro_x, 0.0f) << "positive rate " << rate << " wrapped negative";
+        EXPECT_LT(out.gyro_y, 0.0f) << "negative rate " << -rate << " wrapped positive";
+        // Saturated at the wire max, not wrapped.
+        EXPECT_NEAR(out.gyro_x, 3276.7f, 0.1f) << "rate=" << rate;
+        EXPECT_NEAR(out.gyro_y, -3276.7f, 0.1f) << "rate=" << rate;
+        EXPECT_NEAR(out.gyro_z, 3276.7f, 0.1f) << "rate=" << rate;
+    }
 }
 
 TEST_F(LoRaRoundtripTest, i24_SignExtension) {
