@@ -413,9 +413,14 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     out.acc_y_x10 = enc_acc(in.acc_y);
     out.acc_z_x10 = enc_acc(in.acc_z);
 
-    // gyro (×10), −4500..4500 → i16
+    // gyro (×10) → i16. Clamp to ±3276.7, NOT the sensor's ±4500 dps FS: ×10
+    // into an int16 tops out at 32767 = 3276.7 dps, so the old ±4500 bound let
+    // any |rate| > 3276.7 dps (~546 rpm) overflow and wrap to a sign-flipped
+    // value (#563). Matches enc_vel_dms below (same ×10 int16 wire field). This
+    // is the LoRa telemetry packer only — FC control reads local gyro dps and is
+    // unaffected; a faster spin now saturates at ±3276.7 instead of wrapping.
     auto enc_gyro = [](float g)->int16_t {
-        g = SensorConverter::clampf(g, -4500.f, 4500.f);
+        g = SensorConverter::clampf(g, -3276.7f, 3276.7f);
         return (int16_t)lroundf(g * 10.f);
     };
     out.gyro_x_x10 = enc_gyro(in.gyro_x);
