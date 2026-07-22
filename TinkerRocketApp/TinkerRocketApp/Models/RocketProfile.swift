@@ -134,7 +134,13 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     var imuRateHz: UInt16 = 1920
 
     // MARK: Servo
-    var servoBias1: Int16 = 85
+    // #561: default 0 (neutral) to match config.h SERVO_BIAS_N and biases 2-4.
+    // The old 85 (~10° on the ±60° / 1000-2000µs fin cal) baked a servo-1 trim
+    // into every freshly-created profile and — since the app pushes the whole
+    // profile on connect — overrode the FC's 0. Per-airframe mechanical trim is
+    // dialed in per-profile in the iOS UI and persists with the profile; the
+    // generic default must not carry one.
+    var servoBias1: Int16 = 0
     var servoBias2: Int16 = 0
     var servoBias3: Int16 = 0
     var servoBias4: Int16 = 0

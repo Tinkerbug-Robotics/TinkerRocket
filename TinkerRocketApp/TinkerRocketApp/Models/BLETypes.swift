@@ -101,7 +101,7 @@ struct DiscoveredDevice: Identifiable {
 }
 
 struct RocketConfig {
-    var servoBias1: Int16 = 85
+    var servoBias1: Int16 = 0   // #561: match RocketProfile/config.h (was 85 → ~10° servo-1 trim)
     var servoHz: Int16 = 333
     // #407: match RocketProfile (the source of truth) and config.h
     // SERVO_MIN_US/MAX_US = 1000/2000. The old 1250/1750 disagreed with the
