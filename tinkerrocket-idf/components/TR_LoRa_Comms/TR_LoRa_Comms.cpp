@@ -655,6 +655,13 @@ bool TR_LoRa_Comms::startScan(float start_mhz, float stop_mhz, uint16_t step_khz
     scan_idx_       = 0;
     scan_dwell_ms_  = dwell_ms;
     scan_count_     = 0;
+    // #567: wall-clock backstop. A healthy step costs one SetFreq service
+    // pass plus dwell_ms of Dwell passes; 250 ms/step of margin covers even a
+    // badly stalled main loop, so this only ever fires on a genuinely stuck
+    // machine (unknown radio fault / future regression) — and then force-
+    // finishes the scan instead of leaving isScanActive() pinned true, which
+    // would kill TX and hopping until reboot.
+    scan_deadline_ms_ = millis() + (uint32_t)n * (uint32_t)(dwell_ms + 250u) + 5000u;
     scan_state_     = ScanState::SetFreq;
 
     if (debug_)
@@ -666,10 +673,42 @@ bool TR_LoRa_Comms::startScan(float start_mhz, float stop_mhz, uint16_t step_khz
     return true;
 }
 
+// #567: the ONLY way out of an active scan. Restores the operating frequency,
+// re-enters RX, and marks Done so isScanActive() releases the TX / hop gates.
+// The restore calls are best-effort by design: on a wedged SPI bus they fail
+// too, but the state transition must happen regardless — a scan that never
+// reaches Done pins isScanActive() true and kills send()/canSend()/
+// hopToFrequencyMHz() until reboot.
+void TR_LoRa_Comms::finishScan(const char* why)
+{
+    (void)radio_->setFrequency(cfg_freq_mhz_);
+    (void)radio_->startReceive();
+    rx_mode_ = true;
+    scan_state_ = ScanState::Done;
+    if (debug_)
+    {
+        ESP_LOGI(TAG, "Scan %s: %u samples, restored %.1f MHz",
+                 why, (unsigned)scan_count_, (double)cfg_freq_mhz_);
+    }
+}
+
 void TR_LoRa_Comms::serviceScan()
 {
     if (!enabled_ || radio_ == nullptr) return;
     if (scan_state_ == ScanState::Idle || scan_state_ == ScanState::Done) return;
+
+    // #567: wall-clock backstop (armed in startScan). The state machine below
+    // terminates by construction — both SetFreq outcomes advance it — so this
+    // fires only on an unknown failure mode or a future regression. Wrap-safe
+    // compare, same idiom as the TX watchdog.
+    if ((int32_t)(millis() - scan_deadline_ms_) >= 0)
+    {
+        ESP_LOGW(TAG, "Scan deadline hit at step %u/%u — force-finishing so the "
+                      "link is not held hostage",
+                 (unsigned)scan_idx_, (unsigned)scan_n_steps_);
+        finishScan("aborted (deadline)");
+        return;
+    }
 
     switch (scan_state_)
     {
@@ -686,6 +725,16 @@ void TR_LoRa_Comms::serviceScan()
                     scan_samples_[scan_count_++] = { f, -128 };
                 }
                 scan_idx_++;
+                // #567: this branch used to skip the completion check, so a
+                // setFrequency failure on the LAST channel — or a persistent
+                // one (range outside the radio's band, wedged SPI) — pushed
+                // scan_idx_ past scan_n_steps_ with Done unreachable: the
+                // machine spun in SetFreq forever and isScanActive() stayed
+                // true until reboot. Mirror the Dwell branch's completion.
+                if (scan_idx_ >= scan_n_steps_)
+                {
+                    finishScan("done (last setFrequency failed)");
+                }
             }
             else
             {
@@ -714,15 +763,7 @@ void TR_LoRa_Comms::serviceScan()
                 {
                     // Restore the operating frequency and return to RX so
                     // normal comms with the OutComputer resume.
-                    (void)radio_->setFrequency(cfg_freq_mhz_);
-                    (void)radio_->startReceive();
-                    rx_mode_ = true;
-                    scan_state_ = ScanState::Done;
-                    if (debug_)
-                    {
-                        ESP_LOGI(TAG, "Scan done: %u samples, restored %.1f MHz",
-                                 (unsigned)scan_count_, (double)cfg_freq_mhz_);
-                    }
+                    finishScan("done");
                 }
                 else
                 {

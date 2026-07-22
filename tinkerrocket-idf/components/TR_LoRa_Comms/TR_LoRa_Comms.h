@@ -188,11 +188,22 @@ private:
 
     // ---- Scan state ------------------------------------------------------
     enum class ScanState : uint8_t { Idle, SetFreq, Dwell, Done };
+    // #567: single exit point for the scan state machine — restore the
+    // operating frequency, re-enter RX, mark Done. EVERY path out of a scan
+    // must go through this, because isScanActive() gates send()/canSend()/
+    // hopToFrequencyMHz(): a scan that never reaches Done kills TX and
+    // hopping until reboot.
+    void finishScan(const char* why);
     ScanState scan_state_    = ScanState::Idle;
     uint16_t  scan_idx_      = 0;
     uint16_t  scan_n_steps_  = 0;
     uint16_t  scan_dwell_ms_ = 30;
     uint32_t  scan_dwell_start_ms_ = 0;
+    // #567: wall-clock backstop for the whole scan (defense in depth — the
+    // state machine terminates by construction, this catches regressions and
+    // unknown radio failure modes). Sized in startScan() well above the
+    // slowest plausible healthy scan so it never false-fires.
+    uint32_t  scan_deadline_ms_ = 0;
     float     scan_start_mhz_ = 0.0f;
     float     scan_step_khz_  = 0.0f;
     size_t    scan_count_    = 0;
