@@ -61,7 +61,7 @@ MSG_EXPECTED_LEN = {
     MSG_POWER:            10,
     MSG_START_LOGGING:    None,
     MSG_END_FLIGHT:       None,
-    MSG_LORA:             49,
+    MSG_LORA:             65,   # sizeof(LoRaData) — #572: was a stale 49; sweep on struct-size changes (#227)
 }
 
 FMT_ISM6       = '<I hhh hhh hhh'

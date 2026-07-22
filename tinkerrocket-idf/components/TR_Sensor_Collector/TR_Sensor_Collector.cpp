@@ -1112,12 +1112,20 @@ void SensorCollector::calibrateGyro(float rotation_z_deg)
     // --- Accel cross-calibration ---
     if (accel_count > 0)
     {
-        // ISM6HG256 sensitivity (must match SensorConverter config):
-        //   low-g  ±16g  → 16*1000/32768 mg/LSB → * 1e-3 * 9.80665 m/s²/LSB
-        //   high-g ±256g → 256*1000/32768 mg/LSB → * 1e-3 * 9.80665 m/s²/LSB
+        // ISM6HG256 sensitivity — #572: derived from the CONFIGURED full
+        // scales (the same ctor members Set_X_FullScale programs into the
+        // chip), NOT literals. The old hardcoded 16g/256g silently decoupled
+        // from a non-default FS: counts scaled with the wrong per-LSB put a
+        // ~1 g error into hg_bias, which setHighGBias() then subtracted from
+        // every boost sample (burnout detect, max-speed, launch fallback).
+        // Inert on the shipping build (FS is constexpr 16/256 in config.h) —
+        // this is the maintainability pin. Formula mirrors
+        // SensorConverter::configureISM6HG256FullScale (FS*1000/32768 mg/LSB).
         static constexpr float g_ms2 = 9.80665f;
-        static constexpr float lg_ms2_per_lsb = (16.0f * 1000.0f / 32768.0f) * 1e-3f * g_ms2;
-        static constexpr float hg_ms2_per_lsb = (256.0f * 1000.0f / 32768.0f) * 1e-3f * g_ms2;
+        const float lg_ms2_per_lsb =
+            ((float)ism6_low_g_fs_g_  * 1000.0f / 32768.0f) * 1e-3f * g_ms2;
+        const float hg_ms2_per_lsb =
+            ((float)ism6_high_g_fs_g_ * 1000.0f / 32768.0f) * 1e-3f * g_ms2;
 
         // Average raw → SI (sensor frame)
         const float avg_lg_x = ((float)sum_lg_x / accel_count) * lg_ms2_per_lsb;

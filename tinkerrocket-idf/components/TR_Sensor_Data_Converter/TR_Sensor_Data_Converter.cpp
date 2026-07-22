@@ -404,9 +404,14 @@ void SensorConverter::packLoRa(const LoRaDataSI& in, LoRaData& out)
     packed |= (state & 0x07u) << LORA_STATE_SHIFT; // b4..b6
     out.flags_state = packed;
 
-    // acceleration (×10), −400..400 → i16
+    // acceleration (×10) → i16. #572: clamp at the WIRE max (±3276.7, same
+    // bound as enc_gyro/enc_vel_dms), not the old ±400 m/s² (~40.8 g) which
+    // silently flat-topped telemetry/CSV traces on any boost above ~40 g even
+    // though the high-g accelerometer reads to 256 g (~2511 m/s² — inside the
+    // wire range, so the sensor ceiling is the real limit). Saturation only
+    // ever occurs above int16 capacity; no wire-format change.
     auto enc_acc = [](float a)->int16_t {
-        a = SensorConverter::clampf(a, -400.f, 400.f);
+        a = SensorConverter::clampf(a, -3276.7f, 3276.7f);
         return (int16_t)lroundf(a * 10.f);
     };
     out.acc_x_x10 = enc_acc(in.acc_x);

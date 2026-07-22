@@ -62,13 +62,10 @@ class TR_GNSSReceiverUBloxSerial
         // Helper: blocking read of one byte. Returns byte or -1 on timeout.
         int uartRead();
 
-        // Staleness detection: if GNSS second+millisecond are unchanged for
-        // STALE_THRESHOLD consecutive getGNSSData() calls, the serial link
-        // has likely lost sync and the library is returning cached data.
-        static constexpr uint16_t STALE_THRESHOLD = 5;  // ~500 ms at 10 Hz
-        uint8_t  prev_second      = 0xFF;   // impossible initial value
-        uint16_t prev_milli_second = 0xFFFF;
-        uint16_t stale_count       = 0;
+        // (#572: the old getGNSSData() staleness counter was removed — it was
+        // dead code, only reachable after getPVT(0) already proved a fresh
+        // frame. Liveness is owned by the downstream collector/EKF time_us
+        // freshness gates.)
 
         void enuToEcefVelocityAndPosition(float v_east,
                                           float v_north,
