@@ -250,3 +250,34 @@ TEST(BsUplinkQueue, HeadIsNullAndPopIsSafeWhenEmpty) {
     EXPECT_EQ(q.size(), 0u);
     EXPECT_EQ(q.head(), nullptr);
 }
+
+// ---- #565: send-failure counter starts clean, even in a reused ring slot ----
+
+// serviceUplink pops the head after UPLINK_MAX_SEND_FAILURES consecutive
+// send() failures so a wedged radio can't jam the queue until reboot. The
+// counter lives in Entry, and ring slots are REUSED: if push() didn't reset
+// it, a new command landing in a slot whose previous occupant died of send
+// failures would inherit that count and be dropped prematurely — a healthy
+// command silently losing (up to all of) its failure budget.
+TEST(BsUplinkQueue, SendFailureCountStartsAtZeroInAReusedSlot) {
+    Queue q;
+    ASSERT_EQ(push(q, /*cmd=*/5), PushResult::Queued);
+    EXPECT_EQ(q.head()->send_failures, 0);  // fresh entry starts clean
+
+    // The command dies of send() failures, the way serviceUplink counts them.
+    q.head()->send_failures = 20;  // config::UPLINK_MAX_SEND_FAILURES
+    q.pop();
+    EXPECT_TRUE(q.empty());
+
+    // Cycle the ring so the SAME slot (index 0) is reused by a new command.
+    for (size_t i = 0; i < bs_uplink_queue::kDepth - 1; i++) {
+        ASSERT_EQ(push(q, (uint8_t)(10 + i)), PushResult::Queued);
+        q.pop();
+    }
+    ASSERT_EQ(push(q, /*cmd=*/6), PushResult::Queued);
+
+    ASSERT_NE(q.head(), nullptr);
+    EXPECT_EQ(q.head()->cmd(), 6);
+    EXPECT_EQ(q.head()->send_failures, 0)
+        << "reused slot inherited the previous occupant's send-failure count";
+}

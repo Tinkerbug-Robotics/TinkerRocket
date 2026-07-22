@@ -49,6 +49,12 @@ struct Entry
     uint8_t buf[kMaxPacket];
     size_t  len          = 0;
     uint8_t retries_left = 0;
+    // #565: consecutive send() FAILURES (startTransmit error — nothing went on
+    // air). Deliberately separate from retries_left, which counts blind
+    // TRANSMISSIONS and is the delivery mechanism: an SPI hiccup must not eat
+    // a command's delivery odds. serviceUplink pops the head when this hits
+    // UPLINK_MAX_SEND_FAILURES so a wedged radio can't jam the queue forever.
+    uint8_t send_failures = 0;
 
     uint8_t cmd() const { return buf[kCmdOffset]; }
 };
@@ -85,8 +91,9 @@ public:
         {
             memcpy(&e.buf[kHeaderBytes], payload, payload_len);
         }
-        e.len          = kHeaderBytes + payload_len;
-        e.retries_left = retries;
+        e.len           = kHeaderBytes + payload_len;
+        e.retries_left  = retries;
+        e.send_failures = 0;  // #565: slots are reused — never inherit a stale count
         count_++;
         return PushResult::Queued;
     }

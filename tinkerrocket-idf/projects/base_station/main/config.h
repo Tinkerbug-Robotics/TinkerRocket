@@ -61,6 +61,12 @@ struct config : board_pins
     static constexpr uint8_t  UPLINK_SYNC_BYTE        = 0xCA;
     static constexpr uint8_t  UPLINK_RETRIES           = 8;     // TX attempts per command
     static constexpr uint32_t UPLINK_RETRY_INTERVAL_MS = 100;   // Delay between retries
+    // #565: consecutive send() FAILURES (startTransmit error, nothing on air)
+    // before the head command is dropped. Failed attempts are paced at
+    // UPLINK_RETRY_INTERVAL_MS, so a wedged radio holds each command at most
+    // ~2 s (20 x 100 ms) instead of jamming the queue until reboot. Generous
+    // enough that a transient SPI/radio hiccup never costs a command.
+    static constexpr uint8_t  UPLINK_MAX_SEND_FAILURES = 20;
 
     // --- Uplink TX window (#506) ---
     // The radio is half-duplex, so every uplink retry is a deaf window. At

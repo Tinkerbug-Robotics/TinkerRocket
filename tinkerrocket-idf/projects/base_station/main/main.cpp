@@ -1994,6 +1994,7 @@ static void serviceUplink()
         uplink_tx_count++;
         uplink_tx_airtime_ms += win.tx_airtime_ms;
         tx->retries_left--;
+        tx->send_failures = 0;  // #565: the radio works again — count CONSECUTIVE failures
         uplink_last_tx_ms = now;
         // #285: "blind" + "unconfirmed" so the log is not mistaken for an ACK.
         ESP_LOGI(TAG, "[UPLINK] blind TX cmd=%u, %u attempt(s) left (unconfirmed, no ACK)",
@@ -2001,7 +2002,33 @@ static void serviceUplink()
     }
     else
     {
-        ESP_LOGW(TAG, "[UPLINK] send() failed, will retry");
+        // #565: a failed send() put NOTHING on air (startTransmit error;
+        // tx_ongoing_ is never set on this path, so the TX watchdog can't
+        // recover it either). This branch used to log-and-return without
+        // bounding anything: retries_left never decremented, so a radio whose
+        // startTransmit fails persistently wedged the head command — and with
+        // it the entire queue — until reboot, RejectedFull-dropping every
+        // later command. Count consecutive failures (NOT retries_left: a
+        // transient hiccup must not eat the blind delivery budget), pace them
+        // like retries via uplink_last_tx_ms (this also stops the old
+        // busy-retry-every-pass spin), and at the cap drop the command LOUDLY
+        // so the queue stays live for the ones behind it.
+        tx->send_failures++;
+        uplink_last_tx_ms = now;
+        if (tx->send_failures >= config::UPLINK_MAX_SEND_FAILURES)
+        {
+            ESP_LOGE(TAG, "[UPLINK] cmd=%u DROPPED after %u consecutive send() "
+                          "failures (radio TX fault) — command was NEVER transmitted",
+                     (unsigned)tx->cmd(), (unsigned)tx->send_failures);
+            uplink_q.pop();             // unwedge: next command gets its chance
+            uplink_defer_start_ms = 0;  // #506: don't carry this command's defer clock over
+        }
+        else
+        {
+            ESP_LOGW(TAG, "[UPLINK] cmd=%u send() failed (%u/%u), will retry",
+                     (unsigned)tx->cmd(), (unsigned)tx->send_failures,
+                     (unsigned)config::UPLINK_MAX_SEND_FAILURES);
+        }
     }
 }
 
