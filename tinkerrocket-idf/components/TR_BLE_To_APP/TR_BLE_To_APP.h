@@ -77,6 +77,10 @@ public:
         bool     hop_active = false;
         uint8_t  hop_channel_idx = 0;
         uint32_t netid_drops = 0;
+        // #570: CRC-valid packets dropped for a wrong length (mixed-flash
+        // SIZE_OF_LORA_DATA trap). BS-only, recency-windowed like netid_drops;
+        // 0 (the default) emits nothing on the wire.
+        uint32_t size_drops = 0;
 
         // Base station (only meaningful when connected via base station)
         float bs_soc;           // Base station battery SOC %

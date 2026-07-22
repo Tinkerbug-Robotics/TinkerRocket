@@ -125,6 +125,15 @@ static uint32_t lora_netid_mismatch_drops = 0;
 static constexpr uint32_t NETID_DROP_REPORT_WINDOW_MS = 30000;
 static uint32_t lora_netid_last_drop_ms = 0;
 
+// #570: CRC-valid packets dropped because their length is neither a beacon
+// nor exactly SIZE_OF_LORA_DATA — the classic 65-vs-66 B mixed-flash trap
+// (rocket and BS built from commits with different LoRaData sizes drops 100%
+// of telemetry while the app just shows "Searching"). Mirrors the #329
+// netid-drop pattern: lifetime count for logs, recency-windowed "szd"
+// surface over BLE (same window as nidd).
+static uint32_t lora_size_mismatch_drops = 0;
+static uint32_t lora_size_last_drop_ms   = 0;
+
 // Base station battery (MAX17205G fuel gauge via I2C)
 static float bs_voltage = NAN;
 static float bs_soc = NAN;
@@ -1624,6 +1633,11 @@ static void buildBLETelemetry(const LoRaDataSI& lora, float rssi, float snr,
     out.netid_drops     = (lora_netid_mismatch_drops > 0 &&
                            (millis() - lora_netid_last_drop_ms) < NETID_DROP_REPORT_WINDOW_MS)
                           ? lora_netid_mismatch_drops : 0;
+    // #570: same recency treatment for size-mismatch drops ("szd") — the
+    // mixed-flash trap the netid surface doesn't catch.
+    out.size_drops      = (lora_size_mismatch_drops > 0 &&
+                           (millis() - lora_size_last_drop_ms) < NETID_DROP_REPORT_WINDOW_MS)
+                          ? lora_size_mismatch_drops : 0;
 
     // Base station battery (local measurement)
     out.bs_soc = bs_soc;
@@ -1811,7 +1825,11 @@ static void sendCurrentConfig()
     ble_app.sendConfigJSON(j);
     ESP_LOGI(TAG, "[CFG] Sent config readback to app");
 
-    delay(50);
+    // #570: the fixed delay(50) that used to sit here was legacy pre-#524
+    // pacing. It parked the single bs_loop task for 50 ms per config command
+    // (no RX decode, no uplink retries, no heartbeat, no CSV flush) — a
+    // connect-time burst chained several of those. notify_data now applies
+    // MTU-aware backpressure itself, so back-to-back sends are safe.
 
     // Message 2: device identity ("config_identity" type)
     const esp_app_desc_t* app_desc = esp_app_get_description();
@@ -2671,6 +2689,19 @@ static constexpr uint32_t COORD_SCAN_PAUSE_GRACE_MS  = 500;
 // If the rocket never resumes hopping after we push cmd 15, give up so
 // the normal silence/recovery machinery can take over.
 static constexpr uint32_t COORD_SCAN_RESUMING_MAX_MS = 5000;
+// #570: SCANNING-state budget — the driver scan's own worst case at the
+// stored params (steps × (dwell + 250 ms/step of loop-pacing margin) + 5 s
+// slack, matching the #567 in-driver backstop sizing), so a healthy slow
+// scan can never trip it. Guards the coordinated-scan machine against a
+// scan that finishes with nothing pushable (see the SCANNING case).
+static uint32_t coordScanScanningBudgetMs()
+{
+    if (coord_scan_step_khz_ == 0) return 30000u;  // defensive; startScan rejects 0
+    const uint32_t steps = (uint32_t)(((coord_scan_stop_mhz_ - coord_scan_start_mhz_) * 1000.0f)
+                                      / (float)coord_scan_step_khz_) + 1u;
+    return steps * (uint32_t)(coord_scan_dwell_ms_ + 250u) + 5000u;
+}
+
 // Slack on top of the computed scan + cmd 15 retry budget so the rocket's
 // pause comfortably outlasts our work window.
 // #150 Seam B finding: the rocket's pause clock starts at cmd-16 RECEIPT,
@@ -3114,6 +3145,23 @@ static void serviceCoordinatedScan()
             {
                 coord_scan_state_    = CoordScanState::PUSHING_CHSET;
                 coord_scan_phase_ms_ = now;
+            }
+            // #570: this state had NO timeout — the only exit needed BOTH a
+            // valid scan AND a queued cmd 15. A zero-sample pass (quiet /
+            // wedged radio: analyzeAndPushFromCachedScan early-returns, no
+            // cmd 15) or a RejectedFull cmd 15 left it stuck in SCANNING
+            // forever, which suppresses the hop-silence fallback and rejects
+            // every future scan until reboot. Budget = the driver scan's own
+            // worst case (steps × (dwell+250 ms) + 5 s, the #567 sizing) so
+            // it can never fire on a healthy slow scan; on expiry drop to
+            // IDLE and let the normal recovery machinery take over.
+            else if ((now - coord_scan_phase_ms_) > coordScanScanningBudgetMs())
+            {
+                ESP_LOGW(TAG, "[CHSET] Coord scan: no pushable result within "
+                              "%lu ms (empty scan or cmd-15 not queued) — "
+                              "abandoning to normal recovery",
+                         (unsigned long)coordScanScanningBudgetMs());
+                coord_scan_state_ = CoordScanState::IDLE;
             }
             break;
         }
@@ -4004,7 +4052,8 @@ static void loop_bs()
                 }
             }
         }
-        // --- Telemetry packet: SIZE_OF_LORA_DATA (73) bytes ---
+        // --- Telemetry packet: exactly SIZE_OF_LORA_DATA bytes ---
+        // (#570: no literal here — a stale "(73)" outlived two frame diets.)
         else if (rx_len == SIZE_OF_LORA_DATA)
         {
             // Decode the telemetry packet
@@ -4035,7 +4084,17 @@ static void loop_bs()
                 // #506: learn the downlink cadence from the TELEMETRY stream only.
                 // Beacons are sporadic (~2 s) and would corrupt the estimate; this
                 // is the steady ~500 ms stream whose gaps the uplink aims for.
-                rx_cadence.onPacket(last_packet_ms);
+                // #570: and ONLY from the FOCUSED rocket — with two rockets up,
+                // feeding every packet drove the learned period toward the
+                // inter-rocket spacing (~100-400 ms) instead of the true
+                // per-rocket ~500 ms, collapsing the #506 TX window until
+                // mayStartTx stopped gating and uplinks fired blind over
+                // downlinks. (No focus yet → isFocusedRocket is true for all,
+                // so single-rocket learning is unchanged.)
+                if (isFocusedRocket(decoded.rocket_id))
+                {
+                    rx_cadence.onPacket(last_packet_ms);
+                }
 
                 // Route to per-rocket tracker
                 int slot = findOrAllocRocket(decoded.rocket_id);
@@ -4388,8 +4447,17 @@ static void loop_bs()
         }
         else
         {
-            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u or beacon)",
-                     (unsigned)rx_len, (unsigned)SIZE_OF_LORA_DATA);
+            // #570: count + surface (was a bare WARN — a mixed-flash size
+            // mismatch dropped 100% of telemetry with no counter and nothing
+            // over BLE; the netid path got this treatment in #329, this
+            // didn't).
+            lora_size_mismatch_drops++;
+            lora_size_last_drop_ms = millis();
+            ESP_LOGW(TAG, "[RX] Unexpected packet size: %u (expected %u or beacon) "
+                          "— %lu dropped; mixed-firmware flash? (SIZE_OF_LORA_DATA "
+                          "differs between rocket and BS builds)",
+                     (unsigned)rx_len, (unsigned)SIZE_OF_LORA_DATA,
+                     (unsigned long)lora_size_mismatch_drops);
         }
     }
 
