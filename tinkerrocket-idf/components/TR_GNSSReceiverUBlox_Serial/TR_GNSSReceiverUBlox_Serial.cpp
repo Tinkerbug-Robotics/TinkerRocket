@@ -76,6 +76,22 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     uint8_t active_rx = GNSS_RX;
     uint8_t active_tx = GNSS_TX;
 
+    // Bring-up deadline (#557).  A dead or deaf-UART module used to hang begin()
+    // forever in the retry loops below — delay() feeds the WDT, so the FC sat
+    // silently on the pad with no telemetry and no flight.  One full baud sweep
+    // (6 bauds x 2 orientations, each with a ~1.5 s begin() timeout) is ~27 s, so
+    // the budget must cover at least one complete sweep; 35 s leaves margin for
+    // the pre-sweep bootstrap/orientation probes.  On expiry begin() returns
+    // false and the collector continues in a GNSS-absent degraded mode.  The
+    // loops still run one full attempt first (the deadline is only checked before
+    // a *retry*), so a live-but-slow module is never cut off mid-sweep.  Compared
+    // wrap-safe; boot-time millis() never wraps, but keep the idiom consistent.
+    const uint32_t kBeginTimeoutMs   = 35000U;
+    const uint32_t begin_deadline_ms = millis() + kBeginTimeoutMs;
+    auto beginExpired = [&]() -> bool {
+        return (int32_t)(millis() - begin_deadline_ms) >= 0;
+    };
+
     if (safeboot_n_pin >= 0)
     {
         pinMode((uint8_t)safeboot_n_pin, OUTPUT);
@@ -134,6 +150,13 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
         const size_t n = sizeof(probe_bauds) / sizeof(probe_bauds[0]);
         for (size_t i = 0; i < n; i++)
         {
+            // #557: bail mid-sweep on the bring-up deadline.  A removed module
+            // whose UART floats reads noise, so hasSerialActivity() trips and
+            // each baud runs a double begin() (~5 s) — a full 12-baud sweep is
+            // ~60 s.  Checking the deadline only *between* whole sweeps let a
+            // dead/noisy module spin ~100 s (bench 2026-07-21); a per-baud check
+            // bounds bring-up to roughly the deadline + one baud probe.
+            if (beginExpired()) return false;
             const uint32_t baud = probe_bauds[i];
             ESP_LOGI(TAG, "Trying %lu baud (RX=%d, TX=%d)",
                      (unsigned long)baud, rx_pin, tx_pin);
@@ -264,6 +287,17 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
     while ((connected_baud == 0U) && !scanAndConnect(connected_baud))
     {
         scan_attempt++;
+        // #557: give up after the deadline rather than spinning forever on a
+        // dead/deaf-UART module.  scanAndConnect() above already ran one full
+        // sweep this iteration, so a live-but-slow module always gets at least
+        // one complete attempt before we can bail here.
+        if (beginExpired())
+        {
+            ESP_LOGE(TAG, "GNSS bring-up: no response after %lu ms (%u sweeps); "
+                          "continuing without GNSS", (unsigned long)kBeginTimeoutMs,
+                     scan_attempt);
+            return false;
+        }
         ESP_LOGW(TAG, "No response on known bauds, retrying...");
         if ((scan_attempt % 2U) == 0U)
         {
@@ -323,6 +357,12 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
             while (!scanAndConnect(connected_baud))
             {
+                if (beginExpired())
+                {
+                    ESP_LOGE(TAG, "GNSS baud recovery timed out after %lu ms; "
+                                  "continuing without GNSS", (unsigned long)kBeginTimeoutMs);
+                    return false;
+                }
                 delay(500);
             }
 
@@ -564,6 +604,12 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
         while (!scanAndConnect(connected_baud))
         {
+            if (beginExpired())
+            {
+                ESP_LOGE(TAG, "GNSS config recovery timed out after %lu ms; "
+                              "continuing without GNSS", (unsigned long)kBeginTimeoutMs);
+                return false;
+            }
             delay(500);
         }
 

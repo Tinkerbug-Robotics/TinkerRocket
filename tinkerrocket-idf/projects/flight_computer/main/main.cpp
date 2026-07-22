@@ -277,6 +277,25 @@ static uint32_t valid_gnss_start_millis = 0;
 static uint32_t landed_candidate_start_millis = 0;
 static bool landed_candidate_active = false;  // #297: explicit flag (0 collided with now_ms==0)
 static bool gnss_started = false;
+
+// #557 GNSS-absent degraded flight.  A dead/deaf-UART module makes the GNSS
+// bring-up fail; the FC then flies without GNSS instead of hanging.
+//   gnss_absent_mode   — latched once at boot from the collector: the module
+//                        failed bring-up.  Makes the baro+IMU-only EKF init
+//                        ELIGIBLE (no fix will ever arrive).
+//   gnss_absent_flight — set true when the EKF was actually initialized on the
+//                        degraded path this session.  Drives the SH_GNSS_ABSENT
+//                        telemetry flag and the launch-time guidance force-off.
+//                        Reset per sim run so a sim re-evaluates on the normal path.
+//   gnss_absent_dwell_ms — earliest millis() a degraded init may fire.  A short
+//                        settle after boot / sim-reset so an injected sim GNSS
+//                        fix (arrives ~100 ms) reaches the normal init path
+//                        before the degraded fallback can commit.  A real dead
+//                        module never gets a fix, so it degrades right after.
+static constexpr uint32_t GNSS_ABSENT_INIT_DWELL_MS = 5000U;
+static bool     gnss_absent_mode    = false;
+static bool     gnss_absent_flight  = false;
+static uint32_t gnss_absent_dwell_ms = 0;
 static bool ground_pressure_found = false;
 static bool out_ready = false;
 static uint32_t out_ready_request_time_ms = 0;
@@ -2806,6 +2825,19 @@ static void setup_fc()
     // Initialize sensor collector (including sensors) and start polling tasks
     ESP_LOGI(TAG, "Sensor collector init...");
     sensor_collector.begin(config::SENSOR_CORE);
+
+    // #557: latch GNSS-absent mode.  isGnssOnline() is false when GNSS is built
+    // in but the module failed bring-up (dead/deaf UART).  The FC then flies a
+    // baro+IMU-only degraded path instead of hanging on the pad.  begin() blocks
+    // until the ~35 s bring-up deadline in that case, so millis() is already
+    // well past zero here.
+    gnss_absent_mode     = config::USE_GNSS && !sensor_collector_hw.isGnssOnline();
+    gnss_absent_dwell_ms = millis() + GNSS_ABSENT_INIT_DWELL_MS;
+    if (gnss_absent_mode)
+    {
+        ESP_LOGW(TAG, "[GNSS] Module absent (bring-up failed) — GNSS-absent "
+                      "degraded mode: baro+IMU EKF init, guidance forced off");
+    }
     sensor_converter.configureISM6HG256FullScale(
         static_cast<ISM6LowGFullScale>(config::ISM6_LOW_G_FS_G),
         static_cast<ISM6HighGFullScale>(config::ISM6_HIGH_G_FS_G),
@@ -3233,6 +3265,11 @@ static void resetFlightStateForSim(const char* edge)
     last_gnss_fix_ms     = 0xFFFF;
     gnss_started = false;
     have_gnss_si = false;
+    // #557: a sim injects synthetic GNSS, so re-evaluate the degraded path from
+    // scratch — clear the degraded-flight latch and restart the settle so the
+    // sim's ~100 ms first fix reaches the normal init path before any fallback.
+    gnss_absent_flight   = false;
+    gnss_absent_dwell_ms = millis() + GNSS_ABSENT_INIT_DWELL_MS;
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
@@ -3286,6 +3323,14 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
             ESP_LOGW(TAG, "[GUIDANCE] Auto-disabled — EKF not initialized");
             guidance_enabled = false;
         }
+    }
+    // #557: in a GNSS-absent degraded flight the EKF *is* initialized (baro+IMU),
+    // so the gate above does not fire — but there is no absolute position frame,
+    // so PN/station-keep guidance must not steer.  Force it off here (roll
+    // control is untouched; coast_guidance_active also self-gates on have_ref_pos).
+    if (gnss_absent_flight && guidance_enabled) {
+        ESP_LOGW(TAG, "[GUIDANCE] Auto-disabled — GNSS-absent degraded flight");
+        guidance_enabled = false;
     }
     // Freeze the ENU reference position at launch
     if (!ref_pos_frozen && have_ref_pos) {
@@ -3965,7 +4010,35 @@ static void loop_fc()
                 // and can also set kinematics flags we'd rather not pick up)
                 // can't trigger an init.  EKF init resumes naturally after
                 // the cal session ends and rocket_state returns to READY.
-                if (have_ref_pos && gnss_gate3_init) {
+                // #557: degraded init — when the GNSS module is absent (dead/
+                // deaf UART) initialize the EKF from baro + IMU only, so attitude
+                // + vertical velocity (hence the velocity/pitch apogee voters and
+                // roll control) still work.  Gated on initGyroN >= 8 (well-averaged
+                // stationary gyro-bias seed, same readiness the normal path needs),
+                // on never having seen a fix (!gnss_started — defers to the normal
+                // path if a real/sim fix ever arrives), and on a short settle so an
+                // injected sim fix wins first.
+                const bool normal_init = have_ref_pos && gnss_gate3_init;
+                const bool degraded_init =
+                    !normal_init && gnss_absent_mode && !gnss_started &&
+                    (initGyroN >= 8) &&
+                    ((int32_t)(millis() - gnss_absent_dwell_ms) >= 0);
+                if (normal_init || degraded_init) {
+                    if (degraded_init) {
+                        // Pad-relative seed: lat/lon 0 (equator — regular, no
+                        // geodetic singularity), alt from baro (pressure_altitude_m
+                        // is height above the pad), zero velocity, and a stale GNSS
+                        // time so the EKF never runs a GNSS measurement update
+                        // against this fake origin.  Baro then bounds the vertical
+                        // channel and accel+mag bound attitude.
+                        ekf_gnss.time_us   = 0;
+                        ekf_gnss.lat_rad   = 0.0;
+                        ekf_gnss.lon_rad   = 0.0;
+                        ekf_gnss.alt_m     = pressure_altitude_m;
+                        ekf_gnss.vel_n_mps = 0.0f;
+                        ekf_gnss.vel_e_mps = 0.0f;
+                        ekf_gnss.vel_d_mps = 0.0f;
+                    }
                     // #297: seed wBias off the recent-window gyro average rather
                     // than the single live sample (see the ring above).
                     if (initGyroN >= 8)
@@ -4031,6 +4104,18 @@ static void loop_fc()
                                       gnss_latest_si.month, gnss_latest_si.day);
                     }
                     ekf_initialized = true;
+                    if (degraded_init) {
+                        // #557: mark the session degraded so the SH_GNSS_ABSENT
+                        // telemetry flag and the launch-time guidance force-off
+                        // (enterInflight) fire.  Guidance also physically can't
+                        // engage without a position frame — have_ref_pos stays
+                        // false, so coast_guidance_active is false regardless.
+                        // Roll control is unaffected (raw-gyro rate-null path).
+                        gnss_absent_flight = true;
+                        ESP_LOGW(TAG, "[EKF] GNSS-absent degraded init: baro+IMU "
+                                      "only, position pad-relative, guidance off "
+                                      "(roll control unaffected)");
+                    }
                 }
             }
             else if (run_ekf_this_tick)
@@ -6338,6 +6423,7 @@ static void loop_fc()
                         const bool coast_guidance_active =
                             guidance_enabled &&
                             ekf_initialized &&
+                            have_ref_pos &&       // #557: no GNSS-anchored position frame → no steering
                             ekf_ctrl_healthy &&   // #265: don't fly guidance on a diverged EKF
                             !guidance_tilt_inhibited &&  // tilt-limit safety latch
                             (speed > pn_min_speed) &&
@@ -6827,6 +6913,15 @@ static void loop_fc()
                 }
                 sh = shSet(sh, SH_PYRO_SHIFT[i], pst);
             }
+
+            // #557: GNSS-absent degraded-flight verdict (distinct from the fix
+            // health at SH_GNSS above).  SH_BAD = the FC initialized the EKF on
+            // the baro+IMU-only path because the module failed bring-up; guidance
+            // is off and there is no absolute position.  Rides sensor_health to
+            // the app on BOTH the direct-BLE and LoRa/BS-relay paths so the
+            // degraded banner shows regardless of transport.
+            sh = shSet(sh, SH_GNSS_ABSENT_SHIFT,
+                       gnss_absent_flight ? SH_BAD : SH_NA);
 
             // Battery bits (12-13) left N/A — the OC fills them from POWERData.
             non_sensor_data.sensor_health = sh;

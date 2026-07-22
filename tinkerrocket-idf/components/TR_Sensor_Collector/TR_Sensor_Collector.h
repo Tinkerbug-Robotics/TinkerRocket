@@ -138,6 +138,12 @@ public:
     // vs. MMC software offset.)
     bool isIIS2MDCActive() const { return iis2mdc_active; }
 
+    // #557: true iff GNSS is enabled in the build AND the module came up at
+    // boot.  False after a dead/deaf-UART bring-up failure — the flight
+    // computer reads this to enter GNSS-absent mode (baro+IMU EKF init,
+    // guidance forced off).  Always false when use_gnss is compiled out.
+    bool isGnssOnline() const { return use_gnss && gnss_online_; }
+
     // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers.  Returns false if
     // the IIS2MDC isn't active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
@@ -184,6 +190,11 @@ private:
     bool use_iis2mdc;
     bool use_gnss;
     bool use_ism6hg256;
+
+    // #557: runtime GNSS liveness.  Starts true; cleared in begin() if the
+    // module fails bring-up (dead/deaf UART).  Gates the GNSS poll task and is
+    // exposed via isGnssOnline() so the FC can enter GNSS-absent mode.
+    bool gnss_online_ = true;
 
     // Set true after IIS2MDC is detected and configured at boot. When true,
     // the legacy MMC5983MA SPI path is skipped.

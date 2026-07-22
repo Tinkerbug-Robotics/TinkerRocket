@@ -64,6 +64,30 @@ TEST(RocketComputerTypes, StorageHealth_BitPosition) {
     EXPECT_EQ(shGet(f, SH_PYRO_SHIFT[3]), SH_OK);
 }
 
+// #557: the GNSS-absent degraded-flight slot rides sensor_health to the app on
+// both the direct-BLE and LoRa/BS-relay paths.  Pin its slot clear of every
+// existing item (esp. the neighbouring SH_STORAGE at 20 and the real SH_GNSS
+// fix-health at 8) so the degraded-mode banner can never alias another verdict.
+TEST(RocketComputerTypes, GnssAbsent_BitPosition) {
+    EXPECT_EQ(SH_GNSS_ABSENT_SHIFT, 22u);
+    for (uint8_t other : {SH_BARO_SHIFT, SH_IMU_SHIFT, SH_EKF_SHIFT, SH_MAG_SHIFT,
+                          SH_GNSS_SHIFT, SH_BATT_SHIFT, SH_STORAGE_SHIFT,
+                          SH_PYRO_SHIFT[0], SH_PYRO_SHIFT[1], SH_PYRO_SHIFT[2],
+                          SH_PYRO_SHIFT[3]}) {
+        EXPECT_NE(SH_GNSS_ABSENT_SHIFT, other);   // clear of every other field
+    }
+    // Slot fits inside the 32-bit field.
+    EXPECT_LT(SH_GNSS_ABSENT_SHIFT + 2u, 32u);
+    uint32_t f = shSet(0u, SH_GNSS_ABSENT_SHIFT, SH_BAD);  // degraded mode active
+    EXPECT_EQ(shGet(f, SH_GNSS_ABSENT_SHIFT), SH_BAD);
+    // Neighbouring SH_STORAGE (shift 20) and the real SH_GNSS (shift 8) don't bleed.
+    f = shSet(f, SH_STORAGE_SHIFT, SH_OK);
+    f = shSet(f, SH_GNSS_SHIFT,    SH_DEGRADED);
+    EXPECT_EQ(shGet(f, SH_GNSS_ABSENT_SHIFT), SH_BAD);
+    EXPECT_EQ(shGet(f, SH_STORAGE_SHIFT),     SH_OK);
+    EXPECT_EQ(shGet(f, SH_GNSS_SHIFT),        SH_DEGRADED);
+}
+
 TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
     // bits 0-6 used; bit 7 reserved post per-fire-arming refactor.
     uint8_t all = NSF_ALT_LANDED | NSF_ALT_APOGEE | NSF_VEL_APOGEE |

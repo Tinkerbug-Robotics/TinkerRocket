@@ -499,10 +499,21 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                                  GNSS_RESET_N,
                                  GNSS_SAFEBOOT_N))
         {
-            ESP_LOGE(SC_TAG, "GNSS initialization failed, stopping.");
-            while (1) { delay_ms(1000); }
+            // #557: a dead or deaf-UART module used to hang boot here forever
+            // (while(1)), leaving the FC silent on the pad.  begin() now returns
+            // false on a bring-up-deadline expiry; continue in a GNSS-absent
+            // degraded mode instead.  gnss_online_ stays false so the poll task
+            // idles and getGNSSData() reports no fix; the flight computer sees
+            // isGnssOnline()==false and initializes the EKF from baro+IMU.  No
+            // flight-critical function needs GNSS (baro-backstop apogee, baro
+            // deploy, accel/baro launch, baro/gyro/accel landing).
+            gnss_online_ = false;
+            ESP_LOGE(SC_TAG, "GNSS init failed — continuing in GNSS-absent mode");
         }
-        ESP_LOGI(SC_TAG, "GNSS found and initialized");
+        else
+        {
+            ESP_LOGI(SC_TAG, "GNSS found and initialized");
+        }
     }
 
     // TODO Calibrate low and high g accel
@@ -845,7 +856,9 @@ void SensorCollector::pollGNSSdata(void* parameter)
     {
         vTaskDelay(xPollInterval);
 
-        if (!self->use_gnss) continue;
+        // #557: skip polling when GNSS is disabled (build config) or the module
+        // failed bring-up (dead/deaf UART) — no serial traffic to parse.
+        if (!self->use_gnss || !self->gnss_online_) continue;
 
         const uint32_t gnss_t0 = time_us();
 

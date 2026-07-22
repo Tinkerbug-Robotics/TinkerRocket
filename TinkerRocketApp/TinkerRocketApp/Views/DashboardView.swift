@@ -613,6 +613,16 @@ struct ConnectedDashboardView: View {
                     .opacity(staleOpacity)
             }
 
+            // #557: the FC lost its GNSS module and is flying a baro+IMU-only
+            // degraded path — no absolute position/track, guidance off (recovery
+            // is unaffected).  Shown on the pad too, so the operator sees it
+            // before launching.  Rides sensor_health, so it appears on both the
+            // direct-BLE and base-station-relay links.
+            if showRocketViews && device.telemetry.gnssAbsentMode {
+                GnssAbsentBannerView()
+                    .opacity(staleOpacity)
+            }
+
             // #393: gate on the rocket's REPORTED sim state (fs bit 8) OR the
             // local launch latch.  The latch alone dies on BLE reconnect
             // (BLEDevice is recreated), which made the Stop-sim control vanish
@@ -1072,6 +1082,37 @@ struct SimModeBannerView: View {
         .frame(maxWidth: .infinity)
         .background(Color.orange.opacity(0.1))
         .cornerRadius(10)
+    }
+}
+
+// #557: GNSS-absent degraded-flight warning.  Passive/informational (no control
+// — it reflects a hardware condition the operator can't toggle), modeled on
+// SimModeBannerView.  Driven by the FC's SH_GNSS_ABSENT verdict in sensor_health.
+struct GnssAbsentBannerView: View {
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "location.slash.fill")
+                    .font(.title2)
+                Text("NO GNSS — DEGRADED FLIGHT")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+            }
+            .foregroundColor(.orange)
+            Text("Flying on baro + IMU only: no position or ground track, "
+                 + "landing prediction and guidance are off. Apogee, deployment "
+                 + "and landing detection are unaffected.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.orange.opacity(0.5), lineWidth: 1)
+        )
     }
 }
 
