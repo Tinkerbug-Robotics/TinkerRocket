@@ -310,7 +310,14 @@ struct PyroTestView: View {
     private func safeRocket() {
         ticker.stop()
         if cameraRecording {
-            device.sendToggleLogging()
+            // #560: cmd 23 is a TOGGLE — only stop logging if THIS test started
+            // it. Blind-toggling here stopped an operator's pre-existing session
+            // (the #385 failure mode, which was fixed on the recording-complete
+            // path but missed on the abort paths). Stop the camera regardless.
+            if startedLoggingForTest {
+                device.sendToggleLogging()
+                startedLoggingForTest = false
+            }
             camera.stopRecording()
             cameraRecording = false
         }
@@ -346,7 +353,13 @@ struct PyroTestView: View {
     private func cancelAll() {
         ticker.stop()
         if cameraRecording {
-            device.sendToggleLogging()
+            // #560: only stop logging if THIS test started it (see safeRocket) —
+            // otherwise navigating away / dismissing mid-test toggles off an
+            // operator's pre-existing log. Stop the camera regardless.
+            if startedLoggingForTest {
+                device.sendToggleLogging()
+                startedLoggingForTest = false
+            }
             camera.stopRecording()
             cameraRecording = false
         }
