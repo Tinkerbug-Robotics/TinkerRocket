@@ -1331,13 +1331,23 @@ static volatile uint32_t fc_ota_rx_cb_count = 0;  // I2S RX cb ticks; teardown s
 
 static inline IRAM_ATTR void fcOtaRingPush(uint8_t b)
 {
-    fc_ota_ring[fc_ota_head] = b;
-    fc_ota_head = (fc_ota_head + 1) % FC_OTA_RING;
-    if (fc_ota_head == fc_ota_tail)
+    // #568: drop the NEWEST byte on overflow — the ISR must NEVER write
+    // fc_ota_tail. The old drop-oldest advanced tail from ISR context while
+    // fcOtaRingPop's non-atomic RMW ran in the parser task; the ISR preempting
+    // mid-pop (parser reads tail, ISR advances it, parser writes back stale+1)
+    // tore the index and corrupted fcOtaRingLen/framing. Same ISR-touches-tail
+    // hazard the OC eliminated in #383 (see OC rxPush) — with the ISR owning
+    // only head and the parser owning only tail this is a true SPSC ring.
+    // Dropping newest is safe here: chunks are CRC-framed and offset-ordered,
+    // so a lost byte costs one chunk resend, same as drop-oldest did.
+    const size_t next = (fc_ota_head + 1) % FC_OTA_RING;
+    if (next == fc_ota_tail)
     {
         fc_ota_ring_ovf = fc_ota_ring_ovf + 1;           // (-Wvolatile: avoid ++)
-        fc_ota_tail = (fc_ota_tail + 1) % FC_OTA_RING;   // drop oldest
+        return;                                          // ring full: drop newest
     }
+    fc_ota_ring[fc_ota_head] = b;
+    fc_ota_head = next;
 }
 static inline size_t  fcOtaRingLen()         { return (fc_ota_head + FC_OTA_RING - fc_ota_tail) % FC_OTA_RING; }
 static inline uint8_t fcOtaRingPeek(size_t i){ return fc_ota_ring[(fc_ota_tail + i) % FC_OTA_RING]; }
@@ -2235,9 +2245,18 @@ static inline void serviceCameraStart(uint32_t now_ms)
 
     if (camera_start_phase == CameraStartPhase::Probing)
     {
-        const bool alive = runCamProbeOnce();
+        // #568: each probe blocks up to RUNCAM_PROBE_READ_MS (60 ms) on the
+        // camera UART — fine on the pad, but if the operator starts the
+        // camera and launches inside the probe window (~8 s), those stalls
+        // would land in early boost. The flight loop must never wait on a
+        // camera in flight: on launch detect, skip the blocking probe and
+        // start recording blind immediately (fire-and-forget START_RECORDING
+        // — blind beats both a stalled boost loop and a camera that never
+        // records).
+        const bool in_flight = (rocket_state == INFLIGHT);
+        const bool alive = in_flight ? false : runCamProbeOnce();
         const bool deadline = (int32_t)(now_ms - camera_probe_deadline_ms) >= 0;
-        if (!alive && !deadline)
+        if (!alive && !deadline && !in_flight)
         {
             camera_start_due_ms = now_ms + config::RUNCAM_PROBE_INTERVAL_MS;
             return;  // keep polling
@@ -2247,6 +2266,9 @@ static inline void serviceCameraStart(uint32_t now_ms)
                      (unsigned long)(now_ms - camera_start_power_ms), runcam_features,
                      (runcam_features & RUNCAM_FEAT_START_RECORDING)
                          ? "" : " — START_RECORDING not advertised!");
+        else if (in_flight)
+            ESP_LOGW(TAG, "RunCam: launch during boot probe — starting blind NOW "
+                          "(no blocking UART reads in boost)");
         else
             ESP_LOGW(TAG, "RunCam: no GET_DEVICE_INFO reply in %lu ms — recording "
                           "blind (check RX wire to FC pin %d and the camera's "
@@ -2610,6 +2632,15 @@ static void setup_fc()
     pn_min_speed      = prefs.getFloat("gms", config::PN_MIN_SPEED_MPS);
     pn_coast_delay_ms = prefs.getUShort("gcd", config::PN_COAST_DELAY_MS);
     pn_target_mode    = prefs.getUChar("gtm", config::PN_TARGET_MODE);
+    // #568: whitelist the NVS-loaded mode exactly like the command path does
+    // (and like pn_guidance_law below) — a corrupt / forward-version record
+    // must not flow into guidance unchecked.
+    if (pn_target_mode != GUIDE_TARGET_OVERHEAD &&
+        pn_target_mode != GUIDE_TARGET_POINT) {
+        ESP_LOGW(TAG, "[GUID CFG] stored target mode %u unknown — falling back "
+                      "to OVERHEAD", (unsigned)pn_target_mode);
+        pn_target_mode = GUIDE_TARGET_OVERHEAD;
+    }
     pn_target_e       = prefs.getFloat("gte", config::PN_TARGET_E_M);
     pn_target_n       = prefs.getFloat("gtn", config::PN_TARGET_N_M);
     pn_target_alt     = prefs.getFloat("gta", config::PN_TARGET_ALT_M);
@@ -6360,6 +6391,10 @@ static void loop_fc()
                         // would jerk the fins when roll control activates.
                         servo_control.stowControl();
                         servo_control.resetPID();
+                        // #568: defensive — can't be true here on a normal flight
+                        // (guidance only sets it after roll_delay elapses), but a
+                        // stowed vehicle must never report guidance active.
+                        guidance_active = false;
                     }
                     else if (ism6_fresh)   // #259: stale IMU -> neutral-hold branch below
                     {
@@ -6508,6 +6543,19 @@ static void loop_fc()
                         else
                         {
                             // --- Roll-only mode (powered flight or guidance disabled) ---
+                            // #568: guidance→roll-only handback. While guiding,
+                            // roll was nulled by roll_rate_pid_standalone +
+                            // setServoAngles, so servo_control's INTERNAL PID
+                            // never ran and its integrator froze at its
+                            // pre-guidance value (#268 syncs gains, not state).
+                            // Reset it once on the falling edge — guidance_active
+                            // still holds last tick's value here — so the
+                            // resuming controller doesn't apply the stale
+                            // integral as a step on the fins.
+                            if (guidance_active)
+                            {
+                                servo_control.resetPID();
+                            }
                             guidance_active = false;
 
                             // Decide per-segment whether to track angle or null rate.
@@ -6566,6 +6614,12 @@ static void loop_fc()
                         // resumes clean if the IMU recovers.
                         servo_control.stowControl();
                         servo_control.resetPID();
+                        // #568: without this, guidance_active latched true across
+                        // an IMU dropout during guided coast — NSF_GUIDANCE kept
+                        // asserting and GuidanceTelemData kept streaming stale
+                        // accel commands while the fins were actually stowed.
+                        // Telemetry/log fidelity only; mirrors the roll-only path.
+                        guidance_active = false;
                     }
                 }
                 const bool landing_conditions =
