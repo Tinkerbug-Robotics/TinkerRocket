@@ -37,6 +37,31 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(telemetry.state, "INFLIGHT")
     }
 
+    func testJSONDecode_IntFieldsTolerateFloatAndString() throws {
+        // #571: completes the #293 hardening — EVERY integer key must survive
+        // firmware-contract drift emitting it as a float or string. A strict
+        // decode threw inside init(from:) and the caller's catch discarded the
+        // WHOLE frame, so one off-type field (e.g. "rid" on a relayed frame)
+        // made the rocket vanish from the BS dashboard instead of degrading a
+        // single field.
+        let json = """
+        {"st":"INFLIGHT","nsat":7.0,"rid":"3","frx":"1000","fdr":2.0,
+         "hch":"5","nidd":4.0,"h":"9","slrm":"120","ds":1.0}
+        """.data(using: .utf8)!
+
+        let t = try JSONDecoder().decode(TelemetryData.self, from: json)
+        XCTAssertEqual(t.num_sats, 7)
+        XCTAssertEqual(t.source_rocket_id, 3, "rid is the multi-rocket demux key")
+        XCTAssertEqual(t.frames_rx, 1000)
+        XCTAssertEqual(t.frames_drop, 2)
+        XCTAssertEqual(t.hop_channel, 5)
+        XCTAssertEqual(t.netid_drops, 4)
+        XCTAssertEqual(t.sensor_health, 9)
+        XCTAssertEqual(t.bs_log_silence_remaining_s, 120)
+        XCTAssertEqual(t.data_status, .stale)
+        XCTAssertEqual(t.state, "INFLIGHT", "frame must decode as a whole")
+    }
+
     func testJSONDecode_HopStateKeys() throws {
         // #150: "hch" (current hop channel) and "nidd" (network-id
         // mismatch drops) ride the droppable tail of the telemetry JSON —
