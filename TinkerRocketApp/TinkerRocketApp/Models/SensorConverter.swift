@@ -29,14 +29,20 @@ nonisolated class SensorConverter {
     private var iis2mdc_rot_z_rad: Double = 0.0
 
     init() {
-        // Calculate sensitivity values
-        // ISM6HG256 outputs 16-bit two's-complement samples:
-        //   value = raw * (full_scale / 32768)
+        // Calculate sensitivity values. Mirror the firmware converter
+        // (TR_Sensor_Data_Converter.cpp configureISM6HG256FullScale) exactly:
+        //   accel: the full ±32768 LSB span maps to the full scale, so
+        //          mg/LSB = FS[g] * 1000 / 32768.
+        //   gyro : ST gyros use a FIXED per-FS sensitivity, NOT FS/32768 —
+        //          8.75 mdps/LSB at ±250 dps, doubling each FS step (140 @
+        //          ±4000), i.e. mdps/LSB = FS[dps] * 0.035. The old FS/32768
+        //          form (122.07 @ ±4000) understated every CSV gyro value
+        //          ~12.8% — fixed in firmware by #369, here by #564.
         let denom: Double = 32768.0
 
         let low_mg_per_lsb = (lowGFullScale * 1000.0) / denom
         let high_mg_per_lsb = (highGFullScale * 1000.0) / denom
-        let gyro_mdps_per_lsb = (gyroFullScale * 1000.0) / denom
+        let gyro_mdps_per_lsb = gyroFullScale * 0.035
 
         // mg/LSB -> m/s² per LSB
         acc_low_ms2_per_lsb = (low_mg_per_lsb * 1e-3) * g_ms2

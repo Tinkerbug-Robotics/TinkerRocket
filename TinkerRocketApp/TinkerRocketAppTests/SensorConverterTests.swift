@@ -114,6 +114,28 @@ final class SensorConverterTests: XCTestCase {
         XCTAssertEqual(si.low_g_acc_x, expected, accuracy: 0.1)
     }
 
+    func testIMU_GyroSensitivity_MatchesFirmware369Fix() throws {
+        // #564: ST gyros use a FIXED per-FS sensitivity, NOT FS/32768. The
+        // ISM6HG256 datasheet gives 8.75 mdps/LSB at ±250 dps, doubling each
+        // FS step → 140 mdps/LSB at ±4000 (mdps/LSB = FS * 0.035). The
+        // firmware converter was fixed in #369 (TR_Sensor_Data_Converter.cpp);
+        // this pins the app converter to the same 0.14 dps/LSB so the two
+        // can't drift apart again. The stale FS/32768 form (122.07 mdps/LSB)
+        // understated every post-flight CSV gyro value by ~12.8%.
+        let raw = try makeISM6Data(gyro: (1000, -2000, 500))
+        let si = converter.convertISM6HG256(raw)
+
+        // Default zero rotation: raw maps straight through at 0.14 dps/LSB.
+        XCTAssertEqual(si.gyro_x,  140.0, accuracy: 1e-9)
+        XCTAssertEqual(si.gyro_y, -280.0, accuracy: 1e-9)
+        XCTAssertEqual(si.gyro_z,   70.0, accuracy: 1e-9)
+
+        // Guard the exact regression: FS/32768 would give 122.07 dps here.
+        let staleDps = 1000.0 * (4000.0 / 32768.0)
+        XCTAssertNotEqual(si.gyro_x, staleDps, accuracy: 0.01,
+                          "gyro scale regressed to the pre-#369 FS/32768 form")
+    }
+
     // MARK: - GNSS
 
     func testGNSS_LatLonAlt() throws {
