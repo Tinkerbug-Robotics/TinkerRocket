@@ -890,6 +890,27 @@ static uint32_t ready_entry_ms    = 0;
 
 static OutStatusQueryData last_query_cfg = {};
 
+// #569: last_query_cfg is overwritten WHOLESALE (memcpy) by the I2S parser
+// task (core 1, prio 6) and read multi-field by loop_oc (core 1, prio 5).
+// The parser strictly preempts loopTask, so an unsynchronized multi-field
+// read could observe a torn mix of two status-query generations (e.g. an old
+// b2r_code with a new b2r_mode, or a torn b2r_q quaternion) in the LoRa
+// orientation packer / imu_orient echo / guid_target echo. The writer holds
+// this spinlock for its memcpy; multi-field readers take a whole-struct
+// snapshot and work on the local copy. (The parser's OWN field reads right
+// after its memcpy need no lock — same task as the writer. The dirty-flag
+// publish pattern is safe with this: data is committed under the lock BEFORE
+// the flag is set, so a consumer that sees the flag snapshots data at least
+// that new.)
+static portMUX_TYPE last_query_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
+static inline OutStatusQueryData snapshotQueryCfg()
+{
+    portENTER_CRITICAL(&last_query_cfg_mux);
+    const OutStatusQueryData snap = last_query_cfg;
+    portEXIT_CRITICAL(&last_query_cfg_mux);
+    return snap;
+}
+
 // FC firmware version, relayed from the FC via FC_IDENTITY (#8 Phase 4). Cached
 // here so the OC can publish it to the app as a "fc_identity" config message,
 // letting the app verify an FC OTA / detect a rollback against the FC's *own*
@@ -1542,6 +1563,12 @@ static uint32_t msg_count_power = 0;
 static uint32_t msg_count_start_logging = 0;
 static uint32_t msg_count_end_flight = 0;
 static uint32_t msg_count_unknown = 0;
+// #569: types accepted by isKnownMessageType and written to the flight log by
+// the enqueue path, but with no live handler branch (GUIDANCE_TELEM_MSG,
+// FLIGHT_SETTINGS_MSG, LORA_MSG). They used to fall through to
+// msg_count_unknown++, so a guided flight showed a climbing "unknown" rate
+// that read as I2S corruption and masked genuinely unknown frames.
+static uint32_t msg_count_logonly = 0;
 
 static uint32_t prev_msg_count_query = 0;
 static uint32_t prev_msg_count_ism6 = 0;
@@ -1554,6 +1581,7 @@ static uint32_t prev_msg_count_power = 0;
 static uint32_t prev_msg_count_start_logging = 0;
 static uint32_t prev_msg_count_end_flight = 0;
 static uint32_t prev_msg_count_unknown = 0;
+static uint32_t prev_msg_count_logonly = 0;   // #569
 static uint32_t last_stats_ms = 0;
 static uint64_t prev_bytes_rx = 0;
 static uint64_t prev_bytes_nand = 0;
@@ -1738,6 +1766,20 @@ static constexpr size_t I2C_TX_PAD = 1;   // legacy V1
 #endif
 static constexpr size_t I2C_TX_SIZE = FC_COMBINED_READ_SIZE + I2C_TX_PAD;
 
+// #569: the combined slave response is [status frame][optional config frame],
+// read as EXACTLY FC_COMBINED_READ_SIZE bytes by the FC. A config frame that
+// doesn't fit is DROPPED at pack time (now logged, but a drop is still a
+// config that never reaches the FC), so guarantee at compile time that the
+// largest config payload staged via setPendingCommandWithConfig() fits behind
+// the status frame. RollProfileData is the documented largest; if a bigger
+// config is ever added, extend this assert (the runtime ESP_LOGE below is the
+// backstop for anything missed).
+static constexpr size_t I2C_FRAME_OVERHEAD_B = 4 /*SOF*/ + 1 /*type*/ + 1 /*len*/ + 2 /*CRC*/;
+static constexpr size_t I2C_STATUS_FRAME_B   = 2 /*payload*/ + I2C_FRAME_OVERHEAD_B;
+static_assert(I2C_STATUS_FRAME_B + sizeof(RollProfileData) + I2C_FRAME_OVERHEAD_B
+                  <= FC_COMBINED_READ_SIZE,
+              "largest config frame (RollProfileData) no longer fits the combined I2C read");
+
 static void queueOutStatusResponse(bool ready)
 {
     // #366: serving-slot lifecycle.  When idle, first serve one cmd=0 poll
@@ -1818,10 +1860,24 @@ static void queueOutStatusResponse(bool ready)
             {
                 memcpy(tx_buf + tx_pos, cfg_frame, cfg_frame_len);
                 tx_pos += cfg_frame_len;
+                ESP_LOGI("OC", "I2C TX Config frame type=0x%02X len=%u",
+                              (unsigned)serving_cfg_type,
+                              (unsigned)cfg_frame_len);
             }
-            ESP_LOGI("OC", "I2C TX Config frame type=0x%02X len=%u",
-                          (unsigned)serving_cfg_type,
-                          (unsigned)cfg_frame_len);
+            else
+            {
+                // #569: this drop used to be SILENT — worse, the success line
+                // above printed regardless, so the log claimed a config was
+                // sent that never reached the FC. The static_assert by
+                // FC_COMBINED_READ_SIZE guards the known types; this is the
+                // runtime backstop for anything it misses.
+                ESP_LOGE("OC", "I2C TX Config frame type=0x%02X len=%u does NOT "
+                              "fit combined read (%u+%u > %u) — DROPPED, never "
+                              "reaches FC",
+                              (unsigned)serving_cfg_type, (unsigned)cfg_frame_len,
+                              (unsigned)tx_pos, (unsigned)cfg_frame_len,
+                              (unsigned)FC_COMBINED_READ_SIZE);
+            }
         }
         else
         {
@@ -2361,7 +2417,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         msg_count_query++;
         if (payload_len >= sizeof(OutStatusQueryData))
         {
+            // #569: commit the new generation atomically w.r.t. loop_oc's
+            // snapshot readers (see last_query_cfg_mux).
+            portENTER_CRITICAL(&last_query_cfg_mux);
             memcpy(&last_query_cfg, payload, sizeof(OutStatusQueryData));
+            portEXIT_CRITICAL(&last_query_cfg_mux);
             sensor_converter.configureISM6HG256FullScale(
                 decodeISM6LowGFS(last_query_cfg.ism6_low_g_fs_g),
                 decodeISM6HighGFS(last_query_cfg.ism6_high_g_fs_g),
@@ -2705,6 +2765,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         {
             ESP_LOGE("OC", "[I2C] slave TX reset FAILED: %s", esp_err_to_name(rerr));
         }
+    }
+    else if (type == GUIDANCE_TELEM_MSG ||
+             type == FLIGHT_SETTINGS_MSG ||
+             type == LORA_MSG)
+    {
+        // #569: log-only types — no live handler by design (they exist for
+        // the flight log; GUIDANCE_TELEM streams at up to 500 Hz in guided
+        // flight). Count them separately so "unknown" stays a real
+        // corruption signal.
+        msg_count_logonly++;
     }
     else
     {
@@ -3068,12 +3138,16 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     // after the app disconnects — a confidently WRONG display.)
     // Wire mode 0 = "not reported" (also what pre-#390 firmware and a
     // zero-init last_query_cfg produce), so nothing false can render.
-    if (last_query_cfg.format_version < 3)
+    // #569: snapshot so mode+code come from one query generation (the parser
+    // can preempt this packer and overwrite last_query_cfg between reads).
+    {
+    const OutStatusQueryData q = snapshotQueryCfg();
+    if (q.format_version < 3)
     {
         lora.imu_orient_mode = LORA2_OMODE_NONE;   // FC not up / pre-v3 FC
         lora.imu_orient_code = 0;
     }
-    else if (last_query_cfg.b2r_mode == ORIENT_MODE_AUTO_EXACT)
+    else if (q.b2r_mode == ORIENT_MODE_AUTO_EXACT)
     {
         lora.imu_orient_mode = LORA2_OMODE_AUTO;
         lora.imu_orient_code = LORA2_ORIENT_CODE_NONE;  // no discrete code
@@ -3081,10 +3155,11 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t se
     else
     {
         lora.imu_orient_mode =
-            (last_query_cfg.b2r_mode == ORIENT_MODE_MANUAL)    ? LORA2_OMODE_MANUAL :
-            (last_query_cfg.b2r_mode == ORIENT_MODE_AUTO_SNAP) ? LORA2_OMODE_AUTO
-                                                               : LORA2_OMODE_DEFAULT;
-        lora.imu_orient_code = (uint8_t)(last_query_cfg.b2r_code & LORA2_ORIENT_CODE_MASK);
+            (q.b2r_mode == ORIENT_MODE_MANUAL)    ? LORA2_OMODE_MANUAL :
+            (q.b2r_mode == ORIENT_MODE_AUTO_SNAP) ? LORA2_OMODE_AUTO
+                                                  : LORA2_OMODE_DEFAULT;
+        lora.imu_orient_code = (uint8_t)(q.b2r_code & LORA2_ORIENT_CODE_MASK);
+    }
     }
 
     if (latest_ism6_valid)
@@ -3351,22 +3426,25 @@ static void sendFcIdentity()
 // drops anything over the BLE notify MTU.
 static void sendImuOrientation()
 {
-    if (last_query_cfg.format_version < 3) return;  // pre-orientation FC
+    // #569: snapshot so code/mode/name come from ONE query generation (the
+    // parser can preempt this function and overwrite last_query_cfg mid-read).
+    const OutStatusQueryData q = snapshotQueryCfg();
+    if (q.format_version < 3) return;  // pre-orientation FC
     // "set" is the user's SETTING (0xFF auto / manual code), distinct from
     // code/mode/name which describe what the FC is actively applying.
     char buf[112];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"imu_orient\",\"code\":%u,\"mode\":%u,\"name\":\"%s\",\"set\":%u}",
-             (unsigned)last_query_cfg.b2r_code,
-             (unsigned)last_query_cfg.b2r_mode,
-             orientCodeName(last_query_cfg.b2r_code),
+             (unsigned)q.b2r_code,
+             (unsigned)q.b2r_mode,
+             orientCodeName(q.b2r_code),
              (unsigned)cfg_imu_orient);
     enqueueConfigReadback(String(buf));   // #398 item 3
-    imu_orient_pub_code = last_query_cfg.b2r_code;
-    imu_orient_pub_mode = last_query_cfg.b2r_mode;
+    imu_orient_pub_code = q.b2r_code;
+    imu_orient_pub_mode = q.b2r_mode;
     ESP_LOGI("CFG", "Queued imu_orient (%s, mode %u)",
-             orientCodeName(last_query_cfg.b2r_code),
-             (unsigned)last_query_cfg.b2r_mode);
+             orientCodeName(q.b2r_code),
+             (unsigned)q.b2r_mode);
 }
 
 // Publish the FC's guidance-target echo (#435) as its own compact config
@@ -3378,27 +3456,31 @@ static void sendImuOrientation()
 // f32 echo's full precision (~0.11 m/digit at the equator).
 static void sendGuidTarget()
 {
-    if (last_query_cfg.format_version < 5) return;  // pre-#435 FC — the app
+    // #569: snapshot — seq/status/rc/lat/lon/alt must all come from the same
+    // query generation, or a preempting parser memcpy could pair a new seq
+    // with an old point (the app confirms cmd-28 sends on exactly this tuple).
+    const OutStatusQueryData q = snapshotQueryCfg();
+    if (q.format_version < 5) return;               // pre-#435 FC — the app
                                                     // treats absence as
                                                     // unsupported firmware
     char buf[144];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"guid_target\",\"seq\":%u,\"st\":%u,\"rc\":%u,"
              "\"lat\":%.6f,\"lon\":%.6f,\"alt\":%d}",
-             (unsigned)last_query_cfg.tgt_seq,
-             (unsigned)last_query_cfg.tgt_status,
-             (unsigned)last_query_cfg.tgt_last_rc,
-             (double)last_query_cfg.tgt_lat_deg,
-             (double)last_query_cfg.tgt_lon_deg,
-             (int)last_query_cfg.tgt_alt_m);
+             (unsigned)q.tgt_seq,
+             (unsigned)q.tgt_status,
+             (unsigned)q.tgt_last_rc,
+             (double)q.tgt_lat_deg,
+             (double)q.tgt_lon_deg,
+             (int)q.tgt_alt_m);
     enqueueConfigReadback(String(buf));   // #398 item 3: paced drain
-    guid_tgt_pub_seq    = last_query_cfg.tgt_seq;
-    guid_tgt_pub_status = last_query_cfg.tgt_status;
-    guid_tgt_pub_rc     = last_query_cfg.tgt_last_rc;
+    guid_tgt_pub_seq    = q.tgt_seq;
+    guid_tgt_pub_status = q.tgt_status;
+    guid_tgt_pub_rc     = q.tgt_last_rc;
     ESP_LOGI("CFG", "Queued guid_target (seq=%u st=%u rc=%u)",
-             (unsigned)last_query_cfg.tgt_seq,
-             (unsigned)last_query_cfg.tgt_status,
-             (unsigned)last_query_cfg.tgt_last_rc);
+             (unsigned)q.tgt_seq,
+             (unsigned)q.tgt_status,
+             (unsigned)q.tgt_last_rc);
 }
 
 static void sendCurrentConfig()
@@ -3739,6 +3821,18 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
             ESP_LOGI("LORA", "UPLINK LoRa reconfigured + saved: %.1f MHz SF%u BW%.0f CR%u %d dBm",
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
+
+            // #569: reconfigure() leaves the radio in STANDBY (it clears
+            // rx_mode_ internally and does not re-enter RX). Every other
+            // reconfigure site (cmd 16, rendezvous, hop visit) follows with
+            // startReceive(); this one didn't — and serviceLoRaUplink's
+            // rx-flag sync only ever sets lora_in_rx_mode TRUE, so the stale
+            // true suppressed its startReceive() recovery. The OC sat deaf to
+            // uplinks on the NEW modulation until the next telemetry TX
+            // re-armed RX (~0.5–2 s), silently missing any follow-up ground
+            // command in that window.
+            lora_comms.startReceive();
+            lora_in_rx_mode = true;
         }
         else
         {
@@ -4715,6 +4809,7 @@ static void printStats()
     const uint32_t d_start_logging = msg_count_start_logging - prev_msg_count_start_logging;
     const uint32_t d_end_flight = msg_count_end_flight - prev_msg_count_end_flight;
     const uint32_t d_unknown = msg_count_unknown - prev_msg_count_unknown;
+    const uint32_t d_logonly = msg_count_logonly - prev_msg_count_logonly;   // #569
     const float hz_scale = (dt > 0U) ? (1000.0f / (float)dt) : 0.0f;
     const float hz_query = (float)d_query * hz_scale;
     const float hz_ism6 = (float)d_ism6 * hz_scale;
@@ -4727,6 +4822,7 @@ static void printStats()
     const float hz_start_logging = (float)d_start_logging * hz_scale;
     const float hz_end_flight = (float)d_end_flight * hz_scale;
     const float hz_unknown = (float)d_unknown * hz_scale;
+    const float hz_logonly = (float)d_logonly * hz_scale;   // #569
     prev_msg_count_query = msg_count_query;
     prev_msg_count_ism6 = msg_count_ism6;
     prev_msg_count_bmp = msg_count_bmp;
@@ -4738,6 +4834,7 @@ static void printStats()
     prev_msg_count_start_logging = msg_count_start_logging;
     prev_msg_count_end_flight = msg_count_end_flight;
     prev_msg_count_unknown = msg_count_unknown;
+    prev_msg_count_logonly = msg_count_logonly;   // #569
 
     // Persist a LogBufferStats snapshot once per stats interval (~1 Hz) into
     // the flight log so post-flight tooling can read the per-flight peak
@@ -4810,7 +4907,7 @@ static void printStats()
                   (double)((float)last_query_cfg.ism6_rot_z_cdeg / 100.0f),
                   (double)((float)last_query_cfg.mmc_rot_z_cdeg / 100.0f),
                   (unsigned)last_query_cfg.format_version);
-    ESP_LOGI("OC", "msg Hz q/ism6/bmp/mmc/iis2mdc/gnss/ns/pwr/st/en/unk=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
+    ESP_LOGI("OC", "msg Hz q/ism6/bmp/mmc/iis2mdc/gnss/ns/pwr/st/en/unk/lo=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
                   (double)hz_query,
                   (double)hz_ism6,
                   (double)hz_bmp,
@@ -4821,7 +4918,8 @@ static void printStats()
                   (double)hz_power,
                   (double)hz_start_logging,
                   (double)hz_end_flight,
-                  (double)hz_unknown);
+                  (double)hz_unknown,
+                  (double)hz_logonly);   // #569: log-only ≠ unknown
     if (config::USE_LORA_RADIO)
     {
         TR_LoRa_Comms::Stats ls = {};

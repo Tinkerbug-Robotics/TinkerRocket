@@ -82,7 +82,9 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     if (!pushConfig(freq_mhz, sf, bw_khz, cr, tx_power, /*start_rx=*/true,
                     /*ack_timeout_ms=*/500))
     {
-        ESP_LOGE(TAG, "initial SET_CONFIG not acknowledged — radio disabled");
+        // #569: covers both "no STATUS ack" and "ack with radio_enabled=0"
+        // (RF dead on the daughterboard — pushConfig logs the specific cause).
+        ESP_LOGE(TAG, "initial SET_CONFIG rejected — radio disabled");
         modem_alive_ = false;
         return false;
     }
@@ -128,6 +130,22 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
         link_.poll(&UartModemBackend::onFrameTrampoline, this);
         if (status_rx_count_ != status_before)
         {
+            // #569: the STATUS ack proves the MODEM is alive — not the radio.
+            // The modem echoes STATUS even when its LLCC68 begin() failed
+            // (radio_enabled=0). Accepting that as success made begin()
+            // report a fully working radio while every send() was silently
+            // rejected modem-side (handleTxFrame: !radio_up → ok=0) — the OC
+            // transmitted telemetry into a void, discoverable only by
+            // watching tx_fail climb. Reject the config so begin() degrades
+            // to radio-less, same as a failed TR_LoRa_Comms::begin(), and
+            // the RF-dead state is loud and distinct from modem-absent.
+            if (last_status_.radio_enabled == 0)
+            {
+                ESP_LOGE(TAG, "modem alive but RADIO DEAD (STATUS ack has "
+                              "radio_enabled=0 — LLCC68 init failed on the "
+                              "daughterboard) — rejecting config");
+                return false;
+            }
             cfg_freq_mhz_ = freq_mhz;
             cfg_sf_ = sf;
             cfg_bw_khz_ = bw_khz;
