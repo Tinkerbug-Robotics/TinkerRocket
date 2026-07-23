@@ -466,7 +466,7 @@ public object Commands {
      * (java.text.BreakIterator character boundaries) until it fits — the
      * JVM analogue of the iOS `removeLast()` loop over Swift Characters.
      */
-    internal fun utf8Clamped(s: String, maxBytes: Int): String {
+    public fun utf8Clamped(s: String, maxBytes: Int): String {
         var out = s
         while (out.toByteArray(Charsets.UTF_8).size > maxBytes) {
             val it = BreakIterator.getCharacterInstance()
