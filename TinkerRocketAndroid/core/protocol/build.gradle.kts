@@ -15,10 +15,11 @@ kotlin {
 }
 
 dependencies {
+    // TelemetryData decodes wire JSON via the JsonElement API with a
+    // hand-written mapper (never plugin-default @Serializable — it cannot
+    // express the per-field flexInt tolerance), so no serialization plugin.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     testImplementation(kotlin("test"))
-    // Sidecar (.expected.json) parsing in the golden walk. JsonElement API
-    // only — no @Serializable classes yet, so no serialization plugin needed.
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 }
 
 tasks.test {
