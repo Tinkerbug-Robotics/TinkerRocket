@@ -676,7 +676,7 @@ void buildFileops(Builder& b) {
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
 // payloads come straight from the header; the documented hand-packed layouts
-// (cmd 9/10/50/60/70) are packed here and pinned by the freshness test.
+// (cmd 5/9/10/50/60/70) are packed here and pinned by the freshness test.
 void buildCommands(Builder& b) {
     auto cmd = [](uint8_t id, const std::vector<uint8_t>& payload) {
         std::vector<uint8_t> f{id};
@@ -685,11 +685,22 @@ void buildCommands(Builder& b) {
         return out;
     };
 
-    b.add("commands", "cmd05_simconfig_16.bin",
-          cmd(5, bytesOf(SimConfigData{0.595f, 80.0f, 2.5f, 15.0f})),
-          Json().u("cmd", 5).f("mass_kg", 0.595f).f("thrust_n", 80.0f)
-              .f("burn_time_s", 2.5f).f("descent_rate_mps", 15.0f).done(),
-          "SimConfigData");
+    {
+        // BLE cmd-5 wire is [mass_g][thrust_n][burn_s][descent_mps]: same field
+        // order as SimConfigData but the first float is GRAMS — the OC relay
+        // divides by 1000 into SimConfigData.mass_kg before forwarding to the
+        // FC (out_computer main.cpp, BLE + LoRa handlers).  Do NOT bytesOf()
+        // the struct here; that would pin a kg wire unit no firmware accepts.
+        std::vector<uint8_t> p;
+        appendF32(p, 595.0f);   // mass_g (firmware sim sees 0.595 kg)
+        appendF32(p, 80.0f);    // thrust_n
+        appendF32(p, 2.5f);     // burn_time_s
+        appendF32(p, 15.0f);    // descent_rate_mps
+        b.add("commands", "cmd05_simconfig_16.bin", cmd(5, p),
+              Json().u("cmd", 5).f("mass_g", 595.0f).f("thrust_n", 80.0f)
+                  .f("burn_time_s", 2.5f).f("descent_rate_mps", 15.0f).done(),
+              "sim config; mass is GRAMS on the wire (OC /1000 -> SimConfigData.mass_kg)");
+    }
 
     {
         std::vector<uint8_t> p;

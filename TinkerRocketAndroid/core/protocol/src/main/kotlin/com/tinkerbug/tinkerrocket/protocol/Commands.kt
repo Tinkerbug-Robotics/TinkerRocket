@@ -44,19 +44,20 @@ public object Commands {
     // ------------------------------------------------------------ simulation
 
     /**
-     * cmd 5 — SimConfigData, 16 B: `[mass f32][thrust_n f32][burn_s f32]
-     * [descent_rate_mps f32]`.  The iOS UI enters mass in GRAMS and packs the
-     * entered number unscaled (SimulationView comment says `mass_g`); the C++
-     * fixture generator labels the same first float `mass_kg`.  The builder is
-     * unit-agnostic — it packs exactly the float given, like iOS does.
+     * cmd 5 — sim config, 16 B: `[mass_g f32][thrust_n f32][burn_s f32]
+     * [descent_rate_mps f32]`.  The wire mass unit is GRAMS: the OC relay
+     * (BLE and LoRa paths) divides by 1000 into the firmware-internal
+     * `SimConfigData.mass_kg` before forwarding to the FC.  Field order
+     * matches `SimConfigData`, the mass unit does not — never pack kg here.
+     * Verified against the 2026-07-16 HIL log (500 g → 80 m/s² boost).
      */
     public fun simConfig(
-        mass: Float,
+        massGrams: Float,
         thrustN: Float,
         burnTimeS: Float,
         descentRateMps: Float,
     ): ByteArray = frame(BleCommandId.SIM_CONFIG) {
-        f32(mass); f32(thrustN); f32(burnTimeS); f32(descentRateMps)
+        f32(massGrams); f32(thrustN); f32(burnTimeS); f32(descentRateMps)
     }
 
     // ------------------------------------------------------- device settings

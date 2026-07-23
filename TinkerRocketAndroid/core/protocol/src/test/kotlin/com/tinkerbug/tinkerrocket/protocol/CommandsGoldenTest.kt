@@ -96,7 +96,7 @@ class CommandsGoldenTest {
         assertMatchesFixture(
             "cmd05_simconfig_16.bin",
             Commands.simConfig(
-                mass = s.f("mass_kg"),
+                massGrams = s.f("mass_g"),
                 thrustN = s.f("thrust_n"),
                 burnTimeS = s.f("burn_time_s"),
                 descentRateMps = s.f("descent_rate_mps"),

@@ -125,7 +125,7 @@
  {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
- "notes": "SimConfigData"},
+ "notes": "sim config; mass is GRAMS on the wire (OC /1000 -> SimConfigData.mass_kg)"},
  {
  "file": "commands/cmd09_timesync.bin",
  "size": 8,

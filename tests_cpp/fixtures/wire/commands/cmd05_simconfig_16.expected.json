@@ -1,6 +1,6 @@
 {
  "cmd": 5,
- "mass_kg": 0.595000029,
+ "mass_g": 595,
  "thrust_n": 80,
  "burn_time_s": 2.5,
  "descent_rate_mps": 15}
