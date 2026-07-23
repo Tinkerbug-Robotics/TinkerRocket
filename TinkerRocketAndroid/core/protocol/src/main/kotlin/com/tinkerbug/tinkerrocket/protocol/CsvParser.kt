@@ -1,0 +1,251 @@
+package com.tinkerbug.tinkerrocket.protocol
+
+// Port of TinkerRocketApp/Models/CSVParser.swift (parse + header repair +
+// column groups).  The iOS source is the behavioral reference — including the
+// #236 over-long-row clamp and the #514 split-header repair — so any change
+// here must stay lockstep with the Swift original.
+
+/** One named group of column headers for the chart column picker UI. */
+public data class ColumnGroup(
+    public val name: String,
+    public val columns: List<String>,
+)
+
+/**
+ * Parsed CSV flight data in columnar format for efficient charting.
+ * Mirrors iOS `FlightCSVData`.
+ */
+public class FlightCsvData(
+    public val headers: List<String>,
+    public val columns: Map<String, List<Double>>,
+    public val rowCount: Int,
+) {
+    public companion object {
+
+        /**
+         * Column names grouped by sensor category for the picker UI (rocket
+         * on-board CSV).  Mirrors iOS `FlightCSVData.columnGroups`.
+         */
+        public val columnGroups: List<ColumnGroup> = listOf(
+            ColumnGroup("Altitude & Position", listOf(
+                "Pressure Altitude (m)", "GNSS Altitude (m)",
+                "Position East (m)", "Position North (m)", "Position Up (m)",
+            )),
+            ColumnGroup("Velocity", listOf(
+                "Altitude Rate (m/s)",
+                "Velocity East (m/s)", "Velocity North (m/s)", "Velocity Up (m/s)",
+                "GNSS East Velocity (m/s)", "GNSS North Velocity (m/s)", "GNSS Up Velocity (m/s)",
+            )),
+            ColumnGroup("Acceleration", listOf(
+                "Low-G Acceleration X (m/s2)", "Low-G Acceleration Y (m/s2)", "Low-G Acceleration Z (m/s2)",
+                "High-G Acceleration X (m/s2)", "High-G Acceleration Y (m/s2)", "High-G Acceleration Z (m/s2)",
+            )),
+            // #514: the quaternion is the only reconstructable attitude — Roll
+            // is the body-Z azimuth while Pitch/Yaw are ZYX-Euler, so those
+            // three are NOT a valid Euler triple.  Two name generations appear
+            // in the wild: the current semicolon names (the #514 comma names
+            // broke naive readers and were re-released with semicolons;
+            // repairSplitHeaderNames folds the 7/14–7/16 comma exports into
+            // this form) and the pre-#514 plain names.
+            ColumnGroup("Rotation", listOf(
+                "Gyro X (deg/s)", "Gyro Y (deg/s)", "Gyro Z (deg/s)",
+                "Quat q0", "Quat q1", "Quat q2", "Quat q3",
+                "Roll (deg; body-Z azimuth)", "Pitch (deg; ZYX Euler)", "Yaw (deg; ZYX Euler)",
+                "Roll (deg)", "Pitch (deg)", "Yaw (deg)",           // pre-#514 exports
+                "Roll Command (deg)",
+            )),
+            ColumnGroup("Environment", listOf(
+                "Pressure (Pa)", "Barometer Temperature (C)",
+                "Magnetic Field X (uT)", "Magnetic Field Y (uT)", "Magnetic Field Z (uT)",
+            )),
+            ColumnGroup("Power", listOf(
+                "Voltage (V)", "Current (mA)", "State of Charge (%)",
+            )),
+            ColumnGroup("GPS", listOf(
+                "Latitude (deg)", "Longitude (deg)",
+                "Number of Satellites", "PDOP",
+                "GNSS Horizontal Accuracy (m)", "GNSS Vertical Accuracy (m)",
+            )),
+            ColumnGroup("Flags", listOf(
+                "Launch Flag", "Altitude Apogee Flag", "Velocity Apogee Flag", "Landed Flag",
+            )),
+        )
+
+        /**
+         * Column names grouped by category for LoRa base-station CSV files.
+         * Mirrors iOS `FlightCSVData.loraColumnGroups`.
+         */
+        public val loraColumnGroups: List<ColumnGroup> = listOf(
+            ColumnGroup("Altitude & Speed", listOf(
+                "pressure_alt", "alt_m", "alt_rate", "speed",
+                "max_alt", "max_speed",
+            )),
+            ColumnGroup("Acceleration", listOf(
+                "acc_x", "acc_y", "acc_z",
+            )),
+            ColumnGroup("Rotation", listOf(
+                "gyro_x", "gyro_y", "gyro_z",
+                "roll", "pitch", "yaw",
+            )),
+            ColumnGroup("Power", listOf(
+                "voltage", "current", "soc",
+            )),
+            ColumnGroup("GPS", listOf(
+                "lat", "lon", "num_sats", "pdop", "h_acc",
+            )),
+            ColumnGroup("Radio", listOf(
+                "rssi", "snr",
+            )),
+            ColumnGroup("State & Flags", listOf(
+                "state", "launch", "vel_apo", "alt_apo", "landed",
+            )),
+        )
+
+        /**
+         * Pick the right column groups based on which headers are present.
+         * LoRa CSVs use short names (e.g. "pressure_alt"), rocket CSVs use
+         * descriptive names (e.g. "Pressure Altitude (m)").
+         */
+        public fun columnGroupsFor(headers: List<String>): List<ColumnGroup> {
+            if (headers.contains("pressure_alt") || headers.contains("rssi")) {
+                return loraColumnGroups
+            }
+            return columnGroups
+        }
+    }
+}
+
+/** Parse failures, mirroring iOS `CSVParserError`. */
+public sealed class CsvParserException(message: String) : Exception(message) {
+    public class EmptyFile : CsvParserException("CSV file is empty")
+    public class NoHeader : CsvParserException("CSV file has no header row")
+}
+
+public object CsvParser {
+
+    /**
+     * Apps built 2026-07-14…07-16 (#514, pre-fix) emitted three column names
+     * containing literal commas without quoting, so the header row carried
+     * three more comma-separated tokens than every data row and all columns
+     * after "Quat q3" loaded shifted.  Re-join those known token pairs into
+     * the current comma-free names so existing exports parse correctly.
+     * (The writer no longer puts commas in column names — see CSVGenerator.)
+     *
+     * Table-driven and exact: pre-#514 plain names ("Roll (deg)") and the
+     * current semicolon names never match a (first, second) pair, so they
+     * pass through untouched.
+     */
+    private val splitHeaderRepairs: Map<String, Pair<String, String>> = mapOf(
+        // first token → (second token, joined replacement)
+        "Roll (deg" to ("body-Z azimuth)" to "Roll (deg; body-Z azimuth)"),
+        "Pitch (deg" to ("ZYX Euler)" to "Pitch (deg; ZYX Euler)"),
+        "Yaw (deg" to ("ZYX Euler)" to "Yaw (deg; ZYX Euler)"),
+    )
+
+    public fun repairSplitHeaderNames(headers: List<String>): List<String> {
+        val repaired = ArrayList<String>(headers.size)
+        var i = 0
+        while (i < headers.size) {
+            val fix = splitHeaderRepairs[headers[i]]
+            if (i + 1 < headers.size && fix != null && headers[i + 1] == fix.first) {
+                repaired.add(fix.second)
+                i += 2
+            } else {
+                repaired.add(headers[i])
+                i += 1
+            }
+        }
+        return repaired
+    }
+
+    /**
+     * Parse CSV text into columnar [FlightCsvData].
+     *
+     * Deviation from iOS (by design): the Swift `parse(url:)` reads the file
+     * itself; this pure-JVM port takes the decoded UTF-8 content and leaves
+     * I/O to the caller.  Everything after the read is a line-for-line port:
+     *  - lines split on "\n" dropping EMPTY lines only (a lone "\r" survives,
+     *    exactly as in Swift `split(omittingEmptySubsequences: true)`);
+     *  - the header row splits on "," dropping empty tokens (Swift default),
+     *    then trims spaces/tabs (Swift `.whitespaces` excludes CR/LF, so a
+     *    trailing "\r" on a CRLF header is preserved — mirrored here);
+     *  - data rows split on "," KEEPING empty fields; unparseable or empty
+     *    fields become NaN; short rows pad NaN; over-long rows clamp with
+     *    min() — the #236 trap: the naive `fields.count..<columnCount` pad
+     *    range inverts (and trapped on iOS) when a garbled row like
+     *    "166.65.5,extra" carries more fields than the header;
+     *  - [FlightCsvData.rowCount] counts data lines, not columns.
+     */
+    public fun parse(content: String): FlightCsvData {
+        val lines = content.split("\n").filter { it.isNotEmpty() }
+
+        if (lines.isEmpty()) {
+            throw CsvParserException.EmptyFile()
+        }
+
+        val rawHeaders = lines[0].split(",")
+            .filter { it.isNotEmpty() }          // Swift split omits empty subsequences
+            .map { it.trim(' ', '\t') }          // Swift .whitespaces: blanks, NOT CR/LF
+        val headers = repairSplitHeaderNames(rawHeaders)
+        val columnCount = headers.size
+
+        if (columnCount == 0) {
+            throw CsvParserException.NoHeader()
+        }
+
+        val dataLines = lines.subList(1, lines.size)
+        val rowCount = dataLines.size
+
+        // Pre-allocate columnar arrays
+        val columns = List(columnCount) { ArrayList<Double>(rowCount) }
+
+        // Parse all rows in a single pass
+        for (line in dataLines) {
+            val fields = line.split(",")         // Kotlin split keeps empty fields
+            val consumed = minOf(fields.size, columnCount)
+            for (col in 0 until consumed) {
+                columns[col].add(parseFieldStrict(fields[col]))
+            }
+            // Pad short rows.  min() guards over-long rows (more fields than
+            // the header — e.g. garbled LoRa telemetry like "166.65.5"
+            // splitting into extra fields): the bare Swift range
+            // `fields.count..<columnCount` trapped when fields.count >
+            // columnCount (#236).  Extra fields were already consumed above.
+            for (col in consumed until columnCount) {
+                columns[col].add(Double.NaN)
+            }
+        }
+
+        // Build map keyed by column name (duplicate headers: last one wins,
+        // matching the Swift dictionary assignment).
+        val dict = LinkedHashMap<String, List<Double>>(columnCount)
+        for ((i, header) in headers.withIndex()) {
+            dict[header] = columns[i]
+        }
+
+        return FlightCsvData(headers = headers, columns = dict, rowCount = rowCount)
+    }
+
+    /**
+     * Strict field-to-Double conversion mirroring Swift `Double(Substring)`.
+     *
+     * Kotlin's `toDoubleOrNull` (Java `parseDouble`) is laxer than Swift: it
+     * accepts surrounding whitespace, trailing 'd'/'D'/'f'/'F' suffixes, and
+     * differs on "NaN"/"Infinity"/hex-float spellings.  Those forms only ever
+     * appear in garbage rows, where iOS lands on NaN — so anything outside a
+     * plain decimal/scientific literal maps to NaN here, matching the iOS
+     * column outcome.  (Documented deviation: Swift itself parses a literal
+     * "nan"/"inf" field to nan/inf; per the port decision those are folded to
+     * NaN since no writer ever emits them.)
+     */
+    private fun parseFieldStrict(field: String): Double {
+        if (field.isEmpty()) return Double.NaN
+        for (c in field) {
+            when (c) {
+                in '0'..'9', '+', '-', '.', 'e', 'E' -> Unit
+                else -> return Double.NaN            // whitespace, x/X, n/N, i/I, d/D, f/F, …
+            }
+        }
+        return field.toDoubleOrNull() ?: Double.NaN
+    }
+}
