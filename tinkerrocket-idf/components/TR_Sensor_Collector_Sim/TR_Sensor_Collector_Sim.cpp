@@ -94,6 +94,14 @@ void SensorCollectorSim::configureSim(const SimConfigData& cfg)
 {
     cfg_ = cfg;
     configured_ = true;
+    // mass_kg outside any plausible vehicle (>50 kg / <10 g) almost certainly
+    // means a raw cmd-5 BLE payload (grams) reached us without the OC's /1000
+    // conversion — the sim will sit on the pad (or go ballistic) silently.
+    if (cfg_.mass_kg > 50.0f || cfg_.mass_kg < 0.010f)
+    {
+        ESP_LOGE("SIM", "Implausible mass_kg=%.4f — grams sent where kg expected? "
+                 "(BLE cmd-5 mass is grams; OC converts)", (double)cfg_.mass_kg);
+    }
     ESP_LOGI("SIM", "Config: mass=%.3fkg thrust=%.1fN burn=%.1fs descent=%.1fm/s",
              (double)cfg_.mass_kg, (double)cfg_.thrust_n,
              (double)cfg_.burn_time_s, (double)cfg_.descent_rate_mps);
