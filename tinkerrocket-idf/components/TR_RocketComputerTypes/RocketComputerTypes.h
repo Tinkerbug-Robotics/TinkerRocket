@@ -2052,6 +2052,15 @@ typedef struct __attribute__((packed))
     float max_cmd;
 } PIDConfigData;
 static_assert(sizeof(PIDConfigData) == 20, "PIDConfigData must be 20 bytes");
+// #572: field-ORDER pin. This struct is homogeneous (same-typed fields), is
+// hand-packed byte-by-byte in the iOS app (BLEDevice.swift) and memcpy'd on
+// the FC — a same-size field reorder passes the sizeof assert and every gtest
+// while silently mismapping (e.g. the app's ki applied as kd: wrong gains
+// fly). The offsets ARE the wire ABI.
+static_assert(offsetof(PIDConfigData, kp) == 0 && offsetof(PIDConfigData, ki) == 4 &&
+              offsetof(PIDConfigData, kd) == 8 && offsetof(PIDConfigData, min_cmd) == 12 &&
+              offsetof(PIDConfigData, max_cmd) == 16,
+              "PIDConfigData field order is wire ABI (app hand-packs it)");
 
 // PN guidance target mode (which point the rocket steers toward).
 static constexpr uint8_t GUIDE_TARGET_OVERHEAD = 0;  // directly over the pad: (0,0,target_alt)
@@ -2151,6 +2160,11 @@ typedef struct __attribute__((packed))
 } FinConfigData;
 static_assert(sizeof(FinConfigData) == 18, "FinConfigData must be 18 bytes");
 
+// UNIT TRAP: this struct is the OC→FC I2C frame and the sim's internal config —
+// mass in KILOGRAMS.  The BLE cmd-5 payload the app sends has the same field
+// order but its first float is mass in GRAMS; the OC relay handlers (BLE and
+// LoRa uplink, out_computer main.cpp) divide by 1000 when building this struct.
+// Never memcpy a raw cmd-5 payload into SimConfigData.
 typedef struct __attribute__((packed))
 {
     float mass_kg;
@@ -2159,12 +2173,21 @@ typedef struct __attribute__((packed))
     float descent_rate_mps;
 } SimConfigData;
 static_assert(sizeof(SimConfigData) == 16, "SimConfigData must be 16 bytes");
+// #572: field-order pin — see PIDConfigData.
+static_assert(offsetof(SimConfigData, mass_kg) == 0 && offsetof(SimConfigData, thrust_n) == 4 &&
+              offsetof(SimConfigData, burn_time_s) == 8 && offsetof(SimConfigData, descent_rate_mps) == 12,
+              "SimConfigData field order matches the cmd-5 BLE payload (app hand-packs it), "
+              "but the BLE mass field is grams — OC converts (see unit trap above)");
 
 typedef struct __attribute__((packed))
 {
     int16_t angle_cdeg[4];  // Per-servo angle in centi-degrees (-2000 to +2000)
 } ServoTestAnglesData;
 static_assert(sizeof(ServoTestAnglesData) == 8, "ServoTestAnglesData must be 8 bytes");
+// #572: field-order pin — see PIDConfigData.
+static_assert(offsetof(ServoTestAnglesData, angle_cdeg) == 0 &&
+              sizeof(((ServoTestAnglesData*)nullptr)->angle_cdeg[0]) == 2,
+              "ServoTestAnglesData layout is wire ABI (app hand-packs it)");
 
 // --- Servo Replay Data ---
 // Replays recorded flight data through the control loop to observe servo response
@@ -2219,6 +2242,13 @@ typedef struct __attribute__((packed))
     float    integral_sep_threshold_dps;  // roll-rate PID integral-separation anti-windup threshold (deg/s); >=0 applies (0 disables), <0 keeps firmware default
 } RollControlConfigData;
 static_assert(sizeof(RollControlConfigData) == 16, "RollControlConfigData must be 16 bytes");
+// #572: field-order pin — see PIDConfigData.
+static_assert(offsetof(RollControlConfigData, use_angle_control) == 0 &&
+              offsetof(RollControlConfigData, roll_delay_ms) == 2 &&
+              offsetof(RollControlConfigData, kp_angle_rate_cap_dps) == 4 &&
+              offsetof(RollControlConfigData, kp_angle) == 8 &&
+              offsetof(RollControlConfigData, integral_sep_threshold_dps) == 12,
+              "RollControlConfigData field order is wire ABI (app hand-packs it)");
 
 // --- Flight settings snapshot (#165) ---
 // One-shot snapshot of the rocket's runtime settings, emitted FC→OC over I2S

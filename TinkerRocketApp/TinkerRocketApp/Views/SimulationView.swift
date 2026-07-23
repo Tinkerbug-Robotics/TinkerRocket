@@ -152,6 +152,8 @@ struct SimulationView: View {
         }
 
         // Pack 4 floats as little-endian bytes: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4]
+        // Wire mass is GRAMS: the OC relay divides by 1000 into SimConfigData.mass_kg
+        // (firmware-internal struct is kg — do not "fix" this to pack kg).
         var payload = Data()
         var m = massG
         var t = thrustN

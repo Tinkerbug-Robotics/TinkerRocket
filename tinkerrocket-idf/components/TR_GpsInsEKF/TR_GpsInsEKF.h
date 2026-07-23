@@ -139,13 +139,20 @@ public:
     void getQuaternion(float (&r)[4]) const { r[0]=quat_BL_[0]; r[1]=quat_BL_[1]; r[2]=quat_BL_[2]; r[3]=quat_BL_[3]; }
 
     /// EKF health for downstream consumers (#257 apogee voter exclusion, #265
-    /// servo-stow gate).  v1 signal: the quaternion + velocity estimate are
-    /// finite AND stabilizeP() has not had to repair a non-finite covariance
-    /// within the last divergence-cooldown window.  Conservative — covariance-
-    /// magnitude thresholds are deferred until tuned against flight logs.
+    /// servo-stow gate).  v1 signal: the quaternion + velocity + position
+    /// estimates are finite AND stabilizeP() has not had to repair a
+    /// non-finite covariance within the last divergence-cooldown window.
+    /// #572: position was missing — a NaN reaching only pEst_D_rrm_ fed NaN
+    /// into guidance range/bearing and the landing estimate while isHealthy()
+    /// still said true, so the voter and servo gate kept trusting it.
+    /// Conservative — covariance-magnitude thresholds are deferred until
+    /// tuned against flight logs.  (Bias states are deliberately not checked:
+    /// a non-finite bias corrupts velocity/attitude within one predict step,
+    /// so these checks already catch it a tick later.)
     bool isHealthy() const {
         for (int i = 0; i < 4; ++i) if (!std::isfinite(quat_BL_[i]))      return false;
         for (int i = 0; i < 3; ++i) if (!std::isfinite(vEst_NED_mps_[i])) return false;
+        for (int i = 0; i < 3; ++i) if (!std::isfinite(pEst_D_rrm_[i]))   return false;  // #572
         return unhealthy_cooldown_ == 0;
     }
 
@@ -481,16 +488,31 @@ private:
     // consistent for a dwell, i.e. until the slew has finished. Sized to comfortably
     // outlast the accel update's attitude time constant.
     static constexpr uint32_t GBIAS_GATE_HOLD_US = 2000000u;   // 2 s
-    uint32_t gbias_gate_hold_until_us_ = 0;
+    // #572: store the TRIP time and compare elapsed, not an absolute
+    // "hold-until" deadline. The old `tPrev_us_ < hold_until` broke across
+    // the uint32 microsecond wrap (~71.6 min) twice over: a trip within 2 s
+    // of the wrap computed a small hold_until so the hold dropped instantly,
+    // and long after any trip the wrapped tPrev_us_ dipped BELOW the stale
+    // nonzero hold_until, spuriously re-holding the coupling cut. Elapsed
+    // arithmetic is wrap-safe, and the armed flag disarms on expiry so a
+    // stale trip time can't re-trigger 71 minutes later.
+    uint32_t gbias_gate_trip_us_ = 0;
+    bool     gbias_gate_armed_   = false;
 
     // True while the gyro-bias coupling is held cut (gate tripped recently).
-    inline bool gyroBiasGateHeld() const {
-        return gbias_gate_hold_until_us_ != 0 && tPrev_us_ < gbias_gate_hold_until_us_;
+    inline bool gyroBiasGateHeld() {
+        if (!gbias_gate_armed_) return false;
+        if ((uint32_t)(tPrev_us_ - gbias_gate_trip_us_) >= GBIAS_GATE_HOLD_US) {
+            gbias_gate_armed_ = false;   // expired — disarm so wrap can't re-hold
+            return false;
+        }
+        return true;
     }
     // Arm/refresh the hold and count the trip.
     inline void tripGyroBiasGate() {
         ++gbias_gate_trips_;
-        gbias_gate_hold_until_us_ = tPrev_us_ + GBIAS_GATE_HOLD_US;
+        gbias_gate_armed_   = true;
+        gbias_gate_trip_us_ = tPrev_us_;
     }
 
     // Hard physical bound on the gyro-bias state (rad/s). A backstop: no

@@ -886,17 +886,24 @@ bool TR_GNSSReceiverUBloxSerial::pollNewPVT(GNSSData &gnss_data)
 
 void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
 {
+    // #572: every getter passes maxWait=0 explicitly. The SparkFun default is
+    // ~1.1 s: a getter whose cache bit is stale silently issues a BLOCKING
+    // getPVT(1100) — safe on the pollNewPVT path only because getPVT(0)==true
+    // just primed the whole cache, but a lethal footgun for any standalone
+    // caller (up to ~1.1 s PER FIELD). With 0 the contract is explicit:
+    // this function reads the already-parsed NAV-PVT and never touches the
+    // serial link. Must be called after a successful getPVT (pollNewPVT does).
     gnss_data.time_us = micros();
-    gnss_data.year = gnss.getYear();
-    gnss_data.month = gnss.getMonth();
-    gnss_data.day = gnss.getDay();
-    gnss_data.hour = gnss.getHour();
-    gnss_data.minute = gnss.getMinute();
-    gnss_data.second = gnss.getSecond();
-    gnss_data.milli_second = gnss.getMillisecond();
+    gnss_data.year = gnss.getYear(0);
+    gnss_data.month = gnss.getMonth(0);
+    gnss_data.day = gnss.getDay(0);
+    gnss_data.hour = gnss.getHour(0);
+    gnss_data.minute = gnss.getMinute(0);
+    gnss_data.second = gnss.getSecond(0);
+    gnss_data.milli_second = gnss.getMillisecond(0);
     // 0: No Fix, 1: Dead Reckoning, 2: 2D Fix, 3: 3D Fix,
     // 4:GNSS + Dead Reckoning, 5: Time Only
-    gnss_data.fix_mode = gnss.getFixType();
+    gnss_data.fix_mode = gnss.getFixType(0);
 
     // #562: fixType alone is not enough to trust a fix. u-blox marks a fix
     // INVALID without dropping fixType below 3 — by clearing gnssFixOK (fix
@@ -905,25 +912,25 @@ void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
     // violation (>515 m/s or >18 km) — exactly the transonic / high-altitude
     // regime the apogee GPS voter and guidance/landing-prediction run in. Zero
     // fix_mode so every downstream `fix_mode >= 3` consumer treats it as "no
-    // fix" (same contract as the staleness gate below). maxWait=0 keeps this
-    // non-blocking: both flags come from the NAV-PVT that pollNewPVT already
-    // parsed this cycle. See open #491 (COCOM bench-test).
+    // fix". maxWait=0 keeps this non-blocking: both flags come from the
+    // NAV-PVT that pollNewPVT already parsed this cycle. See open #491
+    // (COCOM bench-test).
     if (!gnss.getGnssFixOk(0) || gnss.getInvalidLlh(0))
     {
         gnss_data.fix_mode = 0;
     }
 
-    gnss_data.num_sats = gnss.getSIV();
+    gnss_data.num_sats = gnss.getSIV(0);
 
     // SparkFun u-blox returns PDOP as scale 0.01. Convert to x10 for packed type.
-    const uint16_t pdop_x100 = gnss.getPDOP();
+    const uint16_t pdop_x100 = gnss.getPDOP(0);
     uint16_t pdop_x10_u16 = (uint16_t)((pdop_x100 + 5U) / 10U);
     if (pdop_x10_u16 > 255U) pdop_x10_u16 = 255U;
     gnss_data.pdop_x10 = (uint8_t)pdop_x10_u16;
 
     // Accuracy estimates are reported in mm. Convert to whole meters.
-    const uint32_t h_acc_mm = gnss.getHorizontalAccEst();
-    const uint32_t v_acc_mm = gnss.getVerticalAccEst();
+    const uint32_t h_acc_mm = gnss.getHorizontalAccEst(0);
+    const uint32_t v_acc_mm = gnss.getVerticalAccEst(0);
     uint32_t h_acc_m_u32 = (h_acc_mm + 500U) / 1000U;
     uint32_t v_acc_m_u32 = (v_acc_mm + 500U) / 1000U;
     if (h_acc_m_u32 > 255U) h_acc_m_u32 = 255U;
@@ -932,48 +939,25 @@ void TR_GNSSReceiverUBloxSerial::getGNSSData(GNSSData &gnss_data)
     gnss_data.v_acc_m = (uint8_t)v_acc_m_u32;
 
     // Velocity (ENU, mm/s)
-    gnss_data.vel_e_mmps = gnss.getNedEastVel();
-    gnss_data.vel_n_mmps = gnss.getNedNorthVel();
-    gnss_data.vel_u_mmps = -gnss.getNedDownVel();
+    gnss_data.vel_e_mmps = gnss.getNedEastVel(0);
+    gnss_data.vel_n_mmps = gnss.getNedNorthVel(0);
+    gnss_data.vel_u_mmps = -gnss.getNedDownVel(0);
 
     // Latitude and Longitude (deg*1e7)
-    gnss_data.lat_e7 = gnss.getLatitude();
-    gnss_data.lon_e7 = gnss.getLongitude();
+    gnss_data.lat_e7 = gnss.getLatitude(0);
+    gnss_data.lon_e7 = gnss.getLongitude(0);
 
     // Altitude relative to mean sea level (mm)
-    gnss_data.alt_mm = gnss.getAltitudeMSL();
+    gnss_data.alt_mm = gnss.getAltitudeMSL(0);
 
-    // --- Staleness detection ---
-    // If the GNSS second+millisecond are unchanged across consecutive reads,
-    // the SparkFun library is returning cached data (serial buffer overflow
-    // caused the UBX parser to lose frame sync).  After STALE_THRESHOLD
-    // consecutive unchanged readings, zero fix_mode so downstream consumers
-    // know the position is unreliable.
-    if (gnss_data.second == prev_second &&
-        gnss_data.milli_second == prev_milli_second)
-    {
-        if (stale_count < UINT16_MAX) stale_count++;
-
-        if (stale_count == STALE_THRESHOLD)
-        {
-            ESP_LOGW(TAG, "Data stale — no new PVT for 5 consecutive reads, zeroing fix_mode");
-        }
-    }
-    else
-    {
-        if (stale_count >= STALE_THRESHOLD)
-        {
-            ESP_LOGI(TAG, "Data resumed after %u stale reads",
-                          (unsigned)stale_count);
-        }
-        stale_count = 0;
-    }
-
-    prev_second = gnss_data.second;
-    prev_milli_second = gnss_data.milli_second;
-
-    if (stale_count >= STALE_THRESHOLD)
-    {
-        gnss_data.fix_mode = 0;  // signal "no fix" to consumers
-    }
+    // #572: the "staleness detection" that lived here was DEAD CODE — this
+    // function is only reached from pollNewPVT() after getPVT(0) returned
+    // true (a NEW NAV-PVT was fully parsed), so the second+millisecond
+    // "unchanged across consecutive reads" condition it counted could never
+    // occur on the live path; in the overflow/desync case it targeted,
+    // getPVT(0) returns false and this function is never called. Genuine
+    // GNSS silence is caught downstream by the collector/EKF time_us
+    // freshness gates (and #557's absent-module handling). Removed rather
+    // than relocated — a wall-clock silence detector here would duplicate
+    // the downstream gates.
 }
