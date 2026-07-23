@@ -44,6 +44,18 @@ class MessageParserGoldenTest {
     }
 
     @Test
+    fun `inflated length byte - whole-frame skip overshoots, never advance-by-one`() {
+        // The discriminator case: an advance-by-one resync would recover the
+        // swallowed POWER frame (3 frames); iOS whole-frame-skip yields 2.
+        val side = WireFixtures.sidecar("framed/stream_badlen_overshoot.bin")
+        val frames = MessageParser.parse(WireFixtures.bytes("framed/stream_badlen_overshoot.bin"))
+
+        assertEquals(side["valid_frame_count"]!!.jsonPrimitive.int, frames.size)
+        val types = side["valid_types"]!!.jsonArray.map { it.jsonPrimitive.int }
+        assertEquals(types, frames.map { it.type })
+    }
+
+    @Test
     fun `truncated tail stops cleanly keeping earlier frames`() {
         val side = WireFixtures.sidecar("framed/stream_truncated_tail.bin")
         val frames = MessageParser.parse(WireFixtures.bytes("framed/stream_truncated_tail.bin"))

@@ -10,7 +10,7 @@
  "target_alt_m": 250,
  "coast_delay_ms": 500,
  "enable": 1,
- "target_mode": 1,
+ "target_mode": 0,
  "kp_pos_per_s2": 0.0500000007,
  "kd_vel_per_s": 0.400000006,
  "guidance_law": 1}

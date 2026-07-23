@@ -14,6 +14,12 @@
 #include <cstring>
 
 static_assert(sizeof(GNSSData) == 42, "layout drift: regen fixtures + bump manifest");
+// MagCalStatusData's full image appears ONLY in the 0xCA ladder (its top rung
+// is sizeof-derived below, so append-only growth changes generated output and
+// trips the freshness diff) — this pin is the second line of defense: a new
+// fw era must add its rung deliberately, not silently.
+static_assert(sizeof(MagCalStatusData) == 36,
+              "new MagCal era: extend the 0xCA ladder + regen fixtures");
 
 namespace tr_wire_fixtures {
 namespace {
@@ -206,7 +212,10 @@ OutStatusQueryData canonicalStatusQuery() {
     d.iis2mdc_rot_z_cdeg = 18000;
     d.tgt_lat_deg = 37.7749f; d.tgt_lon_deg = -122.4194f;
     d.tgt_alt_m = 250; d.tgt_seq = 3;
-    d.tgt_status = GUID_TGT_GEO_ACTIVE; d.tgt_last_rc = GUID_RC_ACCEPTED;
+    // Adjacent u8s get DISTINCT values so a field-swap/off-by-one decode is
+    // visible (semantically valid: status describes the still-active previous
+    // target, last_rc the most recent — rejected — cmd 28).
+    d.tgt_status = GUID_TGT_GEO_ACTIVE; d.tgt_last_rc = GUID_RC_REJ_RADIUS;
     return d;
 }
 
@@ -292,7 +301,7 @@ BaseStationStorageStatsData canonicalBsStorage() {
     b.total_bytes = 512000000000ull;
     b.used_bytes = 100200300400ull;
     b.free_bytes = 411799699600ull;
-    b.backend = 1; b.flags = 1;
+    b.backend = 2; b.flags = 1;  // distinct adjacent u8s (swap-visible)
     return b;
 }
 
@@ -351,6 +360,67 @@ std::string nonSensorSidecar(const NonSensorData& d, size_t presentBytes) {
     if (presentBytes >= 44) j.u("apogee_flags", d.apogee_flags);
     if (presentBytes >= 48) j.u("sensor_health", d.sensor_health);
     if (presentBytes >= 50) j.u("ekf_ticks", d.ekf_ticks);
+    return j.done();
+}
+
+// Every ladder rung gets a sidecar (the corpus contract: NO .bin without its
+// .expected.json).  `version` is the PATCHED byte in the truncated image, not
+// the canonical struct's — the decoders gate on both length and version.
+std::string statusQuerySidecar(const OutStatusQueryData& d, size_t presentBytes,
+                               uint8_t version) {
+    Json j;
+    j.u("present_bytes", presentBytes)
+        .u("ism6_low_g_fs_g", d.ism6_low_g_fs_g)
+        .u("ism6_high_g_fs_g", d.ism6_high_g_fs_g)
+        .u("ism6_gyro_fs_dps", d.ism6_gyro_fs_dps)
+        .i("ism6_rot_z_cdeg", d.ism6_rot_z_cdeg)
+        .i("mmc_rot_z_cdeg", d.mmc_rot_z_cdeg)
+        .u("format_version", version)
+        .i("hg_bias_x_cmss", d.hg_bias_x_cmss)
+        .i("hg_bias_y_cmss", d.hg_bias_y_cmss)
+        .i("hg_bias_z_cmss", d.hg_bias_z_cmss)
+        .u("b2r_code", d.b2r_code).u("b2r_mode", d.b2r_mode)
+        .raw("b2r_q", intArray({d.b2r_q[0], d.b2r_q[1], d.b2r_q[2], d.b2r_q[3]}));
+    if (presentBytes >= 28) j.i("iis2mdc_rot_z_cdeg", d.iis2mdc_rot_z_cdeg);
+    if (presentBytes >= 41) {
+        j.f("tgt_lat_deg", d.tgt_lat_deg).f("tgt_lon_deg", d.tgt_lon_deg)
+            .i("tgt_alt_m", d.tgt_alt_m).u("tgt_seq", d.tgt_seq)
+            .u("tgt_status", d.tgt_status).u("tgt_last_rc", d.tgt_last_rc);
+    }
+    return j.done();
+}
+
+std::string flightSettingsSidecar(const FlightSettingsData& s, size_t presentBytes,
+                                  uint8_t version) {
+    Json j;
+    j.u("present_bytes", presentBytes)
+        .u("time_us", s.time_us).u("version", version).u("flags", s.flags)
+        .u("roll_delay_ms", s.roll_delay_ms)
+        .f("kp", s.kp).f("ki", s.ki).f("kd", s.kd).f("d_lpf_hz", s.d_lpf_hz)
+        .f("min_cmd_deg", s.min_cmd_deg).f("max_cmd_deg", s.max_cmd_deg)
+        .f("kp_angle", s.kp_angle).f("kp_angle_rate_cap_dps", s.kp_angle_rate_cap_dps)
+        .f("gs_v_ref", s.gs_v_ref).f("gs_v_min", s.gs_v_min).f("gs_scale_cap", s.gs_scale_cap)
+        .f("roll_rate_set_point", s.roll_rate_set_point)
+        .u("ism6_low_g_fs_g", s.ism6_low_g_fs_g)
+        .u("ism6_high_g_fs_g", s.ism6_high_g_fs_g)
+        .u("ism6_gyro_fs_dps", s.ism6_gyro_fs_dps)
+        .raw("servo_bias_us", intArray({s.servo_bias_us[0], s.servo_bias_us[1],
+                                        s.servo_bias_us[2], s.servo_bias_us[3]}))
+        .i("servo_hz", s.servo_hz).i("servo_min_us", s.servo_min_us)
+        .i("servo_max_us", s.servo_max_us)
+        .u("camera_type", s.camera_type)
+        .str("fw_git_sha", s.fw_git_sha)
+        .u("roll_profile_num_waypoints", s.roll_profile.num_waypoints);
+    if (presentBytes >= 200) {
+        j.u("b2r_code", s.b2r_code).u("b2r_mode", s.b2r_mode)
+            .i("b2r_residual_cdeg", s.b2r_residual_cdeg);
+    }
+    if (presentBytes >= 208) j.f("fin_min_deg", s.fin_min_deg).f("fin_max_deg", s.fin_max_deg);
+    if (presentBytes >= 210) j.u("ism6_update_rate_hz", s.ism6_update_rate_hz);
+    if (presentBytes >= 219) {
+        j.f("guid_tgt_e_m", s.guid_tgt_e_m).f("guid_tgt_n_m", s.guid_tgt_n_m)
+            .u("guid_tgt_src", s.guid_tgt_src);
+    }
     return j.done();
 }
 
@@ -429,28 +499,13 @@ void buildLogframes(Builder& b) {
     const auto sq = canonicalStatusQuery();
     auto sqFull = bytesOf(sq);
     b.add("logframes", "statusquery_v5_41.bin", sqFull,
-          Json().u("ism6_low_g_fs_g", sq.ism6_low_g_fs_g)
-              .u("ism6_high_g_fs_g", sq.ism6_high_g_fs_g)
-              .u("ism6_gyro_fs_dps", sq.ism6_gyro_fs_dps)
-              .i("ism6_rot_z_cdeg", sq.ism6_rot_z_cdeg)
-              .i("mmc_rot_z_cdeg", sq.mmc_rot_z_cdeg)
-              .u("format_version", sq.format_version)
-              .i("hg_bias_x_cmss", sq.hg_bias_x_cmss)
-              .i("hg_bias_y_cmss", sq.hg_bias_y_cmss)
-              .i("hg_bias_z_cmss", sq.hg_bias_z_cmss)
-              .u("b2r_code", sq.b2r_code).u("b2r_mode", sq.b2r_mode)
-              .raw("b2r_q", intArray({sq.b2r_q[0], sq.b2r_q[1], sq.b2r_q[2], sq.b2r_q[3]}))
-              .i("iis2mdc_rot_z_cdeg", sq.iis2mdc_rot_z_cdeg)
-              .f("tgt_lat_deg", sq.tgt_lat_deg).f("tgt_lon_deg", sq.tgt_lon_deg)
-              .i("tgt_alt_m", sq.tgt_alt_m).u("tgt_seq", sq.tgt_seq)
-              .u("tgt_status", sq.tgt_status).u("tgt_last_rc", sq.tgt_last_rc)
-              .done(),
+          statusQuerySidecar(sq, 41, sq.format_version),
           "OutStatusQueryData v5, msg 0xA0");
     auto sqV4 = prefix(sqFull, 28); sqV4[9] = 4;
-    b.add("logframes", "statusquery_v4_28.bin", sqV4, "",
+    b.add("logframes", "statusquery_v4_28.bin", sqV4, statusQuerySidecar(sq, 28, 4),
           "OutStatusQueryData truncated to v4 (+IIS2MDC rotation, no guidance echo)");
     auto sqV3 = prefix(sqFull, 26); sqV3[9] = 3;
-    b.add("logframes", "statusquery_v3_26.bin", sqV3, "",
+    b.add("logframes", "statusquery_v3_26.bin", sqV3, statusQuerySidecar(sq, 26, 3),
           "OutStatusQueryData truncated to v3 (b2r orientation, no IIS rotation)");
 
     // FlightSettings version ladder (version byte at offset 4):
@@ -459,30 +514,7 @@ void buildLogframes(Builder& b) {
     const auto fs = canonicalFlightSettings();
     const auto fsFull = bytesOf(fs);
     b.add("logframes", "flightsettings_v6_219.bin", fsFull,
-          Json().u("time_us", fs.time_us).u("version", fs.version).u("flags", fs.flags)
-              .u("roll_delay_ms", fs.roll_delay_ms)
-              .f("kp", fs.kp).f("ki", fs.ki).f("kd", fs.kd).f("d_lpf_hz", fs.d_lpf_hz)
-              .f("min_cmd_deg", fs.min_cmd_deg).f("max_cmd_deg", fs.max_cmd_deg)
-              .f("kp_angle", fs.kp_angle).f("kp_angle_rate_cap_dps", fs.kp_angle_rate_cap_dps)
-              .f("gs_v_ref", fs.gs_v_ref).f("gs_v_min", fs.gs_v_min).f("gs_scale_cap", fs.gs_scale_cap)
-              .f("roll_rate_set_point", fs.roll_rate_set_point)
-              .u("ism6_low_g_fs_g", fs.ism6_low_g_fs_g)
-              .u("ism6_high_g_fs_g", fs.ism6_high_g_fs_g)
-              .u("ism6_gyro_fs_dps", fs.ism6_gyro_fs_dps)
-              .raw("servo_bias_us", intArray({fs.servo_bias_us[0], fs.servo_bias_us[1],
-                                              fs.servo_bias_us[2], fs.servo_bias_us[3]}))
-              .i("servo_hz", fs.servo_hz).i("servo_min_us", fs.servo_min_us)
-              .i("servo_max_us", fs.servo_max_us)
-              .u("camera_type", fs.camera_type)
-              .str("fw_git_sha", "abc123def")
-              .u("roll_profile_num_waypoints", fs.roll_profile.num_waypoints)
-              .u("b2r_code", fs.b2r_code).u("b2r_mode", fs.b2r_mode)
-              .i("b2r_residual_cdeg", fs.b2r_residual_cdeg)
-              .f("fin_min_deg", fs.fin_min_deg).f("fin_max_deg", fs.fin_max_deg)
-              .u("ism6_update_rate_hz", fs.ism6_update_rate_hz)
-              .f("guid_tgt_e_m", fs.guid_tgt_e_m).f("guid_tgt_n_m", fs.guid_tgt_n_m)
-              .u("guid_tgt_src", fs.guid_tgt_src)
-              .done(),
+          flightSettingsSidecar(fs, 219, fs.version),
           "FlightSettingsData v6, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
     const struct { size_t len; uint8_t ver; } fsLadder[] = {
         {188, 1}, {200, 2}, {208, 3}, {210, 5}};
@@ -491,7 +523,7 @@ void buildLogframes(Builder& b) {
         img[4] = lv.ver;
         char name[40];
         std::snprintf(name, sizeof(name), "flightsettings_v%u_%zu.bin", lv.ver, lv.len);
-        b.add("logframes", name, img, "",
+        b.add("logframes", name, img, flightSettingsSidecar(fs, lv.len, lv.ver),
               "FlightSettingsData version-ladder truncation of the v6 image");
     }
 }
@@ -537,6 +569,30 @@ void buildFramed(Builder& b) {
               .done(),
           "middle frame's CRC LSB flipped: skip + resync, do not abort");
 
+    // Length-byte corruption: discriminates the documented WHOLE-FRAME-SKIP
+    // resync from advance-by-one.  The ISM6 frame's len byte is inflated
+    // 22→40, so the CRC (computed over the claimed 40-byte span) fails and
+    // the skip lands 18 bytes past the frame's real end — swallowing the
+    // POWER frame exactly and resuming at the IIS2MDC preamble.  An
+    // advance-by-one parser would recover POWER (3 frames); iOS semantics
+    // yield [GNSS, IIS2MDC] only.
+    {
+        std::vector<uint8_t> badlen;
+        append(badlen, frame(GNSS_MSG, bytesOf(canonicalGnss())));
+        auto inflated = frame(ISM6HG256_MSG, bytesOf(canonicalImu()));
+        inflated[5] = 40;  // len byte: claimed 40, real payload 22
+        append(badlen, inflated);
+        append(badlen, frame(POWER_MSG, bytesOf(canonicalPower())));
+        append(badlen, frame(IIS2MDC_MSG, bytesOf(canonicalIis())));
+        b.add("framed", "stream_badlen_overshoot.bin", badlen,
+              Json().u("valid_frame_count", 2)
+                  .raw("valid_types", "[" + std::to_string(GNSS_MSG) + "," +
+                                          std::to_string(IIS2MDC_MSG) + "]")
+                  .done(),
+              "inflated len byte: whole-frame-skip resync overshoots the next frame "
+              "(iOS-accepted behavior); advance-by-one would recover it — must not");
+    }
+
     // Truncated tail: parser must stop cleanly, keeping earlier frames.
     std::vector<uint8_t> trunc;
     append(trunc, frame(GNSS_MSG, bytesOf(canonicalGnss())));
@@ -569,9 +625,12 @@ void buildFileops(Builder& b) {
           "freq-scan result frame; start f32 sits at unaligned offset 1");
 
     // 0xCA mag-cal status ladder: struct sizes 22 / 26 / 32 / 36 by fw era.
+    // Top rung is sizeof-derived so appending a field renames it (len40, ...)
+    // — the freshness test then fails on the missing new file AND the orphaned
+    // old one, forcing a deliberate ladder extension.
     const auto mc = canonicalMagCal();
     const auto mcFull = bytesOf(mc);
-    for (size_t len : {size_t{22}, size_t{26}, size_t{32}, size_t{36}}) {
+    for (size_t len : {size_t{22}, size_t{26}, size_t{32}, sizeof(MagCalStatusData)}) {
         std::vector<uint8_t> f{0xCA};
         append(f, prefix(mcFull, len));
         char name[40];
@@ -787,7 +846,10 @@ void buildCommands(Builder& b) {
         g.nav_gain = 3.5f; g.max_accel_mps2 = 30.0f; g.accel_to_fin_deg = 0.5f;
         g.max_fin_deg = 10.0f; g.min_speed_mps = 8.0f;
         g.target_e_m = 25.5f; g.target_n_m = -30.25f; g.target_alt_m = 250.0f;
-        g.coast_delay_ms = 500; g.enable = 1; g.target_mode = GUIDE_TARGET_POINT;
+        // enable/target_mode are adjacent u8s — keep them DISTINCT so a
+        // field-swap decode is visible.  OVERHEAD ignores target_e/n; the
+        // staged values stay for float coverage.
+        g.coast_delay_ms = 500; g.enable = 1; g.target_mode = GUIDE_TARGET_OVERHEAD;
         g.kp_pos_per_s2 = 0.05f; g.kd_vel_per_s = 0.4f;
         g.guidance_law = GUIDE_LAW_STATION_KEEP;
         b.add("commands", "cmd65_guidance_45.bin", cmd(65, bytesOf(g)),
@@ -795,7 +857,7 @@ void buildCommands(Builder& b) {
                   .f("accel_to_fin_deg", 0.5f).f("max_fin_deg", 10.0f)
                   .f("min_speed_mps", 8.0f).f("target_e_m", 25.5f)
                   .f("target_n_m", -30.25f).f("target_alt_m", 250.0f)
-                  .u("coast_delay_ms", 500).u("enable", 1).u("target_mode", 1)
+                  .u("coast_delay_ms", 500).u("enable", 1).u("target_mode", 0)
                   .f("kp_pos_per_s2", 0.05f).f("kd_vel_per_s", 0.4f)
                   .u("guidance_law", 1).done(),
               "GuidanceConfigData: first 36 bytes FROZEN, append-only (#534); "

@@ -83,6 +83,10 @@
  "size": 98,
  "notes": "middle frame's CRC LSB flipped: skip + resync, do not abort"},
  {
+ "file": "framed/stream_badlen_overshoot.bin",
+ "size": 116,
+ "notes": "inflated len byte: whole-frame-skip resync overshoots the next frame (iOS-accepted behavior); advance-by-one would recover it — must not"},
+ {
  "file": "framed/stream_truncated_tail.bin",
  "size": 64,
  "notes": "trailing frame cut mid-payload: stop, no throw, no resync loop"},

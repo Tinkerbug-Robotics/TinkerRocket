@@ -1,7 +1,7 @@
 {
- "present_bytes": 219,
+ "present_bytes": 208,
  "time_us": 250000123,
- "version": 6,
+ "version": 3,
  "flags": 79,
  "roll_delay_ms": 1500,
  "kp": 0.800000012,
@@ -30,8 +30,4 @@
  "b2r_mode": 2,
  "b2r_residual_cdeg": 150,
  "fin_min_deg": -12.5,
- "fin_max_deg": 12.5,
- "ism6_update_rate_hz": 1920,
- "guid_tgt_e_m": 25.5,
- "guid_tgt_n_m": -30.25,
- "guid_tgt_src": 1}
+ "fin_max_deg": 12.5}

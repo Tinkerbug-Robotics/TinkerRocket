@@ -82,7 +82,7 @@ public object BleCommandId {
     public const val MAG_CAL_VERIFY_DONE_OC: Int = 56
     public const val MAG_CAL_VERIFY_RESET_OC: Int = 57
     public const val MAG_CAL_FORCE_APPLY_OC: Int = 58
-    public const val FREQ_SCAN: Int = 60           // [start f32][stop f32][step u16][dwell u16]
+    public const val FREQ_SCAN_BS: Int = 60        // [start f32][stop f32][step u16][dwell u16] — BS only, scan runs on the BS radio
     public const val MAG_CAL_READ_OC: Int = 61
     public const val SENSOR_CAL_APPLY_OC: Int = 62 // SensorCalApplyData 18 B
     public const val SENSOR_CAL_READ_OC: Int = 63

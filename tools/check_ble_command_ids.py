@@ -71,9 +71,11 @@ KNOWN_RAW_WRITE_CMDS = {2, 3, 4}
 # `ble_cmd ==` branch.
 BLE_TO_APP_CMDS = {70, 71, 72}
 
-# Burn-down list for the Android port: app-command numbers allowed to differ
-# between Swift and Kotlin while a feature is mid-port.  Every entry needs a
-# trailing comment naming the feature; the list must trend to empty.
+# Burn-down list for the Android port: SWIFT-ONLY command numbers whose Kotlin
+# port hasn't landed yet (the only excusable direction — a Kotlin-only number
+# is always an error).  Every entry needs a trailing comment naming the
+# feature; entries that stop being divergent are flagged stale and must be
+# removed, so the list mechanically trends to empty.
 ALLOWED_DIVERGENCE: set[int] = set()
 
 # Guard-the-guard: SWIFT_RE only sees integer literals at call sites.  If a
@@ -89,8 +91,8 @@ CONST_RE = re.compile(
 )
 # RHS of `ble_cmd ==` is either a numeric literal or an identifier.
 BLE_CMD_RE = re.compile(r"ble_cmd\s*==\s*(0[xX][0-9A-Fa-f]+|\d+|[A-Za-z_]\w*)")
-# Swift senders: sendCommand(N) / sendRawCommand(N, ...)
-SWIFT_RE = re.compile(r"send(?:Raw)?Command\(\s*(\d+)")
+# Swift senders: sendCommand(N) / sendRawCommand(N, ...) — decimal or hex.
+SWIFT_RE = re.compile(r"send(?:Raw)?Command\(\s*(0[xX][0-9A-Fa-f]+|\d+)")
 # Kotlin command table: `const val NAME: Int = N` (BleCommandId.kt only).
 KOTLIN_CONST_RE = re.compile(
     r"const\s+val\s+(\w+)(?:\s*:\s*Int)?\s*=\s*(0[xX][0-9A-Fa-f]+|\d+)"
@@ -176,7 +178,7 @@ def collect_swift_commands():
     nums = set()
     files = 0
     for path in sorted(SWIFT_APP_DIR.rglob("*.swift")):
-        found = {int(m.group(1)) for m in SWIFT_RE.finditer(path.read_text())}
+        found = {int(m.group(1), 0) for m in SWIFT_RE.finditer(path.read_text())}
         if found:
             files += 1
             nums |= found
@@ -219,8 +221,13 @@ def app_parity_check(oc_values, bs_values):
         return failed, out
     out.append(f"  Kotlin: {len(kotlin_nums)} distinct const-val values (BleCommandId.kt)")
 
-    only_swift = (swift_all - kotlin_nums) - ALLOWED_DIVERGENCE
-    only_kotlin = (kotlin_nums - swift_all) - ALLOWED_DIVERGENCE
+    raw_only_swift = swift_all - kotlin_nums
+    raw_only_kotlin = kotlin_nums - swift_all
+    # ALLOWED_DIVERGENCE excuses ONE direction only: Swift has a command the
+    # Kotlin port hasn't reached yet (the legitimate mid-port state).  A
+    # Kotlin-only number is never excusable — it's a typo or a stale entry.
+    only_swift = raw_only_swift - ALLOWED_DIVERGENCE
+    only_kotlin = raw_only_kotlin
     if only_swift:
         failed = True
         out.append(
@@ -234,6 +241,16 @@ def app_parity_check(oc_values, bs_values):
             "  FAIL: in Kotlin but not Swift -> "
             + ", ".join(map(str, sorted(only_kotlin)))
             + "  (missing Swift sender, or stale Kotlin entry)"
+        )
+    # Stale entries would otherwise suppress FUTURE drift of that number
+    # forever — the burn-down list must actually burn down.
+    stale = ALLOWED_DIVERGENCE - raw_only_swift
+    if stale:
+        failed = True
+        out.append(
+            "  FAIL: stale ALLOWED_DIVERGENCE entries (no longer divergent) -> "
+            + ", ".join(map(str, sorted(stale)))
+            + "  (remove them)"
         )
     if ALLOWED_DIVERGENCE:
         out.append(
