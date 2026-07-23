@@ -911,6 +911,142 @@ void buildCommands(Builder& b) {
     }
 }
 
+// A miniature synthetic flight for the cross-platform bin→CSV golden
+// (android-port plan Phase 1 exit gate).  Mini-device, ~750 frames, every
+// value derived from integer arithmetic — NO floats/transcendentals in frame
+// synthesis, so the byte image is identical on every host.  The profile
+// deliberately exercises: statusQuery rotation config, the 4-s pre-launch
+// trim (launch at 8 s → rows start at 4 s, dropping the 1.2–4 s pad wait),
+// ground-pressure averaging (strictly-before-launch window), forward-fill,
+// event-flag latching (launch 8 s, burnout 10 s, apogee 14 s, landed 19 s),
+// and the master-apogee max-speed gate.
+void buildCsvFlight(Builder& b) {
+    std::vector<uint8_t> stream;
+    append(stream, frame(OUT_STATUS_QUERY, bytesOf(canonicalStatusQuery())));   // t=1.0 s (rotation config)
+    append(stream, frame(FLIGHT_SETTINGS_MSG, bytesOf(canonicalFlightSettings())));
+
+    int frames = 2;
+    for (int i = 0; i <= 188; ++i) {
+        const uint32_t t_ms = 1200 + 100u * i;
+        const uint32_t t_us = t_ms * 1000u;
+
+        // Barometer every tick: pad wiggle → linear boost drop → descent rise.
+        {
+            BMP585Data d{};
+            d.time_us = t_us;
+            d.temp_q16 = 1540096 - i * 256;
+            if (t_ms < 8000) {
+                d.press_q6 = 6484800u + ((i % 5) - 2) * 64;
+            } else if (t_ms < 14000) {
+                d.press_q6 = 6484800u - (t_ms - 8000) * 64;
+            } else {
+                d.press_q6 = 6484800u - 384000u + (t_ms - 14000) * 60;
+            }
+            append(stream, frame(BMP585_MSG, bytesOf(d)));
+            ++frames;
+        }
+
+        // IIS2MDC magnetometer every tick.
+        {
+            IIS2MDCData d{};
+            d.time_us = t_us;
+            d.mag_x = static_cast<int16_t>(-2000 + 10 * i);
+            d.mag_y = static_cast<int16_t>(5 * i - 400);
+            d.mag_z = 1234;
+            append(stream, frame(IIS2MDC_MSG, bytesOf(d)));
+            ++frames;
+        }
+
+        // IMU from 1.5 s — the row driver (one CSV row per IMU frame).
+        if (t_ms >= 1500) {
+            ISM6HG256Data d{};
+            d.time_us = t_us;
+            d.acc_low_raw = {static_cast<int16_t>(-1000 + 7 * i),
+                             static_cast<int16_t>(500 - 3 * i),
+                             static_cast<int16_t>((t_ms >= 8000 && t_ms < 10000) ? 26000 : 16000)};
+            d.acc_high_raw = {static_cast<int16_t>(-80 + i),
+                              static_cast<int16_t>(60 - i), 120};
+            d.gyro_raw = {static_cast<int16_t>((i * 37) % 4001 - 2000), 1000,
+                          static_cast<int16_t>((i * 53) % 3001 - 1500)};
+            append(stream, frame(ISM6HG256_MSG, bytesOf(d)));
+            ++frames;
+        }
+
+        // NonSensor from 1.3 s: quat keyframes, event flags, EKF velocities.
+        if (t_ms >= 1300) {
+            static const int16_t quatTable[8][4] = {
+                {10000, 0, 0, 0}, {9239, 3827, 0, 0}, {7071, 7071, 0, 0},
+                {3827, 9239, 0, 0}, {0, 10000, 0, 0}, {-3827, 9239, 0, 0},
+                {-7071, 7071, 0, 0}, {-9239, 3827, 0, 0}};
+            const int16_t* q = quatTable[(i / 4) % 8];
+            NonSensorData d{};
+            d.time_us = t_us;
+            d.q0 = q[0]; d.q1 = q[1]; d.q2 = q[2]; d.q3 = q[3];
+            d.roll_cmd = static_cast<int16_t>((i * 25) % 9000 - 4500);
+            d.e_pos = 100 * i; d.n_pos = -50 * i;
+            d.u_pos = (t_ms >= 8000) ? (t_ms - 8000) * 8 : 0;
+            d.e_vel = 100; d.n_vel = -200;
+            if (t_ms < 8000)       d.u_vel = 0;
+            else if (t_ms < 10000) d.u_vel = (t_ms - 8000) * 8;    // boost → 16000 cm/s
+            else if (t_ms < 14000) d.u_vel = 16000 - (t_ms - 10000) * 4;  // coast → 0
+            else                   d.u_vel = -static_cast<int32_t>(t_ms - 14000) * 2;
+            uint8_t flags = 0;
+            if (t_ms >= 19000) flags |= 0x01;   // alt_landed
+            if (t_ms >= 14000) flags |= 0x02;   // alt_apogee
+            if (t_ms >= 13900) flags |= 0x04;   // vel_u_apogee
+            if (t_ms >= 8000)  flags |= 0x08;   // launch
+            if (t_ms >= 10000) flags |= 0x10;   // burnout (#196 latch source)
+            d.flags = flags;
+            d.rocket_state = (t_ms < 8000) ? 3 : (t_ms < 14000) ? 5 : (t_ms < 19000) ? 6 : 7;
+            d.baro_alt_rate_dmps = static_cast<int16_t>(d.u_vel / 10);
+            d.pyro_status = (t_ms >= 14000) ? 0x0F : 0x03;
+            uint8_t af = 0;
+            if (t_ms >= 14100) af |= 0x01;      // gps apogee (per-detector)
+            if (t_ms >= 14000) af |= 0x04;      // MASTER voted apogee (max-speed gate)
+            d.apogee_flags = af;
+            d.sensor_health = 0x00500541u;
+            d.ekf_ticks = static_cast<uint16_t>((i * 13) & 0xFFFF);
+            append(stream, frame(NON_SENSOR_MSG, bytesOf(d)));
+            ++frames;
+        }
+
+        // GNSS every 200 ms from 2 s.
+        if (t_ms >= 2000 && (i % 2) == 0) {
+            GNSSData d = canonicalGnss();
+            d.time_us = t_us;
+            d.lat_e7 = 377749000 + 10 * i;
+            d.lon_e7 = -1224194000 - 10 * i;
+            d.alt_mm = 123456 + ((t_ms >= 8000 && t_ms < 14000) ? (t_ms - 8000) * 80
+                                 : (t_ms >= 14000) ? 480000 - (t_ms - 14000) * 40 : 0);
+            d.vel_u_mmps = (t_ms >= 8000 && t_ms < 10000) ? (t_ms - 8000) * 80 : -900;
+            append(stream, frame(GNSS_MSG, bytesOf(d)));
+            ++frames;
+        }
+
+        // Power every 500 ms from 2 s.
+        if (t_ms >= 2000 && (i % 5) == 0) {
+            POWERData d{};
+            d.time_us = t_us;
+            d.voltage_raw = static_cast<uint16_t>(27000 - 10 * i);
+            d.current_raw = static_cast<int16_t>(-1234 + 20 * i);
+            d.soc_raw = static_cast<int16_t>(15000 - 40 * i);
+            append(stream, frame(POWER_MSG, bytesOf(d)));
+            ++frames;
+        }
+    }
+
+    b.add("csv", "tiny_flight.bin", stream,
+          Json().u("frame_count", frames)
+              .u("launch_ms", 8000).u("burnout_ms", 10000)
+              .u("apogee_ms", 14000).u("landed_ms", 19000)
+              .u("trim_start_ms", 4000)   // max(first IMU 1.5 s, launch − 4 s)
+              .u("expected_rows", 161)    // IMU frames with t >= 4.0 s
+              .done(),
+          "synthetic mini-device flight for the bin→CSV golden; app-generated "
+          "CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside "
+          "wire/ — they are app output, not emitter output)");
+}
+
 }  // namespace
 
 FixtureMap generate() {
@@ -923,6 +1059,7 @@ FixtureMap generate() {
     buildFramed(b);
     buildFileops(b);
     buildCommands(b);
+    buildCsvFlight(b);
 
     // Manifest last: lists every fixture (sidecars excluded — they pair 1:1).
     const std::string manifest =

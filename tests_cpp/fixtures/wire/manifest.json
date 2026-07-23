@@ -217,6 +217,10 @@
  {
  "file": "commands/cmd70_otabegin_37.bin",
  "size": 38,
- "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"}
+ "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"},
+ {
+ "file": "csv/tiny_flight.bin",
+ "size": 29140,
+ "notes": "synthetic mini-device flight for the bin→CSV golden; app-generated CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside wire/ — they are app output, not emitter output)"}
  ]
 }
