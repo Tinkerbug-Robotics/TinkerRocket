@@ -16,7 +16,8 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 
 | Since | Area | Status |
 |---|---|---|
-| 2026-07-23 | Everything beyond `:core:protocol` framing/CRC/GNSS + `:core:session` transport seam | Phases 1–9 of docs/plans/android-port.md |
+| 2026-07-23 | `:core:protocol` COMPLETE — decoders, encoders, converter, telemetry, CSV pipeline all golden-pinned (bin→CSV byte-identical to iOS) | Phase 1 done |
+| 2026-07-23 | Everything above the protocol layer: `:core:session` device/fleet logic, `:core:ble`, all UI | Phases 2–9 of docs/plans/android-port.md |
 
 ## Behavior divergences
 
