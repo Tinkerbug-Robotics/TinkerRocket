@@ -1,0 +1,40 @@
+name: Android Tests (JVM)
+
+# Pure-JVM tests for the Android app's :core:* modules — no emulator, no
+# Android SDK (the modules are kotlin("jvm"); see docs/plans/android-port.md
+# §1).  The fixtures path matters: a golden-corpus regeneration must re-verify
+# the Kotlin decoders, exactly as ios-tests re-verifies the Swift ones —
+# together with cpp-tests' freshness gtest that is the three-way parity gate
+# (plan §2.5).
+
+on:
+  push:
+    paths:
+      - 'TinkerRocketAndroid/**'
+      - 'tests_cpp/fixtures/wire/**'
+      - '.github/workflows/android-tests.yml'
+  pull_request:
+    paths:
+      - 'TinkerRocketAndroid/**'
+      - 'tests_cpp/fixtures/wire/**'
+      - '.github/workflows/android-tests.yml'
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+
+    steps:
+      # No submodules: protocol/session code never touches TR_GuidancePN.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Wrapper validation + build caching.
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run JVM unit tests (golden walk included)
+        run: ./gradlew --no-daemon test
+        working-directory: TinkerRocketAndroid

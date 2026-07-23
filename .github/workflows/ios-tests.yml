@@ -4,10 +4,18 @@ on:
   push:
     paths:
       - 'TinkerRocketApp/**'
+      # Golden-corpus regeneration must re-verify the Swift decoders once the
+      # GoldenVectorTests walk lands (android-port plan §2.1); harmless until
+      # then — the suite just runs unchanged.
+      - 'tests_cpp/fixtures/wire/**'
       - '.github/workflows/ios-tests.yml'
   pull_request:
     paths:
       - 'TinkerRocketApp/**'
+      # Golden-corpus regeneration must re-verify the Swift decoders once the
+      # GoldenVectorTests walk lands (android-port plan §2.1); harmless until
+      # then — the suite just runs unchanged.
+      - 'tests_cpp/fixtures/wire/**'
       - '.github/workflows/ios-tests.yml'
 
 jobs:

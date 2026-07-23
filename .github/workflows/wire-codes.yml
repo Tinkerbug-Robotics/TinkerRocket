@@ -14,7 +14,11 @@ on:
       - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
       - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
       - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
-      - 'TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift'
+      # The checker sweeps ALL app Swift files for send(Raw)Command literals
+      # (SimulationView/DashboardView send commands directly), and diffs them
+      # against the Kotlin command table — hard parity gate (android-port §2.2).
+      - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
+      - 'TinkerRocketAndroid/core/protocol/**'
       - 'tools/check_ble_command_ids.py'
       - '.github/workflows/wire-codes.yml'
   pull_request:
@@ -22,7 +26,11 @@ on:
       - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
       - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
       - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
-      - 'TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift'
+      # The checker sweeps ALL app Swift files for send(Raw)Command literals
+      # (SimulationView/DashboardView send commands directly), and diffs them
+      # against the Kotlin command table — hard parity gate (android-port §2.2).
+      - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
+      - 'TinkerRocketAndroid/core/protocol/**'
       - 'tools/check_ble_command_ids.py'
       - '.github/workflows/wire-codes.yml'
 
