@@ -1,0 +1,6 @@
+{
+ "cmd": 60,
+ "start_mhz": 902,
+ "stop_mhz": 928,
+ "step_khz": 200,
+ "dwell_ms": 150}

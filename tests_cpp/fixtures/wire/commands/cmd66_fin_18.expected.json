@@ -1,0 +1,5 @@
+{
+ "cmd": 66,
+ "azimuth_deg": [0,90,180,270],
+ "reverse_mask": 5,
+ "roll_reverse_mask": 2}

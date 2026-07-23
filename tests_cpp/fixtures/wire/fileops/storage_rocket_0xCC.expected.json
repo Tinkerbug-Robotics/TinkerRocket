@@ -1,0 +1,9 @@
+{
+ "flight_region_blocks": 2012,
+ "used_blocks": 310,
+ "free_blocks": 1650,
+ "bad_blocks": 12,
+ "system_blocks": 40,
+ "flight_count": 27,
+ "block_size_kb": 256,
+ "flags": 3}

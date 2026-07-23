@@ -1,0 +1,18 @@
+{
+ "present_bytes": 36,
+ "time_us": 777777,
+ "sub_type": 3,
+ "coverage_bins": 18,
+ "sample_count": 642,
+ "inst_field_uT_x10": 5234,
+ "offset_x": -321,
+ "offset_y": 456,
+ "offset_z": -789,
+ "field_R_uT_x10": 482,
+ "residual_uT_x10": 37,
+ "reject_code": 0,
+ "coverage_mask": 262143,
+ "inst_x_lsb": -100,
+ "inst_y_lsb": 200,
+ "inst_z_lsb": -300,
+ "partial_mask": 786432}

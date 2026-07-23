@@ -1,0 +1,3 @@
+{
+ "cmd": 34,
+ "channels": [{"enabled": 1, "mode": 0, "value": 2.5},{"enabled": 1, "mode": 1, "value": 150},{"enabled": 0, "mode": 0, "value": 0},{"enabled": 1, "mode": 0, "value": 8.75}]}

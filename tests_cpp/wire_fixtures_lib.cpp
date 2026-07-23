@@ -1,0 +1,863 @@
+// Golden-vector fixture generation — see wire_fixtures_lib.h for the contract.
+//
+// Layout notes live next to each family.  Values are chosen to be hostile to
+// naive ports: u32 fields above INT32_MAX (sign traps), negative values in
+// every signed slot (endianness + sign-extension), 18-bit mag counts above
+// 0x20000 (masking), i8 TX power below zero (bitPattern round-trips).
+
+#include "wire_fixtures_lib.h"
+
+#include "RocketComputerTypes.h"
+#include "CRC.h"
+
+#include <cstdio>
+#include <cstring>
+
+static_assert(sizeof(GNSSData) == 42, "layout drift: regen fixtures + bump manifest");
+
+namespace tr_wire_fixtures {
+namespace {
+
+// Little-endian host required: struct byte images are the wire format.
+static const union { uint16_t u; uint8_t b[2]; } kEnd{0x0102};
+bool hostIsLittleEndian() { return kEnd.b[0] == 0x02; }
+
+// ---------------------------------------------------------------- helpers ---
+
+template <class T>
+std::vector<uint8_t> bytesOf(const T& v) {
+    std::vector<uint8_t> out(sizeof(T));
+    std::memcpy(out.data(), &v, sizeof(T));
+    return out;
+}
+
+std::vector<uint8_t> prefix(const std::vector<uint8_t>& v, size_t n) {
+    return std::vector<uint8_t>(v.begin(), v.begin() + n);
+}
+
+void append(std::vector<uint8_t>& out, const std::vector<uint8_t>& v) {
+    out.insert(out.end(), v.begin(), v.end());
+}
+
+void appendU8(std::vector<uint8_t>& out, uint8_t v) { out.push_back(v); }
+void appendI8(std::vector<uint8_t>& out, int8_t v) { out.push_back(static_cast<uint8_t>(v)); }
+void appendU16(std::vector<uint8_t>& out, uint16_t v) {
+    out.push_back(v & 0xFF);
+    out.push_back((v >> 8) & 0xFF);
+}
+void appendF32(std::vector<uint8_t>& out, float v) {
+    uint8_t b[4];
+    std::memcpy(b, &v, 4);
+    out.insert(out.end(), b, b + 4);
+}
+void appendF64(std::vector<uint8_t>& out, double v) {
+    uint8_t b[8];
+    std::memcpy(b, &v, 8);
+    out.insert(out.end(), b, b + 8);
+}
+
+std::vector<uint8_t> strBytes(const std::string& s) {
+    return std::vector<uint8_t>(s.begin(), s.end());
+}
+
+// Minimal ordered JSON writer.  Key order is declaration order — stable output
+// is part of the fixture contract (the freshness test byte-compares sidecars).
+class Json {
+public:
+    Json() : s_("{") {}
+    Json& u(const char* k, uint64_t v) { key(k); s_ += std::to_string(v); return *this; }
+    Json& i(const char* k, int64_t v) { key(k); s_ += std::to_string(v); return *this; }
+    Json& b(const char* k, bool v) { key(k); s_ += v ? "true" : "false"; return *this; }
+    // %.9g / %.17g round-trip float/double exactly through decimal text.
+    Json& f(const char* k, float v) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(v));
+        key(k); s_ += buf; return *this;
+    }
+    Json& d(const char* k, double v) {
+        char buf[40];
+        std::snprintf(buf, sizeof(buf), "%.17g", v);
+        key(k); s_ += buf; return *this;
+    }
+    Json& str(const char* k, const std::string& v) {
+        key(k); s_ += '"'; s_ += v; s_ += '"'; return *this;
+    }
+    // Pre-encoded value (array / nested object).
+    Json& raw(const char* k, const std::string& v) { key(k); s_ += v; return *this; }
+    std::string done() const { return s_ + "}\n"; }
+
+private:
+    void key(const char* k) {
+        if (s_.size() > 1) s_ += ",";
+        s_ += "\n \""; s_ += k; s_ += "\": ";
+    }
+    std::string s_;
+};
+
+template <class T, class Fn>
+std::string jsonArray(const std::vector<T>& v, Fn fmt) {
+    std::string s = "[";
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (i) s += ",";
+        s += fmt(v[i]);
+    }
+    return s + "]";
+}
+
+std::string intArray(const std::vector<int64_t>& v) {
+    return jsonArray(v, [](int64_t x) { return std::to_string(x); });
+}
+
+// [AA 55 AA 55][type][len u8][payload][CRC16 hi][CRC16 lo] — mirrors
+// TR_I2C_Interface::packMessage exactly, with the CRC from the real
+// components/CRC library (poly 0x8001, init 0, unreflected).
+std::vector<uint8_t> frame(uint8_t type, const std::vector<uint8_t>& payload) {
+    std::vector<uint8_t> f{0xAA, 0x55, 0xAA, 0x55};
+    f.push_back(type);
+    f.push_back(static_cast<uint8_t>(payload.size()));
+    append(f, payload);
+    const uint16_t crc = calcCRC16(f.data() + 4, static_cast<int>(2 + payload.size()));
+    f.push_back((crc >> 8) & 0xFF);
+    f.push_back(crc & 0xFF);
+    return f;
+}
+
+// ------------------------------------------------------- canonical structs ---
+// One canonical instance per struct.  Change a value here → regen → all three
+// test suites re-pin.  Values deliberately exercise sign/endian/mask traps.
+
+GNSSData canonicalGnss() {
+    GNSSData g{};
+    g.time_us = 3600123456u;  // > INT32_MAX: catches signed-int u32 reads
+    g.year = 2026; g.month = 7; g.day = 23;
+    g.hour = 14; g.minute = 5; g.second = 9; g.milli_second = 987;
+    g.fix_mode = 3; g.num_sats = 17; g.pdop_x10 = 13;
+    g.lat_e7 = 377749000; g.lon_e7 = -1224194000; g.alt_mm = 123456;
+    g.vel_e_mmps = -1500; g.vel_n_mmps = 2500; g.vel_u_mmps = -50;
+    g.h_acc_m = 4; g.v_acc_m = 7;
+    return g;
+}
+
+ISM6HG256Data canonicalImu() {
+    ISM6HG256Data d{};
+    d.time_us = 2147483648u;  // exactly 2^31
+    d.acc_low_raw = {-1000, 2000, -32768};
+    d.acc_high_raw = {100, -200, 32767};
+    d.gyro_raw = {-15000, 1000, 29999};
+    return d;
+}
+
+BMP585Data canonicalBaro() {
+    BMP585Data d{};
+    d.time_us = 4000000000u;
+    d.temp_q16 = 1540096;   // 23.5 °C * 65536
+    d.press_q6 = 6484800u;  // 101325 Pa * 64
+    return d;
+}
+
+MMC5983MAData canonicalMmc() {
+    MMC5983MAData d{};
+    d.time_us = 1111111u;
+    d.mag_x = 0x0002ABCDu;  // > 0x20000: catches missing 18-bit mask
+    d.mag_y = 100000u;
+    d.mag_z = 131072u;      // exactly center
+    return d;
+}
+
+IIS2MDCData canonicalIis() {
+    IIS2MDCData d{};
+    d.time_us = 999999u;
+    d.mag_x = -2000; d.mag_y = 0; d.mag_z = 1234;
+    return d;
+}
+
+POWERData canonicalPower() {
+    POWERData d{};
+    d.time_us = 123456789u;
+    d.voltage_raw = 27000; d.current_raw = -1234; d.soc_raw = 15000;
+    return d;
+}
+
+NonSensorData canonicalNonSensor() {
+    NonSensorData d{};
+    d.time_us = 5000000u;
+    d.q0 = 9239; d.q1 = -2588; d.q2 = 1913; d.q3 = 2706;
+    d.roll_cmd = -4500;
+    d.e_pos = 12345; d.n_pos = -6789; d.u_pos = 101112;
+    d.e_vel = -100; d.n_vel = 250; d.u_vel = -9999;
+    d.flags = 0x2D;         // landed | vel_u_apogee | launch | guidance_active
+    d.rocket_state = 6;
+    d.baro_alt_rate_dmps = -123;
+    d.pyro_status = 0x0A;   // ch2 continuity + ch2 fired
+    d.apogee_flags = 0x05;  // gps_apogee | master apogee
+    d.sensor_health = 0x00F0A5C3u;  // gnssAbsent bits 22-23 = 3 (BAD/active)
+    d.ekf_ticks = 54321;
+    return d;
+}
+
+OutStatusQueryData canonicalStatusQuery() {
+    OutStatusQueryData d{};
+    d.ism6_low_g_fs_g = 16; d.ism6_high_g_fs_g = 256; d.ism6_gyro_fs_dps = 4000;
+    d.ism6_rot_z_cdeg = 9000; d.mmc_rot_z_cdeg = -4500;
+    d.format_version = 5;
+    d.hg_bias_x_cmss = -50; d.hg_bias_y_cmss = 75; d.hg_bias_z_cmss = -100;
+    d.b2r_code = 4; d.b2r_mode = 2;
+    d.b2r_q[0] = 9239; d.b2r_q[1] = 0; d.b2r_q[2] = -3827; d.b2r_q[3] = 0;
+    d.iis2mdc_rot_z_cdeg = 18000;
+    d.tgt_lat_deg = 37.7749f; d.tgt_lon_deg = -122.4194f;
+    d.tgt_alt_m = 250; d.tgt_seq = 3;
+    d.tgt_status = GUID_TGT_GEO_ACTIVE; d.tgt_last_rc = GUID_RC_ACCEPTED;
+    return d;
+}
+
+PyroConfigData canonicalPyro() {
+    PyroConfigData p{};
+    p.ch1_enabled = 1; p.ch1_trigger_mode = PYRO_TRIGGER_TIME_AFTER_APOGEE;  p.ch1_trigger_value = 2.5f;
+    p.ch2_enabled = 1; p.ch2_trigger_mode = PYRO_TRIGGER_ALTITUDE_ON_DESCENT; p.ch2_trigger_value = 150.0f;
+    p.ch3_enabled = 0; p.ch3_trigger_mode = PYRO_TRIGGER_TIME_AFTER_APOGEE;  p.ch3_trigger_value = 0.0f;
+    p.ch4_enabled = 1; p.ch4_trigger_mode = PYRO_TRIGGER_TIME_AFTER_APOGEE;  p.ch4_trigger_value = 8.75f;
+    return p;
+}
+
+RollProfileData canonicalRollProfile() {
+    RollProfileData r{};
+    r.num_waypoints = 3;
+    r.waypoints[0] = {0.5f, 0.0f, ROLL_SEG_ANGLE};
+    r.waypoints[1] = {2.0f, 180.0f, ROLL_SEG_ANGLE};
+    r.waypoints[2] = {4.0f, -90.0f, ROLL_SEG_ANGLE};
+    return r;
+}
+
+FlightSettingsData canonicalFlightSettings() {
+    FlightSettingsData s{};
+    s.time_us = 250000123u;
+    s.version = FlightSettingsData::VERSION;
+    s.flags = 0x4F;  // angle_ctl | gain_sched | guidance | servo_en | station_keep
+    s.roll_delay_ms = 1500;
+    s.kp = 0.8f; s.ki = 0.15f; s.kd = 0.05f; s.d_lpf_hz = 25.0f;
+    s.min_cmd_deg = -15.0f; s.max_cmd_deg = 15.0f;
+    s.kp_angle = 2.5f; s.kp_angle_rate_cap_dps = 180.0f;
+    s.gs_v_ref = 50.0f; s.gs_v_min = 15.0f; s.gs_scale_cap = 3.0f;
+    s.roll_rate_set_point = 0.0f;
+    s.ism6_low_g_fs_g = 16; s.ism6_high_g_fs_g = 256; s.ism6_gyro_fs_dps = 4000;
+    s.servo_bias_us[0] = -120; s.servo_bias_us[1] = 35;
+    s.servo_bias_us[2] = 0;    s.servo_bias_us[3] = 88;
+    s.servo_hz = 333; s.servo_min_us = 1000; s.servo_max_us = 2000;
+    s.camera_type = 2;
+    s.pyro = canonicalPyro();
+    std::strncpy(s.fw_git_sha, "abc123def", sizeof(s.fw_git_sha));
+    s.roll_profile = canonicalRollProfile();
+    s.b2r_code = 4; s.b2r_mode = 2; s.b2r_residual_cdeg = 150;
+    s.b2r_q[0] = 9239; s.b2r_q[1] = 0; s.b2r_q[2] = -3827; s.b2r_q[3] = 0;
+    s.fin_min_deg = -12.5f; s.fin_max_deg = 12.5f;
+    s.ism6_update_rate_hz = 1920;
+    s.guid_tgt_e_m = 25.5f; s.guid_tgt_n_m = -30.25f;
+    s.guid_tgt_src = GUID_TGT_GEO_ACTIVE;
+    return s;
+}
+
+MagCalStatusData canonicalMagCal() {
+    MagCalStatusData m{};
+    m.time_us = 777777u;
+    m.sub_type = 3; m.coverage_bins = 18; m.sample_count = 642;
+    m.inst_field_uT_x10 = 5234;
+    m.offset_x = -321; m.offset_y = 456; m.offset_z = -789;
+    m.field_R_uT_x10 = 482; m.residual_uT_x10 = 37;
+    m.reject_code = 0; m._pad = 0;
+    m.coverage_mask = 0x0003FFFFu;
+    m.inst_x_lsb = -100; m.inst_y_lsb = 200; m.inst_z_lsb = -300;
+    m.partial_mask = 0x000C0000u;  // disjoint from coverage_mask by contract
+    return m;
+}
+
+SensorCalStatusData canonicalSensorCal() {
+    SensorCalStatusData s{};
+    s.valid = 1;
+    s.gyro_x = -12; s.gyro_y = 34; s.gyro_z = -56;
+    s.hg_x = 0.25f; s.hg_y = -0.5f; s.hg_z = 9.81f;
+    return s;
+}
+
+RocketStorageStatsData canonicalRocketStorage() {
+    RocketStorageStatsData r{};
+    r.flight_region_blocks = 2012; r.used_blocks = 310; r.free_blocks = 1650;
+    r.bad_blocks = 12; r.system_blocks = 40; r.flight_count = 27;
+    r.block_size_kb = 256;
+    r.flags = RSS_FLAG_INITIALIZED | RSS_FLAG_AUTO_EVICTED;
+    return r;
+}
+
+BaseStationStorageStatsData canonicalBsStorage() {
+    BaseStationStorageStatsData b{};
+    b.total_bytes = 512000000000ull;
+    b.used_bytes = 100200300400ull;
+    b.free_bytes = 411799699600ull;
+    b.backend = 1; b.flags = 1;
+    return b;
+}
+
+// ------------------------------------------------------------- the corpus ---
+
+struct Builder {
+    FixtureMap out;
+    std::string manifest;  // accumulated manifest entries
+
+    void add(const std::string& family, const std::string& name,
+             const std::vector<uint8_t>& bytes, const std::string& sidecarJson,
+             const std::string& notes) {
+        const std::string base = family + "/" + name;
+        out[base] = bytes;
+        if (!sidecarJson.empty()) {
+            std::string side = base;
+            const auto dot = side.rfind('.');
+            side = side.substr(0, dot) + ".expected.json";
+            out[side] = strBytes(sidecarJson);
+        }
+        if (!manifest.empty()) manifest += ",";
+        Json e;
+        e.str("file", base).u("size", bytes.size()).str("notes", notes);
+        std::string entry = e.done();
+        entry.pop_back();  // trailing newline stays out of the array
+        manifest += "\n " + entry;
+    }
+};
+
+std::string gnssSidecar(const GNSSData& g) {
+    return Json()
+        .u("time_us", g.time_us)
+        .u("year", g.year).u("month", g.month).u("day", g.day)
+        .u("hour", g.hour).u("minute", g.minute).u("second", g.second)
+        .u("milli_second", g.milli_second)
+        .u("fix_mode", g.fix_mode).u("num_sats", g.num_sats).u("pdop_x10", g.pdop_x10)
+        .i("lat_e7", g.lat_e7).i("lon_e7", g.lon_e7).i("alt_mm", g.alt_mm)
+        .i("vel_e_mmps", g.vel_e_mmps).i("vel_n_mmps", g.vel_n_mmps).i("vel_u_mmps", g.vel_u_mmps)
+        .u("h_acc_m", g.h_acc_m).u("v_acc_m", g.v_acc_m)
+        .done();
+}
+
+std::string nonSensorSidecar(const NonSensorData& d, size_t presentBytes) {
+    Json j;
+    j.u("present_bytes", presentBytes)
+        .u("time_us", d.time_us)
+        .i("q0", d.q0).i("q1", d.q1).i("q2", d.q2).i("q3", d.q3)
+        .i("roll_cmd", d.roll_cmd)
+        .i("e_pos", d.e_pos).i("n_pos", d.n_pos).i("u_pos", d.u_pos)
+        .i("e_vel", d.e_vel).i("n_vel", d.n_vel).i("u_vel", d.u_vel)
+        .u("flags", d.flags).u("rocket_state", d.rocket_state)
+        .i("baro_alt_rate_dmps", d.baro_alt_rate_dmps)
+        .u("pyro_status", d.pyro_status);
+    // Ladder semantics: fields beyond present_bytes are ABSENT (Kotlin/Swift
+    // decode nil/default), not zero.  Sidecar only lists present fields.
+    if (presentBytes >= 44) j.u("apogee_flags", d.apogee_flags);
+    if (presentBytes >= 48) j.u("sensor_health", d.sensor_health);
+    if (presentBytes >= 50) j.u("ekf_ticks", d.ekf_ticks);
+    return j.done();
+}
+
+std::string magCalSidecar(const MagCalStatusData& m, size_t presentBytes) {
+    Json j;
+    j.u("present_bytes", presentBytes)
+        .u("time_us", m.time_us)
+        .u("sub_type", m.sub_type).u("coverage_bins", m.coverage_bins)
+        .u("sample_count", m.sample_count).u("inst_field_uT_x10", m.inst_field_uT_x10)
+        .i("offset_x", m.offset_x).i("offset_y", m.offset_y).i("offset_z", m.offset_z)
+        .u("field_R_uT_x10", m.field_R_uT_x10).u("residual_uT_x10", m.residual_uT_x10)
+        .u("reject_code", m.reject_code);
+    if (presentBytes >= 26) j.u("coverage_mask", m.coverage_mask);
+    if (presentBytes >= 32) {
+        j.i("inst_x_lsb", m.inst_x_lsb).i("inst_y_lsb", m.inst_y_lsb).i("inst_z_lsb", m.inst_z_lsb);
+    }
+    if (presentBytes >= 36) j.u("partial_mask", m.partial_mask);
+    return j.done();
+}
+
+void buildLogframes(Builder& b) {
+    const auto gnss = canonicalGnss();
+    b.add("logframes", "gnss_42.bin", bytesOf(gnss), gnssSidecar(gnss),
+          "GNSSData, msg 0xA1; u32 time > INT32_MAX");
+
+    const auto imu = canonicalImu();
+    b.add("logframes", "imu_ism6_22.bin", bytesOf(imu),
+          Json().u("time_us", imu.time_us)
+              .raw("acc_low_raw", intArray({imu.acc_low_raw.x, imu.acc_low_raw.y, imu.acc_low_raw.z}))
+              .raw("acc_high_raw", intArray({imu.acc_high_raw.x, imu.acc_high_raw.y, imu.acc_high_raw.z}))
+              .raw("gyro_raw", intArray({imu.gyro_raw.x, imu.gyro_raw.y, imu.gyro_raw.z}))
+              .done(),
+          "ISM6HG256Data, msg 0xA2 (22 B = Mini; 36 B payload = legacy ICM45686)");
+
+    const auto baro = canonicalBaro();
+    b.add("logframes", "baro_bmp585_12.bin", bytesOf(baro),
+          Json().u("time_us", baro.time_us).i("temp_q16", baro.temp_q16)
+              .u("press_q6", baro.press_q6).done(),
+          "BMP585Data, msg 0xA3 (12 B = BMP585; 10 B = legacy MS5611)");
+
+    const auto mmc = canonicalMmc();
+    b.add("logframes", "mag_mmc5983_16.bin", bytesOf(mmc),
+          Json().u("time_us", mmc.time_us)
+              .u("mag_x", mmc.mag_x).u("mag_y", mmc.mag_y).u("mag_z", mmc.mag_z)
+              .done(),
+          "MMC5983MAData, msg 0xA4; mag_x > 0x20000 catches missing 18-bit mask");
+
+    const auto iis = canonicalIis();
+    b.add("logframes", "mag_iis2mdc_10.bin", bytesOf(iis),
+          Json().u("time_us", iis.time_us)
+              .i("mag_x", iis.mag_x).i("mag_y", iis.mag_y).i("mag_z", iis.mag_z)
+              .done(),
+          "IIS2MDCData, msg 0xD1");
+
+    const auto pwr = canonicalPower();
+    b.add("logframes", "power_10.bin", bytesOf(pwr),
+          Json().u("time_us", pwr.time_us).u("voltage_raw", pwr.voltage_raw)
+              .i("current_raw", pwr.current_raw).i("soc_raw", pwr.soc_raw)
+              .done(),
+          "POWERData, msg 0xA6");
+
+    // NonSensor length ladder: 43 (base) / 44 (+apogee_flags) / 48
+    // (+sensor_health) / 50 (+ekf_ticks).  Each shorter form is a faithful
+    // prefix of the append-only struct.
+    const auto ns = canonicalNonSensor();
+    const auto nsFull = bytesOf(ns);
+    for (size_t len : {size_t{43}, size_t{44}, size_t{48}, size_t{50}}) {
+        char name[32];
+        std::snprintf(name, sizeof(name), "nonsensor_%zu.bin", len);
+        b.add("logframes", name, prefix(nsFull, len), nonSensorSidecar(ns, len),
+              "NonSensorData ladder, msg 0xA5; absent tail fields decode as absent, not 0");
+    }
+
+    // OutStatusQuery version ladder (format_version byte at offset 9):
+    // v3 = 26 B, v4 = 28 B (+iis2mdc rot), v5 = 41 B (+guidance echo tail).
+    const auto sq = canonicalStatusQuery();
+    auto sqFull = bytesOf(sq);
+    b.add("logframes", "statusquery_v5_41.bin", sqFull,
+          Json().u("ism6_low_g_fs_g", sq.ism6_low_g_fs_g)
+              .u("ism6_high_g_fs_g", sq.ism6_high_g_fs_g)
+              .u("ism6_gyro_fs_dps", sq.ism6_gyro_fs_dps)
+              .i("ism6_rot_z_cdeg", sq.ism6_rot_z_cdeg)
+              .i("mmc_rot_z_cdeg", sq.mmc_rot_z_cdeg)
+              .u("format_version", sq.format_version)
+              .i("hg_bias_x_cmss", sq.hg_bias_x_cmss)
+              .i("hg_bias_y_cmss", sq.hg_bias_y_cmss)
+              .i("hg_bias_z_cmss", sq.hg_bias_z_cmss)
+              .u("b2r_code", sq.b2r_code).u("b2r_mode", sq.b2r_mode)
+              .raw("b2r_q", intArray({sq.b2r_q[0], sq.b2r_q[1], sq.b2r_q[2], sq.b2r_q[3]}))
+              .i("iis2mdc_rot_z_cdeg", sq.iis2mdc_rot_z_cdeg)
+              .f("tgt_lat_deg", sq.tgt_lat_deg).f("tgt_lon_deg", sq.tgt_lon_deg)
+              .i("tgt_alt_m", sq.tgt_alt_m).u("tgt_seq", sq.tgt_seq)
+              .u("tgt_status", sq.tgt_status).u("tgt_last_rc", sq.tgt_last_rc)
+              .done(),
+          "OutStatusQueryData v5, msg 0xA0");
+    auto sqV4 = prefix(sqFull, 28); sqV4[9] = 4;
+    b.add("logframes", "statusquery_v4_28.bin", sqV4, "",
+          "OutStatusQueryData truncated to v4 (+IIS2MDC rotation, no guidance echo)");
+    auto sqV3 = prefix(sqFull, 26); sqV3[9] = 3;
+    b.add("logframes", "statusquery_v3_26.bin", sqV3, "",
+          "OutStatusQueryData truncated to v3 (b2r orientation, no IIS rotation)");
+
+    // FlightSettings version ladder (version byte at offset 4):
+    // v1 = 188, v2 = 200 (+b2r), v3/v4 = 208 (+fin cal; v4 = semantics only),
+    // v5 = 210 (+imu rate), v6 = 219 (+flown guidance target).
+    const auto fs = canonicalFlightSettings();
+    const auto fsFull = bytesOf(fs);
+    b.add("logframes", "flightsettings_v6_219.bin", fsFull,
+          Json().u("time_us", fs.time_us).u("version", fs.version).u("flags", fs.flags)
+              .u("roll_delay_ms", fs.roll_delay_ms)
+              .f("kp", fs.kp).f("ki", fs.ki).f("kd", fs.kd).f("d_lpf_hz", fs.d_lpf_hz)
+              .f("min_cmd_deg", fs.min_cmd_deg).f("max_cmd_deg", fs.max_cmd_deg)
+              .f("kp_angle", fs.kp_angle).f("kp_angle_rate_cap_dps", fs.kp_angle_rate_cap_dps)
+              .f("gs_v_ref", fs.gs_v_ref).f("gs_v_min", fs.gs_v_min).f("gs_scale_cap", fs.gs_scale_cap)
+              .f("roll_rate_set_point", fs.roll_rate_set_point)
+              .u("ism6_low_g_fs_g", fs.ism6_low_g_fs_g)
+              .u("ism6_high_g_fs_g", fs.ism6_high_g_fs_g)
+              .u("ism6_gyro_fs_dps", fs.ism6_gyro_fs_dps)
+              .raw("servo_bias_us", intArray({fs.servo_bias_us[0], fs.servo_bias_us[1],
+                                              fs.servo_bias_us[2], fs.servo_bias_us[3]}))
+              .i("servo_hz", fs.servo_hz).i("servo_min_us", fs.servo_min_us)
+              .i("servo_max_us", fs.servo_max_us)
+              .u("camera_type", fs.camera_type)
+              .str("fw_git_sha", "abc123def")
+              .u("roll_profile_num_waypoints", fs.roll_profile.num_waypoints)
+              .u("b2r_code", fs.b2r_code).u("b2r_mode", fs.b2r_mode)
+              .i("b2r_residual_cdeg", fs.b2r_residual_cdeg)
+              .f("fin_min_deg", fs.fin_min_deg).f("fin_max_deg", fs.fin_max_deg)
+              .u("ism6_update_rate_hz", fs.ism6_update_rate_hz)
+              .f("guid_tgt_e_m", fs.guid_tgt_e_m).f("guid_tgt_n_m", fs.guid_tgt_n_m)
+              .u("guid_tgt_src", fs.guid_tgt_src)
+              .done(),
+          "FlightSettingsData v6, msg 0xE1; pyro sub-struct pinned by cmd34 fixture");
+    const struct { size_t len; uint8_t ver; } fsLadder[] = {
+        {188, 1}, {200, 2}, {208, 3}, {210, 5}};
+    for (const auto& lv : fsLadder) {
+        auto img = prefix(fsFull, lv.len);
+        img[4] = lv.ver;
+        char name[40];
+        std::snprintf(name, sizeof(name), "flightsettings_v%u_%zu.bin", lv.ver, lv.len);
+        b.add("logframes", name, img, "",
+              "FlightSettingsData version-ladder truncation of the v6 image");
+    }
+}
+
+void buildFramed(Builder& b) {
+    // A miniature but representative .bin log stream.
+    const std::vector<std::pair<uint8_t, std::vector<uint8_t>>> good = {
+        {GNSS_MSG, bytesOf(canonicalGnss())},
+        {ISM6HG256_MSG, bytesOf(canonicalImu())},
+        {BMP585_MSG, bytesOf(canonicalBaro())},
+        {MMC5983MA_MSG, bytesOf(canonicalMmc())},
+        {NON_SENSOR_MSG, bytesOf(canonicalNonSensor())},
+        {POWER_MSG, bytesOf(canonicalPower())},
+        {IIS2MDC_MSG, bytesOf(canonicalIis())},
+        {FLIGHT_SETTINGS_MSG, bytesOf(canonicalFlightSettings())},
+    };
+    std::vector<uint8_t> stream;
+    std::string types = "[", lens = "[";
+    for (size_t i = 0; i < good.size(); ++i) {
+        append(stream, frame(good[i].first, good[i].second));
+        if (i) { types += ","; lens += ","; }
+        types += std::to_string(good[i].first);
+        lens += std::to_string(good[i].second.size());
+    }
+    types += "]"; lens += "]";
+    b.add("framed", "stream_good.bin", stream,
+          Json().u("frame_count", good.size())
+              .raw("types", types).raw("payload_lens", lens)
+              .done(),
+          "8 valid frames: [AA 55 AA 55][type][len][payload][CRC16 poly 0x8001 init 0, BE on wire]");
+
+    // Bad CRC in the middle: parser must skip it and resync on the next preamble.
+    std::vector<uint8_t> bad;
+    append(bad, frame(GNSS_MSG, bytesOf(canonicalGnss())));
+    auto corrupt = frame(ISM6HG256_MSG, bytesOf(canonicalImu()));
+    corrupt[corrupt.size() - 1] ^= 0xFF;
+    append(bad, corrupt);
+    append(bad, frame(POWER_MSG, bytesOf(canonicalPower())));
+    b.add("framed", "stream_badcrc_resync.bin", bad,
+          Json().u("valid_frame_count", 2)
+              .raw("valid_types", "[" + std::to_string(GNSS_MSG) + "," + std::to_string(POWER_MSG) + "]")
+              .u("corrupt_frame_count", 1)
+              .done(),
+          "middle frame's CRC LSB flipped: skip + resync, do not abort");
+
+    // Truncated tail: parser must stop cleanly, keeping earlier frames.
+    std::vector<uint8_t> trunc;
+    append(trunc, frame(GNSS_MSG, bytesOf(canonicalGnss())));
+    auto cut = frame(BMP585_MSG, bytesOf(canonicalBaro()));
+    cut.resize(cut.size() - 6);
+    append(trunc, cut);
+    b.add("framed", "stream_truncated_tail.bin", trunc,
+          Json().u("valid_frame_count", 1)
+              .raw("valid_types", "[" + std::to_string(GNSS_MSG) + "]")
+              .b("ends_truncated", true)
+              .done(),
+          "trailing frame cut mid-payload: stop, no throw, no resync loop");
+}
+
+void buildFileops(Builder& b) {
+    // file_ops frames INCLUDE the leading discriminator byte — this is the
+    // full-frame convention that resolves the 26-vs-27 0xCD ambiguity.
+
+    // 0xAA frequency-scan result: [0xAA][start_mhz f32][step_khz f32][n u8][rssi i8 x n]
+    std::vector<uint8_t> scan{0xAA};
+    appendF32(scan, 903.0f);
+    appendF32(scan, 200.0f);
+    appendU8(scan, 5);
+    for (int8_t r : {int8_t{-95}, int8_t{-102}, int8_t{-88}, int8_t{-120}, int8_t{-77}})
+        appendI8(scan, r);
+    b.add("fileops", "scan_0xAA_5samples.bin", scan,
+          Json().f("start_mhz", 903.0f).f("step_khz", 200.0f).u("n", 5)
+              .raw("rssi_dbm", intArray({-95, -102, -88, -120, -77}))
+              .done(),
+          "freq-scan result frame; start f32 sits at unaligned offset 1");
+
+    // 0xCA mag-cal status ladder: struct sizes 22 / 26 / 32 / 36 by fw era.
+    const auto mc = canonicalMagCal();
+    const auto mcFull = bytesOf(mc);
+    for (size_t len : {size_t{22}, size_t{26}, size_t{32}, size_t{36}}) {
+        std::vector<uint8_t> f{0xCA};
+        append(f, prefix(mcFull, len));
+        char name[40];
+        std::snprintf(name, sizeof(name), "magcal_0xCA_len%zu.bin", len);
+        b.add("fileops", name, f, magCalSidecar(mc, len),
+              "MagCalStatusData ladder; frame length = 1 + struct bytes");
+    }
+
+    // 0xCB sensor-cal status.
+    const auto sc = canonicalSensorCal();
+    std::vector<uint8_t> scF{0xCB};
+    append(scF, bytesOf(sc));
+    b.add("fileops", "sensorcal_0xCB_19.bin", scF,
+          Json().u("valid", sc.valid)
+              .i("gyro_x", sc.gyro_x).i("gyro_y", sc.gyro_y).i("gyro_z", sc.gyro_z)
+              .f("hg_x", sc.hg_x).f("hg_y", sc.hg_y).f("hg_z", sc.hg_z)
+              .done(),
+          "SensorCalStatusData behind 0xCB");
+
+    // 0xCC rocket storage stats.
+    const auto rs = canonicalRocketStorage();
+    std::vector<uint8_t> rsF{0xCC};
+    append(rsF, bytesOf(rs));
+    b.add("fileops", "storage_rocket_0xCC.bin", rsF,
+          Json().u("flight_region_blocks", rs.flight_region_blocks)
+              .u("used_blocks", rs.used_blocks).u("free_blocks", rs.free_blocks)
+              .u("bad_blocks", rs.bad_blocks).u("system_blocks", rs.system_blocks)
+              .u("flight_count", rs.flight_count).u("block_size_kb", rs.block_size_kb)
+              .u("flags", rs.flags)
+              .done(),
+          "RocketStorageStatsData behind 0xCC; flags = initialized|auto_evicted");
+
+    // 0xCD base-station storage stats (u64 fields).
+    const auto bs = canonicalBsStorage();
+    std::vector<uint8_t> bsF{0xCD};
+    append(bsF, bytesOf(bs));
+    b.add("fileops", "storage_bs_0xCD.bin", bsF,
+          Json().u("total_bytes", bs.total_bytes).u("used_bytes", bs.used_bytes)
+              .u("free_bytes", bs.free_bytes).u("backend", bs.backend).u("flags", bs.flags)
+              .done(),
+          "BaseStationStorageStatsData behind 0xCD; frame = 27 B (1 + 26-B struct)");
+}
+
+// App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
+// payloads come straight from the header; the documented hand-packed layouts
+// (cmd 9/10/50/60/70) are packed here and pinned by the freshness test.
+void buildCommands(Builder& b) {
+    auto cmd = [](uint8_t id, const std::vector<uint8_t>& payload) {
+        std::vector<uint8_t> f{id};
+        auto out = f;
+        out.insert(out.end(), payload.begin(), payload.end());
+        return out;
+    };
+
+    b.add("commands", "cmd05_simconfig_16.bin",
+          cmd(5, bytesOf(SimConfigData{0.595f, 80.0f, 2.5f, 15.0f})),
+          Json().u("cmd", 5).f("mass_kg", 0.595f).f("thrust_n", 80.0f)
+              .f("burn_time_s", 2.5f).f("descent_rate_mps", 15.0f).done(),
+          "SimConfigData");
+
+    {
+        std::vector<uint8_t> p;
+        appendU16(p, 2026);
+        for (uint8_t v : {7, 23, 14, 5, 9}) appendU8(p, v);
+        b.add("commands", "cmd09_timesync.bin", cmd(9, p),
+              Json().u("cmd", 9).u("year", 2026).u("month", 7).u("day", 23)
+                  .u("hour", 14).u("minute", 5).u("second", 9).done(),
+              "time sync, UTC; hand-packed [year u16][mo][d][h][m][s]");
+    }
+
+    {
+        std::vector<uint8_t> p;
+        appendF32(p, 903.0f);   // freq MHz
+        appendF32(p, 250.0f);   // bw kHz
+        appendU8(p, 9);         // sf
+        appendU8(p, 5);         // cr
+        appendI8(p, -3);        // tx power dBm — negative pins i8 bitPattern
+        b.add("commands", "cmd10_lora_cfg.bin", cmd(10, p),
+              Json().u("cmd", 10).f("freq_mhz", 903.0f).f("bw_khz", 250.0f)
+                  .u("sf", 9).u("cr", 5).i("tx_pwr_dbm", -3).done(),
+              "LoRa RF config; hand-packed [f32][f32][u8][u8][i8]");
+    }
+
+    {
+        ServoConfigData s{};
+        s.bias_us[0] = -120; s.bias_us[1] = 35; s.bias_us[2] = 0; s.bias_us[3] = 88;
+        s.hz = 333; s.min_us = 1000; s.max_us = 2000;
+        s.fin_min_deg = -12.5f; s.fin_max_deg = 12.5f;
+        b.add("commands", "cmd12_servo_22.bin", cmd(12, bytesOf(s)),
+              Json().u("cmd", 12).raw("bias_us", intArray({-120, 35, 0, 88}))
+                  .i("hz", 333).i("min_us", 1000).i("max_us", 2000)
+                  .f("fin_min_deg", -12.5f).f("fin_max_deg", 12.5f).done(),
+              "ServoConfigData (#267 22-B form)");
+    }
+
+    b.add("commands", "cmd13_pid_20.bin",
+          cmd(13, bytesOf(PIDConfigData{0.8f, 0.15f, 0.05f, -15.0f, 15.0f})),
+          Json().u("cmd", 13).f("kp", 0.8f).f("ki", 0.15f).f("kd", 0.05f)
+              .f("min_cmd", -15.0f).f("max_cmd", 15.0f).done(),
+          "PIDConfigData");
+
+    b.add("commands", "cmd24_servotest_8.bin",
+          cmd(24, bytesOf(ServoTestAnglesData{{-2000, 1500, 0, 250}})),
+          Json().u("cmd", 24).raw("angle_cdeg", intArray({-2000, 1500, 0, 250})).done(),
+          "ServoTestAnglesData, centi-degrees");
+
+    {
+        const auto rp = canonicalRollProfile();
+        b.add("commands", "cmd26_rollprofile_76.bin", cmd(26, bytesOf(rp)),
+              Json().u("cmd", 26).u("num_waypoints", 3)
+                  .raw("waypoints",
+                       "[{\"time_s\": 0.5, \"angle_deg\": 0, \"mode\": 0},"
+                       "{\"time_s\": 2, \"angle_deg\": 180, \"mode\": 0},"
+                       "{\"time_s\": 4, \"angle_deg\": -90, \"mode\": 0}]")
+                  .done(),
+              "RollProfileData: [n u8][3 pad][8 x {t f32, a f32, mode u8}]; unused slots zeroed");
+    }
+
+    {
+        std::vector<uint8_t> p;
+        appendF64(p, 37.7749);
+        appendF64(p, -122.4194);
+        appendF32(p, 250.0f);
+        b.add("commands", "cmd28_guidpoint_20.bin", cmd(28, p),
+              Json().u("cmd", 28).d("lat_deg", 37.7749).d("lon_deg", -122.4194)
+                  .f("alt_m", 250.0f).done(),
+              "GuidancePointData {lat f64, lon f64, alt f32} — only f64 fields on the wire");
+    }
+
+    {
+        RollControlConfigData r{};
+        r.use_angle_control = 1; r._pad = 0; r.roll_delay_ms = 1200;
+        r.kp_angle_rate_cap_dps = 120.0f; r.kp_angle = 2.5f;
+        r.integral_sep_threshold_dps = -1.0f;  // sentinel: keep firmware default
+        b.add("commands", "cmd31_rollctl_16.bin", cmd(31, bytesOf(r)),
+              Json().u("cmd", 31).u("use_angle_control", 1).u("roll_delay_ms", 1200)
+                  .f("kp_angle_rate_cap_dps", 120.0f).f("kp_angle", 2.5f)
+                  .f("integral_sep_threshold_dps", -1.0f).done(),
+              "RollControlConfigData; iwind < 0 = keep-firmware-default sentinel (#253)");
+    }
+
+    b.add("commands", "cmd33_camera_1.bin", cmd(33, bytesOf(CameraConfigData{2})),
+          Json().u("cmd", 33).u("camera_type", 2).done(), "CameraConfigData (2 = RunCam)");
+
+    b.add("commands", "cmd34_pyro_24.bin", cmd(34, bytesOf(canonicalPyro())),
+          Json().u("cmd", 34)
+              .raw("channels",
+                   "[{\"enabled\": 1, \"mode\": 0, \"value\": 2.5},"
+                   "{\"enabled\": 1, \"mode\": 1, \"value\": 150},"
+                   "{\"enabled\": 0, \"mode\": 0, \"value\": 0},"
+                   "{\"enabled\": 1, \"mode\": 0, \"value\": 8.75}]")
+              .done(),
+          "PyroConfigData: 4 x {en u8, mode u8, value f32}");
+
+    b.add("commands", "cmd40_setname.bin", cmd(40, strBytes("RollyPolly III")),
+          Json().u("cmd", 40).str("name", "RollyPolly III").u("payload_len", 14).done(),
+          "set unit name; payload = raw UTF-8, firmware rejects > 20 bytes");
+    b.add("commands", "cmd41_setnid.bin", cmd(41, {0x2A}),
+          Json().u("cmd", 41).u("nid", 42).done(), "set network id");
+    b.add("commands", "cmd42_setrid.bin", cmd(42, {7}),
+          Json().u("cmd", 42).u("rid", 7).done(), "set rocket id (1..254)");
+    b.add("commands", "cmd45_setfocus.bin", cmd(45, {7}),
+          Json().u("cmd", 45).u("rid", 7).done(),
+          "BS sticky focus (#390); 0 = auto");
+
+    {
+        // cmd 50 to a BS = relay envelope: [50][target_rid][inner cmd + payload].
+        // Inner payload here is the cmd24 servo test (8 B) — total inner 9 B,
+        // under the OC's 26-B relay RX cap.
+        std::vector<uint8_t> inner = cmd(24, bytesOf(ServoTestAnglesData{{-2000, 1500, 0, 250}}));
+        std::vector<uint8_t> p{7};
+        append(p, inner);
+        b.add("commands", "cmd50_relay_wrapped.bin", cmd(50, p),
+              Json().u("cmd", 50).u("target_rid", 7).u("inner_cmd", 24)
+                  .u("inner_payload_len", 8).done(),
+              "BS relay envelope; SAME number is mag-cal start on a rocket link (dual namespace)");
+    }
+
+    {
+        MagCalApplyData m{-321, 456, -789, 48.2f, 3.7f};
+        b.add("commands", "cmd55_magcal_apply_14.bin", cmd(55, bytesOf(m)),
+              Json().u("cmd", 55).i("cx", -321).i("cy", 456).i("cz", -789)
+                  .f("R_uT", 48.2f).f("res_uT", 3.7f).done(),
+              "MagCalApplyData");
+    }
+
+    {
+        std::vector<uint8_t> p;
+        appendF32(p, 902.0f);
+        appendF32(p, 928.0f);
+        appendU16(p, 200);
+        appendU16(p, 150);
+        b.add("commands", "cmd60_scan_12.bin", cmd(60, p),
+              Json().u("cmd", 60).f("start_mhz", 902.0f).f("stop_mhz", 928.0f)
+                  .u("step_khz", 200).u("dwell_ms", 150).done(),
+              "freq scan request; hand-packed [f32][f32][u16][u16]");
+    }
+
+    {
+        SensorCalApplyData s{-12, 34, -56, 0.25f, -0.5f, 9.81f};
+        b.add("commands", "cmd62_sensorcal_18.bin", cmd(62, bytesOf(s)),
+              Json().u("cmd", 62).i("gyro_x", -12).i("gyro_y", 34).i("gyro_z", -56)
+                  .f("hg_x", 0.25f).f("hg_y", -0.5f).f("hg_z", 9.81f).done(),
+              "SensorCalApplyData");
+    }
+
+    b.add("commands", "cmd64_imuorient_auto.bin", cmd(64, bytesOf(ImuOrientConfigData{IMU_ORIENT_AUTO})),
+          Json().u("cmd", 64).u("setting", 255).done(),
+          "ImuOrientConfigData; 0xFF = auto, else orientation code 0..23");
+
+    {
+        GuidanceConfigData g{};
+        g.nav_gain = 3.5f; g.max_accel_mps2 = 30.0f; g.accel_to_fin_deg = 0.5f;
+        g.max_fin_deg = 10.0f; g.min_speed_mps = 8.0f;
+        g.target_e_m = 25.5f; g.target_n_m = -30.25f; g.target_alt_m = 250.0f;
+        g.coast_delay_ms = 500; g.enable = 1; g.target_mode = GUIDE_TARGET_POINT;
+        g.kp_pos_per_s2 = 0.05f; g.kd_vel_per_s = 0.4f;
+        g.guidance_law = GUIDE_LAW_STATION_KEEP;
+        b.add("commands", "cmd65_guidance_45.bin", cmd(65, bytesOf(g)),
+              Json().u("cmd", 65).f("nav_gain", 3.5f).f("max_accel_mps2", 30.0f)
+                  .f("accel_to_fin_deg", 0.5f).f("max_fin_deg", 10.0f)
+                  .f("min_speed_mps", 8.0f).f("target_e_m", 25.5f)
+                  .f("target_n_m", -30.25f).f("target_alt_m", 250.0f)
+                  .u("coast_delay_ms", 500).u("enable", 1).u("target_mode", 1)
+                  .f("kp_pos_per_s2", 0.05f).f("kd_vel_per_s", 0.4f)
+                  .u("guidance_law", 1).done(),
+              "GuidanceConfigData: first 36 bytes FROZEN, append-only (#534); "
+              "a 45-B-era FC rejects a 36-B frame — ship in lockstep");
+    }
+
+    {
+        FinConfigData f{};
+        f.azimuth_deg[0] = 0.0f; f.azimuth_deg[1] = 90.0f;
+        f.azimuth_deg[2] = 180.0f; f.azimuth_deg[3] = 270.0f;
+        f.reverse_mask = 0x05; f.roll_reverse_mask = 0x02;
+        b.add("commands", "cmd66_fin_18.bin", cmd(66, bytesOf(f)),
+              Json().u("cmd", 66)
+                  .raw("azimuth_deg", "[0,90,180,270]")
+                  .u("reverse_mask", 5).u("roll_reverse_mask", 2).done(),
+              "FinConfigData");
+    }
+
+    b.add("commands", "cmd67_imurate_2.bin", cmd(67, bytesOf(ImuRateConfigData{1920})),
+          Json().u("cmd", 67).u("rate_hz", 1920).done(),
+          "ImuRateConfigData; valid values 960/1920/3840");
+
+    {
+        // OTA_BEGIN: [target u8][size u32 LE][sha256 32 B]; not a header struct
+        // (lives in TR_BLE_To_APP.cpp) — layout pinned here.
+        std::vector<uint8_t> p{1};  // target: 1 = FC via relay
+        const uint32_t size = 1234567;
+        p.push_back(size & 0xFF); p.push_back((size >> 8) & 0xFF);
+        p.push_back((size >> 16) & 0xFF); p.push_back((size >> 24) & 0xFF);
+        std::string sha;
+        for (int i = 0; i < 32; ++i) {
+            p.push_back(static_cast<uint8_t>(i));
+            char h[3];
+            std::snprintf(h, sizeof(h), "%02x", i);
+            sha += h;
+        }
+        b.add("commands", "cmd70_otabegin_37.bin", cmd(70, p),
+              Json().u("cmd", 70).u("target", 1).u("size", size).str("sha256_hex", sha).done(),
+              "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp");
+    }
+}
+
+}  // namespace
+
+FixtureMap generate() {
+    if (!hostIsLittleEndian()) {
+        // Struct byte images would not be the wire format on a BE host.
+        return {};
+    }
+    Builder b;
+    buildLogframes(b);
+    buildFramed(b);
+    buildFileops(b);
+    buildCommands(b);
+
+    // Manifest last: lists every fixture (sidecars excluded — they pair 1:1).
+    const std::string manifest =
+        "{\n \"format\": 1,\n \"note\": \"generated by wire_fixture_gen — do not edit; "
+        "regen via cmake --build <build> --target regen-wire-fixtures\",\n \"fixtures\": [" +
+        b.manifest + "\n ]\n}\n";
+    b.out["manifest.json"] = strBytes(manifest);
+    return b.out;
+}
+
+}  // namespace tr_wire_fixtures

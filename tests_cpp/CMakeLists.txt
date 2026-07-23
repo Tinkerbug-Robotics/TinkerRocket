@@ -568,3 +568,47 @@ target_include_directories(test_sim_sensor_model PRIVATE
 )
 target_link_libraries(test_sim_sensor_model GTest::gtest_main)
 gtest_discover_tests(test_sim_sensor_model)
+
+# ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
+# Golden-vector generation from the REAL packed structs: wire_fixture_gen
+# writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness
+# fails CI whenever the committed bytes drift from what the current header
+# would generate.  The Swift and Kotlin golden walks consume the same files.
+set(WIRE_FIXTURES_SRCS
+    wire_fixtures_lib.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+set(WIRE_FIXTURES_INCLUDES
+    ${SHIM_DIR}   # Must come first so Arduino.h resolves to our shim
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/CRC
+)
+
+add_executable(wire_fixture_gen wire_fixture_gen_main.cpp ${WIRE_FIXTURES_SRCS})
+target_include_directories(wire_fixture_gen PRIVATE ${WIRE_FIXTURES_INCLUDES})
+target_compile_definitions(wire_fixture_gen PRIVATE
+    TR_WIRE_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/wire"
+)
+
+# Convenience: cmake --build <build> --target regen-wire-fixtures
+add_custom_target(regen-wire-fixtures
+    COMMAND wire_fixture_gen
+    DEPENDS wire_fixture_gen
+    COMMENT "Regenerating tests_cpp/fixtures/wire/ from RocketComputerTypes.h"
+)
+
+add_executable(test_wire_fixture_freshness
+    test_wire_fixture_freshness.cpp ${WIRE_FIXTURES_SRCS})
+target_include_directories(test_wire_fixture_freshness PRIVATE ${WIRE_FIXTURES_INCLUDES})
+target_compile_definitions(test_wire_fixture_freshness PRIVATE
+    TR_WIRE_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/wire"
+)
+target_link_libraries(test_wire_fixture_freshness GTest::gtest_main)
+gtest_discover_tests(test_wire_fixture_freshness)

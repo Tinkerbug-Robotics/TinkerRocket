@@ -1,0 +1,16 @@
+{
+ "cmd": 65,
+ "nav_gain": 3.5,
+ "max_accel_mps2": 30,
+ "accel_to_fin_deg": 0.5,
+ "max_fin_deg": 10,
+ "min_speed_mps": 8,
+ "target_e_m": 25.5,
+ "target_n_m": -30.25,
+ "target_alt_m": 250,
+ "coast_delay_ms": 500,
+ "enable": 1,
+ "target_mode": 1,
+ "kp_pos_per_s2": 0.0500000007,
+ "kd_vel_per_s": 0.400000006,
+ "guidance_law": 1}

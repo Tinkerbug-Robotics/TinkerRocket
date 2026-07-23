@@ -1,0 +1,7 @@
+{
+ "cmd": 10,
+ "freq_mhz": 903,
+ "bw_khz": 250,
+ "sf": 9,
+ "cr": 5,
+ "tx_pwr_dbm": -3}
