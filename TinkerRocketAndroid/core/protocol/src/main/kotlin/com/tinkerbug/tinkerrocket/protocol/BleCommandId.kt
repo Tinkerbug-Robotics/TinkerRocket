@@ -19,6 +19,12 @@ package com.tinkerbug.tinkerrocket.protocol
  * Payload layouts are pinned byte-exactly by tests_cpp/fixtures/wire/commands/.
  */
 public object BleCommandId {
+    // Camera toggle. Direct link: bare cmd 1. BS link: relayed with an
+    // explicit desired-state byte computed from the FOCUSED rocket's
+    // telemetry (#390 — the legacy broadcast keyed off whichever rocket was
+    // heard last).
+    public const val CAMERA_TOGGLE: Int = 1
+
     // File operations (sent as raw writes in iOS — Data([N, ...]), not
     // sendCommand; the checker's KNOWN_RAW_WRITE_CMDS covers them).
     public const val FILE_LIST: Int = 2            // [page u8]
@@ -28,6 +34,7 @@ public object BleCommandId {
     // Simulated launch (sent from SimulationView on iOS).
     public const val SIM_CONFIG: Int = 5           // SimConfigData 16 B
     public const val SIM_START: Int = 6
+    public const val SIM_STOP: Int = 7
 
     public const val POWER_TOGGLE: Int = 8         // BLIND toggle — UI gate #377
     public const val TIME_SYNC: Int = 9            // [year u16][mo][d][h][m][s] UTC
@@ -36,8 +43,11 @@ public object BleCommandId {
     public const val SERVO_CONFIG: Int = 12        // ServoConfigData 22 B (#267)
     public const val PID_CONFIG: Int = 13          // PIDConfigData 20 B
     public const val SERVO_ENABLE: Int = 14        // [bool]
+    public const val GROUND_TEST_START: Int = 15
+    public const val GROUND_TEST_STOP: Int = 16
     public const val HOP_DISABLE_BS: Int = 17      // [bool] — BS only
     public const val REQUEST_CONFIG: Int = 20
+    public const val SENSOR_CAL_RUN: Int = 21      // on-pad gyro+high-g cal, ~12 s
     public const val GAIN_SCHED_ENABLE: Int = 22   // [bool]
     public const val TOGGLE_LOGGING: Int = 23
     public const val SERVO_TEST: Int = 24          // ServoTestAnglesData 8 B

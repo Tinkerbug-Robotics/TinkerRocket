@@ -22,13 +22,24 @@ branches, not constants.  Grepping the chain is the maintainable option.
 
 Why per-device and not one global space: the app talks to EITHER an OC or a
 BS, so the two command spaces are independent.  cmd 50 is "mag-cal start" to
-the OC but "relay to rocket" to the BS; that overlap is correct.  The Swift
-app therefore mixes both spaces and is reported for information only -- the
-firmware dispatch is the authority where a duplicate actually causes a bug.
+the OC but "relay to rocket" to the BS; that overlap is correct.  The apps
+therefore mix both spaces; the firmware dispatch is the authority where a
+duplicate actually causes a bug.
+
+App-parity check (android-port plan section 2.2): the iOS app's literal
+send(Raw)Command numbers -- swept across ALL app Swift files, since
+SimulationView sends cmds 5/6 itself -- plus the KNOWN_RAW_WRITE_CMDS
+(file ops sent as raw Data([N, ...]) writes the regex cannot see) must
+EXACTLY equal the Kotlin BleCommandId const-val set.  A command added to one
+app but not the other is the new silent-drift failure mode a second app
+introduces; this makes it a hard CI failure.  While Android is mid-port,
+ALLOWED_DIVERGENCE holds the burn-down list.  Every app number must also
+exist in some firmware dispatch (OC, BS, or the OTA trio handled inside
+TR_BLE_To_APP.cpp) -- the "app sends a number nobody handles" hole.
 
 Usage (runs from anywhere):
     python3 tools/check_ble_command_ids.py
-Exit 0 = OK, exit 1 = duplicate (or unresolved RHS) found.
+Exit 0 = OK, exit 1 = duplicate / unresolved RHS / app-parity failure.
 """
 
 import re
@@ -42,7 +53,35 @@ DISPATCHES = [
     ("Out Computer", REPO / "tinkerrocket-idf/projects/out_computer/main/main.cpp"),
     ("Base Station", REPO / "tinkerrocket-idf/projects/base_station/main/main.cpp"),
 ]
-SWIFT = REPO / "TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift"
+SWIFT_APP_DIR = REPO / "TinkerRocketApp/TinkerRocketApp"
+KOTLIN = (
+    REPO / "TinkerRocketAndroid/core/protocol/src/main/kotlin/"
+    "com/tinkerbug/tinkerrocket/protocol/BleCommandId.kt"
+)
+
+# File-op commands sent as raw `Data([N, ...])` + writeValue in
+# BLEDevice.swift (requestFileList / deleteFile / downloadFile) -- invisible
+# to SWIFT_RE.  If a new command is ever added via a raw write instead of
+# send(Raw)Command, it must be added here or the parity check will (rightly)
+# scream.
+KNOWN_RAW_WRITE_CMDS = {2, 3, 4}
+
+# Dispatched inside TR_BLE_To_APP.cpp (OTA begin/finish/abort), not the
+# main.cpp chains grepped above -- legitimate app commands with no
+# `ble_cmd ==` branch.
+BLE_TO_APP_CMDS = {70, 71, 72}
+
+# Burn-down list for the Android port: app-command numbers allowed to differ
+# between Swift and Kotlin while a feature is mid-port.  Every entry needs a
+# trailing comment naming the feature; the list must trend to empty.
+ALLOWED_DIVERGENCE: set[int] = set()
+
+# Guard-the-guard: SWIFT_RE only sees integer literals at call sites.  If a
+# refactor moved the Swift app to named constants, the extracted set would
+# silently shrink and the parity diff would degrade to noise.  The app has
+# ~50 distinct literal command numbers; well under that means the extraction
+# broke, not the protocol.
+MIN_SWIFT_DISTINCT = 40
 
 # `static constexpr uint8_t NAME = 0xNN;`  /  `= 17;`
 CONST_RE = re.compile(
@@ -52,6 +91,10 @@ CONST_RE = re.compile(
 BLE_CMD_RE = re.compile(r"ble_cmd\s*==\s*(0[xX][0-9A-Fa-f]+|\d+|[A-Za-z_]\w*)")
 # Swift senders: sendCommand(N) / sendRawCommand(N, ...)
 SWIFT_RE = re.compile(r"send(?:Raw)?Command\(\s*(\d+)")
+# Kotlin command table: `const val NAME: Int = N` (BleCommandId.kt only).
+KOTLIN_CONST_RE = re.compile(
+    r"const\s+val\s+(\w+)(?:\s*:\s*Int)?\s*=\s*(0[xX][0-9A-Fa-f]+|\d+)"
+)
 
 NUMERIC_RE = re.compile(r"\A(?:0[xX][0-9A-Fa-f]+|\d+)\Z")
 
@@ -128,22 +171,89 @@ def check_dispatch(name, path, consts):
     return failed, out
 
 
-def swift_cross_reference(oc_values):
-    """Informational only: list the app's command numbers vs the OC dispatch."""
-    out = ["App cross-reference (informational, not enforced):"]
-    if not SWIFT.exists():
-        out.append(f"  (skipped: {SWIFT} not found)")
-        return out
-    rel = SWIFT.relative_to(REPO)
-    nums = sorted({int(m.group(1)) for m in SWIFT_RE.finditer(SWIFT.read_text())})
-    out.append(f"  {rel}: {len(nums)} distinct send(Raw)Command numbers")
-    not_oc = [n for n in nums if n not in oc_values]
-    if not_oc:
+def collect_swift_commands():
+    """Literal send(Raw)Command numbers across the whole iOS app tree."""
+    nums = set()
+    files = 0
+    for path in sorted(SWIFT_APP_DIR.rglob("*.swift")):
+        found = {int(m.group(1)) for m in SWIFT_RE.finditer(path.read_text())}
+        if found:
+            files += 1
+            nums |= found
+    return nums, files
+
+
+def collect_kotlin_commands():
+    """const-val values from the single mandated Kotlin command table."""
+    if not KOTLIN.exists():
+        return None
+    return {
+        int(m.group(2), 0) for m in KOTLIN_CONST_RE.finditer(KOTLIN.read_text())
+    }
+
+
+def app_parity_check(oc_values, bs_values):
+    """HARD check: Swift command set == Kotlin command set, and every app
+    number is handled by some firmware dispatch.  Returns (failed, lines)."""
+    out = ["App parity (Swift <-> Kotlin <-> firmware, enforced):"]
+    failed = False
+
+    swift_nums, files = collect_swift_commands()
+    out.append(
+        f"  Swift: {len(swift_nums)} distinct literal numbers across {files} files"
+        f" + raw-write cmds {sorted(KNOWN_RAW_WRITE_CMDS)}"
+    )
+    if len(swift_nums) < MIN_SWIFT_DISTINCT:
+        failed = True
         out.append(
-            "  not in the OC ble_cmd dispatch (expected: base-station / relay / "
-            "OTA / out-of-band handlers) -> " + ", ".join(map(str, not_oc))
+            f"  FAIL: only {len(swift_nums)} distinct Swift literals found "
+            f"(< {MIN_SWIFT_DISTINCT}).  Either commands moved behind named "
+            "constants (teach SWIFT_RE the new shape) or the extraction broke."
         )
-    return out
+    swift_all = swift_nums | KNOWN_RAW_WRITE_CMDS
+
+    kotlin_nums = collect_kotlin_commands()
+    if kotlin_nums is None:
+        failed = True
+        out.append(f"  FAIL: Kotlin command table missing at {KOTLIN.relative_to(REPO)}")
+        return failed, out
+    out.append(f"  Kotlin: {len(kotlin_nums)} distinct const-val values (BleCommandId.kt)")
+
+    only_swift = (swift_all - kotlin_nums) - ALLOWED_DIVERGENCE
+    only_kotlin = (kotlin_nums - swift_all) - ALLOWED_DIVERGENCE
+    if only_swift:
+        failed = True
+        out.append(
+            "  FAIL: in Swift but not Kotlin -> "
+            + ", ".join(map(str, sorted(only_swift)))
+            + "  (add to BleCommandId.kt, or to ALLOWED_DIVERGENCE with a comment)"
+        )
+    if only_kotlin:
+        failed = True
+        out.append(
+            "  FAIL: in Kotlin but not Swift -> "
+            + ", ".join(map(str, sorted(only_kotlin)))
+            + "  (missing Swift sender, or stale Kotlin entry)"
+        )
+    if ALLOWED_DIVERGENCE:
+        out.append(
+            "  allowed divergence (burn-down): "
+            + ", ".join(map(str, sorted(ALLOWED_DIVERGENCE)))
+        )
+
+    handled = oc_values | bs_values | BLE_TO_APP_CMDS
+    unhandled = sorted((swift_all | kotlin_nums) - handled)
+    if unhandled:
+        failed = True
+        out.append(
+            "  FAIL: app command(s) with no firmware handler (not in OC or BS "
+            "dispatch, not in the TR_BLE_To_APP OTA trio) -> "
+            + ", ".join(map(str, unhandled))
+        )
+
+    if not failed:
+        out.append("  -> OK (Swift == Kotlin, all numbers firmware-handled)")
+    return failed, out
 
 
 def main():
@@ -154,25 +264,34 @@ def main():
 
     print("=== BLE command-number uniqueness guard ===\n")
     any_failed = False
-    oc_values = set()
+    dispatch_values = {}
     for name, path in DISPATCHES:
         failed, lines = check_dispatch(name, path, consts)
         any_failed = any_failed or failed
         print("\n".join(lines))
         print()
-        if name == "Out Computer" and path.exists():
+        values = set()
+        if path.exists():
             for m in BLE_CMD_RE.finditer(path.read_text()):
                 v = resolve(m.group(1), consts)
                 if v is not None:
-                    oc_values.add(v)
+                    values.add(v)
+        dispatch_values[name] = values
 
-    print("\n".join(swift_cross_reference(oc_values)))
+    parity_failed, lines = app_parity_check(
+        dispatch_values["Out Computer"], dispatch_values["Base Station"]
+    )
+    any_failed = any_failed or parity_failed
+    print("\n".join(lines))
     print()
 
     if any_failed:
-        print("RESULT: FAIL -- fix the duplicate/unresolved command number(s) above.")
+        print("RESULT: FAIL -- fix the finding(s) above.")
         return 1
-    print("RESULT: PASS -- every device's ble_cmd dispatch is internally unique.")
+    print(
+        "RESULT: PASS -- dispatches internally unique; Swift and Kotlin "
+        "command sets match and every number has a firmware handler."
+    )
     return 0
 
 
