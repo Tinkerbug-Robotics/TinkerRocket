@@ -109,7 +109,8 @@ void GpsInsEKF::initCore(EkfIMUData imu_data,
     // the physical envelope, and start the health counters clean.
     gbias_gate_trips_ = 0;
     gbias_clip_count_ = 0;
-    gbias_gate_hold_until_us_ = 0;
+    gbias_gate_armed_   = false;   // #572: trip-time + armed flag (wrap-safe hold)
+    gbias_gate_trip_us_ = 0;
     wBias_rps_[0]=wMeas[0]; wBias_rps_[1]=wMeas[1]; wBias_rps_[2]=wMeas[2];
     clampGyroBias();
 
