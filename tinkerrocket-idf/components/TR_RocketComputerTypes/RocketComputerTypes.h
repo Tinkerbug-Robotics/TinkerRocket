@@ -2160,6 +2160,11 @@ typedef struct __attribute__((packed))
 } FinConfigData;
 static_assert(sizeof(FinConfigData) == 18, "FinConfigData must be 18 bytes");
 
+// UNIT TRAP: this struct is the OC→FC I2C frame and the sim's internal config —
+// mass in KILOGRAMS.  The BLE cmd-5 payload the app sends has the same field
+// order but its first float is mass in GRAMS; the OC relay handlers (BLE and
+// LoRa uplink, out_computer main.cpp) divide by 1000 when building this struct.
+// Never memcpy a raw cmd-5 payload into SimConfigData.
 typedef struct __attribute__((packed))
 {
     float mass_kg;
@@ -2171,7 +2176,8 @@ static_assert(sizeof(SimConfigData) == 16, "SimConfigData must be 16 bytes");
 // #572: field-order pin — see PIDConfigData.
 static_assert(offsetof(SimConfigData, mass_kg) == 0 && offsetof(SimConfigData, thrust_n) == 4 &&
               offsetof(SimConfigData, burn_time_s) == 8 && offsetof(SimConfigData, descent_rate_mps) == 12,
-              "SimConfigData field order is wire ABI (app hand-packs it)");
+              "SimConfigData field order matches the cmd-5 BLE payload (app hand-packs it), "
+              "but the BLE mass field is grams — OC converts (see unit trap above)");
 
 typedef struct __attribute__((packed))
 {
