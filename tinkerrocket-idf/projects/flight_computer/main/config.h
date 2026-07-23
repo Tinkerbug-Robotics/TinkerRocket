@@ -130,7 +130,9 @@ struct config : board_pins
     // One shared arming FET feeds all four squib drivers. ARM is raised
     // only momentarily — for the PRELAUNCH continuity check and again
     // during a fire pulse — never latched in flight.
-    static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 500;
+    // E-matches commit in <10 ms; 200 ms is ignition margin while bounding
+    // the I2t a shorted match can dump into the channel FET on 2S.
+    static constexpr uint32_t PYRO_FIRE_DURATION_MS    = 200;
     // Time between raising ARM and reading CONT / pulsing FIRE, giving
     // the upstream arming FET its turn-on settle margin.
     static constexpr uint32_t PYRO_ARM_SETTLE_MS       = 10;
