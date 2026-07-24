@@ -4,7 +4,7 @@ An open source hardware and software full featured flight computer with out of t
 
 | | |
 |---|---|
-| **High-rate logging** | IMU at a configurable 1, 2, or 4 kHz, written straight to onboard NAND |
+| **High-rate logging** | Full sensor suite data logging at configurable rates up to 4 kHz |
 | **Remote power switch** | Built-in low-power 'WiFi' switch — no through-wall switch to drill for. ~1 mA standby, weeks on a 600 mAh pack |
 | **Four pyro channels** | Fully isolated, with continuity monitoring and configurable triggers |
 | **Camera control** | RunCam Split 4 and 'naked' GoPro Hero 10 Black — power and recording, remotely over LoRa |
