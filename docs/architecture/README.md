@@ -58,6 +58,33 @@ sources that define it, and CI re-checks it.
 python3 tools/gen_protocol_reference.py
 ```
 
+## What CI enforces
+
+The `Docs` workflow runs on **every** push and pull request — it is the only
+workflow here without a path filter, because documentation goes stale as a side
+effect of changes anywhere, and a filter listing everything that could invalidate
+a doc is the same list as "everything".
+
+It checks two things:
+
+| | |
+|---|---|
+| **Generated artifacts** | `gen_section_index.py --check` and `gen_protocol_reference.py --check` — the committed maps and protocol tables must match the sources they were extracted from |
+| **Prose** | [`tools/check_docs.py`](../../tools/check_docs.py) — links resolve, the ESP-IDF version matches the one CI builds with, the workflow list is complete, and struct sizes quoted in the README match the header's `static_assert`s |
+
+Every prose check exists because that exact mistake was found in the README on
+2026-07-24: three image tags pointing at files that were never added, an ESP-IDF
+version two majors behind, a CI list naming four of seven workflows, and two
+wire sizes that had been wrong since the structs grew.
+
+What CI cannot check is whether the prose is still *true* — that a described
+mechanism still works the way the page says. Nothing catches that but reading it,
+so when you change how something works, read its page.
+
+```bash
+python3 tools/check_docs.py
+```
+
 ## Conventions
 
 - **Audience is layered.** The body of each page assumes general embedded and rocketry
