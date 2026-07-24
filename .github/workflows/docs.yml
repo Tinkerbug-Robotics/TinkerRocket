@@ -1,53 +1,50 @@
 name: Docs
 
-# Guards the generated firmware section maps against drift.
+# Documentation checks. Two kinds:
 #
-# docs/architecture/generated/*-map.md is produced from the `// SECTION:` banners
-# in each firmware's main.cpp. A hand-maintained line-range table would be stale
-# the first time anyone inserted a function, and a stale navigation map is worse
-# than none -- it sends the reader to the wrong place with full confidence.
+#   1. Generated artifacts (section maps, protocol reference) must match the
+#      sources they were extracted from. Each generator re-runs with --check.
+#   2. Hand-written prose must agree with the source on the facts a machine can
+#      verify -- links resolve, the IDF version matches CI, the workflow list is
+#      complete, quoted struct sizes match the wire.
 #
-# So the map is generated and this job re-runs the generator and fails if the
-# committed output differs. Adding or moving a section means re-running
-# `python3 tools/gen_section_index.py` and committing the result.
+# DELIBERATELY NOT PATH-FILTERED. Every other workflow in this repo is, which
+# is correct for them -- there is no point compiling firmware for a README typo.
+# It is wrong here. Documentation drifts *because of* changes elsewhere: the
+# README's ESP-IDF version went stale when the toolchain moved, its struct sizes
+# went stale when a field was added, its workflow list went stale when workflows
+# were added. A path filter listing "everything that could invalidate the docs"
+# is the same unbounded list as "everything", and PR #594 -- a README-only
+# change -- ran no checks at all because nothing matched it.
+#
+# The whole job is ~15 s of pure-stdlib Python, so running it on every push and
+# every PR costs less than maintaining the filter would.
+#
+# This is also why the docs checks are NOT duplicated into the other six
+# workflows: one always-on job covers every change, and a check that lives in
+# one place cannot fall out of sync with copies of itself.
 
 on:
   push:
-    paths:
-      - 'tinkerrocket-idf/projects/flight_computer/main/main.cpp'
-      - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
-      - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
-      - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
-      - 'docs/architecture/generated/**'
-      - 'tools/gen_section_index.py'
-      - 'tools/gen_protocol_reference.py'
-      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
-      - 'tinkerrocket-idf/components/TR_I2C_Interface/TR_I2C_Interface.h'
-      - 'tests_cpp/test_rocket_computer_types.cpp'
-      - '.github/workflows/docs.yml'
   pull_request:
-    paths:
-      - 'tinkerrocket-idf/projects/flight_computer/main/main.cpp'
-      - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
-      - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
-      - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
-      - 'docs/architecture/generated/**'
-      - 'tools/gen_section_index.py'
-      - 'tools/gen_protocol_reference.py'
-      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
-      - 'tinkerrocket-idf/components/TR_I2C_Interface/TR_I2C_Interface.h'
-      - 'tests_cpp/test_rocket_computer_types.cpp'
-      - '.github/workflows/docs.yml'
 
 jobs:
-  section-index:
+  docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Pure stdlib (re, argparse, pathlib); ubuntu-latest ships python3.
+      # Every step below is pure stdlib (re, argparse, pathlib); ubuntu-latest
+      # ships python3, so there is nothing to install.
+
       - name: Check the generated section maps match the firmware sources
         run: python3 tools/gen_section_index.py --check
 
       - name: Check the protocol reference matches the wire definitions
         run: python3 tools/gen_protocol_reference.py --check
+
+      # Runs even if a generator check above failed, so one PR surfaces every
+      # documentation problem at once instead of one per push.
+      - name: Check the prose agrees with the source
+        if: '!cancelled()'
+        run: python3 tools/check_docs.py
