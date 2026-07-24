@@ -11,13 +11,13 @@ written to be read start to finish.
 
 | Page | Covers | Status |
 |---|---|---|
+| [Flight Computer](flight-computer.md) | ESP32-P4 — sensors, EKF, control laws, pyro | written |
 | [Out Computer](out-computer.md) | ESP32-S3 — storage, radios, power rail, BLE | written |
-| Flight Computer | ESP32-P4 — sensors, EKF, control laws, pyro | not written |
 | Base Station | ESP32-S3 — LoRa receive, multi-rocket tracker, SD log | not written |
 | iOS App | SwiftUI — fleet model, telemetry, config, flight logs | not written |
 | Protocols | frame formats, message types, LoRa framing, BLE commands | not written |
 
-The Out Computer page is the pilot. It sets the template — audience, depth, diagram
+The Out Computer page was the pilot. It sets the template — audience, depth, diagram
 style, and the "Gotchas" section that carries the hard-won details — for the rest.
 
 ## The section map
@@ -46,6 +46,9 @@ the generator until they get banners.
 - **Audience is layered.** The body of each page assumes general embedded and rocketry
   familiarity but not knowledge of this project. The "Gotchas" section at the end is
   where the expensive, non-obvious details live.
+- **Write "Base Station" out in full.** Never abbreviate it — the two-letter form means
+  something else to every reader. "FC" and "OC" are fine once introduced; the code uses
+  the short form freely and that is left alone.
 - **Diagrams are Mermaid**, rendered natively by GitHub. No build step, no image
   assets to keep in sync.
 - **No line-number links in prose.** They rot. Prose links to a file or to a named

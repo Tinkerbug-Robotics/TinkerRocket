@@ -12,9 +12,9 @@ to NAND flash. It does no flight math of its own.
 
 ## Why the split
 
-The rocket carries two processors. The Flight Computer (FC) is an ESP32-P4 running the
-sensor loop, the EKF, and the control laws; the Out Computer is an ESP32-S3 running
-everything that touches the outside world.
+The rocket carries two processors. The [Flight Computer](flight-computer.md) (FC) is an
+ESP32-P4 running the sensor loop, the EKF, and the control laws; the Out Computer is an
+ESP32-S3 running everything that touches the outside world.
 
 The division exists because those two jobs have incompatible timing. Flight math wants
 a loop that never blocks — a 200 ms stall in the EKF is a lost flight. Storage and
@@ -89,8 +89,8 @@ The parser outranks the main loop, so incoming telemetry preempts everything els
 core 1. That is the right priority order, and it is also why anything slow inside
 `loop_oc()` is a problem: it cannot starve the parser, but it *can* starve LoRa
 transmits, BLE service, and the FC's I2C polls. The loop is wrapped in
-`LOOP_STALL_INSTR` macros that log any call exceeding 100 ms, which is how the periodic-stall bug in #90
-was tracked down.
+`LOOP_STALL_INSTR` macros that log any call exceeding 100 ms, which is how the
+periodic-stall bug in #90 was tracked down.
 
 ## How data moves
 
@@ -109,15 +109,15 @@ flowchart TB
     end
 
     PHONE["<b>iOS app</b>"]
-    BS["<b>Base Station</b>"]
+    GROUND["<b>Base Station</b>"]
 
     FC -->|"I2S DMA, 22 kHz"| CB --> RING --> PARSE
     PARSE --> CACHE
     PARSE --> LOG
-    CACHE -->|"LoRa 915 MHz, 2 Hz"| BS
+    CACHE -->|"LoRa 915 MHz, 2 Hz"| GROUND
     CACHE -->|"BLE notify"| PHONE
     PHONE -->|"BLE cmd"| CMDQ
-    BS -->|"LoRa uplink"| CMDQ
+    GROUND -->|"LoRa uplink"| CMDQ
     CMDQ -->|"I2C, FC polls"| FC
     LOG -->|"BLE file download"| PHONE
 ```
@@ -281,5 +281,7 @@ dropped everything. If you add a schema version bump, be sure which side you are
   `TR_I2C_Interface`, `TR_BLE_To_APP`, `TR_RadioLink`
 - Shared wire contract: [`RocketComputerTypes.h`](../../tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h)
 
-Pages for the Flight Computer, Base Station, iOS app, and the protocol reference are
-not written yet — see [the index](README.md) for status.
+- [Flight Computer](flight-computer.md) — what produces the telemetry this board ingests
+
+Base Station, iOS app, and protocol-reference pages are not written yet — see
+[the index](README.md) for status.
