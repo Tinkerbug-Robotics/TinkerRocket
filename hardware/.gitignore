@@ -31,3 +31,11 @@ fp-info-cache
 # Netlist/BOM/plot exports — regenerate with kicad-cli, see README.
 *.net
 *.xml
+
+# Fab output. Generated from the board at order time; the git tag on that
+# commit is the record of what was sent, not a checked-in copy. The empty
+# gerbers/ directories are kept as the conventional export target.
+# (A pattern with an embedded slash is anchored to this file's directory, so
+# `gerbers/*` alone would only match hardware/gerbers/ — hence the `**/`.)
+**/gerbers/*
+!**/gerbers/.gitkeep

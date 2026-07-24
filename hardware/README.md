@@ -81,9 +81,10 @@ kicad-cli sch export netlist -o /tmp/after.net hardware/rocket-computer/rocket-c
 
 ### 4. Sending a board to fab
 
-Regenerate the fab package from the committed board rather than trusting the
-checked-in `gerbers/` folder, then tag the commit so the revision is
-recoverable:
+Gerbers are **not** tracked — they are a pure function of the board file, and a
+checked-in copy only ever drifts out of sync with it. Each board keeps an empty
+`gerbers/` directory as the export target. Generate the package, then tag the
+commit so the revision stays recoverable:
 
 ```bash
 kicad-cli pcb export gerbers -o hardware/rocket-computer/gerbers/ hardware/rocket-computer/rocket-computer.kicad_pcb
@@ -98,19 +99,20 @@ gets you exactly what was fabbed.
 
 ## What is tracked
 
-Design sources (`.kicad_pro`, `.kicad_pcb`, `.kicad_sch`), the fab output in
-`gerbers/`, BOMs, and design review notes. Everything KiCad regenerates —
-autosave zips, `fp-info-cache`, `.kicad_prl` GUI state, STEP exports — is
-ignored; see [`.gitignore`](.gitignore).
+Design sources (`.kicad_pro`, `.kicad_pcb`, `.kicad_sch`), BOMs, and design
+review notes. Everything KiCad regenerates — gerbers, autosave zips,
+`fp-info-cache`, `.kicad_prl` GUI state, STEP exports — is ignored; see
+[`.gitignore`](.gitignore).
 
 ## Known issues in the imported data
 
 These are pre-existing problems in the source folders, carried over as-is
 rather than silently "fixed". Each is worth a look before the next respin.
 
-- **`rocket-computer/gerbers/` is mixed-revision.** The `.gbr` files are V9 but
-  the `-job.gbrjob` alongside them indexes `TinkerRocket Full V8-*.gbr`
-  filenames. Regenerate before relying on this package for fab.
+- **The original gerber folders had drifted from their boards** — the rocket
+  computer's held V9 `.gbr` files next to a `-job.gbrjob` indexing
+  `TinkerRocket Full V8-*.gbr`. That drift is the reason gerbers aren't
+  tracked here; regenerate at order time.
 - **Custom footprint library and 3D models are machine-local.** Boards
   reference `/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded
   Library Files/...` by absolute path (57 refs in the rocket computer alone).
