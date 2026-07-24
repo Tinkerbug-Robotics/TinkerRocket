@@ -1,3 +1,6 @@
+// ==========================================================================
+// SECTION: Includes, board selection, and compile-time configuration
+// ==========================================================================
 #include <TR_NVS.h>
 
 // Configuration Parameters
@@ -72,6 +75,9 @@ static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 // EKF timeUpdate()/measUpdate() allocate ~7.5 KB of temporary 15x15 matrices
 // on the stack.  The FreeRTOS task in app_main() is created with 16 KB.
 
+// ==========================================================================
+// SECTION: Sensor collector and hardware objects
+// ==========================================================================
 // IMU sensor data collection library (real hardware)
 SensorCollector sensor_collector_hw(config::ISM6HG256_CS,
                                     config::ISM6HG256_INT,
@@ -186,6 +192,9 @@ typedef struct
 static QueueHandle_t i2s_tx_queue = nullptr;
 static TaskHandle_t  i2s_sender_task_handle = nullptr;
 
+// ==========================================================================
+// SECTION: I2C link to the Out Computer
+// ==========================================================================
 // Cache for config frame bytes read in the same I2S transaction as the
 // OUT_STATUS_RESPONSE.  The ESP32 I2S slave hardware FIFO discards bytes
 // remaining after a master STOP, so both frames must be read in one shot.
@@ -261,6 +270,9 @@ static RocketState rocket_state = INITIALIZATION;
 // Cleared only at boot (static init) and on sim-completion re-arm.
 static bool post_flight_lockout = false;
 
+// ==========================================================================
+// SECTION: Command lockout and flight-state flags
+// ==========================================================================
 // Issue #216 — predicate used to gate ground-test / pyro-fire / servo-test
 // BLE commands.  We reject these from INFLIGHT (a launched rocket should
 // not be reachable from app-side test commands) AND from MAG_CALIBRATION
@@ -350,6 +362,10 @@ static bool landed_actions_done = false;
 static bool gopro_recording = false;
 static bool gopro_pulse_active = false;
 static uint32_t gopro_pulse_end_ms = 0;
+
+// ==========================================================================
+// SECTION: Camera phase state machines
+// ==========================================================================
 // Deferred camera-stop sequence (see cameraStop / serviceCameraStop).
 // Idle → DelayBeforeStop (30s post-LANDED) → for RunCam, RunCamToggleSent
 // (500ms after toggle, then power off) → Idle.
@@ -386,6 +402,10 @@ static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
 static bool use_angle_control = config::USE_ANGLE_CONTROL;
 static uint16_t roll_delay_ms = config::ROLL_CONTROL_DELAY_MS;
 static float kp_angle_rate_cap_dps = config::KP_ANGLE_RATE_CAP_DPS;
+
+// ==========================================================================
+// SECTION: Roll control: gains, PID, and roll profile
+// ==========================================================================
 static float kp_angle_outer = config::KP_ANGLE;  // outer angle-loop P-gain (runtime/app-overridable)
 static float integral_sep_threshold_dps = config::INTEGRAL_SEP_THRESHOLD_DPS;  // PID anti-windup threshold
 // --- Guidance (PN) state ---
@@ -483,6 +503,9 @@ static uint32_t blue_led_flash_end_ms = 0;
 static portMUX_TYPE pyro_spinlock = portMUX_INITIALIZER_UNLOCKED;
 static PyroConfigData pyro_config = {};  // zeroed = all four disabled
 
+// ==========================================================================
+// SECTION: Pyro channel state
+// ==========================================================================
 enum class PyroChState : uint8_t {
     Idle,       // no fire requested
     ArmSettle,  // ARM raised by this channel; waiting PYRO_ARM_SETTLE_MS
@@ -528,6 +551,9 @@ static uint32_t last_snapshot_ms = 0;         // rate-limit NVS writes to 10 Hz
 // lost all three early copies to the pre-#418 races).
 static uint8_t  settings_emit_count = 0;
 
+// ==========================================================================
+// SECTION: Flight snapshot (crash recovery)
+// ==========================================================================
 static uint32_t computeSnapshotCRC(const FlightSnapshotData& snap)
 {
     CRC32 crc;
@@ -623,6 +649,9 @@ static void clearFlightSnapshot()
                        sizeof(snap));
 }
 
+// ==========================================================================
+// SECTION: Reset-reason reporting
+// ==========================================================================
 static const char* resetReasonStr(esp_reset_reason_t r)
 {
     switch (r) {
@@ -640,6 +669,10 @@ static const char* resetReasonStr(esp_reset_reason_t r)
 enum class BootChirpPhase : uint8_t { Idle, GapAfterBeep1, WaitingBeep2End };
 static BootChirpPhase boot_chirp_phase = BootChirpPhase::Idle;
 static uint32_t boot_chirp_next_ms = 0;
+
+// ==========================================================================
+// SECTION: Servo control and config-frame reads
+// ==========================================================================
 static TR_ServoControl servo_control(config::SERVO_PIN_1,
                                      config::SERVO_PIN_2,
                                      config::SERVO_PIN_3,
@@ -830,6 +863,9 @@ static const uint8_t PYRO_CONT_PINS[4] = {
     config::PYRO3_CONT_PIN, config::PYRO4_CONT_PIN,
 };
 
+// ==========================================================================
+// SECTION: Pyro channels: init, safing, and servicing
+// ==========================================================================
 // Per-channel config accessors so the loop body stays uniform.
 static inline bool pyroChEnabled(int ch_idx)
 {
@@ -1115,6 +1151,9 @@ static void servicePyroChannels(uint32_t now_ms)
     }
 }
 
+// ==========================================================================
+// SECTION: Roll-profile waypoint lookup
+// ==========================================================================
 // ── Roll profile lookup ─────────────────────────────────────────────────────
 // Returns the desired (angle, mode) for the current flight time.
 // FlightSettingsData v4 semantics: the profile is pure (time, angle) waypoints —
@@ -1189,6 +1228,9 @@ static RollProfileQuery roll_profile_query(float t_flight_s)
     return out;
 }
 
+// ==========================================================================
+// SECTION: I2S transmit to the Out Computer
+// ==========================================================================
 static inline void i2sSendWithStats(uint8_t type, const uint8_t *payload, size_t len)
 {
     const esp_err_t err = i2s_stream.writeFrame(type, payload, len);
@@ -1257,6 +1299,9 @@ static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len
 static TR_OTA_Backend_esp fc_ota_backend;
 static TR_OTA_Receiver    fc_ota_receiver(fc_ota_backend);
 
+// ==========================================================================
+// SECTION: OTA relay receiver (image in over I2S)
+// ==========================================================================
 static void sendOtaRelayStatus(uint8_t state, uint8_t err, uint32_t bytes_written)
 {
     OtaRelayStatusData st;
@@ -1481,6 +1526,9 @@ static void fcRevertToTx()
     ESP_LOGW(TAG, "[OTA] I2S -> master TX (%s)", esp_err_to_name(e));
 }
 
+// ==========================================================================
+// SECTION: Board-to-rocket orientation
+// ==========================================================================
 // Apply a discrete board→rocket mounting orientation everywhere it matters:
 // the converter (rotates all vector sensors into rocket frame), the sim
 // collector (inverse, so synthesized sensor counts survive the forward
@@ -1614,6 +1662,9 @@ static void handleOrientationEstimate(const float up_rocket[3])
     }
 }
 
+// ==========================================================================
+// SECTION: Guidance configuration and flight settings
+// ==========================================================================
 // Push the guidance law, its gains and the horizontal aim point into the
 // guidance object.  ORDER IS LOAD-BEARING: configure()/configureStationKeep()
 // set mode_, and TR_GuidancePN consumes the aim point in MODE_STATION_KEEP
@@ -1761,6 +1812,9 @@ static void sendFlightSettings()
 
 static SemaphoreHandle_t i2c_bus_mutex = nullptr;
 
+// ==========================================================================
+// SECTION: I2S sender task
+// ==========================================================================
 // I2S sender task — dequeues telemetry and writes to I2S DMA.
 // When no frame is available, writes idle fill (zeros) to prevent the
 // I2S DMA from replaying stale data.  The OC's parser skips zero runs
@@ -1806,6 +1860,9 @@ static void i2sSenderTask(void *)
     }
 }
 
+// ==========================================================================
+// SECTION: Status LED
+// ==========================================================================
 static inline void triggerBlueLedFlash(uint32_t now_ms)
 {
     gpio_set_level((gpio_num_t)(config::BLUE_LED_PIN), 1);
@@ -1826,6 +1883,9 @@ static inline void serviceBlueLedFlash(uint32_t now_ms)
     }
 }
 
+// ==========================================================================
+// SECTION: Calibration status publishing
+// ==========================================================================
 // Issue #132 — publish a one-shot status frame built from whatever the
 // "mag_cal" NVS namespace currently holds.  Used by MAG_CAL_APPLY (after
 // persisting a pushed cal) and MAG_CAL_READ (pure query) so the app sees
@@ -1893,6 +1953,9 @@ static void publishSensorCalFromNVS()
     (void)enqueueI2STx(SENSOR_CAL_STATUS_MSG, buf, sizeof(buf));
 }
 
+// ==========================================================================
+// SECTION: Piezo buzzer
+// ==========================================================================
 static void piezoToggleCb(void *)
 {
     if (!piezo_wave_active)
@@ -1978,6 +2041,9 @@ static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms)
     }
 }
 
+// ==========================================================================
+// SECTION: Camera control (GoPro pulse, RunCam serial)
+// ==========================================================================
 // ── GoPro control (GPIO pulse on shutter pin) ──
 static inline void startGoProPulse(uint32_t now_ms)
 {
@@ -2294,6 +2360,9 @@ static inline void serviceCameraStart(uint32_t now_ms)
         camera_start_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
 }
 
+// ==========================================================================
+// SECTION: Boot chirp and heartbeat beep
+// ==========================================================================
 static inline void startBootReadyChirp(uint32_t now_ms)
 {
     if (!enable_sounds || !piezo_pwm_ready)
@@ -2367,6 +2436,9 @@ static inline void serviceHeartbeatBeep(uint32_t now_ms)
 // back. Mirrors the OC's maybeMarkOtaValid().
 static bool fc_ota_pending_verify = false;
 
+// ==========================================================================
+// SECTION: OTA boot validation
+// ==========================================================================
 static inline void fcMaybeMarkOtaValid()
 {
     if (!fc_ota_pending_verify) return;
@@ -2382,6 +2454,9 @@ static inline void fcMaybeMarkOtaValid()
     fc_ota_pending_verify = false;
 }
 
+// ==========================================================================
+// SECTION: Boot setup
+// ==========================================================================
 static void setup_fc()
 {
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4 may not auto-init)
@@ -3267,6 +3342,9 @@ static void setup_fc()
 
 }
 
+// ==========================================================================
+// SECTION: Simulator re-arm
+// ==========================================================================
 // #393: reset the flight state machine for a sim run.  Used on the sim START
 // edge (fresh run — the sim's equivalent of a reboot) and on an explicit sim
 // STOP (SIM_STOP_CMD → abort back to READY).  Deliberately NOT called on the
@@ -3333,6 +3411,9 @@ static void resetFlightStateForSim(const char* edge)
     ESP_LOGI(TAG, "[STATE] Sim %s -> READY", edge);
 }
 
+// ==========================================================================
+// SECTION: INFLIGHT entry
+// ==========================================================================
 // Loop is responsible for reading sensor data
 // INFLIGHT entry — everything that must happen exactly once at launch
 // (state flip, per-flight resets, EKF/guidance degraded-mode handling).
@@ -3464,6 +3545,9 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
                   from_state, (double)ground_pressure_pa);
 }
 
+// ==========================================================================
+// SECTION: Main loop
+// ==========================================================================
 static void loop_fc()
 {
     // Zero the IMU-queue drop gauge on the first pass: the poll task starts
@@ -3498,6 +3582,9 @@ static void loop_fc()
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 
+    // ==========================================================================
+    // SECTION: Sensor drain and conversion
+    // ==========================================================================
     // ### Read and Send Sensor Data ###
     // Poll as fast as possible so high-rate sensor frames are not dropped by
     // loop-period gating.
@@ -3636,6 +3723,9 @@ static void loop_fc()
                            SIZE_OF_GNSS_DATA);
     }
 
+    // ==========================================================================
+    // SECTION: Magnetometer calibration status
+    // ==========================================================================
     // Issue #96 — periodic mag-cal status frame.  5 Hz cadence in
     // SAMPLING; immediate publish on REVIEW/APPLIED/ABORTED transitions
     // (mag_cal_status_dirty).  Outside MAG_CALIBRATION the calibrator is
@@ -3737,6 +3827,9 @@ static void loop_fc()
         }
     }
 
+    // ==========================================================================
+    // SECTION: Flight logic: pressure altitude and orientation
+    // ==========================================================================
     // --- Flight logic update ---
     const uint32_t logic_now_us = time_us();
     if ((logic_now_us - last_flight_loop_update_time) >= flight_loop_period)
@@ -3852,6 +3945,9 @@ static void loop_fc()
                 }
             }
 
+            // ==========================================================================
+            // SECTION: EKF input, initialization, and update
+            // ==========================================================================
             // ── Build EKF input: IMU in FRD body frame ──
             // SensorConverter outputs FLU (X=Fwd, Y=Left, Z=Up).
             // EKF expects FRD (X=Fwd, Y=Right, Z=Down): negate Y and Z.
@@ -4268,6 +4364,9 @@ static void loop_fc()
             }
         }
 
+        // ==========================================================================
+        // SECTION: I2C status poll to the Out Computer
+        // ==========================================================================
         // Skip the status query during INFLIGHT — no app commands are
         // processed mid-flight.  I2C is now command-only (telemetry uses I2S)
         // Mutex protects the I2C bus from the sender task.
@@ -4430,6 +4529,9 @@ static void loop_fc()
             // the command dispatch block.
         }
 
+        // ==========================================================================
+        // SECTION: Command dispatch from the Out Computer
+        // ==========================================================================
         // Dedup: OutComputer repeats each command for 5 polls for I2C
         // reliability.  Process only the first delivery.  out_pending_command
         // mirrors the OC's reported command (set every poll above, including 0),
@@ -6019,6 +6121,9 @@ static void loop_fc()
             xSemaphoreGive(i2c_bus_mutex);
         }
 
+        // ==========================================================================
+        // SECTION: Kinematic checks and sensor health
+        // ==========================================================================
         // Kinematic checks.  Issue #216 — skip during MAG_CALIBRATION: the
         // user is physically tumbling the rocket on the bench, so a vigorous
         // shake would otherwise spike `accel_norm` past the launch threshold
@@ -6086,6 +6191,9 @@ static void loop_fc()
             }
         }
 
+        // ==========================================================================
+        // SECTION: Test modes (ground, servo, replay)
+        // ==========================================================================
         // #363 SAFETY: the state machine (and servicePyroChannels) live in the
         // `else` of the test-mode chain below, so a ground/servo/replay test
         // left active at launch would suppress PRELAUNCH->INFLIGHT and pyro
@@ -6212,6 +6320,10 @@ static void loop_fc()
         }
         else
         {
+
+        // ==========================================================================
+        // SECTION: Flight state machine
+        // ==========================================================================
         // #317: once a flight has landed, the computer is terminal until a
         // hardware reboot. Force LANDED so any transition a command or a
         // ground-handling re-trigger of launch-detect tries to make is overridden
@@ -6731,6 +6843,9 @@ static void loop_fc()
         }
         }
 
+        // ==========================================================================
+        // SECTION: Simulator re-arm and diagnostics
+        // ==========================================================================
         // ---- Re-arm on a NEW sim run, NOT when a sim ends (#317) ----
         // A sim flight that reaches LANDED must STAY landed — terminal, exactly
         // like real hardware — so the sim faithfully reproduces and can validate
@@ -6772,6 +6887,9 @@ static void loop_fc()
             }
         }
 
+        // ==========================================================================
+        // SECTION: Telemetry packing (NonSensorData)
+        // ==========================================================================
         // Publish non-sensor summary (SI -> packed) for downstream logging/telem.
         non_sensor_data.time_us = logic_now_us;
         // #529: achieved-EKF-cadence witness; stays 0 until the EKF initializes.
@@ -7024,6 +7142,9 @@ static void loop_fc()
     serviceCameraStart(now_ms_for_sound);
     serviceCameraStop(now_ms_for_sound);
 
+    // ==========================================================================
+    // SECTION: Periodic diagnostics
+    // ==========================================================================
     // --- Periodic poll-task timing diagnostics (once per second) ---
     {
         static uint32_t last_poll_diag_ms = 0;
@@ -7221,6 +7342,9 @@ static void loop_fc()
 
 /* ── ESP-IDF entry point ─────────────────────────────────── */
 
+// ==========================================================================
+// SECTION: FreeRTOS entry point
+// ==========================================================================
 extern "C" void app_main(void)
 {
     setup_fc();
