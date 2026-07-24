@@ -56,6 +56,12 @@ Finally, manage the flight data intuitively by uploading from the flight compute
                         └───────────────────────────────────┘
 ```
 
+### Deeper reading
+
+This README covers what the system is and how to build it. For how each board actually
+works — task model, data paths, state machines, and the non-obvious decisions — see
+**[docs/architecture/](docs/architecture/README.md)**.
+
 ## Hardware
 
 ### Sensors
