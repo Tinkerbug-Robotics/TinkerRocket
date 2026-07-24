@@ -1,3 +1,6 @@
+// ==========================================================================
+// SECTION: Includes, board selection, and compile-time configuration
+// ==========================================================================
 #include <compat.h>
 #include <cstring>
 #include <cmath>
@@ -71,6 +74,9 @@ static inline std::string itos(int v)
 #include <WireFormat.h>
 // FlightSimulator.h removed — sim now runs on FlightComputer via TR_Sensor_Collector_Sim
 
+// ==========================================================================
+// SECTION: OTA boot validation and rollback guard
+// ==========================================================================
 // OTA rollback gate (#8). True only between boot and the first successful
 // telemetry-while-connected event when we booted PENDING_VERIFY (i.e., a
 // fresh OTA image). On first hit we call esp_ota_mark_app_valid_cancel_rollback
@@ -94,6 +100,9 @@ static inline void maybeMarkOtaValid()
     g_ota_pending_verify = false;
 }
 
+// ==========================================================================
+// SECTION: Peripheral objects and flight-log storage
+// ==========================================================================
 static TR_I2C_Interface i2c_interface(config::I2C_ADDRESS);
 static bool i2c_slave_initialized = false;
 static TR_I2S_Stream i2s_stream;
@@ -398,6 +407,10 @@ static void flightlogEndFlight()
     // accumulate across reboots; deletion becomes an explicit BLE cmd 3
     // operation (re-backed on TR_FlightLog in Stage 3).
 }
+
+// ==========================================================================
+// SECTION: LoRa radio backend and shared device state
+// ==========================================================================
 static TR_BLE_To_APP ble_app("TinkerRocket");
 // Radio backend seam (#410): direct SPI LLCC68 (V7 boards) or the UART
 // radio-daughterboard modem (V8), selected by the board header. The
@@ -422,6 +435,9 @@ static constexpr float INA230_R_SHUNT_OHM = 0.002f;     // 2 mOhm
 static constexpr float INA230_CURRENT_LSB_A = 0.001f;    // 1 mA/bit
 static volatile uint8_t pending_out_command = 0U;  // command currently being SERVED to the FC
 
+// ==========================================================================
+// SECTION: FC command queue (OC -> FC over I2C)
+// ==========================================================================
 // ---- FC command queue (#366) -----------------------------------------------
 // The old single pending slot meant every setPendingCommand() overwrote the
 // previous one — the app's connect-time profile sync bursts ~13 commands
@@ -565,6 +581,9 @@ static RocketState latest_rocket_state = INITIALIZATION;
 static bool pwr_pin_on = false;              // Power rail state — starts OFF
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 
+// ==========================================================================
+// SECTION: LoRa frequency lock and channel hopping
+// ==========================================================================
 // Frequency is locked once the rocket enters flight (issue #71).  Any
 // Cmd 10 uplink received in flight is ignored, and the slow-rendezvous
 // recovery cycle is suppressed — we cannot afford to leave the operating
@@ -768,6 +787,9 @@ static inline float hopTargetFreqMHz()
     return lora_freq_mhz;
 }
 
+// ==========================================================================
+// SECTION: Cached configuration (NVS <-> FC <-> app)
+// ==========================================================================
 // Servo/PID config cache (mirrored from FlightComputer for BLE readback)
 static int16_t cfg_servo_bias1 = 0;
 static int16_t cfg_servo_hz    = 50;
@@ -941,6 +963,9 @@ static inline bool nsFlagSet(uint8_t flags, uint8_t mask)
     return (flags & mask) != 0U;
 }
 
+// ==========================================================================
+// SECTION: Battery sampling and state of charge
+// ==========================================================================
 // Read INA230 and populate latest_power_raw so that the existing telemetry
 // pipeline (BLE, LoRa, web) picks up the values automatically.
 // Uses triggered mode: fires one conversion (~0.7ms with 1 avg × 332us × 2ch),
@@ -1072,6 +1097,9 @@ static void readINA230Power()
 #endif
 #endif  // ESP_PLATFORM
 
+// ==========================================================================
+// SECTION: Clock sources, low-power mode, and boot USB-serial grace
+// ==========================================================================
 // ---------------------------------------------------------------------------
 //  Low-power mode helpers
 //  Called at boot and when power rail is turned OFF.
@@ -1281,6 +1309,9 @@ static void exitLowPowerMode()
     ESP_LOGI("PWR", "Full performance mode (%d MHz)", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
 }
 
+// ==========================================================================
+// SECTION: BLE connection-parameter policy
+// ==========================================================================
 // #519: both of these took a conn_handle argument and BOTH call sites passed a
 // literal 0 — while NimBLE had handed out handle 1. So every request failed with
 // "GAP update_params: connection not found; conn_handle=0x0000" and neither the
@@ -1391,6 +1422,9 @@ static void ensureFastLinkForTransfer()
              (unsigned long)ble_app.effectiveEventMs());
 }
 
+// ==========================================================================
+// SECTION: Derived telemetry (altitude and speed)
+// ==========================================================================
 static void updateDerivedAltitudeFromBMP()
 {
     if (!latest_bmp_valid)
@@ -1460,6 +1494,9 @@ static void updateDerivedSpeedFromNonSensor()
     }
 }
 
+// ==========================================================================
+// SECTION: IMU full-scale decode helpers
+// ==========================================================================
 static ISM6LowGFullScale decodeISM6LowGFS(uint8_t fs_g)
 {
     switch (fs_g)
@@ -1497,6 +1534,9 @@ static ISM6GyroFullScale decodeISM6GyroFS(uint16_t fs_dps)
     }
 }
 
+// ==========================================================================
+// SECTION: Ingest ring buffers and frame counters
+// ==========================================================================
 // I2S telemetry ring (high-volume, parsed by I2S receiver task)
 static constexpr size_t RX_STREAM_RING = 65536;
 static uint8_t rx_ring[RX_STREAM_RING];
@@ -1634,6 +1674,9 @@ static inline uint8_t rxPop()
     return b;
 }
 
+// ==========================================================================
+// SECTION: Phone-I/O power management
+// ==========================================================================
 // #524: hold the CPU at full speed and out of light sleep while we are serving
 // the phone.
 //
@@ -1739,6 +1782,9 @@ static inline void endPhoneIO()
     phoneIoPmRelease();
 }
 
+// ==========================================================================
+// SECTION: I2C status-query response to the FC
+// ==========================================================================
 // The FC reads exactly FC_COMBINED_READ_SIZE bytes per I2C poll.
 // The new i2c_slave driver panics if the master clocks out more bytes
 // than are in the TX ringbuffer.  Always write exactly this many bytes
@@ -1911,6 +1957,9 @@ static void queueOutStatusResponse(bool ready)
     }
 }
 
+// ==========================================================================
+// SECTION: FC OTA relay: I2S direction flip and image feeder
+// ==========================================================================
 // ---- OTA relay to the Flight Computer (#8 Phase 4) ------------------------
 // TR_BLE_To_APP invokes these when an OTA_BEGIN/FINISH/ABORT with target==1
 // arrives over BLE. We stage the matching command (+ the 36-byte image header
@@ -2170,6 +2219,9 @@ static void ocOtaRelayAbort(void* /*ctx*/)
     ESP_LOGI("OC", "OTA relay: staged OTA_ABORT for FC");
 }
 
+// ==========================================================================
+// SECTION: Frame processing: FC -> OC telemetry ingest
+// ==========================================================================
 static const char* rocketStateToString(RocketState s)
 {
     switch (s)
@@ -2890,6 +2942,9 @@ static void parseRxStream()
     }
 }
 
+// ==========================================================================
+// SECTION: I2S DMA callback and parser task
+// ==========================================================================
 // I2S receiver task handle (for cleanup on power-down)
 static TaskHandle_t i2s_rx_task_handle = nullptr;
 
@@ -3010,6 +3065,9 @@ static void parseCmdRing()
     }
 }
 
+// ==========================================================================
+// SECTION: I2C ingress from the FC
+// ==========================================================================
 // serviceI2CIngress — reads I2C command data from the FlightComputer
 // into a separate command ring buffer (not the I2S telemetry ring).
 static void serviceI2CIngress()
@@ -3025,7 +3083,9 @@ static void serviceI2CIngress()
     }
 }
 
-// ============================================================================
+// ==========================================================================
+// SECTION: LoRa downlink: telemetry payload and beacon
+// ==========================================================================
 static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_DATA], uint16_t seq)
 {
     if (out_payload == nullptr)
@@ -3353,9 +3413,9 @@ static void sendLoRaBeacon()
     lora_comms.send(beacon, 3 + name_len);
 }
 
-// ============================================================================
-// Config readback: send current config to app over BLE
-// ============================================================================
+// ==========================================================================
+// SECTION: Config readback to the app
+// ==========================================================================
 
 // #398 item 3: config-readback used to send its 4 frames inline with a
 // delay(50) between each — a ~235 ms loop_oc stall per readback (pad-only
@@ -3632,9 +3692,9 @@ static void cacheRollControlConfig(const uint8_t* payload, size_t len)
         (double)cfg_rate_cap_dps, (double)cfg_kp_angle, (double)cfg_iwind_dps);
 }
 
-// ============================================================================
-// LoRa Uplink RX (receive sim commands from BaseStation)
-// ============================================================================
+// ==========================================================================
+// SECTION: LoRa uplink command handling
+// ==========================================================================
 
 static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len)
 {
@@ -4147,9 +4207,9 @@ static void serviceLoRaUplink()
     }
 }
 
-// ============================================================================
-// Slow Rendezvous Cycle (issue #71)
-// ============================================================================
+// ==========================================================================
+// SECTION: LoRa rendezvous and hop fallback
+// ==========================================================================
 // If the rocket has been silent (no uplink received) for long enough, hop
 // briefly to LORA_FACTORY_RENDEZVOUS_MHZ on a duty cycle so the base station's
 // Phase-A recovery has a guaranteed meeting point even when the two NVS
@@ -4480,6 +4540,9 @@ static void serviceHopFallback()
     }
 }
 
+// ==========================================================================
+// SECTION: Diagnostics and periodic statistics
+// ==========================================================================
 static void printLoRaPayloadDebug()
 {
     if (!config::USE_LORA_RADIO)
@@ -5211,6 +5274,9 @@ static void printStats()
     interval_ring_fill_peak = s.ring_fill;
 }
 
+// ==========================================================================
+// SECTION: Peripheral initialization (runs on power-on)
+// ==========================================================================
 // Initialize peripherals that are behind the PWR_PIN power rail.
 // Called once when power is first turned on (deferred from setup).
 void initPeripherals()
@@ -5705,6 +5771,9 @@ static void initI2CSlave()
     i2c_slave_initialized = true;
 }
 
+// ==========================================================================
+// SECTION: Boot setup (rail off, BLE only)
+// ==========================================================================
 static void setup_oc()
 {
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4/S3 may not auto-init)
@@ -5980,6 +6049,9 @@ static void setup_oc()
     ESP_LOGI("OC", "OutComputer ready (PWR_PIN OFF, waiting for power-on command).");
 }
 
+// ==========================================================================
+// SECTION: Main loop
+// ==========================================================================
 // ============================================================================
 // loop_oc stall instrumentation (#90 follow-up — periodic 745 ms Core-1 stall)
 // ============================================================================
@@ -6326,6 +6398,9 @@ static void loop_oc()
                  (unsigned)ota_begin_total_size_staged);
     }
 
+    // ==========================================================================
+    // SECTION: BLE command dispatch
+    // ==========================================================================
     uint8_t ble_cmd = ble_app.getCommand();
     if (ble_cmd != 0)
     {
@@ -7434,6 +7509,9 @@ static void loop_oc()
     vTaskDelay(1);  // yield to FreeRTOS scheduler
 }
 
+// ==========================================================================
+// SECTION: FreeRTOS entry point
+// ==========================================================================
 extern "C" void app_main(void)
 {
     setup_oc();

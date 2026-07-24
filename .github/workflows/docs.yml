@@ -1,0 +1,53 @@
+name: Docs
+
+# Guards the generated firmware section maps against drift.
+#
+# docs/architecture/generated/*-map.md is produced from the `// SECTION:` banners
+# in each firmware's main.cpp. A hand-maintained line-range table would be stale
+# the first time anyone inserted a function, and a stale navigation map is worse
+# than none -- it sends the reader to the wrong place with full confidence.
+#
+# So the map is generated and this job re-runs the generator and fails if the
+# committed output differs. Adding or moving a section means re-running
+# `python3 tools/gen_section_index.py` and committing the result.
+
+on:
+  push:
+    paths:
+      - 'tinkerrocket-idf/projects/flight_computer/main/main.cpp'
+      - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
+      - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
+      - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
+      - 'docs/architecture/generated/**'
+      - 'tools/gen_section_index.py'
+      - 'tools/gen_protocol_reference.py'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
+      - 'tinkerrocket-idf/components/TR_I2C_Interface/TR_I2C_Interface.h'
+      - 'tests_cpp/test_rocket_computer_types.cpp'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'tinkerrocket-idf/projects/flight_computer/main/main.cpp'
+      - 'tinkerrocket-idf/projects/out_computer/main/main.cpp'
+      - 'tinkerrocket-idf/projects/base_station/main/main.cpp'
+      - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
+      - 'docs/architecture/generated/**'
+      - 'tools/gen_section_index.py'
+      - 'tools/gen_protocol_reference.py'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
+      - 'tinkerrocket-idf/components/TR_I2C_Interface/TR_I2C_Interface.h'
+      - 'tests_cpp/test_rocket_computer_types.cpp'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  section-index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pure stdlib (re, argparse, pathlib); ubuntu-latest ships python3.
+      - name: Check the generated section maps match the firmware sources
+        run: python3 tools/gen_section_index.py --check
+
+      - name: Check the protocol reference matches the wire definitions
+        run: python3 tools/gen_protocol_reference.py --check
