@@ -15,7 +15,7 @@ written to be read start to finish.
 | [Out Computer](out-computer.md) | ESP32-S3 — storage, radios, power rail, BLE | written |
 | [Base Station](base-station.md) | ESP32-S3 — LoRa receive, multi-rocket tracker, CSV log | written |
 | [iOS App](ios-app.md) | SwiftUI — fleet model, telemetry, config, flight logs | written |
-| Protocols | frame formats, message types, LoRa framing, BLE commands | not written |
+| [Protocols](protocols.md) | frame formats, message types, LoRa framing, BLE commands | written |
 
 The Out Computer page was the pilot. It sets the template — audience, depth, diagram
 style, and the "Gotchas" section that carries the hard-won details — for the rest.
@@ -46,6 +46,17 @@ the source and re-running — nothing in the tool needs editing.
 All three firmwares are bannered. The generator skips any source with no banners yet, so
 adding a fourth is one entry in `TARGETS` (C++, banner-based) or `SWIFT_TARGETS`
 (directory tree, MARK-based).
+
+## The generated protocol reference
+
+Wire numbers are the worst thing to keep by hand — a stale command number reads as
+authoritative. [`tools/gen_protocol_reference.py`](../../tools/gen_protocol_reference.py)
+extracts every table in [the reference](generated/protocol-reference.md) from the
+sources that define it, and CI re-checks it.
+
+```bash
+python3 tools/gen_protocol_reference.py
+```
 
 ## Conventions
 

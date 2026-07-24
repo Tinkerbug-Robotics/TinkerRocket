@@ -20,6 +20,10 @@ on:
       - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
       - 'docs/architecture/generated/**'
       - 'tools/gen_section_index.py'
+      - 'tools/gen_protocol_reference.py'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
+      - 'tinkerrocket-idf/components/TR_I2C_Interface/TR_I2C_Interface.h'
+      - 'tests_cpp/test_rocket_computer_types.cpp'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
@@ -29,6 +33,10 @@ on:
       - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
       - 'docs/architecture/generated/**'
       - 'tools/gen_section_index.py'
+      - 'tools/gen_protocol_reference.py'
+      - 'tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h'
+      - 'tinkerrocket-idf/components/TR_I2C_Interface/TR_I2C_Interface.h'
+      - 'tests_cpp/test_rocket_computer_types.cpp'
       - '.github/workflows/docs.yml'
 
 jobs:
@@ -40,3 +48,6 @@ jobs:
       # Pure stdlib (re, argparse, pathlib); ubuntu-latest ships python3.
       - name: Check the generated section maps match the firmware sources
         run: python3 tools/gen_section_index.py --check
+
+      - name: Check the protocol reference matches the wire definitions
+        run: python3 tools/gen_protocol_reference.py --check

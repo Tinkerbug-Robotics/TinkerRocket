@@ -211,4 +211,5 @@ Flashing the wrong one gives you a working boot with the wrong pin map.
 - Policy tests: [`tests_cpp/`](../../tests_cpp/) — `test_bs_*.cpp`, 83 tests
 - Components: `TR_RadioLink`, `TR_LoRa_Comms`, `TR_BLE_To_APP`, `TR_MAX17205G`,
   `TR_MAX17303`, `TR_MP2672`, `TR_BQ27Z746`
+- [Protocols](protocols.md) — LoRa framing and the BLE command spaces
 - Shared wire contract: [`RocketComputerTypes.h`](../../tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h)

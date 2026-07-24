@@ -254,5 +254,6 @@ trap as the other firmwares: editing the defaults file does nothing while a stal
 - [iOS App](ios-app.md) — where the profile this board flies comes from
 - Components: `TR_Sensor_Collector`, `TR_GpsInsEKF`, `TR_KinematicChecks`, `TR_PID`,
   `TR_ControlMixer`, `TR_GuidancePN`, `TR_ServoControl_ledc_mult`, `TR_Orientation`
+- [Protocols](protocols.md) — the I2S and I2C links this board drives
 - Shared wire contract: [`RocketComputerTypes.h`](../../tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h)
 - Host tests for the flight-critical math live in [`tests_cpp/`](../../tests_cpp/)

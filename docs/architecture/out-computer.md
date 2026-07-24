@@ -279,6 +279,7 @@ dropped everything. If you add a schema version bump, be sure which side you are
   wire-code guard, and a readable account of why the command space needs one
 - Components this board leans on: `TR_LogToFlash`, `TR_FlightLog`, `TR_I2S_Stream`,
   `TR_I2C_Interface`, `TR_BLE_To_APP`, `TR_RadioLink`
+- [Protocols](protocols.md) — frame formats, message types, and the command spaces
 - Shared wire contract: [`RocketComputerTypes.h`](../../tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h)
 
 - [Flight Computer](flight-computer.md) — what produces the telemetry this board ingests

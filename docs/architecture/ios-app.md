@@ -218,6 +218,7 @@ instance. Deleting it looks harmless and breaks the test suite.
 - [Out Computer](out-computer.md) — the BLE peer when connected directly to a rocket
 - [Base Station](base-station.md) — the BLE peer when connected on the field
 - [Flight Computer](flight-computer.md) — what ultimately consumes the pushed profile
+- [Protocols](protocols.md) — the BLE command spaces and the shared wire contract
 - Tests: [`TinkerRocketAppTests/`](../../TinkerRocketApp/TinkerRocketAppTests/)
 - Wire-code guard: [`tools/check_ble_command_ids.py`](../../tools/check_ble_command_ids.py)
   reports the app's command numbers for information — the firmware dispatch is the
