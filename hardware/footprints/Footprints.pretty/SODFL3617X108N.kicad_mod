@@ -218,7 +218,7 @@
 		(uuid "a9f044c1-00e4-4c1e-a336-83d325744791")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SS24FL/SS24FL.step"
+	(model "${KIPRJMOD}/../3dmodels/SS24FL.step"
 		(offset
 			(xyz 0 0 0)
 		)

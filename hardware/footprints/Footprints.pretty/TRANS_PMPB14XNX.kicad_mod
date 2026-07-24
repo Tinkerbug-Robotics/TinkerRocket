@@ -456,7 +456,7 @@
 		(uuid "6a8718d7-033a-4f1d-a6cf-b8c754455773")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/PMPB14XNX (1)/PMPB14XNX.step"
+	(model "${KIPRJMOD}/../3dmodels/PMPB14XNX.step"
 		(offset
 			(xyz 0 0 0)
 		)

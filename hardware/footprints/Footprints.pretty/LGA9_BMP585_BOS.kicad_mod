@@ -724,7 +724,7 @@
 		(uuid "69e948c5-e7cc-4f77-8d5b-4a8067c91f34")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BMP585/LGA9_BMP585_BOS.step"
+	(model "${KIPRJMOD}/../3dmodels/LGA9_BMP585_BOS.step"
 		(offset
 			(xyz 0 0 0)
 		)
@@ -735,7 +735,7 @@
 			(xyz 0 0 0)
 		)
 	)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BMP585/LGA9_BMP585_BOS.step"
+	(model "${KIPRJMOD}/../3dmodels/LGA9_BMP585_BOS.step"
 		(offset
 			(xyz 0 0 0)
 		)

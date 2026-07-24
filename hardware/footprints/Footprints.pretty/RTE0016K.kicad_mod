@@ -241,7 +241,7 @@
 		(uuid "8dd794c2-5c95-46ac-a7b8-cdc834ffdd55")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/LM5157QRTERQ1/RTE0016K.stp"
+	(model "${KIPRJMOD}/../3dmodels/RTE0016K.stp"
 		(offset
 			(xyz 0 0 0)
 		)

@@ -431,7 +431,7 @@
 		(uuid "fdedcefc-4b53-41d4-bb2b-eed0ec5583c1")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/CUS10S30_H3F/USC-ZKN_r.stp"
+	(model "${KIPRJMOD}/../3dmodels/USC-ZKN_r.stp"
 		(offset
 			(xyz 0 0 0)
 		)

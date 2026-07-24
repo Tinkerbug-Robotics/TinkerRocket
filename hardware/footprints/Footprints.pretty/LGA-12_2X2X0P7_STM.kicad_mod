@@ -1001,7 +1001,7 @@
 		(uuid "c980394f-016c-4a4d-b45f-019c53280e34")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/IIS2MDCTR/LGA-12_2X2X0P7_STM.step"
+	(model "${KIPRJMOD}/../3dmodels/LGA-12_2X2X0P7_STM.step"
 		(offset
 			(xyz 0 0 0)
 		)

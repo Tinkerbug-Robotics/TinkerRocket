@@ -143,13 +143,11 @@ rather than silently "fixed". Each is worth a look before the next respin.
   computer's held V9 `.gbr` files next to a `-job.gbrjob` indexing
   `TinkerRocket Full V8-*.gbr`. That drift is the reason gerbers aren't
   tracked here; regenerate at order time.
-- **3D models are still machine-local.** 103 `(model ...)` references across the
-  six boards, and 55 of the 60 vendored footprints, point at
-  `/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library
-  Files/...` for their `.step` file. Symbols and footprints now resolve from the
-  repo, so editing, ERC, and fab output are unaffected — only the 3D viewer is,
-  and only for custom parts on another machine. Fixing it means vendoring the
-  STEP files (currently ignored by `.gitignore`) and re-pointing those paths.
+- ~~**3D models are still machine-local.**~~ **Fixed.** The 54 available models
+  are vendored in [`3dmodels/`](3dmodels/) and every reference now resolves
+  through `${KIPRJMOD}`. Two remain unavailable and are listed in
+  [`3dmodels/README.md`](3dmodels/README.md); both were already broken before
+  the import.
 - **`PMPB14XNX` had already been deleted from the shared symbol library** while
   the rocket computer still used it. It was recovered from the schematic's own
   embedded copy — which is by definition what the board was built with — rather

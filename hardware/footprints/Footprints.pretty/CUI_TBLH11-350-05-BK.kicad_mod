@@ -322,7 +322,7 @@
 		(uuid "d4c27206-a0d9-4e4d-a449-987a3aa051dd")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TBLH11_350_05BK/TBLH11-350-05-BK.step"
+	(model "${KIPRJMOD}/../3dmodels/TBLH11-350-05-BK.step"
 		(offset
 			(xyz 6 -5.5 5.5)
 		)

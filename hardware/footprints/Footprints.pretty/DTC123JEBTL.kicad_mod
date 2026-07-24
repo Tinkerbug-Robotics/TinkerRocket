@@ -413,7 +413,7 @@
 		(uuid "6428fd46-38e4-43ea-bdc0-c590f20535b3")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/DTC123JEBTL/DTC123JEBTL.step"
+	(model "${KIPRJMOD}/../3dmodels/DTC123JEBTL.step"
 		(offset
 			(xyz 0 0 0)
 		)

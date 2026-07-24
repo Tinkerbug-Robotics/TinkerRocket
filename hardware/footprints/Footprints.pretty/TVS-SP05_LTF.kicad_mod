@@ -473,7 +473,7 @@
 		(uuid "672a5ce0-c92a-4dab-a76c-b98d7477e741")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SP0503BAHTG/SP0503BAHTG.step"
+	(model "${KIPRJMOD}/../3dmodels/SP0503BAHTG.step"
 		(offset
 			(xyz 0 0 0)
 		)

@@ -28,6 +28,13 @@ fp-info-cache
 *.3mf
 *.wrl
 
+# ...except the vendored part models. Those are INPUTS, not exports -- the
+# footprints reference them, and without them the 3D view is broken for
+# everyone who is not on the machine the boards were drawn on. See
+# 3dmodels/README.md.
+!3dmodels/
+!3dmodels/**
+
 # Netlist/BOM/plot exports — regenerate with kicad-cli, see README.
 *.net
 *.xml

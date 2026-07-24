@@ -392,7 +392,7 @@
 		(uuid "059a876d-0050-4259-a749-f291b2116dd2")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS2121RUXR/TPS2121RUXR.step"
+	(model "${KIPRJMOD}/../3dmodels/TPS2121RUXR.step"
 		(offset
 			(xyz 0 0 0)
 		)

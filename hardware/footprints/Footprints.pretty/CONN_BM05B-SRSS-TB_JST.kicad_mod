@@ -241,7 +241,7 @@
 		(uuid "e10acb03-5115-41d3-917f-8237d046454d")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BM05B_SRSS_TB/BM05B-SRSS-TB.STEP"
+	(model "${KIPRJMOD}/../3dmodels/BM05B-SRSS-TB.STEP"
 		(offset
 			(xyz 0 -1.5 0)
 		)

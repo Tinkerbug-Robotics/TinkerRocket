@@ -670,7 +670,7 @@
 		(uuid "82c67816-39f8-4fc0-ab20-916700fa04df")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/NTMD6N02R2G/SOIC8_4X5_ONS.step"
+	(model "${KIPRJMOD}/../3dmodels/SOIC8_4X5_ONS.step"
 		(offset
 			(xyz 0 0 0)
 		)

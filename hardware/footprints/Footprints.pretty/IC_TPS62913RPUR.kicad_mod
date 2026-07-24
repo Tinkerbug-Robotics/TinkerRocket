@@ -234,7 +234,7 @@
 		(uuid "90f9a564-b3e2-4735-8990-7ddd5ff80348")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS62913RPUR/TPS62913RPUR.step"
+	(model "${KIPRJMOD}/../3dmodels/TPS62913RPUR.step"
 		(offset
 			(xyz 0.1 0.1 0)
 		)

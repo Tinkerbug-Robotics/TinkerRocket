@@ -166,7 +166,7 @@
 		(uuid "2b5fa8df-d04a-401c-bc42-b32c8eb3f0ff")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ASPI-0530HI-2R2M-T2/ASPI-0530HI-2R2M-T2.step"
+	(model "${KIPRJMOD}/../3dmodels/ASPI-0530HI-2R2M-T2.step"
 		(offset
 			(xyz 0 0 1.5)
 		)

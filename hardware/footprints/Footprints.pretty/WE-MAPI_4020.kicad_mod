@@ -232,7 +232,7 @@
 		)
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/74438356012HT/WE-MAPI_4020.step"
+	(model "${KIPRJMOD}/../3dmodels/WE-MAPI_4020.step"
 		(offset
 			(xyz 0 0 2)
 		)

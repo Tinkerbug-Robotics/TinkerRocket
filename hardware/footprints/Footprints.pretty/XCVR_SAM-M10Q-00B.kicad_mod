@@ -1564,7 +1564,7 @@
 		(uuid "bcf25a78-76af-43f5-922a-4aa5ff3b9f72")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SAM_M10Q_00B/SAM-M10Q-00B.step"
+	(model "${KIPRJMOD}/../3dmodels/SAM-M10Q-00B.step"
 		(offset
 			(xyz 0 0 0)
 		)
