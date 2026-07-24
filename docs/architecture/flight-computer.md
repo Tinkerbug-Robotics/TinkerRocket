@@ -34,7 +34,7 @@ interrupt-driven, and why that poll is skipped entirely in flight.
 | **Navigation** | [section map](generated/flight-computer-map.md) — 28 sections, 12 of them inside `loop_fc` |
 | **Flight loop** | 1000 Hz |
 | **Estimator** | 15-state error-state EKF at 500 Hz (loop rate ÷ `EKF_DECIMATION`) |
-| **Sensors** | IMU 1920 Hz, barometer 500 Hz, magnetometer 200 Hz, GNSS 18 Hz |
+| **Sensors** | IMU 1920 Hz, barometer 500 Hz, magnetometer 100 Hz (V8 IIS2MDC; 200 Hz on older MMC5983MA boards), GNSS 18 Hz |
 | **Outputs** | 1–4 fin servos, 4 pyro channels, camera control, piezo, status LED |
 | **Talks to the OC** | I2S out (telemetry, master TX) + I2C out (command poll, master) |
 
