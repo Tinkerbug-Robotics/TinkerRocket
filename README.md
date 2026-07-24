@@ -478,6 +478,26 @@ python scripts/run_closed_loop.py --config config/sim_config.yaml
 
 ## License
 
-Copyright (c) 2026 Tinkerbug Robotics. All rights reserved.
+Copyright (c) 2026 Tinkerbug Robotics.
 
-<!-- TODO: Choose and add license (MIT, Apache 2.0, etc.) -->
+**Software in this repository is licensed under the [GNU General Public License
+v3.0 or later](LICENSE)** — firmware, the iOS app, the simulator, and the tooling.
+You may use, study, modify and redistribute it, and anything you distribute that
+builds on it must be released under the same terms with source available.
+
+**Hardware design files will be licensed under [CERN-OHL-S
+v2](https://cern-ohl.web.cern.ch/)** (strongly reciprocal) when they are added to
+this repository. A `hardware/LICENSE` will accompany them; until then, no hardware
+files are published here.
+
+Two exceptions to the above:
+
+| | |
+|---|---|
+| **Vendored components** | Third-party code under `tinkerrocket-idf/components/` keeps its own license — RadioLib is MIT, `spi_nand_flash` is Apache-2.0. Both permit inclusion in a GPL-3.0 work; their own terms continue to govern those files. See the `LICENSE` / `license.txt` in each. |
+| **`TR_GuidancePN`** | The proportional-navigation guidance law is a separate private submodule and is **not** covered by this license. Everything else builds and runs without it (see [Guidance](#guidance-optional)), so the public tree is complete and buildable on its own. |
+
+TinkerRocket controls pyrotechnic devices. As set out in sections 15 and 16 of the
+GPL, it comes with **no warranty of any kind** — you are responsible for the safe
+construction, testing, and operation of anything you build from it, and for
+complying with the launch regulations that apply to you.

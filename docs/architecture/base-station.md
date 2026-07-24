@@ -39,7 +39,7 @@ entirely** so it can be tested without hardware.
 | **Listens** | LoRa 915 MHz, up to 4 rockets tracked simultaneously |
 | **Stores** | CSV per flight on external flash (FAT) |
 | **Talks to your phone** | BLE GATT, 20 commands |
-| **Board revisions** | V1, V2 (default), V3 — selected with `-DTR_BS_BOARD=n` |
+| **Board** | **V5 hardware** — built as `TR_BS_BOARD=3`. Earlier revisions still build (1, 2) |
 
 ## The policy headers
 
@@ -151,8 +151,9 @@ GNSS sentinel. A log opened before that sync gets renamed once the time arrives.
 
 ## Power
 
-Board revision determines the gauge: V1 and V2 use the MAX17205G, V3 the MAX17303 with an
-MP2672 flight-pack charger. `maintainBatteryFets()` keeps the protection FETs enabled —
+The current V5 board carries a **MAX17303G+** gauge and an MP2672 flight-pack charger.
+(Superseded revisions used the MAX17205G or BQ27Z746; the gauge is probed at runtime, so
+it does not depend on the build flag.) `maintainBatteryFets()` keeps the protection FETs enabled —
 the BQ27Z746 ships with `FET_EN=0` and reverts to it on reset, so a fresh gauge presents
 as a dead battery that only works on USB.
 
@@ -194,10 +195,23 @@ the point where a packet merely passes the SNR floor and has the right shape. Do
 suppressed silence recovery and, worse, satisfied a command's "the rocket is alive"
 predicate on what was really just noise (#384).
 
+**The build flag does not match the board number on the silkscreen.** The current
+hardware is **V5**, and it is built as **`TR_BS_BOARD=3`** — the two numbering schemes
+diverged and have not been reconciled. Build the current board with:
+
+```bash
+idf.py -B build_v3 -DTR_BS_BOARD=3 build
+```
+
+A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing that
+onto a V5 gives you a **working boot with the wrong pin map** — no error, just peripherals
+that are not where the firmware thinks they are.
+
 **`sdkconfig` is generated and untracked, and it overrides `sdkconfig.defaults`.** Same
-trap as the other firmwares. The board revision compounds it: builds are per-board
-(`idf.py -B build_v3 -DTR_BS_BOARD=3`), and a plain `build/` directory is a V2 build.
-Flashing the wrong one gives you a working boot with the wrong pin map.
+trap as the other firmwares: editing the defaults file does nothing while a stale
+`sdkconfig` sits beside it, and a symbol that no longer exists fails silently. Because
+builds here are per-board, each build dir carries its own — delete it and rebuild when a
+config change appears to have no effect.
 
 ---
 
