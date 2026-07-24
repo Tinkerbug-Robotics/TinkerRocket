@@ -97,12 +97,37 @@ git tag hw/rocket-computer/v10 -m "sent to fab 2026-xx-xx"
 The tag is what replaces `V9` in the filename. `git show hw/rocket-computer/v9`
 gets you exactly what was fabbed.
 
+## Libraries
+
+Custom symbols and footprints are vendored into the repo, so a fresh clone
+resolves them without depending on anyone's local KiCad setup:
+
+- [`symbols/Custom.kicad_sym`](symbols/Custom.kicad_sym) — 58 symbols
+- [`footprints/Footprints.pretty/`](footprints/Footprints.pretty/) — 60 footprints
+
+These are **only the parts these six boards use.** The shared libraries they
+came from hold 240 symbols and 288 footprints accumulated across every past
+design; carrying the unused ~75% into the repo would mean every future board
+inherits a junk drawer.
+
+Each board has a project-local `sym-lib-table` / `fp-lib-table` pointing at
+`${KIPRJMOD}/../symbols/` and `${KIPRJMOD}/../footprints/`. The library
+nicknames are unchanged (`Custom`, `Footprints`) and a project-local table wins
+over the global one for the same nickname, so **no board file needed editing** —
+they simply resolve from the repo now. KiCad's stock libraries (`Device`,
+`power`, `Capacitor_SMD`, …) still come from your KiCad install, as intended.
+
+**Adding a part:** add it to `hardware/symbols/Custom.kicad_sym` and
+`hardware/footprints/Footprints.pretty/` — inside the repo, in the same commit
+as the board that uses it. Adding it only to your personal shared library will
+work on your machine and break on a clean clone.
+
 ## What is tracked
 
-Design sources (`.kicad_pro`, `.kicad_pcb`, `.kicad_sch`), BOMs, and design
-review notes. Everything KiCad regenerates — gerbers, autosave zips,
-`fp-info-cache`, `.kicad_prl` GUI state, STEP exports — is ignored; see
-[`.gitignore`](.gitignore).
+Design sources (`.kicad_pro`, `.kicad_pcb`, `.kicad_sch`), the vendored
+libraries, BOMs, and design review notes. Everything KiCad regenerates —
+gerbers, autosave zips, `fp-info-cache`, `.kicad_prl` GUI state, STEP exports —
+is ignored; see [`.gitignore`](.gitignore).
 
 ## Known issues in the imported data
 
@@ -113,14 +138,20 @@ rather than silently "fixed". Each is worth a look before the next respin.
   computer's held V9 `.gbr` files next to a `-job.gbrjob` indexing
   `TinkerRocket Full V8-*.gbr`. That drift is the reason gerbers aren't
   tracked here; regenerate at order time.
-- **Custom footprint library and 3D models are machine-local.** Boards
-  reference `/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded
-  Library Files/...` by absolute path (57 refs in the rocket computer alone).
-  Footprints and symbols are *embedded* in the board and schematic, so a fresh
-  clone opens and edits fine — but 3D preview of custom parts and "update
-  footprint from library" will not resolve on another machine. Fixing this
-  means vendoring the library into `hardware/lib/` and re-pointing the paths at
-  `${KIPRJMOD}`.
+- **3D models are still machine-local.** 103 `(model ...)` references across the
+  six boards, and 55 of the 60 vendored footprints, point at
+  `/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library
+  Files/...` for their `.step` file. Symbols and footprints now resolve from the
+  repo, so editing, ERC, and fab output are unaffected — only the 3D viewer is,
+  and only for custom parts on another machine. Fixing it means vendoring the
+  STEP files (currently ignored by `.gitignore`) and re-pointing those paths.
+- **`PMPB14XNX` had already been deleted from the shared symbol library** while
+  the rocket computer still used it. It was recovered from the schematic's own
+  embedded copy — which is by definition what the board was built with — rather
+  than from a same-named file of unknown vintage elsewhere on disk.
+- **`Custom Library:2337019-1`** (used by the PX1105R board) refers to a KiCad
+  6.0-era library that no longer exists on disk at all. The symbol is embedded
+  so the board is fine, but that one link is dangling and can't be re-vendored.
 - **Some source folders were cloned from other boards and kept the leftovers.**
   `LoRa Board V3/` contained five Full-board sub-sheets
   (`central_processing_p4`, `in_sensors`, …) unreferenced by its own flat root

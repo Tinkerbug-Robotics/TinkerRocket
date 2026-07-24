@@ -1,0 +1,246 @@
+(footprint "WE-MAPI_4020"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0 -3.485 0)
+		(layer "F.SilkS")
+		(uuid "d16fb21b-20b8-4d74-afc9-fd1fe51ca881")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "WE-MAPI_4020"
+		(at 0 3.365 0)
+		(layer "F.Fab")
+		(uuid "674a5b1e-6fd5-4767-a187-115b41e9bd2c")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c26e8479-3d28-4602-bf13-e3396bfb9ec2")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "35431eeb-54a3-4571-bf4f-8cd86a485090")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_circle
+		(center -2.8 -2)
+		(end -2.7 -2)
+		(stroke
+			(width 0.3)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "1f6a786c-589f-4f33-a189-b7231198c9ea")
+	)
+	(fp_poly
+		(pts
+			(xy -2.35 -2.35) (xy 2.35 -2.35) (xy 2.35 2.35) (xy -2.35 2.35)
+		)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.CrtYd")
+		(uuid "32c570de-c71e-43e1-9933-f3cb9c51731f")
+	)
+	(fp_line
+		(start -2.15 -2.15)
+		(end 2.15 -2.15)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "b88f6d97-4497-4bb2-941b-4e760a16fb84")
+	)
+	(fp_line
+		(start -2.15 2.15)
+		(end -2.15 -2.15)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "589885ba-7f88-4a03-808f-6956f092c5e7")
+	)
+	(fp_line
+		(start -2.05 -2.05)
+		(end 2.05 -2.05)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "26029371-ad80-453e-a021-80ed8ff65588")
+	)
+	(fp_line
+		(start -2.05 2.05)
+		(end -2.05 -2.05)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "b2118eff-3a45-4403-b5ca-c8538da2b2b3")
+	)
+	(fp_line
+		(start 2.05 -2.05)
+		(end 2.05 2.05)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "37e3a1ec-576f-42b0-a323-c7ba0397646d")
+	)
+	(fp_line
+		(start 2.05 2.05)
+		(end -2.05 2.05)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "b7c5b303-510a-41bc-9949-67a1b86a1999")
+	)
+	(fp_line
+		(start 2.15 -2.15)
+		(end 2.15 2.15)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "603d527a-9c72-4e08-a4f8-d221121fbab3")
+	)
+	(fp_line
+		(start 2.15 2.15)
+		(end -2.15 2.15)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "db158f53-95c4-45a4-a19d-053263418de3")
+	)
+	(pad "1" smd rect
+		(at -1.185 0)
+		(size 0.98 3.7)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.102)
+		(uuid "45624ce4-92ab-4e51-b1c0-58b79061fcb5")
+	)
+	(pad "2" smd rect
+		(at 1.185 0)
+		(size 0.98 3.7)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(solder_mask_margin 0.102)
+		(uuid "42e676de-8612-443f-a3b6-b7b5ded4012e")
+	)
+	(zone
+		(layer "F.Cu")
+		(uuid "f419ca93-e64a-4877-8cb3-3c9546dbed4e")
+		(hatch full 0.508)
+		(connect_pads
+			(clearance 0)
+		)
+		(min_thickness 0.01)
+		(keepout
+			(tracks not_allowed)
+			(vias not_allowed)
+			(pads not_allowed)
+			(copperpour not_allowed)
+			(footprints allowed)
+		)
+		(placement
+			(enabled no)
+			(sheetname "")
+		)
+		(fill
+			(thermal_gap 0.508)
+			(thermal_bridge_width 0.508)
+			(island_removal_mode 0)
+		)
+		(polygon
+			(pts
+				(xy -0.695 -1.85) (xy 0.695 -1.85) (xy 0.695 1.85) (xy -0.695 1.85)
+			)
+		)
+	)
+	(zone
+		(layers "F.Cu" "B.Cu" "In1.Cu" "In2.Cu" "In3.Cu" "In4.Cu" "In5.Cu" "In6.Cu"
+			"In7.Cu" "In8.Cu" "In9.Cu" "In10.Cu" "In11.Cu" "In12.Cu" "In13.Cu" "In14.Cu"
+			"In15.Cu" "In16.Cu" "In17.Cu" "In18.Cu" "In19.Cu" "In20.Cu" "In21.Cu"
+			"In22.Cu" "In23.Cu" "In24.Cu" "In25.Cu" "In26.Cu" "In27.Cu" "In28.Cu"
+			"In29.Cu" "In30.Cu"
+		)
+		(uuid "4625e69d-6f8a-4a9d-8f6e-3a856f61cd8b")
+		(hatch full 0.508)
+		(connect_pads
+			(clearance 0)
+		)
+		(min_thickness 0.01)
+		(keepout
+			(tracks allowed)
+			(vias not_allowed)
+			(pads allowed)
+			(copperpour allowed)
+			(footprints allowed)
+		)
+		(placement
+			(enabled no)
+			(sheetname "")
+		)
+		(fill
+			(thermal_gap 0.508)
+			(thermal_bridge_width 0.508)
+			(island_removal_mode 0)
+		)
+		(polygon
+			(pts
+				(xy -0.695 -1.85) (xy 0.695 -1.85) (xy 0.695 1.85) (xy -0.695 1.85)
+			)
+		)
+	)
+	(embedded_fonts no)
+	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/74438356012HT/WE-MAPI_4020.step"
+		(offset
+			(xyz 0 0 2)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz -0 -180 -0)
+		)
+	)
+)
