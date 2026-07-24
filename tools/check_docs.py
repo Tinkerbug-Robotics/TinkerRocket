@@ -67,8 +67,16 @@ MSG_PROSE = re.compile(r"`?(0[xX][0-9A-Fa-f]{2})`?\s*\([^)]*?(\d+)\s*B\)")
 
 
 def markdown_files():
-    """README plus the architecture pages. See the scope note above."""
-    files = [README]
+    """Root-level docs plus the architecture pages. See the scope note above.
+
+    CONTRIBUTING.md and CLA.md are included because they are the first thing a
+    new contributor reads -- a broken link there costs someone their first
+    half hour. hardware/README.md is included for the same reason.
+    """
+    files = [README,
+             REPO / "CONTRIBUTING.md",
+             REPO / "CLA.md",
+             REPO / "hardware/README.md"]
     if DOCS.is_dir():
         files += sorted(DOCS.rglob("*.md"))
     return [f for f in files if f.exists()]

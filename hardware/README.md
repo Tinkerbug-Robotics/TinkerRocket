@@ -6,6 +6,11 @@ analysis behind what is and isn't tracked here.
 
 Built with **KiCad 10.0.3**.
 
+These design files are licensed under the [CERN Open Hardware Licence v2 — Strongly
+Reciprocal](LICENSE) (`CERN-OHL-S-2.0`), which is separate from the GPL covering the
+software. If you distribute a product based on them, or publish a modified design, the
+complete sources must be available under the same licence.
+
 ## Boards
 
 | Folder | Board | Firmware target |
