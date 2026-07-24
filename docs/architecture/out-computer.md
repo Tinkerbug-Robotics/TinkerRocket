@@ -282,6 +282,7 @@ dropped everything. If you add a schema version bump, be sure which side you are
 - Shared wire contract: [`RocketComputerTypes.h`](../../tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h)
 
 - [Flight Computer](flight-computer.md) — what produces the telemetry this board ingests
+- [Base Station](base-station.md) — the other end of the LoRa link
 
-Base Station, iOS app, and protocol-reference pages are not written yet — see
-[the index](README.md) for status.
+iOS app and protocol-reference pages are not written yet — see [the index](README.md)
+for status.

@@ -13,7 +13,7 @@ written to be read start to finish.
 |---|---|---|
 | [Flight Computer](flight-computer.md) | ESP32-P4 — sensors, EKF, control laws, pyro | written |
 | [Out Computer](out-computer.md) | ESP32-S3 — storage, radios, power rail, BLE | written |
-| Base Station | ESP32-S3 — LoRa receive, multi-rocket tracker, SD log | not written |
+| [Base Station](base-station.md) | ESP32-S3 — LoRa receive, multi-rocket tracker, CSV log | written |
 | iOS App | SwiftUI — fleet model, telemetry, config, flight logs | not written |
 | Protocols | frame formats, message types, LoRa framing, BLE commands | not written |
 
@@ -38,8 +38,8 @@ CI runs the same script with `--check` and fails if a committed map disagrees wi
 source, so the map cannot silently go stale. Adding a section means adding a banner to
 the source and re-running — nothing in the tool needs editing.
 
-Currently bannered: Out Computer. The Flight Computer and Base Station are skipped by
-the generator until they get banners.
+All three firmwares are bannered. The generator skips any source that has no banners
+yet, so adding a fourth is just a new entry in `TARGETS`.
 
 ## Conventions
 

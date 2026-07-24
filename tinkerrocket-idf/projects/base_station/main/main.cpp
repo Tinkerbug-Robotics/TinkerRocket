@@ -1,3 +1,6 @@
+// ==========================================================================
+// SECTION: Includes, board selection, and compile-time configuration
+// ==========================================================================
 #include <compat.h>
 #include <TR_NVS.h>
 #include <algorithm>
@@ -56,6 +59,9 @@ static const char* TAG = "BS";
 // failure) the bootloader auto-reverts to ota_0 on next boot.
 static bool g_ota_pending_verify = false;
 
+// ==========================================================================
+// SECTION: OTA boot validation
+// ==========================================================================
 static inline void maybeMarkOtaValid()
 {
     if (!g_ota_pending_verify) return;
@@ -147,6 +153,10 @@ static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
 static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
+
+// ==========================================================================
+// SECTION: Peripheral objects and board hardware
+// ==========================================================================
 static TR_MAX17303  max17303_gauge(config::MAX17303_ADDR);  // V3; shares 0x36 with MAX17205, split by DevName
 static TR_MP2672    pack_charger(config::MP2672_ADDR);      // V3 flight-pack charger (HAS_PACK_CHARGER)
 // Which gauge runtime detection found (one firmware image, both PCBs).
@@ -178,6 +188,9 @@ static uint8_t network_id     = config::DEFAULT_NETWORK_ID;
 static bs_uplink_queue::Queue uplink_q;
 static uint32_t uplink_last_tx_ms = 0;
 
+// ==========================================================================
+// SECTION: Uplink queue state
+// ==========================================================================
 // "The uplink is busy" — successor to the old `uplink_pending` flag. True while
 // anything is queued or mid-retry, so the transaction / recovery / heartbeat /
 // mask-drift paths keep their original meaning: don't touch the radio, and
@@ -205,6 +218,9 @@ static bool using_external_flash = false;   // V2/V3: FAT on the external SPI fl
 static spi_device_handle_t      s_ext_spi = nullptr;
 static spi_nand_flash_device_t *s_nand    = nullptr;
 
+// ==========================================================================
+// SECTION: External flash and FAT mount
+// ==========================================================================
 // Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
 // flash used for logging on the V2/V3 PCBs (M_* pins on SPI3_HOST; LoRa owns
 // SPI2_HOST on V2). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
@@ -340,6 +356,9 @@ static uint32_t hop_last_rx_ms_   = 0;
 // and the NVS load can never report hop-enabled.
 static bool     lora_hop_disabled = true;
 
+// ==========================================================================
+// SECTION: LoRa channel hopping
+// ==========================================================================
 // #150: packets-per-channel dwell for the CURRENT modulation, derived
 // from real airtime so the FCC occupancy bound holds at every preset.
 // 0 means hopping is not permitted at this (sf, bw, cr): the cmd-17
@@ -406,6 +425,9 @@ static void serviceMaskDriftRepush();
 static void serviceHopModeResync();
 static void serviceHopDisableDrain();
 
+// ==========================================================================
+// SECTION: Auto-acquire state
+// ==========================================================================
 // Auto-acquire + auto-scan state (#136).  Full definitions live just
 // before setup_bs(); the enum + state variable are declared here so
 // finalizeNoiseScan() can branch on them without forward-decl gymnastics.
@@ -481,6 +503,10 @@ static uint32_t hop_disable_drain_deadline_ms = 0;
 
 // Per-rocket tracker (replaces single last_decoded for multi-rocket support)
 static constexpr int MAX_TRACKED_ROCKETS = 4;
+
+// ==========================================================================
+// SECTION: Multi-rocket tracker
+// ==========================================================================
 struct TrackedRocket {
     bool       active = false;
     uint8_t    rocket_id = 0;
@@ -667,6 +693,9 @@ static uint8_t  sync_hour = 0, sync_minute = 0, sync_second = 0;
 // updateBattery() fans the latest readings into the global fields used by
 // the BLE telemetry builder.
 
+// ==========================================================================
+// SECTION: Battery monitoring and charger FETs
+// ==========================================================================
 // Keep the new-board (BQ27Z746) battery protection FETs enabled. The gauge
 // ships with FET_EN=0 (and a reset reverts to it), so we (re)enable whenever
 // FET_EN has dropped and there is no active safety fault -- never overriding a
@@ -788,9 +817,9 @@ static void updateBattery()
     }
 }
 
-// ============================================================================
-// CSV Logging
-// ============================================================================
+// ==========================================================================
+// SECTION: CSV logging: clock, file lifecycle, and writers
+// ==========================================================================
 
 // Days in each month (non-leap / leap year)
 static const uint8_t days_in_month[2][12] = {
@@ -1255,9 +1284,9 @@ static inline float currentRxFreqMHz()
     return lora_freq_mhz;
 }
 
-// ============================================================================
-// BLE File Command Handlers
-// ============================================================================
+// ==========================================================================
+// SECTION: BLE file operations (list, delete, download)
+// ==========================================================================
 
 // NOTE: All SD card operations (log, list, delete) run on the main loop task.
 // No mutex needed as long as this guarantee holds. If BLE callbacks move to
@@ -1491,9 +1520,9 @@ static void serviceDownload()
     if (eof) finishDownload("complete");
 }
 
-// ============================================================================
-// Telemetry Helpers
-// ============================================================================
+// ==========================================================================
+// SECTION: BLE telemetry frame and console output
+// ==========================================================================
 
 static const char* rocketStateToString(uint8_t state)
 {
@@ -1792,9 +1821,9 @@ static void printStats()
              (unsigned long)chset_drift_repush_count);
 }
 
-// ============================================================================
-// Config readback: send cached config to app over BLE
-// ============================================================================
+// ==========================================================================
+// SECTION: Config readback to the app
+// ==========================================================================
 
 static void sendCurrentConfig()
 {
@@ -1857,9 +1886,9 @@ static void sendCurrentConfig()
 // surfaced via sendCurrentConfig) but are no longer written from a relay path,
 // consistent with the base station never configuring the rocket.
 
-// ============================================================================
-// LoRa Uplink (relay BLE commands to OutComputer)
-// ============================================================================
+// ==========================================================================
+// SECTION: LoRa uplink to the rocket
+// ==========================================================================
 
 /// Build an uplink packet with routing header.
 /// target_rid: destination rocket_id (0xFF = broadcast to all rockets in network)
@@ -2050,9 +2079,9 @@ static void serviceUplink()
     }
 }
 
-// ============================================================================
-// LoRa Config Transaction (issue #71)
-// ============================================================================
+// ==========================================================================
+// SECTION: Transactional LoRa reconfigure
+// ==========================================================================
 // Transactional commit of a new LoRa config (freq / bw / sf / cr / pwr).
 // Sequence:
 //   1. On BLE Cmd 10 the base station takes a rollback snapshot, then queues
@@ -2269,9 +2298,9 @@ static void serviceLoRaTransaction()
     }
 }
 
-// ============================================================================
-// LoRa Silence Recovery (issue #71)
-// ============================================================================
+// ==========================================================================
+// SECTION: Silence recovery
+// ==========================================================================
 // If the base station hears nothing from any rocket for RECOVERY_SILENCE_MS
 // while on the ground (not freq_locked_for_flight), hop through known-good
 // frequencies looking for the rocket:
@@ -2526,9 +2555,9 @@ static void serviceRecovery()
     }
 }
 
-// ============================================================================
-// Heartbeat (issue #71)
-// ============================================================================
+// ==========================================================================
+// SECTION: Heartbeat to the rocket
+// ==========================================================================
 // Periodic uplink that gives the rocket positive proof of comms.  Without
 // this, a rocket happily streaming telemetry to a base station that's
 // receiving fine would still fall into its slow-rendezvous cycle every
@@ -2620,9 +2649,9 @@ static void serviceHeartbeat()
     last_heartbeat_tx_ms = now;
 }
 
-// ============================================================================
-// Channel-set: multi-pass scan + auto-analyze + push to rocket (#40/#41 phase 3)
-// ============================================================================
+// ==========================================================================
+// SECTION: Coordinated noise scan and channel set
+// ==========================================================================
 // On BLE cmd 60 we run a 5-pass noise scan (max-RSSI accumulation per
 // channel) instead of a single sweep, so an intermittent jammer that
 // only fires every couple of seconds is more likely to be captured.
@@ -3244,6 +3273,9 @@ static constexpr float    AUTO_ACQUIRE_SCAN_STOP_MHZ  = LORA_BAND_HI_MHZ;
 static constexpr uint16_t AUTO_ACQUIRE_SCAN_STEP_KHZ  = 500;
 static constexpr uint16_t AUTO_ACQUIRE_SCAN_DWELL_MS  = 30;
 
+// ==========================================================================
+// SECTION: Auto-acquire
+// ==========================================================================
 // Called from finalizeNoiseScan() when the auto-acquire scan completes.
 // Walks the scan grid, picks the quietest channel snapped to the BW
 // table, and hands off to the existing cmd-10 transaction.  If the
@@ -3348,6 +3380,9 @@ static void serviceAutoAcquire()
     }
 }
 
+// ==========================================================================
+// SECTION: Boot setup
+// ==========================================================================
 static void setup_bs()
 {
     // NVS first — before BLE/LoRa and before any Preferences use (#500).
@@ -3912,6 +3947,9 @@ static void setup_bs()
     ESP_LOGI(TAG, "Listening for rocket telemetry...");
 }
 
+// ==========================================================================
+// SECTION: Main loop
+// ==========================================================================
 static void loop_bs()
 {
     // #289: set when the RX path sends a (fresh) telemetry notification this
@@ -3920,6 +3958,9 @@ static void loop_bs()
     // the queue may be full, making an RX-path drop more likely.
     bool rx_sent_telem_this_iter = false;
 
+    // ==========================================================================
+    // SECTION: LoRa service and hop management
+    // ==========================================================================
     // Service LoRa (complete any pending TX before checking for RX)
     lora_comms.service();
     lora_comms.pollDio1();          // Fallback if DIO1 interrupt doesn't fire
@@ -3981,6 +4022,9 @@ static void loop_bs()
         hop_needs_retune_ = false;
     }
 
+    // ==========================================================================
+    // SECTION: Packet receive: beacon, telemetry, tracker
+    // ==========================================================================
     // Check for received packet
     uint8_t rx_buf[256];
     size_t rx_len = 0;
@@ -4461,6 +4505,9 @@ static void loop_bs()
         }
     }
 
+    // ==========================================================================
+    // SECTION: Log lifecycle timeouts and flush
+    // ==========================================================================
     // INFLIGHT safety timeout (#107, per-rocket in #381): close the log if a
     // rocket has been in INFLIGHT too long without a LANDED — lost-LoRa-
     // during-descent / stuck-rocket-state-machine — UNLESS another fresh
@@ -4526,6 +4573,9 @@ static void loop_bs()
         log_last_flush_ms = millis();
     }
 
+    // ==========================================================================
+    // SECTION: Battery read and standalone BLE update
+    // ==========================================================================
     // Periodic battery read + standalone BLE update
     if (millis() - last_battery_ms >= config::PWR_UPDATE_PERIOD_MS)
     {
@@ -4613,6 +4663,9 @@ static void loop_bs()
         }
     }
 
+    // ==========================================================================
+    // SECTION: BLE command dispatch
+    // ==========================================================================
     // Handle BLE commands (file list, delete, download)
     ble_app.loop();
 
@@ -5057,6 +5110,9 @@ static void loop_bs()
         }
     }
 
+    // ==========================================================================
+    // SECTION: Scan completion and periodic service chain
+    // ==========================================================================
     // Service scan state machine (no-op when idle).  Must come before
     // serviceUplink so a TX retry doesn't fire while we're mid-scan —
     // the scan temporarily owns the radio's frequency.
@@ -5141,9 +5197,9 @@ static void loop_bs()
     vTaskDelay(1);
 }
 
-// ============================================================================
-// ESP-IDF entry point
-// ============================================================================
+// ==========================================================================
+// SECTION: FreeRTOS entry point
+// ==========================================================================
 
 extern "C" void app_main(void)
 {
