@@ -61,7 +61,7 @@ stateDiagram-v2
 
 In the **idle** state only BLE is running. Peripheral init is deferred entirely —
 NAND, MRAM, LoRa and I2S are not even initialized — so the board sits at roughly a
-milliamp and a pack lasts days on the pad. The app can still connect, read config,
+milliamp and a pack lasts weeks on the pad. The app can still connect, read config,
 and download previous flights in this state.
 
 In the **active** state the rail is closed, the FC boots, and the OC starts doing all
