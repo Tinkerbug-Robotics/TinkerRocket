@@ -5,7 +5,7 @@ An open source hardware and software full featured flight computer with out of t
 | | |
 |---|---|
 | **High-Rate Logging** | Full sensor suite data logging at configurable rates up to 4 kHz |
-| **Remote Power Switch** | Built-in low power wireless switch to completely disable pyro channels and allow you to install the computer days ahead of a flight while still having plenty of power to fly. Power it up on the pad using the phone app over BlueTooth |
+| **Remote Power Switch** | Use the built-in wireless switch to disable pyro channels and install the computer days ahead of a flight. Power it up on the pad using the phone app over BlueTooth |
 | **Four Pyro Channels** | Fully isolated (low and high switched), with continuity monitoring and app configurable triggers |
 | **Camera Control** | Control a RunCam Split 4 or 'naked' GoPro, starting or stopping recording from the app or over LoRa just before take off. Monitor current usage in the app to ensure everything is recording before you launch |
 | **Active Control** | One to four servos for roll control or flight stabilization |
