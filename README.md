@@ -487,10 +487,16 @@ v3.0 or later](LICENSE)** — firmware, the iOS app, the simulator, and the tool
 You may use, study, modify and redistribute it, and anything you distribute that
 builds on it must be released under the same terms with source available.
 
-**Hardware design files will be licensed under [CERN-OHL-S
-v2](https://cern-ohl.web.cern.ch/)** (strongly reciprocal) when they are added to
-this repository. A `hardware/LICENSE` will accompany them; until then, no hardware
-files are published here.
+**Hardware design files under [`hardware/`](hardware/) are licensed under the
+[CERN Open Hardware Licence v2 — Strongly Reciprocal](hardware/LICENSE)**
+(`CERN-OHL-S-2.0`). If you make or distribute a product based on these designs, or
+publish a modified version of them, you must make the complete design sources
+available under the same licence.
+
+CERN-OHL-S is to hardware roughly what the GPL is to software, which is why the two
+sit together here. They are separate licences covering separate files: the software
+licence does not reach the board files, and the hardware licence does not reach the
+firmware.
 
 Two exceptions to the above:
 
