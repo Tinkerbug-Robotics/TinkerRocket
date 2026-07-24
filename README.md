@@ -9,8 +9,8 @@ An open source hardware and software full featured flight computer with out of t
 | **Four Pyro Channels** | Fully isolated (low and high switched), with continuity monitoring and app configurable triggers |
 | **Camera Control** | Control a RunCam Split 4 or 'naked' GoPro, starting or stopping recording from the app or over LoRa just before take off. Monitor current usage in the app to ensure everything is recording before you launch |
 | **Active Control** | One to four servos for roll control or flight stabilization |
-| **Modular Radio** | Swappable daughter board for the LoRa radio, shipping with a 1 W 900 MHz radio supporting flights up to 30,000 ft. Swap it out for an even higher power radio that communicates over UART |
-| **Modular GNSS** | GNSS on a swappable daughter board. Ships with a u-blox SAM-M10Q module with ~20 Hz updates and multiple constellation support. Swap for another GNSS module, or position the shipped module in an optional location in your avionics bay |
+| **Modular Radio** | Swappable daughter board for the LoRa radio, shipping with a 22 dBm 900 MHz radio supporting flights up to 30,000 ft. Swap it out for an even higher power radio that communicates over UART |
+| **Modular GNSS** | GNSS on a swappable daughter board. Ships with a u-blox SAM-M10Q module with 18 Hz updates and multiple constellation support. Swap for another GNSS module, or position the shipped module in an optional location in your avionics bay |
 | **Voice Callouts** | Altitude, apogee, max speed and descent rate spoken aloud during the flight |
 
 <!-- TODO: add a hero photo, then restore this:
