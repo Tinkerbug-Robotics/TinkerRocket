@@ -279,7 +279,7 @@ Seven GitHub Actions workflows run automatically, each path-filtered to what it 
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
 | **flight-report-tests.yml** | Flight-report tooling |
 | **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
-| **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source |
+| **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. The only workflow with **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
 
 ## Communication Protocols
 
