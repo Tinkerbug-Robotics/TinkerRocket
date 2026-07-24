@@ -1,8 +1,16 @@
 # TinkerRocket
 
-An open source hardware and software full featured flight computer with out of the box functionality and room to tinker. The flight computer, base station, and companion iOS or Andriod app provide out of the box dual deploy and GNSS tracking with plenty of extra bells and whistles to support all your rocketry needs.
+An open source hardware and software full featured flight computer with out of the box functionality and room to tinker. The flight computer, base station, and companion iOS or Android app provide out of the box dual deploy and GNSS tracking with plenty of extra bells and whistles to support all your rocketry needs.
 
-high data rate logging (configurable 1,2, or 4 kHz), remote control power 'WiFi' switch with days of standby time, four fully isolated pyro channels, camera control for RunCam Split4 or 'naked' GoPro, servo control for active roll control or flight stabalization using proportional navigation, GNSS and LoRa modules on daughter boards for maximum flexibility with included long range LoRa and uBlox GNSS, voice call outs during flight.
+| | |
+|---|---|
+| **High-rate logging** | IMU at a configurable 1, 2, or 4 kHz, written straight to onboard NAND |
+| **Remote power switch** | Built-in low-power 'WiFi' switch — no through-wall switch to drill for. ~1 mA standby, weeks on a 600 mAh pack |
+| **Four pyro channels** | Fully isolated, with continuity monitoring and configurable triggers |
+| **Camera control** | RunCam Split 4 and 'naked' GoPro Hero 10 Black — power and recording, remotely over LoRa |
+| **Active control** | 1-4 servos for roll control, or flight stabilization under a proportional-navigation guidance law |
+| **Modular radios** | GNSS and LoRa on swappable daughter boards; ships with long-range LoRa and u-blox GNSS |
+| **Voice callouts** | Altitude, apogee, max speed and descent rate spoken aloud during the flight |
 
 <!-- TODO: add a hero photo, then restore this:
 ![TinkerRocket](docs/images/rocket_hero.jpg) -->
