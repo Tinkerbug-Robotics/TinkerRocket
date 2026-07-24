@@ -5895,7 +5895,7 @@
 		(layer "Edge.Cuts")
 		(uuid "40be5c3a-df4d-446e-bd89-81edb56e4189")
 	)
-	(gr_text "TinkerRocket\nLoRa Board\nV2"
+	(gr_text "TinkerRocket\nGNSS PX1105R\nV1"
 		(at 47.21 35 0)
 		(layer "F.SilkS")
 		(uuid "e47dfeb4-d4cc-4673-be80-55d4d8223489")
