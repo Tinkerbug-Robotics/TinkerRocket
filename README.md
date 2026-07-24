@@ -2,8 +2,8 @@
 
 Full featured flight computer with 1 kHz logging, remote control power 'WiFi' switch, four pyro channels, camera control, and control of up to six servos for active roll control, guidance, or other functions. Downlink and GPS tracking via a LoRa radio to ground station and companion iOS app for configuration, monitoring, and voice call outs during flight.
 
-<!-- TODO: Add hero photo of the rocket -->
-![TinkerRocket](docs/images/rocket_hero.jpg)
+<!-- TODO: add a hero photo, then restore this:
+![TinkerRocket](docs/images/rocket_hero.jpg) -->
 
 ## Overview
 
@@ -25,17 +25,17 @@ Finally, manage the flight data intuitively by uploading from the flight compute
 
 ## Architecture
 
-<!-- TODO: Add system architecture photo/diagram -->
-![Architecture](docs/images/architecture.jpg)
+<!-- TODO: add a system photo/diagram, then restore this:
+![Architecture](docs/images/architecture.jpg) -->
 
 ```
                         ┌─────────────────────────────────┐
                         │        FLIGHT COMPUTER          │
                         │                                 │
- ISM6HG256 (1000 Hz) ──>│  Sensor       EKF        PID   │
+ ISM6HG256 (1920 Hz) ──>│  Sensor       EKF        PID   │
  BMP585    (500 Hz) ──>│  Collector ──> (15-state) ──> Mixer ──> 1-4x Servos
- MMC5983MA (200 Hz) ──>│              Roll Control / Guidance PN        │
- u-blox M10 (10-25 Hz) ──>│                                 │
+ IIS2MDC   (100 Hz) ──>│              Roll Control / Guidance PN        │
+ u-blox M10 (18 Hz) ──>│                                 │
                         └──────┬──────────────────────────┘
                                │ I2S (22 kHz DMA)
                                │ I2C (commands)
@@ -56,11 +56,28 @@ Finally, manage the flight data intuitively by uploading from the flight compute
                         └───────────────────────────────────┘
 ```
 
-### Deeper reading
+## Documentation
 
-This README covers what the system is and how to build it. For how each board actually
-works — task model, data paths, state machines, and the non-obvious decisions — see
-**[docs/architecture/](docs/architecture/README.md)**.
+This README covers what the system is and how to build it. For how each part actually
+works — task model, data paths, state machines, and the decisions that aren't visible
+from reading the code — see **[docs/architecture/](docs/architecture/README.md)**:
+
+| Page | Covers |
+|------|--------|
+| [Flight Computer](docs/architecture/flight-computer.md) | ESP32-P4 — two-core task model, the 1 kHz loop, flight states, estimation gates, roll vs guidance, pyro |
+| [Out Computer](docs/architecture/out-computer.md) | ESP32-S3 — the two power states, telemetry ingest, flight log, radios, BLE dispatch |
+| [Base Station](docs/architecture/base-station.md) | ESP32-S3 — link recovery, the multi-rocket tracker, host-tested policy headers |
+| [iOS App](docs/architecture/ios-app.md) | SwiftUI — fleet/roster model, transport, profile sync, offline maps |
+| [Protocols](docs/architecture/protocols.md) | the four links, why each is shaped that way, and how to add to the wire safely |
+
+Each page ends with a **Gotchas** section carrying the details that have cost bench time.
+
+Two references are generated from source and re-checked in CI, so they cannot drift:
+
+- **[Protocol reference](docs/architecture/generated/protocol-reference.md)** — message
+  types, struct sizes, both BLE command spaces, flags, LoRa constants
+- **[Section maps](docs/architecture/generated/)** — a navigable index of each firmware's
+  `main.cpp` (they are 5,000–7,500 lines each), plus a module map for the iOS app
 
 ## Hardware
 
@@ -68,11 +85,14 @@ works — task model, data paths, state machines, and the non-obvious decisions 
 
 | Sensor | Type | Interface | Rate | Range |
 |--------|------|-----------|------|-------|
-| **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 960 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
+| **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 1920 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
 | **BMP585** | Barometer | SPI | 500 Hz | 300-1250 hPa |
-| **IIS2MDCTR** | Magnetometer | I2C | 150 Hz | +/-50 Gauss |
+| **IIS2MDCTR** | Magnetometer | I2C | 100 Hz | +/-50 Gauss |
 | **u-blox M10** | GNSS | UART 115200 | 18 Hz | GPS/GLONASS/Galileo/BeiDou |
 | **INA230** | Power monitor | I2C | 10 Hz | Voltage, current, SOC |
+
+Rates above are the configured rates on a V8 board. Earlier boards carry an MMC5983MA
+magnetometer (200 Hz) instead of the IIS2MDC; the board header selects which is used.
 
 ### Radios
 
@@ -122,7 +142,14 @@ TinkerRocket/
 ├── tests/integration/          # Binary log replay integration tests
 ├── preflight/                  # Pre-flight go/no-go checklist
 │
-├── .github/workflows/          # CI: cpp-tests, sim-tests, ios-tests
+├── docs/
+│   ├── architecture/           # Per-codebase architecture pages (+ generated maps)
+│   └── plans/                  # Design plans written before the work
+│
+├── Data_Analysis/              # Flight-log analysis and plotting scripts
+├── tools/                      # Wire-code guards, doc generators, bench utilities
+│
+├── .github/workflows/          # CI (see below)
 └── ARCHIVE/                    # Previous hardware iterations
 ```
 
@@ -130,7 +157,7 @@ TinkerRocket/
 
 ### Prerequisites
 
-- [ESP-IDF v5.x](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/) for firmware
+- [ESP-IDF v6.0](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/) for firmware — every project needs v6; CI builds on `espressif/idf:v6.0.1`
 - Xcode 16+ for iOS app
 - Python 3.10+ for simulation
 - CMake 3.16+ for host-side tests
@@ -192,7 +219,8 @@ git clone --recurse-submodules https://github.com/Tinkerbug-Robotics/TinkerRocke
 
 ### C++ Unit Tests (GoogleTest)
 
-90 tests covering all safety-critical flight libraries:
+Roughly 660 tests across 35 suites, covering the safety-critical flight libraries and
+the pure-logic policies extracted from firmware so they can run without hardware:
 
 ```bash
 cmake -S tests_cpp -B tests_cpp/build -DCMAKE_BUILD_TYPE=Debug
@@ -200,22 +228,21 @@ cmake --build tests_cpp/build -j$(nproc)
 ctest --test-dir tests_cpp/build --output-on-failure
 ```
 
-| Test Suite | Tests | Coverage |
-|------------|-------|----------|
-| `test_ekf` | 15 | EKF convergence, quaternion norm, bias estimation, NaN safety |
-| `test_kinematic_checks` | 11 | Launch/apogee/landing detection, spike rejection |
-| `test_pid` | 11 | P/I/D terms, anti-windup, derivative-on-measurement |
-| `test_control_mixer` | 10 | Cruciform mixing, gain scheduling, fin clamping |
-| `test_guidance_pn` | 9 | PN commands, acceleration clamping, CPA detection |
-| `test_coordinates` | 7 | ECEF/LLA roundtrip, ENU transforms, Quat2Euler |
-| `test_sensor_data_converter` | 10 | All sensor types: IMU, baro, GNSS, mag, power |
-| `test_lora_roundtrip` | 6 | Full OC -> Base Station -> App data pipeline |
-| `test_rocket_computer_types` | 6 | Struct sizes, flag bits, frame constants |
-| `test_crc16_compat` | 5 | CRC cross-platform compatibility (C++ and Swift) |
+| Area | Suites |
+|------|--------|
+| Estimation and control | `test_ekf`, `test_pid`, `test_control_mixer`, `test_guidance_pn`, `test_coordinates`, `test_orientation`, `test_geomag` |
+| Flight events | `test_kinematic_checks`, `test_burnout_detector`, `test_baro_gate_policy` |
+| Wire contract | `test_rocket_computer_types`, `test_lora_roundtrip`, `test_crc16_compat`, `test_uart_link_codec`, `test_ble_chunk_size` |
+| Storage and logging | `test_tr_flightlog_core`, `test_tr_flightlog_wire_format`, `test_nand_bitmap_store`, `test_mram_dirty_policy`, `test_bad_block_scan_policy` |
+| Base-station policies | `test_bs_*` — battery SoC, uplink queue/window/policy, log policy, download policy |
+| Sensors and sim | `test_sensor_data_converter`, `test_sim_sensor_model`, `test_sim_pad_align`, `test_mag_calibrator` |
+
+Suite-level counts are deliberately not listed here — they change with every PR. `ctest`
+is the authority.
 
 ### Simulation Tests (pytest)
 
-48 tests validating pybind11 bindings match flight code:
+Around 125 tests validating that the pybind11 bindings match the flight code:
 
 ```bash
 cd tinkerrocket-sim
@@ -242,12 +269,17 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Three GitHub Actions workflows run automatically on push:
+Seven GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
-- **cpp-tests.yml** -- Triggered by changes to `tinkerrocket-idf/components/`, `tests_cpp/`, or `tests/integration/`
-- **firmware-build.yml** -- Full ESP-IDF compilation of `out_computer` and `base_station` (Docker: `espressif/idf:v5.3.2`)
-- **sim-tests.yml** -- Triggered by changes to `tinkerrocket-sim/` or the component sources it builds from
-- **ios-tests.yml** -- Triggered by changes to `TinkerRocketApp/`
+| Workflow | What it does |
+|----------|--------------|
+| **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tests_cpp/`, or `tests/integration/` |
+| **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, and `radio_board` (Docker: `espressif/idf:v6.0.1`) |
+| **sim-tests.yml** | pytest for `tinkerrocket-sim/` and the component sources it binds to |
+| **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
+| **flight-report-tests.yml** | Flight-report tooling |
+| **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
+| **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source |
 
 ## Communication Protocols
 
@@ -257,28 +289,42 @@ All inter-board and logged data uses a consistent framing protocol:
 
 ```
 [0xAA 0x55 0xAA 0x55] [Type] [Length] [Payload] [CRC16_MSB] [CRC16_LSB]
-     (4 bytes)         (1)    (1)      (0-68)     (1)         (1)
+   (start of frame)     (1)     (1)   (0-MAX)      (1)         (1)
 ```
 
 CRC-16 polynomial: 0x8001, initial: 0x0000.
 
 ### Message Types
 
+The main sensor frames, with the rate each is produced at:
+
 | Type | Name | Size | Rate |
 |------|------|------|------|
 | 0xA1 | GNSS | 42 B | 18 Hz |
-| 0xA2 | ISM6HG256 (IMU) | 22 B | 960 Hz |
+| 0xA2 | ISM6HG256 (IMU) | 22 B | 1920 Hz |
 | 0xA3 | BMP585 (Baro) | 12 B | 500 Hz |
-| 0xA4 | MMC5983MA (Mag) | 16 B | 200 Hz |
-| 0xA5 | NonSensor (EKF) | 43 B | 500 Hz |
+| 0xA5 | NonSensor (EKF) | 50 B | 500 Hz |
 | 0xA6 | Power | 10 B | 10 Hz |
-| 0xF1 | LoRa Telemetry | 59 B | 2 Hz |
+| 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
+| 0xF1 | LoRa Telemetry | 65 B | 2 Hz |
+
+`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from earlier boards, which V8 does
+not populate.
+
+**All 89 message types, both BLE command spaces, and every struct's wire size are in the
+[generated protocol reference](docs/architecture/generated/protocol-reference.md)** —
+extracted from source and CI-checked, so it cannot go stale the way a hand-kept table
+does.
 
 ### I2S Telemetry Pipeline
 
 The flight computer streams sensor data to the out computer via I2S DMA at 22,050 Hz sample rate (88 KB/s bandwidth). Frames are zero-copy from ISR callbacks into an MRAM ring buffer, then flushed to NAND flash.
 
 ## Performance
+
+Measured on the bench, not recomputed from configuration — treat these as a snapshot
+from a specific run rather than current targets. Where a figure disagrees with the
+[Sensors](#sensors) table, the configured rate there is the authority.
 
 | Metric | Target | Achieved |
 |--------|--------|----------|
@@ -294,8 +340,8 @@ The flight computer streams sensor data to the out computer via I2S DMA at 22,05
 
 ## iOS App
 
-<!-- TODO: Add iOS app screenshot -->
-![iOS App](docs/images/ios_app.jpg)
+<!-- TODO: add an app screenshot, then restore this:
+![iOS App](docs/images/ios_app.jpg) -->
 
 The TinkerRocketApp is a SwiftUI companion app providing:
 
@@ -324,7 +370,7 @@ Every unit has a persistent identity stored in NVS flash:
 | `network_id` | 1 byte | LoRa network namespace (0-255), isolates different users |
 | `rocket_id` | 1 byte | Unique ID per rocket within a network (1-254) |
 
-BLE advertising names use the format `TR-R-<name>` for rockets and `TR-B-<name>` for base stations (e.g. `TR-R-Atlas`, `TR-B-PadAlpha`). The app configures identity on first connect via BLE commands 40/41/42.
+Out of the box a unit names itself from its hardware ID — `TR-R-<hex>` for rockets, `TR-B-<hex>` for base stations. Once renamed, **a device advertises its user-set name verbatim**, with no prefix; the app therefore discovers devices by service UUID and never by name. The app configures identity on first connect via BLE commands 40/41/42.
 
 ### Network Isolation
 
@@ -336,19 +382,22 @@ Multiple users at the same field are isolated via three layers:
 
 ### LoRa Frame Format
 
-Telemetry packets (rocket to base station) carry a 2-byte routing header:
+Telemetry packets (rocket to base station) open with routing and sequencing fields:
 
 ```
-[network_id:1][rocket_id:1][telemetry_payload:57] = 59 bytes total
+[network_id:1][rocket_id:1][next_channel_idx:1][seq:2][telemetry payload:60] = 65 bytes
 ```
 
-Uplink commands (base station to rocket) are addressed:
+`next_channel_idx` tells the base station which channel to hop to after this packet
+(`0xFF` = stay put), so the two ends stay together while frequency hopping.
+
+Uplink commands (base station to rocket) are addressed, and carry the same hop field:
 
 ```
-[0xCA][network_id:1][target_rocket_id:1][cmd:1][len:1][payload:0-18]
+[0xCA][network_id:1][target_rocket_id:1][next_channel_idx:1][cmd:1][len:1][payload:0-33]
 ```
 
-Target rocket ID `0xFF` is broadcast (e.g., time sync). The rocket filters incoming uplinks and ignores packets for other networks or rocket IDs.
+Target rocket ID `0xFF` is broadcast (e.g., time sync). The rocket filters incoming uplinks and ignores packets for other networks or rocket IDs. An oversized payload is rejected outright rather than truncated — a truncated command would go out malformed with a consistent-looking length and no error surfaced.
 
 ### Base Station Multi-Rocket Tracker
 
@@ -366,14 +415,24 @@ BLEFleet (owns CBCentralManager, scanning, connection routing)
   │   ├── BLEDevice (rocket)        -- telemetry, config, files, commands
   │   └── BLEDevice (base station)  -- relays telemetry from remote rockets
   │       └── remoteRockets: [RemoteRocket]  -- rockets seen via LoRa relay
-  └── activeDeviceID                -- which device the dashboard shows
+  └── activeDeviceID                -- which device is selected
+
+RocketRoster (rebuilt on demand from the live objects above)
+  └── [RocketSubject]               -- one logical rocket, merged across every
+                                       link that reaches it (direct BLE and/or
+                                       one or more relaying base stations)
 ```
 
 - **BLEFleet** manages the shared `CBCentralManager`, scan/discovery, and connection routing
 - **BLEDevice** holds per-peripheral state (telemetry, config, file downloads, RSSI) and implements `CBPeripheralDelegate`
-- **RemoteRocket** holds telemetry forwarded by a base station, identified by `(baseStationID, rocketID)`
+- **RemoteRocket** holds telemetry forwarded by a base station
+- **RocketRoster** answers the question the operator actually has — *what rockets can I reach right now* — by merging links into one `RocketSubject` per rocket. It holds references, not copies, so views observe the leaf objects for per-frame updates
+
+Rocket identity is the pair `(networkID, rocketID)`: rocket IDs are unique only within a network, so two base-station/rocket pairs on different networks may legitimately reuse one.
 
 When multiple devices are connected, the dashboard shows a horizontal chip bar for switching between them. Remote rockets appear as orange chips with an antenna icon.
+
+Full detail in the [iOS App architecture page](docs/architecture/ios-app.md).
 
 ### First-Launch Onboarding
 
