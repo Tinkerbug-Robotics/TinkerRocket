@@ -7,7 +7,7 @@ An open source hardware and software full featured flight computer with out of t
 | **High-rate logging** | Full sensor suite data logging at configurable rates up to 4 kHz |
 | **Remote power switch** | Built-in low power wireless switch to completely disable pyro channels and allow you to install the computer days ahead of a flight while still having plenty of power to fly. Power it up on the pad using the phone app over BlueTooth |
 | **Four pyro channels** | Fully isolated (low and high switched), with continuity monitoring and app configurable triggers |
-| **Camera control** | RunCam Split 4 and 'naked' GoPro Hero 10 Black — power and recording, remotely over LoRa |
+| **Camera control** | Control a RunCam Split 4 or 'naked' GoPro, starting or stopping recording from the app or over LoRa just before take off. Monitor current usage in the app to ensure everything is recording before you launch |
 | **Active control** | 1-4 servos for roll control, or flight stabilization under a proportional-navigation guidance law |
 | **Modular radios** | GNSS and LoRa on swappable daughter boards; ships with long-range LoRa and u-blox GNSS |
 | **Voice callouts** | Altitude, apogee, max speed and descent rate spoken aloud during the flight |
