@@ -1,6 +1,6 @@
 # TinkerRocket
 
-Full featured flight computer with 1 kHz logging, remote control power 'WiFi' switch, four pyro channels, camera control, and control of up to six servos for active roll control, guidance, or other functions. Downlink and GPS tracking via a LoRa radio to ground station and companion iOS app for configuration, monitoring, and voice call outs during flight.
+Full featured flight computer with 1 kHz logging, remote control power 'WiFi' switch, four pyro channels, camera control, and 1-4 servos for active roll control or proportional-navigation guidance. Downlink and GPS tracking via a LoRa radio to ground station and companion iOS app for configuration, monitoring, and voice call outs during flight.
 
 <!-- TODO: add a hero photo, then restore this:
 ![TinkerRocket](docs/images/rocket_hero.jpg) -->
@@ -12,10 +12,10 @@ The system comprises three physical cooperating components:
 | Component | Hardware | Role |
 |-----------|----------|------|
 | **Flight Computer** | ESP32-P4 & ESP32-S3 | Sensor fusion, EKF, guidance, servo control, data logging, LoRa downlink, BLE telemetry |
-| **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, SD card logging |
+| **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, onboard-flash logging |
 | **iOS App** | iPhone/iPad | Real-time dashboard, file management, configuration |
 
-The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands four fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
+The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands 1-4 fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
 
 Remove the need for a dedicated through wall power switch using the built in low power 'WiFi' type switch. After plugging in a battery the unit draws only 10-15 mA, which gives you over 2.5 days of battery life on a typical 600 mAh battery. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control recording remotely from the base station over LoRa as well.
 
@@ -32,29 +32,31 @@ Finally, manage the flight data intuitively by uploading from the flight compute
                         ┌─────────────────────────────────┐
                         │        FLIGHT COMPUTER          │
                         │                                 │
- ISM6HG256 (1920 Hz) ──>│  Sensor       EKF        PID   │
- BMP585    (500 Hz) ──>│  Collector ──> (15-state) ──> Mixer ──> 1-4x Servos
- IIS2MDC   (100 Hz) ──>│              Roll Control / Guidance PN        │
- u-blox M10 (18 Hz) ──>│                                 │
+ ISM6HG256 (1920 Hz*)──>│  Sensor       EKF        PID    │
+      BMP585 (500 Hz)──>│  Collector ──> (15-state) ──> Mixer ──> 1-4x Servos
+     IIS2MDC (100 Hz)──>│  Roll Control / Guidance PN     │
+   u-blox M10 (18 Hz)──>│                                 │
                         └──────┬──────────────────────────┘
                                │ I2S (22 kHz DMA)
                                │ I2C (commands)
                         ┌──────▼──────────────────────────┐
-                        │         OUT COMPUTER             │
-                        │                                  │
-                        │  MRAM Ring ──> NAND Flash (log)  │
+                        │         OUT COMPUTER            │
+                        │                                 │
+                        │  MRAM Ring ──> NAND Flash (log) │
                         │  LoRa TX (2 Hz) ──> 915 MHz     │──── BLE ────> iOS App
-                        │  BLE GATT Server                 │     (direct)
-                        └──────┬───────────────────────────┘
+                        │  BLE GATT Server                │     (direct)
+                        └──────┬──────────────────────────┘
                                │ LoRa 915 MHz
-                        ┌──────▼───────────────────────────┐
-                        │         BASE STATION              │
-                        │                                   │
-                        │  LoRa RX ──> SD Card (CSV log)   │──── BLE ────> iOS App
-                        │  BLE GATT Server                  │    (relayed)
-                        │  MAX17205G Battery Monitor        │
-                        └───────────────────────────────────┘
+                        ┌──────▼──────────────────────────┐
+                        │         BASE STATION            │
+                        │                                 │
+                        │  LoRa RX ──> Flash (CSV log)    │──── BLE ────> iOS App
+                        │  BLE GATT Server                │    (relayed)
+                        │  MAX17303G+ Battery Monitor     │
+                        └─────────────────────────────────┘
 ```
+
+\* IMU rate is app-settable — 960 / 1920 / 3840 Hz. 1920 Hz is the default.
 
 ## Documentation
 
@@ -85,7 +87,7 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 
 | Sensor | Type | Interface | Rate | Range |
 |--------|------|-----------|------|-------|
-| **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 1920 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
+| **ISM6HG256** | 6-axis IMU | SPI @ 10 MHz | 960 / **1920** / 3840 Hz | Low-g: +/-16g, High-g: +/-256g, Gyro: +/-4000 dps |
 | **BMP585** | Barometer | SPI | 500 Hz | 300-1250 hPa |
 | **IIS2MDCTR** | Magnetometer | I2C | 100 Hz | +/-50 Gauss |
 | **u-blox M10** | GNSS | UART 115200 | 18 Hz | GPS/GLONASS/Galileo/BeiDou |
@@ -94,18 +96,28 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 Rates above are the configured rates on a V8 board. Earlier boards carry an MMC5983MA
 magnetometer (200 Hz) instead of the IIS2MDC; the board header selects which is used.
 
+**IMU logging rate is settable from the app** — nominally 1 kHz, 2 kHz, or 4 kHz, which
+land on the sensor's own output rates of 960, 1920 (default), and 3840 Hz. The rate
+cannot be changed in flight.
+
 ### Radios
 
 | Radio | Protocol | Frequency | Data Rate | Purpose |
 |-------|----------|-----------|-----------|---------|
-| **LLCC68** | LoRa | 915 MHz | 2-10 Hz | Rocket-to-ground telemetry |
+| **LLCC68** | LoRa | 915 MHz | 2 Hz | Rocket-to-ground telemetry |
 | **NimBLE** | BLE 5.0 | 2.4 GHz | ~10 Hz | Ground-to-app telemetry |
 
 ### Control
 
-- **1-4 fin-tab servos** configurable PWM control for roll or guide straight up
+- **1-4 fin-tab servos** on configurable PWM. Roll control and proportional-navigation
+  guidance each drive 1-4 servos
 - **4x pyro channels** with continuity monitoring and configurable triggers
 - **RunCam Split 4 and GoPro Hero 10 Black** support via UART/GPIO control
+
+Current boards (V7, V8) break out four servo outputs. **V9 replaces these with a general
+12-channel GPIO block**, one channel of which is ADC-capable. Those channels are not
+servo-dedicated — they can drive servos, carry communication, or read external sensors.
+Roll control and guidance still use 1-4 servos each.
 
 ## Repository Structure
 
@@ -301,7 +313,7 @@ The main sensor frames, with the rate each is produced at:
 | Type | Name | Size | Rate |
 |------|------|------|------|
 | 0xA1 | GNSS | 42 B | 18 Hz |
-| 0xA2 | ISM6HG256 (IMU) | 22 B | 1920 Hz |
+| 0xA2 | ISM6HG256 (IMU) | 22 B | 1920 Hz (default) |
 | 0xA3 | BMP585 (Baro) | 12 B | 500 Hz |
 | 0xA5 | NonSensor (EKF) | 50 B | 500 Hz |
 | 0xA6 | Power | 10 B | 10 Hz |
@@ -466,6 +478,26 @@ python scripts/run_closed_loop.py --config config/sim_config.yaml
 
 ## License
 
-Copyright (c) 2026 Tinkerbug Robotics. All rights reserved.
+Copyright (c) 2026 Tinkerbug Robotics.
 
-<!-- TODO: Choose and add license (MIT, Apache 2.0, etc.) -->
+**Software in this repository is licensed under the [GNU General Public License
+v3.0 or later](LICENSE)** — firmware, the iOS app, the simulator, and the tooling.
+You may use, study, modify and redistribute it, and anything you distribute that
+builds on it must be released under the same terms with source available.
+
+**Hardware design files will be licensed under [CERN-OHL-S
+v2](https://cern-ohl.web.cern.ch/)** (strongly reciprocal) when they are added to
+this repository. A `hardware/LICENSE` will accompany them; until then, no hardware
+files are published here.
+
+Two exceptions to the above:
+
+| | |
+|---|---|
+| **Vendored components** | Third-party code under `tinkerrocket-idf/components/` keeps its own license — RadioLib is MIT, `spi_nand_flash` is Apache-2.0. Both permit inclusion in a GPL-3.0 work; their own terms continue to govern those files. See the `LICENSE` / `license.txt` in each. |
+| **`TR_GuidancePN`** | The proportional-navigation guidance law is a separate private submodule and is **not** covered by this license. Everything else builds and runs without it (see [Guidance](#guidance-optional)), so the public tree is complete and buildable on its own. |
+
+TinkerRocket controls pyrotechnic devices. As set out in sections 15 and 16 of the
+GPL, it comes with **no warranty of any kind** — you are responsible for the safe
+construction, testing, and operation of anything you build from it, and for
+complying with the launch regulations that apply to you.
