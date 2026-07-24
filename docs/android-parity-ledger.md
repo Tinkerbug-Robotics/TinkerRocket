@@ -21,4 +21,16 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 
 ## Behavior divergences
 
-*(none)*
+| Since | Divergence | Rationale |
+|---|---|---|
+| 2026-07-23 | Disconnect suppression is **per-device** (`pendingUserDisconnects` set); iOS uses one global `userInitiatedDisconnect` flag that can suppress the WRONG device's reconnect in a multi-device fleet | The global flag is an iOS latent bug, not a behavior to preserve |
+| 2026-07-23 | Download API returns typed `DownloadResult.Busy` for a second concurrent download; iOS silently overwrites the in-flight completion handler (leaking it) | Silent handler loss is a defect; byte/wire behavior unchanged |
+| 2026-07-23 | Reconnect endgame is **re-scan → sighting-gated autoConnect**; iOS parks a CoreBluetooth `connect()` forever | Android `autoConnect=true` from a bare MAC can silently never fire (plan §3); the CB parked connect has no analog |
+| 2026-07-23 | Scan restart within 15 s is NOT truncated (epoch-guarded timeout); iOS's unguarded timer truncates a restarted scan | The iOS behavior is a timer-hygiene bug; a restarted scan deserves its full window |
+| 2026-07-23 | KnownDeviceStore device list sorts plain case-insensitive; iOS uses `localizedCaseInsensitiveCompare` | Locale-dependent ordering is cosmetic; plain ordering is deterministic across devices |
+
+## Feature lag (session layer, deferred to Phase 3)
+
+| Since | Area | Status |
+|---|---|---|
+| 2026-07-23 | RocketRoster merge (RocketSubject keyed (nid,rid), freshness tiers, commandLink selection incl. the foregroundBSID guard) + the 10 RocketRosterTests cases | Phase 3 with the dashboard that consumes it |

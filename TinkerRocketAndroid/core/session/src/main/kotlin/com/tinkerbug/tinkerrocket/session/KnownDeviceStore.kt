@@ -374,7 +374,7 @@ public class KnownDeviceStore(
     }
 
     // iOS uses localizedCaseInsensitiveCompare (locale collation); plain
-    // case-insensitive ordering here — see NOTES.
+    // case-insensitive ordering here — see docs/android-parity-ledger.md.
     private fun sorted(list: List<KnownDevice>): List<KnownDevice> =
         list.sortedWith(
             compareBy<KnownDevice> { rank(it.deviceType) }

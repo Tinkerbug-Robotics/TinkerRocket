@@ -304,7 +304,7 @@ class FleetManagerTest {
     @Test
     fun disconnectAll_suppressesReconnectForEveryDevice() = runTest {
         // Per-device suppression — the iOS single global flag would only
-        // suppress the FIRST device's disconnect event (see NOTES).
+        // suppress the FIRST device's disconnect event (see docs/android-parity-ledger.md).
         val h = fleetHarness()
         discoverAndConnect(h, "aa:01", "TR-R-Atlas")
         discoverAndConnect(h, "aa:02", "TR-B-Ground")
@@ -376,10 +376,13 @@ class FleetManagerTest {
         val dev = assertNotNull(h.fleet.devices.value["bs:01"])
         assertEquals(2, dev.generation)
         assertEquals(3, h.fleet.focusFor("bs:01"), "Focus map survives session recreation")
-        // #390: the BS keeps the pin in RAM only — re-pushed on the fresh
-        // link at adopt time.
+        // #390: the pin is SEEDED into the fresh session (iOS BLEFleet.adopt);
+        // the session's own choreography sends the single cmd 45 after cmd 20.
+        // The fleet must NOT write it — an adopt-time push double-sent and
+        // could land before cmd 9 (Phase 2 review).
+        assertEquals(3, h.sessions.created.last().seededFocus)
         val newTransport = h.transports.lastFor("bs:01")
-        assertContentEquals(Commands.setFocusRocket(3), newTransport.writes.single().second)
+        assertTrue(newTransport.writes.isEmpty(), "fleet must not push cmd 45 at adopt")
     }
 
     // ------------------------------------------- foreground BS pair (#390)

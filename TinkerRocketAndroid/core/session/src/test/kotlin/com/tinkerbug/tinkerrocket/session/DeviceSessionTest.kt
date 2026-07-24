@@ -61,7 +61,6 @@ class DeviceSessionTest {
         // the INSTANT the command char is usable, BEFORE the file CCCDs.
         assertEquals(
             listOf(
-                "connect",
                 "mtu:517",
                 "cccd:TELEMETRY",
                 "write:COMMAND:9",
@@ -228,6 +227,55 @@ class DeviceSessionTest {
         assertTrue(h.session.hasReceivedTelemetry.value)
     }
 
+    @Test
+    fun hasReceivedTelemetry_relayedFrameAlsoConfirms() = runTest {
+        // iOS PowerStateGateTests.RelayedFrame_AlsoConfirms: the gate flips
+        // BEFORE the relay early-return.
+        val h = startedSession(type = BleDeviceType.BASE_STATION) {
+            configIdentityJson = null
+        }
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1)
+        runCurrent()
+        assertTrue(h.session.hasReceivedTelemetry.value)
+    }
+
+    @Test
+    fun hasReceivedTelemetry_garbageFrameDoesNotConfirm() = runTest {
+        // iOS PowerStateGateTests.GarbageFrame_DoesNotConfirm.
+        val h = startedSession { configJson = null; configPyroJson = null; configIdentityJson = null; pushEchoWithConfig = false }
+        runCurrent()
+        h.fw.emitTelemetryJson("not json at all")
+        runCurrent()
+        assertFalse(h.session.hasReceivedTelemetry.value)
+    }
+
+    @Test
+    fun hasReceivedTelemetry_firstFrameConfirmsPowerOff() = runTest {
+        // iOS PowerStateGateTests.FirstFrame_ConfirmsPowerOff: a frame with
+        // pwr_pin OFF still confirms (the point is KNOWING, not being on).
+        val h = startedSession()
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", pwrPinOn = false)
+        runCurrent()
+        assertTrue(h.session.hasReceivedTelemetry.value)
+        assertFalse(h.session.telemetry.value.pwrPinOn)
+    }
+
+    @Test
+    fun relayedEmptyUnitName_neverClobbersLearnedName() = runTest {
+        // iOS RemoteRocket.updateTelemetry guards !name.isEmpty.
+        val h = startedSession(type = BleDeviceType.BASE_STATION) {
+            configIdentityJson = null
+        }
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1, sourceUnitName = "Atlas")
+        runCurrent()
+        h.fw.emitTelemetry(state = "READY", sourceRocketId = 1, sourceUnitName = "")
+        runCurrent()
+        assertEquals("Atlas", h.session.remoteRockets.value.single().unitName)
+    }
+
     // ── #159 power-on watchdog ───────────────────────────────────────────
 
     @Test
@@ -317,25 +365,34 @@ class DeviceSessionTest {
             configIdentityJson = null   // keep the seeded BS type
         }
         runCurrent()
-        // Relayed frame latches sticky focus onto rocket 1.
+        // Emit OFF the ticker epoch so the 2 s ticks observe ages 1000/3000/
+        // 5000 — age 3000 must stay LIVE, pinning the strict `> 3000` rule
+        // (an `>= 3000` or any 2000-4000 threshold fails this test).
+        advanceTimeBy(1000)
         h.fw.emitTelemetry(state = "READY", sourceRocketId = 1, sourceUnitName = "Atlas", dataStatusRaw = 0)
         runCurrent()
         assertEquals(1, h.session.focusRocketId.value)
         assertEquals(TelemetryData.DataStatus.LIVE, h.session.effectiveDataStatus.value)
 
-        // Tick at 2 s: age 2000 ≤ 3000 → still LIVE.
-        advanceTimeBy(2000)
+        // Tick at 2 s: age 1000 ≤ 3000 → LIVE.
+        advanceTimeBy(1000)
         runCurrent()
-        assertEquals(2000L, h.session.focusedRelayAgeMs.value)
+        assertEquals(1000L, h.session.focusedRelayAgeMs.value)
         assertEquals(TelemetryData.DataStatus.LIVE, h.session.effectiveDataStatus.value)
 
-        // Tick at 4 s: age 4000 > 3000 → worsened to STALE while the frame
+        // Tick at 4 s: age EXACTLY 3000 → still LIVE (strictly greater).
+        advanceTimeBy(2000)
+        runCurrent()
+        assertEquals(3000L, h.session.focusedRelayAgeMs.value)
+        assertEquals(TelemetryData.DataStatus.LIVE, h.session.effectiveDataStatus.value)
+
+        // Tick at 6 s: age 5000 > 3000 → worsened to STALE while the frame
         // still SAYS live (the BS re-push freeze this overlay exists for).
         advanceTimeBy(2000)
         runCurrent()
         assertEquals(TelemetryData.DataStatus.STALE, h.session.effectiveDataStatus.value)
         assertEquals(TelemetryData.DataStatus.LIVE, h.session.telemetry.value.dataStatus)
-        assertEquals(4000L, h.session.effectiveDataAgeMs.value)
+        assertEquals(5000L, h.session.effectiveDataAgeMs.value)
 
         // SYNCING is never overridden by the overlay.
         h.fw.emitTelemetry(sourceRocketId = 1, dataStatusRaw = 2)

@@ -4,6 +4,7 @@ import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.ConfigIdentityMsg
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
@@ -153,11 +154,12 @@ public class FleetManager<S : Any>(
 
     /** Devices whose next Disconnected event is user-requested (suppresses
      *  the reconnect ladder).  Per-device, unlike the iOS single global
-     *  `userInitiatedDisconnect` flag — see NOTES (the global flag drops
+     *  `userInitiatedDisconnect` flag — see docs/android-parity-ledger.md (the global flag drops
      *  suppression for the 2nd device of a disconnectAll). */
     private val pendingUserDisconnects = mutableSetOf<String>()
 
     private var scanJob: Job? = null
+    private var scanEpoch: Int = 0
     private val reconnectJobs = mutableMapOf<String, Job>()
     private val connectJobs = mutableMapOf<String, Job>()
 
@@ -200,18 +202,24 @@ public class FleetManager<S : Any>(
         _isScanning.value = true
         _userInitiatedScan.value = userInitiated
         scanJob?.cancel()
+        // Epoch-guarded timeout: an already-queued stale timeout resumption
+        // (cancel() can't unqueue it) must not truncate the NEW scan.
+        // Deliberate divergence from iOS, whose unguarded 15 s timer DOES
+        // truncate a restarted scan — see the parity ledger (Phase 2 review).
+        val epoch = ++scanEpoch
         scanJob = scope.launch {
             try {
                 withTimeout(SCAN_TIMEOUT_MS) {
                     scanner.advertisements().collect { onAdvertisement(it) }
                 }
             } catch (_: TimeoutCancellationException) {
-                onScanTimeout()
+                if (epoch == scanEpoch) onScanTimeout()
             }
         }
     }
 
     public fun stopScanning() {
+        scanEpoch++   // invalidate any queued timeout resumption
         scanJob?.cancel()
         scanJob = null
         _isScanning.value = false
@@ -273,6 +281,10 @@ public class FleetManager<S : Any>(
         val name = discovered?.name ?: "Unknown"
         _statusMessage.value = "Connecting to $name..."
         connectJobs[deviceId]?.cancel()
+        // A user-driven connect supersedes any in-flight reconnect ladder —
+        // two concurrent tryConnects for one device would race adoption
+        // (Phase 2 review).
+        reconnectJobs.remove(deviceId)?.cancel()
         connectJobs[deviceId] = scope.launch {
             if (!tryConnect(deviceId, name, autoConnect = false)) {
                 _statusMessage.value = "Connection failed"
@@ -283,7 +295,7 @@ public class FleetManager<S : Any>(
     /**
      * User-initiated disconnect of one device.  Suppresses the reconnect
      * ladder for THIS device's next Disconnected event (per-device — see
-     * NOTES on the iOS global-flag divergence).
+     * docs/android-parity-ledger.md, iOS global-flag divergence).
      */
     public fun disconnect(deviceId: String) {
         val dev = _devices.value[deviceId] ?: return
@@ -305,11 +317,22 @@ public class FleetManager<S : Any>(
      */
     private suspend fun tryConnect(deviceId: String, name: String, autoConnect: Boolean): Boolean {
         val transport = transportFactory.create(deviceId, autoConnect)
+        // Disconnect watcher: registered UNDISPATCHED *before* connect() so a
+        // drop in the connect window can never be missed — transport.events
+        // has NO replay guarantee (BleTransport contract; Phase 2 review).
+        // The watcher is scoped to THIS transport: handleDisconnect ignores
+        // ghosts (see there).  One event drives the full teardown+reconnect
+        // decision (iOS didDisconnectPeripheral).
+        val watcher = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            transport.events.filterIsInstance<TransportEvent.Disconnected>().first()
+            handleDisconnect(deviceId, transport)
+        }
         return try {
             transport.connect()
             adopt(deviceId, name, transport)
             true
         } catch (_: Exception) {
+            watcher.cancel()
             false
         }
     }
@@ -335,7 +358,14 @@ public class FleetManager<S : Any>(
             ?: knownDevices.deviceTypeForAdvertisedName(advertisedName)
             ?: BleDeviceType.fromName(advertisedName)
 
-        val session = sessionFactory.create(deviceId, advertisedName, generation, transport)
+        // #390: the sticky focus pin is SEEDED into the session (iOS
+        // BLEFleet.adopt), never pushed from here — the session's connect
+        // choreography sends the single cmd 45 after cmd 20.  A fleet-side
+        // push raced the choreography and double-sent (Phase 2 review).
+        val session = sessionFactory.create(
+            deviceId, advertisedName, generation, transport,
+            seedFocusRocket = _bsFocus.value[deviceId],
+        )
         val device = FleetDevice(
             deviceId = deviceId,
             advertisedName = advertisedName,
@@ -347,24 +377,15 @@ public class FleetManager<S : Any>(
         _devices.value = LinkedHashMap(_devices.value).also { it[deviceId] = device }
         if (_activeDeviceId.value == null) _activeDeviceId.value = deviceId
         _statusMessage.value = "Connected to $advertisedName"
-
-        // #390: re-assert the radio-focus pin after every (re)connect — the
-        // BS keeps it in RAM only, so a BS reboot (which bounces BLE)
-        // forgets it.  Presence in bsFocus implies this device is a BS.
-        _bsFocus.value[deviceId]?.let { focus ->
-            sendCommandFrame(deviceId, Commands.setFocusRocket(focus))
-        }
-
-        // Disconnect watcher: one event drives the full teardown+reconnect
-        // decision (iOS didDisconnectPeripheral).
-        scope.launch {
-            transport.events.filterIsInstance<TransportEvent.Disconnected>().first()
-            handleDisconnect(deviceId)
-        }
     }
 
-    private fun handleDisconnect(deviceId: String) {
+    private fun handleDisconnect(deviceId: String, transport: BleTransport) {
         val dev = _devices.value[deviceId]
+        // Connection-scoped: a GHOST event (a replaced/failed transport's
+        // late Disconnected) must not tear down the CURRENT connection.
+        // Only the transport actually adopted for this device may act; a
+        // ghost's own cleanup is just its watcher ending (Phase 2 review).
+        if (dev != null && dev.transport !== transport) return
         if (dev != null) {
             sessionFactory.close(dev.session)
             _devices.value = LinkedHashMap(_devices.value).also { it.remove(deviceId) }
@@ -672,11 +693,21 @@ public interface TransportFactory {
  * fleet treats it opaquely so the two layers can evolve independently.
  */
 public interface FleetSessionFactory<S : Any> {
+    /**
+     * Build (and start) the per-connection session.  [seedFocusRocket] is the
+     * fleet's sticky BS focus pin for this device (null when none): the
+     * factory MUST seed it into the session BEFORE starting it (iOS
+     * BLEFleet.adopt seeds `focusRocketID`; the session's connect
+     * choreography then sends the single cmd 45 after cmd 20 — the fleet
+     * itself never writes it, so exactly ONE push happens per (re)connect,
+     * in the iOS order [9, 20, 45]).
+     */
     public fun create(
         deviceId: String,
         advertisedName: String,
         generation: Int,
         transport: BleTransport,
+        seedFocusRocket: Int?,
     ): S
 
     /** Teardown for a session whose connection dropped (iOS onDisconnect). */

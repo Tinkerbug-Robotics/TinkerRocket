@@ -86,6 +86,21 @@ public class DeviceSession(
      * rocket heard this session.
      */
     private val onAutoFocus: ((Int) -> Unit)? = null,
+    /**
+     * #140 per-packet fix recording (iOS `fleet?.recordRocketFix`): called
+     * synchronously for EVERY relayed rocket packet and for direct-rocket
+     * packets, so the fleet can latch the last VALID GPS fix per (nid, rid).
+     * Returns the latched fix (null when the packet carried no valid fix and
+     * nothing was latched before).  Wire to [FleetManager.recordRocketFix].
+     */
+    private val onRocketFix: ((TelemetryData, RocketKey) -> LastValidRocketFix?)? = null,
+    /**
+     * #140 re-latch/hydrate lookup (iOS `fleet?.lastValidRocketFix(for:)`):
+     * consulted on focus switches and when identity becomes known, so a
+     * reconnected session shows the last known position immediately instead
+     * of blanking until the next valid fix.
+     */
+    private val fixLookup: ((RocketKey) -> LastValidRocketFix?)? = null,
 ) : DeviceIdentityPusher {
 
     // ── Connection / link state ──────────────────────────────────────────
@@ -112,6 +127,16 @@ public class DeviceSession(
     /** When the last telemetry frame (any kind) was decoded on this link. */
     public var lastTelemetryAtMs: Long? = null
         private set
+
+    /**
+     * #140: the latched last-valid GPS fix for THIS session's rocket (direct
+     * link) or its focused relayed rocket (BS link).  Consumers read this,
+     * never per-frame telemetry lat/lon — after landing, frames stop carrying
+     * fresh GPS and a per-frame read blanks the map marker.  Survives
+     * disconnect by design (it is the fleet cache's mirror).
+     */
+    private val _lastValidRocketFix = MutableStateFlow<LastValidRocketFix?>(null)
+    public val lastValidRocketFix: StateFlow<LastValidRocketFix?> = _lastValidRocketFix.asStateFlow()
 
     // ── Identity ─────────────────────────────────────────────────────────
 
@@ -271,10 +296,14 @@ public class DeviceSession(
     public fun start(): Job {
         check(!started) { "DeviceSession.start() may only be called once" }
         started = true
-        // Subscribe BEFORE connecting so no event can be dropped.
+        // The TRANSPORT IS ALREADY CONNECTED by contract: the fleet owns
+        // connect() (iOS parity — CBCentralManager connects, BLEDevice never
+        // does).  Double-connecting here raced/violated the transport
+        // contract (Phase 2 review finding).  Standalone users (replay
+        // feeds, tests) must connect the transport before start().
+        // Subscribe first so no event can be dropped.
         scope.launch { transport.events.collect { onTransportEvent(it) } }
         return scope.launch {
-            transport.connect()
             _isConnected.value = true
             transport.requestMtu(REQUESTED_MTU)
             transport.enableNotifications(TrCharacteristic.TELEMETRY)
@@ -306,8 +335,8 @@ public class DeviceSession(
         _files.value = emptyList()
         _currentPage.value = 0
         _hasMoreFiles.value = false
-        clearSimBanner()
-        clearPoweringOn()
+        clearSimBannerNow()
+        clearPoweringOnNow()
         _rocketConfig.value = null
         // Stale REVIEW must not bleed across sessions (#96); the FC
         // republishes IDLE on reconnect anyway.
@@ -392,7 +421,10 @@ public class DeviceSession(
             remoteMap[rid] = if (existing != null) {
                 existing.copy(
                     telemetry = data,
-                    unitName = data.sourceUnitName ?: existing.unitName,
+                    // iOS RemoteRocket.updateTelemetry guards !name.isEmpty —
+                    // an empty relayed name never clobbers a learned one.
+                    unitName = data.sourceUnitName?.takeIf { it.isNotEmpty() }
+                        ?: existing.unitName,
                     lastSeenMs = now,
                 )
             } else {
@@ -405,6 +437,12 @@ public class DeviceSession(
             }
             _remoteRockets.value = remoteMap.values.toList()
 
+            // #140: record the fix for EVERY relayed rocket, keyed by the
+            // BS's OWN network id (it only forwards its own network) —
+            // rocket ids are only unique per network (#390).
+            val fix = onRocketFix?.invoke(
+                data, RocketKey(_identity.value.networkId ?: 0, rid))
+
             // #390: sticky first-heard focus — never moves on its own after
             // this; the user (or the fleet re-seed) switches it.
             if (_focusRocketId.value == null) {
@@ -413,6 +451,9 @@ public class DeviceSession(
             }
             if (rid == _focusRocketId.value) {
                 _telemetry.value = data
+                // Mirror the latched fix only when non-null — a GPS-less
+                // packet must not blank the marker (#140).
+                if (fix != null) _lastValidRocketFix.value = fix
             }
             recomputeEffective()
             return
@@ -432,7 +473,16 @@ public class DeviceSession(
         _telemetry.value = data
         // #159: the rocket finished flushing and powered on — drop the busy
         // state (guarded inside clearPoweringOn via StateFlow dedup).
-        if (data.pwrPinOn && _poweringOn.value) clearPoweringOn()
+        if (data.pwrPinOn && _poweringOn.value) clearPoweringOnNow()
+        // #140 direct path: record + mirror using this device's own identity.
+        // Skip when rocketId is unset so a BS-self packet (no source rocket
+        // id, falls through to here) can't blank a relay-mirrored fix.
+        val id = _identity.value
+        val ownRid = id.rocketId
+        if (ownRid != null && ownRid > 0) {
+            onRocketFix?.invoke(data, RocketKey(id.networkId ?: 0, ownRid))
+                ?.let { _lastValidRocketFix.value = it }
+        }
         recomputeEffective()
     }
 
@@ -711,6 +761,11 @@ public class DeviceSession(
         scope.launch {
             _focusRocketId.value = rocketId
             remoteMap[rocketId]?.let { _telemetry.value = it.telemetry }
+            // #140 re-latch from the fleet cache (iOS BLEFleet.setFocus):
+            // the newly focused rocket's last known position shows
+            // immediately instead of blanking until its next valid fix.
+            fixLookup?.invoke(RocketKey(_identity.value.networkId ?: 0, rocketId))
+                ?.let { _lastValidRocketFix.value = it }
             refreshFocusedRelayFreshness()
             recomputeEffective()
             writeCommand(Commands.setFocusRocket(rocketId))
@@ -747,13 +802,24 @@ public class DeviceSession(
             poweringOnJob?.cancel()
             poweringOnJob = scope.launch {
                 delay(POWER_ON_WATCHDOG_MS)
-                clearPoweringOn()
+                clearPoweringOnNow()
             }
             writeCommand(Commands.bare(BleCommandId.POWER_TOGGLE))
         }
     }
 
+    // Single-writer contract: the public mutators launch onto the session
+    // dispatcher like every other public API; the *Now variants are the
+    // direct implementations for on-dispatcher internal call sites that need
+    // synchronous semantics (the atomic disconnect wipe, the watchdog, the
+    // telemetry fold).  (Phase 2 review finding — these three previously
+    // mutated on the caller's thread.)
+
     public fun clearPoweringOn() {
+        scope.launch { clearPoweringOnNow() }
+    }
+
+    internal fun clearPoweringOnNow() {
         _poweringOn.value = false
         poweringOnJob?.cancel()
         poweringOnJob = null
@@ -762,11 +828,17 @@ public class DeviceSession(
     public fun requestConfig(): Unit = sendBareCommand(BleCommandId.REQUEST_CONFIG)
 
     public fun markSimLaunched() {
-        _simLaunched.value = true
-        simSawNonReady = false
+        scope.launch {
+            _simLaunched.value = true
+            simSawNonReady = false
+        }
     }
 
     public fun clearSimBanner() {
+        scope.launch { clearSimBannerNow() }
+    }
+
+    internal fun clearSimBannerNow() {
         _simLaunched.value = false
         simSawNonReady = false
     }
