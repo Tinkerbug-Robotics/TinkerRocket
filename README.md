@@ -1,8 +1,17 @@
 # TinkerRocket
 
-An open source hardware and software full featured flight computer with out of the box functionality and room to tinker. The flight computer, base station, and companion iOS or Andriod app provide out of the box dual deploy and GNSS tracking with plenty of extra bells and whistles to support all your rocketry needs.
+An open source hardware and software full featured flight computer with out of the box functionality and room to tinker. The flight computer, base station, and companion iOS or Android app provide out of the box dual deploy and GNSS tracking with plenty of extra bells and whistles to support all your rocketry needs.
 
-high data rate logging (configurable 1,2, or 4 kHz), remote control power 'WiFi' switch with days of standby time, four fully isolated pyro channels, camera control for RunCam Split4 or 'naked' GoPro, servo control for active roll control or flight stabalization using proportional navigation, GNSS and LoRa modules on daughter boards for maximum flexibility with included long range LoRa and uBlox GNSS, voice call outs during flight.
+| | |
+|---|---|
+| **High-Rate Logging** | Full sensor suite data logging at configurable rates up to 4 kHz. |
+| **Remote Power Switch** | Use the built-in wireless switch to disable pyro channels and install the computer days ahead of a flight. Power it up on the pad using the phone app over BlueTooth. |
+| **Four Pyro Channels** | Fully isolated (low and high switched), with continuity monitoring and app configurable triggers. |
+| **Camera Control** | Control a RunCam Split 4 or 'naked' GoPro, start or stop recording from the flight line before take off. Monitor current usage in the app to ensure everything is recording before you launch. |
+| **Active Control** | One to four servos for roll control or flight stabilization. |
+| **Modular Radio** | Swappable daughter board for the LoRa radio, shipping with a 22 dBm 900 MHz radio supporting flights up to 30,000 ft. Swap it out for an even higher power radio that communicates over UART. |
+| **Modular GNSS** | Swappable GNSS daughter board. Start with the u-blox SAM-M10Q module with 18 Hz updates and multiple constellation support. Swap for another GNSS module to meet specific flight requirements. |
+| **Voice Callouts** | Altitude, apogee, max speed and descent rate spoken aloud during the flight. |
 
 <!-- TODO: add a hero photo, then restore this:
 ![TinkerRocket](docs/images/rocket_hero.jpg) -->
@@ -19,7 +28,7 @@ The system comprises three physical cooperating components:
 
 The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands 1-4 fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
 
-Remove the need for a dedicated through wall power switch using the built in low power 'WiFi' type switch. After plugging in a battery the unit draws only 10-15 mA, which gives you over 2.5 days of battery life on a typical 600 mAh battery. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control recording remotely from the base station over LoRa as well.
+Remove the need for a dedicated through wall power switch using the built in low power 'WiFi' type switch. After plugging in a battery the unit draws only about 1 mA, which is over three weeks of standby on a typical 600 mAh battery. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control recording remotely from the base station over LoRa as well.
 
 The base station relays data sent over LoRa from the flight computer to a nearby iOS device, giving the user a realtime view of telemetry data prior to launch, as well as telemetry and tracking data post launch. Use your phone's speakers to call out altitude, apogee, max speed, and descent rate during the flight and to locate the rocket via an arrow that points towards the rocket and/or a map view of where the rocket landed.
 
@@ -349,7 +358,7 @@ from a specific run rather than current targets. Where a figure disagrees with t
 | GNSS rate | 18 Hz | 34 Hz |
 | I2S frame drops | 0 | 0 |
 | Max IMU gap | < 10 ms | 9.4 ms |
-| Standby power | -- | 12 mA |
+| Standby power | -- | ~1 mA |
 | Active power | -- | 130 mA |
 
 ## iOS App
