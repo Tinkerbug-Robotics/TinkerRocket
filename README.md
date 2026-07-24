@@ -1,6 +1,8 @@
 # TinkerRocket
 
-Full featured flight computer with 1 kHz logging, remote control power 'WiFi' switch, four pyro channels, camera control, and 1-4 servos for active roll control or proportional-navigation guidance. Downlink and GPS tracking via a LoRa radio to ground station and companion iOS app for configuration, monitoring, and voice call outs during flight.
+An open source hardware and software full featured flight computer with out of the box functionality and room to tinker. The flight computer, base station, and companion iOS or Andriod app provide out of the box dual deploy and GNSS tracking with plenty of extra bells and whistles to support all your rocketry needs.
+
+high data rate logging (configurable 1,2, or 4 kHz), remote control power 'WiFi' switch with days of standby time, four fully isolated pyro channels, camera control for RunCam Split4 or 'naked' GoPro, servo control for active roll control or flight stabalization using proportional navigation, GNSS and LoRa modules on daughter boards for maximum flexibility with included long range LoRa and uBlox GNSS, voice call outs during flight.
 
 <!-- TODO: add a hero photo, then restore this:
 ![TinkerRocket](docs/images/rocket_hero.jpg) -->
