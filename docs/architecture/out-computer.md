@@ -283,6 +283,6 @@ dropped everything. If you add a schema version bump, be sure which side you are
 
 - [Flight Computer](flight-computer.md) — what produces the telemetry this board ingests
 - [Base Station](base-station.md) — the other end of the LoRa link
+- [iOS App](ios-app.md) — the BLE peer on the other side of the phone link
 
-iOS app and protocol-reference pages are not written yet — see [the index](README.md)
-for status.
+The protocol reference is not written yet — see [the index](README.md) for status.

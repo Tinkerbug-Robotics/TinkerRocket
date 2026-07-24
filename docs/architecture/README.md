@@ -14,19 +14,24 @@ written to be read start to finish.
 | [Flight Computer](flight-computer.md) | ESP32-P4 — sensors, EKF, control laws, pyro | written |
 | [Out Computer](out-computer.md) | ESP32-S3 — storage, radios, power rail, BLE | written |
 | [Base Station](base-station.md) | ESP32-S3 — LoRa receive, multi-rocket tracker, CSV log | written |
-| iOS App | SwiftUI — fleet model, telemetry, config, flight logs | not written |
+| [iOS App](ios-app.md) | SwiftUI — fleet model, telemetry, config, flight logs | written |
 | Protocols | frame formats, message types, LoRa framing, BLE commands | not written |
 
 The Out Computer page was the pilot. It sets the template — audience, depth, diagram
 style, and the "Gotchas" section that carries the hard-won details — for the rest.
 
-## The section map
+## The generated maps
 
 The three firmware entry points are single files of 5,000–7,500 lines each. There is no
 module structure to navigate by, so the source carries its own map: `// SECTION:`
 banners mark each logical region, and
 [`tools/gen_section_index.py`](../../tools/gen_section_index.py) turns them into a table
 of line ranges with links.
+
+The iOS app is the opposite shape — 65 files that already carry Swift's native
+`// MARK: -` markers. The same tool reads those, plus each file's type declarations, and
+emits a module map. No Swift source was modified to make that work; adding a second
+banner convention on top of a convention Xcode already understands would have been noise.
 
 Generated maps live in [`generated/`](generated/) and are **not** hand-edited.
 
@@ -38,8 +43,9 @@ CI runs the same script with `--check` and fails if a committed map disagrees wi
 source, so the map cannot silently go stale. Adding a section means adding a banner to
 the source and re-running — nothing in the tool needs editing.
 
-All three firmwares are bannered. The generator skips any source that has no banners
-yet, so adding a fourth is just a new entry in `TARGETS`.
+All three firmwares are bannered. The generator skips any source with no banners yet, so
+adding a fourth is one entry in `TARGETS` (C++, banner-based) or `SWIFT_TARGETS`
+(directory tree, MARK-based).
 
 ## Conventions
 

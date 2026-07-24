@@ -251,6 +251,7 @@ trap as the other firmwares: editing the defaults file does nothing while a stal
   ranges and links, regenerated from the source banners
 - [Out Computer](out-computer.md) — where this board's telemetry goes
 - [Base Station](base-station.md) — where it goes after that
+- [iOS App](ios-app.md) — where the profile this board flies comes from
 - Components: `TR_Sensor_Collector`, `TR_GpsInsEKF`, `TR_KinematicChecks`, `TR_PID`,
   `TR_ControlMixer`, `TR_GuidancePN`, `TR_ServoControl_ledc_mult`, `TR_Orientation`
 - Shared wire contract: [`RocketComputerTypes.h`](../../tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComputerTypes.h)

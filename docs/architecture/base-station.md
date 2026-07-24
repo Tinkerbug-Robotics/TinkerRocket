@@ -207,6 +207,7 @@ Flashing the wrong one gives you a working boot with the wrong pin map.
   ranges and links, regenerated from the source banners
 - [Out Computer](out-computer.md) — the other end of the LoRa link
 - [Flight Computer](flight-computer.md) — what produces the telemetry that arrives here
+- [iOS App](ios-app.md) — the BLE peer this board serves
 - Policy tests: [`tests_cpp/`](../../tests_cpp/) — `test_bs_*.cpp`, 83 tests
 - Components: `TR_RadioLink`, `TR_LoRa_Comms`, `TR_BLE_To_APP`, `TR_MAX17205G`,
   `TR_MAX17303`, `TR_MP2672`, `TR_BQ27Z746`
