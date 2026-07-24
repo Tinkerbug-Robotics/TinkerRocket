@@ -4,13 +4,14 @@ An open source hardware and software full featured flight computer with out of t
 
 | | |
 |---|---|
-| **High-rate logging** | Full sensor suite data logging at configurable rates up to 4 kHz |
-| **Remote power switch** | Built-in low power wireless switch to completely disable pyro channels and allow you to install the computer days ahead of a flight while still having plenty of power to fly. Power it up on the pad using the phone app over BlueTooth |
-| **Four pyro channels** | Fully isolated (low and high switched), with continuity monitoring and app configurable triggers |
-| **Camera control** | Control a RunCam Split 4 or 'naked' GoPro, starting or stopping recording from the app or over LoRa just before take off. Monitor current usage in the app to ensure everything is recording before you launch |
-| **Active control** | 1-4 servos for roll control, or flight stabilization under a proportional-navigation guidance law |
-| **Modular radios** | GNSS and LoRa on swappable daughter boards; ships with long-range LoRa and u-blox GNSS |
-| **Voice callouts** | Altitude, apogee, max speed and descent rate spoken aloud during the flight |
+| **High-Rate Logging** | Full sensor suite data logging at configurable rates up to 4 kHz |
+| **Remote Power Switch** | Built-in low power wireless switch to completely disable pyro channels and allow you to install the computer days ahead of a flight while still having plenty of power to fly. Power it up on the pad using the phone app over BlueTooth |
+| **Four Pyro Channels** | Fully isolated (low and high switched), with continuity monitoring and app configurable triggers |
+| **Camera Control** | Control a RunCam Split 4 or 'naked' GoPro, starting or stopping recording from the app or over LoRa just before take off. Monitor current usage in the app to ensure everything is recording before you launch |
+| **Active Control** | One to four servos for roll control or flight stabilization |
+| **Modular Radio** | Swappable daughter board for the LoRa radio, shipping with a 1 W 900 MHz radio supporting flights up to 30,000 ft. Swap it out for an even higher power radio that communicates over UART |
+| **Modular GNSS** | GNSS on a swappable daughter board. Ships with a u-blox SAM-M10Q module with ~20 Hz updates and multiple constellation support. Swap for another GNSS module, or position the shipped module in an optional location in your avionics bay |
+| **Voice Callouts** | Altitude, apogee, max speed and descent rate spoken aloud during the flight |
 
 <!-- TODO: add a hero photo, then restore this:
 ![TinkerRocket](docs/images/rocket_hero.jpg) -->
