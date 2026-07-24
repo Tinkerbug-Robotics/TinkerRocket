@@ -145,7 +145,7 @@
 		(uuid "5b7ffe23-2af3-447a-8ea4-7f00a06960b6")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ECS__327_6_16R_TR/ECS-.327-6-16R-TR.step"
+	(model "${KIPRJMOD}/../3dmodels/ECS-.327-6-16R-TR.step"
 		(offset
 			(xyz 0 0 0)
 		)

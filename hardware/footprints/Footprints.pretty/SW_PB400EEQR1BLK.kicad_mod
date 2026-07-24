@@ -542,7 +542,7 @@
 		(uuid "e4e0c3c0-e044-4042-9c21-b81ebc4ee3f8")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/PB400EEQR1BLK/PB400EEQR1BLK.step"
+	(model "${KIPRJMOD}/../3dmodels/PB400EEQR1BLK.step"
 		(offset
 			(xyz 14.5 0 5.2)
 		)

@@ -851,7 +851,7 @@
 		(uuid "280ad546-97f2-4667-b840-f719986be4ee")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS63021DSJR/TPS63021DSJR.step"
+	(model "${KIPRJMOD}/../3dmodels/TPS63021DSJR.step"
 		(offset
 			(xyz 0 0 0)
 		)

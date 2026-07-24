@@ -540,7 +540,7 @@
 		(uuid "7166b23c-fa66-475b-a38f-a62ac8bb261f")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/S25FL256LAGNFI010/S25FL256LAGNFI010_CYP.step"
+	(model "${KIPRJMOD}/../3dmodels/S25FL256LAGNFI010_CYP.step"
 		(offset
 			(xyz 0 0 0)
 		)

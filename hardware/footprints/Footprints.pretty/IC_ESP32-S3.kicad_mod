@@ -1345,7 +1345,7 @@
 		(uuid "56ca5bd1-d2ec-4208-8a03-403ac1a9b8c6")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ESP32_S3/ESP32-S3.step"
+	(model "${KIPRJMOD}/../3dmodels/ESP32-S3.step"
 		(offset
 			(xyz 0 0 0)
 		)

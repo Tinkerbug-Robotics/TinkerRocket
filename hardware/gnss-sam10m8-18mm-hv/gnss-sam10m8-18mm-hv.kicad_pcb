@@ -1724,7 +1724,7 @@
 			(uuid "5523d19c-a39d-4367-93de-ed9b6366337b")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -2042,7 +2042,7 @@
 			(uuid "33086d85-e969-49bb-81b8-83eca1c4c5d3")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -2392,7 +2392,7 @@
 			(uuid "9cf074b2-dad6-4e5a-b498-9975ffcacfe9")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/782853200/WE-CBA_0805_CBA+%28rev1%29.stp"
+		(model "${KIPRJMOD}/../3dmodels/WE-CBA_0805_CBA__rev1_.stp"
 			(offset
 				(xyz 0 0 0.5)
 			)
@@ -3194,7 +3194,7 @@
 			(uuid "503b9294-f1ba-46b7-afb3-d69fcdfdb5ee")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ASPI-0530HI-2R2M-T2/ASPI-0530HI-2R2M-T2.step"
+		(model "${KIPRJMOD}/../3dmodels/ASPI-0530HI-2R2M-T2.step"
 			(offset
 				(xyz 0 0 1.5)
 			)
@@ -3623,7 +3623,7 @@
 			(uuid "c6a2d965-6535-40ba-8dfd-306edf4a031b")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/DLW21SN670HQ2L/DLW21SN670HQ2L.step"
+		(model "${KIPRJMOD}/../3dmodels/DLW21SN670HQ2L.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -4172,7 +4172,7 @@
 			(uuid "749f6743-faa8-4b06-b2b8-5b6f98ef2adb")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BM05B_SRSS_TB/BM05B-SRSS-TB.STEP"
+		(model "${KIPRJMOD}/../3dmodels/BM05B-SRSS-TB.STEP"
 			(offset
 				(xyz 0 -1.5 0)
 			)
@@ -4406,7 +4406,7 @@
 			(uuid "3381180c-8a6a-45a2-a55e-c784b76318b2")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/LED_SMD.3dshapes/LED_0402_1005Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/LED_SMD.3dshapes/LED_0402_1005Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -6870,7 +6870,7 @@
 			(uuid "04ce0649-c910-4362-994a-8a64adc66916")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SAM_M10Q_00B/SAM-M10Q-00B.step"
+		(model "${KIPRJMOD}/../3dmodels/SAM-M10Q-00B.step"
 			(offset
 				(xyz 0 0 0)
 			)

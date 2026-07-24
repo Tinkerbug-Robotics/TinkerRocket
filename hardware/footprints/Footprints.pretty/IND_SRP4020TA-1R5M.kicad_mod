@@ -205,7 +205,7 @@
 		(uuid "b3ddbd52-2a5a-4418-aef9-4bb1c9f5bf81")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SRP4020TA_1R5M (1)/SRP4020TA-1R5M.step"
+	(model "${KIPRJMOD}/../3dmodels/SRP4020TA-1R5M.step"
 		(offset
 			(xyz 0 0 0)
 		)

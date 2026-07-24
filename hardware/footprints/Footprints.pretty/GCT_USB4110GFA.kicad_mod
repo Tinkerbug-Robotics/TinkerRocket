@@ -329,7 +329,7 @@
 		(uuid "a36a724a-96fd-4006-9f0b-076b039d7d0e")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/USB4110_GF_A/USB4110GFA.step"
+	(model "${KIPRJMOD}/../3dmodels/USB4110GFA.step"
 		(offset
 			(xyz 0 0 0)
 		)

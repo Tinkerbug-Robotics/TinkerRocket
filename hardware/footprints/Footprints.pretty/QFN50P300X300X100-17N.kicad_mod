@@ -379,7 +379,7 @@
 		(uuid "87f6d90e-a802-4cc8-b8bc-2786699d7506")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS62152RGTR/TPS62152RGTR.step"
+	(model "${KIPRJMOD}/../3dmodels/TPS62152RGTR.step"
 		(offset
 			(xyz 0 0 0)
 		)

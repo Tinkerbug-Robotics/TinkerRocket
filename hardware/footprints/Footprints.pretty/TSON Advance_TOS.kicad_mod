@@ -745,7 +745,7 @@
 		(uuid "2f4a789b-b020-498d-9b1d-33368e286dcf")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPN4R712MD/TSON Advance_z90.stp"
+	(model "${KIPRJMOD}/../3dmodels/TSON_Advance_z90.stp"
 		(offset
 			(xyz 0 0 0)
 		)

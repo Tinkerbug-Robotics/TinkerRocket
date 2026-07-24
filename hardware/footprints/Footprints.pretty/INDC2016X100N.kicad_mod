@@ -144,7 +144,7 @@
 		(uuid "4a15b226-7e7c-4bf7-8a8d-46db5fb7b8fa")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/DFE201610E_1R0M_P2 (1)/DFE201610E-1R0M_P2.step"
+	(model "${KIPRJMOD}/../3dmodels/DFE201610E-1R0M_P2.step"
 		(offset
 			(xyz 0.1 -0.5 0)
 		)

@@ -248,7 +248,7 @@
 		(uuid "4686c814-6205-4a90-b8fb-38ce0975787d")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/DLW21SN670HQ2L/DLW21SN670HQ2L.step"
+	(model "${KIPRJMOD}/../3dmodels/DLW21SN670HQ2L.step"
 		(offset
 			(xyz 0 0 0)
 		)

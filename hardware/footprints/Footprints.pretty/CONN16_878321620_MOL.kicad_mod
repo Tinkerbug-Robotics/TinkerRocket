@@ -466,7 +466,7 @@
 		(uuid "b3d32213-7a3b-4fec-9f2f-433068fa93fc")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/878321620/878321620.stp"
+	(model "${KIPRJMOD}/../3dmodels/878321620.stp"
 		(offset
 			(xyz 0 0 4.5)
 		)

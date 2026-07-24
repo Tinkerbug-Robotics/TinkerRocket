@@ -4288,7 +4288,7 @@
 		(uuid "782dc670-6f0a-4654-9773-ec14a65b720b")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/esp32-p4-1.snapshot.2/QFN-104_10x10mm_ESP32P4.step"
+	(model "${KIPRJMOD}/../3dmodels/QFN-104_10x10mm_ESP32P4.step"
 		(offset
 			(xyz 0 0 0)
 		)

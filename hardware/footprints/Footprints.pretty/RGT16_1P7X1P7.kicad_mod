@@ -1572,7 +1572,7 @@
 		(uuid "01399039-f8de-4c80-b8c0-5cd7886b06db")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/INA230AIRGTR/INA230AIRGTR.step"
+	(model "${KIPRJMOD}/../3dmodels/INA230AIRGTR.step"
 		(offset
 			(xyz 0 0 0)
 		)

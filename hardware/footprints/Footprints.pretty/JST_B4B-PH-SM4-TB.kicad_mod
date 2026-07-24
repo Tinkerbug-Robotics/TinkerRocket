@@ -266,7 +266,7 @@
 		(uuid "9ee592e8-0b43-4008-bcc5-3b64a963b752")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/B4B_PH_SM4_TB/B4B-PH-SM4-TB.step"
+	(model "${KIPRJMOD}/../3dmodels/B4B-PH-SM4-TB.step"
 		(offset
 			(xyz 0 0 0)
 		)

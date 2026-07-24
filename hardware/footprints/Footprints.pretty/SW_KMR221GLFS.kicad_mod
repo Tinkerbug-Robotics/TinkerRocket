@@ -175,7 +175,7 @@
 		(uuid "8acc3cfd-1d60-4331-8158-c322a21de212")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/KMR221GLFS/KMR221GLFS.step"
+	(model "${KIPRJMOD}/../3dmodels/KMR221GLFS.step"
 		(offset
 			(xyz 0 0 1.5)
 		)

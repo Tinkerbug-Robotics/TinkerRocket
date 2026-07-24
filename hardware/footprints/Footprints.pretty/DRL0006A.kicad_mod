@@ -462,7 +462,7 @@
 		(uuid "1c68361a-5ed0-4eb6-997e-4ebcdaba4f04")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS61023DRLR/DRL0006A.stp"
+	(model "${KIPRJMOD}/../3dmodels/DRL0006A.stp"
 		(offset
 			(xyz 0 0 0)
 		)
