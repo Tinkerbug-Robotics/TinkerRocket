@@ -139,10 +139,9 @@ cannot be changed in flight.
 > is unrestricted, and you can supply your own guidance library based on public-domain
 > guidance concepts in its place. See [Guidance (optional)](#guidance-optional).
 
-The V8 board breaks out four servo outputs. **V9 replaces these with a general
-12-channel GPIO block**, one channel of which is ADC-capable. Those channels are not
-servo-dedicated — they can drive servos, carry communication, or read external sensors.
-Roll control and guidance still use 1-4 servos each.
+One of the twelve GPIO channels is ADC-capable. None of them are servo-dedicated — they
+can drive servos, carry communication, or read external sensors — so the four used for fin
+tabs are a choice rather than a fixed allocation.
 
 ## Flight Data
 
@@ -395,8 +394,8 @@ The main sensor frames, with the rate each is produced at:
 | 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
 | 0xF1 | LoRa Telemetry | 65 B | 2 Hz |
 
-`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from earlier boards, which V8 does
-not populate.
+`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from an earlier sensor, still on the
+wire so older logs decode.
 
 **All 89 message types, both BLE command spaces, and every struct's wire size are in the
 [generated protocol reference](docs/architecture/generated/protocol-reference.md)** —
