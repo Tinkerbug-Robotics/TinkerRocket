@@ -76,7 +76,7 @@ flowchart TB
     APP["<b>iOS App</b><br/>Dashboard · Logs · Config"]
 
     SENSORS --> FC
-    CTRL --> OUT
+    FC --> OUT
     RAD -->|"LoRa 915 MHz · 2 Hz"| RX
     RAD -->|"BLE · Pad"| APP
     RX -->|"BLE · Flight"| APP
