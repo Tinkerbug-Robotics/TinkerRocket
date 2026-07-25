@@ -140,6 +140,58 @@ Current boards (V7, V8) break out four servo outputs. **V9 replaces these with a
 servo-dedicated — they can drive servos, carry communication, or read external sensors.
 Roll control and guidance still use 1-4 servos each.
 
+## Flight Data
+
+Data starts as **binary** on the rocket and stays that way until something needs to read
+it. The flight computer packs each sensor reading into a framed record and streams it to
+the out computer, which buffers it in MRAM and writes it to NAND flash. Framing is the same
+everywhere — a start-of-frame marker, a type byte, a length, the payload, and a CRC — so a
+truncated or corrupted record is detected rather than silently believed.
+
+Binary is the right format on the vehicle: a 22-byte IMU record at 1920 Hz would be four to
+five times larger as text, and the flight computer has no cycles to spare formatting numbers
+mid-flight.
+
+### Getting it off the rocket
+
+| Step | What happens |
+|------|--------------|
+| **Download** | The app pulls the `.bin` over BLE, in chunks, straight from the rocket's flash |
+| **Convert** | It is expanded to CSV on the phone — one row per IMU update, slower sensors forward-filled so every row is complete |
+| **View** | Charts, 3D trajectory, and flight events, rendered from the CSV in the app |
+| **Share** | The CSV goes out by email, AirDrop, or anything else iOS can share to |
+
+The base station writes its own CSV as it receives LoRa telemetry. That one is a separate,
+lower-rate record — useful when the rocket is not recovered, but the flash log is the
+complete one.
+
+### Flight reports
+
+[`Data_Analysis/flight_report/`](Data_Analysis/flight_report/) turns a `.bin` into a
+self-contained **HTML report**. It reads the binary directly and runs twelve analysis
+modules over it — launch detection, kinematics, apogee and pyro timing, sensor noise,
+timestamp gaps, GNSS staleness, LoRa link quality, roll PID, guidance — then renders the
+plots and findings into one page.
+
+Four real flights are committed in [`examples/flights/`](examples/flights/) so this runs
+out of the box:
+
+```bash
+python -m Data_Analysis.flight_report run examples/flights/flight_20260705_174532.bin
+python -m Data_Analysis.flight_report run examples/flights      # all four
+```
+
+Point it at a directory and it processes every flight it finds. A report lands next to its
+`.bin` unless `--out` says otherwise, and a matching `.csv` or `.json` sidecar is picked up
+automatically when present.
+
+Both subcommands take a path. Omit it and they scan a default local flight archive
+(`~/Documents/Hobbies/ModelRockets/TestFlights`), which finds nothing on a fresh clone — so
+pass the path explicitly.
+
+The suite is covered by `flight-report-tests.yml` in CI, so a change to the analysis code
+has to still produce a report from a real flight log.
+
 ## Repository Structure
 
 ```
@@ -172,6 +224,7 @@ TinkerRocket/
 │   ├── cpp/                    # pybind11 bindings for EKF, PID, mixer, guidance
 │   └── tests/                  # Pytest regression suite
 │
+├── examples/flights/           # Four real flight logs, for the report tooling
 ├── tests/integration/          # Binary log replay integration tests
 ├── preflight/                  # Pre-flight go/no-go checklist
 │
