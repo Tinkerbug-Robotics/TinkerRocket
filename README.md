@@ -127,15 +127,21 @@ cannot be changed in flight.
 
 ### Control
 
-- **1-4 fin-tab servos** on configurable PWM. Roll control and proportional-navigation
-  guidance each drive 1-4 servos
+- **12 GPIO pins** from the ESP32-P4 flight computer exposed. Library included for roll
+  control using 1-4 servos (e.g. fin tabs). Configuration support for active flight
+  stabilization using a proportional navigation law and multiple guide points — guide
+  overhead, guide to a reverse drift-cast point, or guide to an offset
 - **4x pyro channels** with continuity monitoring and configurable triggers
 - **RunCam Split 4 and GoPro Hero 10 Black** support via UART/GPIO control
 
-Current boards (V7, V8) break out four servo outputs. **V9 replaces these with a general
-12-channel GPIO block**, one channel of which is ADC-capable. Those channels are not
-servo-dedicated — they can drive servos, carry communication, or read external sensors.
-Roll control and guidance still use 1-4 servos each.
+> **Export control.** The proportional-navigation library is subject to US ITAR
+> regulations and is available to US persons. Everything else — including roll control —
+> is unrestricted, and you can supply your own guidance library based on public-domain
+> guidance concepts in its place. See [Guidance (optional)](#guidance-optional).
+
+One of the twelve GPIO channels is ADC-capable. None of them are servo-dedicated — they
+can drive servos, carry communication, or read external sensors — so the four used for fin
+tabs are a choice rather than a fixed allocation.
 
 ## Flight Data
 
@@ -388,8 +394,8 @@ The main sensor frames, with the rate each is produced at:
 | 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
 | 0xF1 | LoRa Telemetry | 65 B | 2 Hz |
 
-`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from earlier boards, which V8 does
-not populate.
+`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from an earlier sensor, still on the
+wire so older logs decode.
 
 **All 89 message types, both BLE command spaces, and every struct's wire size are in the
 [generated protocol reference](docs/architecture/generated/protocol-reference.md)** —
