@@ -137,7 +137,7 @@ cannot be changed in flight.
 > **Export control.** The proportional-navigation library is subject to US ITAR
 > regulations and is available to US persons. Everything else — including roll control —
 > is unrestricted, and you can supply your own guidance library based on public-domain
-> guidance concepts in its place. See [Guidance (optional)](#guidance-optional).
+> guidance concepts in its place. [Guidance (optional)](#guidance-optional) covers what that means for building.
 
 One of the twelve GPIO channels is ADC-capable. None of them are servo-dedicated — they
 can drive servos, carry communication, or read external sensors — so the four used for fin
@@ -250,7 +250,9 @@ TinkerRocket/
 
 ### Guidance (optional)
 
-The proportional-navigation guidance law lives in a separate private submodule at [`tinkerrocket-idf/components/TR_GuidancePN`](https://github.com/Tinkerbug-Robotics/TR_GuidancePN). Everything else — roll control, EKF, sensor collection, telemetry, logging, LoRa, BLE, iOS integration, ground-test modes — builds and runs **without** it. Public contributors can clone, build, flash, and contribute to any non-guidance feature with a standard, non-recursive clone.
+The proportional-navigation guidance law lives in a separate private submodule at [`tinkerrocket-idf/components/TR_GuidancePN`](https://github.com/Tinkerbug-Robotics/TR_GuidancePN). **It is separate because it is subject to US ITAR regulations and is available to US persons** — that restriction is the reason for the split, not a preference about openness.
+
+Everything else — roll control, EKF, sensor collection, telemetry, logging, LoRa, BLE, iOS integration, ground-test modes — builds and runs **without** it, and none of it is export-restricted. Public contributors can clone, build, flash, and contribute to any non-guidance feature with a standard, non-recursive clone. If you need guidance and cannot access this module, supply your own based on public-domain guidance concepts: [`TR_GuidancePN_Stub`](tinkerrocket-idf/components/TR_GuidancePN_Stub/TR_GuidancePN.h) is the interface to implement — the firmware already builds and flies against it.
 
 When the submodule is not initialized:
 - Firmware compiles against a header-only no-op stub (`TR_GuidancePN_Stub`). At boot the flight computer logs `PN Guidance: NOT COMPILED IN (stub active)`. All `guidance.*` call sites still exist, but each method returns zero / false.
