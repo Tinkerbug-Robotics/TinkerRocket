@@ -143,6 +143,48 @@ One of the twelve GPIO channels is ADC-capable. None of them are servo-dedicated
 can drive servos, carry communication, or read external sensors — so the four used for fin
 tabs are a choice rather than a fixed allocation.
 
+#### Expansion connector
+
+All twelve channels come out on one 16-pin Molex 878321620. Odd pins are on one row, even
+pins on the other, with pin 1 at the keyed end:
+
+| | | | | | | | | |
+|---|---|---|---|---|---|---|---|---|
+| **odd** | `1`<br/>RTN | `3`<br/>**EXP_01** | `5`<br/>**EXP_03** | `7`<br/>EXP_05 | `9`<br/>EXP_12 | `11`<br/>EXP_10 | `13`<br/>EXP_08 | `15`<br/>VBATT |
+| **even** | `2`<br/>RTN | `4`<br/>**EXP_02** | `6`<br/>**EXP_04** | `8`<br/>EXP_06 | `10`<br/>EXP_11 | `12`<br/>EXP_09 | `14`<br/>EXP_07 | `16`<br/>VBATT |
+
+**Servos 1-4 default to pins 3, 4, 5 and 6** — nets `EXP_01`–`EXP_04`. With the return on
+pins 1-2 and VBATT on 15-16, a three-wire servo lead reaches signal, power and ground
+without leaving the connector.
+
+Two things that will catch you out:
+
+- **The numbering reverses at pin 9.** Pins 3-8 run `EXP_01`→`EXP_06` ascending; pins 9-14
+  run `EXP_12`→`EXP_07` descending. Pin 9 is `EXP_12`, not `EXP_07`.
+- **Pins 1-2 are a switched return, not a ground.** They go through a MOSFET whose source
+  is on GND, so the firmware can cut the servo return — that is what the on-pad relax
+  behaviour uses. Do not use these as a chassis ground.
+
+Each net maps to a fixed ESP32-P4 GPIO:
+
+| Net | GPIO | | Net | GPIO | | Net | GPIO |
+|---|---|---|---|---|---|---|---|
+| `EXP_01` | 45 | | `EXP_05` | 39 | | `EXP_09` | 38 |
+| `EXP_02` | 44 | | `EXP_06` | 40 | | `EXP_10` | 37 |
+| `EXP_03` | 43 | | `EXP_07` | 29 | | `EXP_11` | 34 |
+| `EXP_04` | 54 | | `EXP_08` | 28 | | `EXP_12` | 33 |
+
+#### Which mapping is set where
+
+| Mapping | Set in | Changeable from the app |
+|---|---|---|
+| servo → GPIO pin | flight-computer board header, compile time | **No** |
+| servo → fin azimuth and reversal | `FinConfigData`, BLE command 66 | Yes |
+| PWM rate, pulse limits, per-servo bias, fin travel | `ServoConfigData` | Yes |
+
+So which connector pin drives which servo is fixed when the firmware is built; where that
+servo points, and how far it moves, are set live from the app.
+
 ## Flight Data
 
 Data starts as **binary** on the rocket and stays that way until something needs to read
