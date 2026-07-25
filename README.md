@@ -36,9 +36,6 @@ Finally, manage the flight data intuitively by uploading from the flight compute
 
 ## Architecture
 
-<!-- TODO: add a system photo/diagram, then restore this:
-![Architecture](docs/images/architecture.jpg) -->
-
 ```mermaid
 flowchart TB
     subgraph SENSORS["Sensors"]
