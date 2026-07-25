@@ -143,27 +143,24 @@ Roll control and guidance still use 1-4 servos each.
 ## Flight Data
 
 Data starts as **binary** on the rocket and stays that way until something needs to read
-it. The flight computer packs each sensor reading into a framed record and streams it to
-the out computer, which buffers it in MRAM and writes it to NAND flash. Framing is the same
+it. This allows high throughput data logging and efficient use of storage space. The flight 
+computer packs each sensor reading into a framed record and streams it to the out 
+computer, which buffers it before writing it to NAND flash. Framing is the same
 everywhere — a start-of-frame marker, a type byte, a length, the payload, and a CRC — so a
 truncated or corrupted record is detected rather than silently believed.
-
-Binary is the right format on the vehicle: a 22-byte IMU record at 1920 Hz would be four to
-five times larger as text, and the flight computer has no cycles to spare formatting numbers
-mid-flight.
 
 ### Getting it off the rocket
 
 | Step | What happens |
 |------|--------------|
-| **Download** | The app pulls the `.bin` over BLE, in chunks, straight from the rocket's flash |
+| **Download to Phone** | The app pulls the `.bin` over BLE, in chunks, straight from the rocket's flash |
 | **Convert** | It is expanded to CSV on the phone — one row per IMU update, slower sensors forward-filled so every row is complete |
 | **View** | Charts, 3D trajectory, and flight events, rendered from the CSV in the app |
 | **Share** | The CSV goes out by email, AirDrop, or anything else iOS can share to |
 
 The base station writes its own CSV as it receives LoRa telemetry. That one is a separate,
-lower-rate record — useful when the rocket is not recovered, but the flash log is the
-complete one.
+lower-rate record — useful for receiver specific data and a quick look analysis before your
+rocket is recovered. Binary is not necessary here since data is at 2 Hz.
 
 ### Flight reports
 
