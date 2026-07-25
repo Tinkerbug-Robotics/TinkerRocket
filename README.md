@@ -22,9 +22,9 @@ The system comprises three physical cooperating components:
 
 | Component | Hardware | Role |
 |-----------|----------|------|
-| **Rocket Computer (Flight Computer & Out Computer)** | ESP32-S3 & ESP32-P4 | Power switch, flight control, sensor fusion, data logging, LoRa transmitter, BLE ground link |
-| **Base Station** | ESP32-S3 | LoRa receiver, BLE ground link, LoRa data logging |
-| **iOS App** | iPhone/iPad | Real-time flight data dashboard, flight and LoRa data storage, rocket and downlink configuration |
+| **Rocket Computer** ([Flight Computer](docs/architecture/flight-computer.md) & [Out Computer](docs/architecture/out-computer.md)) | ESP32-P4 & ESP32-S3 | Power switch, flight control, sensor fusion, data logging, LoRa transmitter, BLE ground link |
+| **[Base Station](docs/architecture/base-station.md)** | ESP32-S3 | LoRa receiver, BLE ground link, LoRa data logging |
+| **[iOS App](docs/architecture/ios-app.md)** | iPhone/iPad | Real-time flight data dashboard, flight and LoRa data storage, rocket and downlink configuration |
 
 The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the BlueTooth Low Energy (BLE) radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at 500 Hz. Optional roll control or, a proportional navigation guidance law commands 1-4 fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro support currently implemented.
 
