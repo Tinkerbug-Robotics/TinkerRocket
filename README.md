@@ -39,35 +39,48 @@ Finally, manage the flight data intuitively by uploading from the flight compute
 <!-- TODO: add a system photo/diagram, then restore this:
 ![Architecture](docs/images/architecture.jpg) -->
 
-```
-                        ┌─────────────────────────────────┐
-                        │        FLIGHT COMPUTER          │
-                        │                                 │
- ISM6HG256 (1920 Hz*)──>│  Sensor       EKF        PID    │
-      BMP585 (500 Hz)──>│  Collector ──> (15-state) ──> Mixer ──> 1-4x Servos
-     IIS2MDC (100 Hz)──>│  Roll Control / Guidance PN     │
-   u-blox M10 (18 Hz)──>│                                 │
-                        └──────┬──────────────────────────┘
-                               │ I2S (22 kHz DMA)
-                               │ I2C (commands)
-                        ┌──────▼──────────────────────────┐
-                        │         OUT COMPUTER            │
-                        │                                 │
-                        │  MRAM Ring ──> NAND Flash (log) │
-                        │  LoRa TX (2 Hz) ──> 915 MHz     │──── BLE ────> iOS App
-                        │  BLE GATT Server                │     (direct)
-                        └──────┬──────────────────────────┘
-                               │ LoRa 915 MHz
-                        ┌──────▼──────────────────────────┐
-                        │         BASE STATION            │
-                        │                                 │
-                        │  LoRa RX ──> Flash (CSV log)    │──── BLE ────> iOS App
-                        │  BLE GATT Server                │    (relayed)
-                        │  MAX17303G+ Battery Monitor     │
-                        └─────────────────────────────────┘
-```
+```mermaid
+flowchart TB
+    subgraph SENSORS["Sensors"]
+        direction LR
+        S1["IMU<br/>1920 Hz"]
+        S2["Barometer<br/>500 Hz"]
+        S3["Magnetometer<br/>100 Hz"]
+        S4["GNSS<br/>18 Hz"]
+    end
 
-\* IMU rate is app-settable — 960 / 1920 / 3840 Hz. 1920 Hz is the default.
+    subgraph ROCKET["Rocket Computer"]
+        direction LR
+        subgraph FC["<b>Flight Computer</b> — ESP32-P4"]
+            direction TB
+            EKF["Sensor Fusion · 15-State EKF<br/>500 Hz"]
+            CTRL["Flight Control<br/>1 kHz"]
+            EKF --> CTRL
+        end
+        subgraph OC["<b>Out Computer</b> — ESP32-S3"]
+            direction TB
+            LOG["Flight Log to Flash Memory"]
+            RAD["LoRa TX · BLE GATT"]
+        end
+        FC <==>|"I2S Telemetry &rarr;<br/>&larr; I2C Commands"| OC
+    end
+
+    subgraph BS["<b>Base Station</b> — ESP32-S3"]
+        direction TB
+        RX["LoRa RX"]
+        BSLOG["CSV Log to Flash"]
+        RX --> BSLOG
+    end
+
+    OUT["1–4 Fin Servos<br/>4 Pyro Channels<br/>Camera Control"]
+    APP["<b>iOS App</b><br/>Dashboard · Logs · Config"]
+
+    SENSORS --> FC
+    CTRL --> OUT
+    RAD -->|"LoRa 915 MHz · 2 Hz"| RX
+    RAD -->|"BLE · Pad"| APP
+    RX -->|"BLE · Flight"| APP
+```
 
 ## Documentation
 
