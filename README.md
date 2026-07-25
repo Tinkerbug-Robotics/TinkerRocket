@@ -40,7 +40,7 @@ Finally, manage the flight data intuitively by uploading from the flight compute
 flowchart TB
     subgraph SENSORS["Sensors"]
         direction LR
-        S1["IMU<br/>1920 Hz"]
+        S1["IMU<br/>1 / 2 / 4 kHz"]
         S2["Barometer<br/>500 Hz"]
         S3["Magnetometer<br/>100 Hz"]
         S4["GNSS<br/>18 Hz"]
