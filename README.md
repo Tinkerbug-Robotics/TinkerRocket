@@ -54,11 +54,13 @@ flowchart TB
             CTRL["Flight Control<br/>1 kHz"]
             EKF --> CTRL
         end
+        OUT["1–4 Fin Servos<br/>4 Pyro Channels<br/>Camera Control"]
         subgraph OC["<b>Out Computer</b> — ESP32-S3"]
             direction TB
             LOG["Flight Log to Flash Memory"]
             RAD["LoRa TX · BLE GATT"]
         end
+        CTRL --> OUT
         FC <==>|"I2S Telemetry &rarr;<br/>&larr; I2C Commands"| OC
     end
 
@@ -69,11 +71,9 @@ flowchart TB
         RX --> BSLOG
     end
 
-    OUT["1–4 Fin Servos<br/>4 Pyro Channels<br/>Camera Control"]
     APP["<b>iOS App</b><br/>Dashboard · Logs · Config"]
 
     SENSORS --> FC
-    FC --> OUT
     RAD -->|"LoRa 915 MHz · 2 Hz"| RX
     RAD -->|"BLE · Pad"| APP
     RX -->|"BLE · Flight"| APP
