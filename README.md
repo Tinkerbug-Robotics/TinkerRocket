@@ -132,7 +132,7 @@ cannot be changed in flight.
 - **4x pyro channels** with continuity monitoring and configurable triggers
 - **RunCam Split 4 and GoPro Hero 10 Black** support via UART/GPIO control
 
-Current boards (V7, V8) break out four servo outputs. **V9 replaces these with a general
+The V8 board breaks out four servo outputs. **V9 replaces these with a general
 12-channel GPIO block**, one channel of which is ADC-capable. Those channels are not
 servo-dedicated — they can drive servos, carry communication, or read external sensors.
 Roll control and guidance still use 1-4 servos each.
