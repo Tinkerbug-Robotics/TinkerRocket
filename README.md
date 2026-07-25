@@ -22,7 +22,7 @@ The system comprises three physical cooperating components:
 
 | Component | Hardware | Role |
 |-----------|----------|------|
-| **Rocket Computer** ([Flight Computer](docs/architecture/flight-computer.md) & [Out Computer](docs/architecture/out-computer.md)) | ESP32-P4 & ESP32-S3 | Power switch, flight control, sensor fusion, data logging, LoRa transmitter, BLE ground link |
+| **Rocket Computer**<br/>([Flight Computer](docs/architecture/flight-computer.md) & [Out Computer](docs/architecture/out-computer.md)) | ESP32-P4 & ESP32-S3 | Power switch, flight control, sensor fusion, data logging, LoRa transmitter, BLE ground link |
 | **[Base Station](docs/architecture/base-station.md)** | ESP32-S3 | LoRa receiver, BLE ground link, LoRa data logging |
 | **[iOS App](docs/architecture/ios-app.md)** | iPhone/iPad | Real-time flight data dashboard, flight and LoRa data storage, rocket and downlink configuration |
 
