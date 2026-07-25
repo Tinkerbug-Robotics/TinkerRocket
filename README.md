@@ -127,10 +127,17 @@ cannot be changed in flight.
 
 ### Control
 
-- **1-4 fin-tab servos** on configurable PWM. Roll control and proportional-navigation
-  guidance each drive 1-4 servos
+- **12 GPIO pins** from the ESP32-P4 flight computer exposed. Library included for roll
+  control using 1-4 servos (e.g. fin tabs). Configuration support for active flight
+  stabilization using a proportional navigation law and multiple guide points — guide
+  overhead, guide to a reverse drift-cast point, or guide to an offset
 - **4x pyro channels** with continuity monitoring and configurable triggers
 - **RunCam Split 4 and GoPro Hero 10 Black** support via UART/GPIO control
+
+> **Export control.** The proportional-navigation library is subject to US ITAR
+> regulations and is available to US persons. Everything else — including roll control —
+> is unrestricted, and you can supply your own guidance library based on public-domain
+> guidance concepts in its place. See [Guidance (optional)](#guidance-optional).
 
 The V8 board breaks out four servo outputs. **V9 replaces these with a general
 12-channel GPIO block**, one channel of which is ADC-capable. Those channels are not
