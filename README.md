@@ -173,9 +173,12 @@ modules over it — launch detection, kinematics, apogee and pyro timing, sensor
 timestamp gaps, GNSS staleness, LoRa link quality, roll PID, guidance — then renders the
 plots and findings into one page.
 
+Four real flights are committed in [`examples/flights/`](examples/flights/) so this runs
+out of the box:
+
 ```bash
-python -m Data_Analysis.flight_report run tests/test_data/flight_20260615_170318.bin
-python -m Data_Analysis.flight_report list tests/test_data   # discover, don't analyse
+python -m Data_Analysis.flight_report run examples/flights/flight_20260705_174532.bin
+python -m Data_Analysis.flight_report run examples/flights      # all four
 ```
 
 Point it at a directory and it processes every flight it finds. A report lands next to its
@@ -183,8 +186,8 @@ Point it at a directory and it processes every flight it finds. A report lands n
 automatically when present.
 
 Both subcommands take a path. Omit it and they scan a default local flight archive
-(`~/Documents/Hobbies/ModelRockets/TestFlights`), which is convenient on the machine that
-keeps one and finds nothing anywhere else — so pass the path explicitly.
+(`~/Documents/Hobbies/ModelRockets/TestFlights`), which finds nothing on a fresh clone — so
+pass the path explicitly.
 
 The suite is covered by `flight-report-tests.yml` in CI, so a change to the analysis code
 has to still produce a report from a real flight log.
@@ -221,6 +224,7 @@ TinkerRocket/
 │   ├── cpp/                    # pybind11 bindings for EKF, PID, mixer, guidance
 │   └── tests/                  # Pytest regression suite
 │
+├── examples/flights/           # Four real flight logs, for the report tooling
 ├── tests/integration/          # Binary log replay integration tests
 ├── preflight/                  # Pre-flight go/no-go checklist
 │
