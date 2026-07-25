@@ -114,9 +114,6 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 | **u-blox M10** | GNSS | UART 115200 | 18 Hz | GPS/GLONASS/Galileo/BeiDou |
 | **INA230** | Power monitor | I2C | 10 Hz | Voltage, current, SOC |
 
-Rates above are the configured rates on a V8 board. Earlier boards carry an MMC5983MA
-magnetometer (200 Hz) instead of the IIS2MDC; the board header selects which is used.
-
 **IMU logging rate is settable from the app** — nominally 1 kHz, 2 kHz, or 4 kHz, which
 land on the sensor's own output rates of 960, 1920 (default), and 3840 Hz. The rate
 cannot be changed in flight.
