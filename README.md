@@ -115,8 +115,7 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 | **INA230** | Power monitor | I2C | 10 Hz | Voltage, current, SOC |
 
 **IMU logging rate is settable from the app** — nominally 1 kHz, 2 kHz, or 4 kHz, which
-land on the sensor's own output rates of 960, 1920 (default), and 3840 Hz. The rate
-cannot be changed in flight.
+land on the sensor's own output rates of 960, 1920 (default), and 3840 Hz.
 
 ### Radios
 
