@@ -6099,7 +6099,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "CONN_BM05B-SRSS-TB_JST"
+		(property "Footprint" "Footprints:CONN_BM05B-SRSS-TB_JST"
 			(at 233.045 80.645 0)
 			(hide yes)
 			(show_name no)

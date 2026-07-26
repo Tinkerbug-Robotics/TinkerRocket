@@ -2392,7 +2392,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 100.965 83.82 90)
 		(fields_autoplaced yes)
@@ -2464,7 +2464,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 212.725 97.155 90)
 		(fields_autoplaced yes)
@@ -2560,7 +2560,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 98.425 105.41 90)
 		(fields_autoplaced yes)
@@ -2656,7 +2656,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 125.73 114.3 90)
 		(fields_autoplaced yes)
@@ -5635,7 +5635,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "22 uF"
 			(at 94.615 72.39 0)
 			(show_name no)
 			(do_not_autoplace no)

@@ -1,0 +1,126 @@
+(footprint "BUZ_MLT-8530"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "Jiangsu Huaneng MLT-8530 electro-magnetic buzzer, SMD 8.5x8.5x3.0mm, externally driven (passive), 2.7kHz resonant, 3.6Vo-p rated. LCSC C94599. Land pattern per LCSC/EasyEDA library for C94599; pad roles per Huaneng datasheet rev 5/22/2017 mechanical drawing: the two pads sharing the -X edge are the + and - leads, the two pads on the +X edge are DUMMY (mechanical only, no internal connection).")
+	(tags "buzzer transducer magnetic smd passive externally-driven MLT-8530")
+	(property "Reference" "REF**"
+		(at 0 -5.4 0)
+		(layer "F.SilkS")
+		(uuid "1a2b3c4d-0001-4000-8000-000000000001")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "BUZ_MLT-8530"
+		(at 0 5.4 0)
+		(layer "F.Fab")
+		(uuid "1a2b3c4d-0002-4000-8000-000000000002")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://files.seeedstudio.com/products/107020109/document/MLT_8530_datasheet.pdf"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1a2b3c4d-0003-4000-8000-000000000003")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "Magnetic buzzer, externally driven, 8.5x8.5x3.0mm SMD, 2.7kHz"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1a2b3c4d-0004-4000-8000-000000000004")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+
+	(fp_line (start -2.17 -4.25) (end 2.17 -4.25)
+		(stroke (width 0.12) (type solid)) (layer "F.SilkS")
+		(uuid "1a2b3c4d-0101-4000-8000-000000000101"))
+	(fp_line (start -2.17 4.25) (end 2.17 4.25)
+		(stroke (width 0.12) (type solid)) (layer "F.SilkS")
+		(uuid "1a2b3c4d-0102-4000-8000-000000000102"))
+	(fp_line (start -4.25 -2.17) (end -4.25 2.17)
+		(stroke (width 0.12) (type solid)) (layer "F.SilkS")
+		(uuid "1a2b3c4d-0103-4000-8000-000000000103"))
+	(fp_line (start 4.25 -2.17) (end 4.25 2.17)
+		(stroke (width 0.12) (type solid)) (layer "F.SilkS")
+		(uuid "1a2b3c4d-0104-4000-8000-000000000104"))
+
+	(fp_text user "+"
+		(at -5.3 3.6 0)
+		(layer "F.SilkS")
+		(uuid "1a2b3c4d-0105-4000-8000-000000000105")
+		(effects
+			(font
+				(size 1.2 1.2)
+				(thickness 0.2)
+			)
+		)
+	)
+
+	(fp_rect (start -4.25 -4.25) (end 4.25 4.25)
+		(stroke (width 0.1) (type solid)) (fill none) (layer "F.Fab")
+		(uuid "1a2b3c4d-0201-4000-8000-000000000201"))
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(uuid "1a2b3c4d-0202-4000-8000-000000000202")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+
+	(fp_rect (start -5 -5) (end 5 5)
+		(stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd")
+		(uuid "1a2b3c4d-0301-4000-8000-000000000301"))
+
+	(pad "LOAD+" smd rect
+		(at -3.6 3.6)
+		(size 2.4 2.4)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "1a2b3c4d-0401-4000-8000-000000000401")
+	)
+	(pad "LOAD-" smd rect
+		(at -3.6 -3.6)
+		(size 2.4 2.4)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "1a2b3c4d-0402-4000-8000-000000000402")
+	)
+	(pad "" smd rect
+		(at 3.6 3.6)
+		(size 2.4 2.4)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "1a2b3c4d-0403-4000-8000-000000000403")
+	)
+	(pad "" smd rect
+		(at 3.6 -3.6)
+		(size 2.4 2.4)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(uuid "1a2b3c4d-0404-4000-8000-000000000404")
+	)
+
+	(embedded_fonts no)
+)

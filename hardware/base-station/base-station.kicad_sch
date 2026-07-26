@@ -562,55 +562,7 @@
 		)
 	)
 	(sheet
-		(at 193.04 125.095)
-		(size 75.565 22.225)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
-		(uuid "0ce83299-e5b5-4a54-b31d-3ad5464ff7cc")
-		(property "Sheetname" "Outputs"
-			(at 193.04 123.7684 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 2.5 2.5)
-					(thickness 0.5)
-					(bold yes)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "outputs.kicad_sch"
-			(at 193.04 147.9046 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f"
-					(page "7")
-				)
-			)
-		)
-	)
-	(sheet
-		(at 113.03 22.86)
+		(at 25.4 29.845)
 		(size 75.565 23.495)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -626,7 +578,7 @@
 		)
 		(uuid "2379f198-28b9-4984-b470-63cb7f5b1a0e")
 		(property "Sheetname" "Battery"
-			(at 113.03 21.5334 0)
+			(at 25.4 28.5184 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -639,7 +591,7 @@
 			)
 		)
 		(property "Sheetfile" "battery.kicad_sch"
-			(at 113.03 46.9396 0)
+			(at 25.4 53.9246 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -658,8 +610,8 @@
 		)
 	)
 	(sheet
-		(at 193.04 92.71)
-		(size 75.565 22.86)
+		(at 25.4 64.135)
+		(size 75.565 25.4)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -674,7 +626,7 @@
 		)
 		(uuid "6cfb856e-ef45-4f36-bd7e-e27b13a29501")
 		(property "Sheetname" "ESP32-S3"
-			(at 193.04 91.3834 0)
+			(at 25.4 62.8084 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -687,7 +639,7 @@
 			)
 		)
 		(property "Sheetfile" "esp32_p3.kicad_sch"
-			(at 193.04 116.1546 0)
+			(at 25.4 90.1196 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -706,8 +658,8 @@
 		)
 	)
 	(sheet
-		(at 193.04 57.15)
-		(size 75.565 26.035)
+		(at 105.41 30.48)
+		(size 75.565 23.495)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -722,7 +674,7 @@
 		)
 		(uuid "a2c0dd5a-afba-424d-8751-54eedd450b6c")
 		(property "Sheetname" "Power Switch"
-			(at 193.04 55.8234 0)
+			(at 105.41 29.1534 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -735,7 +687,7 @@
 			)
 		)
 		(property "Sheetfile" "power.kicad_sch"
-			(at 193.04 83.7696 0)
+			(at 105.41 54.5596 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -754,8 +706,8 @@
 		)
 	)
 	(sheet
-		(at 193.04 22.86)
-		(size 75.565 24.13)
+		(at 105.41 63.5)
+		(size 75.565 26.035)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
@@ -770,7 +722,7 @@
 		)
 		(uuid "dd2872d5-4eb8-4b19-9e46-72fd20e930ec")
 		(property "Sheetname" "External Charger"
-			(at 193.04 21.5334 0)
+			(at 105.41 62.1734 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -783,7 +735,7 @@
 			)
 		)
 		(property "Sheetfile" "external_charger.kicad_sch"
-			(at 193.04 47.5746 0)
+			(at 105.41 90.1196 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
