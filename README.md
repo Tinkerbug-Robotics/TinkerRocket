@@ -449,24 +449,6 @@ does.
 
 The flight computer streams sensor data to the out computer via I2S DMA at 22,050 Hz sample rate (88 KB/s bandwidth). Frames are zero-copy from ISR callbacks into an MRAM ring buffer, then flushed to NAND flash.
 
-## Performance
-
-Measured on the bench, not recomputed from configuration — treat these as a snapshot
-from a specific run rather than current targets. Where a figure disagrees with the
-[Sensors](#sensors) table, the configured rate there is the authority.
-
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| IMU rate | 960 Hz | 960 Hz |
-| Barometer rate | 500 Hz | 490 Hz |
-| Magnetometer rate | 200 Hz | 220 Hz |
-| EKF output rate | 500 Hz | 490 Hz |
-| GNSS rate | 18 Hz | 34 Hz |
-| I2S frame drops | 0 | 0 |
-| Max IMU gap | < 10 ms | 9.4 ms |
-| Standby power | -- | ~1 mA |
-| Active power | -- | 130 mA |
-
 ## iOS App
 
 <!-- TODO: add an app screenshot, then restore this:
