@@ -319,7 +319,7 @@
 		(uuid "1fe5a3d8-a99b-4cd1-aef0-dd619eaa6034")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TAJC337M006RNJ/TAJC337M006RNJ.step"
+	(model "${KIPRJMOD}/../3dmodels/TAJC337M006RNJ.step"
 		(offset
 			(xyz 0 0 0)
 		)

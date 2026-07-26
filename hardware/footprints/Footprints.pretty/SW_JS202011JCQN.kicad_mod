@@ -295,7 +295,7 @@
 		(uuid "09c99378-1666-4ca5-9591-4f97aa1efe91")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/JS202011JCQN/JS202011JCQN.step"
+	(model "${KIPRJMOD}/../3dmodels/JS202011JCQN.step"
 		(offset
 			(xyz 0 0 0)
 		)

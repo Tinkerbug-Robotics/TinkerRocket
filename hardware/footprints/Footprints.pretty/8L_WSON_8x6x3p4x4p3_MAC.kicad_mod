@@ -445,7 +445,7 @@
 		(uuid "1d68af1c-5c19-4517-9331-9d9ed0b9c3f7")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/MX35UF4G24AD_Z4I8/8L_WSON_8x6x3p4x4p3_MAC.step"
+	(model "${KIPRJMOD}/../3dmodels/8L_WSON_8x6x3p4x4p3_MAC.step"
 		(offset
 			(xyz 0 0 0)
 		)

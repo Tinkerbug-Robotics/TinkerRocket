@@ -496,7 +496,8 @@ private:
     // Pre-create log file support
     volatile bool prepare_file_requested_ = false;
 
-    // SPI bus mutex (active when MRAM is enabled — both cores share SPI bus)
+    // SPI bus mutex — always created.  Both cores share the bus even without
+    // MRAM (flush task programs NAND pages while the BLE download path reads).
     SemaphoreHandle_t spi_mutex_ = nullptr;
     void spiAcquire();
     void spiRelease();

@@ -106,7 +106,7 @@
 		(uuid "5d8da68f-0390-4e0a-ae2a-e14dc3821865")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/EKYC160ELL103MM25S.STEP"
+	(model "${KIPRJMOD}/../3dmodels/EKYC160ELL103MM25S.STEP"
 		(offset
 			(xyz 0 0 2.5)
 		)

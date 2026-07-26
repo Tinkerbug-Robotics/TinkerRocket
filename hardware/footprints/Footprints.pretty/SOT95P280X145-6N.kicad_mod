@@ -278,7 +278,7 @@
 		(uuid "416bb1cc-f911-4b5a-bf1b-a6882495b163")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BQ21040DBVR/BQ21040DBVR.step"
+	(model "${KIPRJMOD}/../3dmodels/BQ21040DBVR.step"
 		(offset
 			(xyz 0 0 0)
 		)

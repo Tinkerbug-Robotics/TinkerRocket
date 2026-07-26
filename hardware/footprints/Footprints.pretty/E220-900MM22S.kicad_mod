@@ -266,7 +266,7 @@
 		(uuid "3e3b7082-45d4-4e72-8e69-ba15c0996054")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/E07-900MM10S.step"
+	(model "${KIPRJMOD}/../3dmodels/E07-900MM10S.step"
 		(offset
 			(xyz 0 0 0)
 		)

@@ -295,7 +295,7 @@
 		(uuid "d1ed6e42-ba25-4019-917a-8f73163a68af")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/FSUSB63UMX (1)/FSUSB63UMX.step"
+	(model "${KIPRJMOD}/../3dmodels/FSUSB63UMX.step"
 		(offset
 			(xyz 0 0 0)
 		)

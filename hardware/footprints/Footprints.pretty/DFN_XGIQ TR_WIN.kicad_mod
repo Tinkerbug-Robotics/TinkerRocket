@@ -386,7 +386,7 @@
 		(uuid "e53dd06c-84af-4026-8328-2c9ba0a20f64")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/W25Q64JVXGIQ_TR/DFN_XGIQTR_WIN.step"
+	(model "${KIPRJMOD}/../3dmodels/DFN_XGIQTR_WIN.step"
 		(offset
 			(xyz 0 0 0)
 		)

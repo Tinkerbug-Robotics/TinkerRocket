@@ -355,7 +355,7 @@
 		(uuid "62a79290-dd92-4c25-a331-a42554bb2610")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ISM6HG256XTR/ISM6HG256XTR.stp"
+	(model "${KIPRJMOD}/../3dmodels/ISM6HG256XTR.stp"
 		(offset
 			(xyz 0 0 0.75)
 		)

@@ -164,7 +164,7 @@
 		(uuid "c199ab16-0127-4b49-8b42-1080293aeeb8")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/VLS3012CX-2R2M-1/VLS3012CX-2R2M-1.step"
+	(model "${KIPRJMOD}/../3dmodels/VLS3012CX-2R2M-1.step"
 		(offset
 			(xyz 0 0 0)
 		)

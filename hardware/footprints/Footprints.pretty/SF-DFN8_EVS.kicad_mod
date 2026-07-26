@@ -424,7 +424,7 @@
 		(uuid "a794f8d5-a115-4645-89a4-f6405e9be5c0")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/MR25H10CDFR/SF-DFN8_EVS.step"
+	(model "${KIPRJMOD}/../3dmodels/SF-DFN8_EVS.step"
 		(offset
 			(xyz 0 0 0)
 		)

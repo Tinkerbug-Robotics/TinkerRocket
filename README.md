@@ -22,52 +22,62 @@ The system comprises three physical cooperating components:
 
 | Component | Hardware | Role |
 |-----------|----------|------|
-| **Flight Computer** | ESP32-P4 & ESP32-S3 | Sensor fusion, EKF, guidance, servo control, data logging, LoRa downlink, BLE telemetry |
-| **Base Station** | ESP32-S3 | LoRa receiver, BLE gateway, onboard-flash logging |
-| **iOS App** | iPhone/iPad | Real-time dashboard, file management, configuration |
+| **Rocket Computer**<br/>([Flight Computer](docs/architecture/flight-computer.md) & [Out Computer](docs/architecture/out-computer.md)) | ESP32-P4 & ESP32-S3 | Power switch, flight control, sensor fusion, data logging, LoRa transmitter, BLE ground link |
+| **[Base Station](docs/architecture/base-station.md)** | ESP32-S3 | LoRa receiver, BLE ground link, LoRa data logging |
+| **[iOS App](docs/architecture/ios-app.md)** | iPhone/iPad | Real-time flight data dashboard, flight and LoRa data storage, rocket and downlink configuration |
 
-The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the WiFi/BlueTooth LE radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at up to 1000 Hz. Optional roll control or, a proportional navigation guidance law commands 1-4 fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro Hero 10 Black support currently implemented.
+The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the BlueTooth Low Energy (BLE) radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at 500 Hz. Optional roll control or a proportional navigation guidance law commands 1-4 fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro support currently implemented.
 
-Remove the need for a dedicated through wall power switch using the built in low power 'WiFi' type switch. After plugging in a battery the unit draws only about 1 mA, which is over three weeks of standby on a typical 600 mAh battery. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control recording remotely from the base station over LoRa as well.
+On plugging in a battery only the ESP32-S3 powers up; drawing only 1 milli-amp. The computer can stay in this configuration for days on a typical battery allowing you to close up the rocket without the need for a physical switch at the pad for many uses. Pyro charges are controlled by the ESP32-P4, which remains un-powered on boot of the ESP32-S3, providing a level of saftey beyond what a single processor switch can provide. Physical switches and/or shunts for air starts and pyro charges are still possible and prudent in many scenarios, so follow all safety regulations and best practices. Power up the main processor using the app before leaving the pad over the BlueTooth connection and control powering up the camera remotely from the base station over LoRa to maximize battery life and reduce camera run time. Control data recording remotely from the base station over LoRa as well, or allow flight data recording to start at launch and end at landing automatically.
 
-The base station relays data sent over LoRa from the flight computer to a nearby iOS device, giving the user a realtime view of telemetry data prior to launch, as well as telemetry and tracking data post launch. Use your phone's speakers to call out altitude, apogee, max speed, and descent rate during the flight and to locate the rocket via an arrow that points towards the rocket and/or a map view of where the rocket landed.
+The base station fits easily in your hand or pocket and can run for hours on a single rechargable battery. The base station also provides a convient charger for your flight data back, while charging the base station from a USB source you can also power your flight battery. The base stationn relays data sent over LoRa from the flight computer to a nearby iOS device, giving the user a realtime view of telemetry data prior to launch, as well as telemetry and tracking data post launch. Use your phone's speakers to call out altitude, apogee, max speed, and descent rate during the flight and to locate the rocket via an arrow that points towards the rocket and/or a map view of where the rocket landed.
 
 Finally, manage the flight data intuitively by uploading from the flight computer to an iOS device and then sharing that data using email, text, air drop, or any other iOS supported sharing means.
 
 ## Architecture
 
-<!-- TODO: add a system photo/diagram, then restore this:
-![Architecture](docs/images/architecture.jpg) -->
+```mermaid
+flowchart TB
+    subgraph SENSORS["Sensors"]
+        direction LR
+        S1["IMU<br/>1 / 2 / 4 kHz"]
+        S2["Barometer<br/>500 Hz"]
+        S3["Magnetometer<br/>100 Hz"]
+        S4["GNSS<br/>18 Hz"]
+    end
 
-```
-                        ┌─────────────────────────────────┐
-                        │        FLIGHT COMPUTER          │
-                        │                                 │
- ISM6HG256 (1920 Hz*)──>│  Sensor       EKF        PID    │
-      BMP585 (500 Hz)──>│  Collector ──> (15-state) ──> Mixer ──> 1-4x Servos
-     IIS2MDC (100 Hz)──>│  Roll Control / Guidance PN     │
-   u-blox M10 (18 Hz)──>│                                 │
-                        └──────┬──────────────────────────┘
-                               │ I2S (22 kHz DMA)
-                               │ I2C (commands)
-                        ┌──────▼──────────────────────────┐
-                        │         OUT COMPUTER            │
-                        │                                 │
-                        │  MRAM Ring ──> NAND Flash (log) │
-                        │  LoRa TX (2 Hz) ──> 915 MHz     │──── BLE ────> iOS App
-                        │  BLE GATT Server                │     (direct)
-                        └──────┬──────────────────────────┘
-                               │ LoRa 915 MHz
-                        ┌──────▼──────────────────────────┐
-                        │         BASE STATION            │
-                        │                                 │
-                        │  LoRa RX ──> Flash (CSV log)    │──── BLE ────> iOS App
-                        │  BLE GATT Server                │    (relayed)
-                        │  MAX17303G+ Battery Monitor     │
-                        └─────────────────────────────────┘
-```
+    subgraph ROCKET["Rocket Computer"]
+        direction LR
+        subgraph FC["<b>Flight Computer</b> — ESP32-P4"]
+            direction TB
+            EKF["Sensor Fusion · 15-State EKF<br/>500 Hz"]
+            CTRL["Flight Control<br/>1 kHz"]
+            EKF --> CTRL
+        end
+        OUT["1–4 Fin Servos<br/>4 Pyro Channels<br/>Camera Control"]
+        subgraph OC["<b>Out Computer</b> — ESP32-S3"]
+            direction TB
+            LOG["Flight Log to Flash Memory"]
+            RAD["LoRa TX · BLE GATT"]
+        end
+        CTRL --> OUT
+        FC <==>|"I2S Telemetry &rarr;<br/>&larr; I2C Commands"| OC
+    end
 
-\* IMU rate is app-settable — 960 / 1920 / 3840 Hz. 1920 Hz is the default.
+    subgraph BS["<b>Base Station</b> — ESP32-S3"]
+        direction TB
+        RX["LoRa RX"]
+        BSLOG["CSV Log to Flash"]
+        RX --> BSLOG
+    end
+
+    APP["<b>iOS App</b><br/>Dashboard · Logs · Config"]
+
+    SENSORS --> FC
+    RAD -->|"LoRa 915 MHz · 2 Hz"| RX
+    RAD -->|"BLE · Pad"| APP
+    RX -->|"BLE · Flight"| APP
+```
 
 ## Documentation
 
@@ -104,9 +114,6 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 | **u-blox M10** | GNSS | UART 115200 | 18 Hz | GPS/GLONASS/Galileo/BeiDou |
 | **INA230** | Power monitor | I2C | 10 Hz | Voltage, current, SOC |
 
-Rates above are the configured rates on a V8 board. Earlier boards carry an MMC5983MA
-magnetometer (200 Hz) instead of the IIS2MDC; the board header selects which is used.
-
 **IMU logging rate is settable from the app** — nominally 1 kHz, 2 kHz, or 4 kHz, which
 land on the sensor's own output rates of 960, 1920 (default), and 3840 Hz. The rate
 cannot be changed in flight.
@@ -120,15 +127,112 @@ cannot be changed in flight.
 
 ### Control
 
-- **1-4 fin-tab servos** on configurable PWM. Roll control and proportional-navigation
-  guidance each drive 1-4 servos
+- **12 GPIO pins** from the ESP32-P4 flight computer exposed. Library included for roll
+  control using 1-4 servos (e.g. fin tabs). Configuration support for active flight
+  stabilization using a proportional navigation law and multiple guide points — guide
+  overhead, guide to a reverse drift-cast point, or guide to an offset
 - **4x pyro channels** with continuity monitoring and configurable triggers
 - **RunCam Split 4 and GoPro Hero 10 Black** support via UART/GPIO control
 
-Current boards (V7, V8) break out four servo outputs. **V9 replaces these with a general
-12-channel GPIO block**, one channel of which is ADC-capable. Those channels are not
-servo-dedicated — they can drive servos, carry communication, or read external sensors.
-Roll control and guidance still use 1-4 servos each.
+> **Export control.** The proportional-navigation library is subject to US ITAR
+> regulations and is available to US persons. Everything else — including roll control —
+> is unrestricted, and you can supply your own guidance library based on public-domain
+> guidance concepts in its place. [Guidance (optional)](#guidance-optional) covers what that means for building.
+
+One of the twelve GPIO channels is ADC-capable. None of them are servo-dedicated — they
+can drive servos, carry communication, or read external sensors — so the four used for fin
+tabs are a choice rather than a fixed allocation.
+
+#### Expansion connector
+
+All twelve channels come out on one 16-pin Molex 878321620. Odd pins are on one row, even
+pins on the other, with pin 1 at the keyed end:
+
+| | | | | | | | | |
+|---|---|---|---|---|---|---|---|---|
+| **odd** | `1`<br/>RTN | `3`<br/>**EXP_01** | `5`<br/>**EXP_03** | `7`<br/>EXP_05 | `9`<br/>EXP_12 | `11`<br/>EXP_10 | `13`<br/>EXP_08 | `15`<br/>VBATT |
+| **even** | `2`<br/>RTN | `4`<br/>**EXP_02** | `6`<br/>**EXP_04** | `8`<br/>EXP_06 | `10`<br/>EXP_11 | `12`<br/>EXP_09 | `14`<br/>EXP_07 | `16`<br/>VBATT |
+
+**Servos 1-4 default to pins 3, 4, 5 and 6** — nets `EXP_01`–`EXP_04`. With the return on
+pins 1-2 and VBATT on 15-16, a three-wire servo lead reaches signal, power and ground
+without leaving the connector.
+
+Two things that will catch you out:
+
+- **The numbering reverses at pin 9.** Pins 3-8 run `EXP_01`→`EXP_06` ascending; pins 9-14
+  run `EXP_12`→`EXP_07` descending. Pin 9 is `EXP_12`, not `EXP_07`.
+- **Pins 1-2 are a switched return, not a ground.** They go through a MOSFET whose source
+  is on GND, so the firmware can cut the servo return — that is what the on-pad relax
+  behaviour uses. Do not use these as a chassis ground.
+
+Each net maps to a fixed ESP32-P4 GPIO:
+
+| Net | GPIO | | Net | GPIO | | Net | GPIO |
+|---|---|---|---|---|---|---|---|
+| `EXP_01` | 45 | | `EXP_05` | 39 | | `EXP_09` | 38 |
+| `EXP_02` | 44 | | `EXP_06` | 40 | | `EXP_10` | 37 |
+| `EXP_03` | 43 | | `EXP_07` | 29 | | `EXP_11` | 34 |
+| `EXP_04` | 54 | | `EXP_08` | 28 | | `EXP_12` | 33 |
+
+#### Which mapping is set where
+
+| Mapping | Set in | Changeable from the app |
+|---|---|---|
+| servo → GPIO pin | flight-computer board header, compile time | **No** |
+| servo → fin azimuth and reversal | `FinConfigData`, BLE command 66 | Yes |
+| PWM rate, pulse limits, per-servo bias, fin travel | `ServoConfigData` | Yes |
+
+So which connector pin drives which servo is fixed when the firmware is built; where that
+servo points, and how far it moves, are set live from the app.
+
+## Flight Data
+
+Data starts as **binary** on the rocket and stays that way until something needs to read
+it. This allows high throughput data logging and efficient use of storage space. The flight 
+computer packs each sensor reading into a framed record and streams it to the out 
+computer, which buffers it before writing it to NAND flash. Framing is the same
+everywhere — a start-of-frame marker, a type byte, a length, the payload, and a CRC — so a
+truncated or corrupted record is detected rather than silently believed.
+
+### Getting it off the rocket
+
+| Step | What happens |
+|------|--------------|
+| **Download to Phone** | The app pulls the `.bin` over BLE, in chunks, straight from the rocket's flash |
+| **Convert** | It is expanded to CSV on the phone — one row per IMU update, slower sensors forward-filled so every row is complete |
+| **View** | Charts, 3D trajectory, and flight events, rendered from the CSV in the app |
+| **Share** | The CSV goes out by email, AirDrop, or anything else iOS can share to |
+
+The base station writes its own CSV as it receives LoRa telemetry. That one is a separate,
+lower-rate record — useful for receiver specific data and a quick look analysis before your
+rocket is recovered. Binary is not necessary here since data is at 2 Hz.
+
+### Flight reports
+
+[`Data_Analysis/flight_report/`](Data_Analysis/flight_report/) turns a `.bin` into a
+self-contained **HTML report**. It reads the binary directly and runs twelve analysis
+modules over it — launch detection, kinematics, apogee and pyro timing, sensor noise,
+timestamp gaps, GNSS staleness, LoRa link quality, roll PID, guidance — then renders the
+plots and findings into one page.
+
+Four real flights are committed in [`examples/flights/`](examples/flights/) so this runs
+out of the box:
+
+```bash
+python -m Data_Analysis.flight_report run examples/flights/flight_20260705_174532.bin
+python -m Data_Analysis.flight_report run examples/flights      # all four
+```
+
+Point it at a directory and it processes every flight it finds. A report lands next to its
+`.bin` unless `--out` says otherwise, and a matching `.csv` or `.json` sidecar is picked up
+automatically when present.
+
+Both subcommands take a path. Omit it and they scan a default local flight archive
+(`~/Documents/Hobbies/ModelRockets/TestFlights`), which finds nothing on a fresh clone — so
+pass the path explicitly.
+
+The suite is covered by `flight-report-tests.yml` in CI, so a change to the analysis code
+has to still produce a report from a real flight log.
 
 ## Repository Structure
 
@@ -162,6 +266,7 @@ TinkerRocket/
 │   ├── cpp/                    # pybind11 bindings for EKF, PID, mixer, guidance
 │   └── tests/                  # Pytest regression suite
 │
+├── examples/flights/           # Four real flight logs, for the report tooling
 ├── tests/integration/          # Binary log replay integration tests
 ├── preflight/                  # Pre-flight go/no-go checklist
 │
@@ -187,7 +292,9 @@ TinkerRocket/
 
 ### Guidance (optional)
 
-The proportional-navigation guidance law lives in a separate private submodule at [`tinkerrocket-idf/components/TR_GuidancePN`](https://github.com/Tinkerbug-Robotics/TR_GuidancePN). Everything else — roll control, EKF, sensor collection, telemetry, logging, LoRa, BLE, iOS integration, ground-test modes — builds and runs **without** it. Public contributors can clone, build, flash, and contribute to any non-guidance feature with a standard, non-recursive clone.
+The proportional-navigation guidance law lives in a separate private submodule at [`tinkerrocket-idf/components/TR_GuidancePN`](https://github.com/Tinkerbug-Robotics/TR_GuidancePN). **It is separate because it is subject to US ITAR regulations and is available to US persons** — that restriction is the reason for the split, not a preference about openness.
+
+Everything else — roll control, EKF, sensor collection, telemetry, logging, LoRa, BLE, iOS integration, ground-test modes — builds and runs **without** it, and none of it is export-restricted. Public contributors can clone, build, flash, and contribute to any non-guidance feature with a standard, non-recursive clone. If you need guidance and cannot access this module, supply your own based on public-domain guidance concepts: [`TR_GuidancePN_Stub`](tinkerrocket-idf/components/TR_GuidancePN_Stub/TR_GuidancePN.h) is the interface to implement — the firmware already builds and flies against it.
 
 When the submodule is not initialized:
 - Firmware compiles against a header-only no-op stub (`TR_GuidancePN_Stub`). At boot the flight computer logs `PN Guidance: NOT COMPILED IN (stub active)`. All `guidance.*` call sites still exist, but each method returns zero / false.
@@ -331,8 +438,8 @@ The main sensor frames, with the rate each is produced at:
 | 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
 | 0xF1 | LoRa Telemetry | 65 B | 2 Hz |
 
-`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from earlier boards, which V8 does
-not populate.
+`0xA4` (MMC5983MA, 16 B) is the magnetometer frame from an earlier sensor, still on the
+wire so older logs decode.
 
 **All 89 message types, both BLE command spaces, and every struct's wire size are in the
 [generated protocol reference](docs/architecture/generated/protocol-reference.md)** —

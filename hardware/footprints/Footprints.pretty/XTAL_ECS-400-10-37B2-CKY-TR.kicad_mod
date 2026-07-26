@@ -170,7 +170,7 @@
 		(uuid "1f20d1fb-57b1-4328-b73d-6365762d9be3")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ECS_400_10_37B2_CKY_TR/ECS-400-10-37B2-CKY-TR.step"
+	(model "${KIPRJMOD}/../3dmodels/ECS-400-10-37B2-CKY-TR.step"
 		(offset
 			(xyz 0 0 0)
 		)

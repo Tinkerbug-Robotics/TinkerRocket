@@ -302,7 +302,7 @@
 			(uuid "4cfe58a9-6813-40b5-a358-9b47b88b263c")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/782853200/WE-CBA_0805_CBA+%28rev1%29.stp"
+		(model "${KIPRJMOD}/../3dmodels/WE-CBA_0805_CBA__rev1_.stp"
 			(offset
 				(xyz 0 0 0.5)
 			)
@@ -1264,7 +1264,7 @@
 			(uuid "4dfa0aac-3b5a-438e-8b7b-5be3b1a1078a")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ASPI-0530HI-2R2M-T2/ASPI-0530HI-2R2M-T2.step"
+		(model "${KIPRJMOD}/../3dmodels/ASPI-0530HI-2R2M-T2.step"
 			(offset
 				(xyz 0 0 1.5)
 			)
@@ -1472,7 +1472,7 @@
 			(uuid "9a17cee9-910d-4503-b5d5-2a5df5248a21")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402_1005Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -1901,7 +1901,7 @@
 			(uuid "8d72a46b-d9ef-4512-b762-d1e088324bf4")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS62913RPUR/TPS62913RPUR.step"
+		(model "${KIPRJMOD}/../3dmodels/TPS62913RPUR.step"
 			(offset
 				(xyz 0.1 0.1 0)
 			)
@@ -2220,7 +2220,7 @@
 			(uuid "4d1a4991-4372-48c2-8e1a-28418f9b1255")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/DLW21SN670HQ2L/DLW21SN670HQ2L.step"
+		(model "${KIPRJMOD}/../3dmodels/DLW21SN670HQ2L.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -2711,7 +2711,7 @@
 			(uuid "b12db128-e558-4ee3-a156-017842140b3c")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/LED_SMD.3dshapes/LED_0402_1005Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/LED_SMD.3dshapes/LED_0402_1005Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -4439,7 +4439,7 @@
 			(uuid "71b191d4-8dff-41bb-88af-d80f5c103a5b")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BM05B_SRSS_TB/BM05B-SRSS-TB.STEP"
+		(model "${KIPRJMOD}/../3dmodels/BM05B-SRSS-TB.STEP"
 			(offset
 				(xyz 0 -1.5 0)
 			)
@@ -4998,7 +4998,7 @@
 			(uuid "5530a2e9-d773-4f28-bd2f-373b2570624e")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0402_1005Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0402_1005Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -5211,7 +5211,7 @@
 			(uuid "8aa7998c-02ee-4a12-a863-1f0a58ce3c66")
 		)
 		(embedded_fonts no)
-		(model "${KICAD9_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0805_2012Metric.step"
+		(model "${KICAD10_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0805_2012Metric.step"
 			(offset
 				(xyz 0 0 0)
 			)

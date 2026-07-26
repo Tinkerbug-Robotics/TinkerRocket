@@ -138,7 +138,7 @@
 		(uuid "7a957608-24d4-4193-ab1d-aab5fb029925")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/782853200/WE-CBA_0805_CBA+%28rev1%29.stp"
+	(model "${KIPRJMOD}/../3dmodels/WE-CBA_0805_CBA__rev1_.stp"
 		(offset
 			(xyz 0 0 0.5)
 		)

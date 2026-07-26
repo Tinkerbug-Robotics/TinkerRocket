@@ -488,7 +488,7 @@
 		(uuid "2df38787-6e65-467c-8f00-e8132da4c3ff")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/TPS259824ONRGER/TPS259824ONRGER.step"
+	(model "${KIPRJMOD}/../3dmodels/TPS259824ONRGER.step"
 		(offset
 			(xyz 0 0 0)
 		)

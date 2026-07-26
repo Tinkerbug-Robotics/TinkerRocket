@@ -5,11 +5,9 @@
 Thanks for wanting to contribute. This agreement covers the legal side of that, once,
 so neither of us has to think about it again.
 
-> **Maintainer note:** this document is a draft derived from the Apache Software
-> Foundation's Individual CLA, adapted to cover hardware design files as well as
-> software. It has **not** been reviewed by a lawyer. If Tinkerbug Robotics intends to
-> rely on the relicensing right in section 4 commercially, have counsel read it first.
-> Delete this note once that has happened.
+It is derived from the Apache Software Foundation's Individual CLA — so if you have
+signed one of those, this will look familiar — extended to cover hardware design files
+as well as software, since this project publishes both.
 
 ---
 
@@ -141,6 +139,12 @@ Signed-off-by: Your Name <your.email@example.com>
 
 Use a real name and an address that reaches you. One signature covers all your future
 contributions; you do not repeat it per pull request.
+
+**Contributing on behalf of a company?** There is no separate corporate agreement — this
+is the only one. Someone authorised to bind the company signs this same document, naming
+the company, and it then covers contributions made by its people. If your employer holds
+rights in what you write and has not signed, get their permission before contributing —
+see "You have the authority" in section 5.
 
 **Safety-critical reminder.** TinkerRocket fires pyrotechnic devices and flies at
 altitude. Contributions touching pyro, deployment, recovery, or flight-state logic get

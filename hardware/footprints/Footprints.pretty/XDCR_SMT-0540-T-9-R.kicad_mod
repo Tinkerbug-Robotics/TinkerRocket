@@ -242,7 +242,7 @@
 		(uuid "63b532f5-031b-4c8d-83dc-f210051939ab")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SMT_0540_T_9_R/SMT-0540-T-9-R.step"
+	(model "${KIPRJMOD}/../3dmodels/SMT-0540-T-9-R.step"
 		(offset
 			(xyz 11 0 -5)
 		)

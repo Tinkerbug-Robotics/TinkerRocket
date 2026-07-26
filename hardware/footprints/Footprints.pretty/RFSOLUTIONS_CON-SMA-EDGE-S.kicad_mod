@@ -318,7 +318,7 @@
 		(uuid "a102fcca-730a-4c01-88be-96de1afcdeda")
 	)
 	(embedded_fonts no)
-	(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/CON_SMA_EDGE_S/CON-SMA-EDGE-S.step"
+	(model "${KIPRJMOD}/../3dmodels/CON-SMA-EDGE-S.step"
 		(offset
 			(xyz 0 0 0)
 		)

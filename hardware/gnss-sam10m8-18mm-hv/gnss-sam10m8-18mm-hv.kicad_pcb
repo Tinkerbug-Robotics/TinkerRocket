@@ -633,7 +633,7 @@
 			(uuid "c11f884c-1b84-4a53-bdd8-9bae6be3f048")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/VLS3012CX-2R2M-1/VLS3012CX-2R2M-1.step"
+		(model "${KIPRJMOD}/../3dmodels/VLS3012CX-2R2M-1.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -2727,7 +2727,7 @@
 			(uuid "9cf074b2-dad6-4e5a-b498-9975ffcacfe9")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/782853200/WE-CBA_0805_CBA+%28rev1%29.stp"
+		(model "${KIPRJMOD}/../3dmodels/WE-CBA_0805_CBA__rev1_.stp"
 			(offset
 				(xyz 0 0 0.5)
 			)
@@ -3794,7 +3794,7 @@
 			(uuid "c6a2d965-6535-40ba-8dfd-306edf4a031b")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/DLW21SN670HQ2L/DLW21SN670HQ2L.step"
+		(model "${KIPRJMOD}/../3dmodels/DLW21SN670HQ2L.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -4343,7 +4343,7 @@
 			(uuid "749f6743-faa8-4b06-b2b8-5b6f98ef2adb")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/BM05B_SRSS_TB/BM05B-SRSS-TB.STEP"
+		(model "${KIPRJMOD}/../3dmodels/BM05B-SRSS-TB.STEP"
 			(offset
 				(xyz 0 -1.5 0)
 			)
@@ -7041,7 +7041,7 @@
 			(uuid "04ce0649-c910-4362-994a-8a64adc66916")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/SAM_M10Q_00B/SAM-M10Q-00B.step"
+		(model "${KIPRJMOD}/../3dmodels/SAM-M10Q-00B.step"
 			(offset
 				(xyz 0 0 0)
 			)
