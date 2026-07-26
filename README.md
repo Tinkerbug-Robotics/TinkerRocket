@@ -24,7 +24,7 @@ The system comprises three physical cooperating components:
 |-----------|----------|------|
 | **Rocket Computer**<br/>([Flight Computer](docs/architecture/flight-computer.md) & [Out Computer](docs/architecture/out-computer.md)) | ESP32-P4 & ESP32-S3 | Power switch, flight control, sensor fusion, data logging, LoRa transmitter, BLE ground link |
 | **[Base Station](docs/architecture/base-station.md)** | ESP32-S3 | LoRa receiver, BLE ground link, LoRa data logging |
-| **[iOS App](docs/architecture/ios-app.md)** | iPhone/iPad | Real-time flight data dashboard, flight and LoRa data storage, rocket and downlink configuration |
+| **[iOS App](docs/architecture/ios-app.md)** | iPhone/iPad · [App Store](https://apps.apple.com/app/id6782041169) | Real-time flight data dashboard, flight and LoRa data storage, rocket and downlink configuration |
 
 The onboard computer has both the ESP32-P4 main processor with two cores running at 400 MHz for sensor intake, flight processing, and controls. An ESP32-S3 serves as the BlueTooth Low Energy (BLE) radio as well as high speed data logger and LoRa radio control. To support guidance and control functions, the onboard flight computer runs a 15-state Extended Kalman Filter fusing IMU, barometer, magnetometer, and GNSS data at 500 Hz. Optional roll control or a proportional navigation guidance law commands 1-4 fin-tab servos through cascaded PID controllers with velocity-based gain scheduling. There are four fully programmable pyro channels. There is also an interface to power and control an on board camera, with RunCam Split4 and GoPro support currently implemented.
 
@@ -326,7 +326,8 @@ idf.py flash
 
 ### iOS App
 
-Open `TinkerRocketApp/TinkerRocketApp.xcodeproj` in Xcode and build for your device.
+Most people want the [App Store build](https://apps.apple.com/app/id6782041169) rather than a local one. To work on the app,
+open `TinkerRocketApp/TinkerRocketApp.xcodeproj` in Xcode and build for your device.
 
 ### Simulation
 
@@ -454,7 +455,11 @@ The flight computer streams sensor data to the out computer via I2S DMA at 22,05
 <!-- TODO: add an app screenshot, then restore this:
 ![iOS App](docs/images/ios_app.jpg) -->
 
-The TinkerRocketApp is a SwiftUI companion app providing:
+**[Download TinkerRocket App on the App Store](https://apps.apple.com/app/id6782041169)** — free, iOS 16 or later, iPhone
+and iPad. You do not need to build it to fly; the sources here are for contributing, or
+for running a version ahead of the store release.
+
+The app is a SwiftUI companion providing:
 
 - Real-time telemetry dashboard (attitude, altitude, velocity, GPS, battery)
 - 3D flight trajectory visualization
