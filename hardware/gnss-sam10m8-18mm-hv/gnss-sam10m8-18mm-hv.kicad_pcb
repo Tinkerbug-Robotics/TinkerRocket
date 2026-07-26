@@ -310,6 +310,341 @@
 			)
 		)
 	)
+	(footprint "Footprints:IND_VLS3012CX-2R2M-1"
+		(layer "F.Cu")
+		(uuid "123fadfe-186d-420e-b9e0-316767b691ea")
+		(at 55.5 42.54)
+		(property "Reference" "L8"
+			(at 0.282 -2.4064 0)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "588f429e-8154-4c4a-a5c5-053a15d38306")
+			(effects
+				(font
+					(size 0.64 0.64)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "VLS3012CX-2R2M-1"
+			(at 6.378 2.4064 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "c13dea6c-f49a-47c9-901c-438f467e0ae0")
+			(effects
+				(font
+					(size 0.64 0.64)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "a8f761a2-e2e3-46d9-ab0f-e4b3d52675d8")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Inductor Power Shielded Wirewound 2.2uH 20% 1MHz Ferrite 2.55A 0.074Ohm DCR 1212 T/R"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "75779ea9-8d5d-4e8b-83b2-80079caa257b")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MF" "TDK Corporation"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "3f505246-aad6-4368-bc64-c356902a81bf")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "MAXIMUM_PACKAGE_HEIGHT" "1.2 mm"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "37455f82-33de-4b1c-9948-f43d96eef24e")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Package" "NON STANDARD-2 TDK"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "0ca9ac30-2c15-4e59-bc36-704d6fce79a7")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Price" "None"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "e91f72b4-779f-408d-afc2-c84e9e01ffba")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Check_prices" "https://www.snapeda.com/parts/VLS3012CX-2R2M-1/TDK/view-part/?ref=eda"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "b5fe5189-a477-4766-96c1-b40bb310fa41")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "STANDARD" "Manufacturer Recommendations"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "bc392701-7b43-4840-a8cd-c35010d5f9ef")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "PARTREV" "N/A"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "24ec470d-68c0-4023-9bc8-ad852b872637")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "SnapEDA_Link" "https://www.snapeda.com/parts/VLS3012CX-2R2M-1/TDK/view-part/?ref=snap"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "f1e3ffdc-1b20-4ea6-86d6-012c0d1f74bd")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "MP" "VLS3012CX-2R2M-1"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "714b5f54-62c2-4709-bb92-ce4655ab39d8")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Availability" "In Stock"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "8c99d35e-e3a0-40d8-995b-d86712cc86d3")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "MANUFACTURER" "TDK"
+			(at 0 0 0)
+			(unlocked yes)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "381fd857-5ba8-45a8-b0af-c23dc0753055")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/3592c6ce-db10-4863-ab1d-796a3c008cd1")
+		(sheetname "/")
+		(sheetfile "gnss-sam10m8-18mm-hv.kicad_sch")
+		(units
+			(unit
+				(name "A")
+				(pins "1" "2")
+			)
+		)
+		(attr smd)
+		(duplicate_pad_numbers_are_jumpers no)
+		(fp_line
+			(start -0.18 -1.5)
+			(end 0.18 -1.5)
+			(stroke
+				(width 0.127)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "767c3ea6-b196-4f5a-bf7c-48d7c9a21dce")
+		)
+		(fp_line
+			(start -0.18 1.5)
+			(end 0.18 1.5)
+			(stroke
+				(width 0.127)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "3f39aa46-3f2b-4498-b57a-15d4f3281405")
+		)
+		(fp_line
+			(start -1.75 -1.75)
+			(end -1.75 1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "966e7db8-be88-4d71-a6f0-038591b7ae8b")
+		)
+		(fp_line
+			(start -1.75 1.75)
+			(end 1.75 1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "984585d8-f1ec-437b-866f-6a544f1fb2e6")
+		)
+		(fp_line
+			(start 1.75 -1.75)
+			(end -1.75 -1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "0748d616-d059-4507-876a-dc3747c82ebc")
+		)
+		(fp_line
+			(start 1.75 1.75)
+			(end 1.75 -1.75)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "3b3c7283-69d3-4e58-a7bd-0aaa5bd544e7")
+		)
+		(fp_line
+			(start -1.5 -1.5)
+			(end -1.5 1.5)
+			(stroke
+				(width 0.127)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "d3a621b1-e5ad-40d7-b2cf-ef092929c22a")
+		)
+		(fp_line
+			(start -1.5 -1.5)
+			(end 1.5 -1.5)
+			(stroke
+				(width 0.127)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "57bfbbf0-cbdc-42c2-9c00-b9bce55ad6c3")
+		)
+		(fp_line
+			(start -1.5 1.5)
+			(end 1.5 1.5)
+			(stroke
+				(width 0.127)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "12b46665-0b0d-4ba1-b0d5-bb70fdb79dff")
+		)
+		(fp_line
+			(start 1.5 -1.5)
+			(end 1.5 1.5)
+			(stroke
+				(width 0.127)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "c3f321bd-5641-497d-a9e2-14f937de1709")
+		)
+		(pad "1" smd rect
+			(at -1 0)
+			(size 1 3)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net "Net-(U3-SW)")
+			(pintype "passive")
+			(solder_mask_margin 0.05)
+			(uuid "dfa2b621-d1e4-4dd6-9f21-73cd36377d20")
+		)
+		(pad "2" smd rect
+			(at 1 0)
+			(size 1 3)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net "Net-(U3-VO)")
+			(pintype "passive")
+			(solder_mask_margin 0.05)
+			(uuid "c11f884c-1b84-4a53-bdd8-9bae6be3f048")
+		)
+		(embedded_fonts no)
+		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/VLS3012CX-2R2M-1/VLS3012CX-2R2M-1.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz -90 -0 -0)
+			)
+		)
+	)
 	(footprint "Capacitor_SMD:C_0805_2012Metric"
 		(layer "F.Cu")
 		(uuid "13a7736f-8c34-40ad-9c61-dd577166a525")
@@ -488,7 +823,7 @@
 				)
 			)
 		)
-		(property "Value" "22 uF"
+		(property "Value" "47 uF"
 			(at 0 1.68 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -2884,62 +3219,61 @@
 			)
 		)
 	)
-	(footprint "Footprints:IND_ASPI-0530HI-2R2M-T2"
+	(footprint "Capacitor_SMD:C_0805_2012Metric"
 		(layer "F.Cu")
-		(uuid "813803a7-2fbf-40f9-8a83-bcf48f1534b6")
-		(at 55.24 42.29 90)
-		(property "Reference" "L1"
-			(at -1.718 -3.5564 90)
+		(uuid "844804db-9003-4986-ad11-bb9d401952f2")
+		(at 68.485 43.095)
+		(descr "Capacitor SMD 0805 (2012 Metric), square (rectangular) end terminal, IPC-7351 nominal, (Body size source: IPC-SM-782 page 76, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf, https://docs.google.com/spreadsheets/d/1BsfQQcO9C6DZCsRaXUlFlo91Tg2WpOkGARC1WS5S8t0/edit?usp=sharing)")
+		(tags "capacitor")
+		(property "Reference" "C14"
+			(at 0 -1.68 0)
 			(layer "F.SilkS")
-			(hide yes)
-			(uuid "d3d6c2ad-7afb-4727-a42c-0a538c48aeb5")
+			(uuid "5041c6a6-9cad-43c6-9481-9d280e0ec1a1")
 			(effects
 				(font
-					(size 0.64 0.64)
+					(size 1 1)
 					(thickness 0.15)
 				)
 			)
 		)
-		(property "Value" "ASPI-0530HI-2R2M-T2"
-			(at 5.5972 3.5564 90)
+		(property "Value" "22 uF"
+			(at 0 1.68 0)
 			(layer "F.Fab")
-			(hide yes)
-			(uuid "f321d4c9-ae25-4539-b012-f22caa864c9b")
+			(uuid "3b0385b7-516d-4c3f-bdcc-13d036709e7e")
 			(effects
 				(font
-					(size 0.64 0.64)
+					(size 1 1)
 					(thickness 0.15)
 				)
 			)
 		)
 		(property "Datasheet" ""
-			(at 0 0 90)
+			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "8bcb9821-f100-4e4f-aa28-b39a21aa2907")
+			(uuid "8b80f50a-97f1-43d0-a486-04437e87fdd3")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "Description" "2.2 µH Shielded Molded Inductor 5.5 A 35mOhm Max Nonstandard"
-			(at 0 0 90)
+		(property "Description" "Unpolarized capacitor"
+			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
-			(uuid "e37624e7-aaf4-4b7b-a2af-52bb4182535d")
+			(uuid "97c926a2-c04e-41c6-9aea-7fc314c13681")
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "DigiKey_Part_Number" "535-ASPI-0530HI-2R2M-T2CT-ND"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
+		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
+			(at 0 0 0)
+			(layer "F.SilkS")
 			(hide yes)
-			(uuid "a5bac5a9-e7d9-4f30-8281-74d4365d3a38")
+			(uuid "414fab99-2b75-4a18-9101-61129d013e1f")
 			(effects
 				(font
 					(size 1 1)
@@ -2947,124 +3281,8 @@
 				)
 			)
 		)
-		(property "SnapEDA_Link" "https://www.snapeda.com/parts/ASPI-0530HI-2R2M-T2/Abracon/view-part/?ref=snap"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "5e7a1d21-2493-494c-8a04-be8b32c0f3ab")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "MAXIMUM_PACKAGE_HEIGHT" "3.0 mm"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "dc754488-2528-45bb-9103-f15fe6f1576d")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "Package" "Nonstandard Abracon"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "1fc1d2b0-401e-4f11-98b7-99c9302b33d0")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "Check_prices" "https://www.snapeda.com/parts/ASPI-0530HI-2R2M-T2/Abracon/view-part/?ref=eda"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "4c8bb3df-ea82-4c9f-b793-ea8e20bb07d2")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "STANDARD" "Manufacturer Recommendations"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "30cf81b0-9bba-47c4-a313-92c06d023fb0")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "PARTREV" "B"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "30d0851b-7716-430b-aade-8dd64aaf5026")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "MF" "Abracon LLC"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "d476fda4-3176-4c73-bfaf-fad478d8aca8")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "MP" "ASPI-0530HI-2R2M-T2"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "25ba2e2b-dbac-4d21-bff0-0d8d4de04567")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(property "MANUFACTURER" "Abracon"
-			(at 0 0 90)
-			(unlocked yes)
-			(layer "F.Fab")
-			(hide yes)
-			(uuid "7b92728b-51c9-4fd5-a3ea-3e4ebe78d055")
-			(effects
-				(font
-					(size 1 1)
-					(thickness 0.15)
-				)
-			)
-		)
-		(path "/a37eb19c-610b-4a82-825b-498f9146d5e6")
+		(property ki_fp_filters "C_*")
+		(path "/14764dd1-9592-4872-ace8-a5e5345b7225")
 		(sheetname "/")
 		(sheetfile "gnss-sam10m8-18mm-hv.kicad_sch")
 		(units
@@ -3076,133 +3294,86 @@
 		(attr smd)
 		(duplicate_pad_numbers_are_jumpers no)
 		(fp_line
-			(start -2.85 -2.65)
-			(end 2.85 -2.65)
+			(start -0.261252 -0.735)
+			(end 0.261252 -0.735)
 			(stroke
-				(width 0.127)
+				(width 0.12)
 				(type solid)
 			)
 			(layer "F.SilkS")
-			(uuid "09570c81-c0d1-406b-956f-9c1698135d69")
+			(uuid "da04df4e-0658-4388-b2de-a5016fcd2210")
 		)
 		(fp_line
-			(start -2.85 2.65)
-			(end 2.85 2.65)
+			(start -0.261252 0.735)
+			(end 0.261252 0.735)
 			(stroke
-				(width 0.127)
+				(width 0.12)
 				(type solid)
 			)
 			(layer "F.SilkS")
-			(uuid "40aba9e8-e66d-4ffe-b5b5-d63badf4f45f")
+			(uuid "9586d8c9-aaa9-4df8-baaf-f42b546098b6")
 		)
-		(fp_line
-			(start 3.75 -2.9)
-			(end -3.75 -2.9)
+		(fp_rect
+			(start -1.7 -0.98)
+			(end 1.7 0.98)
 			(stroke
 				(width 0.05)
 				(type solid)
 			)
+			(fill no)
 			(layer "F.CrtYd")
-			(uuid "d210106c-2853-4770-86a4-ca52749e7926")
+			(uuid "4ab90f14-20c0-4276-a8de-ab1e5fcf6b3b")
 		)
-		(fp_line
-			(start -3.75 -2.9)
-			(end -3.75 2.9)
+		(fp_rect
+			(start -1 -0.625)
+			(end 1 0.625)
 			(stroke
-				(width 0.05)
+				(width 0.1)
 				(type solid)
 			)
-			(layer "F.CrtYd")
-			(uuid "d41832a0-06da-4a05-b696-4d9acb0e7854")
-		)
-		(fp_line
-			(start 3.75 2.9)
-			(end 3.75 -2.9)
-			(stroke
-				(width 0.05)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "47de3f0b-a679-4cf7-8433-ad4580348269")
-		)
-		(fp_line
-			(start -3.75 2.9)
-			(end 3.75 2.9)
-			(stroke
-				(width 0.05)
-				(type solid)
-			)
-			(layer "F.CrtYd")
-			(uuid "287db26c-88c3-44da-a7b9-921ba6d6e89d")
-		)
-		(fp_line
-			(start 2.85 -2.65)
-			(end 2.85 2.65)
-			(stroke
-				(width 0.127)
-				(type solid)
-			)
+			(fill no)
 			(layer "F.Fab")
-			(uuid "5674a270-fd6d-442b-974f-304f77a2a323")
+			(uuid "2bef7ada-288d-4ac7-909a-89faf3fcf803")
 		)
-		(fp_line
-			(start -2.85 -2.65)
-			(end 2.85 -2.65)
-			(stroke
-				(width 0.127)
-				(type solid)
-			)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 0)
 			(layer "F.Fab")
-			(uuid "41b10c74-3dad-4895-99e2-2b28f7bffd5b")
-		)
-		(fp_line
-			(start -2.85 -2.65)
-			(end -2.85 2.65)
-			(stroke
-				(width 0.127)
-				(type solid)
+			(uuid "62efffa7-7ba4-4d2a-828b-aab6e9ddff3d")
+			(effects
+				(font
+					(size 0.5 0.5)
+					(thickness 0.08)
+				)
 			)
-			(layer "F.Fab")
-			(uuid "b9564f77-688b-492f-a623-5e648bd4de70")
 		)
-		(fp_line
-			(start -2.85 2.65)
-			(end 2.85 2.65)
-			(stroke
-				(width 0.127)
-				(type solid)
-			)
-			(layer "F.Fab")
-			(uuid "29a679be-c30d-4fe8-b198-ef3967f389de")
-		)
-		(pad "1" smd rect
-			(at -2.5 0 90)
-			(size 2 2.5)
+		(pad "1" smd roundrect
+			(at -0.95 0)
+			(size 1 1.45)
 			(layers "F.Cu" "F.Mask" "F.Paste")
-			(net "Net-(U3-SW)")
+			(roundrect_rratio 0.25)
+			(net "+3V3")
 			(pintype "passive")
-			(solder_mask_margin 0.102)
-			(uuid "bba69cb0-336a-48d8-8dbb-6c4fe4f15aea")
+			(uuid "853faf5e-d47d-4727-8856-3f9bd39432d8")
 		)
-		(pad "2" smd rect
-			(at 2.5 0 90)
-			(size 2 2.5)
+		(pad "2" smd roundrect
+			(at 0.95 0)
+			(size 1 1.45)
 			(layers "F.Cu" "F.Mask" "F.Paste")
-			(net "Net-(U3-VO)")
+			(roundrect_rratio 0.25)
+			(net "GND")
 			(pintype "passive")
-			(solder_mask_margin 0.102)
-			(uuid "503b9294-f1ba-46b7-afb3-d69fcdfdb5ee")
+			(uuid "b71f8d7d-b6c1-4421-a805-f80a23aba1bf")
 		)
 		(embedded_fonts no)
-		(model "/Users/christianpedersen/Documents/KiCad/Libraries/Downloaded Library Files/ASPI-0530HI-2R2M-T2/ASPI-0530HI-2R2M-T2.step"
+		(model "${KICAD10_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0805_2012Metric.step"
 			(offset
-				(xyz 0 0 1.5)
+				(xyz 0 0 0)
 			)
 			(scale
 				(xyz 1 1 1)
 			)
 			(rotate
-				(xyz -90 -0 -0)
+				(xyz 0 0 0)
 			)
 		)
 	)
@@ -4866,7 +5037,7 @@
 				)
 			)
 		)
-		(property "Value" "22 uF"
+		(property "Value" "47 uF"
 			(at 0 1.68 0)
 			(layer "F.Fab")
 			(hide yes)
