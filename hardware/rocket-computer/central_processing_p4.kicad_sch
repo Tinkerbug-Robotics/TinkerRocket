@@ -5,207 +5,6 @@
 	(uuid "c95845b6-ff1d-4fb2-900f-98953663792c")
 	(paper "A4")
 	(lib_symbols
-		(symbol "Custom:ECS-.327-6-16R-TR"
-			(pin_names
-				(offset 1.016)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "Y"
-				(at -5.0889 3.8167 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "Value" "ECS-.327-6-16R-TR"
-				(at -5.0894 -5.0894 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "Footprint" "ECS-.327-6-16R-TR:XTAL_ECS-.327-6-16R-TR"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "ECS-.327-6-16R-TR_0_0"
-				(polyline
-					(pts
-						(xy -2.54 0) (xy -1.016 0)
-					)
-					(stroke
-						(width 0.1524)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy -1.016 1.778) (xy -1.016 -1.778)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy -0.381 1.524) (xy -0.381 -1.524)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy -0.381 -1.524) (xy 0.381 -1.524)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.381 1.524) (xy -0.381 1.524)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.381 -1.524) (xy 0.381 1.524)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 1.016 1.778) (xy 1.016 -1.778)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 1.016 0) (xy 2.54 0)
-					)
-					(stroke
-						(width 0.1524)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(pin passive line
-					(at -5.08 0 0)
-					(length 2.54)
-					(name ""
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 5.08 0 180)
-					(length 2.54)
-					(name ""
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
 		(symbol "Custom:ECS-400-10-37B2-CKY-TR"
 			(pin_names
 				(offset 1.016)
@@ -2993,6 +2792,207 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:SC-32S-32.768kHz-12.5pF"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "Y"
+				(at -5.0889 3.8167 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "SC-32S-32.768kHz-12.5pF"
+				(at -5.0894 -5.0894 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Footprint" "Footprints:XTAL_SC-32S_3215"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "SC-32S-32.768kHz-12.5pF_0_0"
+				(polyline
+					(pts
+						(xy -2.54 0) (xy -1.016 0)
+					)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.016 1.778) (xy -1.016 -1.778)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -0.381 1.524) (xy -0.381 -1.524)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -0.381 -1.524) (xy 0.381 -1.524)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0.381 1.524) (xy -0.381 1.524)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0.381 -1.524) (xy 0.381 1.524)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.016 1.778) (xy 1.016 -1.778)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.016 0) (xy 2.54 0)
+					)
+					(stroke
+						(width 0.1524)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -5.08 0 0)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 5.08 0 180)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:TLV62569DRLR"
 			(pin_names
 				(offset 0.254)
@@ -3524,7 +3524,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Custom:W25Q64JVXGIQ_TR"
+		(symbol "Custom:W25Q128JVSIQ"
 			(pin_names
 				(offset 0.254)
 			)
@@ -3543,7 +3543,7 @@
 					)
 				)
 			)
-			(property "Value" "W25Q64JVXGIQ TR"
+			(property "Value" "W25Q128JVSIQ"
 				(at 40.64 10.16 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3553,7 +3553,7 @@
 					)
 				)
 			)
-			(property "Footprint" "DFN_XGIQ TR_WIN"
+			(property "Footprint" "Footprints:SOIC-8_W25Q128JVSIQ"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3565,7 +3565,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "W25Q64JVXGIQ TR"
+			(property "Datasheet" "https://www.winbond.com/resource-files/W25Q128JV%20RevI%2008232021%20Plus.pdf"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3577,7 +3577,7 @@
 					)
 				)
 			)
-			(property "Description" ""
+			(property "Description" "128Mbit SPI NOR flash, SOIC-8 208mil | Winbond W25Q128JVSIQ. Derived from the W25Q64JVXGIQ_TR (WSON-8) symbol with pin 9 REMOVED - that was the WSON exposed pad, which the SOIC-8 package does not have. Pins 1-8 unchanged so nets are preserved; GND is pin 4."
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -3620,7 +3620,7 @@
 					)
 				)
 			)
-			(symbol "W25Q64JVXGIQ_TR_0_1"
+			(symbol "W25Q128JVSIQ_0_1"
 				(pin unspecified line
 					(at 64.77 6.35 180)
 					(length 7.62)
@@ -3747,26 +3747,8 @@
 						)
 					)
 				)
-				(pin unspecified line
-					(at 22.86 -6.35 0)
-					(length 7.62)
-					(name "9"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "9"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
 			)
-			(symbol "W25Q64JVXGIQ_TR_1_1"
+			(symbol "W25Q128JVSIQ_1_1"
 				(rectangle
 					(start 30.48 7.62)
 					(end 57.15 -8.89)
@@ -4598,12 +4580,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "99bcc24f-8232-4f9d-b741-7917038af91a")
-	)
-	(junction
-		(at 33.02 182.245)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "9a055339-2591-4bc0-aee9-181685fb79ed")
 	)
 	(junction
 		(at 25.4 170.815)
@@ -8352,7 +8328,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:W25Q64JVXGIQ_TR")
+		(lib_id "Custom:W25Q128JVSIQ")
 		(at 10.16 175.895 0)
 		(unit 1)
 		(body_style 1)
@@ -8417,9 +8393,6 @@
 					(size 1.27 1.27)
 				)
 			)
-		)
-		(pin "9"
-			(uuid "92e039bb-b166-46bb-933d-e7fb44698dd4")
 		)
 		(pin "8"
 			(uuid "22f75e25-9e36-484e-9be9-062ead3b968f")
@@ -10546,7 +10519,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "15 pF"
+		(property "Value" "22 pF"
 			(at 14.605 67.31 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11334,7 +11307,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "15 pF"
+		(property "Value" "22 pF"
 			(at 15.24 89.535 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11394,7 +11367,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:ECS-.327-6-16R-TR")
+		(lib_id "Custom:SC-32S-32.768kHz-12.5pF")
 		(at 19.05 78.105 270)
 		(unit 1)
 		(body_style 1)
@@ -11415,7 +11388,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "ECS-.327-6-16R-TR"
+		(property "Value" "SC-32S-32.768kHz-12.5pF"
 			(at 24.13 67.945 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11426,7 +11399,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:XTAL_ECS-.327-6-16R-TR"
+		(property "Footprint" "Footprints:XTAL_SC-32S_3215"
 			(at 19.05 78.105 0)
 			(hide yes)
 			(show_name no)
@@ -12358,7 +12331,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22 pF"
+		(property "Value" "18 pF"
 			(at 107.95 60.325 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14094,7 +14067,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "22 pF"
+		(property "Value" "18 pF"
 			(at 118.11 45.72 0)
 			(show_name no)
 			(do_not_autoplace no)

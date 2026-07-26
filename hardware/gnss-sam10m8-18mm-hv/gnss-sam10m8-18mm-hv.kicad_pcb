@@ -1855,7 +1855,7 @@
 			(size 0.25 0.55)
 			(layers "F.Cu" "F.Mask" "F.Paste")
 			(roundrect_rratio 0.025)
-			(net "GND")
+			(net "Net-(U3-EN{slash}SYNC)")
 			(pinfunction "S-CONF_10")
 			(pintype "output")
 			(solder_mask_margin 0.102)

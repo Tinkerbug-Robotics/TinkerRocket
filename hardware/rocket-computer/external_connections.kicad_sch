@@ -9375,7 +9375,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 103.505 164.465 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9386,7 +9386,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 104.4702 165.735 0)
 			(hide yes)
 			(show_name no)
@@ -9850,7 +9850,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 103.505 116.84 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9861,7 +9861,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 104.4702 118.11 0)
 			(hide yes)
 			(show_name no)
@@ -9943,7 +9943,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "USC_TOS"
+		(property "Footprint" "Footprints:USC_TOS"
 			(at 227.33 79.375 0)
 			(hide yes)
 			(show_name no)
@@ -10678,7 +10678,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "CAPMP7.6X4.3_3.1N_KEM"
+		(property "Footprint" "Footprints:CAPMP7.6X4.3_3.1N_KEM"
 			(at 272.415 113.03 0)
 			(hide yes)
 			(show_name no)
@@ -11306,7 +11306,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 194.31 121.285 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11317,7 +11317,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 195.2752 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -14661,7 +14661,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 101.6 41.275 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14672,7 +14672,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1206_3216Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 102.5652 42.545 0)
 			(hide yes)
 			(show_name no)
@@ -14743,7 +14743,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "100 uF"
+		(property "Value" "22 uF"
 			(at 241.3 39.3699 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14754,7 +14754,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_1210_3225Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 238.4552 41.91 0)
 			(hide yes)
 			(show_name no)

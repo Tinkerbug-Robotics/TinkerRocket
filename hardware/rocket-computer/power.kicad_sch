@@ -11257,7 +11257,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "USC_TOS"
+		(property "Footprint" "Footprints:USC_TOS"
 			(at 20.955 168.91 0)
 			(hide yes)
 			(show_name no)
@@ -14237,7 +14237,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "1 uF"
 			(at 180.975 39.37 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14961,7 +14961,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "CAPMP7.6X4.3_3.1N_KEM"
+		(property "Footprint" "Footprints:CAPMP7.6X4.3_3.1N_KEM"
 			(at 171.45 33.02 0)
 			(hide yes)
 			(show_name no)

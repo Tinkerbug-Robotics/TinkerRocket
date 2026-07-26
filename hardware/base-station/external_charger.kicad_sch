@@ -2392,7 +2392,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 100.965 83.82 90)
 		(fields_autoplaced yes)
@@ -2464,7 +2464,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 212.725 97.155 90)
 		(fields_autoplaced yes)
@@ -2560,7 +2560,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 98.425 105.41 90)
 		(fields_autoplaced yes)
@@ -2656,7 +2656,7 @@
 			)
 		)
 	)
-	(global_label "Vcc"
+	(global_label "CHG_VCC"
 		(shape input)
 		(at 125.73 114.3 90)
 		(fields_autoplaced yes)
