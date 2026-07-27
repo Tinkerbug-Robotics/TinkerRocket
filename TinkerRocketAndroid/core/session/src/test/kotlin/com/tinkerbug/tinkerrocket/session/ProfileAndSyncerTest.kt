@@ -1,0 +1,376 @@
+package com.tinkerbug.tinkerrocket.session
+
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import java.io.File
+import java.util.UUID
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * THE defaults pin: every RocketProfile default must equal the firmware
+ * config.h factory default — the profile is pushed on connect and OVERRIDES
+ * the FC, so a wrong default silently re-tunes the rocket.  Values cite
+ * tinkerrocket-idf/projects/flight_computer/main/config.h.
+ */
+class FirmwareDefaultsTest {
+
+    private val p = RocketProfile.makeDefault("x", nowMs = 0)
+
+    @Test
+    fun pidDefaults_matchConfigH() {
+        assertEquals(0.12f, p.pidKp)                 // config.h:158 KP
+        assertEquals(0.01f, p.pidKi)                 // config.h:159 KI
+        assertEquals(0.0f, p.pidKd)                  // config.h:160 KD
+        assertEquals(-20.0f, p.pidMinCmd)            // config.h:161 MIN_CMD
+        assertEquals(20.0f, p.pidMaxCmd)             // config.h:162 MAX_CMD
+        assertEquals(40f, p.integralSepThreshold)    // config.h:184 INTEGRAL_SEP_THRESHOLD_DPS
+    }
+
+    @Test
+    fun servoDefaults_matchConfigH() {
+        assertEquals(0, p.servoBias1)                // config.h:139-142 SERVO_BIAS_N (#561)
+        assertEquals(0, p.servoBias4)
+        assertEquals(333, p.servoHz)                 // config.h:144 SERVO_HZ
+        assertEquals(1000, p.servoMinUs)             // config.h:145 SERVO_MIN_US
+        assertEquals(2000, p.servoMaxUs)             // config.h:146 SERVO_MAX_US
+    }
+
+    @Test
+    fun angleLoopDefaults_matchConfigH() {
+        assertEquals(2.0f, p.kpAngle)                // config.h:280 KP_ANGLE
+        assertEquals(60f, p.rateCapDps)              // config.h:288 KP_ANGLE_RATE_CAP_DPS
+    }
+
+    @Test
+    fun guidanceDefaults_matchConfigH() {
+        assertEquals(5.0f, p.pnNavGain)              // config.h:306 PN_NAV_GAIN
+        assertEquals(20.0f, p.pnMaxAccel)            // config.h:308 PN_MAX_ACCEL_MPS2
+        assertEquals(600.0f, p.pnTargetAltM)         // config.h:310 PN_TARGET_ALT_M
+        assertEquals(15.0f, p.pnMaxFinDeg)           // config.h:322 PN_MAX_FIN_DEG
+        assertEquals(15.0f, p.pnMinSpeed)            // config.h:345 PN_MIN_SPEED_MPS
+        assertEquals(0, p.pnCoastDelayMs)            // config.h:347 PN_COAST_DELAY_MS
+        assertEquals(4.0f, p.pnAccelToFin)           // config.h:349 PN_ACCEL_TO_FIN_DEG
+        assertEquals(0, p.pnGuidanceLaw)             // config.h:363 GUIDANCE_LAW_DEFAULT
+        assertEquals(0.8f, p.pnKpPos)                // config.h:378 PN_KP_POS_PER_S2
+        assertEquals(1.5f, p.pnKdVel)                // config.h:379 PN_KD_VEL_PER_S
+    }
+
+    @Test
+    fun cameraDefault_matchesConfigH() {
+        assertEquals(2, p.cameraType)                // config.h:98 CAMERA_TYPE (RunCam)
+    }
+
+    @Test
+    fun finCalibration_isDerived449() {
+        assertEquals(120.0f, p.finTravelDeg)
+        assertEquals(-60.0f, p.finMinDeg)
+        assertEquals(60.0f, p.finMaxDeg)
+    }
+}
+
+class RocketProfileCodecTest {
+
+    @Test
+    fun roundTrip_preservesEverything() {
+        val original = RocketProfile.makeDefault("Atlas", nowMs = 1_753_000_000_000).copy(
+            notes = "test",
+            lastUsedUnitID = "a1b2",
+            rollWaypoints = listOf(ProfileRollWaypoint(timeSeconds = 1.5f, angleDeg = 90f)),
+            magCal = MagCalData(-321, 456, -789, 48.2f, 3.7f, "a1b2", 1_753_000_000_000),
+            pidKp = 0.5f,
+            finTravelDeg = 90f,
+        )
+        val decoded = RocketProfileCodec.decode(RocketProfileCodec.encode(original), nowMs = 0)
+        assertNotNull(decoded)
+        assertEquals(original.id, decoded.id)
+        assertEquals(original.name, decoded.name)
+        assertEquals(original.pidKp, decoded.pidKp)
+        assertEquals(original.finTravelDeg, decoded.finTravelDeg)
+        assertEquals(original.magCal, decoded.magCal)
+        assertEquals(original.rollWaypoints.single().angleDeg, decoded.rollWaypoints.single().angleDeg)
+        // Apple-epoch date round trip (ms precision within 1 ms of double math)
+        assertTrue(kotlin.math.abs(original.createdAtMs - decoded.createdAtMs) <= 1)
+    }
+
+    @Test
+    fun minimalJson_getsAllDefaults() {
+        val decoded = RocketProfileCodec.decode("""{"name":"Old"}""", nowMs = 42)
+        assertNotNull(decoded)
+        assertEquals("Old", decoded.name)
+        assertEquals(0.12f, decoded.pidKp)
+        assertEquals(333, decoded.servoHz)
+        assertNull(decoded.magCal)
+    }
+
+    @Test
+    fun missingName_failsDecode() {
+        assertNull(RocketProfileCodec.decode("""{"pidKp":0.5}""", nowMs = 0))
+        assertNull(RocketProfileCodec.decode("not json", nowMs = 0))
+    }
+
+    @Test
+    fun legacyFinKeys_deliberatelyIgnored449() {
+        // The pre-#449 pathology: 1250/1750 µs declared as ±60° — no physical
+        // servo.  The legacy angle keys must be IGNORED and travel derived
+        // from the endpoints on the standard-servo line: 500 µs → 60° total.
+        val decoded = RocketProfileCodec.decode(
+            """{"name":"Legacy","servoMinUs":1250,"servoMaxUs":1750,
+               "finMinDeg":-60.0,"finMaxDeg":60.0}""",
+            nowMs = 0,
+        )
+        assertNotNull(decoded)
+        assertEquals(60.0f, decoded.finTravelDeg)
+        assertEquals(-30.0f, decoded.finMinDeg, "±30°, NOT the stored ±60 lie")
+        assertEquals(30.0f, decoded.finMaxDeg)
+    }
+
+    @Test
+    fun wrongLengthFinArrays_fallBackToDefaults() {
+        val decoded = RocketProfileCodec.decode(
+            """{"name":"X","finServoAtSlot":[1,2],"finReverse":[true]}""",
+            nowMs = 0,
+        )
+        assertNotNull(decoded)
+        assertEquals(listOf(1, 2, 3, 4), decoded.finServoAtSlot)
+        assertEquals(listOf(false, false, false, false), decoded.finReverse)
+    }
+}
+
+class RocketProfileStoreTest {
+
+    private class MemActive : ActiveProfileStorage {
+        var id: String? = null
+        override fun loadActiveId() = id
+        override fun saveActiveId(id: String?) { this.id = id }
+    }
+
+    private fun tempStore(active: MemActive = MemActive()): Pair<RocketProfileStore, File> {
+        val dir = File.createTempFile("profiles", "").let { f -> f.delete(); File(f.path).apply { mkdirs() } }
+        return RocketProfileStore(dir, active) { 1000 } to dir
+    }
+
+    @Test
+    fun addSaveReload_roundTrips() {
+        val active = MemActive()
+        val (store, dir) = tempStore(active)
+        val p = store.add("Atlas")
+        store.setActive(p.id)
+
+        val reloaded = RocketProfileStore(dir, active) { 2000 }
+        assertEquals(1, reloaded.profiles.value.size)
+        assertEquals("Atlas", reloaded.profiles.value.single().name)
+        assertEquals(p.id, reloaded.activeId.value)
+        assertEquals(p.id, reloaded.activeProfile?.id)
+    }
+
+    @Test
+    fun corruptFile_losesOneProfileNotTheSet() {
+        val (store, dir) = tempStore()
+        store.add("Good")
+        File(dir, "${UUID.randomUUID().toString().uppercase()}.json").writeText("{corrupt")
+
+        val reloaded = RocketProfileStore(dir, MemActive()) { 0 }
+        assertEquals(listOf("Good"), reloaded.profiles.value.map { it.name })
+    }
+
+    @Test
+    fun delete_removesFileAndClearsActive() {
+        val (store, dir) = tempStore()
+        val p = store.add("Gone")
+        store.setActive(p.id)
+        store.delete(p.id)
+        assertTrue(store.profiles.value.isEmpty())
+        assertNull(store.activeId.value)
+        assertEquals(0, dir.listFiles { f: File -> f.extension == "json" }.orEmpty().size)
+    }
+
+    @Test
+    fun update_bumpsUpdatedAtAndPersists() {
+        val active = MemActive()
+        val (store, dir) = tempStore(active)
+        val p = store.add("Tune")
+        store.update(p.id) { it.copy(pidKp = 0.5f) }
+        val reloaded = RocketProfileStore(dir, active) { 0 }
+        assertEquals(0.5f, reloaded.profiles.value.single().pidKp)
+    }
+
+    @Test
+    fun duplicateNames_deduped() {
+        val (store, _) = tempStore()
+        store.add("Kit")
+        val second = store.add("Kit")
+        assertEquals("Kit 2", second.name)
+    }
+}
+
+/**
+ * Syncer over a REAL DeviceSession + FakeFirmware — iOS ActiveRocketSyncerTests
+ * semantics: push-on-ready, whole-profile command set, optimistic synced,
+ * BS never pushed, cal advisories, suggestion.
+ */
+class ActiveRocketSyncerTest {
+
+    private class Rig(
+        val syncer: ActiveRocketSyncer,
+        val session: DeviceSession,
+        val fw: FakeFirmware,
+        val store: RocketProfileStore,
+    )
+
+    private fun TestScope.rig(
+        identityJson: String? =
+            """{"type":"config_identity","uid":"boardA","un":"Atlas","nid":5,"rid":1,"dt":"R"}""",
+        makeProfile: Boolean = true,
+        mutate: (RocketProfile) -> RocketProfile = { it },
+    ): Rig {
+        val fw = FakeFirmware(backgroundScope).apply {
+            configIdentityJson = identityJson
+        }
+        val session = DeviceSession(
+            scope = backgroundScope,
+            transport = fw,
+            connectedDeviceName = "TR-R-Atlas",
+            clock = { currentTime },
+        )
+        session.start()
+        runCurrent()
+
+        val dir = File.createTempFile("prof", "").let { f -> f.delete(); File(f.path).apply { mkdirs() } }
+        val store = RocketProfileStore(
+            dir,
+            object : ActiveProfileStorage {
+                var v: String? = null
+                override fun loadActiveId() = v
+                override fun saveActiveId(id: String?) { v = id }
+            },
+        ) { currentTime }
+        if (makeProfile) {
+            val p = store.add("Atlas Profile")
+            store.update(p.id, mutate)
+            store.setActive(p.id)
+        }
+
+        val syncer = ActiveRocketSyncer(backgroundScope)
+        return Rig(syncer, session, fw, store)
+    }
+
+    private fun Rig.sentCommandIds(): List<Int> = fw.commandFrames.map { it[0].toInt() }
+
+    @Test
+    fun pushesWholeProfile_onceConfigAndUnitIdLand() = runTest {
+        val r = rig()
+        r.syncer.attach(r.session, r.store)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.AwaitingSync>(r.syncer.syncState.value)
+
+        advanceTimeBy(1100)   // choreography: config + identity land
+        runCurrent()
+
+        val sent = r.sentCommandIds().toSet()
+        // The whole-profile push (iOS performSync order): servo 12, PID 13,
+        // servo-en 14, gainsched 22, rollctl 31, rollprofile 26, guidance 65,
+        // fin 66, camera 33, imu orient 64, imu rate 67, sounds 11, pyro 34;
+        // default profile has no cal → READ both: mag 61 + sensor 63.
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34, 61, 63)) {
+            assertTrue(cmd in sent, "cmd $cmd missing from push (sent: $sent)")
+        }
+        assertIs<ActiveRocketSyncer.SyncState.Syncing>(r.syncer.syncState.value)
+
+        advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
+
+        // lastUsedUnitID recorded for the soft pre-select.
+        assertEquals("boardA", r.store.activeProfile?.lastUsedUnitID)
+    }
+
+    @Test
+    fun noActiveProfile_reportsNoProfile() = runTest {
+        val r = rig(makeProfile = false)
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.NoProfile>(r.syncer.syncState.value)
+    }
+
+    @Test
+    fun baseStation_neverPushed() = runTest {
+        val r = rig(
+            identityJson = """{"type":"config_identity","uid":"bs1","un":"BS","nid":5,"dt":"B"}""",
+        )
+        advanceTimeBy(1100)   // identity lands FIRST so the role is known
+        runCurrent()
+        val before = r.fw.commandFrames.size
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(2000)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.Idle>(r.syncer.syncState.value)
+        assertEquals(before, r.fw.commandFrames.size, "no profile writes to a BS")
+    }
+
+    @Test
+    fun calOnAnotherBoard_warnsInsteadOfPushing() = runTest {
+        val r = rig(
+            mutate = {
+                it.copy(magCal = MagCalData(1, 2, 3, 48f, 3f, "OTHERBOARD", 0))
+            },
+        )
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val adv = assertIs<ActiveRocketSyncer.CalAdvisory.BoardMismatch>(r.syncer.magCalAdvisory.value)
+        assertEquals("OTHERBOARD", adv.savedOn)
+        assertEquals("boardA", adv.current)
+        // Mismatch → no cmd 55 apply, and no cmd 61 read either.
+        assertTrue(55 !in r.sentCommandIds())
+        assertTrue(61 !in r.sentCommandIds())
+    }
+
+    @Test
+    fun rocketAppliedCal_offersImport() = runTest {
+        val r = rig()   // default profile: no cal → connect-time READ
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertTrue(61 in r.sentCommandIds(), "mag-cal READ sent")
+
+        // The rocket answers: cal APPLIED → advisory offers import.
+        r.fw.emitFileOpsFrame(
+            byteArrayOf(0xCA.toByte()) + r.fw.magCalStatusFrame(subType = 3).drop(1).toByteArray(),
+        )
+        runCurrent()
+        assertIs<ActiveRocketSyncer.CalAdvisory.RocketHasUnsavedCal>(r.syncer.magCalAdvisory.value)
+    }
+
+    @Test
+    fun profileSwitch_rePushes() = runTest {
+        val r = rig()
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val afterFirst = r.fw.commandFrames.size
+
+        val second = r.store.add("Backup")
+        r.store.setActive(second.id)
+        runCurrent()
+        assertTrue(r.fw.commandFrames.size > afterFirst, "switch re-pushed the profile")
+        assertNull(r.syncer.suggestedProfileId.value, "user chose — hint dropped")
+    }
+
+    @Test
+    fun suggestion_pure() {
+        val a = RocketProfile.makeDefault("A", 0).copy(lastUsedUnitID = "u1")
+        val b = RocketProfile.makeDefault("B", 0).copy(lastUsedUnitID = "u2")
+        assertEquals(a.id, ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = b.id, unitId = "u1"))
+        assertNull(ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = a.id, unitId = "u1"))
+        assertNull(ActiveRocketSyncer.suggestedProfile(listOf(a, b), active = null, unitId = ""))
+    }
+}
