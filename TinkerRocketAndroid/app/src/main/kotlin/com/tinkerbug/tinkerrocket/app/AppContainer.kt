@@ -34,7 +34,10 @@ class AppContainer(app: Application) {
         Executors.newSingleThreadExecutor { r -> Thread(r, "tr-fleet") }.asCoroutineDispatcher()
     val fleetScope = CoroutineScope(SupervisorJob() + fleetDispatcher)
 
-    private val knownDevices = KnownDeviceStore(PrefsKnownStorage(app))
+    val knownDevices = KnownDeviceStore(PrefsKnownStorage(app))
+
+    /** #150 app-side network identity (iOS @AppStorage networkName/networkID). */
+    val networkStore = AppNetworkStore(app)
 
     // Loads a handful of small JSON files at app create — acceptable on Main;
     // all MUTATORS go through the fleet dispatcher (single-writer contract).
@@ -78,6 +81,28 @@ class AppContainer(app: Application) {
             knownDevices = knownDevices,
         )
         fleetRef
+    }
+}
+
+/**
+ * #150 network identity, prefs-backed with reactive reads.  The ID is
+ * always derived from the name via [NetworkIdentity.networkIdForName] —
+ * never stored independently, so the pair can't drift.
+ */
+class AppNetworkStore(app: Application) {
+    private val prefs = app.getSharedPreferences("network_identity", Context.MODE_PRIVATE)
+
+    private val _name = kotlinx.coroutines.flow.MutableStateFlow(prefs.getString("networkName", "") ?: "")
+    val name: kotlinx.coroutines.flow.StateFlow<String> = _name
+
+    private val _id = kotlinx.coroutines.flow.MutableStateFlow(prefs.getInt("networkID", 0))
+    val id: kotlinx.coroutines.flow.StateFlow<Int> = _id
+
+    fun setNetwork(name: String) {
+        val id = com.tinkerbug.tinkerrocket.session.NetworkIdentity.networkIdForName(name)
+        _name.value = name
+        _id.value = id
+        prefs.edit().putString("networkName", name).putInt("networkID", id).apply()
     }
 }
 

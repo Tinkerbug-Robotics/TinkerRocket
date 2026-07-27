@@ -25,7 +25,11 @@ import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
 
 @Composable
-fun ScannerScreen(fleet: FleetManager<DeviceSession>, onDemo: () -> Unit) {
+fun ScannerScreen(
+    fleet: FleetManager<DeviceSession>,
+    onDemo: () -> Unit,
+    onMyDevices: () -> Unit = {},
+) {
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
     val status by fleet.statusMessage.collectAsState()
@@ -41,7 +45,8 @@ fun ScannerScreen(fleet: FleetManager<DeviceSession>, onDemo: () -> Unit) {
             }
             if (scanning) CircularProgressIndicator(Modifier.padding(start = 12.dp))
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = onDemo) { Text("Demo") }
+            OutlinedButton(onClick = onMyDevices) { Text("My Devices") }
+            OutlinedButton(onClick = onDemo, modifier = Modifier.padding(start = 6.dp)) { Text("Demo") }
         }
         Text(status, style = MaterialTheme.typography.bodyMedium)
 

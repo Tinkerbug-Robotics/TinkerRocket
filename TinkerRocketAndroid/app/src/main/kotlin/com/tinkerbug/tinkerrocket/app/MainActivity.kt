@@ -146,17 +146,31 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        else -> ScannerScreen(
-                            fleet = container.fleet,
-                            onDemo = {
-                                demoFleet = buildDemoFleet(
-                                    this@MainActivity, container.fleetScope,
-                                ).also {
-                                    it.scan(userInitiated = true)
-                                    it.connect("demo:01")
-                                }
-                            },
-                        )
+                        else -> {
+                            var showMyDevices by remember { mutableStateOf(false) }
+                            if (showMyDevices) {
+                                DeviceManagerScreen(
+                                    store = container.knownDevices,
+                                    fleet = container.fleet,
+                                    network = container.networkStore,
+                                    fleetScope = container.fleetScope,
+                                    onBack = { showMyDevices = false },
+                                )
+                            } else {
+                                ScannerScreen(
+                                    fleet = container.fleet,
+                                    onDemo = {
+                                        demoFleet = buildDemoFleet(
+                                            this@MainActivity, container.fleetScope,
+                                        ).also {
+                                            it.scan(userInitiated = true)
+                                            it.connect("demo:01")
+                                        }
+                                    },
+                                    onMyDevices = { showMyDevices = true },
+                                )
+                            }
+                        }
                     }
                 }
             }
