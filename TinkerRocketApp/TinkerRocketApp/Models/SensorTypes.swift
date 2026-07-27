@@ -119,6 +119,7 @@ nonisolated struct FlightSettingsData {
     static let fServoEnabled: UInt8    = 3
     static let fFwDirty: UInt8         = 4
     static let fSounds: UInt8          = 5
+    static let fImuRateDynamic: UInt8  = 7
 
     let time_us: UInt32
     let version: UInt8
@@ -203,6 +204,11 @@ nonisolated struct FlightSettingsData {
     var servoEnabled: Bool { flags & (1 << FlightSettingsData.fServoEnabled) != 0 }
     var fwDirty: Bool { flags & (1 << FlightSettingsData.fFwDirty) != 0 }
     var soundsEnabled: Bool { flags & (1 << FlightSettingsData.fSounds) != 0 }
+    /// The flight ran the dynamic logging rate, so `ism6_update_rate_hz` is
+    /// the rate at the snapshot (the boost rate) and the log steps down at the
+    /// first frame carrying NSF2_DEPLOYED. Flights predating dynamic mode
+    /// decode as false and ran one fixed rate throughout.
+    var imuRateDynamic: Bool { flags & (1 << FlightSettingsData.fImuRateDynamic) != 0 }
 
     init(from data: Data) throws {
         guard data.count >= 188 else {
@@ -566,6 +572,7 @@ nonisolated struct NonSensorData {
     //   bit 2 NSF2_MASTER_APOGEE  — voted result driving pyro logic
     //   bit 3 NSF2_REBOOT_RECOVERY  — moved from pyro_status bit 4
     //   bit 4 NSF2_GUIDANCE_ENABLED — moved from pyro_status bit 5
+    //   bit 7 NSF2_DEPLOYED         — recovery deployment detected (sticky)
     // Older logs (43-byte struct) decode this field as 0.
     let apogee_flags: UInt8
 
@@ -902,6 +909,13 @@ nonisolated struct NonSensorDataSI {
     let pyro4_fired: Bool
     let reboot_recovery: Bool
     let guidance_enabled: Bool
+
+    /// Recovery deployment detected (NSF2_DEPLOYED, bit 7 of apogee_flags).
+    /// Sticky once the rocket's deployment detector latches, so the first
+    /// frame carrying it is the detection time. In dynamic logging mode this
+    /// is also where the IMU rate steps down from 3840 to 960 Hz. Logs
+    /// predating the detector decode as false.
+    let deployed_flag: Bool
 
     // #529: free-running EKF update-tick counter (uint16 wrap), carried through
     // verbatim for the CSV so the achieved EKF rate is recoverable from an app

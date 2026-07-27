@@ -756,12 +756,15 @@ struct SettingsView: View {
 
         Section("IMU Logging Rate") {
             Picker("Rate", selection: imuRateBinding) {
+                Text("Dynamic").tag(RocketProfile.imuRateDynamic)
                 Text("1k").tag(UInt16(960))
                 Text("2k").tag(UInt16(1920))
                 Text("4k").tag(UInt16(3840))
             }
             .pickerStyle(.segmented)
-            Text("Samples logged per second from the IMU (actual: 960 / 1920 / 3840 Hz). Higher rates capture faster shock and vibration detail; the control loop is unaffected. Applies on the pad \u{2014} never mid-flight.")
+            Text(profile.imuRateHz == RocketProfile.imuRateDynamic
+                ? "Logs at 4k (3840 Hz) from the pad through boost and coast, then drops to 1k (960 Hz) once the rocket detects its recovery deployment \u{2014} full shock and vibration detail where it matters, without filling the log under canopy."
+                : "Samples logged per second from the IMU (actual: 960 / 1920 / 3840 Hz). Higher rates capture faster shock and vibration detail; the control loop is unaffected. Applies on the pad \u{2014} never mid-flight.")
                 .font(.caption).foregroundColor(.secondary)
         }
 
