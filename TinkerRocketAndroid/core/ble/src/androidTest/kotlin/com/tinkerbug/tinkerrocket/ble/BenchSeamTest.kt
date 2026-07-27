@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assume.assumeTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.test.assertNotNull
@@ -41,6 +42,14 @@ import kotlin.test.assertNotNull
  */
 @RunWith(AndroidJUnit4::class)
 class BenchSeamTest {
+
+    /** Instrumented tests cannot show permission dialogs — self-grant. */
+    @get:Rule
+    val permissions: androidx.test.rule.GrantPermissionRule =
+        androidx.test.rule.GrantPermissionRule.grant(
+            android.Manifest.permission.BLUETOOTH_SCAN,
+            android.Manifest.permission.BLUETOOTH_CONNECT,
+        )
 
     private val benchEnabled: Boolean
         get() = InstrumentationRegistry.getArguments().getString("bench") == "1"
@@ -110,6 +119,38 @@ class BenchSeamTest {
         } finally {
             scope.cancel()
         }
+    }
+
+    /**
+     * DIAGNOSTIC: unfiltered 10 s scan logging everything in range —
+     * distinguishes "board not advertising" / "advertising without the
+     * service UUID" / "nothing heard at all".  Same bench gate.
+     */
+    @Test
+    fun diagUnfilteredScan() {
+        assumeTrue("bench flag not set", benchEnabled)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val manager = context.getSystemService(android.content.Context.BLUETOOTH_SERVICE)
+            as android.bluetooth.BluetoothManager
+        val scanner = manager.adapter?.bluetoothLeScanner ?: error("adapter off")
+        val seen = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val cb = object : android.bluetooth.le.ScanCallback() {
+            override fun onScanResult(t: Int, r: android.bluetooth.le.ScanResult) {
+                val uuids = r.scanRecord?.serviceUuids?.joinToString() ?: "-"
+                seen[r.device.address] =
+                    "name=${r.scanRecord?.deviceName ?: "-"} rssi=${r.rssi} uuids=$uuids"
+            }
+        }
+        scanner.startScan(
+            null,
+            android.bluetooth.le.ScanSettings.Builder()
+                .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build(),
+            cb,
+        )
+        Thread.sleep(10_000)
+        scanner.stopScan(cb)
+        Log.i(TAG, "DIAG: ${seen.size} distinct devices heard")
+        seen.forEach { (addr, info) -> Log.i(TAG, "DIAG: $addr $info") }
     }
 
     /** Bench runs never persist device registrations. */
