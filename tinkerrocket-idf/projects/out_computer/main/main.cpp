@@ -834,7 +834,9 @@ static void stageImuOrientConfig()
 // IMU logging rate setting (BLE cmd 67).  Cached here for app readback and
 // re-push on connect; the FC persists it in its own NVS and re-applies at
 // boot, so no status-query self-heal is needed (unlike orientation).
-static uint16_t cfg_imu_rate = 1920;
+// IMU_RATE_DYNAMIC (the default) is a MODE, not a rate — the OC only relays
+// it; the step-down at deployment is entirely the FC's business.
+static uint16_t cfg_imu_rate = IMU_RATE_DYNAMIC;
 
 static void stageImuRateConfig()
 {
@@ -5579,9 +5581,19 @@ void initPeripherals()
         // Load cached IMU logging rate.  Readback/cache only — the FC owns
         // application (its own NVS survives FC reboots independently).
         prefs.begin("imurate", false);
-        cfg_imu_rate = prefs.getUShort("hz", cfg_imu_rate);
+        {
+            const uint16_t nvs_rate = prefs.getUShort("hz", cfg_imu_rate);
+            // Whitelist on read: a corrupted value must not be relayed to the
+            // FC or echoed to the app as if it were a real setting.
+            if (imuRateSettingValid(nvs_rate)) cfg_imu_rate = nvs_rate;
+            else ESP_LOGW("CFG", "NVS IMU logging rate %u invalid — keeping default",
+                          (unsigned)nvs_rate);
+        }
         prefs.end();
-        ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
+        if (imuRateIsDynamic(cfg_imu_rate))
+            ESP_LOGI("CFG", "NVS IMU logging rate: DYNAMIC");
+        else
+            ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
 
         // Load cached pyro config from NVS (4 channels)
         prefs.begin("pyro", true);
@@ -7245,16 +7257,17 @@ static void loop_oc()
         }
         else if (ble_cmd == 67)
         {
-            // IMU logging rate: [rate_hz:2 LE] — whitelisted ISM6HG256 ODR
-            // (960/1920/3840).  Relayed to the FC, which applies the ODR
-            // live (except INFLIGHT) and persists it in FC NVS.
+            // IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a
+            // whitelisted ISM6HG256 ODR (960/1920/3840).  Relayed to the FC,
+            // which applies the ODR live (except INFLIGHT) and persists it in
+            // FC NVS.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)
             {
                 uint16_t rate_hz;
                 memcpy(&rate_hz, payload, sizeof(rate_hz));
-                if (imuRateValid(rate_hz))
+                if (imuRateSettingValid(rate_hz))
                 {
                     cfg_imu_rate = rate_hz;
                     stageImuRateConfig();
@@ -7262,12 +7275,20 @@ static void loop_oc()
                     p2.begin("imurate", false);
                     p2.putUShort("hz", cfg_imu_rate);
                     p2.end();
-                    ESP_LOGI("BLE", "IMU logging rate: %u Hz -> FlightComputer",
-                             (unsigned)cfg_imu_rate);
+                    if (imuRateIsDynamic(rate_hz))
+                    {
+                        ESP_LOGI("BLE", "IMU logging rate: DYNAMIC -> FlightComputer");
+                    }
+                    else
+                    {
+                        ESP_LOGI("BLE", "IMU logging rate: %u Hz -> FlightComputer",
+                                 (unsigned)cfg_imu_rate);
+                    }
                 }
                 else
                 {
-                    ESP_LOGW("BLE", "IMU logging rate %u Hz rejected (not 960/1920/3840)",
+                    ESP_LOGW("BLE", "IMU logging rate %u Hz rejected "
+                                    "(not dynamic/960/1920/3840)",
                              (unsigned)rate_hz);
                 }
             }
