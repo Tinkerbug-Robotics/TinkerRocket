@@ -652,7 +652,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Description" "One-cell Li-ion protection IC, SOT-23-6 | DW01A | LCSC C351410 (PUOLOP). Overcharge 4.30 V +/-50 mV, release 4.10 V; over-discharge 2.40 V, release 3.00 V; overcurrent 150 mV across the external FET stack, short-circuit 1.2 V; Iq 3 uA. Drives LOW-SIDE N-FETs only (no charge pump), so it sits in the battery NEGATIVE path: VCC via 1k+100nF to cell +, GND to cell - (B-), VM to board GND (P-) via 2k, OD/OC to the two gates. Replaces MAX17303G+ on the base station together with 2x FS8205A. Pin 2 is named VM here; some DW01 datasheets label the same pin CS. Pinout from the LCSC/EasyEDA library for C351410, corroborated by the DW01A datasheet."
+			(property "Description" "One-cell Li-ion protection IC, SOT-23-6 | DW01A | LCSC C351410 (PUOLOP). Overcharge 4.30 V +/-50 mV, release 4.10 V; over-discharge 2.40 V, release 3.00 V; overcurrent 150 mV +/-30 mV across the external FET stack (delay 7 ms typ), short-circuit 1.36 V typ but specified 0.82-1.75 V min-max (delay 400 us); Iq 3 uA. CAUTION: at the 1.75 V corner the fast short-circuit path does not fire with any realistic cell + 3-FET stack, because the stack only develops ~0.6-1.4 V into a dead short - a short is instead caught by the 150 mV overcurrent path at 7 ms. Vendor spreads matter: the Slkor DW01A is 4.3 V +/-50 mV (+/-80 mV over temperature) overcharge with 0.15 V +/-20 mV overcurrent, while other DW01A datasheets specify 4.25 V and +/-30 mV - PIN THE VENDOR AT ORDER TIME, since the 4.22 V low corner sits under the BQ21040's 4.23 V regulation maximum. Drives LOW-SIDE N-FETs only (no charge pump), so it sits in the battery NEGATIVE path: VCC via 1k+100nF to cell +, GND to cell - (B-), VM to board GND (P-) via 2k, OD/OC to the two gates. Replaces MAX17303G+ on the base station together with 3x FS8205A (Q1/Q2/Q3, ~21.0 mOhm stack). Pin 2 is named VM here; some DW01 datasheets label the same pin CS. Pinout from the LCSC/EasyEDA library for C351410, corroborated by the DW01A datasheet."
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -889,7 +889,7 @@
 					(justify left bottom)
 				)
 			)
-			(property "Description" "Dual N-channel MOSFET, common drain, SOT-23-6 | FS8205A | LCSC C2830320 (TECH PUBLIC). 20 V, 6 A, Rds(on) 31.5 mOhm/FET @ Vgs 2.5 V and 25 mOhm max @ 4.5 V. Back-to-back pair for 1-cell battery protection with a DW01A. PINS 2 AND 5 ARE THE SAME INTERNAL DRAIN NODE - solder BOTH to the drain net for current capacity. Base station fits TWO of these in parallel so the DW01A's 150 mV overcurrent trip lands at ~4.8-6.0 A instead of ~2.4-3.0 A; the trip point IS the FET stack resistance, so it rises with cell voltage and falls as the FETs heat. Pinout from the LCSC/EasyEDA library for C2830320."
+			(property "Description" "Dual N-channel MOSFET, common drain, SOT-23-6 | FS8205A | LCSC C2830320 (TECH PUBLIC). 20 V, 6 A, Rds(on) 31.5 mOhm/FET @ Vgs 2.5 V and 25 mOhm max @ 4.5 V. Back-to-back pair for 1-cell battery protection with a DW01A. PINS 2 AND 5 ARE THE SAME INTERNAL DRAIN NODE - solder BOTH to the drain net for current capacity. Base station fits THREE of these in parallel (Q1/Q2/Q3). The DW01A senses its 150 mV +/-30 mV overcurrent threshold across the WHOLE stack, so the trip point IS the FET stack resistance: 21.0 mOhm with three packages gives ~7.1 A typ / ~5.7 A min at 25 C and ~4.1 A at the hot corner (Rds +40 percent), against ~2.7 A hot-min with only two. Three is the sweet spot - a fourth would push the cold-typ trip to ~9.5 A, at or past an 18650's continuous rating, so it would stop protecting the cell. NOTE the trip rises with cell voltage (more gate drive) and falls as the FETs heat. Pinout from the LCSC/EasyEDA library for C2830320."
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -7275,7 +7275,7 @@
 				)
 			)
 		)
-		(property "Value" "1 k"
+		(property "Value" "100"
 			(at 66.675 100.33 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7562,6 +7562,346 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/2379f198-28b9-4984-b470-63cb7f5b1a0e"
 					(reference "R15")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(label "PROT_DRAIN"
+		(at 88.9 163.195 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80101-5b1f-4e17-a2ab-f80d95c10101")
+	)
+	(label "PROT_OD"
+		(at 88.9 180.975 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80102-5b1f-4e17-a2ab-f80d95c10102")
+	)
+	(label "PROT_OC"
+		(at 88.9 153.035 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80103-5b1f-4e17-a2ab-f80d95c10103")
+	)
+	(wire
+		(pts
+			(xy 228.6 177.8) (xy 236.22 177.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80111-5b1f-4e17-a2ab-f80d95c10111")
+	)
+	(wire
+		(pts
+			(xy 254.0 167.64) (xy 259.08 167.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80112-5b1f-4e17-a2ab-f80d95c10112")
+	)
+	(wire
+		(pts
+			(xy 254.0 162.56) (xy 259.08 162.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80113-5b1f-4e17-a2ab-f80d95c10113")
+	)
+	(wire
+		(pts
+			(xy 246.38 152.4) (xy 246.38 148.59)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80114-5b1f-4e17-a2ab-f80d95c10114")
+	)
+	(wire
+		(pts
+			(xy 246.38 177.8) (xy 246.38 182.88)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80115-5b1f-4e17-a2ab-f80d95c10115")
+	)
+	(wire
+		(pts
+			(xy 236.22 152.4) (xy 236.22 148.59)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80116-5b1f-4e17-a2ab-f80d95c10116")
+	)
+	(wire
+		(pts
+			(xy 229.87 148.59) (xy 236.22 148.59)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80117-5b1f-4e17-a2ab-f80d95c10117")
+	)
+	(wire
+		(pts
+			(xy 229.87 148.59) (xy 229.87 151.13)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3f80118-5b1f-4e17-a2ab-f80d95c10118")
+	)
+	(label "B-"
+		(at 228.6 177.8 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "a3f80121-5b1f-4e17-a2ab-f80d95c10121")
+	)
+	(label "PROT_DRAIN"
+		(at 259.08 167.64 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80122-5b1f-4e17-a2ab-f80d95c10122")
+	)
+	(label "PROT_DRAIN"
+		(at 259.08 162.56 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80123-5b1f-4e17-a2ab-f80d95c10123")
+	)
+	(label "PROT_OC"
+		(at 246.38 148.59 90)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80124-5b1f-4e17-a2ab-f80d95c10124")
+	)
+	(label "PROT_OD"
+		(at 246.38 182.88 270)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "a3f80125-5b1f-4e17-a2ab-f80d95c10125")
+	)
+	(symbol
+		(lib_id "Custom:FS8205A")
+		(at 241.3 165.1 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "a3f80131-5b1f-4e17-a2ab-f80d95c10131")
+		(property "Reference" "Q3"
+			(at 229.235 165.1 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "FS8205A"
+			(at 231.14 165.1 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23-6"
+			(at 241.3 165.1 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 241.3 165.1 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 241.3 165.1 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC_Part_Number" "C2830320"
+			(at 241.3 165.1 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a3f80140-5b1f-4e17-a2ab-f80d95c10140")
+		)
+		(pin "2"
+			(uuid "a3f80141-5b1f-4e17-a2ab-f80d95c10141")
+		)
+		(pin "3"
+			(uuid "a3f80142-5b1f-4e17-a2ab-f80d95c10142")
+		)
+		(pin "4"
+			(uuid "a3f80143-5b1f-4e17-a2ab-f80d95c10143")
+		)
+		(pin "5"
+			(uuid "a3f80144-5b1f-4e17-a2ab-f80d95c10144")
+		)
+		(pin "6"
+			(uuid "a3f80145-5b1f-4e17-a2ab-f80d95c10145")
+		)
+		(instances
+			(project "base-station"
+				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/2379f198-28b9-4984-b470-63cb7f5b1a0e"
+					(reference "Q3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 229.87 151.13 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "a3f80150-5b1f-4e17-a2ab-f80d95c10150")
+		(property "Reference" "#PWR206"
+			(at 229.87 157.48 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 231.775 154.94 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 229.87 151.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 229.87 151.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 229.87 151.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a3f80151-5b1f-4e17-a2ab-f80d95c10151")
+		)
+		(instances
+			(project "base-station"
+				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/2379f198-28b9-4984-b470-63cb7f5b1a0e"
+					(reference "#PWR206")
 					(unit 1)
 				)
 			)
