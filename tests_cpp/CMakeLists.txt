@@ -443,6 +443,18 @@ target_include_directories(test_burnout_detector PRIVATE
 target_link_libraries(test_burnout_detector GTest::gtest_main)
 gtest_discover_tests(test_burnout_detector)
 
+# ---------- test_deployment_detector ----------
+# Recovery-deployment detector shared with the firmware via
+# components/TR_KinematicChecks/DeploymentDetector.h — the test exercises the
+# real code, not a mirror.  Drives the dynamic logging rate (IMU_RATE_DYNAMIC).
+add_executable(test_deployment_detector test_deployment_detector.cpp)
+target_include_directories(test_deployment_detector PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_KinematicChecks
+)
+target_link_libraries(test_deployment_detector GTest::gtest_main)
+gtest_discover_tests(test_deployment_detector)
+
 # ---------- test_tr_flightlog_wire_format ----------
 # Golden-file regression guard on the BLE wire formats iOS depends on.
 # Fixtures under tests_cpp/fixtures/ble_wire_format/ are the source of truth.

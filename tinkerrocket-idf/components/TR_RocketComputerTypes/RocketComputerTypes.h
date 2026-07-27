@@ -1441,6 +1441,14 @@ static constexpr uint8_t NSF2_ORIENT_THRUST_MISMATCH = (1u << 5);
 // instead of vanishing with no counter.  Post-flight witness; the app ignores
 // this bit.  Pairs with the deepened ISM6_QUEUE_DEPTH that should keep it clear.
 static constexpr uint8_t NSF2_FC_IMU_DROP = (1u << 6);
+// Recovery deployment detected this flight (tr::deploymentDetectStep).  Sticky
+// once latched, cleared only by a new flight.  Drives the dynamic logging-rate
+// step-down (IMU_RATE_DYNAMIC) and is the post-flight witness for WHEN the
+// detector fired — the .bin timestamps the first frame carrying this bit, so
+// the detector can be scored against the actual ejection signature without
+// re-running anything.  Deliberately a telemetry bit and not a pyro output:
+// this observes deployment, it does not command it.
+static constexpr uint8_t NSF2_DEPLOYED = (1u << 7);
 
 // Pyro status byte — 4 channels × (continuity, fired) = exactly 8 bits.
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
@@ -1992,12 +2000,39 @@ static_assert(sizeof(ImuOrientConfigData) == 1, "ImuOrientConfigData must be 1 b
 
 // IMU logging rate setting (IMU_RATE_CONFIG_MSG payload).
 static constexpr uint16_t IMU_RATE_OPTIONS_HZ[] = {960, 1920, 3840};
+
+// DYNAMIC logging rate (the default).  Sent as a sentinel in the SAME 2-byte
+// rate_hz field rather than a wider struct: growing ImuRateConfigData would
+// ripple the OC/FC config frame, the BLE cmd-67 length check, and every wire
+// test for one extra mode.  0 is the safe choice for the sentinel — firmware
+// predating dynamic mode rejects it (imuRateValid(0) == false) and keeps the
+// rate it already had, instead of silently reading it as some other ODR.
+//
+// In dynamic mode the FC logs at BOOST_HZ from the pad through boost and
+// coast, then drops to POST_HZ the moment the deployment detector latches
+// (tr::deploymentDetectStep, TR_KinematicChecks/DeploymentDetector.h).  The
+// two steps are the ODR-ladder rungs nearest the intended 4 kHz / 1 kHz —
+// the ISM6HG256 has no 4000/1000 Hz step — and are exactly the endpoints of
+// the fixed whitelist above, so dynamic adds no new link-budget case.
+//
+// Boost rate runs from the pad (not from launch detect) deliberately: an ODR
+// switch is staged for the poll task and takes effect on the next DRDY, so
+// arming the change AT launch would sample the first milliseconds of boost —
+// the highest-jerk part of the flight — at the low rate.  Pad dwell costs no
+// flash because pre-launch data lives in the OC's pre-launch ring.
+static constexpr uint16_t IMU_RATE_DYNAMIC          = 0;
+static constexpr uint16_t IMU_RATE_DYNAMIC_BOOST_HZ = 3840;  // pad → deployment
+static constexpr uint16_t IMU_RATE_DYNAMIC_POST_HZ  = 960;   // deployment → landing
+
 typedef struct __attribute__((packed))
 {
-    uint16_t rate_hz;  // one of IMU_RATE_OPTIONS_HZ
+    uint16_t rate_hz;  // IMU_RATE_DYNAMIC or one of IMU_RATE_OPTIONS_HZ
 } ImuRateConfigData;
 static_assert(sizeof(ImuRateConfigData) == 2, "ImuRateConfigData must be 2 bytes");
 
+// True for a FIXED ODR the chip can be programmed to. Deliberately excludes
+// the dynamic sentinel: callers that hand a rate straight to the hardware
+// (SensorCollector::setIsm6Rate) must never be given a mode value.
 inline bool imuRateValid(uint16_t hz)
 {
     for (uint16_t opt : IMU_RATE_OPTIONS_HZ)
@@ -2005,6 +2040,24 @@ inline bool imuRateValid(uint16_t hz)
         if (hz == opt) return true;
     }
     return false;
+}
+
+inline bool imuRateIsDynamic(uint16_t hz) { return hz == IMU_RATE_DYNAMIC; }
+
+// True for any valid user SETTING — dynamic or a fixed step. This is what the
+// BLE/config intake validates against; imuRateValid() is what the ODR
+// programming path validates against.
+inline bool imuRateSettingValid(uint16_t hz)
+{
+    return imuRateIsDynamic(hz) || imuRateValid(hz);
+}
+
+// The ODR a setting resolves to right now. `deployed` is the FC's latched
+// deployment flag for the current flight; it is ignored for a fixed setting.
+inline uint16_t imuRateResolve(uint16_t setting_hz, bool deployed)
+{
+    if (!imuRateIsDynamic(setting_hz)) return setting_hz;
+    return deployed ? IMU_RATE_DYNAMIC_POST_HZ : IMU_RATE_DYNAMIC_BOOST_HZ;
 }
 
 // Pyro trigger modes
@@ -2278,6 +2331,11 @@ struct __attribute__((packed)) FlightSettingsData
     //  bumping it would force a sweep of the Data_Analysis parsers, which
     //  hardcode message lengths, for a bit that older readers already ignore.)
     // v6: appended the flown guidance target (guid_tgt_* tail, #435).
+    // (no version bump for the dynamic logging rate: F_IMU_RATE_DYNAMIC claims
+    //  the last free flags bit, bit 7. Layout is byte-identical — same reasoning
+    //  as F_GUIDANCE_STATION_KEEP above; older readers ignore the bit and read
+    //  ism6_update_rate_hz as the flown rate, which is exactly what it is up to
+    //  the deployment step-down.)
     static constexpr uint8_t VERSION = 6;
 
     // flags bit positions
@@ -2289,6 +2347,12 @@ struct __attribute__((packed)) FlightSettingsData
     static constexpr uint8_t F_SOUNDS            = 5;  // piezo sounds enabled
     static constexpr uint8_t F_GUIDANCE_STATION_KEEP = 6;  // guidance law: 1 = station-keep, 0 = PN
                                                            // (meaningful only when F_GUIDANCE set)
+    static constexpr uint8_t F_IMU_RATE_DYNAMIC      = 7;  // logging rate was DYNAMIC, not fixed:
+                                                           // ism6_update_rate_hz below is the rate
+                                                           // at the snapshot (the boost rate), and
+                                                           // the log steps down to
+                                                           // IMU_RATE_DYNAMIC_POST_HZ at the frame
+                                                           // that first carries NSF2_DEPLOYED
 
     uint32_t time_us;            // micros() at snapshot
     uint8_t  version;            // = VERSION
