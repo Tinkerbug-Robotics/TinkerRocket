@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -23,7 +25,7 @@ import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
 
 @Composable
-fun ScannerScreen(fleet: FleetManager<DeviceSession>) {
+fun ScannerScreen(fleet: FleetManager<DeviceSession>, onDemo: () -> Unit) {
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
     val status by fleet.statusMessage.collectAsState()
@@ -38,6 +40,8 @@ fun ScannerScreen(fleet: FleetManager<DeviceSession>) {
                 Text(if (scanning) "Scanning…" else "Scan")
             }
             if (scanning) CircularProgressIndicator(Modifier.padding(start = 12.dp))
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = onDemo) { Text("Demo") }
         }
         Text(status, style = MaterialTheme.typography.bodyMedium)
 

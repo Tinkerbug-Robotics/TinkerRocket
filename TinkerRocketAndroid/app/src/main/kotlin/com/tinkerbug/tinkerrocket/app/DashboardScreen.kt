@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -35,7 +36,11 @@ import java.util.Locale
  * continuity-AND-live fail-safe rendering.
  */
 @Composable
-fun DashboardScreen(device: FleetDevice<DeviceSession>, onDisconnect: () -> Unit) {
+fun DashboardScreen(
+    device: FleetDevice<DeviceSession>,
+    onDisconnect: () -> Unit,
+    demo: Boolean = false,
+) {
     val session = device.session
     val telemetry by session.telemetry.collectAsState()
     val identity by session.identity.collectAsState()
@@ -56,7 +61,8 @@ fun DashboardScreen(device: FleetDevice<DeviceSession>, onDisconnect: () -> Unit
         ) {
             Column {
                 Text(
-                    identity.unitName.ifEmpty { device.advertisedName },
+                    (identity.unitName.ifEmpty { device.advertisedName }) +
+                        if (demo) "  (demo)" else "",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
@@ -123,6 +129,32 @@ fun DashboardScreen(device: FleetDevice<DeviceSession>, onDisconnect: () -> Unit
             StatCard("Link", rssi?.let { "$it dBm" } ?: "—", Modifier.weight(1f))
         }
 
+        // Flight event flags
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlagChip("LAUNCH", telemetry.launchFlag)
+            FlagChip("BURNOUT", telemetry.burnoutFlag)
+            FlagChip("APOGEE", telemetry.altApo || telemetry.velApo)
+            FlagChip("LANDED", telemetry.landedFlag)
+            FlagChip("LOG", telemetry.loggingActive)
+        }
+
+        // Sensor health scorecard (#303) — shown once the frame carries it.
+        if (telemetry.hasSensorHealth) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Sensor health", style = MaterialTheme.typography.titleMedium)
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        telemetry.sensorHealthRows.forEach { row ->
+                            HealthDot(row.name, row.state)
+                        }
+                    }
+                }
+            }
+        }
+
         // Pyro tiles: fail-safe rendering — a channel shows green ONLY on
         // continuity AND live data (stale green continuity is a lie).
         Card(Modifier.fillMaxWidth()) {
@@ -154,6 +186,39 @@ fun DashboardScreen(device: FleetDevice<DeviceSession>, onDisconnect: () -> Unit
                 Modifier.weight(1f),
             )
         }
+    }
+}
+
+@Composable
+private fun FlagChip(label: String, on: Boolean) {
+    Text(
+        label,
+        color = if (on) Color.White else Color(0xFF757575),
+        style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier
+            .background(
+                if (on) Color(0xFF2E7D32) else Color(0x33777777),
+                RoundedCornerShape(6.dp),
+            )
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+    )
+}
+
+@Composable
+private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
+    val color = when (state) {
+        TelemetryData.SensorHealth.OK -> Color(0xFF2E7D32)
+        TelemetryData.SensorHealth.DEGRADED -> Color(0xFFF9A825)
+        TelemetryData.SensorHealth.BAD -> Color(0xFFB00020)
+        else -> Color(0xFF616161)
+    }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            "●",
+            color = color,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(name, style = MaterialTheme.typography.labelSmall)
     }
 }
 
