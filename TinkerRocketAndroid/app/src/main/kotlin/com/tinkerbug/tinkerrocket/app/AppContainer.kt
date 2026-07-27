@@ -4,15 +4,19 @@ import android.app.Application
 import android.content.Context
 import com.tinkerbug.tinkerrocket.ble.AndroidBleScanner
 import com.tinkerbug.tinkerrocket.ble.AndroidTransportFactory
+import com.tinkerbug.tinkerrocket.session.ActiveProfileStorage
+import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.BleTransport
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
 import com.tinkerbug.tinkerrocket.session.FleetSessionFactory
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStorage
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStore
+import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import java.io.File
 import java.util.concurrent.Executors
 
 /**
@@ -31,6 +35,14 @@ class AppContainer(app: Application) {
     val fleetScope = CoroutineScope(SupervisorJob() + fleetDispatcher)
 
     private val knownDevices = KnownDeviceStore(PrefsKnownStorage(app))
+
+    // Loads a handful of small JSON files at app create — acceptable on Main;
+    // all MUTATORS go through the fleet dispatcher (single-writer contract).
+    val profileStore = RocketProfileStore(
+        directory = File(app.filesDir, "rocket_profiles"),
+        activeStorage = PrefsActiveProfileStorage(app),
+    )
+    val syncer = ActiveRocketSyncer(fleetScope)
 
     val fleet: FleetManager<DeviceSession> = run {
         lateinit var fleetRef: FleetManager<DeviceSession>
@@ -66,6 +78,15 @@ class AppContainer(app: Application) {
             knownDevices = knownDevices,
         )
         fleetRef
+    }
+}
+
+/** Active-profile id persistence (iOS: UserDefaults). */
+private class PrefsActiveProfileStorage(app: Application) : ActiveProfileStorage {
+    private val prefs = app.getSharedPreferences("rocket_profiles", Context.MODE_PRIVATE)
+    override fun loadActiveId(): String? = prefs.getString("active_id", null)
+    override fun saveActiveId(id: String?) {
+        prefs.edit().putString("active_id", id).apply()
     }
 }
 

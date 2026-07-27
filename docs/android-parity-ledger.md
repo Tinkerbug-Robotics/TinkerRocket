@@ -40,4 +40,5 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 | Since | Item | Direction | Status |
 |---|---|---|---|
 | 2026-07-27 | Flight-event flag chips (LAUNCH/BURNOUT/APOGEE/LANDED/LOG illuminating) | Android → iOS | pending back-port |
+| 2026-07-27 | Sensor-health dot row (per-subsystem green/amber/red/gray dots) | Android → iOS | pending back-port (user-requested) |
 | 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | Phase 4/5 screens |

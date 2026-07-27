@@ -12,10 +12,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -39,6 +41,15 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         public data object Syncing : SyncState
         public data object Synced : SyncState
         public data class Failed(val message: String) : SyncState
+    }
+
+    /**
+     * One editable settings group = the command frame(s) that carry it.
+     * Enum order IS the connect-time wire order — keep it stable.
+     */
+    public enum class ConfigGroup {
+        SERVO, PID, SERVO_ENABLE, GAIN_SCHEDULE, ROLL_CONTROL, ROLL_PROFILE,
+        GUIDANCE, FIN_LAYOUT, CAMERA, IMU, SOUNDS, PYRO,
     }
 
     /** Cal is board-specific — it can't be blindly pushed. */
@@ -88,6 +99,25 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         this.session = session
         this.store = store
         attachedAsBaseStation = session.isBaseStation
+
+        // #375 (the SUBSONIC case): the role is parsed from the BLE name and
+        // isn't final until config_identity lands ~1 s in — a "nimble"-named
+        // BS attaches as a rocket and would stick in AwaitingSync forever.
+        // Watch for the flip ourselves; a fresh coroutine re-attaches so the
+        // detach() inside doesn't cancel the job mid-collect.
+        jobs += scope.launch {
+            session.identity
+                .map { it.deviceType == BleDeviceType.BASE_STATION }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    scope.launch {
+                        val s = this@ActiveRocketSyncer.session ?: return@launch
+                        val st = this@ActiveRocketSyncer.store ?: return@launch
+                        attach(s, st)
+                    }
+                }
+        }
 
         if (session.isBaseStation) {
             // BS is a read-only display of the active rocket; never pushed.
@@ -178,71 +208,7 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
 
         _syncState.value = SyncState.Syncing
 
-        s.sendCommandFrame(
-            Commands.servoConfig(
-                biasesUs = listOf(profile.servoBias1, profile.servoBias2, profile.servoBias3, profile.servoBias4),
-                hz = profile.servoHz, minUs = profile.servoMinUs, maxUs = profile.servoMaxUs,
-                finMinDeg = profile.finMinDeg, finMaxDeg = profile.finMaxDeg,
-            ),
-        )
-        s.sendCommandFrame(
-            Commands.pidConfig(
-                kp = profile.pidKp, ki = profile.pidKi, kd = profile.pidKd,
-                minCmd = profile.pidMinCmd, maxCmd = profile.pidMaxCmd,
-            ),
-        )
-        s.sendCommandFrame(Commands.servoEnable(profile.servoControlEnabled))
-        s.sendCommandFrame(Commands.gainScheduleEnable(profile.gainScheduleEnabled))
-        s.sendCommandFrame(
-            Commands.rollControlConfig(
-                useAngleControl = profile.useAngleControl,
-                rollDelayMs = profile.rollDelayMs,
-                rateCapDps = profile.rateCapDps,
-                kpAngle = profile.kpAngle,
-                integralSepThreshold = profile.integralSepThreshold,
-            ),
-        )
-        // mode byte is legacy wire (pre-v4); always .angle = 0.
-        s.sendCommandFrame(
-            Commands.rollProfile(
-                profile.rollWaypoints.map {
-                    RollWaypoint(timeS = it.timeSeconds, angleDeg = it.angleDeg, mode = 0)
-                },
-            ),
-        )
-        s.sendCommandFrame(
-            Commands.guidanceConfig(
-                enabled = profile.guidanceEnabled,
-                navGain = profile.pnNavGain, maxAccel = profile.pnMaxAccel,
-                accelToFin = profile.pnAccelToFin, maxFinDeg = profile.pnMaxFinDeg,
-                minSpeed = profile.pnMinSpeed,
-                coastDelayMs = profile.pnCoastDelayMs, targetMode = profile.pnTargetMode,
-                targetE = profile.pnTargetE, targetN = profile.pnTargetN,
-                targetAlt = profile.pnTargetAltM,
-                kpPos = profile.pnKpPos, kdVel = profile.pnKdVel,
-                guidanceLaw = profile.pnGuidanceLaw,
-            ),
-        )
-        Commands.finConfig(
-            ringMode = profile.finRingMode,
-            servoAtSlot = profile.finServoAtSlot,
-            reverse = profile.finReverse,
-            rollReverse = profile.finRollReverse,
-        )?.let { s.sendCommandFrame(it) }
-        s.sendCommandFrame(Commands.cameraConfig(profile.cameraType))
-        s.sendCommandFrame(Commands.imuOrient(profile.imuOrientSetting))
-        s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
-        s.sendCommandFrame(Commands.soundsEnable(profile.soundsEnabled))
-        s.sendCommandFrame(
-            Commands.pyroConfig(
-                listOf(
-                    PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
-                    PyroChannelConfig(profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
-                    PyroChannelConfig(profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
-                    PyroChannelConfig(profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
-                ),
-            ),
-        )
+        ConfigGroup.entries.forEach { pushGroupFrames(s, profile, it) }
 
         syncCal(profile, s)
 
@@ -255,6 +221,93 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         syncedTimer = scope.launch {
             delay(SYNCED_DELAY_MS)
             if (_syncState.value == SyncState.Syncing) _syncState.value = SyncState.Synced
+        }
+    }
+
+    /**
+     * Push ONE group of the active profile — settings self-apply (#144):
+     * an edit reaches a connected rocket immediately, never waits behind an
+     * Apply button.  No-op when detached / disconnected / base station; the
+     * offline edit rides out on the next connect via the whole-profile push.
+     * Call on the fleet dispatcher; doesn't touch syncState (a field edit
+     * while Synced stays Synced).
+     */
+    public fun pushGroup(group: ConfigGroup) {
+        val s = session ?: return
+        val profile = store?.activeProfile ?: return
+        if (!s.isConnected.value || s.isBaseStation) return
+        pushGroupFrames(s, profile, group)
+    }
+
+    private fun pushGroupFrames(s: DeviceSession, profile: RocketProfile, group: ConfigGroup) {
+        when (group) {
+            ConfigGroup.SERVO -> s.sendCommandFrame(
+                Commands.servoConfig(
+                    biasesUs = listOf(profile.servoBias1, profile.servoBias2, profile.servoBias3, profile.servoBias4),
+                    hz = profile.servoHz, minUs = profile.servoMinUs, maxUs = profile.servoMaxUs,
+                    finMinDeg = profile.finMinDeg, finMaxDeg = profile.finMaxDeg,
+                ),
+            )
+            ConfigGroup.PID -> s.sendCommandFrame(
+                Commands.pidConfig(
+                    kp = profile.pidKp, ki = profile.pidKi, kd = profile.pidKd,
+                    minCmd = profile.pidMinCmd, maxCmd = profile.pidMaxCmd,
+                ),
+            )
+            ConfigGroup.SERVO_ENABLE -> s.sendCommandFrame(Commands.servoEnable(profile.servoControlEnabled))
+            ConfigGroup.GAIN_SCHEDULE -> s.sendCommandFrame(Commands.gainScheduleEnable(profile.gainScheduleEnabled))
+            ConfigGroup.ROLL_CONTROL -> s.sendCommandFrame(
+                Commands.rollControlConfig(
+                    useAngleControl = profile.useAngleControl,
+                    rollDelayMs = profile.rollDelayMs,
+                    rateCapDps = profile.rateCapDps,
+                    kpAngle = profile.kpAngle,
+                    integralSepThreshold = profile.integralSepThreshold,
+                ),
+            )
+            // mode byte is legacy wire (pre-v4); always .angle = 0.
+            ConfigGroup.ROLL_PROFILE -> s.sendCommandFrame(
+                Commands.rollProfile(
+                    profile.rollWaypoints.map {
+                        RollWaypoint(timeS = it.timeSeconds, angleDeg = it.angleDeg, mode = 0)
+                    },
+                ),
+            )
+            ConfigGroup.GUIDANCE -> s.sendCommandFrame(
+                Commands.guidanceConfig(
+                    enabled = profile.guidanceEnabled,
+                    navGain = profile.pnNavGain, maxAccel = profile.pnMaxAccel,
+                    accelToFin = profile.pnAccelToFin, maxFinDeg = profile.pnMaxFinDeg,
+                    minSpeed = profile.pnMinSpeed,
+                    coastDelayMs = profile.pnCoastDelayMs, targetMode = profile.pnTargetMode,
+                    targetE = profile.pnTargetE, targetN = profile.pnTargetN,
+                    targetAlt = profile.pnTargetAltM,
+                    kpPos = profile.pnKpPos, kdVel = profile.pnKdVel,
+                    guidanceLaw = profile.pnGuidanceLaw,
+                ),
+            )
+            ConfigGroup.FIN_LAYOUT -> Commands.finConfig(
+                ringMode = profile.finRingMode,
+                servoAtSlot = profile.finServoAtSlot,
+                reverse = profile.finReverse,
+                rollReverse = profile.finRollReverse,
+            )?.let { s.sendCommandFrame(it) }
+            ConfigGroup.CAMERA -> s.sendCommandFrame(Commands.cameraConfig(profile.cameraType))
+            ConfigGroup.IMU -> {
+                s.sendCommandFrame(Commands.imuOrient(profile.imuOrientSetting))
+                s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
+            }
+            ConfigGroup.SOUNDS -> s.sendCommandFrame(Commands.soundsEnable(profile.soundsEnabled))
+            ConfigGroup.PYRO -> s.sendCommandFrame(
+                Commands.pyroConfig(
+                    listOf(
+                        PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
+                        PyroChannelConfig(profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
+                        PyroChannelConfig(profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
+                        PyroChannelConfig(profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
+                    ),
+                ),
+            )
         }
     }
 

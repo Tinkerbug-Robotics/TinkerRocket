@@ -293,6 +293,53 @@ class ActiveRocketSyncerTest {
     }
 
     @Test
+    fun roleFlip_afterIdentityLands_reattachesAsBaseStation() = runTest {
+        // The SUBSONIC case (#375): the advertised name parses as a rocket,
+        // but the config_identity readback says base station.  The syncer
+        // must fall through to a re-attach on its own — not stick in
+        // AwaitingSync forever (nobody re-calls attach for it).
+        val r = rig(
+            identityJson =
+                """{"type":"config_identity","uid":"bs1","un":"SUBSONIC","nid":5,"dt":"B"}""",
+        )
+        val before = r.fw.commandFrames.size
+        r.syncer.attach(r.session, r.store)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.AwaitingSync>(r.syncer.syncState.value)
+
+        advanceTimeBy(2000)   // identity lands, role corrects to BS
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.Idle>(r.syncer.syncState.value)
+        // The session's own connect choreography still runs (cmd 20 etc.) —
+        // only PROFILE writes are forbidden on a BS link.
+        val profileCmds = setOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34, 55, 61, 62, 63)
+        val sentAfter = r.sentCommandIds().drop(before)
+        assertTrue(
+            sentAfter.none { it in profileCmds },
+            "profile writes to a BS: $sentAfter",
+        )
+    }
+
+    @Test
+    fun pushGroup_sendsOnlyThatGroup_andKeepsSynced() = runTest {
+        val r = rig()
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS)
+        runCurrent()
+        assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
+
+        val before = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.PID)
+        runCurrent()
+        // Self-apply (#144): the edit sends exactly one PID frame and the
+        // badge stays Synced — no whole-profile re-push, no state churn.
+        assertEquals(listOf(13), r.sentCommandIds().drop(before))
+        assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
+    }
+
+    @Test
     fun noActiveProfile_reportsNoProfile() = runTest {
         val r = rig(makeProfile = false)
         r.syncer.attach(r.session, r.store)

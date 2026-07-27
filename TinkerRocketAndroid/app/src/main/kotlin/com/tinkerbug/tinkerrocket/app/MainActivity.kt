@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -67,6 +68,21 @@ class MainActivity : ComponentActivity() {
                     val active by fleet.activeDeviceId.collectAsState()
                     val activeDevice = active?.let { devices[it] }
 
+                    // Syncer follows the active device (#132); attach is
+                    // idempotent per (session, role) and hops to the fleet
+                    // dispatcher (single-writer contract).  Demo attaches
+                    // too — the push lands harmlessly in FakeFirmware.
+                    LaunchedEffect(activeDevice?.session) {
+                        val session = activeDevice?.session
+                        container.fleetScope.launch {
+                            if (session != null) {
+                                container.syncer.attach(session, container.profileStore)
+                            } else {
+                                container.syncer.detach()
+                            }
+                        }
+                    }
+
                     // #385: keep the screen awake while any device is
                     // connected; FGS pins the process on real connections
                     // (BLUETOOTH_CONNECT is granted by the time one exists).
@@ -101,19 +117,29 @@ class MainActivity : ComponentActivity() {
                                             if (tab == 1) "● Files" else "Files",
                                         )
                                     }
+                                    androidx.compose.material3.TextButton(onClick = { tab = 2 }) {
+                                        androidx.compose.material3.Text(
+                                            if (tab == 2) "● Settings" else "Settings",
+                                        )
+                                    }
                                 }
-                                if (tab == 0) {
-                                    DashboardScreen(
+                                when (tab) {
+                                    0 -> DashboardScreen(
                                         device = activeDevice,
                                         demo = demoFleet != null,
+                                        syncer = container.syncer,
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null
                                         },
                                     )
-                                } else {
-                                    FilesScreen(
+                                    1 -> FilesScreen(
                                         device = activeDevice,
+                                        fleetScope = container.fleetScope,
+                                    )
+                                    else -> SettingsScreen(
+                                        store = container.profileStore,
+                                        syncer = container.syncer,
                                         fleetScope = container.fleetScope,
                                     )
                                 }

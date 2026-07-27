@@ -42,3 +42,4 @@ INFLIGHT, DESCENT, LANDED…).
 | Item | Status |
 |---|---|
 | Flight-event flag chips on the dashboard | pending — small DashboardView addition |
+| Sensor-health dot row (one dot per subsystem, green/amber/red/gray = OK/DEGRADED/BAD/NA, name under each dot) | pending — user-requested 2026-07-27; iOS shows sensor state as text today |

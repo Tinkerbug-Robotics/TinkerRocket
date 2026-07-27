@@ -41,6 +41,7 @@ fun DashboardScreen(
     device: FleetDevice<DeviceSession>,
     onDisconnect: () -> Unit,
     demo: Boolean = false,
+    syncer: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer? = null,
 ) {
     val session = device.session
     val telemetry by session.telemetry.collectAsState()
@@ -73,6 +74,12 @@ fun DashboardScreen(
                         "fw ${identity.firmwareVersion ?: "—"}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                // #375: "connected but not yet pushed" must never render
+                // as silent nothing — the sync badge is always on the header.
+                syncer?.let {
+                    val syncState by it.syncState.collectAsState()
+                    SyncStateLine(syncState)
+                }
             }
             OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
         }
@@ -230,6 +237,24 @@ fun DashboardScreen(
             )
         }
     }
+}
+
+@Composable
+private fun SyncStateLine(state: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState) {
+    val (label, color) = when (state) {
+        com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Idle -> return
+        com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.AwaitingSync ->
+            "profile: awaiting sync" to Color(0xFF9E9E9E)
+        com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.NoProfile ->
+            "profile: none active" to Color(0xFFFFA000)
+        com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Syncing ->
+            "profile: syncing…" to Color(0xFF1E88E5)
+        com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Synced ->
+            "profile: synced" to Color(0xFF43A047)
+        is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Failed ->
+            "profile: sync failed" to Color(0xFFE53935)
+    }
+    Text(label, style = MaterialTheme.typography.bodySmall, color = color)
 }
 
 @Composable
