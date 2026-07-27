@@ -64,7 +64,7 @@ fun buildDemoFleet(scope: CoroutineScope): FleetManager<DeviceSession> {
 private class DemoScanner : BleScanner {
     override fun advertisements(): Flow<BleAdvertisement> = flow {
         while (true) {
-            emit(BleAdvertisement("demo:01", "TR-R-Demo Rocket", rssi = -47))
+            emit(BleAdvertisement("demo:01", "TR-B-Demo Base", rssi = -47))
             delay(500)
         }
     }
@@ -74,8 +74,8 @@ private class DemoTransportFactory(private val scope: CoroutineScope) : Transpor
     override fun create(deviceId: String, autoConnect: Boolean): BleTransport {
         val fw = FakeFirmware(scope)
         fw.configIdentityJson =
-            """{"type":"config_identity","uid":"demo0001","un":"Demo Rocket",""" +
-                """"nid":7,"rid":1,"dt":"R","fw":"demo+sim"}"""
+            """{"type":"config_identity","uid":"demo0001","un":"Demo Base Station",""" +
+                """"nid":7,"dt":"B","fw":"demo+sim"}"""
         scope.launch { flyDemoFlight(fw) }
         return fw
     }
@@ -116,9 +116,9 @@ private suspend fun flyDemoFlight(fw: FakeFirmware) {
             fw.emitTelemetryJson(
                 String.format(
                     Locale.ROOT,
-                    """{"st":"%s","fs":%d,"ps":%d,"h":%d,"nsat":%d,"vol":%.2f,""" +
-                        """"cur":%.1f,"soc":%.1f,"palt":%.1f,"malt":%.1f,"arate":%.1f,""" +
-                        """"lat":34.6572,"lon":-118.2015}""",
+                    """{"rid":1,"run":"Booster","st":"%s","fs":%d,"ps":%d,"h":%d,""" +
+                        """"nsat":%d,"vol":%.2f,"cur":%.1f,"soc":%.1f,"palt":%.1f,""" +
+                        """"malt":%.1f,"arate":%.1f,"lat":34.6572,"lon":-118.2015}""",
                     phase, fs,
                     0x00A or 0x080,        // ch1+ch4 continuity (demo)
                     health, sats, vol,
@@ -132,6 +132,13 @@ private suspend fun flyDemoFlight(fw: FakeFirmware) {
                     },
                 ),
             )
+            // Second relayed rocket sits READY on the pad (1 Hz).
+            if (tick % 5 == 0) {
+                fw.emitTelemetryJson(
+                    """{"rid":2,"run":"Pad Rocket","st":"READY","fs":16,"ps":2,""" +
+                        """"h":$health,"nsat":8,"vol":8.31,"palt":0.4}""",
+                )
+            }
             delay(200)
         }
         maxAlt = 0f

@@ -1,6 +1,7 @@
 package com.tinkerbug.tinkerrocket.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -48,6 +49,8 @@ fun DashboardScreen(
     val dataStatus by session.effectiveDataStatus.collectAsState()
     val rssi by session.connectedRssi.collectAsState()
     val poweringOn by session.poweringOn.collectAsState()
+    val remoteRockets by session.remoteRockets.collectAsState()
+    val focusRocketId by session.focusRocketId.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -127,6 +130,46 @@ fun DashboardScreen(
                 Modifier.weight(1f),
             )
             StatCard("Link", rssi?.let { "$it dBm" } ?: "—", Modifier.weight(1f))
+        }
+
+        // Relayed rockets (#390): base-station links list every rocket the
+        // BS hears; the focused one mirrors into this dashboard.  Tap to
+        // switch focus (cmd 45 → the BS radio follows).
+        if (remoteRockets.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Rockets via base station", style = MaterialTheme.typography.titleMedium)
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        remoteRockets.forEach { remote ->
+                            val focused = remote.rocketId == focusRocketId
+                            Column(
+                                Modifier
+                                    .background(
+                                        if (focused) Color(0xFF4527A0) else Color(0x33777777),
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .clickable { session.setFocusRocket(remote.rocketId) }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    remote.unitName.ifEmpty { "Rocket ${remote.rocketId}" },
+                                    color = if (focused) Color.White else Color(0xFFBBBBBB),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                Text(
+                                    if (focused) "focused" else remote.telemetry.state,
+                                    color = if (focused) Color(0xFFB39DDB) else Color(0xFF888888),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Flight event flags

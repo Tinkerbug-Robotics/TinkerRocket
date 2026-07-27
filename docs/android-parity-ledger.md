@@ -33,4 +33,4 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 
 | Since | Area | Status |
 |---|---|---|
-| 2026-07-23 | RocketRoster merge (RocketSubject keyed (nid,rid), freshness tiers, commandLink selection incl. the foregroundBSID guard) + the 10 RocketRosterTests cases | Phase 3 with the dashboard that consumes it |
+| ~~2026-07-23~~ | ~~RocketRoster merge + the 10 RocketRosterTests cases~~ | **PORTED 2026-07-27** — RocketRoster.kt + all 10 cases green; single-BS relay UI live (multi-device fleet chrome remains Phase 9) |
