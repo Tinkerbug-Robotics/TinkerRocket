@@ -67,9 +67,13 @@ class BenchSeamTest {
         try {
             runBlocking(dispatcher) {
                 // 1. Scan: the svc-UUID filter must find the bench board.
-                Log.i(TAG, "scanning for TinkerRocket service...")
+                // With several boards on the bench the first answerer wins —
+                // pass benchAddr=<MAC> to target a specific one.
+                val wantAddr = InstrumentationRegistry.getArguments().getString("benchAddr")
+                Log.i(TAG, "scanning for TinkerRocket service (benchAddr=${wantAddr ?: "any"})...")
                 val adv = withTimeout(SCAN_TIMEOUT_MS) {
-                    AndroidBleScanner(context).advertisements().first()
+                    AndroidBleScanner(context).advertisements()
+                        .first { wantAddr == null || it.deviceId.equals(wantAddr, ignoreCase = true) }
                 }
                 Log.i(TAG, "found ${adv.deviceId} name=${adv.advertisedName} rssi=${adv.rssi}")
 
@@ -100,7 +104,11 @@ class BenchSeamTest {
                     session.rocketConfig.first { it != null }
                 }
                 assertNotNull(cfg, "no config readback within ${CONFIG_TIMEOUT_MS} ms")
-                Log.i(TAG, "config: loraFreq=${cfg?.loraFreqMHz} identity=${session.identity.value}")
+                Log.i(
+                    TAG,
+                    "config: loraFreq=${cfg?.loraFreqMHz} kp=${cfg?.pidKp} ki=${cfg?.pidKi} " +
+                        "servoHz=${cfg?.servoHz} identity=${session.identity.value}",
+                )
 
                 // 6. RSSI ticker alive (2 s cadence).
                 delay(4_500)
