@@ -36,3 +36,4 @@ rootProject.name = "TinkerRocketAndroid"
 include(":core:protocol")
 include(":core:session")
 include(":core:ble")     // Android library: RealBleTransport over BluetoothGatt
+include(":app")          // Compose app
