@@ -3,4 +3,6 @@
 // upgrade window per year.
 plugins {
     kotlin("jvm") version "2.2.20" apply false
+    // AGP 9: Kotlin support is built in — kotlin("android") must NOT be applied.
+    id("com.android.library") version "9.0.0" apply false
 }

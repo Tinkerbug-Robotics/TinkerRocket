@@ -10,6 +10,14 @@
 // SDK is set up (Phase 2/3); everything committed so far builds and tests on
 // a plain JVM: ./gradlew test
 
+pluginManagement {
+    repositories {
+        google()          // Android Gradle Plugin
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
 plugins {
     // Resolves the JVM toolchain (21) from foojay if the local JDK differs.
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
@@ -27,3 +35,4 @@ rootProject.name = "TinkerRocketAndroid"
 
 include(":core:protocol")
 include(":core:session")
+include(":core:ble")     // Android library: RealBleTransport over BluetoothGatt
