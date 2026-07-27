@@ -26,7 +26,7 @@ import kotlin.math.roundToInt
  * its keep as the no-hardware dev path: every screen is developable against
  * it in the emulator, and it doubles as the in-app demo.
  */
-fun buildDemoFleet(scope: CoroutineScope): FleetManager<DeviceSession> {
+fun buildDemoFleet(context: android.content.Context, scope: CoroutineScope): FleetManager<DeviceSession> {
     lateinit var fleet: FleetManager<DeviceSession>
     val factory = object : FleetSessionFactory<DeviceSession> {
         override fun create(
@@ -54,7 +54,7 @@ fun buildDemoFleet(scope: CoroutineScope): FleetManager<DeviceSession> {
     fleet = FleetManager(
         scope = scope,
         scanner = DemoScanner(),
-        transportFactory = DemoTransportFactory(scope),
+        transportFactory = DemoTransportFactory(context, scope),
         sessionFactory = factory,
         knownDevices = KnownDeviceStore(EphemeralStorage()),
     )
@@ -70,12 +70,22 @@ private class DemoScanner : BleScanner {
     }
 }
 
-private class DemoTransportFactory(private val scope: CoroutineScope) : TransportFactory {
+private class DemoTransportFactory(
+    private val context: android.content.Context,
+    private val scope: CoroutineScope,
+) : TransportFactory {
     override fun create(deviceId: String, autoConnect: Boolean): BleTransport {
         val fw = FakeFirmware(scope)
         fw.configIdentityJson =
             """{"type":"config_identity","uid":"demo0001","un":"Demo Base Station",""" +
                 """"nid":7,"dt":"B","fw":"demo+sim"}"""
+        // A real downloadable flight log: the emitter's synthetic golden
+        // flight, bundled from the corpus as an asset.
+        runCatching {
+            context.assets.open("tiny_flight.bin").use { it.readBytes() }
+        }.getOrNull()?.let { bytes ->
+            fw.deviceFiles += FakeFirmware.FakeFile("flight_20260723_141100.bin", bytes)
+        }
         scope.launch { flyDemoFlight(fw) }
         return fw
     }

@@ -23,6 +23,15 @@ android {
     buildFeatures {
         compose = true
     }
+
+    sourceSets {
+        getByName("main") {
+            // Demo mode serves the emitter-generated synthetic flight as a
+            // downloadable device file — read straight from the golden corpus
+            // so there is no second copy to drift.
+            assets.srcDirs("../../tests_cpp/fixtures/wire/csv")
+        }
+    }
 }
 
 kotlin {

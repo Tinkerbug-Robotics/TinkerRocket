@@ -34,3 +34,10 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 | Since | Area | Status |
 |---|---|---|
 | ~~2026-07-23~~ | ~~RocketRoster merge + the 10 RocketRosterTests cases~~ | **PORTED 2026-07-27** — RocketRoster.kt + all 10 cases green; single-BS relay UI live (multi-device fleet chrome remains Phase 9) |
+
+## UI parity (both directions — see docs/design-language.md)
+
+| Since | Item | Direction | Status |
+|---|---|---|---|
+| 2026-07-27 | Flight-event flag chips (LAUNCH/BURNOUT/APOGEE/LANDED/LOG illuminating) | Android → iOS | pending back-port |
+| 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | Phase 4/5 screens |

@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -82,18 +83,48 @@ class MainActivity : ComponentActivity() {
                         !granted -> PermissionScreen { requestPermissions.launch(blePermissions) }
                         // Simple 2-screen state nav; NavHost lands with the
                         // next batch of destinations (plan §4).
-                        activeDevice != null -> DashboardScreen(
-                            device = activeDevice,
-                            demo = demoFleet != null,
-                            onDisconnect = {
-                                fleet.disconnect(activeDevice.deviceId)
-                                demoFleet = null
-                            },
-                        )
+                        activeDevice != null -> {
+                            var tab by remember { mutableStateOf(0) }
+                            androidx.compose.foundation.layout.Column {
+                                androidx.compose.foundation.layout.Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement =
+                                        androidx.compose.foundation.layout.Arrangement.Center,
+                                ) {
+                                    androidx.compose.material3.TextButton(onClick = { tab = 0 }) {
+                                        androidx.compose.material3.Text(
+                                            if (tab == 0) "● Dashboard" else "Dashboard",
+                                        )
+                                    }
+                                    androidx.compose.material3.TextButton(onClick = { tab = 1 }) {
+                                        androidx.compose.material3.Text(
+                                            if (tab == 1) "● Files" else "Files",
+                                        )
+                                    }
+                                }
+                                if (tab == 0) {
+                                    DashboardScreen(
+                                        device = activeDevice,
+                                        demo = demoFleet != null,
+                                        onDisconnect = {
+                                            fleet.disconnect(activeDevice.deviceId)
+                                            demoFleet = null
+                                        },
+                                    )
+                                } else {
+                                    FilesScreen(
+                                        device = activeDevice,
+                                        fleetScope = container.fleetScope,
+                                    )
+                                }
+                            }
+                        }
                         else -> ScannerScreen(
                             fleet = container.fleet,
                             onDemo = {
-                                demoFleet = buildDemoFleet(container.fleetScope).also {
+                                demoFleet = buildDemoFleet(
+                                    this@MainActivity, container.fleetScope,
+                                ).also {
                                     it.scan(userInitiated = true)
                                     it.connect("demo:01")
                                 }
