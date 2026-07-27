@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
                                         store = container.profileStore,
                                         syncer = container.syncer,
                                         fleetScope = container.fleetScope,
+                                        session = activeDevice.session,
                                     )
                                 }
                             }

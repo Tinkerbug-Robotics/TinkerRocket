@@ -38,13 +38,19 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.protocol.BleCommandId
+import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.CalAdvisory
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.ConfigGroup
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState
+import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.ProfileRollWaypoint
 import com.tinkerbug.tinkerrocket.session.RocketProfile
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -62,6 +68,7 @@ fun SettingsScreen(
     store: RocketProfileStore,
     syncer: ActiveRocketSyncer,
     fleetScope: CoroutineScope,
+    session: DeviceSession? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -70,6 +77,18 @@ fun SettingsScreen(
     val sensorAdvisory by syncer.sensorCalAdvisory.collectAsState()
     val suggestedId by syncer.suggestedProfileId.collectAsState()
     val active = activeId?.let { id -> profiles.firstOrNull { it.id == id } }
+
+    // #361 analog: never subscribe this screen to raw telemetry — the jog
+    // gate collects a distinct-until-changed Boolean, so recomposition only
+    // happens when the power state actually flips, not at telemetry rate.
+    val powerOn by remember(session) {
+        session?.telemetry?.map { it.pwrPinOn }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(false)
+    }.collectAsState(initial = false)
+    val connected by (
+        session?.isConnected ?: kotlinx.coroutines.flow.MutableStateFlow(false)
+        ).collectAsState()
+    val canJog = session != null && connected && powerOn
 
     // Self-apply (#144): persist the edit, then push just its group.
     fun edit(group: ConfigGroup?, mutate: (RocketProfile) -> RocketProfile) {
@@ -255,11 +274,94 @@ fun SettingsScreen(
                     s.toFloatOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(finTravelDeg = v) } }
                 }
             }
-            Text(
-                "Fin layout + roll waypoints: editors land in a later batch " +
-                    "(defaults push the “+” mix).",
-                style = MaterialTheme.typography.bodySmall,
+        }
+
+        // ── Fin layout (cmd 66) ──────────────────────────────────────────
+        Section("Fin layout") {
+            FinLayoutEditor(
+                ringMode = active.finRingMode,
+                servoAtSlot = active.finServoAtSlot,
+                reverse = active.finReverse,
+                rollReverse = active.finRollReverse,
+                canJog = canJog,
+                finMinDeg = active.finMinDeg,
+                finMaxDeg = active.finMaxDeg,
+                onSetRingMode = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRingMode = v) } },
+                onSetServoAtSlot = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finServoAtSlot = v) } },
+                onSetReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finReverse = v) } },
+                onSetRollReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRollReverse = v) } },
+                onJogAngles = { angles -> session?.sendCommandFrame(Commands.servoTestAngles(angles)) },
+                onJogStop = { session?.sendBareCommand(BleCommandId.SERVO_TEST_STOP) },
             )
+        }
+
+        // ── Roll profile (cmd 26; Clear = cmd 27, matching iOS) ──────────
+        Section("Roll profile") {
+            Text(
+                "The target roll angle ramps linearly between waypoints. Before " +
+                    "the first waypoint the controller nulls roll rate (fins keep " +
+                    "zero roll through boost); after the last waypoint the final " +
+                    "angle is held. To hold an angle, give two consecutive " +
+                    "waypoints the same angle.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            active.rollWaypoints.forEachIndexed { i, wp ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("WP ${i + 1}", style = MaterialTheme.typography.bodySmall)
+                    NumField("Time s", fmt(wp.timeSeconds), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v ->
+                            edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                p.copy(
+                                    rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
+                                        if (j == i) w.copy(timeSeconds = v) else w
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    NumField("Angle °", fmt(wp.angleDeg), Modifier.weight(1f)) { s ->
+                        s.toFloatOrNull()?.let { v ->
+                            edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                p.copy(
+                                    rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
+                                        if (j == i) w.copy(angleDeg = v) else w
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    TextButton(onClick = {
+                        edit(ConfigGroup.ROLL_PROFILE) { p ->
+                            p.copy(rollWaypoints = p.rollWaypoints.filterIndexed { j, _ -> j != i })
+                        }
+                    }) { Text("✕") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (active.rollWaypoints.size < 8) {
+                    OutlinedButton(onClick = {
+                        val t = (active.rollWaypoints.lastOrNull()?.timeSeconds ?: -1f) + 1f
+                        edit(ConfigGroup.ROLL_PROFILE) { p ->
+                            p.copy(
+                                rollWaypoints = p.rollWaypoints +
+                                    ProfileRollWaypoint(timeSeconds = t, angleDeg = 0f),
+                            )
+                        }
+                    }) { Text("Add Waypoint") }
+                }
+                if (active.rollWaypoints.isNotEmpty()) {
+                    OutlinedButton(onClick = {
+                        // iOS: empty the profile + explicit clear command (27).
+                        edit(null) { it.copy(rollWaypoints = emptyList()) }
+                        session?.sendBareCommand(BleCommandId.ROLL_PROFILE_CLEAR)
+                    }) { Text("Clear Roll Profile") }
+                }
+            }
         }
 
         // ── Guidance ─────────────────────────────────────────────────────
