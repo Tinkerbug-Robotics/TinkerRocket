@@ -56,7 +56,8 @@ struct FlightCSVData {
             "GNSS Horizontal Accuracy (m)", "GNSS Vertical Accuracy (m)"
         ]),
         ("Flags", [
-            "Launch Flag", "Altitude Apogee Flag", "Velocity Apogee Flag", "Landed Flag"
+            "Launch Flag", "Altitude Apogee Flag", "Velocity Apogee Flag", "Landed Flag",
+            "Deployed Flag"
         ])
     ]
 

@@ -40,6 +40,11 @@ NSF_PYRO_ARMED  = (1 << 6)
 NSF2_GPS_APOGEE    = (1 << 0)
 NSF2_PITCH_APOGEE  = (1 << 1)
 NSF2_MASTER_APOGEE = (1 << 2)
+# Recovery deployment detected (sticky).  Independent of the apogee vote: it
+# observes the charge going off, where the vote decides when to fire it, so the
+# gap between the two is the real ejection delay.  Also the row where a dynamic
+# logging rate steps down.  Zero on logs predating the detector.
+NSF2_DEPLOYED      = (1 << 7)
 
 # Pyro status byte bits — paired (CONT, FIRED) per channel.  Layout must match
 # the PSF_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.  The
@@ -168,6 +173,7 @@ def parse(filepath):
                 "gps_apogee":    bool(apogee_flags & NSF2_GPS_APOGEE),
                 "pitch_apogee":  bool(apogee_flags & NSF2_PITCH_APOGEE),
                 "master_apogee": bool(apogee_flags & NSF2_MASTER_APOGEE),
+                "deployed":      bool(apogee_flags & NSF2_DEPLOYED),
             })
             stats["ns_ok"] += 1
 
@@ -239,7 +245,8 @@ def main():
     # never fires on simulated logs (sim attitude isn't realistic).
     for key, label in (("gps_apogee",    "GPS apogee flag"),
                        ("pitch_apogee",  "pitch apogee flag"),
-                       ("master_apogee", "MASTER apogee flag (pyro trigger point)")):
+                       ("master_apogee", "MASTER apogee flag (pyro trigger point)"),
+                       ("deployed",      "DEPLOYED flag (recovery detected)")):
         hit = next((r for r in ns if r[key]), None)
         if hit:
             print(f"  t={(hit['time_us'] - t0) / 1e6:+8.3f}s  {label} SET")
