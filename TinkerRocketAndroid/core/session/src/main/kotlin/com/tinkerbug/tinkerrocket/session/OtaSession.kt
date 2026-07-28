@@ -259,30 +259,25 @@ public class OtaSession(
         return predicate()
     }
 
+    /**
+     * Named views onto [OtaTimeouts], which is the single source of truth and
+     * the thing the shared fixture checks.  These read better at the call
+     * sites than `millis(OtaStage.X, targetIsFc)` and keep the stage/path
+     * pairing in one place instead of at every await.
+     */
     public companion object {
         /** ESP32 app images carry a non-trivial header; anything smaller is not firmware. */
         public const val MIN_IMAGE_BYTES: Int = 64
 
-        public const val POLL_MS: Long = 50
+        public const val POLL_MS: Long = OtaTimeouts.POLL_MS
 
-        /** The FC relay round-trip (BLE→OC→I2C→FC erase→back) dwarfs a local begin. */
-        public const val BEGIN_TIMEOUT_MS: Long = 5_000
-        public const val BEGIN_TIMEOUT_FC_MS: Long = 20_000
-
-        /**
-         * Finish is the same story as begin: the FC has to drain the I2S ring,
-         * write the tail, SHA-256 the whole image and set the boot partition,
-         * and every status hop crosses the relay.  Bench-measured on 2026-07-28
-         * (591.7 kB FC image): 15 s expired while the flash was still in
-         * progress — the FC went on to finish, reboot and run the new image,
-         * but the app had already declared failure.  4x, matching the other two
-         * FC-path multipliers.
-         */
-        public const val FINISH_TIMEOUT_MS: Long = 15_000
-        public const val FINISH_TIMEOUT_FC_MS: Long = 60_000
-        public const val DISCONNECT_TIMEOUT_MS: Long = 5_000
-        public const val RECONNECT_TIMEOUT_MS: Long = 60_000
-        public const val FW_TIMEOUT_MS: Long = 10_000
-        public const val FW_TIMEOUT_FC_MS: Long = 40_000
+        public val BEGIN_TIMEOUT_MS: Long = OtaTimeouts.millis(OtaStage.BEGIN, false)
+        public val BEGIN_TIMEOUT_FC_MS: Long = OtaTimeouts.millis(OtaStage.BEGIN, true)
+        public val FINISH_TIMEOUT_MS: Long = OtaTimeouts.millis(OtaStage.FINISH, false)
+        public val FINISH_TIMEOUT_FC_MS: Long = OtaTimeouts.millis(OtaStage.FINISH, true)
+        public val DISCONNECT_TIMEOUT_MS: Long = OtaTimeouts.millis(OtaStage.DISCONNECT, false)
+        public val RECONNECT_TIMEOUT_MS: Long = OtaTimeouts.millis(OtaStage.RECONNECT, false)
+        public val FW_TIMEOUT_MS: Long = OtaTimeouts.millis(OtaStage.FW_PUBLISH, false)
+        public val FW_TIMEOUT_FC_MS: Long = OtaTimeouts.millis(OtaStage.FW_PUBLISH, true)
     }
 }

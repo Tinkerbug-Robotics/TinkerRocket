@@ -43,3 +43,10 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 | 2026-07-27 | Flight-event flag chips (LAUNCH/BURNOUT/APOGEE/LANDED/LOG illuminating) | Android → iOS | pending back-port |
 | 2026-07-27 | Sensor-health dot row (per-subsystem green/amber/red/gray dots) | Android → iOS | pending back-port (user-requested) |
 | 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | Phase 4/5 screens |
+
+## Test-coverage parity
+
+| Since | Item | Direction | Status |
+|---|---|---|---|
+| 2026-07-28 | OTA timing contract — shared golden `tests_cpp/fixtures/app_behavior/ota_timeouts.json`, both suites assert it plus the crossesRelay invariant | both | done |
+| 2026-07-28 | `OTASession` flow tests. Android has 11 (`OtaSessionTest`) against a scripted peripheral; iOS has none, because `OTASession` reaches concrete `BLEFleet`/`BLEDevice`. Needs a protocol over the 9 members it touches (`sendOtaBegin/Chunk/Finish/Abort`, `otaStatus`, `isConnected`, `otaMaxChunkSize`, `firmwareVersion`, `fcFirmwareVersion`) + the fleet lookup behind a closure — which is the Android design (`sessionLookup: () -> DeviceSession?`), so this converges the two rather than adding a parallel shape. Then the 11 cases port over. | Android → iOS | **Phase 9** (user-scheduled 2026-07-28) |

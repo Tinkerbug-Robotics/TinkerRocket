@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 25,553 lines across 65 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 25,608 lines across 66 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -29,7 +29,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [BasemapOverlayController.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/BasemapOverlayController.swift) | 36 | `BasemapOverlayController` |
 
 
-## `Models/` — 29 files, 11,347 lines
+## `Models/` — 30 files, 11,402 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -67,6 +67,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [LocationManager.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LocationManager.swift) | 109 | `LocationManager` |
 | [StorageStats.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/StorageStats.swift) | 89 | `RocketStorageStats`, `BaseStationStorageStats` |
 | [LastValidRocketFix.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LastValidRocketFix.swift) | 56 | `LastValidRocketFix` |
+| [OTATimeouts.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTATimeouts.swift) | 55 | `OTAStage`, `OTATimeouts` |
 | [SensorCalStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SensorCalStatus.swift) | 50 | `SensorCalStatus` |
 | [RemoteRocket.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RemoteRocket.swift) | 48 | `RemoteRocket` |
 | [OTAStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTAStatus.swift) | 42 | `OTAStatusUpdate` |
@@ -117,4 +118,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 65 files, 25,553 lines.
+Total: 66 files, 25,608 lines.

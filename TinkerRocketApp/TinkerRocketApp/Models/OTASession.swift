@@ -126,7 +126,7 @@ final class OTASession: ObservableObject {
         // The FC relay round-trip (BLE -> OC -> I2C poll -> FC erases ota_1 ->
         // I2S -> OC -> BLE) is far slower than a local OTA's begin, so give it
         // a much longer window before declaring failure (#8 Phase 4).
-        let beginTimeoutS: TimeInterval = targetIsFC ? 20.0 : 5.0
+        let beginTimeoutS = OTATimeouts.seconds(.begin, targetIsFC: targetIsFC)
         do {
             try await awaitOtaState(.ready, timeout: beginTimeoutS)
         } catch {
@@ -186,7 +186,7 @@ final class OTASession: ObservableObject {
         // kB FC image): 15 s expired while the flash was still running — the FC
         // went on to finish, reboot and run the new image, but the app had
         // already declared failure.
-        let finishTimeoutS: TimeInterval = targetIsFC ? 60.0 : 15.0
+        let finishTimeoutS = OTATimeouts.seconds(.finish, targetIsFC: targetIsFC)
         do {
             try await awaitOtaState(.readyToBoot, timeout: finishTimeoutS)
         } catch {
@@ -202,14 +202,14 @@ final class OTASession: ObservableObject {
         // BLEFleet destroys the BLEDevice on disconnect, so `device == nil`
         // also counts as "disconnected".
         state = .rebooting
-        _ = await waitFor(timeout: 5.0) { [weak self] in
+        _ = await waitFor(timeout: OTATimeouts.seconds(.disconnect, targetIsFC: targetIsFC)) { [weak self] in
             self?.device == nil || self?.device?.isConnected == false
         }
 
         // ---- 8. Wait for reconnect ----
         // After BLEFleet creates a fresh BLEDevice for our peripheralID,
         // self.device starts returning the new instance.
-        let reconnected = await waitFor(timeout: 60.0) { [weak self] in
+        let reconnected = await waitFor(timeout: OTATimeouts.seconds(.reconnect, targetIsFC: targetIsFC)) { [weak self] in
             self?.device?.isConnected == true
         }
         if !reconnected {
@@ -224,7 +224,7 @@ final class OTASession: ObservableObject {
         // arrive until the FC finishes rebooting (~8 s, longer if GNSS bootstrap
         // is slow) and pushes FC_IDENTITY — so give it a much wider window.
         let preFlash = preFlashFirmwareVersion
-        let fwTimeout: TimeInterval = targetIsFC ? 40.0 : 10.0
+        let fwTimeout = OTATimeouts.seconds(.fwPublish, targetIsFC: targetIsFC)
         let gotNewFw = await waitFor(timeout: fwTimeout) { [weak self] in
             let fw = (targetIsFC ? self?.device?.fcFirmwareVersion
                                  : self?.device?.firmwareVersion) ?? ""
@@ -260,7 +260,7 @@ final class OTASession: ObservableObject {
                 if st.state == expected { return }
                 if st.state == .verifyFailed { throw TimedOut() }
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            try await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * 1_000_000_000))
         }
         throw TimedOut()
     }
@@ -272,7 +272,7 @@ final class OTASession: ObservableObject {
         while Date() < deadline {
             if Task.isCancelled { return false }
             if predicate() { return true }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * 1_000_000_000))
         }
         return false
     }
