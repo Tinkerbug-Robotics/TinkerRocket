@@ -399,7 +399,7 @@ Validates sensor rates, frame integrity, timestamp health, and data completeness
 
 ### CI/CD
 
-Seven GitHub Actions workflows run automatically, each path-filtered to what it covers:
+Eight GitHub Actions workflows run automatically, each path-filtered to what it covers:
 
 | Workflow | What it does |
 |----------|--------------|
@@ -407,6 +407,7 @@ Seven GitHub Actions workflows run automatically, each path-filtered to what it 
 | **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, and `radio_board` (Docker: `espressif/idf:v6.0.1`) |
 | **sim-tests.yml** | pytest for `tinkerrocket-sim/` and the component sources it binds to |
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
+| **android-tests.yml** | Pure-JVM JUnit for `TinkerRocketAndroid/` (protocol/session/maps modules) against the same golden-vector corpus the C++ and iOS suites consume |
 | **flight-report-tests.yml** | Flight-report tooling |
 | **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
 | **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. The only workflow with **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
