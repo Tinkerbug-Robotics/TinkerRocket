@@ -69,9 +69,18 @@ import kotlin.math.sin
 @Composable
 fun MapTab(container: AppContainer, session: DeviceSession?) {
     var route by remember { mutableStateOf("map") }
+
+    // Landing predictor follows the map's lifecycle (iOS: attach onAppear,
+    // detach onDisappear) — telemetry-rate work only runs while it's shown.
+    val predictor = remember { com.tinkerbug.tinkerrocket.session.LandingPredictor(container.fleetScope) }
+    DisposableEffect(session) {
+        session?.let { predictor.attach(it, container.profileStore) }
+        onDispose { predictor.detach() }
+    }
+
     when (route) {
         "map" -> Box(Modifier.fillMaxSize()) {
-            MapScreen(proxy = container.tileProxy, session = session)
+            MapScreen(proxy = container.tileProxy, session = session, predictor = predictor)
             TextButton(
                 onClick = { route = "offline" },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
