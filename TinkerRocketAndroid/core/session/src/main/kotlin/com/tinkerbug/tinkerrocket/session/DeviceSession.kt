@@ -108,6 +108,13 @@ public class DeviceSession(
     private val _isConnected = MutableStateFlow(false)
     public val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
+    /**
+     * ATT MTU currently negotiated on this link.  The OTA pump sizes its
+     * chunks from it; 23 is the BLE default before negotiation lands.
+     */
+    private val _negotiatedMtu = MutableStateFlow(23)
+    public val negotiatedMtu: StateFlow<Int> = _negotiatedMtu.asStateFlow()
+
     private val _connectedRssi = MutableStateFlow<Int?>(null)
     public val connectedRssi: StateFlow<Int?> = _connectedRssi.asStateFlow()
 
@@ -364,8 +371,11 @@ public class DeviceSession(
 
     private fun onTransportEvent(event: TransportEvent) {
         when (event) {
-            is TransportEvent.Connected -> _isConnected.value = true
-            is TransportEvent.MtuChanged -> Unit
+            is TransportEvent.Connected -> {
+                _isConnected.value = true
+                if (event.mtu > 0) _negotiatedMtu.value = event.mtu
+            }
+            is TransportEvent.MtuChanged -> if (event.mtu > 0) _negotiatedMtu.value = event.mtu
             is TransportEvent.Disconnected -> onDisconnect()
             is TransportEvent.Rssi -> _connectedRssi.value = event.dbm
             is TransportEvent.WriteCompleted -> Unit
@@ -780,6 +790,24 @@ public class DeviceSession(
     public fun sendBareCommand(cmdId: Int) {
         scope.launch { writeCommand(Commands.bare(cmdId)) }
     }
+
+    /**
+     * Write one raw OTA chunk frame on the FILE_TRANSFER characteristic and
+     * SUSPEND until the stack reports it complete.  That completion is the
+     * Android backpressure mechanism (one write per onCharacteristicWrite —
+     * the analogue of iOS parking on canSendWriteWithoutResponse), so the
+     * pump can never outrun the link by looping on this.
+     *
+     * write-without-response: there is no per-chunk ack on the wire, and a
+     * dropped chunk is caught by the firmware's SHA check at OTA_FINISH.
+     */
+    public suspend fun writeOtaChunk(frame: ByteArray) {
+        transport.write(TrCharacteristic.FILE_TRANSFER, frame, withResponse = false)
+    }
+
+    /** Tighter connection interval for the OTA pump only; always released. */
+    public fun requestConnectionPriorityHigh(): Unit = transport.requestConnectionPriorityHigh()
+    public fun releaseConnectionPriority(): Unit = transport.releaseConnectionPriority()
 
     /** Fire-and-forget prebuilt `[cmd][payload]` frame (iOS sendRawCommand). */
     public fun sendCommandFrame(frame: ByteArray) {

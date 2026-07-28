@@ -134,10 +134,63 @@ public class FakeFirmware(
 
     override suspend fun write(char: TrCharacteristic, bytes: ByteArray, withResponse: Boolean) {
         ops += "write:${char.name}:${bytes.firstOrNull()?.toInt()?.and(0xFF) ?: -1}"
+        if (char == TrCharacteristic.FILE_TRANSFER) {
+            if (chunkWriteDelayMs > 0) kotlinx.coroutines.delay(chunkWriteDelayMs)
+            otaChunks += bytes.copyOf()
+            // Scripted mid-pump rejection: real firmware answers a bad chunk
+            // with verify_failed while the pump is still running.
+            failOtaAtChunk?.let { n ->
+                if (otaChunks.size >= n) {
+                    failOtaAtChunk = null
+                    emitOtaStatus("verify_failed", err = failOtaError)
+                }
+            }
+            return
+        }
         if (char == TrCharacteristic.COMMAND && bytes.isNotEmpty()) {
             commandFrames += bytes.copyOf()
             handleCommand(bytes[0].toInt() and 0xFF, bytes.copyOfRange(1, bytes.size))
         }
+    }
+
+    /** Raw OTA chunk frames written to FILE_TRANSFER, in order. */
+    public val otaChunks: MutableList<ByteArray> = mutableListOf()
+
+    /** Emit verify_failed once this many chunks have landed (null = never). */
+    public var failOtaAtChunk: Int? = null
+    public var failOtaError: String = "bad_offset"
+
+    /**
+     * Per-chunk write cost.  0 keeps tests fast, but a real link takes a
+     * millisecond or two per write — set this when a test needs status
+     * notifications to interleave with the pump the way they do on air.
+     */
+    public var chunkWriteDelayMs: Long = 0
+
+    /** Emit an `ota_status` notification on the file-ops characteristic. */
+    public fun emitOtaStatus(
+        state: String,
+        bytes: Long = 0,
+        err: String? = null,
+        fw: String? = null,
+    ) {
+        val sb = StringBuilder("""{"type":"ota_status","state":"""")
+        sb.append(state).append('"').append(",\"bytes\":").append(bytes)
+        if (err != null) sb.append(",\"err\":\"").append(err).append('"')
+        if (fw != null) sb.append(",\"fw\":\"").append(fw).append('"')
+        sb.append('}')
+        emitFileOpsFrame(sb.toString().toByteArray())
+    }
+
+    /** Connection-priority calls the OTA pump makes, for assertions. */
+    public val priorityCalls: MutableList<String> = mutableListOf()
+
+    override fun requestConnectionPriorityHigh() {
+        priorityCalls += "high"
+    }
+
+    override fun releaseConnectionPriority() {
+        priorityCalls += "release"
     }
 
     override suspend fun read(char: TrCharacteristic): ByteArray {

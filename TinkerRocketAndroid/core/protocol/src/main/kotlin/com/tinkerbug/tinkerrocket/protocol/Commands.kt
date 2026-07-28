@@ -451,6 +451,42 @@ public object Commands {
         }
     }
 
+    /**
+     * One OTA image chunk for the FILE_TRANSFER characteristic:
+     * `[offset u32][len u16][isLast u8][data ...]` — a RAW frame, not a
+     * command frame (no command id byte; it rides the file-transfer
+     * characteristic, not the command one).
+     *
+     * There is no per-chunk ack on the wire: a dropped chunk is caught by
+     * the firmware's SHA-256 check at OTA_FINISH, which is why the pump
+     * may use write-without-response.
+     */
+    public fun otaChunkFrame(offset: Long, data: ByteArray, isLast: Boolean): ByteArray {
+        require(offset >= 0) { "offset must be non-negative" }
+        require(data.size <= 0xFFFF) { "chunk length must fit u16" }
+        val w = LeWriter(OTA_CHUNK_HEADER_BYTES + data.size)
+        w.u32(offset)
+        w.u16(data.size)
+        w.bool(isLast)
+        w.bytes(data)
+        return w.toByteArray()
+    }
+
+    /** `[offset u32][len u16][isLast u8]` ahead of every chunk's payload. */
+    public const val OTA_CHUNK_HEADER_BYTES: Int = 7
+
+    /**
+     * Image bytes per chunk for a negotiated ATT [mtu]: the MTU less the
+     * 3-byte ATT write header less our 7-byte chunk header (plan §4 Phase
+     * 8: `chunk = MTU − 3 − 7`).  Floored at 20 B so a pathological MTU
+     * still makes progress; [DEFAULT_MTU] mirrors the BLE default of 23
+     * before negotiation completes.
+     */
+    public fun otaMaxChunkSize(mtu: Int): Int =
+        maxOf(20, mtu - ATT_WRITE_HEADER_BYTES - OTA_CHUNK_HEADER_BYTES)
+
+    private const val ATT_WRITE_HEADER_BYTES = 3
+
     // ------------------------------------------------------------- internals
 
     private inline fun frame(cmdId: Int, build: LeWriter.() -> Unit): ByteArray {
