@@ -179,12 +179,13 @@ public class OtaSession(
         // 4. OTA_FINISH → the firmware verifies the SHA over what it stored.
         _state.value = State.Verifying
         sessionLookup()?.sendBareCommand(BleCommandId.OTA_FINISH)
-        if (!awaitOtaState(OtaStatusUpdate.State.READY_TO_BOOT, FINISH_TIMEOUT_MS)) {
+        val finishTimeout = if (targetIsFc) FINISH_TIMEOUT_FC_MS else FINISH_TIMEOUT_MS
+        if (!awaitOtaState(OtaStatusUpdate.State.READY_TO_BOOT, finishTimeout)) {
             val st = sessionLookup()?.otaStatus?.value
             _state.value = if (st?.state == OtaStatusUpdate.State.VERIFY_FAILED) {
                 State.Failed("Verify failed: ${st.err ?: "unknown"}")
             } else {
-                State.Failed("Device did not finalize OTA within ${FINISH_TIMEOUT_MS / 1000}s")
+                State.Failed("Device did not finalize OTA within ${finishTimeout / 1000}s")
             }
             return
         }
@@ -267,7 +268,18 @@ public class OtaSession(
         /** The FC relay round-trip (BLE→OC→I2C→FC erase→back) dwarfs a local begin. */
         public const val BEGIN_TIMEOUT_MS: Long = 5_000
         public const val BEGIN_TIMEOUT_FC_MS: Long = 20_000
+
+        /**
+         * Finish is the same story as begin: the FC has to drain the I2S ring,
+         * write the tail, SHA-256 the whole image and set the boot partition,
+         * and every status hop crosses the relay.  Bench-measured on 2026-07-28
+         * (591.7 kB FC image): 15 s expired while the flash was still in
+         * progress — the FC went on to finish, reboot and run the new image,
+         * but the app had already declared failure.  4x, matching the other two
+         * FC-path multipliers.
+         */
         public const val FINISH_TIMEOUT_MS: Long = 15_000
+        public const val FINISH_TIMEOUT_FC_MS: Long = 60_000
         public const val DISCONNECT_TIMEOUT_MS: Long = 5_000
         public const val RECONNECT_TIMEOUT_MS: Long = 60_000
         public const val FW_TIMEOUT_MS: Long = 10_000

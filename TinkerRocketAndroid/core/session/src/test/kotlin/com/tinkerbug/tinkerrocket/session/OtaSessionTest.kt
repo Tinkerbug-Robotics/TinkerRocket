@@ -203,6 +203,32 @@ class OtaSessionTest {
     }
 
     @Test
+    fun fcFinishWindowOutlastsTheLocalOne() = runTest {
+        // Bench 2026-07-28: a real 591.7 kB FC flash was still running when the
+        // 15 s local window expired — the FC finished, rebooted and ran the new
+        // image, but the app had already called it a failure.  Finish gets the
+        // same FC-path stretch that begin and fw-publish already had.
+        val r = rig()
+        advanceTimeBy(1_200); runCurrent()
+        r.ota.start(image(600), targetIsFc = true)
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(r.ota.state.value)
+
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_MS + 500); runCurrent()
+        assertIs<OtaSession.State.Verifying>(
+            r.ota.state.value,
+            "the local finish window must not cut off a relayed flash",
+        )
+
+        advanceTimeBy(OtaSession.FINISH_TIMEOUT_FC_MS); runCurrent()
+        val st = r.ota.state.value
+        assertIs<OtaSession.State.Failed>(st)
+        assertTrue("60s" in st.reason, "reports the FC window it actually waited: ${st.reason}")
+    }
+
+    @Test
     fun neverReconnects_failsWithPowerCycleHint() = runTest {
         val r = rig()
         advanceTimeBy(1_200); runCurrent()

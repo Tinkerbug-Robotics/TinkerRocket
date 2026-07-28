@@ -180,13 +180,20 @@ final class OTASession: ObservableObject {
         device?.sendOtaFinish()
 
         // ---- 6. Wait for status=ready_to_boot (or verify_failed) ----
+        // Same story as begin: the FC drains the I2S ring, writes the tail,
+        // SHA-256s the whole image and sets the boot partition, with every
+        // status hop crossing the relay.  Bench-measured on 2026-07-28 (591.7
+        // kB FC image): 15 s expired while the flash was still running — the FC
+        // went on to finish, reboot and run the new image, but the app had
+        // already declared failure.
+        let finishTimeoutS: TimeInterval = targetIsFC ? 60.0 : 15.0
         do {
-            try await awaitOtaState(.readyToBoot, timeout: 15.0)
+            try await awaitOtaState(.readyToBoot, timeout: finishTimeoutS)
         } catch {
             if let st = device?.otaStatus, st.state == .verifyFailed {
                 state = .failed(reason: "Verify failed: \(st.err ?? "unknown")")
             } else {
-                state = .failed(reason: "Device did not finalize OTA within 15s")
+                state = .failed(reason: "Device did not finalize OTA within \(Int(finishTimeoutS))s")
             }
             return
         }
