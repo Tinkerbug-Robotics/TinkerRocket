@@ -1448,7 +1448,7 @@ static constexpr uint8_t NSF2_FC_IMU_DROP = (1u << 6);
 // the detector can be scored against the actual ejection signature without
 // re-running anything.  Deliberately a telemetry bit and not a pyro output:
 // this observes deployment, it does not command it.
-static constexpr uint8_t NSF2_DEPLOYED = (1u << 7);
+static constexpr uint8_t NSF2_DEPLOYED = (1u << 7);  // recovery deployment detected (sticky)
 
 // Pyro status byte — 4 channels × (continuity, fired) = exactly 8 bits.
 static constexpr uint8_t PSF_CH1_CONT  = (1u << 0);
