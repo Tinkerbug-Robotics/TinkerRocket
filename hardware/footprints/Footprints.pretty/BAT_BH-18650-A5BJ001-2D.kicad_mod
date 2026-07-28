@@ -1,0 +1,257 @@
+(footprint "BAT_BH-18650-A5BJ001-2D"
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(layer "F.Cu")
+	(descr "MYOUNG BH-18650-A5BJ001-2D single-cell 18650 holder, THM horizontal, DIP 90deg type. LCSC C19184083. Land pattern per MYOUNG drawing WD-CP-0336 rev A/0 (2023-09-08) 'PCB Layout Diagram': 2-dia2.5 terminal holes at 72.3 +/-0.8 mm pitch, 2-dia3.0 housing-boss holes at 55.5 +/-0.8 mm pitch, body 77.8 +/-0.8 x 20.8 +/-0.5 mm, housing height 21.5 +/-0.5 mm. Terminals are 0.3 mm steel, 1.53 mm wide, Ni-plated; housing is ABS (the Keystone 1043P it replaces was UL94V-0 PBT - this part carries no flame rating on the drawing). Dielectric 500 VAC 1 min, -10 to +100 C.\nREPLACES KEYSTONE 1043P. Terminal pitch 72.3 vs the Keystone's 72.22, so each terminal moves only 0.04 mm. POLARITY IS MIRRORED: this part marks POSITIVE at the pin-1 / -X end where the Keystone had P at +X, so BT2 is rotated 180 deg from the old orientation. It is also NOT polarized mechanically - unlike the 1043P's button-top dimple, nothing stops a reversed cell. It stands 21.5 mm off the board against the Keystone's 14.86 mm: CHECK ENCLOSURE CLEARANCE.\nTerminal pads drawn 3.4 mm (0.45 mm annular ring) rather than the vendor library's 3.1 mm (0.30 mm, right at JLCPCB's minimum), because a battery holder takes cell-insertion force. The two 3.0 mm boss holes are NPTH here; the vendor library wrongly made them plated pads with zero annular ring. Courtyard covers max material condition (78.6 x 21.3) plus 0.25 mm.")
+	(tags "battery holder 18650 THM through-hole MYOUNG BH-18650-A5BJ001-2D C19184083")
+	(property "Reference" "REF**"
+		(at 0 -12.8 0)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0001-4000-8000-000000000001")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "BAT_BH-18650-A5BJ001-2D"
+		(at 0 12.8 0)
+		(layer "F.Fab")
+		(uuid "5a7b1c20-0002-4000-8000-000000000002")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://www.lcsc.com/datasheet/C19184083.pdf"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5a7b1c20-0003-4000-8000-000000000003")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "18650 battery holder, 1 cell, through-hole, horizontal"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5a7b1c20-0004-4000-8000-000000000004")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "LCSC Part" "C19184083"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5a7b1c20-0005-4000-8000-000000000005")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+
+	(fp_line
+		(start -38.9 -10.4)
+		(end 38.9 -10.4)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0101-4000-8000-000000000101")
+	)
+	(fp_line
+		(start 38.9 -10.4)
+		(end 38.9 10.4)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0102-4000-8000-000000000102")
+	)
+	(fp_line
+		(start 38.9 10.4)
+		(end -38.9 10.4)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0103-4000-8000-000000000103")
+	)
+	(fp_line
+		(start -38.9 10.4)
+		(end -38.9 -10.4)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0104-4000-8000-000000000104")
+	)
+	(fp_line
+		(start -38.9 -10.4)
+		(end 38.9 -10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5a7b1c20-0111-4000-8000-000000000111")
+	)
+	(fp_line
+		(start 38.9 -10.4)
+		(end 38.9 10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5a7b1c20-0112-4000-8000-000000000112")
+	)
+	(fp_line
+		(start 38.9 10.4)
+		(end -38.9 10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5a7b1c20-0113-4000-8000-000000000113")
+	)
+	(fp_line
+		(start -38.9 10.4)
+		(end -38.9 -10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5a7b1c20-0114-4000-8000-000000000114")
+	)
+	(fp_line
+		(start -39.55 -10.9)
+		(end 39.55 -10.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "5a7b1c20-0121-4000-8000-000000000121")
+	)
+	(fp_line
+		(start 39.55 -10.9)
+		(end 39.55 10.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "5a7b1c20-0122-4000-8000-000000000122")
+	)
+	(fp_line
+		(start 39.55 10.9)
+		(end -39.55 10.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "5a7b1c20-0123-4000-8000-000000000123")
+	)
+	(fp_line
+		(start -39.55 10.9)
+		(end -39.55 -10.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "5a7b1c20-0124-4000-8000-000000000124")
+	)
+	(fp_text user "+"
+		(at -22.6 0 0)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0131-4000-8000-000000000131")
+		(effects
+			(font
+				(size 2 2)
+				(thickness 0.3)
+			)
+		)
+	)
+	(fp_text user "-"
+		(at 22.6 0 0)
+		(layer "F.SilkS")
+		(uuid "5a7b1c20-0132-4000-8000-000000000132")
+		(effects
+			(font
+				(size 2 2)
+				(thickness 0.3)
+			)
+		)
+	)
+	(fp_text user "+"
+		(at -22.6 0 0)
+		(layer "F.Fab")
+		(uuid "5a7b1c20-0133-4000-8000-000000000133")
+		(effects
+			(font
+				(size 2 2)
+				(thickness 0.3)
+			)
+		)
+	)
+
+	(pad "P" thru_hole circle
+		(at -36.15 0 0)
+		(size 3.4 3.4)
+		(drill 2.5)
+		(layers "*.Cu" "*.Mask")
+		(uuid "c3f3af2e-e620-4087-9fb2-34b1d6642522")
+	)
+	(pad "N" thru_hole circle
+		(at 36.15 0 0)
+		(size 3.4 3.4)
+		(drill 2.5)
+		(layers "*.Cu" "*.Mask")
+		(uuid "1ef29347-f918-4213-b97a-309b59f100e6")
+	)
+	(pad "" np_thru_hole circle
+		(at -27.75 0 0)
+		(size 3 3)
+		(drill 3)
+		(layers "*.Cu" "*.Mask")
+		(uuid "5a7b1c20-0200-4000-8000-000000000200")
+	)
+	(pad "" np_thru_hole circle
+		(at 27.75 0 0)
+		(size 3 3)
+		(drill 3)
+		(layers "*.Cu" "*.Mask")
+		(uuid "5a7b1c20-0201-4000-8000-000000000201")
+	)
+
+	(model "${KIPRJMOD}/../3dmodels/BH-18650-A5BJ001-2D.step"
+		(offset (xyz 0 0 0))
+		(scale (xyz 1 1 1))
+		(rotate (xyz 0 0 0))
+	)
+	(embedded_fonts no)
+)

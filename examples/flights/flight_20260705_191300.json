@@ -1,0 +1,102 @@
+{
+  "apogee_time_s" : 5.827004,
+  "burnout_time_s" : 0.889042,
+  "max_altitude_m" : 174.8497496778897,
+  "max_speed_mps" : 55.317428537487174,
+  "settings" : {
+    "camera" : {
+      "type" : "runcam"
+    },
+    "fw_dirty" : false,
+    "fw_git_sha" : "bbd2630",
+    "imu" : {
+      "gyro_fs_dps" : 4000,
+      "high_g_fs_g" : 256,
+      "low_g_fs_g" : 16,
+      "mounting" : {
+        "mode" : "manual",
+        "orientation" : "+X",
+        "residual_deg" : 0
+      }
+    },
+    "pyro" : {
+      "ch1" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 1
+      },
+      "ch2" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 1
+      },
+      "ch3" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 0
+      },
+      "ch4" : {
+        "enabled" : false,
+        "trigger_mode" : "time_after_apogee",
+        "trigger_value" : 0
+      }
+    },
+    "roll_control" : {
+      "cmd_limit_max_deg" : 20,
+      "cmd_limit_min_deg" : -20,
+      "d_lpf_hz" : 10,
+      "delay_ms" : 250,
+      "gain_schedule" : {
+        "enabled" : true,
+        "scale_cap" : 3,
+        "v_min" : 25,
+        "v_ref" : 50
+      },
+      "guidance_enabled" : false,
+      "kd" : 0,
+      "ki" : 0.002,
+      "kp" : 0.05,
+      "kp_angle" : 2,
+      "mode" : "angle_profile",
+      "profile" : [
+        {
+          "angle_deg" : 0,
+          "mode" : "null_rate",
+          "time_s" : 0
+        },
+        {
+          "angle_deg" : 0,
+          "mode" : "angle",
+          "time_s" : 1.5
+        },
+        {
+          "angle_deg" : 90,
+          "mode" : "angle",
+          "time_s" : 3.5
+        },
+        {
+          "angle_deg" : 0,
+          "mode" : "null_rate",
+          "time_s" : 5
+        }
+      ],
+      "rate_cap_dps" : 100,
+      "roll_rate_set_point" : 0
+    },
+    "servo" : {
+      "bias_us" : [
+        -100,
+        -40,
+        40,
+        -40
+      ],
+      "enabled" : true,
+      "fin_max_deg" : 60,
+      "fin_min_deg" : -60,
+      "frequency_hz" : 333,
+      "max_pulse_us" : 2000,
+      "min_pulse_us" : 1000
+    },
+    "sounds_enabled" : false
+  }
+}

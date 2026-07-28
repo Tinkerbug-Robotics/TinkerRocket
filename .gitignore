@@ -14,6 +14,15 @@ build/
 !tests_cpp/fixtures/**/*.bin
 # Exception: golden flight log for the flight_report suite (#184).
 !tests/test_data/flight_*.bin
+# Example flight logs, committed deliberately -- see examples/flights/README.md.
+# Only the .bin source and its .json summary; the .csv and _report.html are
+# regenerated from the .bin and are several times larger than it.
+!examples/flights/flight_*.bin
+!examples/flights/flight_*.json
+# ...and keep the derived ones out. A flight's CSV is ~4x its .bin and its
+# HTML report larger still; both regenerate, so committing them is pure bloat.
+examples/flights/*.csv
+examples/flights/*_report.html
 
 # Python
 __pycache__/
@@ -50,6 +59,11 @@ tests_cpp/build/
 tinkerrocket-sim/build/
 tinkerrocket-sim/**/*.egg-info/
 tinkerrocket-sim/**/*.so
+
+# replay_deployment_detector.py compiles this from the firmware headers on
+# demand and rebuilds it whenever they change — committing it would be a stale
+# copy of the very thresholds the tool exists to read live.
+Data_Analysis/*.so
 
 # Xcode
 TinkerRocketApp/DerivedData/

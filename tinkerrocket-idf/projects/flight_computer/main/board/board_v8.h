@@ -67,14 +67,29 @@ struct board_pins
     static constexpr uint8_t PYRO4_CONT_PIN = 14;  // PYRO4_CONT
 
     // ### Fin servos ###
-    // TODO: CONFIRM which EXP_* nets carry the four fin-servo signals.
-    // Parked on EXP_01..04 in order (EXP_01=45, EXP_02=44, EXP_03=43,
-    // EXP_04=54) — verify servo numbering with the app's servo test /
-    // fin-cal wiggle before trusting the mapping.
-    static constexpr uint8_t SERVO_PIN_1 = 45;  // EXP_01 (TODO confirm)
-    static constexpr uint8_t SERVO_PIN_2 = 44;  // EXP_02 (TODO confirm)
-    static constexpr uint8_t SERVO_PIN_3 = 43;  // EXP_03 (TODO confirm)
-    static constexpr uint8_t SERVO_PIN_4 = 54;  // EXP_04 (TODO confirm)
+    // CONFIRMED against the board files: each EXP net's package pin was read
+    // out of hardware/rocket-computer/rocket-computer.kicad_pcb and matched to
+    // the ESP32-P4 pin assignment in the schematic. The four servo signals are
+    // EXP_01..04 in order, which is what was already assumed here.
+    //
+    // The full expansion map, for anyone wiring the other eight channels:
+    //
+    //   net       GPIO   pkg pin      net       GPIO   pkg pin
+    //   EXP_01     45      87         EXP_07     29      58
+    //   EXP_02     44      86         EXP_08     28      57
+    //   EXP_03     43      84         EXP_09     38      70
+    //   EXP_04     54      98         EXP_10     37      69
+    //   EXP_05     39      80         EXP_11     34      65
+    //   EXP_06     40      81         EXP_12     33      64
+    //
+    // All twelve come out on the 16-pin Molex 878321620: pins 3..8 carry
+    // EXP_01..06 ascending, then pins 9..14 carry EXP_12..07 DESCENDING --
+    // pin 9 is EXP_12, not EXP_07. Pins 1-2 are a MOSFET-switched return
+    // (Q8, PMPB14XNX, source on GND); pins 15-16 are VBATT.
+    static constexpr uint8_t SERVO_PIN_1 = 45;  // EXP_01, connector pin 3
+    static constexpr uint8_t SERVO_PIN_2 = 44;  // EXP_02, connector pin 4
+    static constexpr uint8_t SERVO_PIN_3 = 43;  // EXP_03, connector pin 5
+    static constexpr uint8_t SERVO_PIN_4 = 54;  // EXP_04, connector pin 6
 
     // ### Indicators ###
     static constexpr uint8_t PIEZO_PIN = 17;      // PIEZZO

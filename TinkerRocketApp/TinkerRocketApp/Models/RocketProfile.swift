@@ -128,10 +128,22 @@ struct RocketProfile: Codable, Equatable, Identifiable {
     /// off-axis board; optional for non-controlled flights.
     var imuOrientSetting: UInt8 = 0   // default: manual identity (+X nose/up); 0xFF = pad auto-detect
 
-    /// IMU logging rate in Hz (ISM6HG256 ODR): 960, 1920, or 3840. Logged
-    /// samples follow this rate; the control loop always consumes the
-    /// freshest sample regardless.
-    var imuRateHz: UInt16 = 1920
+    /// IMU logging rate: `RocketProfile.imuRateDynamic` (0) for the dynamic
+    /// mode, or a fixed ISM6HG256 ODR of 960, 1920, or 3840 Hz. Logged samples
+    /// follow this rate; the control loop always consumes the freshest sample
+    /// regardless.
+    ///
+    /// Dynamic is the default: the rocket logs at 3840 Hz from the pad through
+    /// boost and coast, then drops to 960 Hz once its deployment detector sees
+    /// the recovery device come out. The switch happens entirely on the flight
+    /// computer — the app only selects the mode.
+    var imuRateHz: UInt16 = RocketProfile.imuRateDynamic
+
+    /// Sentinel for the dynamic logging rate, matching `IMU_RATE_DYNAMIC` in
+    /// RocketComputerTypes.h. Rides in the same 2-byte cmd-67 field as a fixed
+    /// rate; firmware predating dynamic mode rejects it and keeps its current
+    /// rate.
+    static let imuRateDynamic: UInt16 = 0
 
     // MARK: Servo
     // #561: default 0 (neutral) to match config.h SERVO_BIAS_N and biases 2-4.

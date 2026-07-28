@@ -51,14 +51,6 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
         pinMode(cfg.mram_cs, OUTPUT);
         digitalWrite(cfg.mram_cs, HIGH);
 
-        // Create SPI bus mutex (both cores share the NAND/MRAM SPI bus)
-        spi_mutex_ = xSemaphoreCreateMutex();
-        if (!spi_mutex_)
-        {
-            if (cfg.debug) ESP_LOGE(TAG, "Failed to create SPI mutex");
-            return false;
-        }
-
         if (cfg.debug) ESP_LOGI(TAG, "MRAM ring: %lu bytes on CS pin %d",
                                       (unsigned long)ring_size_, cfg.mram_cs);
     }
@@ -77,6 +69,21 @@ bool TR_LogToFlash::begin(SPIClass& spi_in, const TR_LogToFlashConfig& cfg_in)
                                       (unsigned long)ring_size_, (unsigned long)esp_get_free_heap_size());
     }
     ring_prelaunch_cap_ = prelaunchCap();
+
+    // SPI bus mutex — created unconditionally.  It used to live inside the
+    // MRAM branch above, which left every NAND transaction unserialized
+    // whenever MRAM was absent: the flush task (Core 0) programs pages while
+    // the BLE download path reads them, and spiAcquire/spiRelease silently
+    // no-op on a null handle.  Nothing caught it because the RAM-ring branch
+    // has never been flown — but it becomes live the moment a board ships
+    // without the MRAM part.  Keeping it unconditional also keeps the #398
+    // spi_wait/spi_hold instrumentation meaningful on both paths.
+    spi_mutex_ = xSemaphoreCreateMutex();
+    if (!spi_mutex_)
+    {
+        if (cfg.debug) ESP_LOGE(TAG, "Failed to create SPI mutex");
+        return false;
+    }
 
     // Mutex to serialize ringPush callers and to block clearRing from
     // running concurrently with an in-flight push (#74). Unconditionally
@@ -744,7 +751,7 @@ bool TR_LogToFlash::isLoggingActive() const
 }
 
 // ============================================================================
-// SPI bus mutex (active when MRAM is enabled)
+// SPI bus mutex (always active — NAND alone needs it; see begin())
 // ============================================================================
 
 void TR_LogToFlash::spiAcquire()

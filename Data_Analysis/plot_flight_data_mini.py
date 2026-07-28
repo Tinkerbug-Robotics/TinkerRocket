@@ -186,6 +186,7 @@ NSF2_REBOOT_RECOVERY  = (1 << 3)
 NSF2_GUIDANCE_ENABLED = (1 << 4)
 NSF2_ORIENT_THRUST_MISMATCH = (1 << 5)
 NSF2_FC_IMU_DROP      = (1 << 6)  # #474: FC loop stalled -> ISM6 queue overflow (sticky)
+NSF2_DEPLOYED         = (1 << 7)  # recovery deployment detected (sticky)
 
 # Pyro status byte bits — paired (CONT, FIRED) per channel.  Layout must match
 # the PSF_* constants in TR_RocketComputerTypes/RocketComputerTypes.h.  An
@@ -583,6 +584,10 @@ def parse_binary_file(filepath):
                     "reboot_recovery":    bool(apogee_flags_b & NSF2_REBOOT_RECOVERY),
                     "guidance_enabled":   bool(apogee_flags_b & NSF2_GUIDANCE_ENABLED),
                     "fc_imu_drop":        bool(apogee_flags_b & NSF2_FC_IMU_DROP),
+                    # Recovery deployment detected.  False on logs predating
+                    # the detector — check has_apogee_flags to tell "flight
+                    # never deployed" from "firmware never reported it".
+                    "deployed":           bool(apogee_flags_b & NSF2_DEPLOYED),
                     # #529: free-running EKF update-tick counter (uint16 wrap);
                     # None on logs that predate the field.  The replay derives
                     # the achieved EKF rate from this instead of a constant.
