@@ -48,6 +48,14 @@ import java.util.Locale
  */
 @Composable
 fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) {
+    // Post-flight chart route: set = show the chart for that cached CSV.
+    var chartCsv by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<java.io.File?>(null)
+    }
+    chartCsv?.let { csv ->
+        FlightChartScreen(csvFile = csv, onBack = { chartCsv = null })
+        return
+    }
     val session = device.session
     val files by session.files.collectAsState()
     val page by session.currentPage.collectAsState()
@@ -111,6 +119,7 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                         }
                     },
                     onShare = { shareCsvIfPresent(context, file) },
+                    onChart = { chartCsv = csvFileFor(context, file.name) },
                     hasCsv = csvFileFor(context, file.name).exists(),
                 )
             }
@@ -125,6 +134,7 @@ private fun FileRow(
     hasCsv: Boolean,
     onDownload: () -> Unit,
     onShare: () -> Unit,
+    onChart: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Row(
@@ -140,7 +150,11 @@ private fun FileRow(
                 )
             }
             if (hasCsv) {
-                OutlinedButton(onClick = onShare) { Text("Share CSV") }
+                OutlinedButton(onClick = onChart) { Text("Chart") }
+                OutlinedButton(
+                    onClick = onShare,
+                    modifier = Modifier.padding(start = 6.dp),
+                ) { Text("Share") }
             } else {
                 Button(onClick = onDownload, enabled = !busy) { Text("Download") }
             }
