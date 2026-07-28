@@ -142,8 +142,8 @@ class MainActivity : ComponentActivity() {
                                         device = activeDevice,
                                         fleetScope = container.fleetScope,
                                     )
-                                    2 -> MapScreen(
-                                        proxy = container.tileProxy,
+                                    2 -> MapTab(
+                                        container = container,
                                         session = activeDevice.session,
                                     )
                                     else -> SettingsScreen(

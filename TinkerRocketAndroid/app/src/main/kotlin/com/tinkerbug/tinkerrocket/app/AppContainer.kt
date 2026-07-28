@@ -54,6 +54,8 @@ class AppContainer(app: Application) {
         File(app.noBackupFilesDir, "OfflineTiles"),
     )
     val tileProxy = com.tinkerbug.tinkerrocket.maps.TileProxyServer(tileCache).apply { start() }
+    // Saved-region manifest lives beside the tile tree (iOS: App Support root).
+    val regionStore = com.tinkerbug.tinkerrocket.maps.OfflineRegionStore(app.noBackupFilesDir, tileCache)
 
     val fleet: FleetManager<DeviceSession> = run {
         lateinit var fleetRef: FleetManager<DeviceSession>
