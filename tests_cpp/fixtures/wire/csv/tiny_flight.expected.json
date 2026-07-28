@@ -1,0 +1,8 @@
+{
+ "frame_count": 881,
+ "launch_ms": 8000,
+ "burnout_ms": 10000,
+ "apogee_ms": 14000,
+ "landed_ms": 19000,
+ "trim_start_ms": 4000,
+ "expected_rows": 161}

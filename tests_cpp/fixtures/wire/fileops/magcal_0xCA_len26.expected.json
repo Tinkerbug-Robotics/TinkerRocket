@@ -1,0 +1,14 @@
+{
+ "present_bytes": 26,
+ "time_us": 777777,
+ "sub_type": 3,
+ "coverage_bins": 18,
+ "sample_count": 642,
+ "inst_field_uT_x10": 5234,
+ "offset_x": -321,
+ "offset_y": 456,
+ "offset_z": -789,
+ "field_R_uT_x10": 482,
+ "residual_uT_x10": 37,
+ "reject_code": 0,
+ "coverage_mask": 262143}

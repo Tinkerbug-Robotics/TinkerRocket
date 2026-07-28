@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- BLE permissions merge in from :core:ble's manifest. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Maps: upstream USGS tile fetches (read-through cache). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Direction/distance to rocket (dashboard arrow, map phone dot). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <application
+        android:name=".app.TinkerRocketApp"
+        android:label="TinkerRocket"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <activity
+            android:name=".app.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.tinkerbug.tinkerrocket.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <service
+            android:name=".app.FleetService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+    </application>
+</manifest>

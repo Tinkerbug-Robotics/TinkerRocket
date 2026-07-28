@@ -1,0 +1,5 @@
+{
+ "cmd": 50,
+ "target_rid": 7,
+ "inner_cmd": 24,
+ "inner_payload_len": 8}

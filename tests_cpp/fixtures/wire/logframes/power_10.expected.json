@@ -1,0 +1,5 @@
+{
+ "time_us": 123456789,
+ "voltage_raw": 27000,
+ "current_raw": -1234,
+ "soc_raw": 15000}

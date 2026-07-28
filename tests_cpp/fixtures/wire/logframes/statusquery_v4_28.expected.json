@@ -1,0 +1,15 @@
+{
+ "present_bytes": 28,
+ "ism6_low_g_fs_g": 16,
+ "ism6_high_g_fs_g": 256,
+ "ism6_gyro_fs_dps": 4000,
+ "ism6_rot_z_cdeg": 9000,
+ "mmc_rot_z_cdeg": -4500,
+ "format_version": 4,
+ "hg_bias_x_cmss": -50,
+ "hg_bias_y_cmss": 75,
+ "hg_bias_z_cmss": -100,
+ "b2r_code": 4,
+ "b2r_mode": 2,
+ "b2r_q": [9239,0,-3827,0],
+ "iis2mdc_rot_z_cdeg": 18000}

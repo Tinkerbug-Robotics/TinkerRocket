@@ -1,0 +1,7 @@
+{
+ "cmd": 31,
+ "use_angle_control": 1,
+ "roll_delay_ms": 1200,
+ "kp_angle_rate_cap_dps": 120,
+ "kp_angle": 2.5,
+ "integral_sep_threshold_dps": -1}
