@@ -62,7 +62,20 @@ class BenchSeamTest {
         // Single-writer dispatcher: the session contract (plan §3).
         val dispatcher = Dispatchers.Default.limitedParallelism(1)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val tap: (String) -> Unit = { Log.i(TAG, it) }
+        // Telemetry-char notifications also log as decoded JSON on their own
+        // tag: the decimal byte-array rendering of a full direct-BLE frame
+        // blows logcat's line limit and truncates; the JSON itself fits.
+        // Used by the #624 bench-captured-fixture harvest.
+        val tap: (String) -> Unit = { line ->
+            Log.i(TAG, line)
+            val m = Regex("""char=TELEMETRY, bytes=\[([-0-9, ]+)\]""").find(line)
+            if (m != null) {
+                runCatching {
+                    val bytes = m.groupValues[1].split(",").map { it.trim().toInt().toByte() }.toByteArray()
+                    Log.i("BenchJson", bytes.decodeToString())
+                }
+            }
+        }
 
         try {
             runBlocking(dispatcher) {
