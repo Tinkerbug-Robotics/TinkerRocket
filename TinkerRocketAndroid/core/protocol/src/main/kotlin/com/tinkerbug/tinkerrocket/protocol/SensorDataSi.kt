@@ -140,6 +140,13 @@ public data class NonSensorDataSi(
     val pyro4Fired: Boolean,
     val rebootRecovery: Boolean,
     val guidanceEnabled: Boolean,
+    /**
+     * Recovery deployment detected (NSF2_DEPLOYED, bit 7 of apogee_flags).
+     * Sticky once the deployment detector latches; in dynamic logging mode
+     * the IMU rate steps down at the first frame carrying it.  Logs
+     * predating the detector decode as false.
+     */
+    val deployedFlag: Boolean,
 
     // #529: free-running EKF update-tick counter (uint16 wrap), carried through
     // verbatim for the CSV so the achieved EKF rate is recoverable from an app

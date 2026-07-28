@@ -431,6 +431,7 @@ public class SensorConverter {
             pyro4Fired = false,
             rebootRecovery = false,
             guidanceEnabled = false,
+            deployedFlag = false,
             ekfTicks = null,
         )
     }
@@ -487,11 +488,13 @@ public class SensorConverter {
         val nsf2MasterApogee = 1 shl 2
         val nsf2RebootRecovery = 1 shl 3
         val nsf2GuidanceEnabled = 1 shl 4
+        val nsf2Deployed = 1 shl 7
         val gpsApogeeFlag = (raw.apogeeFlags and nsf2GpsApogee) != 0
         val pitchApogeeFlag = (raw.apogeeFlags and nsf2PitchApogee) != 0
         val apogeeFlag = (raw.apogeeFlags and nsf2MasterApogee) != 0
         val rebootRecovery = (raw.apogeeFlags and nsf2RebootRecovery) != 0
         val guidanceEnabled = (raw.apogeeFlags and nsf2GuidanceEnabled) != 0
+        val deployedFlag = (raw.apogeeFlags and nsf2Deployed) != 0
 
         val rocketState = RocketState.fromRaw(raw.rocketState) ?: RocketState.INITIALIZATION
 
@@ -541,6 +544,7 @@ public class SensorConverter {
             pyro4Fired = (raw.pyroStatus and psfCh4Fired) != 0,
             rebootRecovery = rebootRecovery,
             guidanceEnabled = guidanceEnabled,
+            deployedFlag = deployedFlag,
             ekfTicks = raw.ekfTicks,   // #529
         )
     }

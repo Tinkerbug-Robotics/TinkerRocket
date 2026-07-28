@@ -133,6 +133,7 @@ public data class FlightSettings(
                 lowGFsG = raw.ism6LowGFsG,
                 highGFsG = raw.ism6HighGFsG,
                 updateRateHz = raw.ism6UpdateRateHz,
+                dynamicRate = raw.imuRateDynamic,
                 mounting = MountingSettings.from(raw),
             ),
         )
@@ -365,6 +366,11 @@ public data class ImuSettings(
      */
     val updateRateHz: Int?,
     /**
+     * The rocket flew the dynamic logging rate: [updateRateHz] through
+     * boost/coast, stepping down at the first "Deployed Flag" row.
+     */
+    val dynamicRate: Boolean,
+    /**
      * Board→rocket mounting orientation (v2 settings frames). null on
      * pre-orientation logs, which always meant the +X-nose mounting.
      */
@@ -375,6 +381,7 @@ public data class ImuSettings(
         "low_g_fs_g" to JsonPrimitive(lowGFsG),
         "high_g_fs_g" to JsonPrimitive(highGFsG),
         "update_rate_hz" to updateRateHz?.let(::JsonPrimitive),
+        "dynamic_rate" to JsonPrimitive(dynamicRate),
         "mounting" to mounting?.toJsonObject(),
     )
 }

@@ -543,6 +543,10 @@ public class CsvGenerator {
         columns.add("Apogee Detector: Pitch")
         columns.add("Apogee Flag (Master)")
         columns.add("Launch Flag")
+        // Sticky recovery-deployment latch. In dynamic logging mode this is
+        // also the row where the IMU sample rate steps down. Flights
+        // predating the detector emit 0.
+        columns.add("Deployed Flag")
 
         // Pyro status bits — 4 channels (legacy files emit 0s for ch3/4)
         columns.add("Pyro 1 Continuity")
@@ -654,6 +658,7 @@ public class CsvGenerator {
         values.add(nonSensor?.let { if (it.pitchApogeeFlag) "1" else "0" } ?: "")
         values.add(nonSensor?.let { if (it.apogeeFlag) "1" else "0" } ?: "")
         values.add(nonSensor?.let { if (it.launchFlag) "1" else "0" } ?: "")
+        values.add(nonSensor?.let { if (it.deployedFlag) "1" else "0" } ?: "")
 
         // Pyro status bits (4 channels)
         values.add(nonSensor?.let { if (it.pyro1Continuity) "1" else "0" } ?: "")

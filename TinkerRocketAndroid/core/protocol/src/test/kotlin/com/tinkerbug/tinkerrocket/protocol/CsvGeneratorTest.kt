@@ -177,14 +177,14 @@ class CsvGeneratorTest {
             "Velocity East (m/s),Velocity North (m/s),Velocity Up (m/s)," +
             "Altitude Rate (m/s),Landed Flag," +
             "Apogee Detector: Baro,Apogee Detector: Velocity,Apogee Detector: GPS," +
-            "Apogee Detector: Pitch,Apogee Flag (Master),Launch Flag," +
+            "Apogee Detector: Pitch,Apogee Flag (Master),Launch Flag,Deployed Flag," +
             "Pyro 1 Continuity,Pyro 2 Continuity,Pyro 3 Continuity,Pyro 4 Continuity," +
             "Pyro 1 Fired,Pyro 2 Fired,Pyro 3 Fired,Pyro 4 Fired," +
             "Reboot Recovery,FC Guidance Enabled,EKF Ticks\n"
         assertEquals(expected, CsvGenerator().buildCsvHeader())
         // #514 regression: no column name may ever contain a comma — the
         // writer does not quote fields and readers split rows blind.
-        assertEquals(62, expected.trimEnd('\n').split(",").size)
+        assertEquals(63, expected.trimEnd('\n').split(",").size)
     }
 
     // ------------------------------------------------------------------
@@ -241,7 +241,7 @@ class CsvGeneratorTest {
             "1.00,-2.50,123.45," +
             "0.50,0.00,25.00," +
             "5.5,0," +
-            "0,0,0,0,0,0," +
+            "0,0,0,0,0,0,0," +
             "1,1,0,0,0,0,0,0," +
             "0,0,1234"
         assertEquals(expected, rows[0])

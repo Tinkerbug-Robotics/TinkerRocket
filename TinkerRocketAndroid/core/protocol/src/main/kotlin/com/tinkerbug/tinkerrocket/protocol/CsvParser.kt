@@ -68,6 +68,7 @@ public class FlightCsvData(
             )),
             ColumnGroup("Flags", listOf(
                 "Launch Flag", "Altitude Apogee Flag", "Velocity Apogee Flag", "Landed Flag",
+                    "Deployed Flag",
             )),
         )
 

@@ -88,6 +88,13 @@ public data class FlightSettingsData(
     public val useAngleControl: Boolean get() = flags and (1 shl F_USE_ANGLE_CONTROL) != 0
     public val gainScheduleEnabled: Boolean get() = flags and (1 shl F_GAIN_SCHEDULE) != 0
     public val guidanceEnabled: Boolean get() = flags and (1 shl F_GUIDANCE) != 0
+
+    /**
+     * The flight ran the dynamic logging rate: `ism6UpdateRateHz` is the
+     * boost rate and the log steps down at the first NSF2_DEPLOYED frame.
+     * Flights predating dynamic mode decode as false.
+     */
+    public val imuRateDynamic: Boolean get() = flags and (1 shl F_IMU_RATE_DYNAMIC) != 0
     public val servoEnabled: Boolean get() = flags and (1 shl F_SERVO_ENABLED) != 0
     public val fwDirty: Boolean get() = flags and (1 shl F_FW_DIRTY) != 0
     public val soundsEnabled: Boolean get() = flags and (1 shl F_SOUNDS) != 0
@@ -103,6 +110,7 @@ public data class FlightSettingsData(
         public const val F_SERVO_ENABLED: Int = 3
         public const val F_FW_DIRTY: Int = 4
         public const val F_SOUNDS: Int = 5
+        public const val F_IMU_RATE_DYNAMIC: Int = 7
 
         public const val MIN_SIZE: Int = 188
 

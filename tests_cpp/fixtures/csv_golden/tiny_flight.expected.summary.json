@@ -10,6 +10,7 @@
     "fw_dirty" : false,
     "fw_git_sha" : "abc123def",
     "imu" : {
+      "dynamic_rate" : false,
       "gyro_fs_dps" : 4000,
       "high_g_fs_g" : 256,
       "low_g_fs_g" : 16,
