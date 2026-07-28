@@ -137,6 +137,7 @@ class MainActivity : ComponentActivity() {
                                         demo = demoFleet != null,
                                         syncer = container.syncer,
                                         phoneLocation = container.phoneLocation,
+                                        profileStore = container.profileStore,
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null

@@ -930,6 +930,11 @@ public class DeviceSession(
             transport.write(TrCharacteristic.COMMAND, frame, withResponse = true)
         }.isSuccess
 
+    /** Fresh phone time (unique sim filenames — iOS sendTimeSync before cmd 5). */
+    public fun sendTimeSync() {
+        scope.launch { sendTimeSyncNow() }
+    }
+
     private suspend fun sendTimeSyncNow() {
         val t = Instant.ofEpochMilli(clock()).atOffset(ZoneOffset.UTC)
         writeCommand(

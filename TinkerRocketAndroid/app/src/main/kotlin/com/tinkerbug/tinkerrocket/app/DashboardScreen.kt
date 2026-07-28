@@ -45,8 +45,19 @@ fun DashboardScreen(
     demo: Boolean = false,
     syncer: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer? = null,
     phoneLocation: PhoneLocationManager? = null,
+    profileStore: com.tinkerbug.tinkerrocket.session.RocketProfileStore? = null,
 ) {
     val session = device.session
+
+    // Tools sub-routes (iOS: sheets from the dashboard).
+    var tool by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<String?>(null)
+    }
+    when (tool) {
+        "servo" -> { ServoTestScreen(session, profileStore, onBack = { tool = null }); return }
+        "sim" -> { SimulationScreen(session, onBack = { tool = null }); return }
+        "scan" -> { FreqScanScreen(session, onBack = { tool = null }); return }
+    }
 
     // Phone GPS/compass run only while the dashboard is visible (the iOS
     // onAppear/onDisappear discipline — continuous updates leak battery).
@@ -243,6 +254,23 @@ fun DashboardScreen(
                     PyroTile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, live)
                     PyroTile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, live)
                     PyroTile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, live)
+                }
+            }
+        }
+
+        // Tools (iOS: dashboard sheet buttons).  Scan runs on the BS
+        // radio (cmd 60, BS links only); servo test + sim talk to a rocket.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Tools", style = MaterialTheme.typography.titleMedium)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!session.isBaseStation) {
+                        OutlinedButton(onClick = { tool = "servo" }) { Text("Servo test") }
+                    }
+                    OutlinedButton(onClick = { tool = "sim" }) { Text("Simulation") }
+                    if (session.isBaseStation) {
+                        OutlinedButton(onClick = { tool = "scan" }) { Text("Freq scan") }
+                    }
                 }
             }
         }
