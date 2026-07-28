@@ -18,6 +18,7 @@
 #include <TR_GeoMag.h>
 #include <TR_KinematicChecks.h>
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
+#include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
 #include <TR_ServoControl_ledc_mult.h>
 #include <TR_GuidancePN.h>
@@ -459,6 +460,29 @@ static uint32_t burnout_time_ms = 0;
 // single-sample noise / vibration / wind dips from latching the flag
 // prematurely; require N consecutive negative body_ax samples first.
 static uint16_t burnout_neg_count = 0;
+
+// --- Recovery deployment detection + dynamic logging rate ---
+// The user's logging-rate SETTING (BLE cmd 67, persisted in NVS "imu"/"rate").
+// IMU_RATE_DYNAMIC means "let the flight drive it"; anything else is a fixed
+// ODR.  Kept separate from the collector's live rate on purpose: in dynamic
+// mode the live rate changes mid-flight, and the setting must not.
+static uint16_t imu_rate_setting = IMU_RATE_DYNAMIC;
+static tr::DeploymentState deployment_state;
+// Sticky per-flight latch mirroring deployment_state.detected, for the
+// telemetry bit and the rate step-down.  Cleared wherever burnout is cleared.
+static bool     deployment_detected = false;
+static uint32_t deployment_time_ms  = 0;
+
+// Put the collector on the ODR the current setting resolves to. Called on the
+// deployment edge, at every new-flight reset, and when the setting changes.
+// Cheap and idempotent: setIsm6Rate stages for the poll task, and re-staging
+// the rate already running is a no-op the task applies and forgets.
+static void applyImuRateForFlightPhase()
+{
+    const uint16_t hz = imuRateResolve(imu_rate_setting, deployment_detected);
+    if (hz != sensor_collector_hw.ism6Rate()) sensor_collector_hw.setIsm6Rate(hz);
+}
+
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
 static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
 static bool guidance_active = false;
@@ -1765,6 +1789,14 @@ static void buildFlightSettings(FlightSettingsData& s)
     s.ism6_high_g_fs_g = config::ISM6_HIGH_G_FS_G;
     s.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
     s.ism6_update_rate_hz = sensor_collector_hw.ism6Rate();  // live (v5+)
+    // Dynamic mode: the rate above is the live one at the snapshot (taken at
+    // launch, so the boost rate). The log steps down to
+    // IMU_RATE_DYNAMIC_POST_HZ at the first frame carrying NSF2_DEPLOYED —
+    // this flag tells a reader to expect that step instead of one fixed rate.
+    if (imuRateIsDynamic(imu_rate_setting))
+    {
+        s.flags |= (uint8_t)(1u << FlightSettingsData::F_IMU_RATE_DYNAMIC);
+    }
 
     // Servo trim + timing (live values from servo_control).
     for (int i = 0; i < 4; ++i) {
@@ -2780,23 +2812,44 @@ static void setup_fc()
                   (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
                   (unsigned)fin_rev, (unsigned)fin_rrev);
 
-    // Restore the user-selected IMU logging rate (BLE cmd 67, namespace
-    // "imu").  Staged into the collector BEFORE sensor_collector.begin()
-    // below, which programs the chip ODR from it.  Whitelist on read so a
-    // corrupted NVS value can't run the IMU at an unplanned rate.
+    // Restore the user-selected IMU logging rate setting (BLE cmd 67,
+    // namespace "imu").  Staged into the collector BEFORE
+    // sensor_collector.begin() below, which programs the chip ODR from it.
+    // Whitelist on read so a corrupted NVS value can't run the IMU at an
+    // unplanned rate.
+    //
+    // A boot always starts pre-deployment, so DYNAMIC resolves to the boost
+    // rate here.  That includes a mid-flight reboot recovery: re-entering a
+    // descent under canopy at the boost rate costs some flash and self-corrects
+    // only if the detector fires again, which it may not have signal for — an
+    // acceptable trade against the alternative of guessing the airframe is
+    // already deployed and logging a boost at 960 Hz.
     prefs.begin("imu", false);
     if (prefs.isKey("rate"))
     {
         const uint16_t nvs_rate = prefs.getUShort("rate", config::ISM6HG256_UPDATE_RATE);
-        if (imuRateValid(nvs_rate))
+        if (imuRateSettingValid(nvs_rate))
         {
-            sensor_collector_hw.setIsm6Rate(nvs_rate);
-            ESP_LOGI(TAG, "NVS IMU logging rate: %u Hz", (unsigned)nvs_rate);
+            imu_rate_setting = nvs_rate;
         }
         else
         {
-            ESP_LOGW(TAG, "NVS IMU logging rate %u invalid — using default %u",
-                     (unsigned)nvs_rate, (unsigned)config::ISM6HG256_UPDATE_RATE);
+            ESP_LOGW(TAG, "NVS IMU logging rate %u invalid — using default",
+                     (unsigned)nvs_rate);
+        }
+    }
+    {
+        const uint16_t boot_hz = imuRateResolve(imu_rate_setting, /*deployed=*/false);
+        sensor_collector_hw.setIsm6Rate(boot_hz);
+        if (imuRateIsDynamic(imu_rate_setting))
+        {
+            ESP_LOGI(TAG, "IMU logging rate: DYNAMIC (%u Hz to deployment, then %u Hz)",
+                     (unsigned)IMU_RATE_DYNAMIC_BOOST_HZ,
+                     (unsigned)IMU_RATE_DYNAMIC_POST_HZ);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "IMU logging rate: %u Hz (fixed)", (unsigned)boot_hz);
         }
     }
     prefs.end();
@@ -3385,6 +3438,14 @@ static void resetFlightStateForSim(const char* edge)
     burnout_detected = false;
     burnout_time_ms = 0;
     burnout_neg_count = 0;
+    // Deployment is a per-flight latch like burnout. Clearing it also puts a
+    // dynamic logging rate back to the boost rate for the new flight — without
+    // this, a second flight in one boot would log its whole boost at the
+    // post-deployment rate.
+    tr::deploymentReset(deployment_state);
+    deployment_detected = false;
+    deployment_time_ms  = 0;
+    applyImuRateForFlightPhase();
     guidance_active = false;
     reboot_recovery = false;
     reboot_recovery_telem = false;
@@ -3524,6 +3585,14 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     burnout_detected = false;
     burnout_time_ms = 0;
     burnout_neg_count = 0;
+    // Deployment is a per-flight latch like burnout. Clearing it also puts a
+    // dynamic logging rate back to the boost rate for the new flight — without
+    // this, a second flight in one boot would log its whole boost at the
+    // post-deployment rate.
+    tr::deploymentReset(deployment_state);
+    deployment_detected = false;
+    deployment_time_ms  = 0;
+    applyImuRateForFlightPhase();
     guidance_active = false;
     guidance_tilt_inhibited = false;   // clear tilt-limit latch
     // Reset pyro channels on launch. ARM stays LOW until a
@@ -4923,6 +4992,9 @@ static void loop_fc()
                     kinematics.reset();
                     burnout_detected = false;
                     burnout_neg_count = 0;
+                    tr::deploymentReset(deployment_state);
+                    deployment_detected = false;
+                    deployment_time_ms  = 0;
                 }
             }
             else if (out_pending_command == MAG_CAL_ABORT)
@@ -5521,23 +5593,36 @@ static void loop_fc()
                     {
                         // Never mid-flight: the ODR switch produces one
                         // odd-length inter-sample gap and changes the log
-                        // cadence — fine on the pad, not during boost.
+                        // cadence — fine on the pad, not during boost.  This
+                        // guard is for the USER setting only; the dynamic
+                        // mode's own step-down at deployment is deliberate and
+                        // runs from the flight loop, not through here.
                         ESP_LOGW(TAG, "[CFG] IMU rate change ignored INFLIGHT");
                     }
-                    else if (imuRateValid(rate_hz))
+                    else if (imuRateSettingValid(rate_hz))
                     {
-                        if (sensor_collector_hw.setIsm6Rate(rate_hz))
+                        imu_rate_setting = rate_hz;
+                        applyImuRateForFlightPhase();
+                        prefs.begin("imu", false);
+                        prefs.putUShort("rate", rate_hz);
+                        prefs.end();
+                        if (imuRateIsDynamic(rate_hz))
                         {
-                            prefs.begin("imu", false);
-                            prefs.putUShort("rate", rate_hz);
-                            prefs.end();
+                            ESP_LOGI(TAG, "[CFG] IMU logging rate: DYNAMIC "
+                                          "(%u Hz to deployment, then %u Hz) (persisted)",
+                                     (unsigned)IMU_RATE_DYNAMIC_BOOST_HZ,
+                                     (unsigned)IMU_RATE_DYNAMIC_POST_HZ);
+                        }
+                        else
+                        {
                             ESP_LOGI(TAG, "[CFG] IMU logging rate: %u Hz (persisted)",
                                      (unsigned)rate_hz);
                         }
                     }
                     else
                     {
-                        ESP_LOGW(TAG, "[CFG] IMU rate %u Hz rejected (not 960/1920/3840)",
+                        ESP_LOGW(TAG, "[CFG] IMU rate %u Hz rejected "
+                                      "(not dynamic/960/1920/3840)",
                                  (unsigned)rate_hz);
                     }
                 }
@@ -6162,6 +6247,54 @@ static void loop_fc()
                                        (float)gnss_latest_si.vel_u,
                                        ekf_healthy,
                                        baro_healthy);
+
+            // --- Recovery deployment detection ---
+            // Stepped from the same block, once per loop pass, on the same
+            // inputs — but with the RAW pressure altitude rather than the
+            // filtered estimate: the rate gate inside kinematicChecks exists
+            // to swallow ejection spikes, which are exactly the signal here.
+            // Runs only INFLIGHT: on the ground the descent-collapse path
+            // would read a stationary airframe as a canopy, and post-landing
+            // the latch would be meaningless.
+            if (rocket_state == INFLIGHT && !kinematics.alt_landed_flag)
+            {
+                static constexpr tr::DeploymentConfig kDeployCfg = {
+                    config::DEPLOY_SHOCK_MS2,
+                    config::DEPLOY_SHOCK_COUNT,
+                    config::DEPLOY_BARO_STEP_M,
+                    config::DEPLOY_COINCIDENCE_MS,
+                    config::DEPLOY_BALLISTIC_MPS,
+                    config::DEPLOY_CANOPY_MPS,
+                    config::DEPLOY_CANOPY_COUNT,
+                    config::DEPLOY_LAUNCH_LOCKOUT_MS,
+                };
+                const uint32_t t_since_launch = now_ms - launch_time_millis;
+                if (tr::deploymentDetectStep(deployment_state, kDeployCfg,
+                                             t_since_launch, accel_norm,
+                                             pressure_altitude_m, bmp_new_for_kf,
+                                             kinematics.d_alt_est_,
+                                             burnout_detected))
+                {
+                    deployment_detected = true;
+                    deployment_time_ms  = now_ms;
+                    ESP_LOGI(TAG, "[DEPLOY] detected T+%.2f s (reason %s%s), alt %.0f m",
+                             t_since_launch / 1000.0f,
+                             (deployment_state.reason & tr::kDeployReasonShockBaro)
+                                 ? "shock+baro " : "",
+                             (deployment_state.reason & tr::kDeployReasonDescentCollapse)
+                                 ? "descent-collapse" : "",
+                             (double)kinematics.alt_est);
+                    // Dynamic logging rate: nothing fast is left to capture
+                    // under canopy, so step the ODR down. A no-op for a fixed
+                    // rate setting.
+                    if (imuRateIsDynamic(imu_rate_setting))
+                    {
+                        applyImuRateForFlightPhase();
+                        ESP_LOGI(TAG, "[DEPLOY] IMU logging rate -> %u Hz (dynamic)",
+                                 (unsigned)IMU_RATE_DYNAMIC_POST_HZ);
+                    }
+                }
+            }
         }
         bmp_new_for_kf = false;
         gps_new_for_kc = false;
@@ -6940,6 +7073,7 @@ static void loop_fc()
         if (reboot_recovery_telem)        non_sensor_data.apogee_flags |= NSF2_REBOOT_RECOVERY;
         if (guidance_enabled)             non_sensor_data.apogee_flags |= NSF2_GUIDANCE_ENABLED;
         if (orient_thrust_mismatch)       non_sensor_data.apogee_flags |= NSF2_ORIENT_THRUST_MISMATCH;
+        if (deployment_detected)          non_sensor_data.apogee_flags |= NSF2_DEPLOYED;
         // #474: sticky witness for a stalled sensor loop.  Nonzero drops mean
         // loop_fc() blocked long enough (an I2C poll/config-read) to overflow the
         // ISM6 handoff queue and lose IMU samples — the previously-silent all-

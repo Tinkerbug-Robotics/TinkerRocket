@@ -409,6 +409,7 @@ nonisolated class SensorConverter {
             pyro4_fired: false,
             reboot_recovery: false,
             guidance_enabled: false,
+            deployed_flag: false,
             ekf_ticks: nil
         )
     }
@@ -465,11 +466,13 @@ nonisolated class SensorConverter {
         let NSF2_MASTER_APOGEE: UInt8    = (1 << 2)
         let NSF2_REBOOT_RECOVERY: UInt8  = (1 << 3)
         let NSF2_GUIDANCE_ENABLED: UInt8 = (1 << 4)
+        let NSF2_DEPLOYED: UInt8         = (1 << 7)
         let gps_apogee_flag   = (raw.apogee_flags & NSF2_GPS_APOGEE) != 0
         let pitch_apogee_flag = (raw.apogee_flags & NSF2_PITCH_APOGEE) != 0
         let apogee_flag       = (raw.apogee_flags & NSF2_MASTER_APOGEE) != 0
         let reboot_recovery   = (raw.apogee_flags & NSF2_REBOOT_RECOVERY) != 0
         let guidance_enabled  = (raw.apogee_flags & NSF2_GUIDANCE_ENABLED) != 0
+        let deployed_flag     = (raw.apogee_flags & NSF2_DEPLOYED) != 0
 
         let rocket_state = RocketState(rawValue: raw.rocket_state) ?? .initialization
 
@@ -519,6 +522,7 @@ nonisolated class SensorConverter {
             pyro4_fired:      (raw.pyro_status & PSF_CH4_FIRED) != 0,
             reboot_recovery:  reboot_recovery,
             guidance_enabled: guidance_enabled,
+            deployed_flag:    deployed_flag,
             ekf_ticks:        raw.ekf_ticks   // #529
         )
     }

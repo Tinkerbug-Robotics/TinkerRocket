@@ -38,9 +38,15 @@ struct config : board_pins
     // MMC5983MA hardware supports 1/10/20/50/100/200/1000 Hz only.
     // 200 Hz is the highest step that fits within I2C budget.
     static constexpr uint16_t MMC5983MA_UPDATE_RATE = 200;
-    // DEFAULT IMU logging rate — the user can select 960/1920/3840 Hz from
-    // the app (BLE cmd 67); the FC persists the choice in NVS ("imu"/"rate")
-    // and stages it into the collector before begin().  The poll task's
+    // Collector-construction IMU rate.  No longer the effective default: the
+    // shipped default setting is IMU_RATE_DYNAMIC (3840 Hz to deployment, then
+    // 960 Hz), which setup() stages over this value before begin().  This
+    // constant is what the collector is built with and the fallback the NVS
+    // whitelist logs against.  The user can also select a FIXED 960/1920/3840
+    // Hz from the app (BLE cmd 67); the FC persists the choice in NVS
+    // ("imu"/"rate") and stages it into the collector before begin().  The
+    // link budget below is unchanged — dynamic only ever runs at the 3840 and
+    // 960 endpoints already covered here.  The poll task's
     // handoff queue + the loop's drain-all consumption log EVERY sample
     // regardless of loop rate (~980/s); control/EKF/guidance still consume
     // the freshest sample at loop rate.  Link budget on the 44100 Hz I2S
@@ -406,6 +412,45 @@ struct config : board_pins
     // drop body_ax below zero during boost, short enough to catch real
     // motor cutoff within one PN coast delay tick. See issue #197.
     static constexpr uint16_t BURNOUT_NEG_HYSTERESIS = 50;
+
+    // ### Deployment Detection ###
+    // Tunables for tr::deploymentDetectStep (TR_KinematicChecks/
+    // DeploymentDetector.h) — see that header for what each path measures and
+    // where it fails.  Counts are FLIGHT-LOOP TICKS (~1 kHz), same convention
+    // as BURNOUT_NEG_HYSTERESIS above and LANDING_IMPACT_COUNT in
+    // TR_KinematicChecks: the loop steps the detector once per pass no matter
+    // what ODR the IMU is logging at.
+    //
+    // FAST path — the ejection charge's two coincident signatures.
+    // 8 g: post-burnout coast decel is ~1-2 g on the motors we fly and never
+    // exceeds ~12 g even in a descent tumble (the LANDING_IMPACT_G rationale),
+    // while an ejection charge and canopy snap read tens of g. accel_norm
+    // switches to the high-g channel near low-g saturation, so the shock is
+    // measured, not clipped.
+    static constexpr float    DEPLOY_SHOCK_G          = 8.0f;
+    static constexpr float    DEPLOY_SHOCK_MS2        = DEPLOY_SHOCK_G * 9.80665f;
+    static constexpr uint16_t DEPLOY_SHOCK_COUNT      = 3;      // ~3 ms
+    // 3 m between consecutive BMP585 samples (500 Hz, ~0.1-0.3 m RMS noise).
+    // Real motion moves indicated altitude ~0.2 m per sample even at 100 m/s,
+    // so this is ~10 sigma of noise and an order of magnitude past flight.
+    static constexpr float    DEPLOY_BARO_STEP_M      = 3.0f;
+    // Shock and baro step must both be this recent. Wide enough to also catch
+    // the case where the FC sees the pressure spike at the charge but the
+    // acceleration only at canopy inflation a fraction of a second later.
+    static constexpr uint32_t DEPLOY_COINCIDENCE_MS   = 250;
+    //
+    // SLOW path — descent-rate collapse (the canopy signature).
+    // Arm above 18 m/s, confirm sustained below 10 m/s. Drogue descent runs
+    // 25-30 m/s and a main 5-7 m/s, so the gap is wide; the 200 ms dwell
+    // rejects the momentary rate wobble at inflation.
+    static constexpr float    DEPLOY_BALLISTIC_MPS    = 18.0f;
+    static constexpr float    DEPLOY_CANOPY_MPS       = 10.0f;
+    static constexpr uint16_t DEPLOY_CANOPY_COUNT     = 200;    // ~200 ms
+    //
+    // No detection this soon after launch, on top of the burnout gate. Covers
+    // a short-burn motor whose burnout latches while the airframe is still in
+    // the high-vibration part of the flight.
+    static constexpr uint32_t DEPLOY_LAUNCH_LOCKOUT_MS = 1000;
 
     // ### Ground Test ###
     // Attitude-hold gain: virtual accel command per unit tilt (m/s² per rad)

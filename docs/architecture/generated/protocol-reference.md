@@ -241,7 +241,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 64 |  | IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or a TR_Orientation code (0..23, manual incl. roll… |
 | 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
-| 67 |  | IMU logging rate: [rate_hz:2 LE] — whitelisted ISM6HG256 ODR (960/1920/3840). Relayed to the FC, which… |
+| 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0) or a whitelisted ISM6HG256 ODR (960/1920/3840).… |
 
 > 10 of these have no comment in the dispatch and so no
 > description here: 6, 7, 15, 16, 21, 51, 52, 53, 54, 57. Adding a comment to the branch
@@ -300,6 +300,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 4 | `NSF2_GUIDANCE_ENABLED` | FC's live guidance_enabled config |
 | 5 | `NSF2_ORIENT_THRUST_MISMATCH` |  |
 | 6 | `NSF2_FC_IMU_DROP` |  |
+| 7 | `NSF2_DEPLOYED` | recovery deployment detected (sticky) |
 
 ## Sensor health field
 

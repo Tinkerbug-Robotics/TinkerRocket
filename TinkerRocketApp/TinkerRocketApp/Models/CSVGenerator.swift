@@ -558,6 +558,10 @@ nonisolated class CSVGenerator {
         columns.append("Apogee Detector: Pitch")
         columns.append("Apogee Flag (Master)")
         columns.append("Launch Flag")
+        // Sticky recovery-deployment latch. In dynamic logging mode this is
+        // also the row where the IMU sample rate steps down. Flights predating
+        // the detector emit 0.
+        columns.append("Deployed Flag")
 
         // Pyro status bits — 4 channels (legacy files emit 0s for ch3/4)
         columns.append("Pyro 1 Continuity")
@@ -670,6 +674,7 @@ nonisolated class CSVGenerator {
         values.append(nonSensor.map { $0.pitch_apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.apogee_flag ? "1" : "0" } ?? "")
         values.append(nonSensor.map { $0.launch_flag ? "1" : "0" } ?? "")
+        values.append(nonSensor.map { $0.deployed_flag ? "1" : "0" } ?? "")
 
         // Pyro status bits (4 channels)
         values.append(nonSensor.map { $0.pyro1_continuity ? "1" : "0" } ?? "")
@@ -746,6 +751,7 @@ nonisolated struct FlightSettings: Codable, Sendable {
             low_g_fs_g: Int(raw.ism6_low_g_fs_g),
             high_g_fs_g: Int(raw.ism6_high_g_fs_g),
             update_rate_hz: raw.ism6_update_rate_hz.map(Int.init),
+            dynamic_rate: raw.imuRateDynamic,
             mounting: MountingSettings(from: raw)
         )
     }
@@ -899,8 +905,14 @@ nonisolated struct IMUSettings: Codable, Sendable {
     let low_g_fs_g: Int
     let high_g_fs_g: Int
     /// Logged IMU sample rate in Hz (v5 settings frames). nil on older
-    /// logs, which ran the then-fixed build default.
+    /// logs, which ran the then-fixed build default. When `dynamic_rate` is
+    /// true this is the rate at the snapshot — i.e. the boost rate — not the
+    /// rate for the whole flight.
     let update_rate_hz: Int?
+    /// The rocket flew the dynamic logging rate: `update_rate_hz` through
+    /// boost and coast, then a step down to a lower rate at the first row
+    /// whose "Deployed Flag" column is 1.
+    let dynamic_rate: Bool
     /// Board→rocket mounting orientation (v2 settings frames). nil on
     /// pre-orientation logs, which always meant the +X-nose mounting.
     let mounting: MountingSettings?

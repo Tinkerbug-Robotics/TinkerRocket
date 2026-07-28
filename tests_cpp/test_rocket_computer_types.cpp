@@ -101,12 +101,14 @@ TEST(RocketComputerTypes, NSF_FlagBits_NoOverlap) {
 TEST(RocketComputerTypes, NSF2_ApogeeFlagBits_NoOverlap) {
     // apogee_flags byte: 3 apogee detector bits + 2 relocated signals
     // (reboot_recovery, guidance_enabled) that used to live in pyro_status,
-    // plus the orientation-mismatch flag (bit 5) and the #474 FC IMU-drop
-    // witness (bit 6).
+    // plus the orientation-mismatch flag (bit 5), the #474 FC IMU-drop
+    // witness (bit 6), and the deployment latch (bit 7).  The byte is now
+    // FULL — a new signal needs a new field, not a bit.
     uint8_t all = NSF2_GPS_APOGEE | NSF2_PITCH_APOGEE | NSF2_MASTER_APOGEE |
                   NSF2_REBOOT_RECOVERY | NSF2_GUIDANCE_ENABLED |
-                  NSF2_ORIENT_THRUST_MISMATCH | NSF2_FC_IMU_DROP;
-    EXPECT_EQ(all, 0x7F);  // bits 0-6 used, none overlapping
+                  NSF2_ORIENT_THRUST_MISMATCH | NSF2_FC_IMU_DROP |
+                  NSF2_DEPLOYED;
+    EXPECT_EQ(all, 0xFF);  // bits 0-7 used, none overlapping
     EXPECT_EQ(__builtin_popcount(NSF2_GPS_APOGEE),            1);
     EXPECT_EQ(__builtin_popcount(NSF2_PITCH_APOGEE),          1);
     EXPECT_EQ(__builtin_popcount(NSF2_MASTER_APOGEE),         1);
@@ -114,6 +116,8 @@ TEST(RocketComputerTypes, NSF2_ApogeeFlagBits_NoOverlap) {
     EXPECT_EQ(__builtin_popcount(NSF2_GUIDANCE_ENABLED),      1);
     EXPECT_EQ(__builtin_popcount(NSF2_ORIENT_THRUST_MISMATCH), 1);
     EXPECT_EQ(__builtin_popcount(NSF2_FC_IMU_DROP),           1);
+    EXPECT_EQ(__builtin_popcount(NSF2_DEPLOYED),              1);
+    EXPECT_EQ(NSF2_DEPLOYED, 1u << 7);
 }
 
 TEST(RocketComputerTypes, PSF_FlagBits_NoOverlap) {
@@ -985,8 +989,55 @@ TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
                             (1u << FlightSettingsData::F_SERVO_ENABLED) |
                             (1u << FlightSettingsData::F_FW_DIRTY) |
                             (1u << FlightSettingsData::F_SOUNDS) |
-                            (1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP));
-    EXPECT_EQ(all, 0x7Fu);  // bits 0-6, no overlap
+                            (1u << FlightSettingsData::F_GUIDANCE_STATION_KEEP) |
+                            (1u << FlightSettingsData::F_IMU_RATE_DYNAMIC));
+    EXPECT_EQ(all, 0xFFu);  // bits 0-7, no overlap — the flags byte is now FULL
+}
+
+// ============================================================================
+// Dynamic IMU logging rate (BLE cmd 67, IMU_RATE_DYNAMIC)
+// ============================================================================
+// The dynamic sentinel rides in the existing 2-byte rate_hz field. Two
+// validators exist on purpose and must NOT be conflated: imuRateValid() gates
+// what may be programmed as a chip ODR, imuRateSettingValid() gates what a
+// user may select.
+TEST(RocketComputerTypes, ImuRate_DynamicSentinel_IsNotAProgrammableOdr) {
+    EXPECT_TRUE(imuRateIsDynamic(IMU_RATE_DYNAMIC));
+    EXPECT_TRUE(imuRateSettingValid(IMU_RATE_DYNAMIC));
+    // Must stay false: SensorCollector::setIsm6Rate() is guarded by this, and
+    // handing it the mode sentinel would try to program a 0 Hz ODR.
+    EXPECT_FALSE(imuRateValid(IMU_RATE_DYNAMIC));
+
+    for (uint16_t hz : IMU_RATE_OPTIONS_HZ) {
+        EXPECT_TRUE(imuRateValid(hz)) << hz;
+        EXPECT_TRUE(imuRateSettingValid(hz)) << hz;
+        EXPECT_FALSE(imuRateIsDynamic(hz)) << hz;
+    }
+
+    for (uint16_t hz : {1u, 500u, 1000u, 4000u, 7680u, 65535u}) {
+        EXPECT_FALSE(imuRateValid((uint16_t)hz)) << hz;
+        EXPECT_FALSE(imuRateSettingValid((uint16_t)hz)) << hz;
+    }
+}
+
+// The dynamic endpoints must be real whitelist steps: the FC programs them
+// straight into the ODR ladder, so a value the chip cannot reach would leave
+// the collector at whatever it was and the mode would silently do nothing.
+TEST(RocketComputerTypes, ImuRate_DynamicEndpoints_AreProgrammable) {
+    EXPECT_TRUE(imuRateValid(IMU_RATE_DYNAMIC_BOOST_HZ));
+    EXPECT_TRUE(imuRateValid(IMU_RATE_DYNAMIC_POST_HZ));
+    EXPECT_GT(IMU_RATE_DYNAMIC_BOOST_HZ, IMU_RATE_DYNAMIC_POST_HZ);
+}
+
+TEST(RocketComputerTypes, ImuRate_Resolve) {
+    // Dynamic: boost rate until deployment latches, post rate after.
+    EXPECT_EQ(imuRateResolve(IMU_RATE_DYNAMIC, false), IMU_RATE_DYNAMIC_BOOST_HZ);
+    EXPECT_EQ(imuRateResolve(IMU_RATE_DYNAMIC, true),  IMU_RATE_DYNAMIC_POST_HZ);
+    // Fixed: the deployment latch must not move the rate.
+    for (uint16_t hz : IMU_RATE_OPTIONS_HZ) {
+        EXPECT_EQ(imuRateResolve(hz, false), hz);
+        EXPECT_EQ(imuRateResolve(hz, true),  hz);
+    }
 }
 
 // ============================================================================

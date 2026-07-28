@@ -60,6 +60,11 @@ tinkerrocket-sim/build/
 tinkerrocket-sim/**/*.egg-info/
 tinkerrocket-sim/**/*.so
 
+# replay_deployment_detector.py compiles this from the firmware headers on
+# demand and rebuilds it whenever they change — committing it would be a stale
+# copy of the very thresholds the tool exists to read live.
+Data_Analysis/*.so
+
 # Xcode
 TinkerRocketApp/DerivedData/
 *.xcuserdata
