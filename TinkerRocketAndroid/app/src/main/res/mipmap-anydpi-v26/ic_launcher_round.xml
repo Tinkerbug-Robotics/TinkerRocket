@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  minSdk is 31, so every device honours the v26 adaptive icon; there are
+  deliberately no legacy square PNGs to drift out of sync.  Foreground is
+  the iOS rocket-bug at 60% of the 108dp canvas, nudged 4% down so the
+  antennae and the exhaust plume clear the circular mask evenly.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+</adaptive-icon>
