@@ -1,4 +1,4 @@
-// TinkerRocket Android — see docs/plans/android-port.md.
+// TinkerRocket Android — see docs/plans/624-android-port.md.
 //
 // Module layout (§1 of the plan):
 //   :core:protocol  pure JVM, zero Android deps — wire codecs + firmware-mirrored math

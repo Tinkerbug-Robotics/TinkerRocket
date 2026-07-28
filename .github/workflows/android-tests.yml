@@ -1,7 +1,7 @@
 name: Android Tests (JVM)
 
 # Pure-JVM tests for the Android app's :core:* modules — no emulator, no
-# Android SDK (the modules are kotlin("jvm"); see docs/plans/android-port.md
+# Android SDK (the modules are kotlin("jvm"); see docs/plans/624-android-port.md
 # §1).  The fixtures path matters: a golden-corpus regeneration must re-verify
 # the Kotlin decoders, exactly as ios-tests re-verifies the Swift ones —
 # together with cpp-tests' freshness gtest that is the three-way parity gate

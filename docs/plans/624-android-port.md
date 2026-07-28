@@ -1,6 +1,6 @@
 # TinkerRocket Android Port — Plan
 
-*Status: PLANNED, 2026-07-22. Rename to `<issue>-android-port.md` once a tracking issue is filed.*
+*Status: IN PROGRESS — tracking issue [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624). Phases 0-6 complete as of 2026-07-27; Phase 7 next.*
 
 Goal: a native Android app with feature parity to the iOS TinkerRocketApp, **maintained concurrently and permanently** alongside it. iOS is the behavioral reference; the firmware (`TR_RocketComputerTypes.h` + `TR_BLE_To_APP`) is the wire authority. One person maintains all of it, evenings/weekends.
 
@@ -159,8 +159,8 @@ The consolation: Phase 0's infrastructure permanently hardens the iOS↔firmware
 1. **Approve Spike S1** ($15 USB BT dongle) and the trigger rule: Pixel 8a ordered at Phase 2 exit, or immediately if S1 fails.
 2. ~~**Default basemap**~~ **DECIDED 2026-07-27**: `usgsImageryTopo` stays the default and the ONLY offline/cacheable path; OpenFreeMap Liberty (keyless vector, online-only, ODbL attribution shown while active) joined the source cycle for international browsing. Save Area stays USGS-only. Post-flight FlightMapView rebases onto the USGS stack.
 3. **v1.0 scope confirmations**: OTA trailing OK? MagCal in Phase 7 OK? Single-BS+single-rocket chrome for the first field season OK (relay routing present)?
-4. **EGM96 fallback**: bundle a coarse geoid table below API 34, or show ellipsoid altitude with a caveat?
+4. ~~**EGM96 fallback**~~ **DECIDED 2026-07-27**: no bundled geoid table — platform MSL on API 34+ (both fleet devices), ellipsoid altitude with a caveat below.
 5. **L2CAP CoC**: if `ble/526-l2cap-coc` merges before Phase 4, grow `BleTransport` with a channel path in v1, or GATT-only first?
-6. **Telemetry JSON fixtures**: bench-captured frames committed to git OK, or hand-synthesized only?
+6. ~~**Telemetry JSON fixtures**~~ **DECIDED 2026-07-27**: bench-captured frames committed to git approved (scrub coordinates); capture task tracked in #624.
 7. **iOS golden-walk retrofit depth**: all families in Phase 0 (biggest coverage gain: Swift command encoders are currently byte-unpinned) vs per-family as they next change.
-8. File a tracking issue and rename this doc to `<issue>-android-port.md`.
+8. ~~File a tracking issue~~ **DONE 2026-07-27**: [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624); doc renamed.
