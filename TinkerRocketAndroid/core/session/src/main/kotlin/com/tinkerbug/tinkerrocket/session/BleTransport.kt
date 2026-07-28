@@ -22,6 +22,15 @@ public interface BleTransport {
     public suspend fun read(char: TrCharacteristic): ByteArray
     public suspend fun readRssi(): Int
     public fun disconnect()
+
+    /**
+     * Ask the stack for a tighter connection interval, and give it back.
+     * Only the OTA pump uses this — the firmware owns connection-parameter
+     * policy the rest of the time (#519/#524), so it must never be left
+     * pinned.  Default no-ops: replay/fake transports have no radio.
+     */
+    public fun requestConnectionPriorityHigh(): Unit = Unit
+    public fun releaseConnectionPriority(): Unit = Unit
 }
 
 public sealed interface TransportEvent {

@@ -50,6 +50,35 @@ class AppContainer(app: Application) {
     /** Phone GPS + heading (ref-counted; consumers start/stop). */
     val phoneLocation = PhoneLocationManager(app)
 
+    /**
+     * OTA sessions keyed by device id.  Owned HERE, above the fleet, because
+     * the fleet destroys and recreates a DeviceSession across every
+     * disconnect — including the post-OTA reboot (#140).  Keeping the OTA
+     * session here is what lets the flow survive that cycle and report the
+     * post-reboot version, and what keeps a finished result visible when the
+     * user navigates away and back.
+     */
+    private val otaSessions = mutableMapOf<String, com.tinkerbug.tinkerrocket.session.OtaSession>()
+
+    /**
+     * The OTA currently mid-flight, if any.  During the post-flash reboot the
+     * device disappears from the fleet, so the normal device UI unmounts —
+     * this is what lets the app keep showing progress instead of dropping the
+     * user back to the scanner while their firmware is being written.
+     */
+    fun runningOta(): com.tinkerbug.tinkerrocket.session.OtaSession? =
+        otaSessions.values.firstOrNull { it.isRunning }
+
+    fun otaSessionFor(deviceId: String): com.tinkerbug.tinkerrocket.session.OtaSession =
+        otaSessions.getOrPut(deviceId) {
+            com.tinkerbug.tinkerrocket.session.OtaSession(
+                scope = fleetScope,
+                // Re-resolved on every poll, never captured: the session
+                // object behind this id changes across the OTA reboot.
+                sessionLookup = { fleet.devices.value[deviceId]?.session },
+            )
+        }
+
     // Offline maps: flat-file cache in noBackupFilesDir (never OS-purged,
     // never backed up — field data must survive storage pressure) + the
     // localhost read-through proxy MapLibre's raster sources fetch from.

@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "Shared OTA timing contract, consumed by BOTH app test suites:",
+    "  iOS     TinkerRocketAppTests/OTATimeoutsTests.swift",
+    "  Android core/session  OtaTimeoutsTest.kt",
+    "Each suite asserts its own platform's table equals this file, so changing",
+    "one platform's numbers without the other fails that platform's build.",
+    "",
+    "This is APP BEHAVIOUR, not a wire format — nothing here is transmitted, so",
+    "it lives outside fixtures/wire/ (which the freshness gtest owns) alongside",
+    "csv_golden/ and telemetry_captured/.",
+    "",
+    "crossesRelay marks a stage whose completion depends on the FC answering",
+    "over the OC relay. Those MUST be longer on the FC path; the rest are local",
+    "phone-to-OC events and MUST be identical. A stage that crosses the relay",
+    "with fc == local is the bug found on the bench 2026-07-28: finish sat at a",
+    "flat 15 s on both platforms while a live 591.7 kB FC flash was still",
+    "running, so the app declared failure on a transfer that then succeeded."
+  ],
+  "stages": [
+    {
+      "name": "begin",
+      "crossesRelay": true,
+      "localMs": 5000,
+      "fcMs": 20000,
+      "why": "FC erases its OTA slot before it can answer ready"
+    },
+    {
+      "name": "finish",
+      "crossesRelay": true,
+      "localMs": 15000,
+      "fcMs": 60000,
+      "why": "FC drains the I2S ring, writes the tail, SHA-256s the image and sets the boot partition"
+    },
+    {
+      "name": "fwPublish",
+      "crossesRelay": true,
+      "localMs": 10000,
+      "fcMs": 40000,
+      "why": "FC reboots, then the OC has to re-query its identity before the new version reaches the app"
+    },
+    {
+      "name": "disconnect",
+      "crossesRelay": false,
+      "localMs": 5000,
+      "fcMs": 5000,
+      "why": "local BLE link drop; the relay is not involved"
+    },
+    {
+      "name": "reconnect",
+      "crossesRelay": false,
+      "localMs": 60000,
+      "fcMs": 60000,
+      "why": "phone re-establishes its own link to the OC; already generous"
+    }
+  ],
+  "pollMs": 50
+}

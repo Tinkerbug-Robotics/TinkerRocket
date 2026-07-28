@@ -46,6 +46,7 @@ fun DashboardScreen(
     syncer: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer? = null,
     phoneLocation: PhoneLocationManager? = null,
     profileStore: com.tinkerbug.tinkerrocket.session.RocketProfileStore? = null,
+    container: AppContainer? = null,
 ) {
     val session = device.session
 
@@ -58,6 +59,12 @@ fun DashboardScreen(
         "sim" -> { SimulationScreen(session, onBack = { tool = null }); return }
         "scan" -> { FreqScanScreen(session, onBack = { tool = null }); return }
         "magcal" -> { MagCalScreen(session, syncer, onBack = { tool = null }); return }
+        "ota" -> {
+            if (container != null) {
+                FirmwareUpdateScreen(container, device.deviceId, session, onBack = { tool = null })
+                return
+            }
+        }
     }
 
     // Phone GPS/compass run only while the dashboard is visible (the iOS
@@ -272,6 +279,9 @@ fun DashboardScreen(
                     OutlinedButton(onClick = { tool = "sim" }) { Text("Simulation") }
                     if (session.isBaseStation) {
                         OutlinedButton(onClick = { tool = "scan" }) { Text("Freq scan") }
+                    }
+                    if (container != null) {
+                        OutlinedButton(onClick = { tool = "ota" }) { Text("Firmware") }
                     }
                 }
             }

@@ -71,6 +71,10 @@ class MainActivity : ComponentActivity() {
                     val active by fleet.activeDeviceId.collectAsState()
                     val activeDevice = active?.let { devices[it] }
 
+                    // Re-checked on every recomposition; the fleet's own state
+                    // changes tick this often enough during a flash.
+                    val otaInFlight = container.runningOta()
+
                     // Syncer follows the active device (#132); attach is
                     // idempotent per (session, role) and hops to the fleet
                     // dispatcher (single-writer contract).  Demo attaches
@@ -138,6 +142,7 @@ class MainActivity : ComponentActivity() {
                                         syncer = container.syncer,
                                         phoneLocation = container.phoneLocation,
                                         profileStore = container.profileStore,
+                                        container = container,
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null
@@ -160,6 +165,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        // A flash in flight outranks the scanner: the device
+                        // vanishes from the fleet while it reboots, and the
+                        // user must not lose sight of an update in progress.
+                        activeDevice == null && otaInFlight != null ->
+                            OtaProgressScreen(otaInFlight)
+
                         else -> {
                             var showMyDevices by remember { mutableStateOf(false) }
                             if (showMyDevices) {

@@ -314,11 +314,11 @@ public class RealBleTransport(
      * SESSION decides when; never pinned (#519/#524: firmware owns
      * conn-param policy, and a pinned HIGH defeats OC idle power).
      */
-    public fun requestConnectionPriorityHigh() {
+    override fun requestConnectionPriorityHigh() {
         gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
     }
 
-    public fun releaseConnectionPriority() {
+    override fun releaseConnectionPriority() {
         gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
     }
 

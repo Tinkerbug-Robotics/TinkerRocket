@@ -27,4 +27,13 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+
+    // Shared app-behaviour goldens (OTA timing contract), read by the iOS suite
+    // too — declared as an input so a fixture edit re-runs the tests instead of
+    // reporting UP-TO-DATE, which is the trap the Phase 0 review caught on the
+    // wire corpus.
+    val appBehaviorDir =
+        rootProject.projectDir.parentFile.resolve("tests_cpp/fixtures/app_behavior")
+    systemProperty("tr.appBehaviorFixtures", appBehaviorDir.absolutePath)
+    inputs.dir(appBehaviorDir).withPropertyName("appBehaviorFixtures")
 }
