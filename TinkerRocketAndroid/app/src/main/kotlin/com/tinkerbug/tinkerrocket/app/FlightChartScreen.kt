@@ -74,6 +74,7 @@ fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
     var chartSeries by remember { mutableStateOf<List<Pair<String, List<LttbPoint>>>>(emptyList()) }
     var fullX by remember { mutableStateOf(Domain(0.0, 1.0)) }
     var visibleX by remember { mutableStateOf(Domain(0.0, 1.0)) }
+    var showPath by remember { mutableStateOf(false) }
 
     LaunchedEffect(csvFile) {
         try {
@@ -136,7 +137,19 @@ fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
         ) {
             TextButton(onClick = onBack) { Text("← Files") }
             Text(csvFile.nameWithoutExtension, style = MaterialTheme.typography.titleSmall)
-            TextButton(onClick = { showPicker = true }) { Text("Columns") }
+            Row {
+                TextButton(onClick = { showPath = !showPath }) {
+                    Text(if (showPath) "Chart" else "Path")
+                }
+                if (!showPath) {
+                    TextButton(onClick = { showPicker = true }) { Text("Columns") }
+                }
+            }
+        }
+
+        if (showPath) {
+            csvData?.let { TrajectoryCanvas(it) }
+            return@Column
         }
 
         when {

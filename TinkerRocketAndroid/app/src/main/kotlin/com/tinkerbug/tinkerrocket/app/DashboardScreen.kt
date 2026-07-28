@@ -57,6 +57,7 @@ fun DashboardScreen(
         "servo" -> { ServoTestScreen(session, profileStore, onBack = { tool = null }); return }
         "sim" -> { SimulationScreen(session, onBack = { tool = null }); return }
         "scan" -> { FreqScanScreen(session, onBack = { tool = null }); return }
+        "magcal" -> { MagCalScreen(session, syncer, onBack = { tool = null }); return }
     }
 
     // Phone GPS/compass run only while the dashboard is visible (the iOS
@@ -266,6 +267,7 @@ fun DashboardScreen(
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!session.isBaseStation) {
                         OutlinedButton(onClick = { tool = "servo" }) { Text("Servo test") }
+                        OutlinedButton(onClick = { tool = "magcal" }) { Text("Mag cal") }
                     }
                     OutlinedButton(onClick = { tool = "sim" }) { Text("Simulation") }
                     if (session.isBaseStation) {
