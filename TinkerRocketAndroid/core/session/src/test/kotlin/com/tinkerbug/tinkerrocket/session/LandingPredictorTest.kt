@@ -215,6 +215,58 @@ class LandingCastTest {
         )
     }
 
+    // ── Reverse drift-cast guidance point ────────────────────────────────
+
+    @Test
+    fun guidancePoint_roundTripsThroughForwardVerification() {
+        // Reverse (upwind walk) then forward (downwind drift) through the
+        // SAME layered wind must land back near the target — the layer
+        // discretization is identical in both directions, so the error is
+        // meters, not the drift scale (~km).
+        val r = computeGuidancePoint(
+            launchLat = launchLat, launchLon = launchLon,
+            landingLat = launchLat, landingLon = launchLon,
+            apogeeAglFt = 10_000.0,
+            drogueRateFps = 60.0, mainRateFps = 18.0, mainDeployAglFt = 700.0,
+            windProfile = sampleWind(),
+        )
+        assertTrue(r.landingErrorM < 20.0, "round-trip error ${r.landingErrorM} m")
+        assertTrue(r.totalDriftM > 100.0, "10k ft under 6-10 kts must drift far")
+        // FROM 250° → guidance point must sit upwind (west) of the target.
+        assertTrue(r.guidanceLon < launchLon)
+        assertTrue(r.totalDescentTimeS > 100.0)
+    }
+
+    @Test
+    fun guidancePoint_feasibilityGate() {
+        // Strong wind + low apogee → guidance point far off-pad → infeasible.
+        val gale = WindProfile(
+            listOf(WindLayer(0.0, 40.0, 250.0)), 0.0, "", launchLat, launchLon,
+        )
+        val r = computeGuidancePoint(
+            launchLat, launchLon, launchLat, launchLon,
+            apogeeAglFt = 1000.0,
+            drogueRateFps = 30.0, mainRateFps = 15.0, mainDeployAglFt = 500.0,
+            windProfile = gale,
+        )
+        assertTrue(!r.feasible)
+        assertNotNull(r.infeasibleReason)
+        assertTrue(r.steeringAngleDeg > 25.0)
+
+        // Zero wind: guidance point IS the landing point, trivially feasible.
+        val calm = WindProfile(listOf(WindLayer(0.0, 0.0, 0.0)), 0.0, "", launchLat, launchLon)
+        val r0 = computeGuidancePoint(
+            launchLat, launchLon, launchLat, launchLon,
+            apogeeAglFt = 1000.0,
+            drogueRateFps = 30.0, mainRateFps = 15.0, mainDeployAglFt = 500.0,
+            windProfile = calm,
+        )
+        assertTrue(r0.feasible)
+        assertEquals(launchLat, r0.guidanceLat, 1e-9)
+        assertEquals(launchLon, r0.guidanceLon, 1e-9)
+        assertEquals(0.0, r0.steeringAngleDeg, 1e-9)
+    }
+
     // ── Kotlin-only pins ─────────────────────────────────────────────────
 
     @Test

@@ -78,7 +78,15 @@ fun MapScreen(
     proxy: TileProxyServer,
     session: DeviceSession?,
     predictor: LandingPredictor? = null,
+    phoneLocation: PhoneLocationManager? = null,
 ) {
+    // Phone dot runs with the map (ref-counted manager).
+    if (phoneLocation != null) {
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            phoneLocation.start()
+            onDispose { phoneLocation.stop() }
+        }
+    }
     val context = LocalContext.current
     remember {
         MapLibre.getInstance(context)
@@ -97,6 +105,10 @@ fun MapScreen(
     val prediction by (
         predictor?.prediction
             ?: kotlinx.coroutines.flow.MutableStateFlow<LandingPrediction?>(null)
+        ).collectAsState()
+    val phoneFix by (
+        phoneLocation?.location
+            ?: kotlinx.coroutines.flow.MutableStateFlow(null)
         ).collectAsState()
 
     var source by remember { mutableStateOf(TileSource.USGS_IMAGERY_TOPO) }
@@ -136,6 +148,7 @@ fun MapScreen(
         val map = mapRef ?: return@LaunchedEffect
         map.setStyle(Style.Builder().fromJson(rasterStyleJson(proxy, source))) { style ->
             installPredictionLayers(style, prediction)
+            installPhoneDot(style, phoneFix)
             installRocketMarker(style, fix?.latitude, fix?.longitude)
         }
     }
@@ -144,6 +157,13 @@ fun MapScreen(
     LaunchedEffect(mapRef, prediction) {
         val style = mapRef?.style ?: return@LaunchedEffect
         updatePredictionSources(style, prediction)
+    }
+
+    // Phone dot tracks the fused location.
+    LaunchedEffect(mapRef, phoneFix) {
+        val f = phoneFix ?: return@LaunchedEffect
+        mapRef?.style?.getSourceAs<GeoJsonSource>(PHONE_SOURCE)
+            ?.setGeoJson(Feature.fromGeometry(Point.fromLngLat(f.lon, f.lat)))
     }
 
     // Marker + follow tracking on fix updates (diff-based: update the source,
@@ -334,6 +354,24 @@ private fun uncertaintyPolygon(lat: Double, lon: Double, radiusM: Double, points
         Point.fromLngLat(lon + dLon * sin(a), lat + dLat * cos(a))
     }
     return Polygon.fromLngLats(listOf(ring))
+}
+
+private const val PHONE_SOURCE = "phone-src"
+private const val PHONE_LAYER = "phone-layer"
+
+/** Blue phone-position dot (the operator), under the rocket marker. */
+private fun installPhoneDot(style: Style, fix: PhoneLocationManager.PhoneFix?) {
+    val src = GeoJsonSource(PHONE_SOURCE)
+    fix?.let { src.setGeoJson(Feature.fromGeometry(Point.fromLngLat(it.lon, it.lat))) }
+    style.addSource(src)
+    style.addLayer(
+        CircleLayer(PHONE_LAYER, PHONE_SOURCE).withProperties(
+            circleRadius(7f),
+            circleColor("#1E88E5"),
+            circleStrokeWidth(2.5f),
+            circleStrokeColor("#FFFFFF"),
+        ),
+    )
 }
 
 private fun installRocketMarker(style: Style, lat: Double?, lon: Double?) {

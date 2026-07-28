@@ -195,6 +195,99 @@ public object DriftCast {
     }
 }
 
+// ── Reverse drift-cast guidance point (iOS computeGuidancePoint) ─────────
+
+/** The DriftCast planner's output — port of iOS GuidanceResult. */
+public data class GuidanceResult(
+    val guidanceLat: Double,
+    val guidanceLon: Double,
+    val steeringAngleDeg: Double,
+    val steeringBearingDeg: Double,
+    val feasible: Boolean,
+    val infeasibleReason: String?,
+    /** Forward verification descent: guidance point → ground. */
+    val descentTrack: List<TrackPoint>,
+    val forwardLandingLat: Double,
+    val forwardLandingLon: Double,
+    val landingErrorM: Double,
+    val windProfile: WindProfile,
+    val launchLat: Double,
+    val launchLon: Double,
+    val landingLat: Double,
+    val landingLon: Double,
+    val apogeeFt: Double,
+    val totalDescentTimeS: Double,
+    val totalDriftM: Double,
+)
+
+/**
+ * Compute the apogee guidance point for a desired landing location:
+ * reverse descent (landing → walk upwind → apogee point), feasibility
+ * check against the steering cone, then a forward verification cast.
+ * Pure — the caller fetches the wind (iOS fetched inside; separated here
+ * so the whole planner is JVM-testable).
+ */
+public fun computeGuidancePoint(
+    launchLat: Double,
+    launchLon: Double,
+    landingLat: Double,
+    landingLon: Double,
+    apogeeAglFt: Double,
+    drogueRateFps: Double,
+    mainRateFps: Double,
+    mainDeployAglFt: Double,
+    windProfile: WindProfile,
+    maxSteeringDeg: Double = 25.0,
+): GuidanceResult {
+    // Step 1: Reverse descent — landing → apogee guidance point.
+    val reverseTrack = DriftCast.simulateDescent(
+        startLat = landingLat, startLon = landingLon,
+        apogeeAglFt = apogeeAglFt,
+        drogueRateFps = drogueRateFps, mainRateFps = mainRateFps,
+        mainDeployAglFt = mainDeployAglFt,
+        windProfile = windProfile, forward = false,
+    )
+    val guidancePt = reverseTrack.last()
+
+    // Step 2: Feasibility against the steering cone.
+    val horizDistM = DriftCast.haversineM(launchLat, launchLon, guidancePt.lat, guidancePt.lon)
+    val steeringAngle = Math.toDegrees(atan2(horizDistM, DriftCast.ftToM(apogeeAglFt)))
+    val steeringBrg = DriftCast.bearingDeg(launchLat, launchLon, guidancePt.lat, guidancePt.lon).mod(360.0)
+    val feasible = steeringAngle <= maxSteeringDeg
+    val infeasibleReason = if (feasible) {
+        null
+    } else {
+        "Steering angle %.1f° exceeds maximum %.1f°. ".format(steeringAngle, maxSteeringDeg) +
+            "The guidance point is %.0f m from the pad at bearing %.0f°. ".format(horizDistM, steeringBrg) +
+            "Try a closer landing point, higher apogee, or increase max steering."
+    }
+
+    // Step 3: Forward verification — guidance point → ground.
+    val forwardTrack = DriftCast.simulateDescent(
+        startLat = guidancePt.lat, startLon = guidancePt.lon,
+        apogeeAglFt = apogeeAglFt,
+        drogueRateFps = drogueRateFps, mainRateFps = mainRateFps,
+        mainDeployAglFt = mainDeployAglFt,
+        windProfile = windProfile, forward = true,
+    )
+    val fwdLanding = forwardTrack.last()
+
+    return GuidanceResult(
+        guidanceLat = guidancePt.lat, guidanceLon = guidancePt.lon,
+        steeringAngleDeg = steeringAngle, steeringBearingDeg = steeringBrg,
+        feasible = feasible, infeasibleReason = infeasibleReason,
+        descentTrack = forwardTrack,
+        forwardLandingLat = fwdLanding.lat, forwardLandingLon = fwdLanding.lon,
+        landingErrorM = DriftCast.haversineM(landingLat, landingLon, fwdLanding.lat, fwdLanding.lon),
+        windProfile = windProfile,
+        launchLat = launchLat, launchLon = launchLon,
+        landingLat = landingLat, landingLon = landingLon,
+        apogeeFt = apogeeAglFt,
+        totalDescentTimeS = forwardTrack.last().timeS,
+        totalDriftM = DriftCast.haversineM(guidancePt.lat, guidancePt.lon, fwdLanding.lat, fwdLanding.lon),
+    )
+}
+
 // ── Landing-prediction cast layer (iOS LandingPredictor.swift free funcs) ─
 
 /** Snapshot-source tag for the staleness badge and replay logs. */

@@ -49,6 +49,9 @@ dependencies {
     // designed around).  Pinned per the dependency policy.
     implementation("org.maplibre.gl:android-sdk:11.8.8")
 
+    // Phone GPS for direction/distance-to-rocket (fused provider; Pixel/GMS).
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
     val composeBom = platform("androidx.compose:compose-bom:2025.06.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")

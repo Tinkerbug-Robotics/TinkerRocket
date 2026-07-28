@@ -80,17 +80,23 @@ fun MapTab(container: AppContainer, session: DeviceSession?) {
 
     when (route) {
         "map" -> Box(Modifier.fillMaxSize()) {
-            MapScreen(proxy = container.tileProxy, session = session, predictor = predictor)
-            TextButton(
-                onClick = { route = "offline" },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp),
-            ) { Text("Offline maps") }
+            MapScreen(
+                proxy = container.tileProxy,
+                session = session,
+                predictor = predictor,
+                phoneLocation = container.phoneLocation,
+            )
+            Row(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
+                TextButton(onClick = { route = "driftcast" }) { Text("Drift Cast") }
+                TextButton(onClick = { route = "offline" }) { Text("Offline maps") }
+            }
         }
         "offline" -> OfflineMapsScreen(
             container = container,
             onBack = { route = "map" },
             onAdd = { route = "save" },
         )
+        "driftcast" -> DriftCastScreen(container = container, onBack = { route = "map" })
         else -> SaveAreaScreen(
             container = container,
             initialCenter = session?.lastValidRocketFix?.value

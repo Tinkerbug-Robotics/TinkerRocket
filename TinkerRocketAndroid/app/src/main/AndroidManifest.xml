@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Maps: upstream USGS tile fetches (read-through cache). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Direction/distance to rocket (dashboard arrow, map phone dot). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:name=".app.TinkerRocketApp"

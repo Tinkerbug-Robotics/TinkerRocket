@@ -33,6 +33,9 @@ class MainActivity : ComponentActivity() {
     private val blePermissions = buildList {
         add(Manifest.permission.BLUETOOTH_SCAN)
         add(Manifest.permission.BLUETOOTH_CONNECT)
+        // Location rides the same prompt (direction-to-rocket arrow, map
+        // phone dot) but never GATES the app — BLE does.
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     }.toTypedArray()
 
@@ -133,6 +136,7 @@ class MainActivity : ComponentActivity() {
                                         device = activeDevice,
                                         demo = demoFleet != null,
                                         syncer = container.syncer,
+                                        phoneLocation = container.phoneLocation,
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null

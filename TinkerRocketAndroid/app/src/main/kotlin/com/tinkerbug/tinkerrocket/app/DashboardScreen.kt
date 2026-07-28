@@ -20,8 +20,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
@@ -42,8 +44,18 @@ fun DashboardScreen(
     onDisconnect: () -> Unit,
     demo: Boolean = false,
     syncer: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer? = null,
+    phoneLocation: PhoneLocationManager? = null,
 ) {
     val session = device.session
+
+    // Phone GPS/compass run only while the dashboard is visible (the iOS
+    // onAppear/onDisappear discipline — continuous updates leak battery).
+    if (phoneLocation != null) {
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            phoneLocation.start()
+            onDispose { phoneLocation.stop() }
+        }
+    }
     val telemetry by session.telemetry.collectAsState()
     val identity by session.identity.collectAsState()
     val hasTelemetry by session.hasReceivedTelemetry.collectAsState()
@@ -137,6 +149,18 @@ fun DashboardScreen(
                 Modifier.weight(1f),
             )
             StatCard("Link", rssi?.let { "$it dBm" } ?: "—", Modifier.weight(1f))
+        }
+
+        // Direction/distance to rocket (BS links only — the recovery walk).
+        // Reads the LATCHED lastValidRocketFix, never per-frame lat/lon:
+        // relay frames frequently arrive with lat/lon = nil (#140).
+        if (phoneLocation != null && session.isBaseStation) {
+            val lastFix by session.lastValidRocketFix.collectAsState()
+            DirectionToRocketCard(
+                phoneLocation = phoneLocation,
+                fix = lastFix,
+                rocketAltM = (telemetry.gnssAlt ?: telemetry.pressureAlt)?.toDouble(),
+            )
         }
 
         // Relayed rockets (#390): base-station links list every rocket the
@@ -235,6 +259,97 @@ fun DashboardScreen(
                 telemetry.maxAltM?.let { String.format(Locale.ROOT, "%.1f m", it) } ?: "—",
                 Modifier.weight(1f),
             )
+        }
+    }
+}
+
+/**
+ * Direction arrow + distance/altitude to the rocket (iOS Signal-panel
+ * arrow).  Arrow angle = bearing(phone→rocket) − phone heading, so the
+ * arrow points where the operator should walk.  Waiting states say WHY
+ * the arrow is hidden instead of showing nothing; a denied permission is
+ * its own state with a Grant button (the plan's denied-state UI).
+ */
+@Composable
+private fun DirectionToRocketCard(
+    phoneLocation: PhoneLocationManager,
+    fix: com.tinkerbug.tinkerrocket.session.LastValidRocketFix?,
+    rocketAltM: Double?,
+) {
+    val phoneFix by phoneLocation.location.collectAsState()
+    val heading by phoneLocation.headingDeg.collectAsState()
+    var permission by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(phoneLocation.hasPermission())
+    }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        permission = granted
+        if (granted) phoneLocation.restartIfHeld()
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Rocket bearing", style = MaterialTheme.typography.titleMedium)
+            when {
+                !permission -> {
+                    Text(
+                        "Location permission is needed to show direction " +
+                            "and distance to the rocket.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedButton(onClick = {
+                        launcher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    }) { Text("Grant location") }
+                }
+                phoneFix == null -> Text(
+                    "Getting phone location…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                fix == null -> Text(
+                    "Waiting for rocket GPS",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> {
+                    val p = phoneFix!!
+                    val dist = com.tinkerbug.tinkerrocket.session.DriftCast.haversineM(
+                        p.lat, p.lon, fix.latitude, fix.longitude,
+                    )
+                    val bear = com.tinkerbug.tinkerrocket.session.DriftCast.bearingDeg(
+                        p.lat, p.lon, fix.latitude, fix.longitude,
+                    )
+                    val arrowAngle = ((bear - heading + 180.0).mod(360.0) - 180.0).toFloat()
+                    Text(
+                        "➤",
+                        style = MaterialTheme.typography.displayMedium,
+                        color = Color(0xFF1E88E5),
+                        // Glyph points east (90°); rotate −90 to make it north-up.
+                        modifier = Modifier.rotate(arrowAngle - 90f),
+                    )
+                    val distText =
+                        if (dist < 1000) "%.0f m".format(dist) else "%.2f km".format(dist / 1000)
+                    Text(
+                        "$distText away",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    val phoneAlt = p.altMslM
+                    if (phoneAlt != null && rocketAltM != null) {
+                        val diff = rocketAltM - phoneAlt
+                        Text(
+                            "%.0f m %s".format(kotlin.math.abs(diff), if (diff >= 0) "up" else "down"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }
