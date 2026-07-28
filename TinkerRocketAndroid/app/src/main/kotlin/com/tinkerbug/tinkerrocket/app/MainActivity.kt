@@ -119,7 +119,12 @@ class MainActivity : ComponentActivity() {
                                     }
                                     androidx.compose.material3.TextButton(onClick = { tab = 2 }) {
                                         androidx.compose.material3.Text(
-                                            if (tab == 2) "● Settings" else "Settings",
+                                            if (tab == 2) "● Map" else "Map",
+                                        )
+                                    }
+                                    androidx.compose.material3.TextButton(onClick = { tab = 3 }) {
+                                        androidx.compose.material3.Text(
+                                            if (tab == 3) "● Settings" else "Settings",
                                         )
                                     }
                                 }
@@ -136,6 +141,10 @@ class MainActivity : ComponentActivity() {
                                     1 -> FilesScreen(
                                         device = activeDevice,
                                         fleetScope = container.fleetScope,
+                                    )
+                                    2 -> MapScreen(
+                                        proxy = container.tileProxy,
+                                        session = activeDevice.session,
                                     )
                                     else -> SettingsScreen(
                                         store = container.profileStore,

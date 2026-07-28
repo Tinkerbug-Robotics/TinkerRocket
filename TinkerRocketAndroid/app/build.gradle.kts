@@ -40,7 +40,14 @@ kotlin {
 
 dependencies {
     implementation(project(":core:ble"))
+    implementation(project(":core:maps"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Maps: MapLibre GL Native, raster-only over the localhost tile proxy
+    // (plan §1 Maps row — Google Maps ToS forbids tile caching; MapLibre's
+    // own OfflineManager is evictable SQLite, the silent-data-loss iOS
+    // designed around).  Pinned per the dependency policy.
+    implementation("org.maplibre.gl:android-sdk:11.8.8")
 
     val composeBom = platform("androidx.compose:compose-bom:2025.06.01")
     implementation(composeBom)

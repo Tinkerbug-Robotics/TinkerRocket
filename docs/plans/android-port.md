@@ -114,6 +114,10 @@ Estimating unit: 1 evening ≈ 2–3 h. Cadence ~3 sessions/week. Every phase en
 
 **v1.0 = Phases 0–7 + Checkpoint A + shadow outing.** Trailing: OTA (first to land), 3D views, PyroTest video, DriftCast send flow (guided flight is gated behind FIRST-GUIDED-FLIGHT anyway), fleet chrome, iOS-profile import.
 
+**Spike verdicts**
+- **S1 (emulator BLE)**: mooted — the Pixel 8 arrived before the spike ran; Phase 2's bench seam validated the real stack directly.
+- **S2 (MapLibre + tile proxy)**: **PASSED 2026-07-27** on the Pixel 8. Raster styles render through the localhost read-through proxy (byte-identical iOS flat-file cache layout); style swap re-installs overlays in the `setStyle` callback; `REASON_API_GESTURE` gates follow mode; airplane-mode cold start renders the cached area. Two real findings, both fixed in `:core:maps`/`MapScreen`: (1) `InetAddress.getLoopbackAddress()` binds `::1` on Android while clients dial `127.0.0.1` — bind IPv4 loopback explicitly; (2) MapLibre fail-fasts all HTTP when the OS reports offline, so `MapLibre.setConnected(true)` is mandatory — safe because every source URL is loopback and the proxy owns real offline semantics. No osmdroid fallback needed.
+
 ---
 
 ## 5. Permanent dual-maintenance operating model

@@ -47,6 +47,14 @@ class AppContainer(app: Application) {
     )
     val syncer = ActiveRocketSyncer(fleetScope)
 
+    // Offline maps: flat-file cache in noBackupFilesDir (never OS-purged,
+    // never backed up — field data must survive storage pressure) + the
+    // localhost read-through proxy MapLibre's raster sources fetch from.
+    val tileCache = com.tinkerbug.tinkerrocket.maps.OfflineTileCache(
+        File(app.noBackupFilesDir, "OfflineTiles"),
+    )
+    val tileProxy = com.tinkerbug.tinkerrocket.maps.TileProxyServer(tileCache).apply { start() }
+
     val fleet: FleetManager<DeviceSession> = run {
         lateinit var fleetRef: FleetManager<DeviceSession>
         val sessionFactory = object : FleetSessionFactory<DeviceSession> {

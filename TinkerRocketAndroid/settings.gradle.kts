@@ -35,5 +35,6 @@ rootProject.name = "TinkerRocketAndroid"
 
 include(":core:protocol")
 include(":core:session")
+include(":core:maps")    // pure JVM: tile math + offline cache + tile proxy
 include(":core:ble")     // Android library: RealBleTransport over BluetoothGatt
 include(":app")          // Compose app
