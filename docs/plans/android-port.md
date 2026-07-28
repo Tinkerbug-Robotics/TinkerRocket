@@ -157,7 +157,7 @@ The consolation: Phase 0's infrastructure permanently hardens the iOS↔firmware
 ## 8. Open decisions (user)
 
 1. **Approve Spike S1** ($15 USB BT dongle) and the trigger rule: Pixel 8a ordered at Phase 2 exit, or immediately if S1 fails.
-2. **Default basemap**: `usgsImageryTopo` as default (US-only, matches the offline story) vs adding a keyless vector style (OpenFreeMap/Protomaps — nicer out-of-box, online-only, mandatory ODbL attribution). Apple standard/hybrid has no Android equivalent; also decides whether post-flight FlightMapView (iOS hardcodes Apple hybrid) rebases onto the USGS stack.
+2. ~~**Default basemap**~~ **DECIDED 2026-07-27**: `usgsImageryTopo` stays the default and the ONLY offline/cacheable path; OpenFreeMap Liberty (keyless vector, online-only, ODbL attribution shown while active) joined the source cycle for international browsing. Save Area stays USGS-only. Post-flight FlightMapView rebases onto the USGS stack.
 3. **v1.0 scope confirmations**: OTA trailing OK? MagCal in Phase 7 OK? Single-BS+single-rocket chrome for the first field season OK (relay routing present)?
 4. **EGM96 fallback**: bundle a coarse geoid table below API 34, or show ellipsoid altitude with a caveat?
 5. **L2CAP CoC**: if `ble/526-l2cap-coc` merges before Phase 4, grow `BleTransport` with a channel path in v1, or GATT-only first?

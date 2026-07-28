@@ -112,6 +112,10 @@ fun MapScreen(
         ).collectAsState()
 
     var source by remember { mutableStateOf(TileSource.USGS_IMAGERY_TOPO) }
+    // Basemap-decision (plan §8 #2): USGS raster = DEFAULT + the only
+    // offline/cacheable path; OpenFreeMap Liberty (keyless vector, ODbL)
+    // is the online-only option for international browsing.
+    var openFreeMap by remember { mutableStateOf(false) }
     var follow by remember { mutableStateOf(true) }
 
     // The map handle once ready; state so recomposition sees it.
@@ -144,9 +148,14 @@ fun MapScreen(
 
     // Style install/swap: a swap is a FULL reload — overlays are re-added in
     // the callback every time (the layer-reinstall pattern the spike proves).
-    LaunchedEffect(mapRef, source) {
+    LaunchedEffect(mapRef, source, openFreeMap) {
         val map = mapRef ?: return@LaunchedEffect
-        map.setStyle(Style.Builder().fromJson(rasterStyleJson(proxy, source))) { style ->
+        val builder = if (openFreeMap) {
+            Style.Builder().fromUri(OPENFREEMAP_STYLE_URI)
+        } else {
+            Style.Builder().fromJson(rasterStyleJson(proxy, source))
+        }
+        map.setStyle(builder) { style ->
             installPredictionLayers(style, prediction)
             installPhoneDot(style, phoneFix)
             installRocketMarker(style, fix?.latitude, fix?.longitude)
@@ -222,12 +231,16 @@ fun MapScreen(
 
         Column(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
             OutlinedButton(onClick = {
-                source = when (source) {
-                    TileSource.USGS_IMAGERY_TOPO -> TileSource.USGS_TOPO
-                    TileSource.USGS_TOPO -> TileSource.USGS_IMAGERY
-                    TileSource.USGS_IMAGERY -> TileSource.USGS_IMAGERY_TOPO
+                when {
+                    openFreeMap -> {
+                        openFreeMap = false
+                        source = TileSource.USGS_IMAGERY_TOPO
+                    }
+                    source == TileSource.USGS_IMAGERY_TOPO -> source = TileSource.USGS_TOPO
+                    source == TileSource.USGS_TOPO -> source = TileSource.USGS_IMAGERY
+                    else -> openFreeMap = true
                 }
-            }) { Text(source.displayName) }
+            }) { Text(if (openFreeMap) "OpenFreeMap (online)" else source.displayName) }
             if (!follow) {
                 OutlinedButton(onClick = {
                     follow = true
@@ -248,7 +261,7 @@ fun MapScreen(
         ) {
             Row {
                 Text(
-                    TileSource.ATTRIBUTION,
+                    if (openFreeMap) OPENFREEMAP_ATTRIBUTION else TileSource.ATTRIBUTION,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                 )
@@ -265,6 +278,11 @@ fun MapScreen(
         }
     }
 }
+
+/** OpenFreeMap Liberty — keyless vector style, online-only, never cached. */
+private const val OPENFREEMAP_STYLE_URI = "https://tiles.openfreemap.org/styles/liberty"
+private const val OPENFREEMAP_ATTRIBUTION =
+    "OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors"
 
 private const val ROCKET_SOURCE = "rocket-src"
 private const val ROCKET_LAYER = "rocket-layer"
