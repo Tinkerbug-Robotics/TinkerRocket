@@ -305,3 +305,50 @@ private fun humanBytes(n: Long): String = when {
     n >= 1024 -> "%.1f kB".format(n / 1024.0)
     else -> "$n B"
 }
+
+/**
+ * Device-less OTA progress, shown while the device is away rebooting and the
+ * normal device UI has unmounted.  Bench 2026-07-28: without this the app
+ * dropped to the scanner mid-flash — the OTA state survived (it is fleet-keyed
+ * in AppContainer), but the user lost sight of it exactly when reassurance
+ * matters most.
+ */
+@Composable
+fun OtaProgressScreen(ota: OtaSession) {
+    val state by ota.state.collectAsState()
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("Firmware update in progress", style = MaterialTheme.typography.titleLarge)
+        when (val s = state) {
+            is OtaSession.State.Uploading -> {
+                Text("${humanBytes(s.bytesSent)} / ${humanBytes(s.totalBytes)}", fontFamily = FontFamily.Monospace)
+                LinearProgressIndicator(
+                    progress = { if (s.totalBytes > 0) s.bytesSent.toFloat() / s.totalBytes else 0f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            is OtaSession.State.Verifying -> {
+                CircularProgressIndicator()
+                Text("Verifying on device…")
+            }
+            is OtaSession.State.Rebooting -> {
+                CircularProgressIndicator()
+                Text("Device rebooting — waiting for it to come back…")
+            }
+            else -> {
+                CircularProgressIndicator()
+                Text("Working…")
+            }
+        }
+        Text(
+            "Keep the phone near the device. Don't power-cycle it — the " +
+                "bootloader keeps the previous firmware and reverts to it if " +
+                "the new image doesn't boot.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}

@@ -60,6 +60,15 @@ class AppContainer(app: Application) {
      */
     private val otaSessions = mutableMapOf<String, com.tinkerbug.tinkerrocket.session.OtaSession>()
 
+    /**
+     * The OTA currently mid-flight, if any.  During the post-flash reboot the
+     * device disappears from the fleet, so the normal device UI unmounts —
+     * this is what lets the app keep showing progress instead of dropping the
+     * user back to the scanner while their firmware is being written.
+     */
+    fun runningOta(): com.tinkerbug.tinkerrocket.session.OtaSession? =
+        otaSessions.values.firstOrNull { it.isRunning }
+
     fun otaSessionFor(deviceId: String): com.tinkerbug.tinkerrocket.session.OtaSession =
         otaSessions.getOrPut(deviceId) {
             com.tinkerbug.tinkerrocket.session.OtaSession(
