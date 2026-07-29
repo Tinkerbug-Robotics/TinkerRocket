@@ -173,7 +173,11 @@ class MainActivity : ComponentActivity() {
 
                         else -> {
                             var showMyDevices by remember { mutableStateOf(false) }
-                            if (showMyDevices) {
+                            var showSavedFlights by remember { mutableStateOf(false) }
+                            if (showSavedFlights) {
+                                // #635: local cache only — no session needed.
+                                SavedFlightsScreen(onBack = { showSavedFlights = false })
+                            } else if (showMyDevices) {
                                 DeviceManagerScreen(
                                     store = container.knownDevices,
                                     fleet = container.fleet,
@@ -193,6 +197,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onMyDevices = { showMyDevices = true },
+                                    onSavedFlights = { showSavedFlights = true },
                                 )
                             }
                         }
