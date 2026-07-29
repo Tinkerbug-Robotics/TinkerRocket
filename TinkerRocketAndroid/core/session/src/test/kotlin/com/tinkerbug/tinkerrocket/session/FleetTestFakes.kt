@@ -21,8 +21,15 @@ class FakeScanner : BleScanner {
     var activeCollections = 0
         private set
 
+    /**
+     * Set to make the flow FAIL instead of emitting — what the real scanner
+     * does when the adapter is off ("BLE scanner unavailable"). Left uncaught
+     * this used to kill the process (Checkpoint A Group 1).
+     */
+    var failWith: Throwable? = null
+
     override fun advertisements(): Flow<BleAdvertisement> = emissions
-        .onStart { activeCollections++ }
+        .onStart { activeCollections++; failWith?.let { throw it } }
         .onCompletion { activeCollections-- }
 }
 
