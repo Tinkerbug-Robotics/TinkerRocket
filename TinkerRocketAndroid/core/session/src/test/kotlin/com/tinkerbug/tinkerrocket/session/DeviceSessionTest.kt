@@ -614,4 +614,49 @@ class DeviceSessionTest {
         runCurrent()
         assertEquals(rssiOps, h.fw.ops.count { it == "rssi" })
     }
+
+    // ── #634 bulk delete ─────────────────────────────────────────────────
+
+    @Test
+    fun deleteFiles_issuesEveryDeleteInOrderAndStripsThemLocally() = runTest {
+        val h = startedSession {
+            repeat(5) { i ->
+                deviceFiles += FakeFirmware.FakeFile("flight_$i.bin", ByteArray(64))
+            }
+        }
+        advanceTimeBy(1_200); runCurrent()
+        h.session.requestFileList(0)
+        advanceTimeBy(500); runCurrent()
+        val listed = h.session.files.value.map { it.name }
+        assertTrue(listed.size >= 3, "need a populated list to delete from, got $listed")
+
+        val doomed = listOf(listed[0], listed[2])
+        h.session.deleteFiles(doomed)
+        advanceTimeBy(2_000); runCurrent()
+
+        // Every name went out as its own cmd 3, in the order given — one
+        // coroutine feeding the op queue, not N racing ones.
+        val deletes = h.fw.commandFrames
+            .filter { it[0].toInt() == BleCommandId.FILE_DELETE }
+            .map { String(it.copyOfRange(1, it.size), Charsets.UTF_8) }
+        assertEquals(doomed, deletes)
+
+        // ...and the list is optimistically stripped of exactly those.
+        val left = h.session.files.value.map { it.name }
+        for (name in doomed) assertFalse(name in left, "$name still listed after delete")
+        assertEquals(listed.size - doomed.size, left.size)
+    }
+
+    @Test
+    fun deleteFiles_emptyListIsANoOp() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1_200); runCurrent()
+        val before = h.fw.commandFrames.count { it[0].toInt() == BleCommandId.FILE_DELETE }
+        h.session.deleteFiles(emptyList())
+        advanceTimeBy(500); runCurrent()
+        assertEquals(
+            before,
+            h.fw.commandFrames.count { it[0].toInt() == BleCommandId.FILE_DELETE },
+        )
+    }
 }
