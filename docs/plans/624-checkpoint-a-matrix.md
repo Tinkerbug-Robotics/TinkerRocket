@@ -142,13 +142,36 @@ connected, which could equally have meant the reset never happened — esptool c
 sync with an OC in light sleep. Use an observable tell-tale: the rocket power rail is ON
 before and OFF after, because `pwr_pin_on` starts OFF on every OC boot.
 
-## Group 5 — Throughput and files
+## Group 5 — Throughput and files ✅ MOSTLY DONE 2026-07-29
 
-- [ ] Download a real flight log; record kB/s and total time
-- [ ] Compare against iOS on the same `.bin` (iOS baseline ~35 kB/s post-#524)
-- [ ] Stall path: interrupt mid-download → 3 s stall timer fires, state is honest
-- [ ] On-device bin→CSV of the same log → byte-identical to the iOS golden
-- [ ] Bulk export / share sheet works for a real file
+Log generated on the bench by a **simulated flight** (Simulation tool → 20 g / 40 N / 1.5 s
+burn), not a real one — the sim runs on the real FC and writes a real log, so it exercises
+the whole download/CSV/export pipeline without flying. Sim logs are HIL: injected altitude
+and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data quality.
+
+- [x] Download throughput → **PASS**. `flight_20260729_163740.bin`, **10,544,908 B verified
+      on disk** against the board's reported 10544.9 kB — exact. Download alone completed
+      within 90 s (**≥117 kB/s**); **84.8 kB/s end-to-end** including on-device CSV
+      generation. iOS baseline is ~35 kB/s, so Android reads roughly 2.4x faster — the
+      opposite direction from OTA writes, where iOS is 6x slower (#627)
+- [ ] Compare against iOS on the same `.bin` → NEEDS the iPhone
+- [x] Stall path → **PASS, cleanly**. A 54.7 MB download interrupted by airplane mode: the
+      app left the download, ran the ladder honestly (`Reconnecting (4/8)…(8/8)`), and left
+      **no partial file** — `BinaryCache` unchanged and no CSV generated from the aborted
+      transfer. A truncated `.bin` persisting as a valid-looking file would be the dangerous
+      outcome here, and it doesn't happen
+- [x] On-device bin→CSV → **PASS**. 72 MB CSV with **63 columns** (the #623 "Deployed Flag"
+      count — the pin that broke CI during Phase 8, intact on a real conversion). JSON sidecar
+      coherent and cross-checks the sim: max alt 457.4 m vs 459 predicted, burnout 261.6 m/s
+      vs 262, burnout 1.501 s vs a 1.5 s burn; `fw_git_sha: d9a2679a`, `fw_dirty: false`.
+      Exact byte-parity with iOS was separately proven in Phase 4
+      (`flight_20260723_141100.csv` = 61,611 B, iOS-identical). NOT re-verified: the CSV's row
+      count — `wc -l` over 72 MB through `run-as` returned nothing, likely a timeout
+- [x] Bulk export / share → **PARTIAL** → issue #634. Single-file share works (sheet resolves
+      the right file; FileProvider correct — the `Permission Denial` logcat lines are the
+      system sheet failing to preview a non-exported provider, which is expected). But Android
+      has **no multi-select at all**, where iOS has bulk delete in two views. Note the matrix
+      wording was wrong: iOS's multi-select drives bulk *delete*, not export
 
 ## Group 6 — UI performance
 
