@@ -173,13 +173,29 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
       has **no multi-select at all**, where iOS has bulk delete in two views. Note the matrix
       wording was wrong: iOS's multi-select drives bulk *delete*, not export
 
-## Group 6 — UI performance
+## Group 6 — UI performance ⚠️ CRASH FOUND 2026-07-29
 
-- [ ] 10 Hz dashboard, 2 rockets in roster → frame timing; look for jank, not averages
-- [ ] Chart screen with a full flight CSV → pinch/pan stays responsive during
-      re-decimation (200 ms debounce)
-- [ ] Map with offline tiles + prediction overlays at 1 Hz → no dropped frames
-- [ ] Screen-on power draw during a simulated 45 min pad wait
+- [x] Dashboard frame timing → **PASS, with a Checkpoint-B watch item**. Under demo replay at
+      flight rates: 245 frames/60 s, 50th 19 ms, 90th 24 ms, 99th 29 ms, **Missed Vsync: 0**.
+      No dropped frames — but each recomposition costs ~19–24 ms of *UI-thread* work
+      (`Slow UI thread: 200/245`), over the 16.7 ms budget for 60 fps. A Pixel 8 has the
+      headroom; the Galaxy A15 at Checkpoint B is exactly where this would tip into visible
+      jank, so measure it there.
+      METHOD NOTE: measuring on the real board while it sits at LANDED gives ~1 Hz telemetry
+      and ~50 frames/60 s — Compose correctly redraws only on change, so the "92% janky"
+      figure that produces is an artifact of judging a 1 Hz UI against a 60 fps budget. Use
+      **Demo mode** for this test; it replays at real flight rates.
+      Only one rocket was in the roster (a second needs a relayed rocket via the BS)
+- [ ] Chart with a full flight CSV → **CRASH** → issue #636. The app OOMs and dies opening
+      the chart on a 72 MB CSV (from a 96-second sim flight). `FlightChartScreen.kt:81` does
+      `CsvParser.parse(csvFile.readText())` — the whole file becomes a UTF-16 `String`, a
+      **134 MB allocation** against a 268 MB heap limit. Reproduced twice; `exit-info` records
+      both as `APP CRASH(EXCEPTION)` at 433 MB and 312 MB RSS. The board already holds 54.7 MB
+      logs, which could never be charted. Download and CSV conversion are unaffected — only
+      the chart's read-back
+- [ ] Map with offline tiles + prediction at 1 Hz → NOT RUN (blocked behind the chart work in
+      this sitting; independent, can be run any time)
+- [ ] Screen-on power draw over a simulated pad wait → NOT RUN
 
 ## Group 7 — Sensors and audio
 
