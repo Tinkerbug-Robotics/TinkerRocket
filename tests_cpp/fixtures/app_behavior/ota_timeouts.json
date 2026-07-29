@@ -36,8 +36,8 @@
       "name": "fwPublish",
       "crossesRelay": true,
       "localMs": 10000,
-      "fcMs": 40000,
-      "why": "FC reboots, then the OC has to re-query its identity before the new version reaches the app"
+      "fcMs": 120000,
+      "why": "FC reboots, then the OC has to re-query its identity before the new version reaches the app. Bench 2026-07-28: a SUCCESSFUL FC update published its new fc_identity 73.9 s after ready_to_boot, so the old 40 s window expired first and the app reported 'Rollback detected' on an update that had in fact worked."
     },
     {
       "name": "disconnect",
@@ -54,5 +54,28 @@
       "why": "phone re-establishes its own link to the OC; already generous"
     }
   ],
-  "pollMs": 50
+  "pollMs": 50,
+
+  "_fcRelayPumpComment": [
+    "Ceiling on the chunk pump for FC-relay OTAs ONLY; a local OC OTA stays",
+    "uncapped (it writes straight to flash, no relay, and runs happily at",
+    "~68 kB/s from Android).",
+    "",
+    "#627: on the relay path the OC re-sends each chunk to the FC over I2S. Pump",
+    "faster than it can drain and the 16-deep feed queue fills, receive buffers",
+    "stop being retired, NimBLE's ACL mbuf pool exhausts and the BLE link wedges",
+    "— thousands of 'ACL buf alloc failed' / 'MBUF alloc stuck', then the OC",
+    "simply stops receiving (bench 2026-07-28: enq frozen at 3418 for 135 s).",
+    "The FC then sees a hole and, being forward-only, discards everything after.",
+    "",
+    "Bench-measured on the same board and image: iOS pumps 11.4 kB/s and the",
+    "relay works; Android pumps ~68 kB/s and it fails. iOS was never CORRECT",
+    "here, just slow enough to stay under an unstated limit. 12000 keeps the",
+    "proven-good rate for both platforms and makes it explicit — on iOS this is",
+    "very nearly a no-op, on Android it is the fix.",
+    "",
+    "A 591.7 kB FC image therefore takes ~50 s to upload, which is why the FC",
+    "finish window is 60 s (see the finish stage above)."
+  ],
+  "fcRelayMaxBytesPerSec": 12000
 }

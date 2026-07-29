@@ -83,6 +83,36 @@ class OtaTimeoutsTest {
             )
         }
         assertEquals(json["pollMs"]!!.jsonPrimitive.long, OtaTimeouts.POLL_MS)
+        assertEquals(
+            json["fcRelayMaxBytesPerSec"]!!.jsonPrimitive.long,
+            OtaTimeouts.FC_RELAY_MAX_BYTES_PER_SEC,
+            "#627 relay cap disagrees with the fixture",
+        )
+    }
+
+    @Test
+    fun fcRelayPacerHoldsTheCapAndCreditsElapsedTime() {
+        val rate = OtaTimeouts.FC_RELAY_MAX_BYTES_PER_SEC
+
+        // One second's worth of bytes, no time spent yet → wait the full second.
+        assertEquals(1000L, OtaTimeouts.fcRelayPaceDelayMs(rate, elapsedMs = 0))
+
+        // Same bytes, but the writes themselves already took 400 ms — credit
+        // that instead of adding to it, or the effective rate drifts under the
+        // cap and a 591.7 kB FC image takes far longer than the 60 s finish
+        // window assumes.
+        assertEquals(600L, OtaTimeouts.fcRelayPaceDelayMs(rate, elapsedMs = 400))
+
+        // Already slower than the cap → never wait, never go backwards.
+        assertEquals(0L, OtaTimeouts.fcRelayPaceDelayMs(rate, elapsedMs = 1000))
+        assertEquals(0L, OtaTimeouts.fcRelayPaceDelayMs(rate, elapsedMs = 5000))
+
+        // The rate it actually enforces is the one measured working on the
+        // bench: iOS ran the relay at 11.4 kB/s, Android at ~68 kB/s wedged it.
+        assertTrue(
+            rate in 11_000..13_000,
+            "cap should sit at iOS's proven-good relay rate, was $rate B/s",
+        )
     }
 
     @Test

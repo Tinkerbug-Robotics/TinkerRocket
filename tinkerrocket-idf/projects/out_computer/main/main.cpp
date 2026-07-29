@@ -1135,12 +1135,35 @@ static constexpr uint32_t   kBootUsjGraceMs = 10000;
 
 static void bootUsjGraceExpired(void*)
 {
+#if defined(TR_OC_BENCH_DEBUG)
+    // Bench-debug image: never release. Light sleep powers down the USB
+    // Serial/JTAG peripheral the console rides on (ESP_CONSOLE_UART_NUM=-1,
+    // secondary none — USJ is the ONLY console), so once this lock drops the
+    // OC goes permanently silent to a host, ~11 s after every boot.
+    //
+    // That used to be masked: before #519 the BT controller took its own
+    // no_light_sleep lock on MAIN_XTAL, so an OC with BLE up never slept and
+    // the console stayed alive. #519 moved the BT LP clock to the 32k crystal
+    // — the power win — and with it went the accidental console lifeline.
+    // Found on the bench 2026-07-28 while trying to get OC-side evidence for
+    // #627: four capture attempts, all silent from exactly this line onward.
+    //
+    // Holding forever costs the whole #519 saving (~22 mA vs ~1 mA), which is
+    // why this is opt-in and stamped into the version string — a bench image
+    // must never be mistaken for a flight image.
+    ESP_LOGW("PWR", "BENCH DEBUG: holding ESP_PM_NO_LIGHT_SLEEP for the whole "
+                    "session so the USJ console stays alive — light sleep is "
+                    "DISABLED and idle current is ~22 mA. Do NOT fly this image.");
+    (void)s_boot_usj_grace_held;
+    return;
+#else
     if (s_boot_usj_grace_held)
     {
         s_boot_usj_grace_held = false;
         esp_pm_lock_release(s_boot_usj_grace_lock);
         ESP_LOGI("PWR", "USB-enumeration grace over — light sleep unblocked");
     }
+#endif
 }
 
 static void holdBootUsjGrace()
@@ -1173,8 +1196,14 @@ static void holdBootUsjGrace()
     esp_timer_stop(s_boot_usj_grace_timer);
     esp_timer_start_once(s_boot_usj_grace_timer,
                          (uint64_t)kBootUsjGraceMs * 1000ULL);
+#if defined(TR_OC_BENCH_DEBUG)
+    ESP_LOGW("PWR", "BENCH DEBUG build — the USB console will stay alive past "
+                    "the %lu ms grace instead of going quiet (#627 bench).",
+             (unsigned long)kBootUsjGraceMs);
+#else
     ESP_LOGI("PWR", "Light sleep held %lu ms for USB enumeration (#541)",
              (unsigned long)kBootUsjGraceMs);
+#endif
 }
 #endif  // CONFIG_PM_ENABLE
 

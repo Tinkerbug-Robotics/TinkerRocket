@@ -35,7 +35,21 @@ if(TR_BOARD_V8)
 else()
     set(TR_BOARD_SUFFIX "")
 endif()
-set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}+${TR_BUILD_DATE}")
+# Bench-debug marker: a TR_OC_BENCH_DEBUG image keeps light sleep off for the
+# whole session (see main/CMakeLists.txt), so it draws ~22 mA instead of ~1 mA.
+# Stamping it here makes that visible everywhere the version travels — boot
+# log, BLE config_identity "fw", the app's Firmware screen, OTA metadata — so
+# one can't end up on a rocket unnoticed.
+#
+# esp_app_desc.version is 32 bytes, and "<sha>-dirty-bench+<date>" overflows it
+# — the suffixes come BEFORE the timestamp deliberately, so the safety marker
+# always survives and only the build date gets clipped.
+if(TR_OC_BENCH_DEBUG)
+    set(TR_BENCH_SUFFIX "-bench")
+else()
+    set(TR_BENCH_SUFFIX "")
+endif()
+set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DATE}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(out_computer)

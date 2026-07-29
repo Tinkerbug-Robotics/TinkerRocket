@@ -43,7 +43,13 @@ class OtaSessionTest {
         )
         session!!.start()
         runCurrent()
-        val ota = OtaSession(scope = backgroundScope, sessionLookup = { session })
+        val ota = OtaSession(
+            scope = backgroundScope,
+            sessionLookup = { session },
+            // Tie the #627 pacer's clock to virtual time, so a paced pump
+            // is deterministic instead of reading ~0 elapsed forever.
+            nanoTime = { currentTime * 1_000_000L },
+        )
         return Rig(fw, ota, { session }, { session = it })
     }
 
@@ -298,6 +304,57 @@ class OtaSessionTest {
         // The FC begin window is the long one — still waiting at the local timeout.
         advanceTimeBy(OtaSession.BEGIN_TIMEOUT_MS + 500); runCurrent()
         assertIs<OtaSession.State.Loading>(r.ota.state.value.let { if (it is OtaSession.State.Loading) it else it })
+    }
+
+    // ── #627 relay pacing ────────────────────────────────────────────────
+
+    @Test
+    fun fcRelayPumpIsPacedButTheLocalPumpIsNot() = runTest {
+        // 60 kB at the 12 kB/s relay cap = ~5 s of pacing. The local path has
+        // no relay to overrun, so it must stay uncapped — a cap there would
+        // turn the bench-proven ~68 kB/s OC flash into a 60-second crawl.
+        val bytes = 60_000
+
+        val local = rig()
+        advanceTimeBy(1_200); runCurrent()
+        val localStart = currentTime
+        local.ota.start(image(bytes), targetIsFc = false)
+        advanceTimeBy(100); runCurrent()
+        local.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        val localElapsed = currentTime - localStart
+        assertIs<OtaSession.State.Verifying>(
+            local.ota.state.value,
+            "local pump should have run straight through",
+        )
+        assertTrue(
+            localElapsed < 2_000,
+            "local pump must not be throttled (took ${localElapsed}ms)",
+        )
+
+        val relay = rig()
+        advanceTimeBy(1_200); runCurrent()
+        val relayStart = currentTime
+        relay.ota.start(image(bytes), targetIsFc = true)
+        advanceTimeBy(100); runCurrent()
+        relay.fw.emitOtaStatus("ready")
+        // Well past the local pump's duration, the relay pump is still going.
+        advanceTimeBy(2_000); runCurrent()
+        assertIs<OtaSession.State.Uploading>(
+            relay.ota.state.value,
+            "relay pump should still be throttled here, not finished",
+        )
+
+        advanceTimeBy(10_000); runCurrent()
+        assertIs<OtaSession.State.Verifying>(relay.ota.state.value)
+        val relayElapsed = currentTime - relayStart
+        val impliedRate = bytes * 1000L / relayElapsed
+        assertTrue(
+            impliedRate <= OtaTimeouts.FC_RELAY_MAX_BYTES_PER_SEC,
+            "relay pump ran at ${impliedRate} B/s, over the " +
+                "${OtaTimeouts.FC_RELAY_MAX_BYTES_PER_SEC} B/s cap that keeps " +
+                "the OC's mbuf pool alive (#627)",
+        )
     }
 
     // ── Chunk sizing ─────────────────────────────────────────────────────
