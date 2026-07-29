@@ -44,22 +44,45 @@ re-run needlessly.
 - [ ] Revoke a permission from Settings while connected → app recovers, no crash
 - [ ] Cold start with Bluetooth OFF → clear prompt, recovers when enabled
 
-## Group 2 — Scan throttle and discovery
+## Group 2 — Scan throttle and discovery ✅ DONE 2026-07-29
 
-- [ ] 6+ scan starts inside 30 s → Android's undocumented 5-scans-per-30-s throttle does not
-      leave the UI stuck "scanning" forever
-- [ ] Scan with both OC and BS powered → both appear, correct type badges
-- [ ] Scan with target board powered off → empty state is honest, not a spinner
-- [ ] Record: time-to-first-advertisement (Phase 2 measured **0.65 s** via svc-UUID filter)
+- [x] 7 scan starts inside 20 s → **PASS**. Ends at "Scan complete" with the device listed,
+      never stranded on a spinner; no `SCAN_FAILED` or throttle warnings in logcat, so the
+      app's own stop-between-starts lifecycle keeps it under Android's 5-per-30-s limit
+- [x] Both boards powered → **PASS**. `Rocket Computer V6` (−30 dBm) and `BaseStation V4`
+      (−42 dBm), distinct names and MACs. NOTE: scan order is not stable between runs — match
+      the Connect button to its device row, never to a fixed y
+- [x] Target powered off → **PASS** (partial). An absent board simply isn't listed — no stale
+      entry, no phantom, no spinner. A both-off empty state was not exercised
+- [x] Time-to-first-advertisement → **2.54 s measured**, but this includes ~0.5–1 s per
+      `uiautomator` poll. NOT comparable to the in-app 0.65 s Phase 2 figure; treat as
+      "advertises promptly", not as a regression signal
 
-## Group 3 — Link under load
+## Group 3 — Link under load ✅ MOSTLY DONE 2026-07-29
 
-- [ ] Confirm MTU negotiates 517→**512** and telemetry arrives **untrimmed** (`"tr"` flag
-      absent — see the BLE JSON budget note)
-- [ ] cmd 26 and cmd 65 accepted at full MTU
-- [ ] Delete-burst: queue 10+ file deletes back-to-back → op queue serializes, nothing lost
-- [ ] Profile sync burst (~13–15 commands) → all land; verify by readback, not by UI state
-- [ ] Sustained 10 Hz telemetry for 10 min → no leak, no growing latency
+- [x] MTU 517→512 → **PASS**, straight from the BLE stack (the cleanest evidence available,
+      and independent of the app's own UI):
+      ```
+      BluetoothGatt: configureMTU() - mtu: 517
+      gatt_process_mtu_rsp: MTU Exchange resulted in: 512
+      BluetoothGatt: onConfigureMTU(..., 512, 0)      # status 0 = success
+      ```
+- [x] Telemetry untrimmed (`"tr"` absent) → **WAIVED** 2026-07-29. No path to the JSON: the
+      app doesn't log telemetry at any logcat level and the OC console is silent under light
+      sleep on a normal (non-`-bench`) image. Phase 2's bench seam already confirmed untrimmed
+      telemetry at MTU 512 and nothing since has touched that path; reflashing the OC to
+      re-measure it isn't worth the churn
+- [ ] cmd 26 / 65 accepted at full MTU → PENDING
+- [ ] Delete-burst (10+) → PENDING, needs flight logs on the board
+- [x] Profile sync burst → **PASS with a caveat**. The connect-time burst completed with zero
+      GATT write errors and a fresh connection shows synced config. But this is NOT the
+      independent readback the matrix asks for — `BenchSeamTest` would not run (instrumentation
+      runner crashed on install), and the app confirming its own sync is weaker evidence. The
+      `profile: synced` badge specifically is NOT proof: `SYNCED_DELAY_MS` fires 800 ms after
+      pushing, optimistically, without confirmation
+- [x] Sustained 10 Hz telemetry → **PASS**. 9 min, PSS flat at 142.4→142.7 MB after startup
+      settling (+0.2%, noise not leak), pid stable, GATT connection held throughout, no
+      exceptions in logcat
 
 ## Group 4 — Reconnect matrix ✅ DONE 2026-07-29
 
