@@ -191,4 +191,86 @@ class CsvParserTest {
             CsvParser.repairSplitHeaderNames(listOf("Roll (deg")),
         )
     }
+
+    // ── #636: large-input handling ───────────────────────────────────────
+
+    @Test
+    fun streamingOverloadMatchesTheStringOverload() {
+        val csv = buildString {
+            append("a,b,c\n")
+            repeat(500) { r -> append("$r,${r * 2},${r * 3}\n") }
+        }
+        val fromString = CsvParser.parse(csv)
+        val fromStream = CsvParser.parse(csv.splitToSequence("\n"))
+
+        assertEquals(fromString.headers, fromStream.headers)
+        assertEquals(fromString.rowCount, fromStream.rowCount)
+        for (h in fromString.headers) {
+            assertEquals(fromString.columns[h], fromStream.columns[h], "column $h")
+        }
+    }
+
+    @Test
+    fun streamingParseHandlesAFlightSizedCsvWithoutHoldingItAllInMemory() {
+        // The shape that crashed the app: a real 63-column flight CSV.  Parsed
+        // as one String this is the 134 MB allocation from #636; streamed, peak
+        // memory is the columns alone.  Sized to stay quick in CI while still
+        // being far larger than any fixture the golden corpus carries.
+        val cols = 63
+        val rows = 20_000
+        val header = (0 until cols).joinToString(",") { "col$it" }
+        val lines = sequence {
+            yield(header)
+            repeat(rows) { r ->
+                yield((0 until cols).joinToString(",") { c -> "${r * cols + c}.5" })
+            }
+        }
+
+        val data = CsvParser.parse(lines)
+
+        assertEquals(cols, data.headers.size)
+        assertEquals(rows, data.rowCount)
+        assertEquals(rows, data.columns["col0"]?.size)
+        // Spot-check that values land in the right column, not merely that it parsed.
+        assertEquals(0.5, data.columns["col0"]!![0])
+        assertEquals(62.5, data.columns["col62"]!![0])
+        assertEquals((cols + 0) + 0.5, data.columns["col0"]!![1])
+    }
+
+    @Test
+    fun maxSampleHzThinsByTimeAndPreservesLatchedFlags() {
+        // 1000 Hz source (1 ms apart), capped to 100 Hz -> every 10th row.
+        // "flag" latches partway through, exactly like Launch/Apogee/Landed in
+        // a real log — the property that makes striding safe (#636).
+        val rows = 1000
+        val latchAt = 400
+        val csv = buildString {
+            append("Time (ms),v,flag\n")
+            repeat(rows) { i -> append("$i,${i * 2},${if (i >= latchAt) 1 else 0}\n") }
+        }
+
+        val full = CsvParser.parse(csv)
+        val thin = CsvParser.parse(csv.splitToSequence("\n"), maxSampleHz = 100.0)
+
+        assertEquals(rows, full.rowCount)
+        assertEquals(100, thin.rowCount, "1000 rows at 1 ms, capped to 100 Hz")
+
+        // Kept rows are real rows, on the expected 10 ms grid.
+        assertEquals(0.0, thin.columns["Time (ms)"]!![0])
+        assertEquals(10.0, thin.columns["Time (ms)"]!![1])
+        assertEquals(20.0, thin.columns["v"]!![1], "values stay aligned to their row")
+
+        // The latched flag survives — it must never be strided over.
+        val flag = thin.columns["flag"]!!
+        assertTrue(flag.any { it == 1.0 }, "latched flag lost by decimation")
+        assertEquals(0.0, flag.first())
+        assertEquals(1.0, flag.last())
+    }
+
+    @Test
+    fun maxSampleHzNullKeepsEveryRow() {
+        val csv = "Time (ms),v\n" + (0 until 50).joinToString("\n") { "$it,$it" }
+        assertEquals(50, CsvParser.parse(csv.splitToSequence("\n"), maxSampleHz = null).rowCount)
+        assertEquals(50, CsvParser.parse(csv).rowCount)
+    }
 }

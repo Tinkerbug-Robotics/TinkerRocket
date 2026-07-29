@@ -1,0 +1,216 @@
+# Checkpoint A — Pixel 8 hardware pass
+
+*Android port [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624). Gate on
+v1.0 alongside the shadow-phone outing; every code phase (0–8) is merged.*
+
+The point of this checkpoint is to find problems at a desk instead of at a launch site. Most
+of it has been touched incidentally by phase bench seams — what has never happened is a
+deliberate pass with numbers written down. Budget is mostly the bug-fix tail, not the runs.
+
+Grouped into sittings that each end at a stopping point. Nothing here depends on a later
+group, so they can be run in any order.
+
+**Rig**: Pixel 8 (`43230DLJH000MG`), Rocket Computer V6 (`a1cae0f0`), BaseStation V4.
+**One phone per board** — `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1` on both OC and BS, so a
+second phone cannot connect at all. Force-quitting the iOS app releases its board normally.
+The automation gotcha: `devicectl device process terminate --kill` does *not* stick — iOS
+relaunches the app under state restoration and it re-grabs the peripheral, so a scripted
+kill leaves the board invisible to the other phone. Bluetooth off is the reliable lever when
+driving this from a script.
+
+---
+
+## S3 — OTA pacing probe ✅ DONE 2026-07-28
+
+Closed out ahead of the rest by the #627 work; recorded here so the checkpoint isn't
+re-run needlessly.
+
+| | result |
+|---|---|
+| OC direct OTA (Android) | 746.7 kB, ≤11 s, **~68 kB/s** at 502 B/chunk, MTU 512 |
+| OC direct OTA (iOS) | 764.6 kB, 67.1 s, **11.4 kB/s** — 6x slower, same board |
+| FC relay OTA | capped at **12 kB/s** (`fcRelayMaxBytesPerSec`); above that the OC's NimBLE mbuf pool exhausts and the link wedges (#627) |
+| Rollback path | verified — re-flashing an identical image reports RollbackDetected |
+| Survives reboot + session recreation | yes (fleet-keyed OTA session, #140) |
+
+---
+
+## Group 1 — Permissions and cold-start
+
+- [ ] Fresh install, all permissions denied → app explains rather than dead-ends
+- [ ] Grant BLUETOOTH_SCAN/CONNECT only (deny location) → scanning still works; the
+      direction-to-rocket arrow degrades with a stated reason, never blocks
+- [ ] Deny POST_NOTIFICATIONS → FGS still runs; no crash on the notification path
+- [ ] Revoke a permission from Settings while connected → app recovers, no crash
+- [ ] Cold start with Bluetooth OFF → clear prompt, recovers when enabled
+
+## Group 2 — Scan throttle and discovery ✅ DONE 2026-07-29
+
+- [x] 7 scan starts inside 20 s → **PASS**. Ends at "Scan complete" with the device listed,
+      never stranded on a spinner; no `SCAN_FAILED` or throttle warnings in logcat, so the
+      app's own stop-between-starts lifecycle keeps it under Android's 5-per-30-s limit
+- [x] Both boards powered → **PASS**. `Rocket Computer V6` (−30 dBm) and `BaseStation V4`
+      (−42 dBm), distinct names and MACs. NOTE: scan order is not stable between runs — match
+      the Connect button to its device row, never to a fixed y
+- [x] Target powered off → **PASS** (partial). An absent board simply isn't listed — no stale
+      entry, no phantom, no spinner. A both-off empty state was not exercised
+- [x] Time-to-first-advertisement → **2.54 s measured**, but this includes ~0.5–1 s per
+      `uiautomator` poll. NOT comparable to the in-app 0.65 s Phase 2 figure; treat as
+      "advertises promptly", not as a regression signal
+
+## Group 3 — Link under load ✅ MOSTLY DONE 2026-07-29
+
+- [x] MTU 517→512 → **PASS**, straight from the BLE stack (the cleanest evidence available,
+      and independent of the app's own UI):
+      ```
+      BluetoothGatt: configureMTU() - mtu: 517
+      gatt_process_mtu_rsp: MTU Exchange resulted in: 512
+      BluetoothGatt: onConfigureMTU(..., 512, 0)      # status 0 = success
+      ```
+- [x] Telemetry untrimmed (`"tr"` absent) → **WAIVED** 2026-07-29. No path to the JSON: the
+      app doesn't log telemetry at any logcat level and the OC console is silent under light
+      sleep on a normal (non-`-bench`) image. Phase 2's bench seam already confirmed untrimmed
+      telemetry at MTU 512 and nothing since has touched that path; reflashing the OC to
+      re-measure it isn't worth the churn
+- [ ] cmd 26 / 65 accepted at full MTU → PENDING
+- [ ] Delete-burst (10+) → PENDING, needs flight logs on the board
+- [x] Profile sync burst → **PASS with a caveat**. The connect-time burst completed with zero
+      GATT write errors and a fresh connection shows synced config. But this is NOT the
+      independent readback the matrix asks for — `BenchSeamTest` would not run (instrumentation
+      runner crashed on install), and the app confirming its own sync is weaker evidence. The
+      `profile: synced` badge specifically is NOT proof: `SYNCED_DELAY_MS` fires 800 ms after
+      pushing, optimistically, without confirmation
+- [x] Sustained 10 Hz telemetry → **PASS**. 9 min, PSS flat at 142.4→142.7 MB after startup
+      settling (+0.2%, noise not leak), pid stable, GATT connection held throughout, no
+      exceptions in logcat
+
+## Group 4 — Reconnect matrix ✅ DONE 2026-07-29
+
+The one I'd least want to discover in the field. Result: clean except cold start.
+
+- [x] Board power-cycled mid-session → **PASS**, reconnected in under 6 s (faster than a 6 s
+      sampling interval could catch a disconnected state)
+- [x] Walk out of range → return → **PASS**, reconnected with no user action. Drop confirmed
+      by direct observation at the phone; see the probe note below for why the instrument
+      missed it
+- [ ] **status-133** → NOT OBSERVED. Opportunistic; it cannot be forced deliberately, so it
+      stays a watch-for-it during other work rather than a step
+- [x] Airplane mode on → off → **PASS**, back inside 10 s. Usefully, the ladder is visible
+      and honest in the UI: `Reconnecting (5/8)...`
+- [ ] Phone reboot with board live → **FAIL** → issue #633. Mid-session reconnect is solid;
+      this is specifically cold start. iOS scans on BT power-on (`BLEFleet.swift:397`) plus
+      state restoration, so it reconnects itself; Android's `scan()` is only ever called from
+      the Scan button, and the sighting-gated autoConnect endgame never engages from cold
+- [x] **FGS survival** → **PASS**: 47 min 56 s, 95 samples, 0 process deaths, 0 GATT drops,
+      deep Doze held for every sample, PID stable
+- [ ] OC current during the wait → NOT MEASURED (needs a meter; the app's own battery figure
+      is the rail, not the OC's own draw)
+- [x] Battery optimization ON → **PASS**, covered by the run above — the app was never
+      whitelisted
+
+### Method notes — two traps that produced wrong answers first time
+
+**The connection probe must be the GATT record, not the MAC.** Grepping the device address
+out of `dumpsys bluetooth_manager` matches `Remote Client: <mac>`, a registration entry that
+**persists across disconnects** — it is structurally incapable of reading 0, and it silently
+reported "no drops" through a real, physically-confirmed disconnect. Validate any probe in
+both directions before trusting it. What actually works:
+
+```sh
+adb shell dumpsys bluetooth_manager | grep -c "Connection<conn_id.*<MAC-suffix>"
+# 0 when disconnected, non-zero when connected (several stale conn_ids linger — treat as bool)
+```
+
+**A plugged-in phone never enters Doze.** The first FGS run was charging throughout, so it
+never faced the thing most likely to kill a backgrounded service, and the result was
+worthless. Simulate battery while keeping USB for adb:
+
+```sh
+adb shell dumpsys battery unplug          # AC/USB powered -> false
+adb shell dumpsys deviceidle force-idle   # "Now forced in to deep idle mode"
+...run the test...
+adb shell dumpsys deviceidle unforce && adb shell dumpsys battery reset   # ALWAYS restore
+```
+
+**Don't run FGS tests soon after a reboot.** A post-reboot backup sweep
+(`BackupManagerService: Killing agent host process`) tears down processes wholesale —
+including `system` — and killed the app at 19:53 in one run. That looked exactly like an FGS
+failure and was not one.
+
+**Prove the perturbation landed.** An early "board power-cycle" run showed the app staying
+connected, which could equally have meant the reset never happened — esptool cannot always
+sync with an OC in light sleep. Use an observable tell-tale: the rocket power rail is ON
+before and OFF after, because `pwr_pin_on` starts OFF on every OC boot.
+
+## Group 5 — Throughput and files ✅ MOSTLY DONE 2026-07-29
+
+Log generated on the bench by a **simulated flight** (Simulation tool → 20 g / 40 N / 1.5 s
+burn), not a real one — the sim runs on the real FC and writes a real log, so it exercises
+the whole download/CSV/export pipeline without flying. Sim logs are HIL: injected altitude
+and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data quality.
+
+- [x] Download throughput → **PASS**. `flight_20260729_163740.bin`, **10,544,908 B verified
+      on disk** against the board's reported 10544.9 kB — exact. Download alone completed
+      within 90 s (**≥117 kB/s**); **84.8 kB/s end-to-end** including on-device CSV
+      generation. iOS baseline is ~35 kB/s, so Android reads roughly 2.4x faster — the
+      opposite direction from OTA writes, where iOS is 6x slower (#627)
+- [ ] Compare against iOS on the same `.bin` → NEEDS the iPhone
+- [x] Stall path → **PASS, cleanly**. A 54.7 MB download interrupted by airplane mode: the
+      app left the download, ran the ladder honestly (`Reconnecting (4/8)…(8/8)`), and left
+      **no partial file** — `BinaryCache` unchanged and no CSV generated from the aborted
+      transfer. A truncated `.bin` persisting as a valid-looking file would be the dangerous
+      outcome here, and it doesn't happen
+- [x] On-device bin→CSV → **PASS**. 72 MB CSV with **63 columns** (the #623 "Deployed Flag"
+      count — the pin that broke CI during Phase 8, intact on a real conversion). JSON sidecar
+      coherent and cross-checks the sim: max alt 457.4 m vs 459 predicted, burnout 261.6 m/s
+      vs 262, burnout 1.501 s vs a 1.5 s burn; `fw_git_sha: d9a2679a`, `fw_dirty: false`.
+      Exact byte-parity with iOS was separately proven in Phase 4
+      (`flight_20260723_141100.csv` = 61,611 B, iOS-identical). NOT re-verified: the CSV's row
+      count — `wc -l` over 72 MB through `run-as` returned nothing, likely a timeout
+- [x] Bulk export / share → **PARTIAL** → issue #634. Single-file share works (sheet resolves
+      the right file; FileProvider correct — the `Permission Denial` logcat lines are the
+      system sheet failing to preview a non-exported provider, which is expected). But Android
+      has **no multi-select at all**, where iOS has bulk delete in two views. Note the matrix
+      wording was wrong: iOS's multi-select drives bulk *delete*, not export
+
+## Group 6 — UI performance ⚠️ CRASH FOUND 2026-07-29
+
+- [x] Dashboard frame timing → **PASS, with a Checkpoint-B watch item**. Under demo replay at
+      flight rates: 245 frames/60 s, 50th 19 ms, 90th 24 ms, 99th 29 ms, **Missed Vsync: 0**.
+      No dropped frames — but each recomposition costs ~19–24 ms of *UI-thread* work
+      (`Slow UI thread: 200/245`), over the 16.7 ms budget for 60 fps. A Pixel 8 has the
+      headroom; the Galaxy A15 at Checkpoint B is exactly where this would tip into visible
+      jank, so measure it there.
+      METHOD NOTE: measuring on the real board while it sits at LANDED gives ~1 Hz telemetry
+      and ~50 frames/60 s — Compose correctly redraws only on change, so the "92% janky"
+      figure that produces is an artifact of judging a 1 Hz UI against a 60 fps budget. Use
+      **Demo mode** for this test; it replays at real flight rates.
+      Only one rocket was in the roster (a second needs a relayed rocket via the BS)
+- [ ] Chart with a full flight CSV → **CRASH** → issue #636. The app OOMs and dies opening
+      the chart on a 72 MB CSV (from a 96-second sim flight). `FlightChartScreen.kt:81` does
+      `CsvParser.parse(csvFile.readText())` — the whole file becomes a UTF-16 `String`, a
+      **134 MB allocation** against a 268 MB heap limit. Reproduced twice; `exit-info` records
+      both as `APP CRASH(EXCEPTION)` at 433 MB and 312 MB RSS. The board already holds 54.7 MB
+      logs, which could never be charted. Download and CSV conversion are unaffected — only
+      the chart's read-back
+- [ ] Map with offline tiles + prediction at 1 Hz → NOT RUN (blocked behind the chart work in
+      this sitting; independent, can be run any time)
+- [ ] Screen-on power draw over a simulated pad wait → NOT RUN
+
+## Group 7 — Sensors and audio
+
+- [ ] Heading arrow vs a physical compass, 8 headings → declination applied, wrap-around
+      correct at N
+- [ ] Arrow behaviour when location permission is denied → stated, not silently wrong
+- [ ] TTS announcements duck background audio and restore it
+- [ ] Announcements still fire with the screen off
+
+---
+
+## Exit
+
+- [ ] Every box above ticked or explicitly waived with a reason
+- [ ] Numbers recorded in this file (throughput, frame timing, time-to-first-advert)
+- [ ] Bugs filed; blockers fixed; non-blockers triaged onto Phase 9 or the ledger
+- [ ] Plan doc §4 updated — the shadow outing's "both on the same BS" is **wrong** and needs
+      correcting to one-phone-per-board (iPhone→BS, Android→OC)

@@ -62,6 +62,22 @@ import java.io.File
  * gestures only.  Pinch zooms about the window center, drag pans, double
  * tap resets; re-decimation runs debounced after the window settles.
  */
+
+/**
+ * Sample-rate ceiling for the on-phone chart (#636).
+ *
+ * The FC logs the IMU at 1920-3840 Hz; the chart draws ~2000 LTTB points. At
+ * 100 Hz a 96-second flight is ~9,600 rows instead of ~500,000 — a ~50x cut in
+ * parse work for a preview whose visible output is identical, since LTTB was
+ * discarding those samples anyway.
+ *
+ * Safe to decimate by time because every column in this CSV is forward-filled
+ * and every event flag latches (Launch/Apogee/Landed/Pyro all hold once set),
+ * so a stride cannot step over an event — it only quantises the transition to
+ * 10 ms. The full-rate CSV on disk and in the share sheet is untouched.
+ */
+private const val PREVIEW_SAMPLE_HZ = 100.0
+
 @Composable
 fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
     var csvData by remember { mutableStateOf<FlightCsvData?>(null) }
@@ -78,7 +94,23 @@ fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
 
     LaunchedEffect(csvFile) {
         try {
-            val parsed = withContext(Dispatchers.Default) { CsvParser.parse(csvFile.readText()) }
+            // #636: stream the file AND cap the sample rate.  readText()
+            // materialised the whole CSV as a UTF-16 String — a 72 MB log
+            // became a 134 MB allocation and OOM-killed the app before the
+            // chart ever drew.
+            //
+            // Streaming alone fixed the crash but left it unusable: ~3.5
+            // minutes to open that file, because the FC logs the IMU at
+            // 1920-3840 Hz and every one of ~500k rows was parsed only for
+            // LTTB to reduce it to ~2000 points.  This screen is a FIELD
+            // PREVIEW — enough to see the shape of a flight on the drive home.
+            // Detailed work happens on a PC against the full-rate CSV, which
+            // is untouched on disk and in the share sheet.
+            val parsed = withContext(Dispatchers.Default) {
+                csvFile.useLines { lines ->
+                    CsvParser.parse(lines, maxSampleHz = PREVIEW_SAMPLE_HZ)
+                }
+            }
             csvData = parsed
             selected = when {
                 parsed.columns.containsKey("Pressure Altitude (m)") -> setOf("Pressure Altitude (m)")
