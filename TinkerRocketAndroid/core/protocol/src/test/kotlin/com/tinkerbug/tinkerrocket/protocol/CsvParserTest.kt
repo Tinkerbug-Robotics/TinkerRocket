@@ -191,4 +191,49 @@ class CsvParserTest {
             CsvParser.repairSplitHeaderNames(listOf("Roll (deg")),
         )
     }
+
+    // ── #636: large-input handling ───────────────────────────────────────
+
+    @Test
+    fun streamingOverloadMatchesTheStringOverload() {
+        val csv = buildString {
+            append("a,b,c\n")
+            repeat(500) { r -> append("$r,${r * 2},${r * 3}\n") }
+        }
+        val fromString = CsvParser.parse(csv)
+        val fromStream = CsvParser.parse(csv.splitToSequence("\n"))
+
+        assertEquals(fromString.headers, fromStream.headers)
+        assertEquals(fromString.rowCount, fromStream.rowCount)
+        for (h in fromString.headers) {
+            assertEquals(fromString.columns[h], fromStream.columns[h], "column $h")
+        }
+    }
+
+    @Test
+    fun streamingParseHandlesAFlightSizedCsvWithoutHoldingItAllInMemory() {
+        // The shape that crashed the app: a real 63-column flight CSV.  Parsed
+        // as one String this is the 134 MB allocation from #636; streamed, peak
+        // memory is the columns alone.  Sized to stay quick in CI while still
+        // being far larger than any fixture the golden corpus carries.
+        val cols = 63
+        val rows = 20_000
+        val header = (0 until cols).joinToString(",") { "col$it" }
+        val lines = sequence {
+            yield(header)
+            repeat(rows) { r ->
+                yield((0 until cols).joinToString(",") { c -> "${r * cols + c}.5" })
+            }
+        }
+
+        val data = CsvParser.parse(lines)
+
+        assertEquals(cols, data.headers.size)
+        assertEquals(rows, data.rowCount)
+        assertEquals(rows, data.columns["col0"]?.size)
+        // Spot-check that values land in the right column, not merely that it parsed.
+        assertEquals(0.5, data.columns["col0"]!![0])
+        assertEquals(62.5, data.columns["col62"]!![0])
+        assertEquals((cols + 0) + 0.5, data.columns["col0"]!![1])
+    }
 }

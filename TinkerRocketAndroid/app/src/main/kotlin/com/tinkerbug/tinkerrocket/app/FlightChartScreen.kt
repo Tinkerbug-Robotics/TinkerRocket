@@ -78,7 +78,13 @@ fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
 
     LaunchedEffect(csvFile) {
         try {
-            val parsed = withContext(Dispatchers.Default) { CsvParser.parse(csvFile.readText()) }
+            // #636: stream the file. readText() materialised the whole CSV as
+            // a UTF-16 String — a 72 MB log became a 134 MB allocation and OOM
+            // -killed the app before the chart ever drew.  useLines keeps peak
+            // memory to the parsed columns, independent of flight length.
+            val parsed = withContext(Dispatchers.Default) {
+                csvFile.useLines { lines -> CsvParser.parse(lines) }
+            }
             csvData = parsed
             selected = when {
                 parsed.columns.containsKey("Pressure Altitude (m)") -> setOf("Pressure Altitude (m)")

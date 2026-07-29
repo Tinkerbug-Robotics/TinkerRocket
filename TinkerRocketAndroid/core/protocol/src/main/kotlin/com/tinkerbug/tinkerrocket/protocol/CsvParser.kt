@@ -177,16 +177,33 @@ public object CsvParser {
      *    "166.65.5,extra" carries more fields than the header;
      *  - [FlightCsvData.rowCount] counts data lines, not columns.
      */
-    public fun parse(content: String): FlightCsvData {
-        val lines = content.split("\n").filter { it.isNotEmpty() }
+    public fun parse(content: String): FlightCsvData =
+        parse(content.splitToSequence("\n"))
 
-        if (lines.isEmpty()) {
+    /**
+     * Streaming overload — the one the app should use for real flight CSVs.
+     *
+     * #636: the `String` overload cannot handle a real log.  A 96-second sim
+     * flight produces a 72 MB CSV, which `readText()` turns into a ~134 MB
+     * UTF-16 `String`, and `split("\n")` then copies every line again.  That
+     * allocation threw `OutOfMemoryError` against a 268 MB heap and killed the
+     * app.  Feeding this from `File.useLines` keeps peak memory to the parsed
+     * columns alone, independent of file size.
+     *
+     * Semantics are identical to the `String` overload — empty lines are
+     * dropped ANYWHERE, not just at the end, matching the original
+     * `split("\n").filter { it.isNotEmpty() }`.
+     */
+    public fun parse(lines: Sequence<String>): FlightCsvData {
+        val it = lines.filter { line -> line.isNotEmpty() }.iterator()
+
+        if (!it.hasNext()) {
             throw CsvParserException.EmptyFile()
         }
 
-        val rawHeaders = lines[0].split(",")
-            .filter { it.isNotEmpty() }          // Swift split omits empty subsequences
-            .map { it.trim(' ', '\t') }          // Swift .whitespaces: blanks, NOT CR/LF
+        val rawHeaders = it.next().split(",")
+            .filter { h -> h.isNotEmpty() }      // Swift split omits empty subsequences
+            .map { h -> h.trim(' ', '\t') }      // Swift .whitespaces: blanks, NOT CR/LF
         val headers = repairSplitHeaderNames(rawHeaders)
         val columnCount = headers.size
 
@@ -194,14 +211,16 @@ public object CsvParser {
             throw CsvParserException.NoHeader()
         }
 
-        val dataLines = lines.subList(1, lines.size)
-        val rowCount = dataLines.size
-
-        // Pre-allocate columnar arrays
-        val columns = List(columnCount) { ArrayList<Double>(rowCount) }
+        // Columnar primitive buffers.  ArrayList<Double> boxes every value at
+        // ~24 B; a 72 MB CSV holds millions, so boxing alone can exhaust the
+        // heap even once the text is streamed (#636).
+        val columns = Array(columnCount) { DoubleBuf() }
+        var rowCount = 0
 
         // Parse all rows in a single pass
-        for (line in dataLines) {
+        while (it.hasNext()) {
+            val line = it.next()
+            rowCount++
             val fields = line.split(",")         // Kotlin split keeps empty fields
             val consumed = minOf(fields.size, columnCount)
             for (col in 0 until consumed) {
@@ -221,10 +240,39 @@ public object CsvParser {
         // matching the Swift dictionary assignment).
         val dict = LinkedHashMap<String, List<Double>>(columnCount)
         for ((i, header) in headers.withIndex()) {
-            dict[header] = columns[i]
+            dict[header] = columns[i].toList()
         }
 
         return FlightCsvData(headers = headers, columns = dict, rowCount = rowCount)
+    }
+
+    /**
+     * Growable primitive double buffer, exposed as an unboxed `List<Double>`.
+     *
+     * Keeps [FlightCsvData.columns] typed `Map<String, List<Double>>` — so the
+     * public API, the golden tests and every consumer are unchanged — while
+     * storing 8 B per value instead of a boxed ~24 B (#636).  Boxing then
+     * happens only on individual `get()` calls, which the chart makes a couple
+     * of thousand times after LTTB decimation rather than millions of times up
+     * front.
+     */
+    private class DoubleBuf {
+        private var a = DoubleArray(1024)
+        private var n = 0
+
+        fun add(v: Double) {
+            if (n == a.size) a = a.copyOf(a.size * 2)
+            a[n++] = v
+        }
+
+        /** Element-wise `equals`/`hashCode` come from AbstractList. */
+        fun toList(): List<Double> {
+            val exact = a.copyOf(n)
+            return object : AbstractList<Double>() {
+                override val size: Int get() = exact.size
+                override fun get(index: Int): Double = exact[index]
+            }
+        }
     }
 
     /**
