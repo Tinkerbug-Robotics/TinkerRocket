@@ -73,7 +73,13 @@ re-run needlessly.
       telemetry at MTU 512 and nothing since has touched that path; reflashing the OC to
       re-measure it isn't worth the churn
 - [ ] cmd 26 / 65 accepted at full MTU → PENDING
-- [ ] Delete-burst (10+) → PENDING, needs flight logs on the board
+- [x] Delete-burst → **MECHANISM PROVEN 2026-07-29** via the #634 multi-select (3-file burst
+      of disposable sim logs; a 10+ burst would need 10 disposable files). The OC's serial
+      confirms all three cmd-3s arrived **in the order sent** and each acknowledged
+      `Delete '...': OK`, whole burst in 223 ms, list resynced to page 0 afterward. Unit test
+      pins the ordering + stop-on-failure; the op-queue serialisation is what the hardware
+      run adds. CAUTION for future runs: pagination undercounts silently — a fixed page-count
+      crawl missed 5 files; crawl until Next disappears and diff against a full inventory
 - [x] Profile sync burst → **PASS with a caveat**. The connect-time burst completed with zero
       GATT write errors and a fresh connection shows synced config. But this is NOT the
       independent readback the matrix asks for — `BenchSeamTest` would not run (instrumentation

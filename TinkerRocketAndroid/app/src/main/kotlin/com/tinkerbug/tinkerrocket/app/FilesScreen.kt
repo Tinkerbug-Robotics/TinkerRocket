@@ -1,5 +1,9 @@
 package com.tinkerbug.tinkerrocket.app
 
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.clickable
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -63,6 +67,13 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
 
     var status by remember { mutableStateOf<String?>(null) }
 
+    // #634 multi-select, mirroring iOS FileManagerView: keyed by file NAME, not
+    // index, so a selection survives paging — you can select across pages and
+    // the count reflects the whole set even when some rows aren't visible.
+    var selecting by remember { mutableStateOf(false) }
+    var selection by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmBulkDelete by remember { mutableStateOf(false) }
+
     // Fetch page 0 on entry (once per session shown).
     androidx.compose.runtime.LaunchedEffect(session) {
         if (files.isEmpty()) session.requestFileList(0)
@@ -105,6 +116,65 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
         }
         status?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
+        // #634 selection action bar.  Deletes are irreversible and the files
+        // are the only copy until they're downloaded, so this always confirms
+        // and always names the count.
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (!selecting) {
+                OutlinedButton(
+                    onClick = { selecting = true },
+                    enabled = files.isNotEmpty() && !downloadState.active,
+                ) { Text("Select") }
+            } else {
+                Text("${selection.size} selected", style = MaterialTheme.typography.bodyMedium)
+                OutlinedButton(
+                    onClick = { selection = files.map { it.name }.toSet() },
+                    enabled = selection.size < files.size,
+                ) { Text("All") }
+                OutlinedButton(
+                    onClick = { confirmBulkDelete = true },
+                    enabled = selection.isNotEmpty() && !downloadState.active,
+                ) { Text("Delete") }
+                TextButton(onClick = { selecting = false; selection = emptySet() }) {
+                    Text("Cancel")
+                }
+            }
+        }
+
+        if (confirmBulkDelete) {
+            AlertDialog(
+                onDismissRequest = { confirmBulkDelete = false },
+                title = { Text("Delete ${selection.size} file${if (selection.size == 1) "" else "s"}?") },
+                text = {
+                    Text(
+                        "This erases them from the rocket. Anything already downloaded stays " +
+                            "on this phone under Saved Flights.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val doomed = files.map { it.name }.filter { it in selection }
+                        session.deleteFiles(doomed)
+                        status = "Deleted ${doomed.size} file(s)"
+                        confirmBulkDelete = false
+                        selecting = false
+                        selection = emptySet()
+                        // Resync: a bulk delete can empty the current page or
+                        // shift the total, so go back to page 0 (iOS does the
+                        // same in deleteSelected()).
+                        session.requestFileList(0)
+                    }) { Text("Delete") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmBulkDelete = false }) { Text("Cancel") }
+                },
+            )
+        }
+
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(files, key = { it.name }) { file ->
                 FileRow(
@@ -119,6 +189,12 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                     onShare = { shareCsvIfPresent(context, file) },
                     onChart = { chartCsv = csvFileFor(context, file.name) },
                     hasCsv = csvFileFor(context, file.name).exists(),
+                    selecting = selecting,
+                    selected = file.name in selection,
+                    onToggleSelected = {
+                        selection = if (file.name in selection) selection - file.name
+                                    else selection + file.name
+                    },
                 )
             }
         }
@@ -133,13 +209,26 @@ private fun FileRow(
     onDownload: () -> Unit,
     onShare: () -> Unit,
     onChart: () -> Unit,
+    selecting: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelected: () -> Unit = {},
 ) {
-    Card(Modifier.fillMaxWidth()) {
+    Card(
+        Modifier.fillMaxWidth().let {
+            // Whole row toggles while selecting — a checkbox alone is a
+            // thumb-miss target, the same finding that moved the chart column
+            // picker to row-click.
+            if (selecting) it.clickable(onClick = onToggleSelected) else it
+        },
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (selecting) {
+                Checkbox(checked = selected, onCheckedChange = { onToggleSelected() })
+            }
             Column(Modifier.weight(1f)) {
                 Text(file.name, style = MaterialTheme.typography.titleSmall)
                 Text(
@@ -147,7 +236,11 @@ private fun FileRow(
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            if (hasCsv) {
+            // Per-row actions would fight the selection gesture, so they step
+            // aside while selecting.
+            if (selecting) {
+                // nothing — the action bar owns the verbs in this mode
+            } else if (hasCsv) {
                 OutlinedButton(onClick = onChart) { Text("Chart") }
                 OutlinedButton(
                     onClick = onShare,

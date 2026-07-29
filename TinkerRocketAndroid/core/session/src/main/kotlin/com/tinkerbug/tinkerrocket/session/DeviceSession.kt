@@ -594,6 +594,27 @@ public class DeviceSession(
         }
     }
 
+    /**
+     * Bulk delete (#634) — the Kotlin twin of iOS `deleteFiles`, which is
+     * likewise a loop rather than a bulk wire command; the firmware has no
+     * multi-delete opcode.
+     *
+     * Issued from ONE coroutine so the writes go out in the caller's order and
+     * the op queue serialises them, instead of N racing coroutines landing in
+     * arbitrary order.  A failed write stops the run rather than pressing on:
+     * the usual cause is the link dropping, and continuing would optimistically
+     * strip rows for files still on the board.
+     */
+    public fun deleteFiles(filenames: List<String>) {
+        if (filenames.isEmpty()) return
+        scope.launch {
+            for (name in filenames) {
+                if (!writeCommand(Commands.fileDelete(name))) return@launch
+                _files.value = _files.value.filterNot { it.name == name }
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Download engine
     // ─────────────────────────────────────────────────────────────────────
