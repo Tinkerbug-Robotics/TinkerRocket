@@ -73,7 +73,7 @@ enum OTATimeouts {
         case .finish:     return targetIsFC ? 60.0 : 15.0
         // FC reboots, then the OC re-queries its identity before the new
         // version can reach the app.
-        case .fwPublish:  return targetIsFC ? 40.0 : 10.0
+        case .fwPublish:  return targetIsFC ? 120.0 : 10.0
         // Local link events — the relay plays no part, so no FC stretch.
         case .disconnect: return 5.0
         case .reconnect:  return 60.0

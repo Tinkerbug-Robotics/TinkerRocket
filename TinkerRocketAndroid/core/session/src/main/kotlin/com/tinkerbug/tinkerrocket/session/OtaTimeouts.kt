@@ -89,7 +89,7 @@ public object OtaTimeouts {
         OtaStage.FINISH -> if (targetIsFc) 60_000 else 15_000
         // FC reboots, then the OC re-queries its identity before the new
         // version can reach the app.
-        OtaStage.FW_PUBLISH -> if (targetIsFc) 40_000 else 10_000
+        OtaStage.FW_PUBLISH -> if (targetIsFc) 120_000 else 10_000
         // Local link events — the relay plays no part, so no FC stretch.
         OtaStage.DISCONNECT -> 5_000
         OtaStage.RECONNECT -> 60_000

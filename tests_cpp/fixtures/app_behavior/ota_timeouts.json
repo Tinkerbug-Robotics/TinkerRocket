@@ -36,8 +36,8 @@
       "name": "fwPublish",
       "crossesRelay": true,
       "localMs": 10000,
-      "fcMs": 40000,
-      "why": "FC reboots, then the OC has to re-query its identity before the new version reaches the app"
+      "fcMs": 120000,
+      "why": "FC reboots, then the OC has to re-query its identity before the new version reaches the app. Bench 2026-07-28: a SUCCESSFUL FC update published its new fc_identity 73.9 s after ready_to_boot, so the old 40 s window expired first and the app reported 'Rollback detected' on an update that had in fact worked."
     },
     {
       "name": "disconnect",
