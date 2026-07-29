@@ -71,5 +71,35 @@ final class OTATimeoutsTests: XCTestCase {
 
         XCTAssertEqual(try XCTUnwrap(json["pollMs"] as? Double) / 1000.0,
                        OTATimeouts.pollSeconds)
+        XCTAssertEqual(try XCTUnwrap(json["fcRelayMaxBytesPerSec"] as? Double),
+                       OTATimeouts.fcRelayMaxBytesPerSec,
+                       "#627 relay cap disagrees with the fixture")
+    }
+
+    func testFCRelayPacerHoldsTheCapAndCreditsElapsedTime() {
+        let rate = OTATimeouts.fcRelayMaxBytesPerSec
+        let oneSecond = Int(rate)
+
+        // One second's worth of bytes, no time spent yet → wait the full second.
+        XCTAssertEqual(
+            OTATimeouts.fcRelayPaceDelay(bytesSent: oneSecond, elapsed: 0), 1.0,
+            accuracy: 0.001)
+
+        // Same bytes, but the writes already took 0.4 s — credit that rather
+        // than adding to it, or the effective rate drifts under the cap.
+        XCTAssertEqual(
+            OTATimeouts.fcRelayPaceDelay(bytesSent: oneSecond, elapsed: 0.4), 0.6,
+            accuracy: 0.001)
+
+        // Already slower than the cap → never wait, never go backwards.
+        XCTAssertEqual(
+            OTATimeouts.fcRelayPaceDelay(bytesSent: oneSecond, elapsed: 1.0), 0)
+        XCTAssertEqual(
+            OTATimeouts.fcRelayPaceDelay(bytesSent: oneSecond, elapsed: 5.0), 0)
+
+        // The rate enforced is the one measured working on the bench: iOS ran
+        // the relay at 11.4 kB/s, Android at ~68 kB/s wedged the OC's mbuf pool.
+        XCTAssertTrue((11_000...13_000).contains(rate),
+                      "cap should sit at iOS's proven-good relay rate, was \(rate) B/s")
     }
 }

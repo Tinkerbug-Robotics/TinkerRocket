@@ -32,6 +32,13 @@ public class OtaSession(
     /** Resolves the CURRENT session for this device, or null between reconnects. */
     private val sessionLookup: () -> DeviceSession?,
     private val sha256: (ByteArray) -> ByteArray = { MessageDigest.getInstance("SHA-256").digest(it) },
+    /**
+     * Wall clock for the #627 FC-relay pacing only.  Injectable because the
+     * pacer credits real elapsed time against the rate budget, and under
+     * `runTest` a real clock would read ~0 while virtual time races ahead —
+     * tests supply their own so the pacing is deterministic.
+     */
+    private val nanoTime: () -> Long = System::nanoTime,
 ) {
 
     public sealed interface State {
@@ -139,6 +146,10 @@ public class OtaSession(
         try {
             val chunkSize = Commands.otaMaxChunkSize(pumpSession?.negotiatedMtu?.value ?: 23)
             var offset = 0
+            // #627: the relay path has a drain rate the OC can actually sustain;
+            // exceed it and its BLE stack wedges (see FC_RELAY_MAX_BYTES_PER_SEC).
+            // A local OC OTA has no relay and stays uncapped.
+            val pumpStartNs = if (targetIsFc) nanoTime() else 0L
             _state.value = State.Uploading(0, image.size.toLong())
             while (offset < image.size) {
                 if (!scope.isActive) return
@@ -171,6 +182,12 @@ public class OtaSession(
                 }
                 offset = end
                 _state.value = State.Uploading(offset.toLong(), image.size.toLong())
+
+                if (targetIsFc && offset < image.size) {
+                    val elapsedMs = (nanoTime() - pumpStartNs) / 1_000_000L
+                    val pause = OtaTimeouts.fcRelayPaceDelayMs(offset.toLong(), elapsedMs)
+                    if (pause > 0) delay(pause)
+                }
             }
         } finally {
             sessionLookup()?.releaseConnectionPriority()

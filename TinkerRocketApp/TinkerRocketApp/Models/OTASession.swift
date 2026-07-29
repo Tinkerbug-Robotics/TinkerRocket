@@ -145,6 +145,10 @@ final class OTASession: ObservableObject {
         // check is what catches a dropped chunk.
         let chunkSize = max(64, beginDevice.otaMaxChunkSize)
         var offset = 0
+        // #627: the relay path has a drain rate the OC can actually sustain;
+        // exceed it and its BLE stack wedges (see fcRelayMaxBytesPerSec). A
+        // local OC OTA has no relay and stays uncapped.
+        let pumpStart = Date()
         state = .uploading(bytesSent: 0, totalBytes: fileData.count)
         while offset < fileData.count {
             if Task.isCancelled { return }
@@ -173,6 +177,14 @@ final class OTASession: ObservableObject {
             }
             offset = end
             state = .uploading(bytesSent: offset, totalBytes: fileData.count)
+
+            if targetIsFC, offset < fileData.count {
+                let pause = OTATimeouts.fcRelayPaceDelay(
+                    bytesSent: offset, elapsed: Date().timeIntervalSince(pumpStart))
+                if pause > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                }
+            }
         }
 
         // ---- 5. OTA_FINISH ----
