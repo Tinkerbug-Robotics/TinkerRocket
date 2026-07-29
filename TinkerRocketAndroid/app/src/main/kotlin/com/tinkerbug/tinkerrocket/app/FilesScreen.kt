@@ -1,7 +1,6 @@
 package com.tinkerbug.tinkerrocket.app
 
 import android.content.Context
-import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,7 +25,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import com.tinkerbug.tinkerrocket.protocol.CsvGenerator
 import com.tinkerbug.tinkerrocket.protocol.FileInfo
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -162,21 +160,15 @@ private fun FileRow(
     }
 }
 
-/** iOS FileCache mirror: durable app files, shallow flight_* naming. */
-private fun binFileFor(context: Context, name: String) =
-    File(File(context.filesDir, "BinaryCache").apply { mkdirs() }, name)
+// iOS FileCache mirror.  Moved to FlightCache for #635 so Saved Flights can
+// browse the same layout with no device attached; these stay as thin aliases
+// to keep this screen readable.
+private fun binFileFor(context: Context, name: String) = FlightCache.binFileFor(context, name)
 
-private fun csvFileFor(context: Context, name: String) =
-    File(
-        File(context.filesDir, "CSVCache").apply { mkdirs() },
-        name.removeSuffix(".bin") + ".csv",
-    )
+private fun csvFileFor(context: Context, name: String) = FlightCache.csvFileFor(context, name)
 
 private fun summaryFileFor(context: Context, name: String) =
-    File(
-        File(context.filesDir, "CSVCache").apply { mkdirs() },
-        name.removeSuffix(".bin") + ".json",
-    )
+    FlightCache.summaryFileFor(context, name)
 
 /** Runs on the fleet dispatcher (downloadFile contract); CSV work hops to Default. */
 private suspend fun downloadAndConvert(
@@ -199,18 +191,5 @@ private suspend fun downloadAndConvert(
     else -> "Download failed: $result"
 }
 
-private fun shareCsvIfPresent(context: Context, file: FileInfo) {
-    val csv = csvFileFor(context, file.name)
-    if (!csv.exists()) return
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", csv)
-    context.startActivity(
-        Intent.createChooser(
-            Intent(Intent.ACTION_SEND).apply {
-                type = "text/csv"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            },
-            "Share ${csv.name}",
-        ),
-    )
-}
+private fun shareCsvIfPresent(context: Context, file: FileInfo) =
+    FlightCache.shareCsv(context, csvFileFor(context, file.name))

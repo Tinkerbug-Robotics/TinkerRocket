@@ -29,6 +29,7 @@ fun ScannerScreen(
     fleet: FleetManager<DeviceSession>,
     onDemo: () -> Unit,
     onMyDevices: () -> Unit = {},
+    onSavedFlights: () -> Unit = {},
 ) {
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
@@ -48,6 +49,11 @@ fun ScannerScreen(
             OutlinedButton(onClick = onMyDevices) { Text("My Devices") }
             OutlinedButton(onClick = onDemo, modifier = Modifier.padding(start = 6.dp)) { Text("Demo") }
         }
+        // #635: flights already on the phone, reachable with nothing connected.
+        // The post-flight workflow is download at the pad, then review later —
+        // which was impossible while the only route to a log was the
+        // connected-device tab row.
+        OutlinedButton(onClick = onSavedFlights) { Text("Saved Flights") }
         Text(status, style = MaterialTheme.typography.bodyMedium)
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
