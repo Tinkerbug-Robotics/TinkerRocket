@@ -61,23 +61,63 @@ re-run needlessly.
 - [ ] Profile sync burst (~13–15 commands) → all land; verify by readback, not by UI state
 - [ ] Sustained 10 Hz telemetry for 10 min → no leak, no growing latency
 
-## Group 4 — Reconnect matrix
+## Group 4 — Reconnect matrix ✅ DONE 2026-07-29
 
-The one I'd least want to discover in the field.
+The one I'd least want to discover in the field. Result: clean except cold start.
 
-- [ ] Board power-cycled mid-session → reconnect ladder (1,2,4,8×5 s) recovers
-- [ ] Walk out of range → return → reconnects without user action
-- [ ] **status-133** (Android's generic GATT failure) → single retry path works, no wedge
-- [ ] Airplane mode on → off → recovers
-- [ ] Phone reboot with board live → app reconnects on next launch
-- [ ] **FGS survival**: connected, background the app, screen off **45 min** → still
-      connected and logging (this is the pad-wait case)
-- [ ] Measure OC current during that wait. #519 puts the BT LP clock on the 32 k crystal
-      (`CONFIG_RTC_CLK_SRC_EXT_CRYS`), so the board light-sleeps *while connected* — expect
-      ~1 mA, not the ~22 mA a `-bench` build draws. A regression here silently costs pad
-      endurance, and nothing else would catch it
-- [ ] Same, but with battery optimization ON for the app → document what actually happens;
-      this is what the Field Setup checklist screen exists to prevent
+- [x] Board power-cycled mid-session → **PASS**, reconnected in under 6 s (faster than a 6 s
+      sampling interval could catch a disconnected state)
+- [x] Walk out of range → return → **PASS**, reconnected with no user action. Drop confirmed
+      by direct observation at the phone; see the probe note below for why the instrument
+      missed it
+- [ ] **status-133** → NOT OBSERVED. Opportunistic; it cannot be forced deliberately, so it
+      stays a watch-for-it during other work rather than a step
+- [x] Airplane mode on → off → **PASS**, back inside 10 s. Usefully, the ladder is visible
+      and honest in the UI: `Reconnecting (5/8)...`
+- [ ] Phone reboot with board live → **FAIL** → issue #633. Mid-session reconnect is solid;
+      this is specifically cold start. iOS scans on BT power-on (`BLEFleet.swift:397`) plus
+      state restoration, so it reconnects itself; Android's `scan()` is only ever called from
+      the Scan button, and the sighting-gated autoConnect endgame never engages from cold
+- [x] **FGS survival** → **PASS**: 47 min 56 s, 95 samples, 0 process deaths, 0 GATT drops,
+      deep Doze held for every sample, PID stable
+- [ ] OC current during the wait → NOT MEASURED (needs a meter; the app's own battery figure
+      is the rail, not the OC's own draw)
+- [x] Battery optimization ON → **PASS**, covered by the run above — the app was never
+      whitelisted
+
+### Method notes — two traps that produced wrong answers first time
+
+**The connection probe must be the GATT record, not the MAC.** Grepping the device address
+out of `dumpsys bluetooth_manager` matches `Remote Client: <mac>`, a registration entry that
+**persists across disconnects** — it is structurally incapable of reading 0, and it silently
+reported "no drops" through a real, physically-confirmed disconnect. Validate any probe in
+both directions before trusting it. What actually works:
+
+```sh
+adb shell dumpsys bluetooth_manager | grep -c "Connection<conn_id.*<MAC-suffix>"
+# 0 when disconnected, non-zero when connected (several stale conn_ids linger — treat as bool)
+```
+
+**A plugged-in phone never enters Doze.** The first FGS run was charging throughout, so it
+never faced the thing most likely to kill a backgrounded service, and the result was
+worthless. Simulate battery while keeping USB for adb:
+
+```sh
+adb shell dumpsys battery unplug          # AC/USB powered -> false
+adb shell dumpsys deviceidle force-idle   # "Now forced in to deep idle mode"
+...run the test...
+adb shell dumpsys deviceidle unforce && adb shell dumpsys battery reset   # ALWAYS restore
+```
+
+**Don't run FGS tests soon after a reboot.** A post-reboot backup sweep
+(`BackupManagerService: Killing agent host process`) tears down processes wholesale —
+including `system` — and killed the app at 19:53 in one run. That looked exactly like an FGS
+failure and was not one.
+
+**Prove the perturbation landed.** An early "board power-cycle" run showed the app staying
+connected, which could equally have meant the reset never happened — esptool cannot always
+sync with an OC in light sleep. Use an observable tell-tale: the rocket power rail is ON
+before and OFF after, because `pwr_pin_on` starts OFF on every OC boot.
 
 ## Group 5 — Throughput and files
 
