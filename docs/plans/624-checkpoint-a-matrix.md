@@ -35,14 +35,34 @@ re-run needlessly.
 
 ---
 
-## Group 1 — Permissions and cold-start
+## Group 1 — Permissions and cold-start ✅ DONE 2026-07-29 (found a crash)
 
-- [ ] Fresh install, all permissions denied → app explains rather than dead-ends
-- [ ] Grant BLUETOOTH_SCAN/CONNECT only (deny location) → scanning still works; the
-      direction-to-rocket arrow degrades with a stated reason, never blocks
-- [ ] Deny POST_NOTIFICATIONS → FGS still runs; no crash on the notification path
-- [ ] Revoke a permission from Settings while connected → app recovers, no crash
-- [ ] Cold start with Bluetooth OFF → clear prompt, recovers when enabled
+- [x] All permissions denied → **PASS**. No crash; the app explains itself — "Bluetooth access
+      needed / TinkerRocket finds and talks to your flight computers over Bluetooth.
+      Nearby-devices permission is required." with a Grant button. Correctly gates on BLE only
+- [x] Scan/connect granted, location denied → **PASS on both halves**. Scanning is unaffected
+      (both boards found) — that's `neverForLocation` and minSdk 31 paying off. The bearing card
+      degrades with a stated reason and an in-place remedy: "Location permission is needed to
+      show direction and distance to the rocket." + `Grant location`
+- [x] POST_NOTIFICATIONS denied → **PASS**. `Background started FGS: Allowed`, connection
+      established, no `SecurityException` on the notification path — the OS suppresses the
+      notification rather than throwing, which is what the pad wait depends on
+- [x] Revoke while connected → **PASS**. Android kills the process on revoke BY DESIGN (not a
+      crash); relaunch recovers cleanly with no crash loop.
+      PLATFORM NOTE: `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT` share the `NEARBY_DEVICES` group,
+      so revoking CONNECT alone gets it auto-re-granted on the next request (it comes back
+      WITHOUT the `USER_SET` flag — that's the tell). "Connected with CONNECT denied" isn't
+      reachable that way; revoke both, which the first item covers
+- [x] Cold start with Bluetooth OFF → **CRASH FOUND, then FIXED**. Launch was fine, but tapping
+      **Scan** with the adapter off killed the app:
+      ```
+      E AndroidRuntime: BleTransportException: BLE scanner unavailable (adapter off?)
+      I ActivityManager: Process ... has died: prcp CRE      # exit-info: APP CRASH(EXCEPTION)
+      ```
+      `FleetManager.scan()` caught only `TimeoutCancellationException`, so a scanner-flow
+      failure escaped the `launch` and reached the default handler. Now caught: scanning stops,
+      the reason is surfaced ("BLE scanner unavailable (adapter off?)"), the spinner clears, and
+      a later scan works once the adapter returns — verified on-device, same pid throughout
 
 ## Group 2 — Scan throttle and discovery ✅ DONE 2026-07-29
 

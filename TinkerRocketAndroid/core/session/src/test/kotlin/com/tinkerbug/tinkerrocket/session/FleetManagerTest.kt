@@ -494,4 +494,42 @@ class FleetManagerTest {
         assertNotSame(first.session, second.session,
             "Every connection gets a NEW session object — survivors live on the fleet")
     }
+
+    // ── scanner failure must not be fatal ────────────────────────────────
+
+    @Test
+    fun scannerFailure_reportsAndStopsInsteadOfCrashing() = runTest {
+        // The real scanner throws "BLE scanner unavailable (adapter off?)" when
+        // the adapter is off.  Uncaught, it escaped scan()'s launch and the
+        // default handler killed the process — tapping Scan with Bluetooth off
+        // crashed the app outright (bench 2026-07-29, APP CRASH(EXCEPTION)).
+        val h = fleetHarness()
+        h.scanner.failWith = IllegalStateException("BLE scanner unavailable (adapter off?)")
+
+        h.fleet.scan(userInitiated = true)
+        advanceTimeBy(1_000); runCurrent()
+
+        // Survived, and says so rather than pretending to scan forever.
+        assertFalse(h.fleet.isScanning.value, "should stop scanning on failure")
+        assertFalse(h.fleet.userInitiatedScan.value, "spinner flag must clear too")
+        assertTrue(
+            h.fleet.statusMessage.value.contains("unavailable", ignoreCase = true),
+            "status should surface the reason, was '${h.fleet.statusMessage.value}'",
+        )
+    }
+
+    @Test
+    fun scannerRecoversOnASubsequentScan_afterAFailure() = runTest {
+        val h = fleetHarness()
+        h.scanner.failWith = IllegalStateException("BLE scanner unavailable (adapter off?)")
+        h.fleet.scan(userInitiated = true)
+        advanceTimeBy(1_000); runCurrent()
+        assertFalse(h.fleet.isScanning.value)
+
+        // Adapter comes back — the next scan must work, not stay poisoned.
+        h.scanner.failWith = null
+        h.fleet.scan(userInitiated = true)
+        runCurrent()
+        assertTrue(h.fleet.isScanning.value, "a later scan should start normally")
+    }
 }

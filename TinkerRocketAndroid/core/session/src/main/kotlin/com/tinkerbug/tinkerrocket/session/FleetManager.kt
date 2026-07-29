@@ -6,6 +6,7 @@ import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -214,6 +215,23 @@ public class FleetManager<S : Any>(
                 }
             } catch (_: TimeoutCancellationException) {
                 if (epoch == scanEpoch) onScanTimeout()
+            } catch (e: CancellationException) {
+                throw e          // structured cancellation is not a failure
+            } catch (e: Exception) {
+                // The scanner flow can fail rather than time out — most often
+                // "BLE scanner unavailable (adapter off?)" when the adapter is
+                // off, but any transport error lands here.  Left uncaught this
+                // escapes the launch and the default handler KILLS THE PROCESS:
+                // tapping Scan with Bluetooth off crashed the app outright
+                // (Checkpoint A Group 1, bench 2026-07-29 — APP CRASH(EXCEPTION)).
+                //
+                // Report it and stop scanning instead; the adapter coming back
+                // is a normal thing to recover from, not a fatal condition.
+                if (epoch == scanEpoch) {
+                    _isScanning.value = false
+                    _userInitiatedScan.value = false
+                    _statusMessage.value = e.message ?: "Scan failed"
+                }
             }
         }
     }
