@@ -178,7 +178,7 @@ public object CsvParser {
      *  - [FlightCsvData.rowCount] counts data lines, not columns.
      */
     public fun parse(content: String): FlightCsvData =
-        parse(content.splitToSequence("\n"))
+        parse(content.splitToSequence("\n"), maxSampleHz = null)
 
     /**
      * Streaming overload — the one the app should use for real flight CSVs.
@@ -194,7 +194,10 @@ public object CsvParser {
      * dropped ANYWHERE, not just at the end, matching the original
      * `split("\n").filter { it.isNotEmpty() }`.
      */
-    public fun parse(lines: Sequence<String>): FlightCsvData {
+    public fun parse(
+        lines: Sequence<String>,
+        maxSampleHz: Double? = null,
+    ): FlightCsvData {
         val it = lines.filter { line -> line.isNotEmpty() }.iterator()
 
         if (!it.hasNext()) {
@@ -217,9 +220,43 @@ public object CsvParser {
         val columns = Array(columnCount) { DoubleBuf() }
         var rowCount = 0
 
+        // #636 rate limiting.  The FC logs the IMU at 1920-3840 Hz, so a
+        // 96-second flight is a 72 MB / ~500k-row CSV — and the chart shows at
+        // most ~2000 LTTB points, so essentially all of that is parsed and then
+        // discarded.  When a ceiling is given, keep at most one row per
+        // interval and SKIP THE SPLIT for the rest: a dropped row costs one
+        // indexOf plus a short substring instead of 63 substrings, which is
+        // where the time actually goes.
+        //
+        // Safe because of how this CSV is shaped, both verified on real logs:
+        //   - every column is forward-filled (~100% populated), so dropping
+        //     rows never loses a slow signal like GNSS — those values repeat
+        //   - every event column LATCHES rather than spiking (Launch, Apogee,
+        //     Landed, Pyro Fired all hold their value once set), so a stride
+        //     cannot step over an event.  It only quantises the transition
+        //     time to the interval — 10 ms at 100 Hz
+        // A sensor that pulsed for a single row would NOT survive this; if one
+        // is ever added, exclude it here or keep its column at full rate.
+        val minIntervalMs = maxSampleHz?.let { hz -> if (hz > 0) 1000.0 / hz else null }
+        var lastKeptMs = Double.NEGATIVE_INFINITY
+
         // Parse all rows in a single pass
         while (it.hasNext()) {
             val line = it.next()
+
+            if (minIntervalMs != null) {
+                // Read ONLY the leading time field; skipping is the whole point,
+                // so a skipped row must not pay for a full split.
+                val comma = line.indexOf(',')
+                val t = (if (comma >= 0) line.substring(0, comma) else line)
+                    .trim().toDoubleOrNull()
+                if (t != null) {
+                    if (t - lastKeptMs < minIntervalMs) continue
+                    lastKeptMs = t
+                }
+                // Unparseable time: keep the row rather than silently drop it.
+            }
+
             rowCount++
             val fields = line.split(",")         // Kotlin split keeps empty fields
             val consumed = minOf(fields.size, columnCount)
