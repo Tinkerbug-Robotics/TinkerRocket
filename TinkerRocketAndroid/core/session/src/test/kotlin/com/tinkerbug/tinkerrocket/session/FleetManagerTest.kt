@@ -532,4 +532,83 @@ class FleetManagerTest {
         runCurrent()
         assertTrue(h.fleet.isScanning.value, "a later scan should start normally")
     }
+
+    // ── #633 cold-start resume ───────────────────────────────────────────
+
+    @Test
+    fun connectRecordsTheResumeHint_andUserDisconnectClearsIt() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Rocket")
+        assertEquals("aa:01", h.lastSession.loadLastConnected()?.deviceId)
+
+        // Walking away is the one case we must NOT resume from.
+        h.fleet.disconnect("aa:01")
+        runCurrent()
+        assertNull(h.lastSession.loadLastConnected(), "user disconnect must clear the hint")
+    }
+
+    @Test
+    fun unexpectedDropKeepsTheHint_soARestartCanResume() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Rocket")
+        // Not user-initiated: a crash/OEM kill/reboot looks like this.
+        h.transports.lastFor("aa:01").dropUnexpectedly()
+        runCurrent()
+        assertEquals(
+            "aa:01",
+            h.lastSession.loadLastConnected()?.deviceId,
+            "an unexpected drop must leave the hint for a cold start",
+        )
+    }
+
+    @Test
+    fun resumeLastSession_scansThenConnectsOnceSighted() = runTest {
+        val h = fleetHarness()
+        h.lastSession.saveLastConnected("aa:01", "TR-R-Rocket")
+
+        h.fleet.resumeLastSession()
+        runCurrent()
+        // Scanning, and NOT user-initiated — a resume must not pop a modal (#394).
+        assertTrue(h.fleet.isScanning.value, "resume should start a scan")
+        assertFalse(h.fleet.userInitiatedScan.value, "resume scan must be silent")
+        assertTrue(h.fleet.devices.value.isEmpty(), "must not connect before a sighting")
+
+        // Only a real advertisement unlocks the connect — never blind from a MAC.
+        h.scanner.emissions.emit(BleAdvertisement("aa:01", "TR-R-Rocket", rssi = -40))
+        advanceTimeBy(500); runCurrent()
+        assertTrue(h.fleet.devices.value.containsKey("aa:01"), "should have reconnected")
+    }
+
+    @Test
+    fun resumeLastSession_givesUpBoundedWhenTheDeviceIsAbsent() = runTest {
+        val h = fleetHarness()
+        h.lastSession.saveLastConnected("aa:01", "TR-R-Rocket")
+        h.fleet.resumeLastSession()
+        runCurrent()
+
+        // Never sighted: bounded wait, unlike the mid-flight endgame.
+        advanceTimeBy(FleetManager.RESUME_SIGHTING_TIMEOUT_MS + 1_000)
+        runCurrent()
+        assertTrue(h.fleet.devices.value.isEmpty())
+        assertTrue(
+            h.fleet.statusMessage.value.contains("not found", ignoreCase = true),
+            "should say so plainly, was '${h.fleet.statusMessage.value}'",
+        )
+    }
+
+    @Test
+    fun resumeLastSession_isANoOpWithNoHintOrWhenAlreadyConnected() = runTest {
+        val h = fleetHarness()
+        // No hint at all.
+        h.fleet.resumeLastSession()
+        runCurrent()
+        assertFalse(h.fleet.isScanning.value, "nothing to resume — must not scan")
+
+        // Already connected: a hint exists but there's nothing to do.
+        discoverAndConnect(h, "aa:01", "TR-R-Rocket")
+        val before = h.fleet.statusMessage.value
+        h.fleet.resumeLastSession()
+        runCurrent()
+        assertEquals(before, h.fleet.statusMessage.value, "should not disturb a live session")
+    }
 }

@@ -123,10 +123,14 @@ The one I'd least want to discover in the field. Result: clean except cold start
       stays a watch-for-it during other work rather than a step
 - [x] Airplane mode on → off → **PASS**, back inside 10 s. Usefully, the ladder is visible
       and honest in the UI: `Reconnecting (5/8)...`
-- [ ] Phone reboot with board live → **FAIL** → issue #633. Mid-session reconnect is solid;
-      this is specifically cold start. iOS scans on BT power-on (`BLEFleet.swift:397`) plus
-      state restoration, so it reconnects itself; Android's `scan()` is only ever called from
-      the Scan button, and the sighting-gated autoConnect endgame never engages from cold
+- [x] Phone reboot with board live → **WAS #633, NOW FIXED**. Mid-session reconnect was always
+      solid; cold start wasn't. iOS gets state restoration plus a re-scan on BT power-on
+      (`BLEFleet.swift:397`); Android's `scan()` was only ever called from the Scan button, so
+      a crash, OEM kill or reboot left the user tapping Scan then Connect. `resumeLastSession()`
+      now scans on launch when the last session ended connected, waits for a real advertisement,
+      then autoConnects — bounded at 20 s, unlike the mid-flight endgame's deliberate forever.
+      Verified: relaunch after a kill reconnected in **under 5 s with zero taps**; an explicit
+      user disconnect clears the hint and relaunch correctly stays put
 - [x] **FGS survival** → **PASS**: 47 min 56 s, 95 samples, 0 process deaths, 0 GATT drops,
       deep Doze held for every sample, PID stable
 - [ ] OC current during the wait → NOT MEASURED (needs a meter; the app's own battery figure

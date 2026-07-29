@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.min
 
 /**
@@ -66,6 +67,12 @@ public class FleetManager<S : Any>(
     public val knownDevices: KnownDeviceStore,
     /** Injected clock (no wall-clock reads in the session layer). */
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Where the "we were connected when the app went away" hint lives (#633).
+     * Defaults to an in-memory no-op so tests and any existing construction
+     * keep working; the app supplies a persistent one.
+     */
+    private val lastSession: LastSessionStore = LastSessionStore.InMemory(),
 ) {
 
     // ------------------------------------------------------------- published
@@ -162,6 +169,7 @@ public class FleetManager<S : Any>(
     private var scanJob: Job? = null
     private var scanEpoch: Int = 0
     private val reconnectJobs = mutableMapOf<String, Job>()
+    private var resumeJob: Job? = null
     private val connectJobs = mutableMapOf<String, Job>()
 
     public companion object {
@@ -169,6 +177,15 @@ public class FleetManager<S : Any>(
 
         /** #291: was 3 (~7 s); raised for flight dropouts. */
         public const val MAX_RECONNECT_ATTEMPTS: Int = 8
+
+        /**
+         * How long a cold-start resume waits to SEE the last device before
+         * giving up (#633).  Bounded on purpose — the mid-flight endgame waits
+         * forever because a flight is in the air; at startup nothing is, and an
+         * endless background scan is just battery.  20 s covers a board that is
+         * already powered and advertising, which is the case worth serving.
+         */
+        public const val RESUME_SIGHTING_TIMEOUT_MS: Long = 20_000
 
         /**
          * Backoff before reconnect attempt `n` (1-based): `min(8, 2^(n-1))` s
@@ -348,6 +365,12 @@ public class FleetManager<S : Any>(
         return try {
             transport.connect()
             adopt(deviceId, name, transport)
+            // #633: remember what we were talking to, so a cold start can
+            // resume it.  Written on every successful connect, cleared only by
+            // an explicit user disconnect — so "was connected" survives a
+            // crash, an OEM kill, or a phone reboot, which are exactly the
+            // cases the field cares about.
+            lastSession.saveLastConnected(deviceId, name)
             true
         } catch (_: Exception) {
             watcher.cancel()
@@ -416,11 +439,67 @@ public class FleetManager<S : Any>(
             reconnectJobs.remove(deviceId)?.cancel()
             _statusMessage.value = "Disconnected"
             _discoveredDevices.value = emptyList()
+            // Deliberate: walking away is the ONE case we don't resume from.
+            // Anything else (crash, OEM kill, reboot, battery pull) leaves the
+            // hint in place (#633).
+            lastSession.clearLastConnected()
             return
         }
 
         // Unexpected drop → reconnect ladder.
         launchReconnectLadder(deviceId, dev?.advertisedName ?: "rocket")
+    }
+
+    // -------------------------------------------------------- cold-start resume
+
+    /**
+     * Reconnect on a cold start to whatever we were connected to (#633).
+     *
+     * The gap this closes: mid-session recovery was already solid — a board
+     * power-cycle comes back in under 6 s — but nothing resumed after the app
+     * itself restarted.  `scan()` was only ever called from the Scan button, so
+     * a crash, an OEM kill or a phone reboot left the user tapping Scan then
+     * Connect at exactly the moment they'd rather be watching the pad.  iOS
+     * never had this: state restoration hands its connections back, and it
+     * re-scans on Bluetooth power-on.
+     *
+     * Reuses the ladder's endgame shape — scan, wait for a real advertisement,
+     * THEN autoConnect — because the rule that made that safe still applies: an
+     * `autoConnect=true` transport for an address the adapter hasn't recently
+     * seen can silently never fire, so we never autoConnect blind from a MAC.
+     *
+     * BOUNDED, unlike the mid-flight endgame's unbounded wait.  That one is
+     * unbounded on purpose: a flight is in progress and abandoning it is worse
+     * than scanning. Here nothing is in the air, and a cold start that scans
+     * forever is just a battery drain — so it gives up after
+     * [RESUME_SIGHTING_TIMEOUT_MS] and leaves the user on a normal scanner.
+     *
+     * Safe to call unconditionally at startup: no hint, or already connected,
+     * and it does nothing.
+     */
+    public fun resumeLastSession() {
+        val last = lastSession.loadLastConnected() ?: return
+        if (_devices.value.isNotEmpty()) return          // already connected
+        resumeJob?.cancel()
+        resumeJob = scope.launch {
+            _statusMessage.value = "Looking for ${last.name}…"
+            // Background scan — NOT user-initiated, so no modal pops (#394).
+            scan(userInitiated = false)
+            val seen = withTimeoutOrNull(RESUME_SIGHTING_TIMEOUT_MS) {
+                scanner.advertisements().first { it.deviceId == last.deviceId }
+            }
+            if (seen == null) {
+                // Not here — say so plainly instead of implying we're still
+                // trying.  The device list keeps whatever the scan turned up.
+                if (_devices.value.isEmpty()) {
+                    _statusMessage.value = "${last.name} not found"
+                }
+                return@launch
+            }
+            // Connected by other means while we waited (user tapped it).
+            if (_devices.value.containsKey(last.deviceId)) return@launch
+            tryConnect(last.deviceId, last.name, autoConnect = true)
+        }
     }
 
     // ----------------------------------------------------- reconnect ladder

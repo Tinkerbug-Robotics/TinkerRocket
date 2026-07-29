@@ -55,7 +55,17 @@ class MainActivity : ComponentActivity() {
         val container = (application as TinkerRocketApp).container
 
         permissionsGranted.value = bleGranted()
-        if (!permissionsGranted.value) requestPermissions.launch(blePermissions)
+        if (!permissionsGranted.value) {
+            requestPermissions.launch(blePermissions)
+        } else {
+            // #633: resume whatever we were connected to before the app went
+            // away.  Android has no CoreBluetooth state restoration, so a
+            // crash, OEM kill or reboot otherwise left the user tapping Scan
+            // then Connect.  No-ops when there's nothing to resume, and only
+            // ever after permissions are already granted — a resume must never
+            // be what triggers a permission prompt.
+            container.fleet.resumeLastSession()
+        }
 
         setContent {
             val scheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
