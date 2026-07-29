@@ -4465,6 +4465,30 @@
 			)
 		)
 	)
+	(global_label "SDA_SENS"
+		(shape input)
+		(at 171.45 107.315 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "087875a0-420a-4b4b-ba4d-380e4b656829")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 183.8694 107.315 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "VDD_SPI"
 		(shape input)
 		(at 183.515 33.02 90)
@@ -4478,6 +4502,30 @@
 		(uuid "0b684f86-5c02-418e-af62-b9cb193e8c0e")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 183.515 22.3543 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "SCL_SENS"
+		(shape input)
+		(at 171.45 109.855 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "2a55a376-162a-4766-aef6-1643ac7034e8")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 183.8089 109.855 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10551,7 +10599,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1 uF"
+		(property "Value" "10 uF"
 			(at 183.515 39.37 0)
 			(show_name no)
 			(do_not_autoplace no)
