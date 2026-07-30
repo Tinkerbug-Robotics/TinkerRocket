@@ -9,7 +9,7 @@
 Top: E220-900MM22S LoRa module, edge SMA, TPS62913 buck + L8 + ferrite bead, ORing Schottkys, CM choke.
 Bottom: ESP32-S3RH2 (QFN-56), W25Q128 boot flash, USB-C, JST-SH host link, both crystals.
 
-**Baseline health: DRC 23 violations (1 error), 0 unconnected, 0 schematic-parity issues.** Nothing here is a "this board is dead" defect — the RF path, the buck topology and the module wiring are all correct. The list below is a must-fix set plus a decide-consciously set.
+**Baseline health: DRC 23 violations (1 error), 0 unconnected, 0 schematic-parity issues.** Nothing here is a "this board is dead" defect — the RF path, the buck topology and the module wiring are all correct. The list below is a must-fix set plus a decide-consciously set. (Finding 2 was closed during review — the intended ferrite bead was confirmed and verified compliant.)
 
 ---
 
@@ -55,10 +55,24 @@ Every cold boot and every brownout recovery is currently out of spec. The rocket
 **Fix (layout):** C95 is at (86.75,123.91) B.Cu, **3.7 mm** from pin 4 at (90.20,122.61) — acceptable for a bypass cap, too far for a reset RC. Move it adjacent to pin 4, alongside R73 at (89.63,123.78).
 **While you are there:** there is no reset button and no CHIP_PU test point. The only way to reset this board is to unplug it. Add at least a pad.
 
-### 2. FB1 is specified as "WE-CBA_0805" — no impedance value, and the bead is inside the control loop
-The FB divider senses **after** FB1, so the bead is part of the compensated plant. TI is explicit: choose a bead with **8 Ω to 20 Ω at 100 MHz**, **DC resistance below 10 mΩ**, and a current rating well above the load; internal compensation "has been designed to be stable with up to **50 nH**" (5–10 nH is what you actually want). Their examples are BLE18PS080SN1 (8.5 Ω → 13.5 nH → 4 mΩ), 7427922808 (8 Ω → 12.7 nH → 5 mΩ).
-The Würth **WE-CBA** family spans roughly 10 Ω to >2 kΩ. A default 600 Ω-class 0805 is ≈**950 nH** — nearly 20× the stability limit — with several hundred mΩ of DCR. Nothing in the schematic, BOM or footprint (`WE-CBA_0805_W4.0`) pins which one.
-**Fix:** put a real MPN on FB1 (8–20 Ω @100 MHz, <10 mΩ, ≥1 A). This is the single highest-risk BOM gap on the board.
+### 2. FB1 — RESOLVED: the intended part is Würth **782853200**, and it checks out
+*(Raised in review as "value-only, could be anything"; the designer confirmed the intended order code. Verified against the datasheet and TI's requirements — no change needed beyond recording it.)*
+
+The FB divider senses **after** FB1, so the bead is part of the compensated plant. TI: **8 Ω to 20 Ω at 100 MHz**, **DCR below 10 mΩ**, current rating well above the load, and internal compensation "designed to be stable with up to **50 nH**".
+
+| TI requirement (§8.2.2.2.4, Table 8-6) | 782853200 | |
+|---|---|---|
+| Impedance 8–20 Ω @ 100 MHz | 20 Ω ±25 % | ✓ top of window |
+| DC resistance below 10 mΩ | 0.008 Ω max | ✓ |
+| Current rating >> load | 5000 mA vs ~180 mA (28×) | ✓ |
+| Inductance ≤ 50 nH | 31.8 nH nom, **39.8 nH at +25 %** | ✓ worst-case unit inside |
+
+The tolerance case is the one that matters and it passes. It is also the only compliant choice at this size: **782853200 is the lowest-impedance 0805 High Current member Würth makes**; the next step up (782853270, 27 Ω) is 43 nH nominal / 54 nH at +25 %, which breaks the 50 nH limit.
+
+The land pattern already matches: Würth's recommended pad is 1.0 × 1.2 mm with total span **W = 4.0 for the High Current type**, and the footprint is literally named `WE-CBA_0805_W4.0` (pads 1.4 × 1.0 at ±1.3 → span 4.0, width 1.0 — 0.2 mm extra toe, otherwise identical). Fab outline 2.0 × 1.2 mm matches the body.
+
+**Remaining action:** none electrically — just get `782853200` into the BOM (see finding 3), because nothing in the schematic, BOM or footprint records it today.
+**Note for bench:** TI's own examples cluster at 8–10 Ω / 12.7–15.9 nH, so this runs ~2× their inductance — worth ~3 dB more ripple attenuation at 2.2 MHz at the cost of phase margin. In spec, but it makes the first-article loop-response measurement (work order step 6) worth doing rather than skipping.
 
 ### 3. BOM has no MPN field, and several parts are value-only where the value is not sufficient
 No component carries an MPN column; a handful of SnapEDA-sourced parts (J2, L8, S3, U3) have inconsistent `MP`/`MF`/`MANUFACTURER`/`DigiKey_Part_Number` fields, so no single export produces a purchasable BOM. **No passive has a voltage rating, dielectric or tolerance.** Where that actually bites:
@@ -160,7 +174,7 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 ## Suggested order of work
 
 1. **Schematic edits:** move C95 to the CHIP_PU node; move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12–15 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
-2. **BOM:** add a real MPN column; pin FB1 first (8–20 Ω @100 MHz / <10 mΩ), then C11/C13 with a DC-bias-derated check against 40–80 µF, C8/C9 at ≥25 V, the three LEDs, and Y5's ESR grade.
+2. **BOM:** add a real MPN column; FB1 = **782853200** (verified, finding 2), then C11/C13 with a DC-bias-derated check against 40–80 µF, C8/C9 at ≥25 V, the three LEDs, and Y5's ESR grade.
 3. **Layout:** relocate Y6 + its caps + L10 next to pins 53/54; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
 5. **Firmware:** `HOST_UART_TX = 6`, `HOST_UART_RX = 5`; flash size to 16 MB; document "never init RF" and "never enable PSRAM unless VDD_SPI is re-fed".
