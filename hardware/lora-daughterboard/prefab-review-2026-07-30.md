@@ -34,10 +34,12 @@ Bottom: ESP32-S3RH2 (QFN-56), W25Q128 boot flash, USB-C, JST-SH host link, both 
 
 ## Must fix before fab
 
-### 1. The CHIP_PU RC capacitor is on the wrong side of the resistor
-Both parts of Espressif's reset network are present and both are the prescribed values (**R = 10 kΩ, C = 1 µF**) — but C95 is wired to the supply side of R73 instead of the CHIP_PU node, so it acts as rail decoupling and forms no delay.
+### 1. The CHIP_PU RC capacitor was on the wrong side of the resistor — **FIXED (schematic), PCB pending**
+Both parts of Espressif's reset network were present and both were the prescribed values (**R = 10 kΩ, C = 1 µF**) — but C95 was wired to the supply side of R73 instead of the CHIP_PU node, so it acted as rail decoupling and formed no delay.
 
-As drawn:
+**Fixed in the schematic 2026-07-30.** `Net-(U28-CHIP_PU)` is now {C95.1, R73.2, U28.4} and R73 pin 1 goes to +3V3 — the RC is correct. **PCB still pending:** the layout was not touched, so C95's copper still ties to +3V3 (pad at (86.75,123.91) B.Cu). Run *Update PCB from Schematic*, re-route, and move C95 next to U28 pin 4 at (90.20,122.61) — alongside R73 at (89.63,123.78) — since 3.7 mm is fine for a bypass cap but too far for a reset RC.
+
+The original analysis, for the record — as drawn:
 ```
 +3V3 (#PWR0235 @154.94,25.4)
   |
@@ -49,10 +51,8 @@ Netlist confirms: `+3V3` contains {C95.1, R73.2, ...}; `Net-(U28-CHIP_PU)` = {R7
 
 Espressif's ESP32-S3 schematic checklist requires ≥50 µs between the rails being stable and CHIP_PU going high. That delay comes from the 10 kΩ charging a capacitor **on the pin**. With C95 on the supply side, the only capacitance on the CHIP_PU node is pin 4's input capacitance plus trace (~5 pF): **τ ≈ 10 kΩ × 5 pF ≈ 50 ns**, i.e. CHIP_PU rises in lockstep with +3V3 (and C95, by slowing the rail slightly, if anything tightens that lockstep). Moved to the pin: **τ = 10 kΩ × 1 µF = 10 ms**, comfortably past the 50 µs floor.
 
-Every cold boot and every brownout recovery is currently out of spec. The rocket-computer review raised the same issue (H8) as a missing capacitor; here the capacitor exists and is simply on the wrong node.
+As drawn, every cold boot and every brownout recovery was out of spec. The rocket-computer review raised the same issue (H8) as a missing capacitor; here the capacitor existed and was simply on the wrong node.
 
-**Fix (schematic, one wire):** move C95's top plate from the +3V3 junction to the R73↔U28.4 node. The 1 µF lost from +3V3 is negligible against the ~90 µF already there (C100/C105 1 µF, C102/C106 10 µF, C12/C15/C16 22 µF); alternatively add a second 0402 and leave C95 as bypass.
-**Fix (layout):** C95 is at (86.75,123.91) B.Cu, **3.7 mm** from pin 4 at (90.20,122.61) — acceptable for a bypass cap, too far for a reset RC. Move it adjacent to pin 4, alongside R73 at (89.63,123.78).
 **While you are there:** there is no reset button and no CHIP_PU test point. The only way to reset this board is to unplug it. Add at least a pad.
 
 ### 2. FB1 — RESOLVED: the intended part is Würth **782853200**, and it checks out
@@ -74,13 +74,42 @@ The land pattern already matches: Würth's recommended pad is 1.0 × 1.2 mm with
 **Remaining action:** none electrically — just get `782853200` into the BOM (see finding 3), because nothing in the schematic, BOM or footprint records it today.
 **Note for bench:** TI's own examples cluster at 8–10 Ω / 12.7–15.9 nH, so this runs ~2× their inductance — worth ~3 dB more ripple attenuation at 2.2 MHz at the cost of phase margin. In spec, but it makes the first-article loop-response measurement (work order step 6) worth doing rather than skipping.
 
-### 3. BOM has no MPN field, and several parts are value-only where the value is not sufficient
-No component carries an MPN column; a handful of SnapEDA-sourced parts (J2, L8, S3, U3) have inconsistent `MP`/`MF`/`MANUFACTURER`/`DigiKey_Part_Number` fields, so no single export produces a purchasable BOM. **No passive has a voltage rating, dielectric or tolerance.** Where that actually bites:
-- **C11/C13 (47 µF 0805) are COUT**, which TI specifies as **40 µF min / 47 nom / 80 µF max effective**. An 0805 47 µF is almost certainly 6.3 V X5R, which loses 50–65 % at 3.3 V DC bias — two of them can land at ~35–45 µF, i.e. straddling the minimum. Pin the part and check the derated value.
-- **C8/C9 (22 µF) sit on VIN at up to 8.4 V.** A 10 V part is not acceptable here; 25 V is the safe call.
+### 3. BOM had no MPN field — **capacitors DONE**, remaining parts still open
+No component carried an MPN field; a handful of SnapEDA-sourced parts (J2, L8, S3, U3) have inconsistent `MP`/`MF`/`MANUFACTURER`/`DigiKey_Part_Number` fields, so no single export produced a purchasable BOM, and **no passive had a voltage rating, dielectric or tolerance.**
+
+**Done 2026-07-30 (capacitors).** All 27 capacitors now carry `MPN`, `Mfr` and `MinVRating` fields in the schematic, sourced from `Circuit Board BOMs/TinkerRocket_CrossBoard_BOM.xlsx` (sheet "Cross-Board BOM"). Field names mirror the spreadsheet columns so the two stay diff-checkable; `MinVRating` is the *design requirement*, not the part's rating (e.g. the 470 nF requirement is 6.3 V while `CL05A474KP5NNNC` is a 10 V part). Verified: nets unchanged, ERC error count unchanged, BOM export emits all three fields on every capacitor row.
+
+| Value | MPN | Mfr | MinVRating | Refs |
+|---|---|---|---|---|
+| 2.2 nF 0402 | CC0402KRX7R9BB222 | Yageo | 16 V | C7 |
+| 22 uF 0805 | CL21A226MOQNNNE | Samsung | 16 V | C8, C9, C11–C16 |
+| 470 nF 0402 | CL05A474KP5NNNC | Samsung | 6.3 V | C10 |
+| 100 nF 0402 | CL05B104KO5NNNC | Samsung | 16 V | C17, C99, C101, C103, C104 |
+| 22 pF 0402 | CL05C220JB5NNNC | Samsung | 6.3 V | C89, C91 |
+| 18 pF 0402 | CL05C180JB5NNNC | Samsung | 6.3 V | C90, C92 |
+| 1 uF 0402 | CL05A105KO5NNNC | Samsung | 16 V | C95, C96, C100, C105 |
+| 10 uF 0402 | CL05A106MQ5NUNC | Samsung | 6.3 V | C97, C102, C106 |
+| 10 nF 0402 | CL05B103KB5NNNC | Samsung | 6.3 V | C98 |
+
+**COUT changed in the same pass — see finding 3a.**
+
+**Still open (non-capacitor):**
 - **D4 "Blue" / D5 "Red" / D6 "LED"** — no part, no Vf (see finding 6).
 - **Y5 "SC-32S-32.768kHz-12.5pF"** — Espressif requires **ESR ≤ 70 kΩ**, which is exactly the typical max for this size class. Pin the grade.
-- U22's `Datasheet` field still reads `W25Q64JVXGIQ TR`, inherited from the symbol it was derived from (the Description property says so). Harmless today because nothing orders from it — but it is a live trap the moment an MPN column is added. Clear it.
+- FB1 = 782853200 (finding 2) — the Value field carries it; it should also get `MPN`/`Mfr` for consistency with the caps.
+- U22's `Datasheet` field still reads `W25Q64JVXGIQ TR`, inherited from the symbol it was derived from (the Description property says so). Harmless today because nothing orders from it — but it is a live trap now that MPN fields exist. Clear it.
+- The resistors, inductors, connectors, crystals and ICs still have no `MPN`/`Mfr`; the spreadsheet has rows for them, so the same one-pass annotation would close it.
+
+### 3a. COUT: 2 × 47 µF 6.3 V → 3 × 22 µF 16 V — **DONE (schematic), PCB pending**
+C11/C13 were `CL21A476MQYNNNE` (47 µF, **6.3 V** X5R, 0805) on `Net-(U3-VO)`, which is the TPS62913's COUT — specified as **40 µF min / 47 nom / 80 µF max effective**. A 6.3 V 0805 X5R sitting at 3.3 V is at 52 % of rated voltage, where that class typically loses 55–70 %: two of them land ≈28–42 µF, straddling and probably under the floor.
+
+Changed to **three × `CL21A226MOQNNNE`** (22 µF, **16 V**, 0805) — already a stocked line on this board, so no new BOM row. At 3.3 V it is only at 21 % of rated, so it derates far less: ≈42–53 µF for three, inside the window. This also matches TI's own Table 8-5 recommendation ("3 × 22 µF, 10 V, X7S, 0805").
+
+Applied: C11 and C13 revalued, **C14 added** at schematic (179.07, 150.495) with `#PWR096` GND and a junction on the VO wire at (179.07, 146.685). Netlist verified: `Net-(U3-VO)` = {C11.1, C13.1, C14.1, FB1.1, L8.2, R4.2, U3.3}.
+
+**PCB pending:** run *Update PCB from Schematic*, then place C14. Free F.Cu slot confirmed at **(93.40, 128.8)** — 2.6 × 1.8 mm clear, directly under L8's VO pad and already inside the `Net-(U3-VO)` pour.
+
+**Caveat:** the derating percentages are the usual range for the class, not measured — confirm both parts against Samsung's DC-bias curves. If the 22 µF derates worse than expected, a fourth (≈56–70 µF) still fits inside the 80 µF ceiling.
 
 ### 4. VDD_SPI: no 0.1 µF at the pin, a 10 µF where Espressif says not to, both 6 mm away — and the boot flash shares the internal 14 Ω
 `OUT_VDD_SPI` = {U28.29, U22.8 (VCC), C96 1 µF, C97 10 µF}. C96/C97 are at (92.15, 113.6–114.6) — **1.6 mm from the flash but 6.1–6.3 mm from U28 pin 29** at (86.20,115.76). The rail reaches the chip over a 0.2 mm, 6.6 mm-long trace cut through the In2 plane.
@@ -173,9 +202,9 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 
 ## Suggested order of work
 
-1. **Schematic edits:** move C95 to the CHIP_PU node; move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12–15 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
-2. **BOM:** add a real MPN column; FB1 = **782853200** (verified, finding 2), then C11/C13 with a DC-bias-derated check against 40–80 µF, C8/C9 at ≥25 V, the three LEDs, and Y5's ESR grade.
-3. **Layout:** relocate Y6 + its caps + L10 next to pins 53/54; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
+1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12–15 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
+2. **BOM:** ~~capacitors~~ (done, finding 3 — MPN/Mfr/MinVRating on all 27); still to do: FB1 MPN/Mfr fields, the three LEDs, Y5's ESR grade, and the same annotation pass over resistors/inductors/connectors/crystals/ICs.
+3. **Layout:** *Update PCB from Schematic* first (C95 re-route + place C14 at ~(93.40,128.8)); relocate Y6 + its caps + L10 next to pins 53/54; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
 5. **Firmware:** `HOST_UART_TX = 6`, `HOST_UART_RX = 5`; flash size to 16 MB; document "never init RF" and "never enable PSRAM unless VDD_SPI is re-fed".
 6. **Bench, once boards exist:** confirm the 40 MHz frequency error and trim C90/C92; scope VIN on hot-plug against the 18 V limit; measure the buck's loop response with the real ferrite bead; verify the SMA's return loss at 915 MHz.
