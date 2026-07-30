@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
@@ -54,20 +55,32 @@ fun ScannerScreen(
                 OutlinedButton(onClick = onGetUpdate) { Text("Get") }
             }
         }
+        // Primary row = the connected world; the spinner lives INSIDE the
+        // Scan button so the row's geometry never changes mid-scan (design
+        // pass 2026-07-30: a floating spinner squeezed the row and wrapped
+        // a button label — the clipped-Disconnect lesson again).
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = { fleet.scan(userInitiated = true) }, enabled = !scanning) {
+                if (scanning) {
+                    CircularProgressIndicator(
+                        Modifier.padding(end = 8.dp).size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
                 Text(if (scanning) "Scanning…" else "Scan")
             }
-            if (scanning) CircularProgressIndicator(Modifier.padding(start = 12.dp))
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = onMyDevices) { Text("My Devices") }
-            OutlinedButton(onClick = onDemo, modifier = Modifier.padding(start = 6.dp)) { Text("Demo") }
         }
-        // #635: flights already on the phone, reachable with nothing connected.
-        // The post-flight workflow is download at the pad, then review later —
-        // which was impossible while the only route to a log was the
-        // connected-device tab row.
-        OutlinedButton(onClick = onSavedFlights) { Text("Saved Flights") }
+        // Secondary row = the no-hardware world: cached flights (#635) and
+        // the Virtual Rocket (a FakeFirmware fleet in the real app stack —
+        // the no-hardware dev path, doubling as the try-the-app mode).
+        // "Virtual Rocket" names the THING; "Simulation" flies the real one.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = onSavedFlights) { Text("Saved Flights") }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = onDemo) { Text("Virtual Rocket") }
+        }
         Text(status, style = MaterialTheme.typography.bodyMedium)
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {

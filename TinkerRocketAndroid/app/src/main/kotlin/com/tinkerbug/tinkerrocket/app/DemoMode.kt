@@ -20,11 +20,15 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Demo mode: the SAME fleet/session/UI stack over [FakeFirmware], flying a
- * canned ~40 s flight on loop — pad wait → boost → coast → apogee → descent
- * → landed.  This is the replay-transport seam from the plan (§3) earning
- * its keep as the no-hardware dev path: every screen is developable against
- * it in the emulator, and it doubles as the in-app demo.
+ * Virtual Rocket (né demo mode): the SAME fleet/session/UI stack over
+ * [FakeFirmware].  The virtual rocket sits in READY like a real one and
+ * flies ONE canned ~40 s flight per SIM_START — the standard Simulation
+ * tool is the start control, exactly the ritual a real rocket uses, and
+ * SIM_STOP aborts mid-flight (user call 2026-07-30: no endless loop).
+ * Nothing is recorded; the downloadable log in Files is the pre-staged
+ * golden corpus flight, not a capture of the show.  This is the replay-
+ * transport seam from the plan (§3) earning its keep as the no-hardware
+ * dev path; Android-only by design (ledger).
  */
 fun buildDemoFleet(context: android.content.Context, scope: CoroutineScope): FleetManager<DeviceSession> {
     lateinit var fleet: FleetManager<DeviceSession>
@@ -64,7 +68,7 @@ fun buildDemoFleet(context: android.content.Context, scope: CoroutineScope): Fle
 private class DemoScanner : BleScanner {
     override fun advertisements(): Flow<BleAdvertisement> = flow {
         while (true) {
-            emit(BleAdvertisement("demo:01", "TR-B-Demo Base", rssi = -47))
+            emit(BleAdvertisement("demo:01", "TR-B-Virtual", rssi = -47))
             delay(500)
         }
     }
@@ -77,7 +81,7 @@ private class DemoTransportFactory(
     override fun create(deviceId: String, autoConnect: Boolean): BleTransport {
         val fw = FakeFirmware(scope)
         fw.configIdentityJson =
-            """{"type":"config_identity","uid":"demo0001","un":"Demo Base Station",""" +
+            """{"type":"config_identity","uid":"demo0001","un":"Virtual Base Station",""" +
                 """"nid":7,"dt":"B","fw":"demo+sim"}"""
         // A real downloadable flight log: the emitter's synthetic golden
         // flight, bundled from the corpus as an asset.
@@ -86,19 +90,54 @@ private class DemoTransportFactory(
         }.getOrNull()?.let { bytes ->
             fw.deviceFiles += FakeFirmware.FakeFile("flight_20260723_141100.bin", bytes)
         }
-        scope.launch { flyDemoFlight(fw) }
+        scope.launch { runVirtualRocket(fw) }
         return fw
     }
 }
 
-/** ~40 s looped flight profile, 5 Hz telemetry, all-healthy sensors. */
-private suspend fun flyDemoFlight(fw: FakeFirmware) {
+/**
+ * READY idle at 1 Hz until SIM_START arrives, then ONE ~40 s flight at 5 Hz
+ * (the script's first 12 s are the pad phase — a countdown after Launch);
+ * SIM_STOP aborts back to READY.  Commands are read off
+ * [FakeFirmware.commandFrames] by index — cheap polling at telemetry cadence.
+ */
+private suspend fun runVirtualRocket(fw: FakeFirmware) {
     // OK (01) at baro/imu/ekf/mag/gnss/batt/storage shifts; pyro NA (hidden).
     val health = 0x100555
     var maxAlt = 0f
+    var cmdCursor = 0
+
+    fun sawCommand(id: Int): Boolean {
+        var hit = false
+        while (cmdCursor < fw.commandFrames.size) {
+            if (fw.commandFrames[cmdCursor].firstOrNull()?.toInt() == id) hit = true
+            cmdCursor++
+        }
+        return hit
+    }
+
     while (true) {
+        // READY idle until the Simulation tool starts a flight.
+        while (!sawCommand(com.tinkerbug.tinkerrocket.protocol.BleCommandId.SIM_START)) {
+            fw.emitTelemetryJson(
+                """{"rid":1,"run":"Booster","st":"READY","fs":16,"ps":${0x00A or 0x080},""" +
+                    """"h":$health,"nsat":9,"vol":8.20,"soc":87.0,"palt":0.2,""" +
+                    """"lat":34.6572,"lon":-118.2015}""",
+            )
+            fw.emitTelemetryJson(
+                """{"rid":2,"run":"Pad Rocket","st":"READY","fs":16,"ps":2,""" +
+                    """"h":$health,"nsat":8,"vol":8.31,"palt":0.4}""",
+            )
+            delay(1000)
+        }
+
+        var aborted = false
         for (tick in 0 until 200) {
-            val t = tick / 5.0f    // seconds into the loop
+            if (sawCommand(com.tinkerbug.tinkerrocket.protocol.BleCommandId.SIM_STOP)) {
+                aborted = true
+                break
+            }
+            val t = tick / 5.0f    // seconds into the flight
             val phase = when {
                 t < 12f -> "READY"
                 t < 14.5f -> "INFLIGHT"       // boost
@@ -150,6 +189,16 @@ private suspend fun flyDemoFlight(fw: FakeFirmware) {
                 )
             }
             delay(200)
+        }
+        // Flight over or aborted: back to the READY idle above.  The sim
+        // banner latch (DeviceSession) clears on the next READY frame; the
+        // `aborted` distinction exists only for readability — both paths
+        // reset the same way, like a real rocket after touchdown + reset.
+        if (aborted) {
+            fw.emitTelemetryJson(
+                """{"rid":1,"run":"Booster","st":"READY","fs":16,"h":$health,""" +
+                    """"nsat":9,"vol":8.20,"palt":0.2}""",
+            )
         }
         maxAlt = 0f
     }
