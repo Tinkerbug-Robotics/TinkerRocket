@@ -15484,4 +15484,98 @@
 			)
 		)
 	)
+	(symbol
+		(lib_id "Connector_Generic:Conn_01x02")
+		(at 180.34 88.9 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "7448e12f-fd37-41be-b141-eb389f224338")
+		(property "Reference" "J8"
+			(at 177.165 88.9001 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "JST_B2P-VH"
+			(at 177.165 86.3601 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical"
+			(at 180.34 88.9 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 180.34 88.9 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 180.34 88.9 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "ee823f9e-32b2-4ffe-8242-974006196843")
+		)
+		(pin "2"
+			(uuid "0d653f04-a9a8-4618-afe1-e085ac0f1c85")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "J8")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(text "#658 fit trial -- JST VH 2-pin (B2P-VH, 3.96 mm) candidate to replace\nthe 2 A JST PH battery input J7. Intentionally UNCONNECTED: placed only to\ncheck mechanical fit on the PCB. Through-hole, 1.7 mm drills. Delete or wire\nup once the connector decision is made."
+		(exclude_from_sim no)
+		(at 165.1 71.12 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "0344bdb0-b130-4487-a9ce-0490dc538298")
+	)
+
 )
