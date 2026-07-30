@@ -42,8 +42,8 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 | Since | Item | Direction | Status |
 |---|---|---|---|
 | 2026-07-27 | Flight-event flag chips (LAUNCH/BURNOUT/APOGEE/LANDED/LOG illuminating) | Android → iOS | **done 2026-07-30** (`FlightEventFlagsView`, render-tested) |
-| 2026-07-27 | Sensor-health dot row (per-subsystem green/amber/red/gray dots) | Android → iOS | **done 2026-07-30** (`HealthDotRow` replaces the labeled grid; go/no-go banner kept — iOS-only, queued the other way) |
-| 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | Phase 4/5 screens. When the camera/logging status lands, ALSO drop Android's LOG chip from the flag row — iOS has no LOG chip (Status card owns logging, user call 2026-07-30) and the rows should re-converge |
+| 2026-07-27 | Sensor-health dot row (per-subsystem green/amber/red/gray dots) | Android → iOS | **done 2026-07-30** (`HealthDotRow` replaces the labeled grid). The go/no-go banner completed the round trip the same day — Android now renders `flightReadiness` too (`ReadinessBanner`), so the health cards match in both directions |
+| 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | **done 2026-07-30**: StatusCard (badges + active file + BS auto-close countdown), ControlsCard (relay-aware camera/log toggles + BS CSV toggle), StorageCard (0xCC/0xCD variants, #315 auto-evict note), go/no-go ReadinessBanner — and the LOG chip dropped in the same change, re-converging the flag rows. Voice indicator had already landed with the announcer (#645). Verified live on both link types (bench OC: 22 flights / 305 MB used; bench BS: countdown 5:00, 451 MB free) |
 
 ## Test-coverage parity
 

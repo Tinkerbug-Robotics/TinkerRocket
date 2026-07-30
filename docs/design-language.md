@@ -23,7 +23,7 @@ terminology, so a user moving between phones never has to re-learn the app.
 | Element | Rule |
 |---|---|
 | Section order | identity header → staleness banner → state → power → battery/GNSS/link stat row → relayed rockets (BS links) → flight-event flags → sensor health → pyro → altitude |
-| Flight-event flag chips | LAUNCH · BURNOUT · APOGEE · LANDED as chips that **illuminate green** as each event latches (born on Android 2026-07-27; on both platforms since 2026-07-30, same lit green #2E7D32). NO LOG chip where a logging tile exists — iOS's Status card owns logging; Android keeps a LOG chip ONLY until the camera/logging status section ports over |
+| Flight-event flag chips | LAUNCH · BURNOUT · APOGEE · LANDED as chips that **illuminate green** as each event latches (born on Android 2026-07-27; on both platforms since 2026-07-30, same lit green #2E7D32). NO LOG chip on either platform since 2026-07-30 — the Status card owns logging on both |
 | Staleness | worsen-only overlay; red banner wording "STALE DATA — link degraded"; never silently show stale values as live |
 | Pyro tiles | green **only** on continuity AND live data; gray = open/stale; dark gray = fired; "ARMED" in the section title when armed |
 | Sensor health | one dot per subsystem, green/amber/red/gray = OK/DEGRADED/BAD/NA, horizontal row |
