@@ -10,14 +10,12 @@ import com.tinkerbug.tinkerrocket.session.FleetSessionFactory
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStorage
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStore
 import com.tinkerbug.tinkerrocket.session.TransportFactory
+import com.tinkerbug.tinkerrocket.session.VirtualFlightScript
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
-import java.util.Locale
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 /**
  * Virtual Rocket (né demo mode): the SAME fleet/session/UI stack over
@@ -96,15 +94,14 @@ private class DemoTransportFactory(
 }
 
 /**
- * READY idle at 1 Hz until SIM_START arrives, then ONE ~40 s flight at 5 Hz
- * (the script's first 12 s are the pad phase — a countdown after Launch);
- * SIM_STOP aborts back to READY.  Commands are read off
+ * READY idle at 1 Hz until SIM_START arrives, then ONE 42 s flight at 5 Hz —
+ * the frames come from [VirtualFlightScript] (shared with the announcer
+ * regression test; the script's first 12 s are a PRELAUNCH countdown after
+ * Launch).  SIM_STOP aborts back to READY.  Commands are read off
  * [FakeFirmware.commandFrames] by index — cheap polling at telemetry cadence.
  */
 private suspend fun runVirtualRocket(fw: FakeFirmware) {
-    // OK (01) at baro/imu/ekf/mag/gnss/batt/storage shifts; pyro NA (hidden).
-    val health = 0x100555
-    var maxAlt = 0f
+    val health = VirtualFlightScript.HEALTH
     var cmdCursor = 0
 
     fun sawCommand(id: Int): Boolean {
@@ -132,55 +129,12 @@ private suspend fun runVirtualRocket(fw: FakeFirmware) {
         }
 
         var aborted = false
-        for (tick in 0 until 200) {
+        for (tick in 0 until VirtualFlightScript.TICKS) {
             if (sawCommand(com.tinkerbug.tinkerrocket.protocol.BleCommandId.SIM_STOP)) {
                 aborted = true
                 break
             }
-            val t = tick / 5.0f    // seconds into the flight
-            val phase = when {
-                t < 12f -> "READY"
-                t < 14.5f -> "INFLIGHT"       // boost
-                t < 22f -> "INFLIGHT"         // coast
-                t < 36f -> "DESCENT"
-                else -> "LANDED"
-            }
-            val alt = when {
-                t < 12f -> 0f
-                t < 22f -> {
-                    val tt = t - 12f
-                    max(0f, 80f * tt - 4f * tt * tt)
-                }
-                t < 36f -> max(0f, 400f - (t - 22f) * 28f)
-                else -> 0f
-            }
-            maxAlt = max(maxAlt, alt)
-            var fs = 0x10 or 0x40                      // pwr on + logging
-            if (t >= 12f) fs = fs or 0x01              // launch
-            if (t >= 14.5f) fs = fs or 0x200           // burnout
-            if (t >= 22f) fs = fs or 0x02 or 0x04      // apogee votes
-            if (t >= 36f) fs = fs or 0x08              // landed
-            val vol = 8.2f - t * 0.004f
-            val sats = if (t < 2f) (t * 4).roundToInt() else 9
-            fw.emitTelemetryJson(
-                String.format(
-                    Locale.ROOT,
-                    """{"rid":1,"run":"Booster","st":"%s","fs":%d,"ps":%d,"h":%d,""" +
-                        """"nsat":%d,"vol":%.2f,"cur":%.1f,"soc":%.1f,"palt":%.1f,""" +
-                        """"malt":%.1f,"arate":%.1f,"lat":34.6572,"lon":-118.2015}""",
-                    phase, fs,
-                    0x00A or 0x080,        // ch1+ch4 continuity (demo)
-                    health, sats, vol,
-                    120f + (if (phase == "INFLIGHT") 900f else 0f),
-                    87f - t * 0.1f, alt, maxAlt,
-                    when {
-                        t in 12f..14.5f -> 95f
-                        t in 14.5f..22f -> 30f - (t - 14.5f) * 4f
-                        t in 22f..36f -> -28f
-                        else -> 0f
-                    },
-                ),
-            )
+            fw.emitTelemetryJson(VirtualFlightScript.frameJson(tick))
             // Second relayed rocket sits READY on the pad (1 Hz).
             if (tick % 5 == 0) {
                 fw.emitTelemetryJson(
@@ -188,7 +142,7 @@ private suspend fun runVirtualRocket(fw: FakeFirmware) {
                         """"h":$health,"nsat":8,"vol":8.31,"palt":0.4}""",
                 )
             }
-            delay(200)
+            delay(VirtualFlightScript.TICK_MS)
         }
         // Flight over or aborted: back to the READY idle above.  The sim
         // banner latch (DeviceSession) clears on the next READY frame; the
@@ -200,7 +154,6 @@ private suspend fun runVirtualRocket(fw: FakeFirmware) {
                     """"nsat":9,"vol":8.20,"palt":0.2}""",
             )
         }
-        maxAlt = 0f
     }
 }
 
