@@ -2446,13 +2446,17 @@ struct TestingControlsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemGray6))
         .cornerRadius(10)
-        .alert("Warning", isPresented: $showSimWarning) {
-            Button("Continue", role: .destructive) {
+        // Sim pyros DRY-FIRE as of the 2026-07-30 firmware: channels
+        // sequence and report, the squib rail never energizes.  The old
+        // destructive "charges will fire" warning was the only protection
+        // before the firmware gate existed.
+        .alert("Simulated flight", isPresented: $showSimWarning) {
+            Button("Launch") {
                 launchSim()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Any attached pyro charges will fire in the sim mode flight. Continue?")
+            Text("The rocket flies the full pipeline on synthetic sensors. Pyro channels sequence and report but are dry-fired — no charges are energized (requires current FC firmware).")
         }
     }
 
