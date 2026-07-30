@@ -41,9 +41,9 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 
 | Since | Item | Direction | Status |
 |---|---|---|---|
-| 2026-07-27 | Flight-event flag chips (LAUNCH/BURNOUT/APOGEE/LANDED/LOG illuminating) | Android → iOS | pending back-port |
-| 2026-07-27 | Sensor-health dot row (per-subsystem green/amber/red/gray dots) | Android → iOS | pending back-port (user-requested) |
-| 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | Phase 4/5 screens |
+| 2026-07-27 | Flight-event flag chips (LAUNCH/BURNOUT/APOGEE/LANDED/LOG illuminating) | Android → iOS | **done 2026-07-30** (`FlightEventFlagsView`, render-tested) |
+| 2026-07-27 | Sensor-health dot row (per-subsystem green/amber/red/gray dots) | Android → iOS | **done 2026-07-30** (`HealthDotRow` replaces the labeled grid; go/no-go banner kept — iOS-only, queued the other way) |
+| 2026-07-27 | iOS dashboard sections not yet on Android (storage bar, camera/logging controls, voice indicator) | iOS → Android | Phase 4/5 screens. When the camera/logging status lands, ALSO drop Android's LOG chip from the flag row — iOS has no LOG chip (Status card owns logging, user call 2026-07-30) and the rows should re-converge |
 
 ## Test-coverage parity
 
