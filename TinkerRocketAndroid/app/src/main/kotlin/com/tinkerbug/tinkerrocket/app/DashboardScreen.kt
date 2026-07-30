@@ -103,7 +103,7 @@ fun DashboardScreen(
             Column(Modifier.weight(1f)) {
                 Text(
                     (identity.unitName.ifEmpty { device.advertisedName }) +
-                        if (demo) "  (demo)" else "",
+                        if (demo) "  (virtual)" else "",
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(

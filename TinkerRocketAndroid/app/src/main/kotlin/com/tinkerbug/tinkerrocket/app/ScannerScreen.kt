@@ -73,13 +73,13 @@ fun ScannerScreen(
             OutlinedButton(onClick = onMyDevices) { Text("My Devices") }
         }
         // Secondary row = the no-hardware world: cached flights (#635) and
-        // demo mode (Android-only by design — the FakeFirmware dev/test path;
-        // iOS has no equivalent, ledger-documented). Demoted from the primary
-        // row in the design pass: a field operator never needs Demo.
+        // the Virtual Rocket (a FakeFirmware fleet in the real app stack —
+        // the no-hardware dev path, doubling as the try-the-app mode).
+        // "Virtual Rocket" names the THING; "Simulation" flies the real one.
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = onSavedFlights) { Text("Saved Flights") }
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = onDemo) { Text("Demo") }
+            OutlinedButton(onClick = onDemo) { Text("Virtual Rocket") }
         }
         Text(status, style = MaterialTheme.typography.bodyMedium)
 
