@@ -34,10 +34,25 @@ Bottom: ESP32-S3RH2 (QFN-56), W25Q128 boot flash, USB-C, JST-SH host link, both 
 
 ## Must fix before fab
 
-### 1. CHIP_PU has the 10 kΩ pull-up but no capacitor — violates the 50 µs t_STBL requirement
-`Net-(U28-CHIP_PU)` = {U28.4, R73.1} only; R73.2 → +3V3. No cap anywhere on the net.
-Espressif's ESP32-S3 schematic checklist requires ≥50 µs between the rails being stable and CHIP_PU going high, and prescribes **R = 10 kΩ and C = 1 µF**. With only a pull-up to the same rail, CHIP_PU tracks +3V3 with ~zero delay — every cold boot and every brownout recovery is out of spec. This is the same defect the rocket-computer review raised (H8); it is repeated verbatim here.
-**Fix:** one 1 µF 0402 from U28 pin 4 to GND, placed at the pin (R73 is at (89.63,123.78), pin 4 at (90.20,122.61) — there is room).
+### 1. The CHIP_PU RC capacitor is on the wrong side of the resistor
+Both parts of Espressif's reset network are present and both are the prescribed values (**R = 10 kΩ, C = 1 µF**) — but C95 is wired to the supply side of R73 instead of the CHIP_PU node, so it acts as rail decoupling and forms no delay.
+
+As drawn:
+```
++3V3 (#PWR0235 @154.94,25.4)
+  |
+  +---- junction (154.94,26.67) ---- C95 1 uF ---- GND (#PWR0238 @160.02,34.29)
+  |
+  +---- R73 10 k ---- CHIP_PU ---- U28.4
+```
+Netlist confirms: `+3V3` contains {C95.1, R73.2, ...}; `Net-(U28-CHIP_PU)` = {R73.1, U28.4} — two nodes.
+
+Espressif's ESP32-S3 schematic checklist requires ≥50 µs between the rails being stable and CHIP_PU going high. That delay comes from the 10 kΩ charging a capacitor **on the pin**. With C95 on the supply side, the only capacitance on the CHIP_PU node is pin 4's input capacitance plus trace (~5 pF): **τ ≈ 10 kΩ × 5 pF ≈ 50 ns**, i.e. CHIP_PU rises in lockstep with +3V3 (and C95, by slowing the rail slightly, if anything tightens that lockstep). Moved to the pin: **τ = 10 kΩ × 1 µF = 10 ms**, comfortably past the 50 µs floor.
+
+Every cold boot and every brownout recovery is currently out of spec. The rocket-computer review raised the same issue (H8) as a missing capacitor; here the capacitor exists and is simply on the wrong node.
+
+**Fix (schematic, one wire):** move C95's top plate from the +3V3 junction to the R73↔U28.4 node. The 1 µF lost from +3V3 is negligible against the ~90 µF already there (C100/C105 1 µF, C102/C106 10 µF, C12/C15/C16 22 µF); alternatively add a second 0402 and leave C95 as bypass.
+**Fix (layout):** C95 is at (86.75,123.91) B.Cu, **3.7 mm** from pin 4 at (90.20,122.61) — acceptable for a bypass cap, too far for a reset RC. Move it adjacent to pin 4, alongside R73 at (89.63,123.78).
 **While you are there:** there is no reset button and no CHIP_PU test point. The only way to reset this board is to unplug it. Add at least a pad.
 
 ### 2. FB1 is specified as "WE-CBA_0805" — no impedance value, and the bead is inside the control loop
@@ -144,7 +159,7 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 
 ## Suggested order of work
 
-1. **Schematic edits:** CHIP_PU 1 µF; move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12–15 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
+1. **Schematic edits:** move C95 to the CHIP_PU node; move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12–15 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
 2. **BOM:** add a real MPN column; pin FB1 first (8–20 Ω @100 MHz / <10 mΩ), then C11/C13 with a DC-bias-derated check against 40–80 µF, C8/C9 at ≥25 V, the three LEDs, and Y5's ESR grade.
 3. **Layout:** relocate Y6 + its caps + L10 next to pins 53/54; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
