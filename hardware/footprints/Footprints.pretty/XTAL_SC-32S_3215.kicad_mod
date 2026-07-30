@@ -1,14 +1,14 @@
 (footprint "XTAL_SC-32S_3215"
-	(version 20241229)
+	(version 20260206)
 	(generator "pcbnew")
-	(generator_version "9.0")
+	(generator_version "10.0")
 	(layer "F.Cu")
 	(descr "Seiko SC-32S 32.768 kHz tuning-fork crystal, 12.5 pF CL, +/-20 ppm, -40 to +85 C, SMD3215-2P (3.2 x 1.5 x 0.75 mm). LCSC C97606.\nREPLACES ECS-.327-6-16R-TR ($1.116 -> $0.1538 @150). Two reasons, not just cost:\n 1. LOAD MATCH. The boards fit 15 pF load caps, which with ~3 pF stray present ~9 pF to the crystal - but the ECS part is a 6 pF CL device, so it was over-loaded and running slow (order -55 ppm, i.e. its own +/-20 ppm spec was swamped ~3x). This part is 12.5 pF CL and the load caps change to 22 pF, which presents 12.5 pF exactly.\n 2. ESR MARGIN. 3215 was chosen over the smaller 2012 SC-20S (C97607, $0.1661) because the ESP32-S3's 32 kHz oscillator is weak, Espressif asks for ESR <= 70 kOhm, and 2012 tuning forks typically run higher ESR than 3215. Neither LCSC page states ESR - CONFIRM IT.\nLand pattern is the LCSC/EasyEDA library pattern for C97606; Seiko's own recommended pattern was not obtained, so check against the datasheet before fab. Courtyard corrected to enclose the pads (the vendor library's sat inside the body outline).")
 	(tags "crystal 32.768kHz tuning fork SMD3215 Seiko SC-32S C97606")
 	(property "Reference" "REF**"
 		(at 0 -1.9 0)
 		(layer "F.SilkS")
-		(uuid "5c320005-0001-4000-8000-000000000001")
+		(uuid "6b9ca475-a89a-47e4-81ef-e0d21de19772")
 		(effects
 			(font
 				(size 0.8 0.8)
@@ -19,7 +19,7 @@
 	(property "Value" "XTAL_SC-32S_3215"
 		(at 0 1.9 0)
 		(layer "F.Fab")
-		(uuid "5c320005-0002-4000-8000-000000000002")
+		(uuid "d50f9d96-4f6f-4456-a240-96b47aac65d0")
 		(effects
 			(font
 				(size 0.8 0.8)
@@ -31,7 +31,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5c320005-0003-4000-8000-000000000003")
+		(uuid "e37ec17a-d326-40fb-9012-9cd79dae9e4c")
 		(effects
 			(font
 				(size 0.8 0.8)
@@ -43,7 +43,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5c320005-0004-4000-8000-000000000004")
+		(uuid "f681b6b1-9a0c-467e-b1b2-0821bcb82204")
 		(effects
 			(font
 				(size 0.8 0.8)
@@ -55,7 +55,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5c320005-0005-4000-8000-000000000005")
+		(uuid "3d4a10b5-27b4-4930-ab01-d46248022dd0")
 		(effects
 			(font
 				(size 0.8 0.8)
@@ -64,7 +64,7 @@
 		)
 	)
 	(attr smd)
-
+	(duplicate_pad_numbers_are_jumpers no)
 	(fp_line
 		(start -2.03 -1.08)
 		(end 2.03 -1.08)
@@ -73,27 +73,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
-		(uuid "5c320005-0101-4000-8000-000000000101")
-	)
-	(fp_line
-		(start 2.03 -1.08)
-		(end 2.03 1.08)
-		(stroke
-			(width 0.12)
-			(type solid)
-		)
-		(layer "F.SilkS")
-		(uuid "5c320005-0102-4000-8000-000000000102")
-	)
-	(fp_line
-		(start 2.03 1.08)
-		(end -2.03 1.08)
-		(stroke
-			(width 0.12)
-			(type solid)
-		)
-		(layer "F.SilkS")
-		(uuid "5c320005-0103-4000-8000-000000000103")
+		(uuid "c6b337bc-6ca8-40e0-9eb9-ac5f04ffdc86")
 	)
 	(fp_line
 		(start -2.03 1.08)
@@ -103,47 +83,27 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
-		(uuid "5c320005-0104-4000-8000-000000000104")
+		(uuid "46c77220-04fb-494c-8a69-3e4ce7fb4488")
 	)
 	(fp_line
-		(start -1.6 -0.75)
-		(end 1.6 -0.75)
+		(start 2.03 -1.08)
+		(end 2.03 1.08)
 		(stroke
-			(width 0.1)
+			(width 0.12)
 			(type solid)
 		)
-		(layer "F.Fab")
-		(uuid "5c320005-0111-4000-8000-000000000111")
+		(layer "F.SilkS")
+		(uuid "248b22fa-64a5-47d9-8aa0-8a2aed2aa288")
 	)
 	(fp_line
-		(start 1.6 -0.75)
-		(end 1.6 0.75)
+		(start 2.03 1.08)
+		(end -2.03 1.08)
 		(stroke
-			(width 0.1)
+			(width 0.12)
 			(type solid)
 		)
-		(layer "F.Fab")
-		(uuid "5c320005-0112-4000-8000-000000000112")
-	)
-	(fp_line
-		(start 1.6 0.75)
-		(end -1.6 0.75)
-		(stroke
-			(width 0.1)
-			(type solid)
-		)
-		(layer "F.Fab")
-		(uuid "5c320005-0113-4000-8000-000000000113")
-	)
-	(fp_line
-		(start -1.6 0.75)
-		(end -1.6 -0.75)
-		(stroke
-			(width 0.1)
-			(type solid)
-		)
-		(layer "F.Fab")
-		(uuid "5c320005-0114-4000-8000-000000000114")
+		(layer "F.SilkS")
+		(uuid "d9ccad67-4b4a-4f0d-8310-1ee62bdc88e4")
 	)
 	(fp_line
 		(start -1.85 -1.1)
@@ -153,27 +113,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "5c320005-0121-4000-8000-000000000121")
-	)
-	(fp_line
-		(start 1.85 -1.1)
-		(end 1.85 1.1)
-		(stroke
-			(width 0.05)
-			(type solid)
-		)
-		(layer "F.CrtYd")
-		(uuid "5c320005-0122-4000-8000-000000000122")
-	)
-	(fp_line
-		(start 1.85 1.1)
-		(end -1.85 1.1)
-		(stroke
-			(width 0.05)
-			(type solid)
-		)
-		(layer "F.CrtYd")
-		(uuid "5c320005-0123-4000-8000-000000000123")
+		(uuid "91a3f40e-672c-4d8a-a0e4-1acc20b7c08b")
 	)
 	(fp_line
 		(start -1.85 1.1)
@@ -183,26 +123,90 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "5c320005-0124-4000-8000-000000000124")
+		(uuid "e735f30c-68dc-4c5c-84b4-e7a7415646c4")
 	)
-
+	(fp_line
+		(start 1.85 -1.1)
+		(end 1.85 1.1)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "7a46f01d-8821-46c8-8129-2cffabdc47fa")
+	)
+	(fp_line
+		(start 1.85 1.1)
+		(end -1.85 1.1)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "bfadadf7-18cb-47bb-9dc1-b4011cc0aa59")
+	)
+	(fp_line
+		(start -1.6 -0.75)
+		(end 1.6 -0.75)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "fc7d258a-6fcd-493d-89fb-0108ea465243")
+	)
+	(fp_line
+		(start -1.6 0.75)
+		(end -1.6 -0.75)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "8662329e-8f96-4c13-8172-2b29f0f67e98")
+	)
+	(fp_line
+		(start 1.6 -0.75)
+		(end 1.6 0.75)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "bedb9524-5b8e-4066-9116-be959d6493f3")
+	)
+	(fp_line
+		(start 1.6 0.75)
+		(end -1.6 0.75)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "9633de14-9bc7-4cf7-a8ec-0a7f256a3fa4")
+	)
 	(pad "1" smd rect
 		(at -1.15 0)
 		(size 0.85 1.7)
-		(layers "F.Cu" "F.Paste" "F.Mask")
-		(uuid "5c320005-0400-4000-8000-000000000400")
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "bc048466-876d-466a-a895-61ce97d3733b")
 	)
 	(pad "2" smd rect
 		(at 1.15 0)
 		(size 0.85 1.7)
-		(layers "F.Cu" "F.Paste" "F.Mask")
-		(uuid "5c320005-0401-4000-8000-000000000401")
-	)
-
-	(model "${KIPRJMOD}/../3dmodels/SC-32S_32.768kHz.step"
-		(offset (xyz 0 0 0))
-		(scale (xyz 1 1 1))
-		(rotate (xyz 0 0 0))
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "39bdce8c-7c23-463f-86bb-d594d54d2c7f")
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/SC-32S_32.768kHz.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )
