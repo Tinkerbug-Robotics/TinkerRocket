@@ -18,8 +18,8 @@ android {
         targetSdk = 36
         // versionCode must only ever increase (Play + sideload "update"
         // installs both key on it); bump BOTH before tagging android-v<name>.
-        versionCode = 4
-        versionName = "1.0.0"
+        versionCode = 5
+        versionName = "1.0.1"
     }
 
     buildFeatures {
