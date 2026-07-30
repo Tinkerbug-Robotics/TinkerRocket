@@ -354,10 +354,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Commands
 
+    /// Wire-tap for outgoing commands.  The Virtual Rocket driver is the
+    /// consumer: its device has no peripheral, so the tap IS the link (the
+    /// same seam FakeFirmware provides on Android).  With a real peripheral
+    /// attached the tap observes without swallowing.
+    var commandTap: ((UInt8, Data) -> Void)?
+
     func sendCommand(_ command: UInt8) {
+        commandTap?(command, Data())
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else {
-            print("Cannot send command: not connected")
+            if commandTap == nil { print("Cannot send command: not connected") }
             return
         }
         let data = Data([command])
@@ -397,9 +404,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func sendRawCommand(_ command: UInt8, payload: Data = Data()) {
+        commandTap?(command, payload)
         guard let characteristic = commandCharacteristic,
               let peripheral = peripheral else {
-            print("Cannot send command: not connected")
+            if commandTap == nil { print("Cannot send command: not connected") }
             return
         }
         var data = Data([command])

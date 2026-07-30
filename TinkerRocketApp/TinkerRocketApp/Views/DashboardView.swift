@@ -1761,6 +1761,34 @@ struct DevicePickerView: View {
                 .buttonStyle(PlainButtonStyle())
                 .disabled(alreadyConnected)
             }
+
+            // Virtual Rocket (2026-07-30): the no-hardware world, matching
+            // Android's secondary-row placement in the design language.  A
+            // scripted fleet through the real stack — READY idle, one flight
+            // per Simulation-sheet launch.  Names the THING (a virtual
+            // rocket); "Simulate" flies the real one.
+            Button {
+                fleet.startVirtualRocket()
+            } label: {
+                HStack {
+                    Image(systemName: "sparkles")
+                        .frame(width: 36)
+                    Text(fleet.virtualRocketActive ? "Virtual Rocket connected"
+                                                   : "Virtual Rocket")
+                        .font(.subheadline)
+                    Spacer()
+                    if fleet.virtualRocketActive {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(Color(.systemGray5).opacity(0.6))
+                .cornerRadius(10)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .disabled(fleet.virtualRocketActive)
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)

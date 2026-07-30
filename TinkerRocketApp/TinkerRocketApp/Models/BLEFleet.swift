@@ -283,6 +283,16 @@ class BLEFleet: NSObject, ObservableObject {
     }
 
     func disconnect(_ device: BLEDevice) {
+        // Virtual rocket: no peripheral, no CoreBluetooth teardown — stop
+        // the driver and remove directly (the didDisconnect path can never
+        // fire for it).
+        if device === virtualDriver?.device {
+            virtualDriver?.stop()
+            virtualDriver = nil
+            device.onDisconnect()
+            devices.removeAll { $0 === device }
+            return
+        }
         userInitiatedDisconnect = true
         if let peripheral = device.peripheral {
             centralManager.cancelPeripheralConnection(peripheral)
@@ -291,12 +301,37 @@ class BLEFleet: NSObject, ObservableObject {
 
     /// Disconnect all devices (convenience for single-device mode).
     func disconnectAll() {
+        if let v = virtualDriver {
+            v.stop()
+            v.device.onDisconnect()
+            devices.removeAll { $0 === v.device }
+            virtualDriver = nil
+        }
         userInitiatedDisconnect = true
         for device in devices {
             if let peripheral = device.peripheral {
                 centralManager.cancelPeripheralConnection(peripheral)
             }
         }
+    }
+
+    // MARK: - Virtual Rocket (iOS twin of Android demo mode, 2026-07-30)
+
+    private var virtualDriver: VirtualRocketDriver?
+
+    /// True while the virtual rocket is in the fleet (the picker's button
+    /// flips to a hint instead of stacking duplicates).
+    var virtualRocketActive: Bool { virtualDriver != nil }
+
+    /// Add the virtual base station + its scripted rocket to the fleet.
+    /// Idempotent; runs entirely without CoreBluetooth (works in the
+    /// Simulator, on the couch, in a talk).
+    func startVirtualRocket() {
+        guard virtualDriver == nil else { return }
+        let driver = VirtualRocketDriver()
+        virtualDriver = driver
+        devices.append(driver.device)
+        driver.start()
     }
 
     // MARK: - Device lookup
