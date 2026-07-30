@@ -1,6 +1,6 @@
 # TinkerRocket Android Port — Plan
 
-*Status: IN PROGRESS — tracking issue [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624). **Phases 0–8 complete; Checkpoint A COMPLETE as of 2026-07-29** (matrix in `624-checkpoint-a-matrix.md` — every box passed or waived with a reason; the compass walk-around rides with the outing). Release signing is DONE (key minted, CI signs on `android-v*` tags, pipeline proven end-to-end 2026-07-30). Remaining for v1.0: the **shadow-phone field outing** (calendar-gated), now purely confirmatory. Phase 9 trailing parity is post-v1.0.*
+*Status: **v1.0 DECLARED 2026-07-30** — tracking issue [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624). Phases 0–8 complete, Checkpoint A fully executed (matrix in `624-checkpoint-a-matrix.md`), release signing proven, `android-v1.0.0` on GitHub Releases. **User decision 2026-07-30: the shadow-phone outing no longer gates v1.0** — it reverts to its original definition, zero-stakes field validation, and rides the next launch day as post-v1.0 confirmation (recovery walk at distance, two-phone choreography, RF range, field conditions). Phase 9 trailing parity in progress: update checker + both dashboard back-ports done.*
 
 Goal: a native Android app with feature parity to the iOS TinkerRocketApp, **maintained concurrently and permanently** alongside it. iOS is the behavioral reference; the firmware (`TR_RocketComputerTypes.h` + `TR_BLE_To_APP`) is the wire authority. One person maintains all of it, evenings/weekends.
 
@@ -112,7 +112,7 @@ Estimating unit: 1 evening ≈ 2–3 h. Cadence ~3 sessions/week. Every phase en
 
 **Screen order rationale** — the launch-day loop defines v1.0: scan/connect → pad dashboard (readiness, power gate, continuity, staleness) → flight (telemetry, voice, prediction) → recovery (map pin, arrow) → post-flight (download, chart). Settings/syncer is non-negotiable in v1.0: the app is the config source of truth; a syncer-less Android app silently flies stale NVS settings. Relay routing (cmd-50 targeting, sticky focus) ships in Phases 2–3 — at a real launch the phone talks through the BS LoRa relay most of the time; only the multi-rocket UI chrome trails. OTA trails: firmware can be flashed at home via iOS/USB indefinitely.
 
-**v1.0 = Phases 0–7 + Checkpoint A + shadow outing.** Trailing: OTA (first to land), 3D views, PyroTest video, DriftCast send flow (guided flight is gated behind FIRST-GUIDED-FLIGHT anyway), fleet chrome, iOS-profile import.
+**v1.0 = Phases 0–7 + Checkpoint A** (the shadow outing was ungated by user decision 2026-07-30 — it validates v1.0 in the field, it doesn't gate it). Trailing: 3D views, PyroTest video, DriftCast send flow (guided flight is gated behind FIRST-GUIDED-FLIGHT anyway), fleet chrome, iOS-profile import. OTA and the update checker, once trailing, both shipped before v1.0.
 
 **Spike verdicts**
 - **S1 (emulator BLE)**: mooted — the Pixel 8 arrived before the spike ran; Phase 2's bench seam validated the real stack directly.
