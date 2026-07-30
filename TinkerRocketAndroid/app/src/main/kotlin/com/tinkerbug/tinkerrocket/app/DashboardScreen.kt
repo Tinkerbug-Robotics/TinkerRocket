@@ -234,20 +234,31 @@ fun DashboardScreen(
             }
         }
 
-        // Flight event flags
+        // Flight event flags.  No LOG chip anymore — the Status card below
+        // owns logging (iOS dropped its LOG chip 2026-07-30 for the same
+        // reason; this is the re-convergence the ledger scheduled for the
+        // change that brought the status section over).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FlagChip("LAUNCH", telemetry.launchFlag)
             FlagChip("BURNOUT", telemetry.burnoutFlag)
             FlagChip("APOGEE", telemetry.altApo || telemetry.velApo)
             FlagChip("LANDED", telemetry.landedFlag)
-            FlagChip("LOG", telemetry.loggingActive)
         }
+
+        // Status card (iOS StatusFlagsView port): camera + logging badges,
+        // active file, BS silence-close countdown.
+        StatusCard(telemetry, session.isBaseStation)
 
         // Sensor health scorecard (#303) — shown once the frame carries it.
         if (telemetry.hasSensorHealth) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Sensor health", style = MaterialTheme.typography.titleMedium)
+                    // Go/no-go banner (iOS HealthCardView port) — the rollup
+                    // was in TelemetryData all along; only the verdict UI was
+                    // missing here.  The banner carries the words; the dots
+                    // below stay the glanceable per-sensor detail.
+                    ReadinessBanner(telemetry.flightReadiness)
                     Row(
                         Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -279,6 +290,20 @@ fun DashboardScreen(
         }
 
         // Tools (iOS: dashboard sheet buttons).  Scan runs on the BS
+        // Controls (iOS ControlsView port): camera + rocket-log toggles are
+        // relay-aware — on a BS link they wrap in the cmd-50 envelope
+        // targeting the FOCUSED rocket with the desired state computed from
+        // ITS telemetry (#390: the legacy broadcast toggle keyed off
+        // whichever rocket was heard last).  Direct links send the bare
+        // toggle, exactly like iOS.
+        ControlsCard(session, telemetry)
+
+        // Storage bar (iOS StorageBarView port): 0xCC on rocket links,
+        // 0xCD on BS links; each renders its own variant.
+        val rocketStorage by session.rocketStorage.collectAsState()
+        val bsStorage by session.bsStorage.collectAsState()
+        StorageCard(session.isBaseStation, rocketStorage, bsStorage)
+
         // radio (cmd 60, BS links only); servo test + sim talk to a rocket.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -546,3 +571,273 @@ private fun VoiceToggle(container: AppContainer) {
             .padding(8.dp),
     )
 }
+
+// ── iOS→Android dashboard-section ports (design-language queue, 2026-07-30) ──
+
+/** iOS StatusBadge: label + filled/hollow state dot. */
+@Composable
+private fun StatusBadge(label: String, active: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "●",
+            color = if (active) Color(0xFF2E7D32) else Color(0x55777777),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Text(
+            " $label",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (active) MaterialTheme.colorScheme.onSurface
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * iOS StatusFlagsView port: camera + logging badges, active file, and the BS
+ * silence-close countdown with the same urgency colors (>60 s green,
+ * 11..60 s amber, ≤10 s red — an imminent close is exactly what the operator
+ * needs to catch mid-flight).  Logging uses [TelemetryData.rocketLoggingActive]
+ * (LANDED-zeroed, #137) — the flag-chip row above used raw loggingActive,
+ * which is why the LOG chip left when this card arrived.
+ */
+@Composable
+private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Status", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                StatusBadge("Camera", telemetry.cameraRecording)
+                StatusBadge(
+                    if (isBaseStation) "Rocket log" else "Logging",
+                    telemetry.rocketLoggingActive,
+                )
+                if (isBaseStation) {
+                    StatusBadge("Base stn log", telemetry.bsLoggingActive)
+                }
+            }
+            if (telemetry.activeFile.isNotEmpty()) {
+                Text(
+                    "File: ${telemetry.activeFile}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val remaining = telemetry.bsLogSilenceRemainingS
+            if (isBaseStation && telemetry.bsLoggingActive && remaining != null) {
+                val color = when {
+                    remaining > 60 -> Color(0xFF2E7D32)
+                    remaining > 10 -> Color(0xFFF9A825)
+                    else -> Color(0xFFB00020)
+                }
+                Text(
+                    "Auto-close in %d:%02d".format(remaining / 60, remaining % 60),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = color,
+                )
+            }
+        }
+    }
+}
+
+/** iOS HealthCardView go/no-go banner: tinted row carrying the rollup verdict. */
+@Composable
+private fun ReadinessBanner(readiness: TelemetryData.FlightReadiness) {
+    val color = when (readiness) {
+        TelemetryData.FlightReadiness.READY -> Color(0xFF2E7D32)
+        TelemetryData.FlightReadiness.CAUTION -> Color(0xFFF9A825)
+        TelemetryData.FlightReadiness.NOT_READY -> Color(0xFFB00020)
+        TelemetryData.FlightReadiness.UNKNOWN -> Color(0xFF616161)
+    }
+    val glyph = when (readiness) {
+        TelemetryData.FlightReadiness.READY -> "✓"
+        TelemetryData.FlightReadiness.CAUTION -> "⚠"
+        TelemetryData.FlightReadiness.NOT_READY -> "✕"
+        TelemetryData.FlightReadiness.UNKNOWN -> "…"
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(glyph, color = color, style = MaterialTheme.typography.titleMedium)
+        Text(
+            readiness.label,
+            color = color,
+            style = MaterialTheme.typography.titleSmall,
+        )
+    }
+}
+
+/**
+ * iOS ControlsView port.  Relay-aware exactly like iOS: BS link + focused
+ * rocket → cmd-50 envelope with the DESIRED state computed from that
+ * rocket's telemetry; direct link → bare toggle.  BS logging (cmd 46) never
+ * uplinks — it's the BS's own CSV (#390 decoupling).
+ */
+@Composable
+private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
+    val focus by session.focusRocketId.collectAsState()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Controls", style = MaterialTheme.typography.titleMedium)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val cam = telemetry.cameraRecording
+                Button(
+                    onClick = {
+                        val f = focus
+                        if (session.isBaseStation && f != null) {
+                            session.sendCommandFrame(
+                                com.tinkerbug.tinkerrocket.protocol.Commands.relayToRocket(
+                                    f,
+                                    com.tinkerbug.tinkerrocket.protocol.Commands
+                                        .cameraToggleWithState(!cam),
+                                ),
+                            )
+                        } else {
+                            session.sendBareCommand(
+                                com.tinkerbug.tinkerrocket.protocol.BleCommandId.CAMERA_TOGGLE,
+                            )
+                        }
+                    },
+                    enabled = !session.isBaseStation || focus != null,
+                    modifier = Modifier.weight(1f),
+                ) { Text(if (cam) "Stop camera" else "Start camera") }
+
+                val log = telemetry.rocketLoggingActive
+                Button(
+                    onClick = {
+                        val f = focus
+                        if (session.isBaseStation && f != null) {
+                            session.sendCommandFrame(
+                                com.tinkerbug.tinkerrocket.protocol.Commands.relayToRocket(
+                                    f,
+                                    com.tinkerbug.tinkerrocket.protocol.Commands
+                                        .toggleLoggingWithState(!log),
+                                ),
+                            )
+                        } else {
+                            session.sendBareCommand(
+                                com.tinkerbug.tinkerrocket.protocol.BleCommandId.TOGGLE_LOGGING,
+                            )
+                        }
+                    },
+                    enabled = !session.isBaseStation || focus != null,
+                    modifier = Modifier.weight(1f),
+                ) { Text(if (log) "Stop logging" else "Start logging") }
+            }
+            if (session.isBaseStation) {
+                val bsLog = telemetry.bsLoggingActive
+                Button(
+                    onClick = {
+                        session.sendCommandFrame(
+                            com.tinkerbug.tinkerrocket.protocol.Commands.bsLogging(!bsLog),
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (bsLog) "Stop base stn log" else "Start base stn log") }
+            }
+        }
+    }
+}
+
+/** Binary-unit byte formatting to match iOS ByteCountFormatter(.binary). */
+private fun fmtBytes(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> String.format(Locale.ROOT, "%.1f GB", bytes / 1073741824.0)
+    else -> String.format(Locale.ROOT, "%.0f MB", bytes / 1048576.0)
+}
+
+/**
+ * iOS StorageBarView port: segmented used/reserved/free bar + legend.
+ * Rocket variant (0xCC) carries flight count + the #315 auto-evict note;
+ * BS variant (0xCD) names its backend.  Absent stats render nothing —
+ * the frames arrive on the file-ops characteristic after connect.
+ */
+@Composable
+private fun StorageCard(
+    isBaseStation: Boolean,
+    rocket: com.tinkerbug.tinkerrocket.protocol.RocketStorageStats?,
+    bs: com.tinkerbug.tinkerrocket.protocol.BaseStationStorageStats?,
+) {
+    val (title, subtitle, used, reserved, free, total, autoEvicted) = when {
+        isBaseStation && bs != null && bs.totalBytes > 0 -> {
+            val backend = listOf("SPIFFS", "SD card", "NAND").getOrElse(bs.backend) { "?" }
+            StorageRow("Base station storage", backend, bs.usedBytes, bs.reservedBytes,
+                bs.freeBytes, bs.totalBytes, false)
+        }
+        !isBaseStation && rocket != null && rocket.initialized -> {
+            val n = rocket.flightCount
+            StorageRow("Rocket storage", "$n flight${if (n == 1) "" else "s"}",
+                rocket.usedBytes, rocket.reservedBytes, rocket.freeBytes,
+                rocket.totalBytes, rocket.autoEvicted)
+        }
+        else -> return
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Segment bar: used | reserved | free, weighted by bytes.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(0x22777777), RoundedCornerShape(4.dp)),
+            ) {
+                val t = total.coerceAtLeast(1)
+                @Composable
+                fun seg(bytes: Long, color: Color) {
+                    val w = bytes.toFloat() / t
+                    if (w > 0f) {
+                        Text(
+                            "",
+                            modifier = Modifier
+                                .weight(w.coerceAtLeast(0.001f))
+                                .background(color)
+                                .padding(vertical = 5.dp),
+                        )
+                    }
+                }
+                seg(used, Color(0xFFF57C00))
+                seg(reserved, Color(0xFF9E9E9E))
+                seg(free, Color(0xFF2E7D32))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Used ${fmtBytes(used)}", style = MaterialTheme.typography.bodySmall)
+                if (reserved > 0) {
+                    Text("Reserved ${fmtBytes(reserved)}", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("Free ${fmtBytes(free)}", style = MaterialTheme.typography.bodySmall)
+            }
+            if (autoEvicted) {
+                // #315 rolling buffer: surface that data rolled off at arm
+                // time rather than being silently dropped.
+                Text(
+                    "↻ Auto-reclaimed oldest flight(s) this session",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private data class StorageRow(
+    val title: String,
+    val subtitle: String,
+    val used: Long,
+    val reserved: Long,
+    val free: Long,
+    val total: Long,
+    val autoEvicted: Boolean,
+)
