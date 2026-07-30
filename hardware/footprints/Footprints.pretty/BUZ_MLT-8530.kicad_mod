@@ -123,4 +123,15 @@
 	)
 
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/MLT-8530.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )

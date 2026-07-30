@@ -40,7 +40,7 @@ Neither affects schematics, layout, ERC/DRC, or fabrication output. Only the 3D 
 
 ## Contents
 
-54 models, 28.2 MB on disk (STEP is verbose ASCII and compresses to
+55 models, 29.6 MB on disk (STEP is verbose ASCII and compresses to
 roughly a fifth of that in git).
 
 | File | Size |
@@ -75,6 +75,7 @@ roughly a fifth of that in git).
 | `KMR221GLFS.step` | 618 KB |
 | `LGA-12_2X2X0P7_STM.step` | 80 KB |
 | `LGA9_BMP585_BOS.step` | 64 KB |
+| `MLT-8530.step` | 1428 KB |
 | `PB400EEQR1BLK.step` | 252 KB |
 | `PMPB14XNX.step` | 451 KB |
 | `QFN-104_10x10mm_ESP32P4.step` | 1658 KB |
