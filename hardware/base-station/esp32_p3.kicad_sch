@@ -3738,10 +3738,10 @@
 		(uuid "908c56f1-8343-424b-83dc-56d79c94d7e3")
 	)
 	(junction
-		(at 113.03 29.845)
+		(at 111.125 45.085)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "ab07e999-814e-49ff-8d39-d0bbce60df6a")
+		(uuid "c0140c95-5bcf-46f2-823d-2d492f1ab008")
 	)
 	(junction
 		(at 198.755 48.895)
@@ -3772,6 +3772,16 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "ff239d5a-eee6-473c-b44e-b16af7957edc")
+	)
+	(wire
+		(pts
+			(xy 120.65 45.085) (xy 120.65 53.975)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "00593746-4a2d-4384-8823-4977b2b7fd04")
 	)
 	(wire
 		(pts
@@ -3882,6 +3892,16 @@
 			(type default)
 		)
 		(uuid "2b85675a-8707-433e-8296-70aed23f24a2")
+	)
+	(wire
+		(pts
+			(xy 111.125 42.545) (xy 111.125 45.085)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2cab3399-06d0-4a98-8372-4a0423718e46")
 	)
 	(wire
 		(pts
@@ -4065,6 +4085,16 @@
 	)
 	(wire
 		(pts
+			(xy 111.125 45.085) (xy 120.65 45.085)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "77cf6eae-7ef4-4ef4-8784-98a6deb9d421")
+	)
+	(wire
+		(pts
 			(xy 175.895 33.02) (xy 183.515 33.02)
 		)
 		(stroke
@@ -4105,13 +4135,13 @@
 	)
 	(wire
 		(pts
-			(xy 113.03 29.845) (xy 113.03 53.975)
+			(xy 111.125 32.385) (xy 111.125 34.925)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "95892bc5-53c9-4cf6-b0d3-4c8e89e70c5e")
+		(uuid "9b315020-8fa8-4e27-a3d0-594b3f7b40f1")
 	)
 	(wire
 		(pts
@@ -4132,16 +4162,6 @@
 			(type default)
 		)
 		(uuid "a38f8c12-0851-4372-b597-77705e84215e")
-	)
-	(wire
-		(pts
-			(xy 113.03 29.845) (xy 118.11 29.845)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a814f52f-8301-4bc8-b638-59d13bf82493")
 	)
 	(wire
 		(pts
@@ -4342,16 +4362,6 @@
 			(type default)
 		)
 		(uuid "e677bda9-b576-412b-b1ba-3794a9dc1dd1")
-	)
-	(wire
-		(pts
-			(xy 113.03 28.575) (xy 113.03 29.845)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e6dd3989-ec9f-4212-9f9f-51410defb2ac")
 	)
 	(wire
 		(pts
@@ -6921,7 +6931,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 118.11 37.465 0)
+		(at 111.125 52.705 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6931,7 +6941,7 @@
 		(dnp no)
 		(uuid "50bdcc8e-fc2a-4d96-b3af-b0a2c7c4f7aa")
 		(property "Reference" "#PWR011"
-			(at 118.11 43.815 0)
+			(at 111.125 59.055 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6942,7 +6952,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 120.015 41.275 0)
+			(at 113.03 56.515 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6953,7 +6963,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 118.11 37.465 0)
+			(at 111.125 52.705 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6964,7 +6974,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 118.11 37.465 0)
+			(at 111.125 52.705 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6975,7 +6985,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 118.11 37.465 0)
+			(at 111.125 52.705 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8341,7 +8351,7 @@
 	)
 	(symbol
 		(lib_id "power:+3V3")
-		(at 113.03 28.575 0)
+		(at 111.125 32.385 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -8352,7 +8362,7 @@
 		(fields_autoplaced yes)
 		(uuid "7c90a65b-14ae-4d1b-aaee-cccc963a81a1")
 		(property "Reference" "#PWR010"
-			(at 113.03 32.385 0)
+			(at 111.125 36.195 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8363,7 +8373,7 @@
 			)
 		)
 		(property "Value" "+3V3"
-			(at 113.03 24.13 0)
+			(at 111.125 27.94 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8373,7 +8383,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 113.03 28.575 0)
+			(at 111.125 32.385 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8384,7 +8394,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 113.03 28.575 0)
+			(at 111.125 32.385 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8395,7 +8405,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 113.03 28.575 0)
+			(at 111.125 32.385 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9364,7 +9374,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 118.11 33.655 0)
+		(at 111.125 48.895 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -9374,7 +9384,7 @@
 		(dnp no)
 		(uuid "b705ab6a-1e8e-4dfd-a7f8-0243823dc6cb")
 		(property "Reference" "C8"
-			(at 118.11 31.115 0)
+			(at 111.125 46.355 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9385,7 +9395,7 @@
 			)
 		)
 		(property "Value" "1 uF"
-			(at 118.11 36.195 0)
+			(at 111.125 51.435 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9396,7 +9406,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 119.0752 37.465 0)
+			(at 112.0902 52.705 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9407,7 +9417,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 118.11 33.655 0)
+			(at 111.125 48.895 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9418,7 +9428,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 118.11 33.655 0)
+			(at 111.125 48.895 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10982,7 +10992,7 @@
 	)
 	(symbol
 		(lib_id "Device:R_US")
-		(at 116.84 53.975 270)
+		(at 111.125 38.735 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10993,27 +11003,29 @@
 		(fields_autoplaced yes)
 		(uuid "ff95c4cf-a926-4bf7-a39a-4a5ce3ee65e8")
 		(property "Reference" "R1"
-			(at 116.84 47.625 90)
+			(at 113.665 37.4649 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
 		(property "Value" "10 k"
-			(at 116.84 50.165 90)
+			(at 113.665 40.0049 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 116.586 54.991 90)
+			(at 112.141 38.989 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11024,7 +11036,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 116.84 53.975 0)
+			(at 111.125 38.735 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11035,7 +11047,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 116.84 53.975 0)
+			(at 111.125 38.735 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
