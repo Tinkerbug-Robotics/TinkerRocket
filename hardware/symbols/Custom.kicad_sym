@@ -8476,10 +8476,10 @@
 					)
 				)
 			)
-			(pin no_connect line
+			(pin passive line
 				(at -22.86 -55.88 0)
 				(length 5.08)
-				(name "NC"
+				(name "VDD_HP_1"
 					(effects
 						(font
 							(size 1.016 1.016)
