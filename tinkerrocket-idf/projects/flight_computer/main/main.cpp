@@ -1120,10 +1120,19 @@ static void servicePyroChannels(uint32_t now_ms)
             }
         }
 
-        // ArmSettle → Firing once the settle elapses
+        // ArmSettle → Firing once the settle elapses.
+        // SIM DRY-FIRE: during a simulated flight the full state machine
+        // runs — states, fired flags, telemetry, deployment logging — but
+        // the FIRE pin is never driven HIGH, so charges connected on a
+        // bench stay cold. The apps' "pyros will fire" warning used to be
+        // the only protection. PYRO_FIRE_TEST (the explicit user ground
+        // test) is deliberately NOT gated — that command means "energize
+        // this channel now" regardless of sim state.
         if (ch.state == PyroChState::ArmSettle &&
             (now_ms - ch.phase_start_ms) >= config::PYRO_ARM_SETTLE_MS) {
-            gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 1);
+            if (!sensor_collector.isSimActive()) {
+                gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 1);
+            }
             ch.state          = PyroChState::Firing;
             ch.phase_start_ms = now_ms;
             just_fired[i]     = true;
@@ -1156,6 +1165,8 @@ static void servicePyroChannels(uint32_t now_ms)
     }
 
     // Compute ARM demand: any channel mid-fire keeps the pin HIGH.
+    // Sim dry-fire: the ARM rail stays LOW too — the whole squib circuit
+    // remains unpowered while the state machine sequences.
     bool any_demand = false;
     for (int i = 0; i < 4; ++i) {
         if (pyro_ch[i].state == PyroChState::ArmSettle ||
@@ -1164,13 +1175,15 @@ static void servicePyroChannels(uint32_t now_ms)
             break;
         }
     }
-    pyroSetArmLocked(any_demand);
+    pyroSetArmLocked(any_demand && !sensor_collector.isSimActive());
 
     portEXIT_CRITICAL(&pyro_spinlock);
 
+    const bool dry = sensor_collector.isSimActive();
     for (int i = 0; i < 4; ++i) {
-        if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d FIRED at alt=%.1f m",
-                                    i + 1, (double)pressure_alt_m);
+        if (just_fired[i]) ESP_LOGW(TAG, "[PYRO] CH%d %s at alt=%.1f m",
+                                    i + 1, dry ? "DRY-FIRED (sim)" : "FIRED",
+                                    (double)pressure_alt_m);
         if (pulse_done[i]) ESP_LOGI(TAG, "[PYRO] CH%d fire pulse complete", i + 1);
     }
 }

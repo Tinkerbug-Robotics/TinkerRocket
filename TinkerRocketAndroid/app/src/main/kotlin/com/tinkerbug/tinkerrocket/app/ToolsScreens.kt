@@ -154,6 +154,7 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
     var burnS by remember { mutableStateOf(prefs.getString("burnTimeSeconds", "1.5")!!) }
     var descentMps by remember { mutableStateOf(prefs.getString("descentRateMps", "5.0")!!) }
     var launching by remember { mutableStateOf(false) }
+    var confirmLaunch by remember { mutableStateOf(false) }
 
     fun persist() {
         prefs.edit()
@@ -198,28 +199,53 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
                 EstRow("Flight Duration", est?.let { "%.0f s".format(it.totalTime) } ?: "—")
             }
         }
+        if (confirmLaunch) {
+            // Same informational confirm as iOS (design language): sim pyros
+            // DRY-FIRE as of the 2026-07-30 firmware — sequence and report,
+            // never energize.
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmLaunch = false },
+                title = { Text("Simulated flight") },
+                text = {
+                    Text(
+                        "The rocket flies the full pipeline on synthetic " +
+                            "sensors. Pyro channels sequence and report but " +
+                            "are dry-fired — no charges are energized " +
+                            "(requires current FC firmware).",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmLaunch = false
+                        launching = true
+                        scope.launch {
+                            session.sendTimeSync()
+                            session.sendCommandFrame(
+                                Commands.simConfig(
+                                    massGrams = massGrams.toFloat(),
+                                    thrustN = thrustN.toFloat(),
+                                    burnTimeS = burnS.toFloat(),
+                                    descentRateMps = descentMps.toFloat(),
+                                ),
+                            )
+                            delay(if (session.isBaseStation) 1000L else 300L)
+                            session.markSimLaunched()
+                            session.sendBareCommand(BleCommandId.SIM_START)
+                            launching = false
+                            onBack()
+                        }
+                    }) { Text("Launch") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmLaunch = false }) { Text("Cancel") }
+                },
+            )
+        }
         Button(
             enabled = connected && inputsValid && !launching,
             onClick = {
-                launching = true
-                scope.launch {
-                    // Fresh phone time for unique sim filenames, then config,
-                    // then start after the relay-dependent delay (iOS timing).
-                    session.sendTimeSync()
-                    session.sendCommandFrame(
-                        Commands.simConfig(
-                            massGrams = massGrams.toFloat(),
-                            thrustN = thrustN.toFloat(),
-                            burnTimeS = burnS.toFloat(),
-                            descentRateMps = descentMps.toFloat(),
-                        ),
-                    )
-                    delay(if (session.isBaseStation) 1000L else 300L)
-                    session.markSimLaunched()
-                    session.sendBareCommand(BleCommandId.SIM_START)
-                    launching = false
-                    onBack()
-                }
+                persist()
+                confirmLaunch = true
             },
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (launching) "Launching…" else "🔥 Launch Simulation") }
@@ -229,12 +255,11 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
             Text("All fields must be positive numbers", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         Text(
-            // Was "Voice announcements, LoRa, and data logging all work during
-            // simulation" — ported verbatim from iOS, but Android has no voice
-            // announcements at all (#643).  Don't promise what isn't there.
             "The simulator runs a 1D physics model on the ESP32, generating " +
                 "synthetic sensor data through the full telemetry pipeline. " +
-                "LoRa and data logging both work during simulation.",
+                "Voice, LoRa, and data logging all work during simulation. " +
+                "Pyro channels dry-fire: they sequence and report, but are " +
+                "never energized.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
