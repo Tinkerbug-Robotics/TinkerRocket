@@ -56,9 +56,11 @@ jobs:
         run: |
           APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
           ls -la "$APK"
+          # Runners ship several build-tools versions — a bare glob expands to
+          # multiple paths and the first binary eats the second as an argument.
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           # apksigner prints the signer cert DN; the debug key's is CN=Android Debug.
-          SIGNER=$("$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" \
-                   | grep -m1 "certificate DN")
+          SIGNER=$("$APKSIGNER" verify --print-certs "$APK" | grep -m1 "certificate DN")
           echo "$SIGNER"
           case "$SIGNER" in
             *"Android Debug"*)
