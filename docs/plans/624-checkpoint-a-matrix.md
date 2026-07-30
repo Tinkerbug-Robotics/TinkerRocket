@@ -397,5 +397,7 @@ TTS speaks from the FGS-pinned process regardless of display state.
       Android→OC); `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1` on both boards is the hard limit.
 
 **CHECKPOINT A: COMPLETE — every box executed or waived (final box closed 2026-07-30).**
-Remaining for v1.0: the shadow-phone field outing, now purely confirmatory (recovery walk at
-real distances, two-phone choreography, RF range, field conditions).
+**v1.0 DECLARED 2026-07-30** (user ungated the outing the same day): the shadow-phone outing
+rides the next launch day as post-v1.0 zero-stakes validation — recovery walk at real
+distances, two-phone choreography, RF range, field conditions, the ~35 m relative-altitude
+eyeball item, and the status-133 watch.
