@@ -229,11 +229,53 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
 
 ## Group 7 — Sensors and audio
 
-- [ ] Heading arrow vs a physical compass, 8 headings → declination applied, wrap-around
-      correct at N
-- [ ] Arrow behaviour when location permission is denied → stated, not silently wrong
-- [ ] TTS announcements duck background audio and restore it
-- [ ] Announcements still fire with the screen off
+- [x] Heading arrow vs a physical compass, 8 headings → declination applied, wrap-around
+      correct at N — **PARTIAL: math verified, physical walk-around deferred to the outing**
+- [x] Arrow behaviour when location permission is denied → stated, not silently wrong —
+      **PASS** (covered in Group 1)
+- [ ] ~~TTS announcements duck background audio and restore it~~ — **N/A, FEATURE ABSENT (#643)**
+- [ ] ~~Announcements still fire with the screen off~~ — **N/A, FEATURE ABSENT (#643)**
+
+### 7.1 Heading arrow — what was actually verified
+
+The bearing card needs **both** a phone fix and a latched rocket GPS fix before it renders an
+arrow at all (`DashboardScreen` otherwise shows "Getting phone location…" / "Waiting for rocket
+GPS"). So the 8-heading comparison is inherently outdoors with a rocket powered and locked — it
+pairs with the shadow-phone outing, not the bench.
+
+What a visual comparison would not catch anyway: **an arrow 359° wrong looks identical to an
+arrow 1° wrong.** The failure modes here are sign and modulo errors, and they are invisible on a
+round dial. So the arithmetic was lifted out of where it could not be tested — a
+`SensorEventListener` callback and a Composable's rotation — into
+`core/session/…/HeadingMath.kt`, with 13 unit tests. Both call sites now use it, so the tests
+cover shipped code rather than a copy.
+
+Covered: declination east/west/across-north (Kotlin's `%` keeps the dividend's sign, so a
+westerly declination — New Jersey is ≈ −13°, the everyday case — would give −11° instead of 349°
+without `mod`); full 0–359 × 5-declination range sweep; wrap-aware angular delta (359.5 → 0.5 is
+1°, not 359°, which is what stops the publish guard from firing continuously while the phone
+sits still pointing north); arrow sign relative to the nose; short-way-round; and the property
+the physical test is really checking — **turn the phone 30° and the arrow must swing exactly 30°
+the other way**, asserted around a full circle.
+
+One correction worth recording: the arrow range is **[-180, 180)**, and the exact antipode
+yields **−180, not +180**. My first two assertions had this backwards. Harmless for a rotation
+(same direction), but don't assert +180.
+
+Still open, for the outing: that the phone's magnetometer is *calibrated* and that declination
+is being fetched for the actual launch site. Those are device/environment facts no unit test
+reaches.
+
+### 7.3 / 7.4 TTS — the feature does not exist
+
+Android has no `TextToSpeech`, `AudioManager`, `AudioAttributes`, `MediaPlayer` or `SoundPool`
+anywhere; there is no audio output of any kind. iOS has `FlightAnnouncer.swift` plus
+`FlightAnnouncerDispatchTests.swift`. These two boxes were scoped against a port that never
+happened — not a test failure, a **scope gap**, filed as #643 along with the plan inconsistency
+it exposes (the v1.0 launch-day loop names "voice"; the only scheduled announcer work is Phase
+9's post-v1.0 "announcer polish"). Also caught in passing: `ToolsScreens.kt:234` tells the user
+"Voice announcements, LoRa, and data logging all work during simulation" — ported verbatim from
+iOS and false on Android.
 
 ---
 

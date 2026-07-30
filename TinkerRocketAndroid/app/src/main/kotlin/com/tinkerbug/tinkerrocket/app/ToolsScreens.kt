@@ -229,10 +229,12 @@ fun SimulationScreen(session: DeviceSession, onBack: () -> Unit) {
             Text("All fields must be positive numbers", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         Text(
+            // Was "Voice announcements, LoRa, and data logging all work during
+            // simulation" — ported verbatim from iOS, but Android has no voice
+            // announcements at all (#643).  Don't promise what isn't there.
             "The simulator runs a 1D physics model on the ESP32, generating " +
                 "synthetic sensor data through the full telemetry pipeline. " +
-                "Voice announcements, LoRa, and data logging all work during " +
-                "simulation.",
+                "LoRa and data logging both work during simulation.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
