@@ -95,7 +95,12 @@ fun DashboardScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
+            // weight(1f) so a wide device name YIELDS instead of shoving the
+            // action row off-screen: #645's voice chip widened the right side
+            // and "Rocket Computer V6" pushed Disconnect past the screen edge
+            // — clipped to invisible, leaving no way off the device. The name
+            // wraps; the actions never move.
+            Column(Modifier.weight(1f)) {
                 Text(
                     (identity.unitName.ifEmpty { device.advertisedName }) +
                         if (demo) "  (demo)" else "",
