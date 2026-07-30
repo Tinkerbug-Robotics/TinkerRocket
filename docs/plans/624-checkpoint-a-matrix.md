@@ -277,7 +277,16 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
 ## Group 7 — Sensors and audio
 
 - [x] Heading arrow vs a physical compass, 8 headings → declination applied, wrap-around
-      correct at N — **PARTIAL: math verified, physical walk-around deferred to the outing**
+      correct at N — **FULL PASS (2026-07-30, backyard)**. Math was already unit-tested
+      (#644); the physical half ran at home instead of waiting for the outing: rocket
+      outdoors with a GNSS lock relaying through the BS (the card is base-station-only, same
+      gate as iOS), operator 20–30 m out. 8 headings against a physical compass, a half-circle
+      orbit, and an arrow-guided approach — **tracked the rocket the whole way, no noticeable
+      offset**. NJ declination is ≈ −13°, so an unapplied declination would have been
+      unmissable; none was. Distance matched pacing. Still worth a glance at the outing: the
+      relative-altitude figure read 35 m with the rocket on the bench (altitude-reference
+      mismatch suspected, phone vs rocket) — bearing and distance are the recovery tools and
+      both check out.
 - [x] Arrow behaviour when location permission is denied → stated, not silently wrong —
       **PASS** (covered in Group 1)
 - [x] TTS announcements duck background audio and restore it — **PASS** (focus lifecycle in
@@ -377,10 +386,9 @@ TTS speaks from the FGS-pinned process regardless of display state.
 
 ## Exit
 
-- [x] Every box above ticked or explicitly waived with a reason — **DONE 2026-07-29**. The
-      one deliberate deferral: the physical 8-heading compass walk-around, which needs
-      outdoors + a rocket GPS fix and rides with the shadow outing (its math is unit-tested,
-      #644).
+- [x] Every box above ticked or explicitly waived with a reason — **DONE, no deferrals
+      left**: the compass walk-around ran in the backyard 2026-07-30 and passed, so every
+      scoped test in the checkpoint is now actually executed or waived-with-reason.
 - [x] Numbers recorded in this file (throughput, frame timing, time-to-first-advert)
 - [x] Bugs filed; blockers fixed; non-blockers triaged onto Phase 9 or the ledger — crashes
       #630/#636 fixed; parity gaps #633/#634/#635 fixed; scope gap #643 (announcer) ported
@@ -388,4 +396,6 @@ TTS speaks from the FGS-pinned process regardless of display state.
 - [x] Plan doc §4 updated — the shadow-outing line now reads one-phone-per-board (iPhone→BS,
       Android→OC); `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1` on both boards is the hard limit.
 
-**CHECKPOINT A: COMPLETE (2026-07-29).** Remaining for v1.0: the shadow-phone field outing.
+**CHECKPOINT A: COMPLETE — every box executed or waived (final box closed 2026-07-30).**
+Remaining for v1.0: the shadow-phone field outing, now purely confirmatory (recovery walk at
+real distances, two-phone choreography, RF range, field conditions).

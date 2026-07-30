@@ -1,6 +1,6 @@
 # TinkerRocket Android Port — Plan
 
-*Status: IN PROGRESS — tracking issue [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624). **Phases 0–8 complete; Checkpoint A COMPLETE as of 2026-07-29** (matrix in `624-checkpoint-a-matrix.md` — every box passed or waived with a reason; the compass walk-around rides with the outing). Remaining for v1.0: the **shadow-phone field outing** (calendar-gated) + release signing. Phase 9 trailing parity is post-v1.0.*
+*Status: IN PROGRESS — tracking issue [#624](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/624). **Phases 0–8 complete; Checkpoint A COMPLETE as of 2026-07-29** (matrix in `624-checkpoint-a-matrix.md` — every box passed or waived with a reason; the compass walk-around rides with the outing). Release signing is DONE (key minted, CI signs on `android-v*` tags, pipeline proven end-to-end 2026-07-30). Remaining for v1.0: the **shadow-phone field outing** (calendar-gated), now purely confirmatory. Phase 9 trailing parity is post-v1.0.*
 
 Goal: a native Android app with feature parity to the iOS TinkerRocketApp, **maintained concurrently and permanently** alongside it. iOS is the behavioral reference; the firmware (`TR_RocketComputerTypes.h` + `TR_BLE_To_APP`) is the wire authority. One person maintains all of it, evenings/weekends.
 
