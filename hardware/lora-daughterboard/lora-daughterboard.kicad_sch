@@ -7631,6 +7631,12 @@
 		(uuid "f7cef179-e85e-451a-9a89-e70d17429788")
 	)
 	(junction
+		(at 179.07 146.685)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "42256b6f-284d-4403-8f31-2efb428c652f")
+	)
+	(junction
 		(at 139.065 52.705)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7685,12 +7691,6 @@
 		(uuid "14a10de9-173b-4fd3-83b1-b0d36d0fc9f6")
 	)
 	(junction
-		(at 154.94 26.67)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "17d75101-ddf2-4851-96b2-1153c3902560")
-	)
-	(junction
 		(at 238.76 115.57)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -7743,6 +7743,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "4a2a21a7-799d-4ec9-a90a-3fcab16ef023")
+	)
+	(junction
+		(at 149.86 40.005)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4f0380a8-6a6a-4a4b-a27c-47c309b4681c")
 	)
 	(junction
 		(at 30.48 38.735)
@@ -8034,6 +8040,16 @@
 	)
 	(wire
 		(pts
+			(xy 160.02 50.8) (xy 160.02 40.005)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2754307c-16a9-455f-baab-e75777c91e28")
+	)
+	(wire
+		(pts
 			(xy 240.665 45.085) (xy 240.665 45.72)
 		)
 		(stroke
@@ -8314,6 +8330,16 @@
 	)
 	(wire
 		(pts
+			(xy 160.02 50.8) (xy 162.56 50.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "63e96d6c-38e0-4f7e-9916-3eec6e169834")
+	)
+	(wire
+		(pts
 			(xy 217.805 29.845) (xy 225.425 29.845)
 		)
 		(stroke
@@ -8454,6 +8480,16 @@
 	)
 	(wire
 		(pts
+			(xy 160.02 40.005) (xy 149.86 40.005)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "81e41d6e-8cf1-4dbf-bde7-7a0a8281470a")
+	)
+	(wire
+		(pts
 			(xy 156.845 68.58) (xy 156.845 73.025)
 		)
 		(stroke
@@ -8481,16 +8517,6 @@
 			(type default)
 		)
 		(uuid "870a5a53-021c-494a-b97f-d554a38c3ab8")
-	)
-	(wire
-		(pts
-			(xy 154.94 26.67) (xy 154.94 50.8)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "8b062480-f9d1-4627-ba4d-8710cd7e5932")
 	)
 	(wire
 		(pts
@@ -8551,16 +8577,6 @@
 			(type default)
 		)
 		(uuid "9665a2e8-1fd2-4f48-bec9-1bb6b7fdf3e6")
-	)
-	(wire
-		(pts
-			(xy 154.94 25.4) (xy 154.94 26.67)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "980f5ab0-a201-4357-a6ac-cbd1eec1d86a")
 	)
 	(wire
 		(pts
@@ -8704,6 +8720,16 @@
 	)
 	(wire
 		(pts
+			(xy 149.86 29.21) (xy 149.86 31.115)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b3da13bf-4667-4c75-b805-a61434a74254")
+	)
+	(wire
+		(pts
 			(xy 217.805 146.685) (xy 248.285 146.685)
 		)
 		(stroke
@@ -8724,13 +8750,13 @@
 	)
 	(wire
 		(pts
-			(xy 154.94 26.67) (xy 160.02 26.67)
+			(xy 149.86 38.735) (xy 149.86 40.005)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "b7f08caf-8d3a-457d-9754-63f9bee488d3")
+		(uuid "b75bbfb2-3595-429d-bd6a-b553652dec74")
 	)
 	(wire
 		(pts
@@ -10270,6 +10296,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C180JB5NNNC"
+			(at 127.635 50.8 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 127.635 50.8 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 127.635 50.8 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "015f6268-4ca7-4bf2-a079-6caec25d01e5")
 		)
@@ -10342,6 +10401,39 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 45.72 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 45.72 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 45.72 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 45.72 149.225 0)
 			(hide yes)
 			(show_name no)
@@ -11116,87 +11208,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:WE-CBA_0805")
-		(at 196.215 146.685 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "11b8b395-5e7c-4eee-9c3c-8ba772b26b13")
-		(property "Reference" "FB1"
-			(at 196.215 140.97 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "WE-CBA_0805"
-			(at 196.215 143.51 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:WE-CBA_0805_W4.0"
-			(at 196.215 146.685 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Datasheet" ""
-			(at 196.215 146.685 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 196.215 146.685 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "2"
-			(uuid "91dcf456-6fee-4844-b937-b1393661386d")
-		)
-		(pin "1"
-			(uuid "9220a090-95dc-4b70-b2c5-cff37043480f")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "FB1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:C")
 		(at 70.485 149.225 0)
 		(unit 1)
@@ -11253,6 +11264,39 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 70.485 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CC0402KRX7R9BB222"
+			(at 70.485 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 70.485 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 70.485 149.225 0)
 			(hide yes)
 			(show_name no)
@@ -12080,7 +12124,7 @@
 	)
 	(symbol
 		(lib_id "power:+3V3")
-		(at 154.94 25.4 0)
+		(at 149.86 29.21 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -12091,7 +12135,7 @@
 		(fields_autoplaced yes)
 		(uuid "278a7603-d337-4e80-988a-e6ff645a2438")
 		(property "Reference" "#PWR0235"
-			(at 154.94 29.21 0)
+			(at 149.86 33.02 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12102,7 +12146,7 @@
 			)
 		)
 		(property "Value" "+3V3"
-			(at 154.94 20.955 0)
+			(at 149.86 24.765 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -12112,7 +12156,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 154.94 25.4 0)
+			(at 149.86 29.21 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12123,7 +12167,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 154.94 25.4 0)
+			(at 149.86 29.21 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12134,7 +12178,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 154.94 25.4 0)
+			(at 149.86 29.21 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12300,6 +12344,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 225.425 33.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 225.425 33.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 225.425 33.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "2ae433d7-2d6e-493d-9a8f-5fd2a556d296")
 		)
@@ -12449,6 +12526,39 @@
 			)
 		)
 		(property "Description" ""
+			(at 240.665 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 240.665 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 240.665 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 240.665 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -13101,6 +13211,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 249.555 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 249.555 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 249.555 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "237eb487-39c0-4fc3-aa1c-111ddd408ce5")
 		)
@@ -13655,6 +13798,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 240.03 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 240.03 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 240.03 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "80ee71f7-77e1-4bdd-9b7d-3ca12b529505")
 		)
@@ -13864,6 +14040,39 @@
 			)
 		)
 		(property "Description" ""
+			(at 130.81 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05C220JB5NNNC"
+			(at 130.81 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 130.81 87.63 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
 			(at 130.81 87.63 0)
 			(hide yes)
 			(show_name no)
@@ -14211,6 +14420,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 279.4 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 279.4 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 279.4 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "395c29e1-2365-4267-8497-a6e78326cd89")
 		)
@@ -14370,6 +14612,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C180JB5NNNC"
+			(at 139.065 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 139.065 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 139.065 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "e3513901-1945-4349-810b-2159adc8bed9")
 		)
@@ -14387,7 +14662,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 160.02 34.29 0)
+		(at 149.86 47.625 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -14397,7 +14672,7 @@
 		(dnp no)
 		(uuid "60e29cb5-86ac-437e-a8b5-40835a43ff6e")
 		(property "Reference" "#PWR0238"
-			(at 160.02 40.64 0)
+			(at 149.86 53.975 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14408,7 +14683,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 161.925 38.1 0)
+			(at 151.765 51.435 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -14419,7 +14694,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 160.02 34.29 0)
+			(at 149.86 47.625 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14430,7 +14705,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 160.02 34.29 0)
+			(at 149.86 47.625 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14441,7 +14716,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 160.02 34.29 0)
+			(at 149.86 47.625 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14704,6 +14979,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 272.415 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 272.415 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 272.415 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "6aa56fd0-84f0-4b08-b553-3d544f4cb5a6")
 		)
@@ -14721,7 +15029,7 @@
 	)
 	(symbol
 		(lib_id "Device:R_US")
-		(at 158.75 50.8 270)
+		(at 149.86 34.925 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -14732,27 +15040,29 @@
 		(fields_autoplaced yes)
 		(uuid "62f518d6-ad84-44a8-9178-5b74c9794769")
 		(property "Reference" "R73"
-			(at 158.75 44.45 90)
+			(at 152.4 33.6549 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
 		(property "Value" "10 k"
-			(at 158.75 46.99 90)
+			(at 152.4 36.1949 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify left)
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 158.496 51.816 90)
+			(at 150.876 35.179 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14763,7 +15073,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 158.75 50.8 0)
+			(at 149.86 34.925 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14774,7 +15084,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 158.75 50.8 0)
+			(at 149.86 34.925 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15011,6 +15321,39 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 217.805 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 217.805 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 217.805 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 217.805 150.495 0)
 			(hide yes)
 			(show_name no)
@@ -15353,6 +15696,87 @@
 		)
 	)
 	(symbol
+		(lib_id "Custom:WE-CBA_0805")
+		(at 196.215 146.685 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "716083cf-40e9-4f43-af23-442b8de1dede")
+		(property "Reference" "FB1"
+			(at 196.215 140.97 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "782853200"
+			(at 196.215 143.51 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Footprints:WE-CBA_0805_W4.0"
+			(at 196.215 146.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Datasheet" ""
+			(at 196.215 146.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 196.215 146.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "a9687125-4774-4ea5-aa88-f945abd7fddf")
+		)
+		(pin "1"
+			(uuid "a3d57a86-678f-47f6-9a20-67f80539f717")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "FB1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 119.38 76.835 0)
 		(unit 1)
@@ -15418,6 +15842,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C220JB5NNNC"
+			(at 119.38 76.835 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 119.38 76.835 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 119.38 76.835 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "de3d64d9-bcf2-4128-8190-365e563c3ee7")
 		)
@@ -15435,7 +15892,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 160.02 30.48 0)
+		(at 149.86 43.815 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -15445,7 +15902,7 @@
 		(dnp no)
 		(uuid "75892946-0dd0-4e94-b3a7-8f411337a4a6")
 		(property "Reference" "C95"
-			(at 160.02 27.94 0)
+			(at 149.86 41.275 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -15456,7 +15913,7 @@
 			)
 		)
 		(property "Value" "1 uF"
-			(at 160.02 33.02 0)
+			(at 149.86 46.355 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -15467,7 +15924,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 160.9852 34.29 0)
+			(at 150.8252 47.625 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15478,7 +15935,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 160.02 30.48 0)
+			(at 149.86 43.815 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15489,7 +15946,40 @@
 			)
 		)
 		(property "Description" ""
-			(at 160.02 30.48 0)
+			(at 149.86 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 149.86 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 149.86 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 149.86 43.815 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16160,6 +16650,199 @@
 	)
 	(symbol
 		(lib_id "Device:C")
+		(at 179.07 150.495 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "d144f1e7-fa5a-40f8-81a5-c56e8eaa3e78")
+		(property "Reference" "C14"
+			(at 182.88 149.2249 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "22 uF"
+			(at 182.88 151.7649 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 180.0352 154.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 179.07 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 179.07 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 179.07 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 179.07 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 179.07 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "3277dfe9-8645-46e0-bc80-00dca8bffd08")
+		)
+		(pin "2"
+			(uuid "1dc39af0-3f63-4ae4-866a-323e9720085e")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "C14")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 179.07 154.305 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "3ff35aea-d433-4a68-8840-4bdf68865ed5")
+		(property "Reference" "#PWR096"
+			(at 179.07 160.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 179.07 158.75 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 179.07 154.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 179.07 154.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 179.07 154.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a8ef9d19-3e2c-4c1c-9419-8c55a1541fa1")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR096")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
 		(at 158.115 150.495 0)
 		(unit 1)
 		(body_style 1)
@@ -16181,7 +16864,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 161.925 151.7649 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16215,6 +16898,39 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 158.115 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 158.115 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 158.115 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 158.115 150.495 0)
 			(hide yes)
 			(show_name no)
@@ -16657,7 +17373,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 173.99 151.7649 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16691,6 +17407,39 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 170.18 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 170.18 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 170.18 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 170.18 150.495 0)
 			(hide yes)
 			(show_name no)
@@ -17007,6 +17756,39 @@
 			)
 		)
 		(property "Description" ""
+			(at 217.805 33.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 217.805 33.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 217.805 33.655 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 217.805 33.655 0)
 			(hide yes)
 			(show_name no)
@@ -18170,6 +18952,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A474KP5NNNC"
+			(at 128.27 168.91 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 128.27 168.91 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 128.27 168.91 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "38c2cd8b-84d3-4db8-a66a-6a1d883117d0")
 		)
@@ -18695,6 +19510,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 247.015 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 247.015 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
+			(at 247.015 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "acf3be4b-a8ca-4629-9ba2-38691d7b070f")
 		)
@@ -18854,6 +19702,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 263.525 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 263.525 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 263.525 46.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "09ef5760-f859-4404-83cc-8aa7244455f3")
 		)
@@ -18926,6 +19807,39 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 58.42 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 58.42 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 58.42 149.225 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 58.42 149.225 0)
 			(hide yes)
 			(show_name no)
@@ -19162,6 +20076,39 @@
 			)
 		)
 		(property "Description" ""
+			(at 233.045 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B103KB5NNNC"
+			(at 233.045 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 233.045 24.13 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "6.3 V"
 			(at 233.045 24.13 0)
 			(hide yes)
 			(show_name no)
@@ -19955,6 +20902,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 233.045 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 233.045 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 233.045 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "6d082bd8-aea8-4f51-ae2d-5a8cb20c484e")
 		)
@@ -20027,6 +21007,39 @@
 			)
 		)
 		(property "Description" ""
+			(at 43.18 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 43.18 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 43.18 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 43.18 34.925 0)
 			(hide yes)
 			(show_name no)
@@ -20430,6 +21443,39 @@
 				)
 			)
 		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 205.105 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 205.105 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
+			(at 205.105 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "124bb915-eb37-4e3a-b39c-426e4d745a92")
 		)
@@ -20503,6 +21549,39 @@
 			)
 		)
 		(property "Description" ""
+			(at 30.48 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 30.48 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 30.48 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MinVRating" "16 V"
 			(at 30.48 34.925 0)
 			(hide yes)
 			(show_name no)
