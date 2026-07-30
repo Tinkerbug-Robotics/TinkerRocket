@@ -29,18 +29,24 @@ final class OTASession: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
-    // Owning fleet (weak — BLEFleet owns this OTASession via
-    // `otaSessions[peripheralID]`, so the cycle would leak both objects).
-    // The current BLEDevice for our peripheral is looked up via the fleet
-    // each time we need it; the device gets destroyed+recreated on every
-    // BLE disconnect/reconnect (#140), but the session lives on.
-    private weak var fleet: BLEFleet?
     let peripheralID: UUID
 
-    /// The current BLEDevice for our peripheral, or nil between reconnects.
-    var device: BLEDevice? {
-        fleet?.devices.first { $0.peripheral?.identifier == peripheralID }
-    }
+    // Link lookup, re-resolved on every access — the device object behind it
+    // is destroyed+recreated on every BLE disconnect/reconnect (#140) while
+    // the session lives on, so it must never be captured.  Same design as
+    // Android's `sessionLookup`; the fleet-owning init below builds the
+    // closure with a weak fleet (BLEFleet owns this OTASession via
+    // `otaSessions[peripheralID]`, so a strong cycle would leak both).
+    private let linkLookup: () -> (any OTALink)?
+
+    /// The current link for our peripheral, or nil between reconnects.
+    var device: (any OTALink)? { linkLookup() }
+
+    /// Test hook: scales every wait (timeouts + poll interval) so the flow
+    /// tests run the REAL windows at 1/200th speed instead of wall-clock.
+    /// Reported timeout seconds in failure text stay unscaled — the messages
+    /// are part of the contract (the FC-window test asserts on "60s").
+    var timeScale: Double = 1.0
 
     private(set) var preFlashFirmwareVersion: String = ""
     private(set) var imageSize: Int = 0
@@ -49,8 +55,16 @@ final class OTASession: ObservableObject {
     private var task: Task<Void, Never>?
 
     init(fleet: BLEFleet, peripheralID: UUID) {
-        self.fleet = fleet
         self.peripheralID = peripheralID
+        self.linkLookup = { [weak fleet] in
+            fleet?.devices.first { $0.peripheral?.identifier == peripheralID }
+        }
+    }
+
+    /// Seam init for tests (and any future non-fleet owner).
+    init(peripheralID: UUID = UUID(), linkLookup: @escaping () -> (any OTALink)?) {
+        self.peripheralID = peripheralID
+        self.linkLookup = linkLookup
     }
 
     deinit {
@@ -64,6 +78,15 @@ final class OTASession: ObservableObject {
         task?.cancel()
         task = Task { [weak self] in
             await self?.runFlow(fileURL: fileURL, targetIsFC: targetIsFC)
+        }
+    }
+
+    /// Data-direct entry (the flow tests use this; file loading is the only
+    /// step they skip — everything downstream is the production path).
+    func start(data: Data, targetIsFC: Bool = false) {
+        task?.cancel()
+        task = Task { [weak self] in
+            await self?.runFlow(fileData: data, targetIsFC: targetIsFC)
         }
     }
 
@@ -88,7 +111,6 @@ final class OTASession: ObservableObject {
     // MARK: - Flow
 
     private func runFlow(fileURL: URL, targetIsFC: Bool) async {
-        // ---- 1. Load file + compute SHA-256 ----
         state = .loading
         let didOpen = fileURL.startAccessingSecurityScopedResource()
         defer { if didOpen { fileURL.stopAccessingSecurityScopedResource() } }
@@ -100,6 +122,12 @@ final class OTASession: ObservableObject {
             state = .failed(reason: "Could not read file: \(error.localizedDescription)")
             return
         }
+        await runFlow(fileData: fileData, targetIsFC: targetIsFC)
+    }
+
+    private func runFlow(fileData: Data, targetIsFC: Bool) async {
+        // ---- 1. Size gate + SHA-256 ----
+        state = .loading
         if fileData.count < 64 {   // ESP32 app images have a non-trivial header
             state = .failed(reason: "File looks too small to be firmware (\(fileData.count) bytes)")
             return
@@ -182,7 +210,7 @@ final class OTASession: ObservableObject {
                 let pause = OTATimeouts.fcRelayPaceDelay(
                     bytesSent: offset, elapsed: Date().timeIntervalSince(pumpStart))
                 if pause > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                    try? await Task.sleep(nanoseconds: UInt64(pause * timeScale * 1_000_000_000))
                 }
             }
         }
@@ -265,14 +293,14 @@ final class OTASession: ObservableObject {
     /// reconnect (new instance) is picked up automatically.
     private func awaitOtaState(_ expected: OTAStatusUpdate.State, timeout: TimeInterval) async throws {
         struct TimedOut: Error {}
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(timeout * timeScale)
         while Date() < deadline {
             if Task.isCancelled { throw CancellationError() }
             if let st = device?.otaStatus {
                 if st.state == expected { return }
                 if st.state == .verifyFailed { throw TimedOut() }
             }
-            try await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * 1_000_000_000))
+            try await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * timeScale * 1_000_000_000))
         }
         throw TimedOut()
     }
@@ -280,11 +308,11 @@ final class OTASession: ObservableObject {
     /// Generic predicate-based wait. Returns true if predicate fired before
     /// timeout. 50 ms poll interval.
     private func waitFor(timeout: TimeInterval, _ predicate: @MainActor @escaping () -> Bool) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(timeout * timeScale)
         while Date() < deadline {
             if Task.isCancelled { return false }
             if predicate() { return true }
-            try? await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(OTATimeouts.pollSeconds * timeScale * 1_000_000_000))
         }
         return false
     }
