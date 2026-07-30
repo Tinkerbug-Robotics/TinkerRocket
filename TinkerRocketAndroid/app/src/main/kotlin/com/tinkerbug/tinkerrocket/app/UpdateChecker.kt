@@ -20,23 +20,35 @@ class UpdateChecker(private val app: Application) {
 
     private val prefs = app.getSharedPreferences("update_check", Context.MODE_PRIVATE)
 
+    // Plain val, declared BEFORE _available: Kotlin runs property initializers
+    // in declaration order, and _available's initializer reads this through
+    // storedIfStillAhead(). The first cut had it below as a `by lazy` — the
+    // delegate object didn't exist yet, and the app crashed at Application
+    // onCreate… but ONLY when a stored update existed, so the first launch
+    // passed and every launch after a release was found died (bench-caught).
+    val currentVersionName: String = try {
+        app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "0.0.0"
+    } catch (_: Exception) {
+        "0.0.0"
+    }
+
     private val _available = MutableStateFlow(storedIfStillAhead())
     val available: StateFlow<UpdateCheck.ReleaseCandidate?> = _available
-
-    val currentVersionName: String by lazy {
-        try {
-            app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "0.0.0"
-        } catch (_: Exception) {
-            "0.0.0"
-        }
-    }
 
     /** Once per app start; hits the network at most every [THROTTLE_MS]. */
     suspend fun checkThrottled() {
         val now = System.currentTimeMillis()
         if (now - prefs.getLong("last_check_ms", 0) < THROTTLE_MS) return
         val body = fetch() ?: return
-        prefs.edit().putLong("last_check_ms", now).apply()
+        // Only a NON-EMPTY release list charges the 24 h throttle. GitHub's
+        // unauthenticated API rides a CDN that can serve a stale empty array
+        // (observed on the bench minutes after the first release was cut) —
+        // burning the throttle on one would hide a real release for a day.
+        // The fleet repo always has ≥1 android release, so empty ⇒ retry
+        // next app start instead.
+        if (UpdateCheck.parseReleases(body).isNotEmpty()) {
+            prefs.edit().putLong("last_check_ms", now).apply()
+        }
 
         val update = UpdateCheck.updateAvailable(currentVersionName, body)
         if (update != null) {
