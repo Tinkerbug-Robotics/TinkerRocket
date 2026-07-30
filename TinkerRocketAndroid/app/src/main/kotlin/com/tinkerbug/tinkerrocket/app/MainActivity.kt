@@ -100,6 +100,27 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    // Voice follows iOS attachActiveDevice (#375, #390): the
+                    // first connected direct rocket when one exists (full
+                    // frame rate), else the foreground base station — whose
+                    // stream is pinned to its focused rocket, so callouts
+                    // never interleave two rockets.  Keyed on the device map
+                    // so reconnects (new session objects) re-attach.
+                    LaunchedEffect(devices) {
+                        container.fleetScope.launch {
+                            val direct = devices.values.firstOrNull {
+                                it.session.isConnected.value &&
+                                    it.deviceType ==
+                                    com.tinkerbug.tinkerrocket.session.BleDeviceType.ROCKET
+                            }
+                            val voice = direct ?: fleet.foregroundBaseStation()
+                            for (d in devices.values) {
+                                if (d !== voice) d.session.telemetryAnnouncer = null
+                            }
+                            voice?.session?.telemetryAnnouncer = container.announcer
+                        }
+                    }
+
                     // #385: keep the screen awake while any device is
                     // connected; FGS pins the process on real connections
                     // (BLUETOOTH_CONNECT is granted by the time one exists).

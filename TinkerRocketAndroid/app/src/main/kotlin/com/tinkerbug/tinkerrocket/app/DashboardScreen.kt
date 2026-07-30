@@ -2,6 +2,7 @@ package com.tinkerbug.tinkerrocket.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -112,7 +113,13 @@ fun DashboardScreen(
                     SyncStateLine(syncState)
                 }
             }
-            OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                container?.let { VoiceToggle(it) }
+                OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
+            }
         }
 
         // Staleness banner (#390 worsen-only overlay)
@@ -502,4 +509,35 @@ private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean
             style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+/**
+ * Voice-callout toggle (#643) — the iOS toolbar speaker icon.  Tap toggles;
+ * long-press speaks the volume/voice check.  Colour is the readiness ladder
+ * from DashboardView: gray = off, red = engine error, orange = enabled but
+ * engine not initialised yet, green = ready.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun VoiceToggle(container: AppContainer) {
+    val enabled by container.announcer.enabled.collectAsState()
+    val ready by container.ttsSpeaker.ready.collectAsState()
+    val error by container.ttsSpeaker.lastError.collectAsState()
+    val tint = when {
+        !enabled -> Color.Gray
+        error != null -> MaterialTheme.colorScheme.error
+        ready -> Color(0xFF2E7D32)
+        else -> Color(0xFFF57C00)
+    }
+    Text(
+        if (enabled) "Voice on" else "Voice off",
+        color = tint,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier
+            .combinedClickable(
+                onClick = { container.announcer.setEnabled(!enabled) },
+                onLongClick = { container.announcer.testVoice() },
+            )
+            .padding(8.dp),
+    )
 }

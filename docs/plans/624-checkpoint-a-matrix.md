@@ -233,8 +233,10 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
       correct at N — **PARTIAL: math verified, physical walk-around deferred to the outing**
 - [x] Arrow behaviour when location permission is denied → stated, not silently wrong —
       **PASS** (covered in Group 1)
-- [ ] ~~TTS announcements duck background audio and restore it~~ — **N/A, FEATURE ABSENT (#643)**
-- [ ] ~~Announcements still fire with the screen off~~ — **N/A, FEATURE ABSENT (#643)**
+- [x] TTS announcements duck background audio and restore it — **PASS** (focus lifecycle in
+      dumpsys + audible on the bench; was N/A: feature absent, #643)
+- [x] Announcements still fire with the screen off — **PASS** (burnout + apogee spoke while
+      Dozing; see 7.4 for the honest scope)
 
 ### 7.1 Heading arrow — what was actually verified
 
@@ -266,16 +268,63 @@ Still open, for the outing: that the phone's magnetometer is *calibrated* and th
 is being fetched for the actual launch site. Those are device/environment facts no unit test
 reaches.
 
-### 7.3 / 7.4 TTS — the feature does not exist
+### 7.3 / 7.4 TTS — was absent, then ported (#643)
 
-Android has no `TextToSpeech`, `AudioManager`, `AudioAttributes`, `MediaPlayer` or `SoundPool`
-anywhere; there is no audio output of any kind. iOS has `FlightAnnouncer.swift` plus
-`FlightAnnouncerDispatchTests.swift`. These two boxes were scoped against a port that never
-happened — not a test failure, a **scope gap**, filed as #643 along with the plan inconsistency
-it exposes (the v1.0 launch-day loop names "voice"; the only scheduled announcer work is Phase
-9's post-v1.0 "announcer polish"). Also caught in passing: `ToolsScreens.kt:234` tells the user
-"Voice announcements, LoRa, and data logging all work during simulation" — ported verbatim from
-iOS and false on Android.
+As found: Android had no `TextToSpeech`, `AudioManager`, `AudioAttributes`, `MediaPlayer` or
+`SoundPool` anywhere — no audio output of any kind, while iOS has `FlightAnnouncer.swift` plus
+dispatch tests, and the v1.0 launch-day loop names "voice". Filed as #643 (scope gap, not a test
+failure), then ported the same day:
+
+- **Policy** in `:core:session` (`FlightAnnouncer.kt`) behind an `AnnouncerSpeech` seam —
+  15 flight-profile state-machine tests that iOS cannot run (its policy is welded to
+  `AVSpeechSynthesizer`), plus the ports of iOS's #138 dispatch and #235 wording suites.
+- **Engine** in `:app` (`TtsSpeaker.kt`): `TextToSpeech` + per-utterance
+  `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` (the Android equivalent of iOS's `.duckOthers` session).
+- **Dispatch** is direct from `DeviceSession`, not via the telemetry StateFlow — a StateFlow
+  dedups equal frames, and burnout detection counts *consecutive unchanged* max-speed frames.
+
+On-device (Pixel, bench OC live): toggle → "Voice ready" spoken, logcat `Announcer` tag firing,
+`dumpsys audio` showed the duck-capable focus grant during playback
+(`GAIN_TRANSIENT_MAY_DUCK`, `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE`/`CONTENT_TYPE_SPEECH`) and a
+clean abandon after.
+
+### 7.4 Sim-flight end-to-end (2026-07-29, bench OC, screen off at launch)
+
+Firmware sim, app defaults (20 g / 40 N / 1.5 s burn / 5.0 m/s descent; est. 262 m/s, 459 m,
+96 s). Every callout, from logcat:
+
+```
+21:14:10.563  Burnout. Max speed 262 meters per second     ← screen OFF (Dozing)
+21:14:11.532  Apogee. 455 meters                           ← screen OFF (Dozing)
+21:14:16.656  424 meters, descending 5 meters per second   (5.1 s after apogee ✓)
+21:14:27.563  369 meters, descending 4 meters per second   (10.9 s ✓)
+  … every ~11 s: 314, 259, 204, 149, 94 …
+21:15:32.703  44 meters, descending 4 meters per second
+21:15:39.674  9 meters, descending 4 meters per second     ← 5 s-cadence branch (see below)
+21:15:44.744  -2 meters                                    (rate in deadband → no direction ✓)
+21:15:46.741  Landed. 0 meters away
+```
+
+Checks that all passed:
+- Spoken apogee **455 m came from telemetry** (`malt`), not the screen's 459 m estimate.
+- First descent callout 5.1 s after apogee, then a clean 10 s cadence.
+- "Landed. **0 meters away**" proves the launch-fix capture + haversine path ran (13 sats live,
+  launch and landing at the same bench spot).
+- No callout ever contradicted the motion (#235's cardinal rule) — including the near-ground
+  frames where it historically did.
+
+Two quirks, both **faithful iOS parity, not Android bugs**:
+- The "9 meters" / "-2 meters" callouts arrive on the **5 s** altitude cadence, not the 10 s
+  descent one: `alt_apo` clears below ~15 m AGL, which re-activates the pre-apogee branch.
+  This is precisely the #235 scenario — iOS fixed the *word* ("descending", from the rate sign)
+  but kept the re-fire, and Android reproduces both. The words were correct here.
+- "-2 meters" is the baro reading slightly below field zero at touchdown; iOS would speak the
+  same.
+
+Screen-off scope, honestly: the phone was Dozing (power-button off) from launch until
+21:14:13.5, when a `PULSING_SINGLE_TAP` (operator tap on the AOD) woke it — so **burnout and
+apogee are the screen-off evidence**, descent ran screen-on. The mechanism doesn't distinguish:
+TTS speaks from the FGS-pinned process regardless of display state.
 
 ---
 

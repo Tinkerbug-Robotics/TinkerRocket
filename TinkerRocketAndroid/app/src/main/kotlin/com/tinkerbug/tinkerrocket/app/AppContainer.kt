@@ -52,6 +52,23 @@ class AppContainer(app: Application) {
     val phoneLocation = PhoneLocationManager(app)
 
     /**
+     * Voice callouts (#643): policy in :core:session, TextToSpeech behind the
+     * AnnouncerSpeech seam.  App-scoped, unlike iOS's per-DashboardView
+     * @StateObject — a mid-flight navigation away from the dashboard must not
+     * tear down the announcer.  Enabled flag shares the iOS UserDefaults key
+     * name for the parity ledger's key inventory.
+     */
+    val ttsSpeaker = TtsSpeaker(app)
+    val announcer: com.tinkerbug.tinkerrocket.session.FlightAnnouncer = run {
+        val prefs = app.getSharedPreferences("announcer", Context.MODE_PRIVATE)
+        com.tinkerbug.tinkerrocket.session.FlightAnnouncer(
+            speech = ttsSpeaker,
+            initialEnabled = prefs.getBoolean("voiceAnnouncementsEnabled", false),
+            onEnabledChanged = { prefs.edit().putBoolean("voiceAnnouncementsEnabled", it).apply() },
+        )
+    }
+
+    /**
      * OTA sessions keyed by device id.  Owned HERE, above the fleet, because
      * the fleet destroys and recreates a DeviceSession across every
      * disconnect — including the post-OTA reboot (#140).  Keeping the OTA
