@@ -71,3 +71,8 @@ TinkerRocketApp/DerivedData/
 
 # Claude Code working files
 .claude/
+
+# Android release signing — the keystore must NEVER enter the repo
+# (docs/android-release-signing.md); belt-and-suspenders for a mis-placed file.
+*.keystore
+*.jks

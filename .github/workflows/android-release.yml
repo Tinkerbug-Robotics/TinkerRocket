@@ -1,0 +1,80 @@
+name: Android Release
+
+# Signed release APK on tag push (android-port plan §2.5: "Release CI signs
+# and attaches the APK on tag push").  Tag scheme: android-v<versionName>,
+# e.g. android-v1.0.0.  The keystore reaches the runner only as a base64
+# repo secret, decoded to a runner-local file that never enters the repo;
+# see docs/android-release-signing.md for minting, custody, and secret setup.
+#
+# Runs the full JVM suite first — a release must never outrun the tests.
+
+on:
+  push:
+    tags:
+      - 'android-v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub release + upload the APK
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run JVM unit tests
+        run: ./gradlew --no-daemon test
+        working-directory: TinkerRocketAndroid
+
+      - name: Decode release keystore
+        env:
+          TR_ANDROID_KEYSTORE_B64: ${{ secrets.TR_ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$TR_ANDROID_KEYSTORE_B64" ]; then
+            echo "::error::TR_ANDROID_KEYSTORE_B64 secret is not set — cannot sign a release"
+            exit 1
+          fi
+          echo "$TR_ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Build signed release APK
+        env:
+          TR_ANDROID_KEYSTORE: ${{ runner.temp }}/release.keystore
+          TR_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.TR_ANDROID_KEYSTORE_PASSWORD }}
+          TR_ANDROID_KEY_ALIAS: ${{ secrets.TR_ANDROID_KEY_ALIAS }}
+          TR_ANDROID_KEY_PASSWORD: ${{ secrets.TR_ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:assembleRelease
+        working-directory: TinkerRocketAndroid
+
+      - name: Verify the APK is signed with the release key (not debug)
+        run: |
+          APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
+          ls -la "$APK"
+          # Runners ship several build-tools versions — a bare glob expands to
+          # multiple paths and the first binary eats the second as an argument.
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          # apksigner prints the signer cert DN; the debug key's is CN=Android Debug.
+          SIGNER=$("$APKSIGNER" verify --print-certs "$APK" | grep -m1 "certificate DN")
+          echo "$SIGNER"
+          case "$SIGNER" in
+            *"Android Debug"*)
+              echo "::error::APK is debug-signed — the release signing env did not take"
+              exit 1 ;;
+          esac
+
+      - name: Attach APK to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
+          OUT="TinkerRocket-${GITHUB_REF_NAME}.apk"
+          cp "$APK" "$OUT"
+          gh release create "$GITHUB_REF_NAME" "$OUT" \
+            --title "TinkerRocket Android ${GITHUB_REF_NAME#android-}" \
+            --generate-notes
