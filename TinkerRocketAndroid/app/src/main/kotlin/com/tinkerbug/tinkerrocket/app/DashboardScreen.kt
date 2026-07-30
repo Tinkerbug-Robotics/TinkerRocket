@@ -365,7 +365,8 @@ private fun DirectionToRocketCard(
                     val bear = com.tinkerbug.tinkerrocket.session.DriftCast.bearingDeg(
                         p.lat, p.lon, fix.latitude, fix.longitude,
                     )
-                    val arrowAngle = ((bear - heading + 180.0).mod(360.0) - 180.0).toFloat()
+                    val arrowAngle = com.tinkerbug.tinkerrocket.session.HeadingMath
+                        .arrowAngleDeg(bear, heading).toFloat()
                     Text(
                         "➤",
                         style = MaterialTheme.typography.displayMedium,

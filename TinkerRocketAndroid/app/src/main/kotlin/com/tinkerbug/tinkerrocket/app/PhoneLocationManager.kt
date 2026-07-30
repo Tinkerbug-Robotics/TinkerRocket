@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.app
 
+import com.tinkerbug.tinkerrocket.session.HeadingMath
 import android.Manifest
 import android.app.Application
 import android.content.Context
@@ -20,7 +21,6 @@ import com.google.android.gms.location.Priority
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlin.math.abs
 
 /**
  * Phone GPS + compass heading for direction/distance to the rocket — port
@@ -80,10 +80,13 @@ class PhoneLocationManager(private val app: Application) {
             SensorManager.getRotationMatrixFromVector(rotation, event.values)
             SensorManager.getOrientation(rotation, orientation)
             val magnetic = Math.toDegrees(orientation[0].toDouble())
-            val trueHeading = (magnetic + declinationDeg).mod(360.0)
-            // ≥1° guard, wrap-aware (359.5 → 0.5 is a 1° move, not 359°).
-            val delta = abs((trueHeading - _headingDeg.value + 180.0).mod(360.0) - 180.0)
-            if (delta >= 1.0) _headingDeg.value = trueHeading
+            // Math lives in HeadingMath (:core:session) so it is unit-tested —
+            // the wrap cases can't be caught by looking at the arrow, since 359°
+            // wrong and 1° wrong render identically (Checkpoint A Group 7).
+            val trueHeading = HeadingMath.trueHeading(magnetic, declinationDeg)
+            if (HeadingMath.shouldPublish(trueHeading, _headingDeg.value)) {
+                _headingDeg.value = trueHeading
+            }
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
