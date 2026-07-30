@@ -32789,7 +32789,7 @@
 				)
 			)
 		)
-		(property "Value" "100 nF"
+		(property "Value" "1 uF"
 			(at 0 1.16 0)
 			(layer "F.Fab")
 			(hide yes)
