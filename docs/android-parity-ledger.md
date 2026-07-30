@@ -29,6 +29,7 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 | 2026-07-27 | FreqScan's fixed-frequency **Apply** (transactional relay + verify + rollback) is iOS-only; Android shows a "use iOS" note | The fleet runs hopping mode (#150 default) where Apply is refused by design — the mask auto-applies. Port the transactional flow when a fixed-frequency need reappears |
 | 2026-07-23 | Scan restart within 15 s is NOT truncated (epoch-guarded timeout); iOS's unguarded timer truncates a restarted scan | The iOS behavior is a timer-hygiene bug; a restarted scan deserves its full window |
 | 2026-07-23 | KnownDeviceStore device list sorts plain case-insensitive; iOS uses `localizedCaseInsensitiveCompare` | Locale-dependent ordering is cosmetic; plain ordering is deterministic across devices |
+| 2026-07-30 | In-app update checker (GitHub Releases → scanner banner → browser) is Android-only | Distribution differs by design (plan §1): iOS updates ride the App Store; Android sideloads from GitHub Releases, so the app itself must notice a new `android-v*` tag. Pure logic in `UpdateCheck.kt` (JVM-tested); fetch is throttled to one hit/day and silent on every failure — no signal at a launch site is normal |
 
 ## Feature lag (session layer, deferred to Phase 3)
 

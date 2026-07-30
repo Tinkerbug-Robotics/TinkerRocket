@@ -67,6 +67,11 @@ class MainActivity : ComponentActivity() {
             container.fleet.resumeLastSession()
         }
 
+        // Update check: once per app start, one network hit per day, silent on
+        // every failure (no signal at a launch site is normal). Fleet scope so
+        // it survives the activity; the banner reads the StateFlow whenever.
+        container.fleetScope.launch { container.updateChecker.checkThrottled() }
+
         setContent {
             val scheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
             MaterialTheme(colorScheme = scheme) {
@@ -217,6 +222,7 @@ class MainActivity : ComponentActivity() {
                                     onBack = { showMyDevices = false },
                                 )
                             } else {
+                                val update by container.updateChecker.available.collectAsState()
                                 ScannerScreen(
                                     fleet = container.fleet,
                                     onDemo = {
@@ -229,6 +235,17 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onMyDevices = { showMyDevices = true },
                                     onSavedFlights = { showSavedFlights = true },
+                                    updateVersion = update?.versionName,
+                                    onGetUpdate = {
+                                        update?.let {
+                                            startActivity(
+                                                android.content.Intent(
+                                                    android.content.Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(it.htmlUrl),
+                                                ),
+                                            )
+                                        }
+                                    },
                                 )
                             }
                         }
