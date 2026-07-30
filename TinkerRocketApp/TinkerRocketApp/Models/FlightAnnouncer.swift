@@ -390,7 +390,16 @@ final class SystemSpeech: NSObject, AnnouncerSpeech, AVSpeechSynthesizerDelegate
     var onStatusChange: (() -> Void)?
 
     private var speaking = false
-    var isBusy: Bool { speaking }
+    private var speakingSince = Date.distantPast
+    /// didFinish/didCancel normally clear `speaking`, but if the delegate
+    /// callback is lost (audio session dying mid-utterance) a latched value
+    /// would make the policy skip every skippable callout for the rest of
+    /// the flight.  No utterance runs anywhere near this long — treat an
+    /// older claim as stale rather than staying mute.
+    private static let busyStaleAfter: TimeInterval = 15
+    var isBusy: Bool {
+        speaking && Date().timeIntervalSince(speakingSince) < Self.busyStaleAfter
+    }
 
     override init() {
         super.init()
@@ -442,6 +451,7 @@ final class SystemSpeech: NSObject, AnnouncerSpeech, AVSpeechSynthesizerDelegate
         utterance.postUtteranceDelay = 0.1
 
         speaking = true
+        speakingSince = Date()
         synthesizer.speak(utterance)
     }
 

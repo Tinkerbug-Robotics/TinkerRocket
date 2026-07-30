@@ -352,6 +352,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         simSawNonReady = false
     }
 
+    /// Drop the SIM MODE banner once a launched sim's flight completes: arm
+    /// on the first non-READY state, clear on the return to READY.  Called
+    /// for direct-rocket frames AND the focused rocket's relayed frames —
+    /// on a base-station link the sim runs relay-wrapped (#390), and the
+    /// latch used to only clear on the direct path, leaving the banner
+    /// stuck after every relayed sim flight (found via the Virtual Rocket,
+    /// which is a BS; Android's latch already watches the focused stream).
+    private func updateSimBannerLatch(_ t: TelemetryData) {
+        guard simLaunched else { return }
+        if t.state != "READY" && t.state != "INITIALIZATION" {
+            simSawNonReady = true
+        }
+        if simSawNonReady && t.state == "READY" {
+            simLaunched = false
+            simSawNonReady = false
+        }
+    }
+
     // MARK: - Commands
 
     /// Wire-tap for outgoing commands.  The Virtual Rocket driver is the
@@ -1800,6 +1818,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     key: RocketKey(networkID: networkID, rocketID: rocketID))
 
                 if rocketID == focusRocketID {
+                    self.updateSimBannerLatch(newTelemetry)
                     self.telemetry = newTelemetry
                     // Mirror the latched fix (#140).  Only assign when the
                     // cache returns a non-nil value so a GPS-less packet
@@ -1816,15 +1835,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 return
             }
 
-            if self.simLaunched {
-                if newTelemetry.state != "READY" && newTelemetry.state != "INITIALIZATION" {
-                    self.simSawNonReady = true
-                }
-                if self.simSawNonReady && newTelemetry.state == "READY" {
-                    self.simLaunched = false
-                    self.simSawNonReady = false
-                }
-            }
+            self.updateSimBannerLatch(newTelemetry)
             self.telemetry = newTelemetry
             // #159: the rocket has finished flushing and powered on — drop the
             // Power On button's busy state.  Guarded so we don't republish on
