@@ -4453,6 +4453,17 @@
 		)
 		(uuid "418fe984-7996-49a5-99a9-2c90f6a0d99d")
 	)
+	(text "P4 chip-rev provisions (#657):\nR74/R75/C93 = DCDC FB network, R76 = pin-54 VDD_HP_1 link.\nFIT all four for chip rev v3.x -- DNP for v1.x (current dev chips = v1.3).\nR77 (CEN_D+ 1M pulldown): ALWAYS fitted (req v1.x, allowed v3.x)."
+		(exclude_from_sim no)
+		(at 161.29 29.845 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "c28c7ac2-05ae-4995-a6ae-cf104eff91bc")
+	)
 	(text "Indicators"
 		(exclude_from_sim no)
 		(at 192.405 47.625 0)
@@ -4468,7 +4479,7 @@
 	)
 	(text "Central Processing ESP32-P4"
 		(exclude_from_sim no)
-		(at 116.84 22.225 0)
+		(at 113.665 19.05 0)
 		(effects
 			(font
 				(size 3 3)
@@ -4610,6 +4621,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "c33f3406-497d-4cd8-89af-34e9ce8834bc")
+	)
+	(junction
+		(at 135.89 30.48)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c4907d42-a840-4c1b-8476-d7024a725907")
 	)
 	(junction
 		(at 214.63 141.605)
@@ -4839,6 +4856,16 @@
 	)
 	(wire
 		(pts
+			(xy 135.89 30.48) (xy 146.05 30.48)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "47d622b1-9ef9-4177-894d-6cd46690470d")
+	)
+	(wire
+		(pts
 			(xy 174.625 123.19) (xy 182.245 123.19)
 		)
 		(stroke
@@ -4866,6 +4893,16 @@
 			(type default)
 		)
 		(uuid "5677197a-2f71-4230-872b-d18c963def54")
+	)
+	(wire
+		(pts
+			(xy 135.89 22.86) (xy 146.05 22.86)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "59e7409e-ef49-4b3e-90c3-2c9afbd63750")
 	)
 	(wire
 		(pts
@@ -5086,6 +5123,16 @@
 			(type default)
 		)
 		(uuid "9423376e-a3dd-4c11-ac43-288ba08930d3")
+	)
+	(wire
+		(pts
+			(xy 135.89 30.48) (xy 135.89 36.83)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "947d4a78-27b1-4bb5-8f20-9e58e7cb0076")
 	)
 	(wire
 		(pts
@@ -5947,6 +5994,30 @@
 			)
 		)
 	)
+	(global_label "ESP_VDD_HP"
+		(shape input)
+		(at 146.05 22.86 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "1509810e-307a-4256-b0ec-6eb925696e88")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 146.05 8.082 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "EXP_03"
 		(shape input)
 		(at 90.17 116.205 0)
@@ -6088,6 +6159,30 @@
 					(size 1.27 1.27)
 				)
 				(justify right)
+			)
+		)
+	)
+	(global_label "FB_DCDC"
+		(shape input)
+		(at 146.05 30.48 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "26b5fb2c-b49b-4295-9a29-7bd8cec6a99e")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 157.441 30.48 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 	)
@@ -6520,6 +6615,30 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+			)
+		)
+	)
+	(global_label "VDD_HP_1"
+		(shape input)
+		(at 44.45 146.685 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "4e19f97b-2023-41d7-9202-8e11356ea6bf")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 33.9053 146.685 180)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 	)
@@ -7315,6 +7434,30 @@
 			)
 		)
 	)
+	(global_label "ESP_VDD_HP"
+		(shape input)
+		(at 154.305 48.26 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "a03d1246-029d-409a-b7f3-66308f287769")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 154.305 33.482 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "GPS_ACT"
 		(shape input)
 		(at 44.45 113.665 180)
@@ -7723,6 +7866,30 @@
 			)
 		)
 	)
+	(global_label "VDD_HP_1"
+		(shape input)
+		(at 154.305 55.88 270)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "d83e86a0-ffb6-49b4-8d68-dce598ca4759")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 143.76 55.88 270)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "VDDO_4"
 		(shape input)
 		(at 233.68 136.525 90)
@@ -7888,6 +8055,30 @@
 					(size 1.27 1.27)
 				)
 				(justify right)
+			)
+		)
+	)
+	(global_label "CEN_D+"
+		(shape input)
+		(at 164.465 48.26 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "ee1bc3c2-156e-48a4-addf-c9596d5bfb13")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 164.465 33.482 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 	)
@@ -9697,6 +9888,87 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
 					(reference "#PWR0105")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 135.89 26.67 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp yes)
+		(uuid "207d5625-8575-40f7-b67e-cd2de2f90ba9")
+		(property "Reference" "R74"
+			(at 134.62 27.94 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "499 k"
+			(at 134.62 25.4 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 136.906 26.924 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 135.89 26.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 135.89 26.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "9d54b954-90fa-40c3-8aad-6b08de4f815a")
+		)
+		(pin "2"
+			(uuid "0a1c41f4-72e5-479b-8e25-68448228e5e6")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "R74")
 					(unit 1)
 				)
 			)
@@ -11837,6 +12109,87 @@
 	)
 	(symbol
 		(lib_id "Device:C")
+		(at 146.05 26.67 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp yes)
+		(uuid "60757a35-2d90-406d-b169-17b93993aae3")
+		(property "Reference" "C93"
+			(at 146.05 24.13 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "22 pF"
+			(at 146.05 29.21 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 147.015 30.48 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 146.05 26.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 146.05 26.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "18bccc04-17b6-4948-bf94-e502e23b1332")
+		)
+		(pin "2"
+			(uuid "06d3f797-f36d-4e16-83a3-7182de67fa17")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "C93")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
 		(at 214.63 120.015 0)
 		(unit 1)
 		(body_style 1)
@@ -12146,6 +12499,87 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
 					(reference "#PWR0164")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 164.465 52.07 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "6925418d-4176-4d0b-b989-ed2867142107")
+		(property "Reference" "R77"
+			(at 163.195 53.34 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "1 M"
+			(at 163.195 50.8 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 165.481 52.324 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 164.465 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 164.465 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5bbaea85-4794-4a07-a883-5c3ce193bfda")
+		)
+		(pin "2"
+			(uuid "459bd397-841a-47e8-9652-8e7cad01da17")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "R77")
 					(unit 1)
 				)
 			)
@@ -13731,6 +14165,83 @@
 	)
 	(symbol
 		(lib_id "power:GND")
+		(at 135.89 44.45 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "a3b62d10-c527-4f7a-aff4-33e7fac9387e")
+		(property "Reference" "#PWR0171"
+			(at 135.89 50.8 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 135.89 48.26 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 135.89 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 135.89 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 135.89 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "0be394be-6830-4412-98ee-87919a02c011")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "#PWR0171")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
 		(at 240.665 90.805 0)
 		(unit 1)
 		(body_style 1)
@@ -14208,6 +14719,83 @@
 		)
 	)
 	(symbol
+		(lib_id "power:GND")
+		(at 164.465 55.88 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "bc155c17-8a4f-45c9-b971-b92e3467c252")
+		(property "Reference" "#PWR0172"
+			(at 164.465 62.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 164.465 59.69 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 164.465 55.88 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 164.465 55.88 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 164.465 55.88 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "0b5ca00f-85fd-420c-b71a-241f459df327")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "#PWR0172")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 21.59 39.37 0)
 		(unit 1)
@@ -14229,7 +14817,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "100 nF"
+		(property "Value" "1 uF"
 			(at 21.59 41.91 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14283,6 +14871,87 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
 					(reference "C39")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 135.89 40.64 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp yes)
+		(uuid "becc04e1-41a2-495d-a13a-226de91bcdb9")
+		(property "Reference" "R75"
+			(at 134.62 41.91 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "499 k"
+			(at 134.62 39.37 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 136.906 40.894 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 135.89 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 135.89 40.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "67a04503-0de1-4c84-8376-2f0c758d5012")
+		)
+		(pin "2"
+			(uuid "0cd4217d-55c9-41ae-adf9-2a24d493380f")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "R75")
 					(unit 1)
 				)
 			)
@@ -17033,6 +17702,87 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:R_US")
+		(at 154.305 52.07 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp yes)
+		(uuid "ef6daa9a-b64e-4745-804f-482a34c63d00")
+		(property "Reference" "R76"
+			(at 153.035 53.34 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "0"
+			(at 153.035 50.8 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 155.321 52.324 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 154.305 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 154.305 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "9472df45-ef1e-400d-abbb-a50f7df3c1be")
+		)
+		(pin "2"
+			(uuid "6f864723-1202-480d-b86a-9a05775e0e03")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
+					(reference "R76")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 217.17 93.98 0)
 		(unit 1)
@@ -17759,755 +18509,4 @@
 			)
 		)
 	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 135.89 26.67 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp yes)
-		(uuid "207d5625-8575-40f7-b67e-cd2de2f90ba9")
-		(property "Reference" "R74"
-			(at 134.62 27.94 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "499 k"
-			(at 134.62 25.4 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 136.906 26.924 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 135.89 26.67 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 135.89 26.67 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "9d54b954-90fa-40c3-8aad-6b08de4f815a")
-		)
-		(pin "2"
-			(uuid "0a1c41f4-72e5-479b-8e25-68448228e5e6")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "R74")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 135.89 40.64 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp yes)
-		(uuid "becc04e1-41a2-495d-a13a-226de91bcdb9")
-		(property "Reference" "R75"
-			(at 134.62 41.91 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "499 k"
-			(at 134.62 39.37 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 136.906 40.894 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 135.89 40.64 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 135.89 40.64 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "67a04503-0de1-4c84-8376-2f0c758d5012")
-		)
-		(pin "2"
-			(uuid "0cd4217d-55c9-41ae-adf9-2a24d493380f")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "R75")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 156.21 40.64 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp yes)
-		(uuid "ef6daa9a-b64e-4745-804f-482a34c63d00")
-		(property "Reference" "R76"
-			(at 154.94 41.91 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "0"
-			(at 154.94 39.37 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 157.226 40.894 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 156.21 40.64 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 156.21 40.64 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "9472df45-ef1e-400d-abbb-a50f7df3c1be")
-		)
-		(pin "2"
-			(uuid "6f864723-1202-480d-b86a-9a05775e0e03")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "R76")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 166.37 40.64 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "6925418d-4176-4d0b-b989-ed2867142107")
-		(property "Reference" "R77"
-			(at 165.1 41.91 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "1 M"
-			(at 165.1 39.37 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 167.386 40.894 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 166.37 40.64 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 166.37 40.64 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "5bbaea85-4794-4a07-a883-5c3ce193bfda")
-		)
-		(pin "2"
-			(uuid "459bd397-841a-47e8-9652-8e7cad01da17")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "R77")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 146.05 26.67 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp yes)
-		(uuid "60757a35-2d90-406d-b169-17b93993aae3")
-		(property "Reference" "C93"
-			(at 146.05 24.13 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "22 pF"
-			(at 146.05 29.21 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 147.015 30.48 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 146.05 26.67 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Unpolarized capacitor"
-			(at 146.05 26.67 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "18bccc04-17b6-4948-bf94-e502e23b1332")
-		)
-		(pin "2"
-			(uuid "06d3f797-f36d-4e16-83a3-7182de67fa17")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "C93")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 135.89 44.45 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "a3b62d10-c527-4f7a-aff4-33e7fac9387e")
-		(property "Reference" "#PWR0171"
-			(at 135.89 50.8 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 135.89 48.26 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 135.89 44.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 135.89 44.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 135.89 44.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "0be394be-6830-4412-98ee-87919a02c011")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "#PWR0171")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 166.37 44.45 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "bc155c17-8a4f-45c9-b971-b92e3467c252")
-		(property "Reference" "#PWR0172"
-			(at 166.37 50.8 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 166.37 48.26 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 166.37 44.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 166.37 44.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 166.37 44.45 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "0b5ca00f-85fd-420c-b71a-241f459df327")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/9eb477c0-6194-4c07-b62b-97e172b64d07"
-					(reference "#PWR0172")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 135.89 22.86) (xy 146.05 22.86)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "59e7409e-ef49-4b3e-90c3-2c9afbd63750")
-	)
-	(wire
-		(pts
-			(xy 135.89 30.48) (xy 146.05 30.48)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "47d622b1-9ef9-4177-894d-6cd46690470d")
-	)
-	(wire
-		(pts
-			(xy 135.89 30.48) (xy 135.89 36.83)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "947d4a78-27b1-4bb5-8f20-9e58e7cb0076")
-	)
-	(junction
-		(at 135.89 30.48)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "c4907d42-a840-4c1b-8476-d7024a725907")
-	)
-	(global_label "VDD_HP_1"
-		(shape input)
-		(at 44.45 146.685 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "4e19f97b-2023-41d7-9202-8e11356ea6bf")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 33.9053 146.685 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(global_label "ESP_VDD_HP"
-		(shape input)
-		(at 146.05 22.86 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "1509810e-307a-4256-b0ec-6eb925696e88")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 146.05 8.082 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(global_label "FB_DCDC"
-		(shape input)
-		(at 146.05 30.48 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "26b5fb2c-b49b-4295-9a29-7bd8cec6a99e")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 157.441 30.48 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(global_label "ESP_VDD_HP"
-		(shape input)
-		(at 156.21 36.83 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "a03d1246-029d-409a-b7f3-66308f287769")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 156.21 22.052 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(global_label "VDD_HP_1"
-		(shape input)
-		(at 156.21 44.45 270)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "d83e86a0-ffb6-49b4-8d68-dce598ca4759")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 145.665 44.45 270)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(global_label "CEN_D+"
-		(shape input)
-		(at 166.37 36.83 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "ee1bc3c2-156e-48a4-addf-c9596d5bfb13")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 166.37 22.052 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(text "P4 chip-rev provisions (#657):\nR74/R75/C93 = DCDC FB network, R76 = pin-54 VDD_HP_1 link.\nFIT all four for chip rev v3.x -- DNP for v1.x (current dev chips = v1.3).\nR77 (CEN_D+ 1M pulldown): ALWAYS fitted (req v1.x, allowed v3.x)."
-		(exclude_from_sim no)
-		(at 128.27 12.7 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "c28c7ac2-05ae-4995-a6ae-cf104eff91bc")
-	)
-
 )
