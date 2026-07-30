@@ -24,6 +24,38 @@ android {
         compose = true
     }
 
+    // Release signing (plan §2.5): source is public, the key is not.  The
+    // keystore lives OUTSIDE the repo and reaches builds only via env vars —
+    // locally from the operator's shell, in CI from repo secrets (see
+    // .github/workflows/android-release.yml and docs/android-release-signing.md).
+    // Forks build without any of this set and get a debug-signed release —
+    // installable everywhere, but unable to impersonate an UPDATE to a real
+    // install, which is the entire security model.
+    val keystorePath: String? = System.getenv("TR_ANDROID_KEYSTORE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("TR_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("TR_ANDROID_KEY_ALIAS") ?: "tinkerrocket"
+                keyPassword = System.getenv("TR_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Minification stays OFF for v1.0: R8 vs MapLibre/GMS keep-rules is
+            // real risk with zero payoff at this APK size and fleet size.
+            isMinifyEnabled = false
+            signingConfig = if (keystorePath != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
+    }
+
     sourceSets {
         getByName("main") {
             // Demo mode serves the emitter-generated synthetic flight as a
@@ -58,4 +90,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.10.1")
+    // Not used directly (MainActivity is a ComponentActivity) — pins the
+    // transitive fragment above 1.3.0 so the ActivityResult APIs are safe on
+    // every resolved path; release-only lintVital fails the build without it
+    // (InvalidFragmentVersionForActivityResult).
+    implementation("androidx.fragment:fragment:1.8.5")
 }
