@@ -180,7 +180,14 @@ fun FlightChartScreen(csvFile: File, onBack: () -> Unit) {
         }
 
         if (showPath) {
-            csvData?.let { TrajectoryCanvas(it) }
+            // 2D ground track / 3D orbit view (Phase 9). Defaults to 2D —
+            // the glanceable answer; 3D is the explore mode.
+            var threeD by remember { mutableStateOf(false) }
+            Row(Modifier.padding(horizontal = 8.dp)) {
+                TextButton(onClick = { threeD = false }) { Text(if (!threeD) "● 2D" else "2D") }
+                TextButton(onClick = { threeD = true }) { Text(if (threeD) "● 3D" else "3D") }
+            }
+            csvData?.let { if (threeD) Trajectory3DCanvas(it) else TrajectoryCanvas(it) }
             return@Column
         }
 
