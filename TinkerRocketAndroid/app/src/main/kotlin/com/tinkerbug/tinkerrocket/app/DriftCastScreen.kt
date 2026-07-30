@@ -371,6 +371,16 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
                         MetricRow("Wind layers", "${r.windProfile.layers.size}")
                     }
                 }
+                // DriftCast 3D (Phase 9): the planned cast as an orbitable
+                // scene — pad, boost line, guidance point, wind-driven
+                // descent, verified landing.  Bounded height inside the
+                // scrolling column; drags on the canvas orbit instead of
+                // scrolling, which is the point of the view.
+                Card {
+                    Box(Modifier.fillMaxWidth().height(380.dp)) {
+                        DriftCast3DCanvas(r)
+                    }
+                }
             }
         }
     }

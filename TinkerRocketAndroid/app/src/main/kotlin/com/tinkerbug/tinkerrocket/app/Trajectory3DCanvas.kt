@@ -23,37 +23,56 @@ import androidx.compose.ui.unit.sp
 import com.tinkerbug.tinkerrocket.protocol.FlightCsvData
 import com.tinkerbug.tinkerrocket.protocol.Trajectory3D
 import com.tinkerbug.tinkerrocket.protocol.Trajectory3D.V3
+import com.tinkerbug.tinkerrocket.session.GuidanceResult
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.floor
 
 /**
- * Orbit-camera 3D flight trajectory — the Phase 9 port of iOS's SceneKit
- * `FlightScene3DView`, rendered per plan §1 as a 2D-projected Compose Canvas
- * (no 3D engine; the value is orientation + shape, not shading).  All camera
- * and projection math is [Trajectory3D] in `:core:protocol`, where the axis
- * conventions are pinned by tests — a mirrored trajectory looks plausible,
- * which is exactly why the math doesn't live in this file.
+ * The ONE shared orbit-camera scene (plan §1: all SceneKit views project to
+ * Compose Canvas through a single component).  Consumers: the 3D flight
+ * trajectory (EKF track) and DriftCast 3D (planned descent).  All camera and
+ * projection math is [Trajectory3D] in `:core:protocol`, where the axis
+ * conventions are pinned by tests — a mirrored scene looks plausible, which
+ * is exactly why the math doesn't live in this file.
  *
- * Gestures: one-finger drag orbits (yaw/pitch), pinch zooms, double-tap
- * resets to the iOS-parity initial framing (broadside to the climb, 1.8×
- * extent, 15° elevation).
- *
- * Scene, matching iOS: ground grid, altitude-colored path (painter-sorted
- * far→near), apogee drop line, launch/apogee/landing markers + labels with
- * the apogee altitude callout.
+ * Gestures: one-finger drag orbits (pitch clamped 5°–85°), pinch zooms
+ * (0.3×–8× extent), double-tap resets to the iOS-parity initial framing
+ * (broadside to the main displacement, 1.8× extent, 15° elevation).
  */
+internal data class SceneMarker(
+    val pos: V3,
+    val color: Color,
+    val label: String,
+    val sublabel: String? = null,
+    val radiusDp: Double = 5.0,
+)
+
+internal data class SceneLine(
+    val a: V3,
+    val b: V3,
+    val color: Color,
+    val widthDp: Double = 1.5,
+)
+
 @Composable
-fun Trajectory3DCanvas(data: FlightCsvData) {
-    val track = remember(data) {
-        Trajectory3D.downsample(ekfTrack(data).map { V3(it.first, it.second, it.third) }, 700)
-    }
-    val initial = remember(track) { Trajectory3D.initialCamera(track) }
+internal fun OrbitSceneCanvas(
+    track: List<V3>,
+    trackColor: (Float) -> Color,
+    markers: List<SceneMarker>,
+    extraLines: List<SceneLine> = emptyList(),
+    /** Included in framing (extent + camera) but NOT drawn as track — e.g.
+     *  the launch pad when the drawn track is only the descent. */
+    frameAlso: List<V3> = emptyList(),
+    emptyMessage: String = "No track data",
+) {
+    val framing = remember(track, frameAlso) { track + frameAlso }
+    val initial = remember(framing) { Trajectory3D.initialCamera(framing) }
+    var yaw by remember(framing) { mutableDoubleStateOf(initial.yawRad) }
+    var pitch by remember(framing) { mutableDoubleStateOf(initial.pitchRad) }
+    var dist by remember(framing) { mutableDoubleStateOf(initial.distance) }
 
-    var yaw by remember(track) { mutableDoubleStateOf(initial.yawRad) }
-    var pitch by remember(track) { mutableDoubleStateOf(initial.pitchRad) }
-    var dist by remember(track) { mutableDoubleStateOf(initial.distance) }
-
-    val extent = remember(track) { Trajectory3D.extent(track) }
+    val extent = remember(framing) { Trajectory3D.extent(framing) }
     val textMeasurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val gridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
@@ -81,7 +100,7 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
     ) {
         if (track.size < 2) {
             val msg = textMeasurer.measure(
-                "No EKF position data in this log",
+                emptyMessage,
                 TextStyle(fontSize = 12.sp, color = labelColor),
             )
             drawText(msg, topLeft = Offset((size.width - msg.size.width) / 2, size.height / 2))
@@ -94,8 +113,7 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
         fun proj(p: V3): Trajectory3D.Projected? = Trajectory3D.project(p, cam, w, h)
         fun Trajectory3D.Projected.o() = Offset(x.toFloat(), y.toFloat())
 
-        val lm = Trajectory3D.landmarks(track)!!
-        val groundU = track.minOf { it.u }
+        val groundU = framing.minOf { it.u }
 
         // ── Ground grid ──────────────────────────────────────────────────
         val spacing = Trajectory3D.niceGridSpacing(extent)
@@ -118,18 +136,14 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
             drawLine(gridColor, pa.o(), pb.o(), strokeWidth = 1f)
         }
 
-        // ── Apogee drop line (under the path) ────────────────────────────
-        val apoGround = V3(lm.apogee.e, lm.apogee.n, groundU)
-        val pApo = proj(lm.apogee)
-        val pApoGround = proj(apoGround)
-        if (pApo != null && pApoGround != null) {
-            drawLine(
-                Color(0xFF64B5F6).copy(alpha = 0.35f), pApo.o(), pApoGround.o(),
-                strokeWidth = 1.5.dp.toPx(),
-            )
+        // ── Extra lines (boost/drop) under the track ─────────────────────
+        for (l in extraLines) {
+            val pa = proj(l.a) ?: continue
+            val pb = proj(l.b) ?: continue
+            drawLine(l.color, pa.o(), pb.o(), strokeWidth = l.widthDp.dp.toPx())
         }
 
-        // ── Path, altitude-colored, painter-sorted far→near ──────────────
+        // ── Track, painter-sorted far→near ───────────────────────────────
         val minU = track.minOf { it.u }
         val maxU = track.maxOf { it.u }
         val uSpan = (maxU - minU).coerceAtLeast(1e-6)
@@ -151,29 +165,22 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
         segs.sortByDescending { it.depth }
         for (s in segs) {
             drawLine(
-                trajectoryAltitudeColor(s.t), s.a, s.b,
+                trackColor(s.t), s.a, s.b,
                 strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round,
             )
         }
 
-        // ── Markers + labels (iOS colors: launch red, apogee blue, landing
-        // green — the 2D track was aligned to the same palette in this
-        // change) ────────────────────────────────────────────────────────
-        fun marker(p: V3, color: Color, label: String, r: Float) {
-            val pp = proj(p) ?: return
-            drawCircle(color, r, pp.o())
-            val t = textMeasurer.measure(label, TextStyle(fontSize = 11.sp, color = labelColor))
+        // ── Markers + labels ─────────────────────────────────────────────
+        for (m in markers) {
+            val pp = proj(m.pos) ?: continue
+            val r = m.radiusDp.dp.toPx()
+            drawCircle(m.color, r, pp.o())
+            val t = textMeasurer.measure(m.label, TextStyle(fontSize = 11.sp, color = labelColor))
             drawText(t, topLeft = Offset(pp.x.toFloat() - t.size.width / 2, pp.y.toFloat() - r - t.size.height - 2))
-        }
-        marker(lm.launch, Color(0xFFFF6B6B), "Launch", 5.dp.toPx().coerceAtLeast(1f))
-        marker(lm.landing, Color(0xFF52CF66), "Landing", 5.dp.toPx())
-        marker(lm.apogee, Color(0xFF4DABF7), "Apogee", 6.dp.toPx())
-        pApo?.let {
-            val altText = textMeasurer.measure(
-                "%.0f m AGL".format(lm.apogee.u - groundU),
-                TextStyle(fontSize = 10.sp, color = labelColor),
-            )
-            drawText(altText, topLeft = Offset(it.x.toFloat() - altText.size.width / 2, it.y.toFloat() + 8.dp.toPx()))
+            m.sublabel?.let { sub ->
+                val st = textMeasurer.measure(sub, TextStyle(fontSize = 10.sp, color = labelColor))
+                drawText(st, topLeft = Offset(pp.x.toFloat() - st.size.width / 2, pp.y.toFloat() + 8.dp.toPx()))
+            }
         }
 
         // Hint + north cue.
@@ -188,6 +195,93 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
             drawText(nl, topLeft = Offset(it.x.toFloat() - nl.size.width / 2, it.y.toFloat() - nl.size.height / 2))
         }
     }
+}
+
+// ── Flight-trajectory wrapper (EKF track from the CSV) ───────────────────
+
+@Composable
+fun Trajectory3DCanvas(data: FlightCsvData) {
+    val track = remember(data) {
+        Trajectory3D.downsample(ekfTrack(data).map { V3(it.first, it.second, it.third) }, 700)
+    }
+    val lm = remember(track) { Trajectory3D.landmarks(track) }
+    val groundU = remember(track) { track.minOfOrNull { it.u } ?: 0.0 }
+
+    val markers = lm?.let {
+        listOf(
+            SceneMarker(it.launch, Color(0xFFFF6B6B), "Launch"),
+            SceneMarker(it.landing, Color(0xFF52CF66), "Landing"),
+            SceneMarker(
+                it.apogee, Color(0xFF4DABF7), "Apogee",
+                sublabel = "%.0f m AGL".format(it.apogee.u - groundU), radiusDp = 6.0,
+            ),
+        )
+    } ?: emptyList()
+    val extra = lm?.let {
+        listOf(SceneLine(
+            it.apogee, V3(it.apogee.e, it.apogee.n, groundU),
+            Color(0xFF64B5F6).copy(alpha = 0.35f),
+        ))
+    } ?: emptyList()
+
+    OrbitSceneCanvas(
+        track = track,
+        trackColor = ::trajectoryAltitudeColor,
+        markers = markers,
+        extraLines = extra,
+        emptyMessage = "No EKF position data in this log",
+    )
+}
+
+// ── DriftCast wrapper (planned descent from the guidance result) ─────────
+
+/**
+ * DriftCast 3D (Phase 9, iOS `Trajectory3DView` port): launch pad, the
+ * apogee guidance point with its AGL callout, the wind-driven descent track
+ * (purple, constant color — altitude is not the story here, the wind path
+ * is), the straight boost line, and the verified landing.  Coordinates are
+ * local ENU meters around the launch pad, same earth model as the planner's
+ * own forwardProject.
+ */
+@Composable
+fun DriftCast3DCanvas(r: GuidanceResult) {
+    val apogeeM = r.apogeeFt * 0.3048
+    fun enu(lat: Double, lon: Double, altM: Double): V3 {
+        val rad = Math.PI / 180.0
+        val earth = 6_371_000.0
+        return V3(
+            earth * cos(r.launchLat * rad) * (lon - r.launchLon) * rad,
+            earth * (lat - r.launchLat) * rad,
+            altM,
+        )
+    }
+
+    val track = remember(r) {
+        r.descentTrack.map { enu(it.lat, it.lon, it.altAglFt * 0.3048) }
+    }
+    val launch = V3(0.0, 0.0, 0.0)
+    val guidance = enu(r.guidanceLat, r.guidanceLon, apogeeM)
+    val landing = enu(r.forwardLandingLat, r.forwardLandingLon, 0.0)
+
+    OrbitSceneCanvas(
+        track = track,                 // descent only — purple
+        frameAlso = listOf(launch),    // pad frames the scene, boost is an extraLine
+        trackColor = { Color(0xFF9775FA) },
+        markers = listOf(
+            SceneMarker(launch, Color(0xFFFF6B6B), "Launch Pad"),
+            SceneMarker(landing, Color(0xFF52CF66), "Landing"),
+            SceneMarker(
+                guidance, Color(0xFF4DABF7), "Guidance",
+                sublabel = "%.0f m AGL".format(apogeeM), radiusDp = 6.0,
+            ),
+        ),
+        extraLines = listOf(
+            SceneLine(launch, guidance, Color(0xFF4DABF7).copy(alpha = 0.5f), widthDp = 2.0),
+            SceneLine(guidance, V3(guidance.e, guidance.n, 0.0),
+                Color(0xFF4DABF7).copy(alpha = 0.25f), widthDp = 1.0),
+        ),
+        emptyMessage = "No descent track",
+    )
 }
 
 /** Blue ground → red apogee, shared with the 2D track. */
