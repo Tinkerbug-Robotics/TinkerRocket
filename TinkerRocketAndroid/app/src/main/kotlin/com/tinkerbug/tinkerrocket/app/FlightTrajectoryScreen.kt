@@ -29,21 +29,8 @@ import kotlin.math.pow
  */
 @Composable
 fun TrajectoryCanvas(data: FlightCsvData) {
-    // Clean finite (E, N, U) triples, EKF position columns.
-    val track = remember(data) {
-        val e = data.columns["Position East (m)"] ?: emptyList()
-        val n = data.columns["Position North (m)"] ?: emptyList()
-        val u = data.columns["Position Up (m)"]
-            ?: data.columns["Pressure Altitude (m)"] ?: emptyList()
-        val rows = minOf(e.size, n.size, u.size)
-        (0 until rows).mapNotNull { i ->
-            if (e[i].isFinite() && n[i].isFinite() && u[i].isFinite()) {
-                Triple(e[i], n[i], u[i])
-            } else {
-                null
-            }
-        }
-    }
+    // Clean finite (E, N, U) triples — shared with the 3D view.
+    val track = remember(data) { ekfTrack(data) }
 
     val textMeasurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -89,7 +76,7 @@ fun TrajectoryCanvas(data: FlightCsvData) {
             val (e1, n1, u1) = track[i]
             val t = ((u1 - minU) / uSpan).toFloat().coerceIn(0f, 1f)
             drawLine(
-                color = lerpColor(Color(0xFF1E88E5), Color(0xFFE53935), t),
+                color = trajectoryAltitudeColor(t),
                 start = px(e0, n0),
                 end = px(e1, n1),
                 strokeWidth = 3.dp.toPx(),
@@ -97,10 +84,12 @@ fun TrajectoryCanvas(data: FlightCsvData) {
             )
         }
 
-        // Launch (green) + landing (red) markers.
-        drawCircle(Color(0xFF43A047), 6.dp.toPx(), px(track.first().first, track.first().second))
+        // Launch (red) + landing (green) markers — iOS palette; the 2D and
+        // 3D views and both platforms now agree (was green/red here, the
+        // opposite of iOS: a field-confusion hazard with two phones out).
+        drawCircle(Color(0xFFFF6B6B), 6.dp.toPx(), px(track.first().first, track.first().second))
         drawCircle(
-            Color(0xFFE53935), 6.dp.toPx(),
+            Color(0xFF52CF66), 6.dp.toPx(),
             px(track.last().first, track.last().second),
         )
 
@@ -122,12 +111,6 @@ fun TrajectoryCanvas(data: FlightCsvData) {
     }
 }
 
-private fun lerpColor(a: Color, b: Color, t: Float): Color = Color(
-    red = a.red + (b.red - a.red) * t,
-    green = a.green + (b.green - a.green) * t,
-    blue = a.blue + (b.blue - a.blue) * t,
-    alpha = 1f,
-)
 
 /** 1/2/5 × 10ⁿ round-down for the scale bar. */
 private fun niceRound(v: Double): Double {

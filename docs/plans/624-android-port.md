@@ -112,7 +112,7 @@ Estimating unit: 1 evening ≈ 2–3 h. Cadence ~3 sessions/week. Every phase en
 
 **Screen order rationale** — the launch-day loop defines v1.0: scan/connect → pad dashboard (readiness, power gate, continuity, staleness) → flight (telemetry, voice, prediction) → recovery (map pin, arrow) → post-flight (download, chart). Settings/syncer is non-negotiable in v1.0: the app is the config source of truth; a syncer-less Android app silently flies stale NVS settings. Relay routing (cmd-50 targeting, sticky focus) ships in Phases 2–3 — at a real launch the phone talks through the BS LoRa relay most of the time; only the multi-rocket UI chrome trails. OTA trails: firmware can be flashed at home via iOS/USB indefinitely.
 
-**v1.0 = Phases 0–7 + Checkpoint A** (the shadow outing was ungated by user decision 2026-07-30 — it validates v1.0 in the field, it doesn't gate it). Trailing: 3D views, PyroTest video, DriftCast send flow (guided flight is gated behind FIRST-GUIDED-FLIGHT anyway), fleet chrome, iOS-profile import. OTA and the update checker, once trailing, both shipped before v1.0.
+**v1.0 = Phases 0–7 + Checkpoint A** (the shadow outing was ungated by user decision 2026-07-30 — it validates v1.0 in the field, it doesn't gate it). Trailing: 3D views, PyroTest video, DriftCast send flow (guided flight is gated behind FIRST-GUIDED-FLIGHT anyway), fleet chrome. ~~iOS-profile import~~ DROPPED by user decision 2026-07-30 (no cross-device profile sharing needed). OTA and the update checker, once trailing, both shipped before v1.0.
 
 **Spike verdicts**
 - **S1 (emulator BLE)**: mooted — the Pixel 8 arrived before the spike ran; Phase 2's bench seam validated the real stack directly.
