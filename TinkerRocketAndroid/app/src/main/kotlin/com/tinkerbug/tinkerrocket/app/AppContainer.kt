@@ -12,6 +12,7 @@ import com.tinkerbug.tinkerrocket.session.FleetManager
 import com.tinkerbug.tinkerrocket.session.FleetSessionFactory
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStorage
 import com.tinkerbug.tinkerrocket.session.KnownDeviceStore
+import com.tinkerbug.tinkerrocket.session.LastSessionStore
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -121,6 +122,7 @@ class AppContainer(app: Application) {
             transportFactory = AndroidTransportFactory(app),
             sessionFactory = sessionFactory,
             knownDevices = knownDevices,
+            lastSession = PrefsLastSessionStore(app),
         )
         fleetRef
     }
@@ -145,6 +147,30 @@ class AppNetworkStore(app: Application) {
         _name.value = name
         _id.value = id
         prefs.edit().putString("networkName", name).putInt("networkID", id).apply()
+    }
+}
+
+/**
+ * #633 cold-start resume hint, prefs-backed.
+ *
+ * Deliberately survives process death — that IS the case it exists for. A
+ * crash, an OEM kill or a phone reboot must still resume; only an explicit
+ * user disconnect clears it (FleetManager owns that rule).
+ */
+private class PrefsLastSessionStore(app: Application) : LastSessionStore {
+    private val prefs = app.getSharedPreferences("last_session", Context.MODE_PRIVATE)
+
+    override fun saveLastConnected(deviceId: String, name: String) {
+        prefs.edit().putString("device_id", deviceId).putString("name", name).apply()
+    }
+
+    override fun clearLastConnected() {
+        prefs.edit().remove("device_id").remove("name").apply()
+    }
+
+    override fun loadLastConnected(): LastSessionStore.LastConnected? {
+        val id = prefs.getString("device_id", null) ?: return null
+        return LastSessionStore.LastConnected(id, prefs.getString("name", null) ?: "rocket")
     }
 }
 

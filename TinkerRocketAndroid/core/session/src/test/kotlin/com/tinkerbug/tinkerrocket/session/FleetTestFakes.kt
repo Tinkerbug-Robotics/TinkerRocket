@@ -137,6 +137,8 @@ class FleetHarness(scope: CoroutineScope, currentTime: () -> Long) {
     val transports = FakeTransportFactory(currentTime)
     val sessions = FakeSessionFactory()
     val knownDevices = KnownDeviceStore(InMemoryKnownStorage(), nowEpochMillis = { 0L })
+    /** #633 resume hint; exposed so tests can seed or inspect it. */
+    val lastSession = LastSessionStore.InMemory()
     val fleet: FleetManager<FakeSession> = FleetManager(
         scope = scope,
         scanner = scanner,
@@ -144,6 +146,7 @@ class FleetHarness(scope: CoroutineScope, currentTime: () -> Long) {
         sessionFactory = sessions,
         knownDevices = knownDevices,
         nowMillis = currentTime,
+        lastSession = lastSession,
     )
 }
 
