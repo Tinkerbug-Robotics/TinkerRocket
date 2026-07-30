@@ -131,8 +131,10 @@ The one I'd least want to discover in the field. Result: clean except cold start
 - [x] Walk out of range → return → **PASS**, reconnected with no user action. Drop confirmed
       by direct observation at the phone; see the probe note below for why the instrument
       missed it
-- [ ] **status-133** → NOT OBSERVED. Opportunistic; it cannot be forced deliberately, so it
-      stays a watch-for-it during other work rather than a step
+- [x] **status-133** → WAIVED (2026-07-29): never observed across the whole checkpoint —
+      dozens of connects, walk-away drops, Doze cycles, reboots. It cannot be forced
+      deliberately; the reconnect ladder that would handle it is the same one airplane-mode
+      and walk-away exercised. Stays a watch-for-it at the field outing.
 - [x] Airplane mode on → off → **PASS**, back inside 10 s. Usefully, the ladder is visible
       and honest in the UI: `Reconnecting (5/8)...`
 - [x] Phone reboot with board live → **WAS #633, NOW FIXED**. Mid-session reconnect was always
@@ -145,8 +147,10 @@ The one I'd least want to discover in the field. Result: clean except cold start
       user disconnect clears the hint and relaunch correctly stays put
 - [x] **FGS survival** → **PASS**: 47 min 56 s, 95 samples, 0 process deaths, 0 GATT drops,
       deep Doze held for every sample, PID stable
-- [ ] OC current during the wait → NOT MEASURED (needs a meter; the app's own battery figure
-      is the rail, not the OC's own draw)
+- [x] OC current during the wait → WAIVED (2026-07-29): needs a bench meter on battery
+      (#519's rule — USB masks it), and the OC light-sleep figure (~1 mA connected) is
+      already established by #519's own measurements. Nothing Android-specific left in this
+      box — the phone-side pad-wait cost is measured (Group 2 Doze + Group 6 screen-on).
 - [x] Battery optimization ON → **PASS**, covered by the run above — the app was never
       whitelisted
 
@@ -239,13 +243,13 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
       figure that produces is an artifact of judging a 1 Hz UI against a 60 fps budget. Use
       **Demo mode** for this test; it replays at real flight rates.
       Only one rocket was in the roster (a second needs a relayed rocket via the BS)
-- [ ] Chart with a full flight CSV → **CRASH** → issue #636. The app OOMs and dies opening
-      the chart on a 72 MB CSV (from a 96-second sim flight). `FlightChartScreen.kt:81` does
-      `CsvParser.parse(csvFile.readText())` — the whole file becomes a UTF-16 `String`, a
-      **134 MB allocation** against a 268 MB heap limit. Reproduced twice; `exit-info` records
-      both as `APP CRASH(EXCEPTION)` at 433 MB and 312 MB RSS. The board already holds 54.7 MB
-      logs, which could never be charted. Download and CSV conversion are unaffected — only
-      the chart's read-back
+- [x] Chart with a full flight CSV → **WAS A CRASH (#636), NOW FIXED + verified on-device**.
+      Original finding: the app OOM'd opening the chart on a 72 MB CSV — `readText()` made a
+      134 MB UTF-16 `String` against a 268 MB heap limit; reproduced twice
+      (`APP CRASH(EXCEPTION)` at 433 MB and 312 MB RSS). Fix (merged #631): stream the file
+      via `useLines` + decimate to a 100 Hz preview during parse + primitive `DoubleArray`
+      columns. Same 72 MB CSV now charts in **~6 s** with no memory pressure; full-rate data
+      stays in the CSV for PC analysis.
 - [x] Map with offline tiles + prediction at 1 Hz → **PASS** (2026-07-29, bench sim flight
       with wifi + mobile data disabled; `Active default network: none` confirmed):
       - Saved a 5 km z10–16 region at the bench (684 tiles, 20 MB) via the Save-area flow;
@@ -261,11 +265,14 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
         (`±3 m · T+40s ago`, restyled orange as a staleness cue) and the map re-centred on
         the real bench fix once live GNSS resumed.
       - Zero MapLibre/tile/proxy errors in logcat across the whole offline flight.
-- [ ] Screen-on power draw over a simulated pad wait → **IN PROGRESS**: measurement must be
-      physically unplugged (`dumpsys battery unplug` only fakes the framework state — charge
-      current keeps flowing), so it runs over wifi-adb after pulling the cable. Baseline
-      recorded at 100% / 4,066,000 µAh charge_counter, dashboard parked with live telemetry,
-      FLAG_KEEP_SCREEN_ON holding the display.
+- [x] Screen-on power draw over a simulated pad wait → **PASS** (2026-07-29): **~212 mA ≈
+      5.0%/hr** screen-on at the live dashboard (telemetry streaming, BLE up, FGS running).
+      Method: physically unplugged (`dumpsys battery unplug` only fakes the framework state —
+      charge current keeps flowing), measured over wifi-adb via the coulomb counter:
+      4,194,000 → 4,088,000 µAh in 30.05 min, slices 34/36/36 mAh per 10 min — flat, no
+      drift. Battery reports 4,240 mAh full capacity. So: a 45-min pad wait ≈ 3.7%; a full
+      8 h screen-on field day ≈ 40%; and Group 2 already showed the screen-OFF wait is
+      near-free under Doze. Caveat: indoor bench brightness — field sunlight will draw more.
 
 ## Group 7 — Sensors and audio
 
@@ -370,8 +377,15 @@ TTS speaks from the FGS-pinned process regardless of display state.
 
 ## Exit
 
-- [ ] Every box above ticked or explicitly waived with a reason
-- [ ] Numbers recorded in this file (throughput, frame timing, time-to-first-advert)
-- [ ] Bugs filed; blockers fixed; non-blockers triaged onto Phase 9 or the ledger
-- [ ] Plan doc §4 updated — the shadow outing's "both on the same BS" is **wrong** and needs
-      correcting to one-phone-per-board (iPhone→BS, Android→OC)
+- [x] Every box above ticked or explicitly waived with a reason — **DONE 2026-07-29**. The
+      one deliberate deferral: the physical 8-heading compass walk-around, which needs
+      outdoors + a rocket GPS fix and rides with the shadow outing (its math is unit-tested,
+      #644).
+- [x] Numbers recorded in this file (throughput, frame timing, time-to-first-advert)
+- [x] Bugs filed; blockers fixed; non-blockers triaged onto Phase 9 or the ledger — crashes
+      #630/#636 fixed; parity gaps #633/#634/#635 fixed; scope gap #643 (announcer) ported
+      and bench-flown; all closed.
+- [x] Plan doc §4 updated — the shadow-outing line now reads one-phone-per-board (iPhone→BS,
+      Android→OC); `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1` on both boards is the hard limit.
+
+**CHECKPOINT A: COMPLETE (2026-07-29).** Remaining for v1.0: the shadow-phone field outing.
