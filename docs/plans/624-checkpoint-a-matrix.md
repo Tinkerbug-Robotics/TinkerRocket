@@ -233,10 +233,10 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
       correct at N — **PARTIAL: math verified, physical walk-around deferred to the outing**
 - [x] Arrow behaviour when location permission is denied → stated, not silently wrong —
       **PASS** (covered in Group 1)
-- [x] TTS announcements duck background audio and restore it — **PORTED + focus lifecycle
-      verified on-device** (was N/A: feature absent, #643); audible listen test pending
-- [ ] Announcements still fire with the screen off — **feature now exists (#643); screen-off
-      run pending, pairs with a sim-flight bench pass**
+- [x] TTS announcements duck background audio and restore it — **PASS** (focus lifecycle in
+      dumpsys + audible on the bench; was N/A: feature absent, #643)
+- [x] Announcements still fire with the screen off — **PASS** (burnout + apogee spoke while
+      Dozing; see 7.4 for the honest scope)
 
 ### 7.1 Heading arrow — what was actually verified
 
@@ -286,8 +286,45 @@ failure), then ported the same day:
 On-device (Pixel, bench OC live): toggle → "Voice ready" spoken, logcat `Announcer` tag firing,
 `dumpsys audio` showed the duck-capable focus grant during playback
 (`GAIN_TRANSIENT_MAY_DUCK`, `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE`/`CONTENT_TYPE_SPEECH`) and a
-clean abandon after. Still pending: an audible duck/restore listen test with music playing, and
-7.4's screen-off callouts during a sim flight.
+clean abandon after.
+
+### 7.4 Sim-flight end-to-end (2026-07-29, bench OC, screen off at launch)
+
+Firmware sim, app defaults (20 g / 40 N / 1.5 s burn / 5.0 m/s descent; est. 262 m/s, 459 m,
+96 s). Every callout, from logcat:
+
+```
+21:14:10.563  Burnout. Max speed 262 meters per second     ← screen OFF (Dozing)
+21:14:11.532  Apogee. 455 meters                           ← screen OFF (Dozing)
+21:14:16.656  424 meters, descending 5 meters per second   (5.1 s after apogee ✓)
+21:14:27.563  369 meters, descending 4 meters per second   (10.9 s ✓)
+  … every ~11 s: 314, 259, 204, 149, 94 …
+21:15:32.703  44 meters, descending 4 meters per second
+21:15:39.674  9 meters, descending 4 meters per second     ← 5 s-cadence branch (see below)
+21:15:44.744  -2 meters                                    (rate in deadband → no direction ✓)
+21:15:46.741  Landed. 0 meters away
+```
+
+Checks that all passed:
+- Spoken apogee **455 m came from telemetry** (`malt`), not the screen's 459 m estimate.
+- First descent callout 5.1 s after apogee, then a clean 10 s cadence.
+- "Landed. **0 meters away**" proves the launch-fix capture + haversine path ran (13 sats live,
+  launch and landing at the same bench spot).
+- No callout ever contradicted the motion (#235's cardinal rule) — including the near-ground
+  frames where it historically did.
+
+Two quirks, both **faithful iOS parity, not Android bugs**:
+- The "9 meters" / "-2 meters" callouts arrive on the **5 s** altitude cadence, not the 10 s
+  descent one: `alt_apo` clears below ~15 m AGL, which re-activates the pre-apogee branch.
+  This is precisely the #235 scenario — iOS fixed the *word* ("descending", from the rate sign)
+  but kept the re-fire, and Android reproduces both. The words were correct here.
+- "-2 meters" is the baro reading slightly below field zero at touchdown; iOS would speak the
+  same.
+
+Screen-off scope, honestly: the phone was Dozing (power-button off) from launch until
+21:14:13.5, when a `PULSING_SINGLE_TAP` (operator tap on the AOD) woke it — so **burnout and
+apogee are the screen-off evidence**, descent ran screen-on. The mechanism doesn't distinguish:
+TTS speaks from the FGS-pinned process regardless of display state.
 
 ---
 
