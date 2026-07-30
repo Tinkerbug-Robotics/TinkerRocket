@@ -708,6 +708,14 @@ struct ConnectedDashboardView: View {
                             isBaseStation: device.isBaseStation)
                 .opacity(showRocketViews ? staleOpacity : 1.0)
 
+            // Flight-event flag chips — Android → iOS back-port
+            // (docs/design-language.md queue, user-requested 2026-07-27).
+            // Shown on BS links too: the relay carries the focused rocket's
+            // fs bits (#138), and mid-flight these chips are exactly what
+            // the operator is watching.
+            FlightEventFlagsView(telemetry: device.telemetry)
+                .opacity(showRocketViews ? staleOpacity : 1.0)
+
             // Pre-launch sensor health scorecard + go/no-go (#303), sitting just
             // above the pyro channels.  Only shown once the rocket reports a
             // scorecard ("h" present → hasSensorHealth).
@@ -927,6 +935,36 @@ struct RocketStateView: View {
 /// only renders it once the rocket actually reports a scorecard.  The rollup
 /// rule lives in TelemetryData.flightReadiness — EKF-init and a GNSS fix gate
 /// green, configured pyros must have continuity, and mag is advisory.
+/// The compact per-subsystem dot row inside HealthCardView's horizontal
+/// scroller.  Split out so the render test can draw it directly —
+/// ImageRenderer produces empty output for ScrollView children.
+struct HealthDotRow: View {
+    let rows: [TelemetryData.SensorHealthRow]
+
+    private func color(for state: TelemetryData.SensorHealth) -> Color {
+        switch state {
+        case .ok:       return .green
+        case .degraded: return .orange
+        case .bad:      return .red
+        case .na:       return .gray
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ForEach(rows) { row in
+                VStack(spacing: 3) {
+                    Circle()
+                        .fill(color(for: row.state))
+                        .frame(width: 12, height: 12)
+                    Text(row.name)
+                        .font(.caption2)
+                }
+            }
+        }
+    }
+}
+
 struct HealthCardView: View {
     let telemetry: TelemetryData
 
@@ -955,8 +993,6 @@ struct HealthCardView: View {
         }
     }
 
-    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 8)]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Sensor Health")
@@ -977,25 +1013,17 @@ struct HealthCardView: View {
             .background(readinessColor.opacity(0.12))
             .cornerRadius(8)
 
-            // Per-sensor chips — core sensors always, configured pyros appended.
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                ForEach(telemetry.sensorHealthRows) { row in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(color(for: row.state))
-                            .frame(width: 8, height: 8)
-                        Text(row.name)
-                            .font(.caption)
-                        Spacer(minLength: 2)
-                        Text(row.state.label)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundColor(color(for: row.state))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(color(for: row.state).opacity(0.10))
-                    .cornerRadius(6)
-                }
+            // Compact dot row — Android → iOS back-port (design-language
+            // queue, user-requested 2026-07-27): one dot per subsystem,
+            // green/amber/red/gray, name under each dot.  Replaced the
+            // labeled chip grid — the per-sensor state TEXT moved out of the
+            // glanceable path (the go/no-go banner above carries the verdict;
+            // a wrong dot's meaning is one tap into MagCal/Settings anyway).
+            // The row itself is a separate view because ImageRenderer draws
+            // ScrollView content as EMPTY — the render test hits the row
+            // directly (same reason the old LazyVGrid was render-untestable).
+            ScrollView(.horizontal, showsIndicators: false) {
+                HealthDotRow(rows: telemetry.sensorHealthRows)
             }
         }
         .padding()
@@ -1565,6 +1593,42 @@ struct DataRatesView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemGray6))
         .cornerRadius(10)
+    }
+}
+
+/// Flight-event flag chips: LAUNCH · BURNOUT · APOGEE · LANDED · LOG,
+/// illuminating green as each event latches in the fs bitfield.  Born on
+/// Android 2026-07-27; back-ported per docs/design-language.md.  The lit
+/// green matches Android's (Material 800) so the two dashboards read alike.
+/// LOG deliberately uses raw `logging_active` (Android parity) — the Status
+/// card's badge keeps the LANDED-zeroed `rocketLoggingActive` variant, whose
+/// stuck-true-surfacing rationale belongs to that badge, not this row.
+struct FlightEventFlagsView: View {
+    let telemetry: TelemetryData
+
+    private static let litGreen = Color(red: 46 / 255, green: 125 / 255, blue: 50 / 255)
+
+    private var chips: [(label: String, on: Bool)] {
+        [("LAUNCH", telemetry.launch_flag),
+         ("BURNOUT", telemetry.burnout_flag),
+         ("APOGEE", telemetry.alt_apo || telemetry.vel_apo),
+         ("LANDED", telemetry.landed_flag),
+         ("LOG", telemetry.logging_active)]
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(chips, id: \.label) { chip in
+                Text(chip.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(chip.on ? .white : .secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(chip.on ? Self.litGreen : Color.gray.opacity(0.2))
+                    .cornerRadius(6)
+            }
+            Spacer(minLength: 0)
+        }
     }
 }
 

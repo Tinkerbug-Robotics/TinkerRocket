@@ -23,7 +23,7 @@ terminology, so a user moving between phones never has to re-learn the app.
 | Element | Rule |
 |---|---|
 | Section order | identity header → staleness banner → state → power → battery/GNSS/link stat row → relayed rockets (BS links) → flight-event flags → sensor health → pyro → altitude |
-| Flight-event flag chips | LAUNCH · BURNOUT · APOGEE · LANDED · LOG as chips that **illuminate green** as each event latches (born on Android 2026-07-27; **back-port to iOS pending** — ledger) |
+| Flight-event flag chips | LAUNCH · BURNOUT · APOGEE · LANDED · LOG as chips that **illuminate green** as each event latches (born on Android 2026-07-27; **on both platforms since 2026-07-30**, same lit green #2E7D32) |
 | Staleness | worsen-only overlay; red banner wording "STALE DATA — link degraded"; never silently show stale values as live |
 | Pyro tiles | green **only** on continuity AND live data; gray = open/stale; dark gray = fired; "ARMED" in the section title when armed |
 | Sensor health | one dot per subsystem, green/amber/red/gray = OK/DEGRADED/BAD/NA, horizontal row |
@@ -41,5 +41,5 @@ INFLIGHT, DESCENT, LANDED…).
 
 | Item | Status |
 |---|---|
-| Flight-event flag chips on the dashboard | pending — small DashboardView addition |
-| Sensor-health dot row (one dot per subsystem, green/amber/red/gray = OK/DEGRADED/BAD/NA, name under each dot) | pending — user-requested 2026-07-27; iOS shows sensor state as text today |
+| Flight-event flag chips on the dashboard | **done 2026-07-30** — `FlightEventFlagsView` |
+| Sensor-health dot row (one dot per subsystem, green/amber/red/gray = OK/DEGRADED/BAD/NA, name under each dot) | **done 2026-07-30** — `HealthDotRow` replaced the labeled grid inside HealthCardView; the go/no-go banner stays (iOS-only, on the Android queue) |
