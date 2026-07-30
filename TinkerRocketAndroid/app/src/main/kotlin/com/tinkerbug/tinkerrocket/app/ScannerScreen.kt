@@ -30,6 +30,8 @@ fun ScannerScreen(
     onDemo: () -> Unit,
     onMyDevices: () -> Unit = {},
     onSavedFlights: () -> Unit = {},
+    updateVersion: String? = null,
+    onGetUpdate: () -> Unit = {},
 ) {
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
@@ -40,6 +42,18 @@ fun ScannerScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("TinkerRocket", style = MaterialTheme.typography.headlineMedium)
+        // Update banner (plan §1 sideload loop): informational, never modal —
+        // launch-day work must be able to ignore it entirely.
+        updateVersion?.let { v ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Update available: v$v",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(onClick = onGetUpdate) { Text("Get") }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = { fleet.scan(userInitiated = true) }, enabled = !scanning) {
                 Text(if (scanning) "Scanning…" else "Scan")

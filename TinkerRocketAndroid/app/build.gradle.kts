@@ -16,8 +16,10 @@ android {
         applicationId = "com.tinkerbug.tinkerrocket"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0-phase3"
+        // versionCode must only ever increase (Play + sideload "update"
+        // installs both key on it); bump BOTH before tagging android-v<name>.
+        versionCode = 2
+        versionName = "0.9.1"
     }
 
     buildFeatures {

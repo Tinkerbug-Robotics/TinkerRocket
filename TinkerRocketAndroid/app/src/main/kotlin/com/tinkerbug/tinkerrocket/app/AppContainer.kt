@@ -51,6 +51,9 @@ class AppContainer(app: Application) {
     /** Phone GPS + heading (ref-counted; consumers start/stop). */
     val phoneLocation = PhoneLocationManager(app)
 
+    /** GitHub-releases update check (plan §1); throttled + failure-silent. */
+    val updateChecker = UpdateChecker(app)
+
     /**
      * Voice callouts (#643): policy in :core:session, TextToSpeech behind the
      * AnnouncerSpeech seam.  App-scoped, unlike iOS's per-DashboardView
