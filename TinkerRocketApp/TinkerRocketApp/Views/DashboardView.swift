@@ -1596,13 +1596,14 @@ struct DataRatesView: View {
     }
 }
 
-/// Flight-event flag chips: LAUNCH · BURNOUT · APOGEE · LANDED · LOG,
+/// Flight-event flag chips: LAUNCH · BURNOUT · APOGEE · LANDED,
 /// illuminating green as each event latches in the fs bitfield.  Born on
 /// Android 2026-07-27; back-ported per docs/design-language.md.  The lit
 /// green matches Android's (Material 800) so the two dashboards read alike.
-/// LOG deliberately uses raw `logging_active` (Android parity) — the Status
-/// card's badge keeps the LANDED-zeroed `rocketLoggingActive` variant, whose
-/// stuck-true-surfacing rationale belongs to that badge, not this row.
+/// No LOG chip on iOS: the Status card directly above already carries the
+/// Logging badge + active-file line, so it would be pure duplication.
+/// Android keeps its LOG chip until the camera/logging status section
+/// ports over — it is Android's only logging indicator today (ledger).
 struct FlightEventFlagsView: View {
     let telemetry: TelemetryData
 
@@ -1612,8 +1613,7 @@ struct FlightEventFlagsView: View {
         [("LAUNCH", telemetry.launch_flag),
          ("BURNOUT", telemetry.burnout_flag),
          ("APOGEE", telemetry.alt_apo || telemetry.vel_apo),
-         ("LANDED", telemetry.landed_flag),
-         ("LOG", telemetry.logging_active)]
+         ("LANDED", telemetry.landed_flag)]
     }
 
     var body: some View {

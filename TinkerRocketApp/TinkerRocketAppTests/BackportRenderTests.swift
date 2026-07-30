@@ -34,10 +34,12 @@ final class BackportRenderTests: XCTestCase {
         _ = try render(FlightEventFlagsView(telemetry: off), name: "chips_all_off")
 
         var mid = TelemetryData()
-        mid.flight_status_bits = 0x01 | 0x200 | 0x40   // LAUNCH + BURNOUT + LOG
+        mid.flight_status_bits = 0x01 | 0x200   // LAUNCH + BURNOUT
         _ = try render(FlightEventFlagsView(telemetry: mid), name: "chips_mid_flight")
 
         var landed = TelemetryData()
+        // logging bit (0x40) also set: no LOG chip may appear — the Status
+        // card owns logging on iOS.
         landed.flight_status_bits = 0x01 | 0x200 | 0x04 | 0x08 | 0x40
         _ = try render(FlightEventFlagsView(telemetry: landed), name: "chips_landed")
     }
