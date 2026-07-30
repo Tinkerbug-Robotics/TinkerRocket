@@ -233,8 +233,10 @@ and velocity, GNSS frozen. Fine for pipeline tests, NOT for judging flight-data 
       correct at N — **PARTIAL: math verified, physical walk-around deferred to the outing**
 - [x] Arrow behaviour when location permission is denied → stated, not silently wrong —
       **PASS** (covered in Group 1)
-- [ ] ~~TTS announcements duck background audio and restore it~~ — **N/A, FEATURE ABSENT (#643)**
-- [ ] ~~Announcements still fire with the screen off~~ — **N/A, FEATURE ABSENT (#643)**
+- [x] TTS announcements duck background audio and restore it — **PORTED + focus lifecycle
+      verified on-device** (was N/A: feature absent, #643); audible listen test pending
+- [ ] Announcements still fire with the screen off — **feature now exists (#643); screen-off
+      run pending, pairs with a sim-flight bench pass**
 
 ### 7.1 Heading arrow — what was actually verified
 
@@ -266,16 +268,26 @@ Still open, for the outing: that the phone's magnetometer is *calibrated* and th
 is being fetched for the actual launch site. Those are device/environment facts no unit test
 reaches.
 
-### 7.3 / 7.4 TTS — the feature does not exist
+### 7.3 / 7.4 TTS — was absent, then ported (#643)
 
-Android has no `TextToSpeech`, `AudioManager`, `AudioAttributes`, `MediaPlayer` or `SoundPool`
-anywhere; there is no audio output of any kind. iOS has `FlightAnnouncer.swift` plus
-`FlightAnnouncerDispatchTests.swift`. These two boxes were scoped against a port that never
-happened — not a test failure, a **scope gap**, filed as #643 along with the plan inconsistency
-it exposes (the v1.0 launch-day loop names "voice"; the only scheduled announcer work is Phase
-9's post-v1.0 "announcer polish"). Also caught in passing: `ToolsScreens.kt:234` tells the user
-"Voice announcements, LoRa, and data logging all work during simulation" — ported verbatim from
-iOS and false on Android.
+As found: Android had no `TextToSpeech`, `AudioManager`, `AudioAttributes`, `MediaPlayer` or
+`SoundPool` anywhere — no audio output of any kind, while iOS has `FlightAnnouncer.swift` plus
+dispatch tests, and the v1.0 launch-day loop names "voice". Filed as #643 (scope gap, not a test
+failure), then ported the same day:
+
+- **Policy** in `:core:session` (`FlightAnnouncer.kt`) behind an `AnnouncerSpeech` seam —
+  15 flight-profile state-machine tests that iOS cannot run (its policy is welded to
+  `AVSpeechSynthesizer`), plus the ports of iOS's #138 dispatch and #235 wording suites.
+- **Engine** in `:app` (`TtsSpeaker.kt`): `TextToSpeech` + per-utterance
+  `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` (the Android equivalent of iOS's `.duckOthers` session).
+- **Dispatch** is direct from `DeviceSession`, not via the telemetry StateFlow — a StateFlow
+  dedups equal frames, and burnout detection counts *consecutive unchanged* max-speed frames.
+
+On-device (Pixel, bench OC live): toggle → "Voice ready" spoken, logcat `Announcer` tag firing,
+`dumpsys audio` showed the duck-capable focus grant during playback
+(`GAIN_TRANSIENT_MAY_DUCK`, `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE`/`CONTENT_TYPE_SPEECH`) and a
+clean abandon after. Still pending: an audible duck/restore listen test with music playing, and
+7.4's screen-off callouts during a sim flight.
 
 ---
 

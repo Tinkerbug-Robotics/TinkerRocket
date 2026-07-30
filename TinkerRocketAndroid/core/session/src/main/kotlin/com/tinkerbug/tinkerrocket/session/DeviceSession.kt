@@ -105,6 +105,16 @@ public class DeviceSession(
 
     // ── Connection / link state ──────────────────────────────────────────
 
+    /**
+     * Voice-callout sink (iOS `BLEDevice.flightAnnouncer`, #138). Dispatch is
+     * DIRECT, not via the [telemetry] StateFlow: a StateFlow dedups equal
+     * frames, and burnout detection counts *consecutive unchanged* max-speed
+     * frames — conflation would eat exactly the frames it counts. Relay path
+     * feeds only the FOCUSED rocket (#390 — two interleaved flights' callouts
+     * are noise). The app attaches/detaches this on the fleet dispatcher.
+     */
+    public var telemetryAnnouncer: TelemetryAnnouncer? = null
+
     private val _isConnected = MutableStateFlow(false)
     public val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
@@ -354,6 +364,10 @@ public class DeviceSession(
         _guidanceEcho.value = null
         // Power state unknown again until the next session's first frame (#377).
         _hasReceivedTelemetry.value = false
+        // Stop mid-utterance speech + clear one-shot flags (iOS onDisconnect
+        // does the same).  The previous-frame snapshot survives inside the
+        // announcer, so edges that already fired don't replay on reconnect.
+        telemetryAnnouncer?.reset()
         // Fail any in-flight download (the transport can't deliver more
         // chunks; the suspended caller must not hang forever).
         downloadStallJob?.cancel()
@@ -464,6 +478,11 @@ public class DeviceSession(
                 // Mirror the latched fix only when non-null — a GPS-less
                 // packet must not blank the marker (#140).
                 if (fix != null) _lastValidRocketFix.value = fix
+                // The relayed JSON carries the full rocket state. Without
+                // this, voice callouts only fire when paired directly to the
+                // rocket, never during a real flight (#138). Focused rocket
+                // only (#390).
+                telemetryAnnouncer?.processTelemetry(data)
             }
             recomputeEffective()
             return
@@ -493,6 +512,9 @@ public class DeviceSession(
             onRocketFix?.invoke(data, RocketKey(id.networkId ?: 0, ownRid))
                 ?.let { _lastValidRocketFix.value = it }
         }
+        // Direct-rocket and BS-self frames both dispatch to voice from here
+        // (iOS parseTelemetryData's fall-through path).
+        telemetryAnnouncer?.processTelemetry(data)
         recomputeEffective()
     }
 
