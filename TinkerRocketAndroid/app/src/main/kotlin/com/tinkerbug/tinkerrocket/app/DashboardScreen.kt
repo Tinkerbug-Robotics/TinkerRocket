@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.horizontalScroll
@@ -168,24 +170,18 @@ fun DashboardScreen(
             }
         }
 
-        // Flight summary (iOS FlightSummaryView twin), right under power —
-        // the operator's first glance (iOS layout, user decision 2026-07-31;
-        // the power-near-top placement is the one deliberate exception).
-        FlightSummaryCard(telemetry)
+        // iOS section order (screenshots 2026-07-31): the summary sits right
+        // after the banners on BS links but after Signal/Battery/IMU on
+        // direct links — matched exactly, per link type.
+        if (session.isBaseStation) FlightSummaryCard(telemetry)
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatCard(
-                "Battery",
-                telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
-                Modifier.weight(1f),
-            )
-            StatCard(
-                "GNSS",
-                if (telemetry.numSats > 0) "${telemetry.numSats} sats" else "no fix",
-                Modifier.weight(1f),
-            )
-            StatCard("Link", rssi?.let { "$it dBm" } ?: "—", Modifier.weight(1f))
-        }
+        SignalCard(telemetry, rssi, session.isBaseStation)
+        BatteryCard(telemetry)
+        ImuCard(telemetry, session.isBaseStation)
+
+        if (!session.isBaseStation) FlightSummaryCard(telemetry)
+
+        GpsRow(telemetry)
 
         // Direction/distance to rocket (BS links only — the recovery walk).
         // Reads the LATCHED lastValidRocketFix, never per-frame lat/lon:
@@ -275,20 +271,27 @@ fun DashboardScreen(
             }
         }
 
-        // Pyro tiles: fail-safe rendering — a channel shows green ONLY on
-        // continuity AND live data (stale green continuity is a lie).
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "Pyro ${if (telemetry.pyroArmed) "ARMED" else "safe"}",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Pyro tiles: iOS card form (2x2 grid, direct rocket links only —
+        // iOS hides pyro on BS links).  Fail-safe rendering — a channel
+        // shows green ONLY on continuity AND live data.  Config-driven
+        // "Disabled"/trigger text + Test Continuity need the 0xB1 config
+        // readback Android doesn't parse yet (ledger follow-up).
+        if (!session.isBaseStation) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Pyro Channels${if (telemetry.pyroArmed) " — ARMED" else ""}",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
                     val live = dataStatus == TelemetryData.DataStatus.LIVE
-                    PyroTile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, live)
-                    PyroTile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, live)
-                    PyroTile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, live)
-                    PyroTile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, live)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PyroTile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, live, Modifier.weight(1f))
+                        PyroTile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, live, Modifier.weight(1f))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PyroTile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, live, Modifier.weight(1f))
+                        PyroTile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, live, Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -508,19 +511,19 @@ private fun StatCard(
 }
 
 @Composable
-private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean) {
+private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean, modifier: Modifier = Modifier) {
     val color = when {
         fired -> Color(0xFF616161)
         continuity && live -> Color(0xFF2E7D32)   // green requires cont AND live
         else -> Color(0xFF9E9E9E)
     }
     Column(
-        Modifier
+        modifier
             .background(color, RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("CH$ch", color = Color.White, style = MaterialTheme.typography.labelMedium)
+        Text("CH $ch", color = Color.White, style = MaterialTheme.typography.labelMedium)
         Text(
             when {
                 fired -> "fired"
@@ -697,6 +700,9 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
                     },
                     enabled = !session.isBaseStation || focus != null,
                     modifier = Modifier.weight(1f),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.logging,
+                    ),
                 ) { Text(if (log) "Stop logging" else "Start logging") }
             }
             if (session.isBaseStation) {
@@ -941,6 +947,199 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * iOS SignalStrengthView twin: vertical bars for LoRa (BS links), GNSS
+ * satellites, and BLE RSSI, value labels underneath.  Fill fraction uses the
+ * same rough scaling ideas as iOS (RSSI −100..−30 dBm, sats 0..12).
+ */
+@Composable
+private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: Boolean) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Signal", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                if (isBaseStation) {
+                    val lora = telemetry.rssi
+                    SignalBar(
+                        fraction = lora?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                        value = lora?.let { String.format(Locale.ROOT, "%.0f", it) } ?: "——",
+                        label = "LoRa",
+                    )
+                }
+                SignalBar(
+                    fraction = (telemetry.numSats / 12f).coerceIn(0f, 1f),
+                    value = "${telemetry.numSats}",
+                    label = "GNSS",
+                )
+                SignalBar(
+                    fraction = bleRssi?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                    value = bleRssi?.let { "$it" } ?: "——",
+                    label = "BLE",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SignalBar(fraction: Float, value: String, label: String) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(
+            Modifier
+                .height(120.dp)
+                .width(36.dp)
+                .background(tr.cardSecondary.copy(alpha = 0.5f), RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            if (fraction > 0f) {
+                Box(
+                    Modifier
+                        .padding(bottom = 6.dp)
+                        .width(24.dp)
+                        .height((10 + 100 * fraction).dp)
+                        .background(tr.logging, RoundedCornerShape(12.dp)),
+                )
+            }
+        }
+        Text(value, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            label, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** iOS BatteryView twin: Charge / Voltage / Current row for the rocket. */
+@Composable
+private fun BatteryCard(telemetry: TelemetryData) {
+    val caption = MaterialTheme.typography.bodySmall
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Battery", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth()) {
+                Text("", modifier = Modifier.width(70.dp))
+                listOf("Charge", "Voltage", "Current").forEach {
+                    Text(
+                        it, style = caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Text("Rocket", style = caption, modifier = Modifier.width(70.dp))
+                listOf(
+                    telemetry.soc?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—",
+                    telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                    telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+                ).forEach {
+                    Text(
+                        it, style = caption.copy(fontFamily = mono),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * iOS IMUView twin: Low-G / High-G / Gyro XYZ triplets.  The nose
+ * orientation annotation shows on BS links (relayed flags2, #390); direct
+ * links need the 0xB1 config readback Android doesn't parse yet (ledger).
+ */
+@Composable
+private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+    val caption = MaterialTheme.typography.bodySmall
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+
+    @Composable
+    fun triplet(label: String, unit: String, x: Float?, y: Float?, z: Float?, decimals: Int) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.width(70.dp)) {
+                Text(label, style = caption)
+                Text(unit, style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            listOf(x, y, z).forEach { v ->
+                Text(
+                    v?.let { String.format(Locale.ROOT, "%.${decimals}f", it) } ?: "—",
+                    style = caption.copy(fontFamily = mono),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("IMU", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                val orient = if (isBaseStation) telemetry.relayedOrientationName else ""
+                if (orient.isNotEmpty()) {
+                    Text(
+                        "nose: $orient",
+                        style = caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Text("", modifier = Modifier.width(70.dp))
+                listOf("X", "Y", "Z").forEach {
+                    Text(
+                        it, style = caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            triplet("Low-G", "m/s²", telemetry.lowGX, telemetry.lowGY, telemetry.lowGZ, 2)
+            triplet("High-G", "m/s²", telemetry.highGX, telemetry.highGY, telemetry.highGZ, 1)
+            triplet("Gyro", "°/s", telemetry.gyroX, telemetry.gyroY, telemetry.gyroZ, 1)
+        }
+    }
+}
+
+/** iOS GPSView (compact) twin: lat, lon + sat count on one row. */
+@Composable
+private fun GpsRow(telemetry: TelemetryData) {
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("GPS", style = MaterialTheme.typography.titleMedium)
+            Text(
+                String.format(
+                    Locale.ROOT, "%.6f, %.6f",
+                    telemetry.latitude ?: 0.0, telemetry.longitude ?: 0.0,
+                ),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = mono),
+                modifier = Modifier.weight(1f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Text(
+                "${telemetry.numSats} sats",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = mono),
+            )
         }
     }
 }
