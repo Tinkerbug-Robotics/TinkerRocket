@@ -38153,7 +38153,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "100"
+		(property "Value" "127"
 			(at 0 -1.17 180)
 			(layer "B.Fab")
 			(hide yes)
