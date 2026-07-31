@@ -157,10 +157,21 @@ The proposed fix failed on two counts: placing Y6 at 0.62 mm from pins 53/54 wou
 
 **Lesson for the next review:** "component should be close to the pin" is a real rule for decoupling and a *false* one for crystals on this part. Check the PCB layout guideline, not just the schematic checklist — they are separate documents and only the former covers placement.
 
-### 6. Load caps on Y6 are ~2 pF too high for a 10 pF crystal
-ECS-400-10-37B2-CKY-TR is **CL = 10 pF**, 40 Ω ESR, ±10 ppm. The board fits **18 pF** on each leg: C_L = 18·18/36 + C_stray = 9 + (~1 pF trace + ~0.5 pF pad + ~2 pF pin) ≈ **12.5 pF**, i.e. roughly **−30 ppm** of pulling — outside the crystal's own ±10 ppm and outside Espressif's "tune to within ±10 ppm" instruction.
-Harmless for USB (±2500 ppm) and irrelevant to the LoRa link (the E220 has its own 32 MHz crystal), so it is not a boot risk — but fix it while the crystal is moving anyway.
-**Fix:** fit **12 pF**, then trim on the first article. (The stray estimate assumes the existing 11 mm routing, which finding 5 now confirms is staying — so 12 pF, not the 12–15 pF range originally given when the crystal position was still in play.)
+### 6. Load caps on Y6 are too high for a 10 pF crystal — **fit 12 pF**
+ECS-400-10-37B2-CKY-TR is **CL = 10 pF**, 40 Ω ESR, ±10 ppm. Per-leg stray with the existing 11 mm routing: ~0.95 pF trace (0.086 pF/mm on B.Cu over In4 at 0.1 mm) + ~0.5 pF pad + **2.0 pF pin** (S3 datasheet Table 5-4, C_IN) = **3.45 pF**.
+
+| C1 = C2 | C_L actual | freq error | startup margin vs 18 pF |
+|---|---|---|---|
+| **18 pF** (present) | 12.45 pF | −33 ppm | 1.00× |
+| 15 pF | 10.95 pF | −14 ppm | 1.44× |
+| 13 pF | 9.95 pF | +1 ppm | 1.92× |
+| **12 pF** ← fit this | 9.45 pF | +9 ppm | 2.25× |
+
+**13 pF is the arithmetic nominal; 12 pF is the practical pick** — +9 ppm is inside the crystal's own ±10 ppm band, 12 pF is a standard E12 value where 13 pF is E24 and thinly stocked, and it gives the best startup margin of the three.
+
+**The real reason to change is margin, not accuracy.** |Rneg| ∝ gm/(ω²·C1·C2), so 18 → 12 pF more than doubles the oscillator's negative resistance against a 40 Ω-ESR part. Frequency accuracy barely matters here: USB tolerates ±2500 ppm, the S3's RF is unused, and LoRa timing comes from the E220's own 32 MHz crystal.
+
+Sensitivity is ~15 ppm per pF of C_L, so a ±1 pF error in the stray estimate is worth about that much — measure and trim on the first article as Espressif instructs.
 
 ### 7. Host-UART polarity: the firmware placeholder is the reverse of the hardware
 Cable pin 3 = host RX ↔ daughterboard **GPIO6**; cable pin 4 = host TX ↔ daughterboard **GPIO5**. Both hosts confirm the convention (`out_computer/board_v8.h`: `LORA_UART_TX_PIN = 11 // LoRa_TX (label-perspective)` → J5.4; `base_station/board_v3.h`: TX = 35 → J6.4).
@@ -179,9 +190,12 @@ Note the root cause is a naming trap worth fixing in the schematic too: on the d
 ### 8. VDD3P3_RTC (pin 20) has no local 0.1 µF
 Espressif asks for a 0.1 µF close to each digital supply pin. Pin 46 (VDD3P3_CPU) has C101 at 1.34 mm ✓; **pin 20's nearest cap on +3V3 is 4.27 mm away** (C99), because the space to the left of U28 is taken by Y5 and the USB resistors. A 0402 fits around (84.3, 118.5).
 
-### 9. LED series resistors are 10 kΩ — the blue LED may not light at all
-R59/R60/R3 = 10 kΩ from a 3.3 V rail. Red (Vf ≈ 1.9 V) → **140 µA**; blue (Vf ≈ 2.7–3.4 V) → **0–70 µA**, and a blue part with Vf > 3.3 V simply does not conduct. Typical indicator design is 1–2 mA.
-If the intent was low power, 2.2–4.7 kΩ (0.3–0.7 mA) is the sensible compromise; if these are meant to be readable on a launch rail in daylight, 1 kΩ. Either way pin actual LED MPNs so Vf is known.
+### 9. ~~LED series resistors are 10 kΩ~~ — **CLOSED, refuted on hardware**
+*Original claim: 10 kΩ from 3.3 V gives 140 µA (red) and 0–70 µA (blue), and a blue part with Vf > 3.3 V would not conduct at all. **Closed 2026-07-31** — the same 10 kΩ arrangement is in service on existing boards and the LEDs are clearly visible.*
+
+The arithmetic was right; the inference from it was not. I reasoned from a generic 2.7–3.4 V Vf range to "may not light", when modern high-efficiency blue 0402s conduct fine at 3.3 V and are readable at tens of µA indoors. Bench evidence from shipped boards outranks a datasheet-range argument.
+
+Still worth doing at some point: **pin actual LED MPNs** so Vf is a known quantity rather than an assumption — this is the only reason the question was open to argument in the first place.
 
 ### 10. Two fiducials, one per side, 0.5 mm — and FID1 is inside the USB connector's courtyard
 FID1 (B.Cu, 102.08,115.73) sits fully inside J2's courtyard (x 95.76–104.19, y 111.41–124.31) — that is the board's **only DRC error**. FID2 is at the same X/Y on the front. A 0.5 mm copper dot is below the 1 mm many assemblers require, and one fiducial per side gives no rotational reference for a 0.4 mm-pitch QFN-56 plus a 1.27 mm-pitch shielded module.
@@ -236,9 +250,9 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 
 ## Suggested order of work
 
-1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); ~~move U22 VCC to +3V3~~ (done, finding 4); ~~C97 10 µF → 1 µF~~ **(reverted — see finding 4a)**; 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
+1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); ~~move U22 VCC to +3V3~~ (done, finding 4); ~~C97 10 µF → 1 µF~~ **(reverted — see finding 4a)**; 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; ~~LED resistors~~ (closed, finding 9); Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
 2. **BOM:** ~~capacitors~~ (done, finding 3 — MPN/Mfr/MinVRating on all 27); still to do: FB1 MPN/Mfr fields, the three LEDs, Y5's ESR grade, and the same annotation pass over resistors/inductors/connectors/crystals/ICs.
 3. **Layout:** ~~C95 re-route + place C14~~ (done); ~~relocate Y6~~ (retracted, finding 5 — layout is compliant); tighten GND via density along the clock traces toward ~1/mm; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
-5. **Firmware:** `HOST_UART_TX = 6`, `HOST_UART_RX = 5`; flash size to 16 MB; document "never init RF" and "never enable PSRAM unless VDD_SPI is re-fed".
+5. **Firmware** (owner: user): `HOST_UART_TX = 6`, `HOST_UART_RX = 5`; flash size to 16 MB; document "never init RF" and "never enable PSRAM unless VDD_SPI is re-fed".
 6. **Bench, once boards exist:** confirm the 40 MHz frequency error and trim C90/C92; scope VIN on hot-plug against the 18 V limit; measure the buck's loop response with the real ferrite bead; verify the SMA's return loss at 915 MHz.
