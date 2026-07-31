@@ -98,6 +98,13 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
             style = MaterialTheme.typography.titleLarge,
         )
 
+        // Storage bar (iOS StorageBarView): lives on the Files screen like
+        // iOS, not the dashboard (moved 2026-07-31 with the section-order
+        // decision).  0xCC on rocket links, 0xCD on BS links.
+        val rocketStorage by session.rocketStorage.collectAsState()
+        val bsStorage by session.bsStorage.collectAsState()
+        StorageCard(session.isBaseStation, rocketStorage, bsStorage)
+
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

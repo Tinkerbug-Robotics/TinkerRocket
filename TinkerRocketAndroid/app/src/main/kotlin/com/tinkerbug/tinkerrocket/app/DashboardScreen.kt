@@ -168,6 +168,11 @@ fun DashboardScreen(
             }
         }
 
+        // Flight summary (iOS FlightSummaryView twin), right under power —
+        // the operator's first glance (iOS layout, user decision 2026-07-31;
+        // the power-near-top placement is the one deliberate exception).
+        FlightSummaryCard(telemetry)
+
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatCard(
                 "Battery",
@@ -234,20 +239,19 @@ fun DashboardScreen(
             }
         }
 
-        // Flight event flags.  No LOG chip anymore — the Status card below
-        // owns logging (iOS dropped its LOG chip 2026-07-30 for the same
-        // reason; this is the re-convergence the ledger scheduled for the
-        // change that brought the status section over).
+        // Status card (iOS StatusFlagsView port): camera + logging badges,
+        // active file, BS silence-close countdown.  Before the flag chips —
+        // the iOS order (StatusFlagsView, then FlightEventFlagsView).
+        StatusCard(telemetry, session.isBaseStation)
+
+        // Flight event flags.  No LOG chip — the Status card above owns
+        // logging (re-converged with iOS 2026-07-30).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FlagChip("LAUNCH", telemetry.launchFlag)
             FlagChip("BURNOUT", telemetry.burnoutFlag)
             FlagChip("APOGEE", telemetry.altApo || telemetry.velApo)
             FlagChip("LANDED", telemetry.landedFlag)
         }
-
-        // Status card (iOS StatusFlagsView port): camera + logging badges,
-        // active file, BS silence-close countdown.
-        StatusCard(telemetry, session.isBaseStation)
 
         // Sensor health scorecard (#303) — shown once the frame carries it.
         if (telemetry.hasSensorHealth) {
@@ -298,12 +302,6 @@ fun DashboardScreen(
         // toggle, exactly like iOS.
         ControlsCard(session, telemetry)
 
-        // Storage bar (iOS StorageBarView port): 0xCC on rocket links,
-        // 0xCD on BS links; each renders its own variant.
-        val rocketStorage by session.rocketStorage.collectAsState()
-        val bsStorage by session.bsStorage.collectAsState()
-        StorageCard(session.isBaseStation, rocketStorage, bsStorage)
-
         // radio (cmd 60, BS links only); servo test + sim talk to a rocket.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -330,10 +328,6 @@ fun DashboardScreen(
             }
         }
 
-        // Flight summary (iOS FlightSummaryView twin): Current/Max table for
-        // altitude + speed, attitude row when the quaternion is present.
-        // Display converts per the global units setting (#160); wire stays SI.
-        FlightSummaryCard(telemetry)
     }
 }
 
@@ -733,7 +727,7 @@ private fun fmtBytes(bytes: Long): String = when {
  * the frames arrive on the file-ops characteristic after connect.
  */
 @Composable
-private fun StorageCard(
+internal fun StorageCard(
     isBaseStation: Boolean,
     rocket: com.tinkerbug.tinkerrocket.protocol.RocketStorageStats?,
     bs: com.tinkerbug.tinkerrocket.protocol.BaseStationStorageStats?,
