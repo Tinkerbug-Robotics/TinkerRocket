@@ -40,6 +40,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 
 /**
  * Phase 4 slice — the post-flight loop: paged device file list (5/page,
@@ -83,7 +92,11 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
         Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Flight logs", style = MaterialTheme.typography.titleLarge)
+        // iOS naming: rocket links list "Flights", BS links "LoRa Logs".
+        Text(
+            if (session.isBaseStation) "LoRa Logs" else "Flights",
+            style = MaterialTheme.typography.titleLarge,
+        )
 
         Row(
             Modifier.fillMaxWidth(),
@@ -175,6 +188,56 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
             )
         }
 
+        // iOS empty state: icon + guidance instead of a blank list.
+        if (files.isEmpty() && !downloadState.active) {
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    Icons.Filled.FolderOpen, contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    if (session.isBaseStation) "No LoRa logs found" else "No flights found",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Tap Refresh to load files",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        var fileToDelete by remember { mutableStateOf<String?>(null) }
+        fileToDelete?.let { doomed ->
+            AlertDialog(
+                onDismissRequest = { fileToDelete = null },
+                title = { Text(if (session.isBaseStation) "Delete LoRa Log?" else "Delete Flight?") },
+                text = {
+                    Text(
+                        "Are you sure you want to delete \"$doomed\" from the " +
+                            (if (session.isBaseStation) "base station" else "rocket") +
+                            "? This cannot be undone.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        session.deleteFiles(listOf(doomed))
+                        status = "Deleted $doomed"
+                        fileToDelete = null
+                        session.requestFileList(0)
+                    }) { Text("Delete") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { fileToDelete = null }) { Text("Cancel") }
+                },
+            )
+        }
+
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(files, key = { it.name }) { file ->
                 FileRow(
@@ -195,6 +258,7 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                         selection = if (file.name in selection) selection - file.name
                                     else selection + file.name
                     },
+                    onDelete = { fileToDelete = file.name },
                 )
             }
         }
@@ -212,6 +276,7 @@ private fun FileRow(
     selecting: Boolean = false,
     selected: Boolean = false,
     onToggleSelected: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
     Card(
         Modifier.fillMaxWidth().let {
@@ -240,14 +305,38 @@ private fun FileRow(
             // aside while selecting.
             if (selecting) {
                 // nothing — the action bar owns the verbs in this mode
-            } else if (hasCsv) {
-                OutlinedButton(onClick = onChart) { Text("Chart") }
-                OutlinedButton(
-                    onClick = onShare,
-                    modifier = Modifier.padding(start = 6.dp),
-                ) { Text("Share") }
             } else {
-                Button(onClick = onDownload, enabled = !busy) { Text("Download") }
+                // iOS-style trailing icon actions.  Android keeps its richer
+                // post-download verbs (chart + share) alongside iOS's
+                // download/trash pair.
+                val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+                if (hasCsv) {
+                    IconButton(onClick = onChart) {
+                        Icon(
+                            Icons.Filled.ShowChart, contentDescription = "Chart",
+                            tint = tr.savedFlights,
+                        )
+                    }
+                    IconButton(onClick = onShare) {
+                        Icon(
+                            Icons.Filled.Share, contentDescription = "Share",
+                            tint = tr.savedFlights,
+                        )
+                    }
+                } else {
+                    IconButton(onClick = onDownload, enabled = !busy) {
+                        Icon(
+                            Icons.Filled.Download, contentDescription = "Download",
+                            tint = if (busy) tr.statusIdle else tr.savedFlights,
+                        )
+                    }
+                }
+                IconButton(onClick = onDelete, enabled = !busy) {
+                    Icon(
+                        Icons.Filled.Delete, contentDescription = "Delete",
+                        tint = tr.driftCast,
+                    )
+                }
             }
         }
     }
