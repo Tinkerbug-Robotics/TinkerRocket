@@ -146,7 +146,14 @@ The proposed fix failed on two counts: placing Y6 at 0.62 mm from pins 53/54 wou
 
 **What actually remains, both minor:**
 - **Ground via density.** The guideline asks for "high-density ground vias" encircling the clock trace. There are 9 GND vias within 1.5 mm of the run across 24.6 mm — 0.37/mm, one every ~2.7 mm. Tightening toward ~1/mm is cheap and is the only place the layout is light against a stated rule.
-- **L8 proximity.** A 2.2 µH buck inductor 4.52 mm away, against "do not place any magnetic components nearby… for example large inductance component." Mitigating: shielded VLS3012 part, opposite board side, four copper layers (In1 GND / In2 / In3 / In4 GND) in between. Judged acceptable; not worth a re-place.
+- **L8 proximity.** A 2.2 µH buck inductor 4.52 mm away, against "do not place any magnetic components nearby… for example large inductance component." Judged acceptable — but be precise about *why*, because the intervening copper is worth less than it looks for this mechanism:
+   - A buck couples by **E-field** (SW node dV/dt) and by **H-field** (inductor stray flux); this rule is the H-field one.
+   - Against the E-field the stack is an excellent shield at every frequency here — In1 is 0.1 mm under F.Cu.
+   - Against the H-field, 35 µm copper only shields above ~1 skin depth: **6.9 dB/layer at the 2.2 MHz fundamental** (δ = 44.0 µm) rising to **29.5 dB/layer at 40 MHz** (δ = 10.3 µm). Nearly transparent where the switcher is loudest.
+   - That lands the right way regardless: only energy near 40 MHz can pull the oscillator — the ~18th harmonic, already far down and smeared by the random spread spectrum (S-CONF 7.5 k, and smearing widens with harmonic number). 2.2 MHz coupling shows up at worst as low-level phase modulation.
+   - Geometry caveat: L8→Y6 is 4.52 mm lateral / 1.60 mm vertical — **20° off the plane of the board**, so the planes are not broadside to the coupling path and per-layer figures overstate the benefit.
+   - **The real mitigations are the shielded inductor** (VLS3012CX, "Shielded Wirewound" — 20–30 dB less stray field than an open part) **and distance at 1/r³** (4.79 mm 3D). For contrast, the retracted F.Cu proposal at ~2.6 mm would have been **+16 dB** of H-field — an independent second reason it was wrong.
+   - Cheapest lever if more margin is ever wanted: GND via density along the clock traces, not moving parts.
 
 **Lesson for the next review:** "component should be close to the pin" is a real rule for decoupling and a *false* one for crystals on this part. Check the PCB layout guideline, not just the schematic checklist — they are separate documents and only the former covers placement.
 
