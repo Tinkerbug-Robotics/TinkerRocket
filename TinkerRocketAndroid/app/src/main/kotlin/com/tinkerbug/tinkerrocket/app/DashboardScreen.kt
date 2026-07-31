@@ -835,12 +835,11 @@ private fun RocketStateBanner(state: String) {
         "COMPLETE", "MAG_CAL" -> tr.savedFlights
         else -> tr.statusIdle
     }
+    // The COLOR carries the acquiring-vs-ready distinction; the text badge
+    // that used to sit under the label was removed 2026-07-31 on both
+    // platforms ("EKF Ready" beside an amber EKF health dot read as a
+    // contradiction — the sensor dots own live quality).
     val label = if (state == "READY") "PRELAUNCH" else state
-    val badge: Pair<String, Boolean>? = when (state) {
-        "PRELAUNCH" -> "EKF Ready" to true
-        "READY" -> "Acquiring GNSS" to false
-        else -> null
-    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -856,13 +855,6 @@ private fun RocketStateBanner(state: String) {
                 36f, androidx.compose.ui.unit.TextUnitType.Sp),
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
         )
-        badge?.let { (text, ready) ->
-            Text(
-                (if (ready) "✓ " else "⏳ ") + text,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (ready) tr.statusConnected else tr.statusScanning,
-            )
-        }
     }
 }
 
