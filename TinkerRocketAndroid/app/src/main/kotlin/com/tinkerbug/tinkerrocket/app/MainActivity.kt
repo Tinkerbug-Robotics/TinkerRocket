@@ -146,32 +146,18 @@ class MainActivity : ComponentActivity() {
                         activeDevice != null -> {
                             var tab by remember { mutableStateOf(0) }
                             androidx.compose.foundation.layout.Column {
-                                androidx.compose.foundation.layout.Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement =
-                                        androidx.compose.foundation.layout.Arrangement.Center,
-                                ) {
-                                    androidx.compose.material3.TextButton(onClick = { tab = 0 }) {
-                                        androidx.compose.material3.Text(
-                                            if (tab == 0) "● Dashboard" else "Dashboard",
-                                        )
-                                    }
-                                    androidx.compose.material3.TextButton(onClick = { tab = 1 }) {
-                                        androidx.compose.material3.Text(
-                                            if (tab == 1) "● Files" else "Files",
-                                        )
-                                    }
-                                    androidx.compose.material3.TextButton(onClick = { tab = 2 }) {
-                                        androidx.compose.material3.Text(
-                                            if (tab == 2) "● Map" else "Map",
-                                        )
-                                    }
-                                    androidx.compose.material3.TextButton(onClick = { tab = 3 }) {
-                                        androidx.compose.material3.Text(
-                                            if (tab == 3) "● Settings" else "Settings",
-                                        )
-                                    }
-                                }
+                                // iOS toolbar arrangement (design pass):
+                                // chevron + units | book · map · voice · gear.
+                                ConnectedTopBar(
+                                    tab = tab,
+                                    onTab = { tab = it },
+                                    onDisconnect = {
+                                        fleet.disconnect(activeDevice.deviceId)
+                                        demoFleet = null
+                                    },
+                                    unitStore = container.units,
+                                    container = container,
+                                )
                                 when (tab) {
                                     0 -> DashboardScreen(
                                         device = activeDevice,
