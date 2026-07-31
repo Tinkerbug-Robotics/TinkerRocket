@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -119,13 +120,9 @@ fun DashboardScreen(
                     SyncStateLine(syncState)
                 }
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                container?.let { VoiceToggle(it) }
-                OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
-            }
+            // Voice + disconnect moved to ConnectedTopBar (iOS toolbar
+            // arrangement, design pass) — the header is identity only now,
+            // which also retires the #645 clipped-Disconnect hazard for good.
         }
 
         // Staleness banner (#390 worsen-only overlay)
@@ -140,8 +137,10 @@ fun DashboardScreen(
             )
         }
 
-        // Rocket state
-        StatCard("State", telemetry.state, big = true)
+        // Rocket state — iOS RocketStateView twin (#382 display mapping:
+        // READY and PRELAUNCH both render "PRELAUNCH" with a readiness badge
+        // carrying the real distinction; raw wire strings untouched).
+        RocketStateBanner(telemetry.state)
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
@@ -309,37 +308,32 @@ fun DashboardScreen(
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Tools", style = MaterialTheme.typography.titleMedium)
+                val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!session.isBaseStation) {
-                        OutlinedButton(onClick = { tool = "servo" }) { Text("Servo test") }
-                        OutlinedButton(onClick = { tool = "magcal" }) { Text("Mag cal") }
+                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                            "Servo test", tr.servoTest, { tool = "servo" })
+                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                            "Mag cal", tr.myDevices, { tool = "magcal" })
                     }
-                    OutlinedButton(onClick = { tool = "sim" }) { Text("Simulation") }
+                    com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                        "Simulate", tr.simulate, { tool = "sim" })
                     if (session.isBaseStation) {
-                        OutlinedButton(onClick = { tool = "scan" }) { Text("Freq scan") }
+                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                            "Freq scan", tr.freqScan, { tool = "scan" })
                     }
                     if (container != null) {
-                        OutlinedButton(onClick = { tool = "ota" }) { Text("Firmware") }
+                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                            "Firmware", tr.camera, { tool = "ota" })
                     }
                 }
             }
         }
 
-        // Altitude row (bench: baro only until the FC rail is up).  Display
-        // converts per the global units setting (#160); wire stays SI.
-        val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            StatCard(
-                "Baro alt",
-                telemetry.pressureAlt?.let { UnitFormatter.altitude(it.toDouble(), units) } ?: "—",
-                Modifier.weight(1f),
-            )
-            StatCard(
-                "Max alt",
-                telemetry.maxAltM?.let { UnitFormatter.altitude(it.toDouble(), units) } ?: "—",
-                Modifier.weight(1f),
-            )
-        }
+        // Flight summary (iOS FlightSummaryView twin): Current/Max table for
+        // altitude + speed, attitude row when the quaternion is present.
+        // Display converts per the global units setting (#160); wire stays SI.
+        FlightSummaryCard(telemetry)
     }
 }
 
@@ -552,30 +546,6 @@ private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean
  * engine not initialised yet, green = ready.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-private fun VoiceToggle(container: AppContainer) {
-    val enabled by container.announcer.enabled.collectAsState()
-    val ready by container.ttsSpeaker.ready.collectAsState()
-    val error by container.ttsSpeaker.lastError.collectAsState()
-    val tint = when {
-        !enabled -> Color.Gray
-        error != null -> MaterialTheme.colorScheme.error
-        ready -> Color(0xFF2E7D32)
-        else -> Color(0xFFF57C00)
-    }
-    Text(
-        if (enabled) "Voice on" else "Voice off",
-        color = tint,
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier
-            .combinedClickable(
-                onClick = { container.announcer.setEnabled(!enabled) },
-                onLongClick = { container.announcer.testVoice() },
-            )
-            .padding(8.dp),
-    )
-}
-
 // ── iOS→Android dashboard-section ports (design-language queue, 2026-07-30) ──
 
 /** iOS StatusBadge: label + filled/hollow state dot. */
@@ -845,3 +815,138 @@ private data class StorageRow(
     val total: Long,
     val autoEvicted: Boolean,
 )
+
+/**
+ * iOS RocketStateView twin (#382 display-only mapping): the wire states
+ * READY and PRELAUNCH both mean "on the pad" — READY is still waiting on
+ * the OC/GNSS gates, PRELAUNCH means the gates are met.  The raw names read
+ * backwards, so both render one "PRELAUNCH" label and a readiness badge
+ * carries the real distinction.  Colors match iOS: acquiring orange, ready
+ * green, INFLIGHT red, COMPLETE/MAG_CAL blue, else gray.  Wire strings,
+ * CSV columns, and the announcer's raw-state logic are untouched.
+ */
+@Composable
+private fun RocketStateBanner(state: String) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val color = when (state) {
+        "READY" -> tr.statusScanning      // acquiring (orange)
+        "PRELAUNCH" -> tr.statusConnected // fully ready (green)
+        "INFLIGHT" -> tr.driftCast        // red
+        "COMPLETE", "MAG_CAL" -> tr.savedFlights
+        else -> tr.statusIdle
+    }
+    val label = if (state == "READY") "PRELAUNCH" else state
+    val badge: Pair<String, Boolean>? = when (state) {
+        "PRELAUNCH" -> "EKF Ready" to true
+        "READY" -> "Acquiring GNSS" to false
+        else -> null
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(color.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            label,
+            color = color,
+            fontSize = androidx.compose.ui.unit.TextUnit(
+                36f, androidx.compose.ui.unit.TextUnitType.Sp),
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+        )
+        badge?.let { (text, ready) ->
+            Text(
+                (if (ready) "✓ " else "⏳ ") + text,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (ready) tr.statusConnected else tr.statusScanning,
+            )
+        }
+    }
+}
+
+/**
+ * iOS FlightSummaryView twin: Current/Max monospace table for altitude and
+ * speed, plus the attitude row (Roll = body-Z azimuth, Pitch/Yaw = ZYX
+ * Euler — display convention, see the CSV-attitude note) when the frame
+ * carries a quaternion.  Units per the global setting (#160).
+ */
+@Composable
+private fun FlightSummaryCard(telemetry: TelemetryData) {
+    val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
+    val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    val caption = MaterialTheme.typography.bodySmall
+
+    @Composable
+    fun row(label: String, current: String, max: String) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = caption, modifier = Modifier.width(70.dp))
+            Text(
+                current, style = caption.copy(fontFamily = mono),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                max, style = caption.copy(fontFamily = mono),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth()) {
+                Text("", modifier = Modifier.width(70.dp))
+                Text(
+                    "Current", style = caption,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "Max", style = caption,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            row(
+                "Altitude",
+                telemetry.pressureAlt?.let { UnitFormatter.altitude(it.toDouble(), units) } ?: "—",
+                telemetry.maxAltM?.let { UnitFormatter.altitude(it.toDouble(), units) } ?: "—",
+            )
+            row(
+                "Speed",
+                telemetry.altitudeRate?.let { UnitFormatter.speed(it.toDouble(), units) } ?: "—",
+                telemetry.maxSpeedMps?.let { UnitFormatter.speed(it.toDouble(), units) } ?: "—",
+            )
+            val roll = telemetry.roll
+            val pitch = telemetry.pitch
+            val yaw = telemetry.yaw
+            Row(Modifier.fillMaxWidth()) {
+                Text("", modifier = Modifier.width(70.dp))
+                listOf("Roll", "Pitch", "Yaw").forEach {
+                    Text(
+                        it, style = caption,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth()) {
+                Text("Attitude", style = caption, modifier = Modifier.width(70.dp))
+                listOf(roll, pitch, yaw).forEach { v ->
+                    Text(
+                        v?.let { String.format(Locale.ROOT, "%.0f°", it) } ?: "—",
+                        style = caption.copy(fontFamily = mono),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}

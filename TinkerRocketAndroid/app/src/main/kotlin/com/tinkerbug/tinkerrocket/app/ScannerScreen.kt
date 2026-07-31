@@ -110,37 +110,7 @@ fun ScannerScreen(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            unitStore?.let { store ->
-                val current by store.system.collectAsState()
-                var menuOpen by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(
-                            Icons.Filled.Straighten, contentDescription = "Display units",
-                            tint = TrTheme.colors.savedFlights,
-                        )
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        listOf(
-                            UnitSystem.METRIC to "Metric (SI)",
-                            UnitSystem.IMPERIAL to "Imperial",
-                        ).forEach { (sys, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                leadingIcon = {
-                                    if (current == sys) {
-                                        Icon(Icons.Filled.Check, contentDescription = null)
-                                    }
-                                },
-                                onClick = {
-                                    store.set(sys)
-                                    menuOpen = false
-                                },
-                            )
-                        }
-                    }
-                }
-            }
+            unitStore?.let { UnitsMenuButton(it) }
             Spacer(Modifier.weight(1f))
             // White circle chip like the iOS toolbar — the purple bug is
             // invisible straight on a dark background.
