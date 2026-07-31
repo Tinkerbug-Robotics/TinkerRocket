@@ -118,6 +118,18 @@ Separately, this is the same **R_SPI budget** question as the rocket computer (H
 **Fix:** move U22 pin 8 off `OUT_VDD_SPI` to +3V3 (this board's +3V3 is a low-noise TPS62913 output, so it is clean), leave VDD_SPI with 0.1 µF + 1 µF **at pin 29**, and drop C97 to 1 µF.
 **If instead you keep the shared node:** it only works while firmware never enables PSRAM. `radio_board/sdkconfig.defaults` does not enable SPIRAM today — write that constraint down, because turning it on later silently breaks the rail.
 
+### 4a. VDD_SPI bulk: C97 stays at 10 µF (the HDG warning does not apply here)
+Finding 4 originally cut C97 from 10 µF to 100 nF on the strength of Espressif's *"do not add excessively large capacitors"*. Tracing the mechanism behind that warning, neither driver applies to this board, so **C97 was put back to 10 µF**:
+
+- **Startup delay.** VDD_SPI charges through the same 14 Ω, so it lags VDD3P3_RTC by τ = 14 Ω × C. At 1 µF + 10 µF (≈5.6 µF effective) τ ≈ 78 µs, settling in ~400 µs. CHIP_PU now releases on a 10 kΩ × 1 µF RC, ~2–3 ms after the rail — VDD_SPI is up an order of magnitude early. Even 100 µF would only settle in ~7 ms.
+- **Light-sleep wake.** Table 5-10: *"Light-sleep: VDD_SPI and Wi-Fi are powered down."* Recovery has to recharge through the 14 Ω. This board is an always-on modem on the host's switched ground and never light-sleeps.
+
+Against that, the 14 Ω makes VDD_SPI the **highest-source-impedance rail on the board**: a 30 mA transient through it is a 420 mV dip unless local capacitance supplies it. Bulk is worth more here than anywhere else, so the 10 µF earns its place.
+
+Open nit: the node is 1 µF + 10 µF with **no 100 nF**, so nothing covers above the bulk caps' self-resonance (~3–5 MHz in 0402) for a quad-SPI PSRAM clocking to 80 MHz. Changing C96 1 µF → 100 nF would close it at zero part count. Raised and consciously declined.
+
+Separately: **C18 (the flash's +3V3 decoupling) stays 100 nF.** The bulk argument above does *not* transfer — +3V3 is a plane with no series impedance, so its ~57 µF is already electrically local to U22, and the 100 nF is the only cap at that pin covering the HF decade. Headroom was checked anyway: swapping it to 10 µF would put Cf at ~61 µF and COUT+Cf at ~109 µF, both inside TI's 160 / 200 µF ceilings — permitted, just not useful.
+
 ### 5. ~~The 40 MHz crystal is 11 mm from the S3~~ — **RETRACTED, the layout is compliant**
 *Original claim: Y6 sits 11 mm from U28 with 10.9/11.5 mm traces to XTAL_P/XTAL_N, and should be moved adjacent to pins 53/54. **That was wrong**, and the proposed fix would have been a regression. Retracted 2026-07-30 after checking Espressif's ESP32-S3 PCB layout guideline rather than assuming a "keep it short" rule.*
 
@@ -217,7 +229,7 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 
 ## Suggested order of work
 
-1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
+1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); ~~move U22 VCC to +3V3~~ (done, finding 4); ~~C97 10 µF → 1 µF~~ **(reverted — see finding 4a)**; 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
 2. **BOM:** ~~capacitors~~ (done, finding 3 — MPN/Mfr/MinVRating on all 27); still to do: FB1 MPN/Mfr fields, the three LEDs, Y5's ESR grade, and the same annotation pass over resistors/inductors/connectors/crystals/ICs.
 3. **Layout:** ~~C95 re-route + place C14~~ (done); ~~relocate Y6~~ (retracted, finding 5 — layout is compliant); tighten GND via density along the clock traces toward ~1/mm; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
