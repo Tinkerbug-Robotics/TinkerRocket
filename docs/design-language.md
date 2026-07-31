@@ -39,7 +39,7 @@ which are Compose renderings of the shapes the iOS app is built from.
 
 | Element | Rule |
 |---|---|
-| Section order | identity header → staleness banner → state → power → battery/GNSS/link stat row → relayed rockets (BS links) → flight-event flags → sensor health → pyro → altitude |
+| Section order | **iOS layout is canon** (user decision 2026-07-31), one deliberate exception: the power section stays near the top with the full dashboard visible in the OFF state (Android behavior — power on without leaving the screen; iOS still swaps to a battery+PowerOn-only view when off). Order: identity header → staleness banner → state banner → **power** → flight summary (Current/Max) → battery/GNSS/link row → bearing + roster (BS links) → status → flight-event flags → sensor health → pyro → controls → tools. Storage bar lives on the FILES screen (iOS placement), not the dashboard |
 | Flight-event flag chips | LAUNCH · BURNOUT · APOGEE · LANDED as chips that **illuminate green** as each event latches (born on Android 2026-07-27; on both platforms since 2026-07-30, same lit green #2E7D32). NO LOG chip on either platform since 2026-07-30 — the Status card owns logging on both |
 | Staleness | worsen-only overlay; red banner wording "STALE DATA — link degraded"; never silently show stale values as live |
 | Pyro tiles | green **only** on continuity AND live data; gray = open/stale; dark gray = fired; "ARMED" in the section title when armed |
