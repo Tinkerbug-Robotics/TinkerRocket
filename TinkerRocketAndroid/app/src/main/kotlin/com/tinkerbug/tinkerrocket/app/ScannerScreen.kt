@@ -1,13 +1,16 @@
 package com.tinkerbug.tinkerrocket.app
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,23 +23,33 @@ import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tinkerbug.tinkerrocket.R
 import com.tinkerbug.tinkerrocket.app.theme.TrActionButton
 import com.tinkerbug.tinkerrocket.app.theme.TrCard
 import com.tinkerbug.tinkerrocket.app.theme.TrCompactButton
@@ -49,6 +62,7 @@ import com.tinkerbug.tinkerrocket.session.BleDeviceType
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.DiscoveredDevice
 import com.tinkerbug.tinkerrocket.session.FleetManager
+import com.tinkerbug.tinkerrocket.session.UnitSystem
 
 /**
  * The top screen, mirroring the iOS layout (design pass 2026-07-30, iOS =
@@ -73,6 +87,7 @@ fun ScannerScreen(
     onDriftCast: () -> Unit = {},
     updateVersion: String? = null,
     onGetUpdate: () -> Unit = {},
+    unitStore: UnitStore? = null,
 ) {
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
@@ -86,6 +101,51 @@ fun ScannerScreen(
             .padding(TrSpacing.screenPadding),
         verticalArrangement = Arrangement.spacedBy(TrSpacing.stackSpacing),
     ) {
+        // iOS toolbar mirror: units menu leading, Tinkerbug branding trailing
+        // (#160 — the choice is global and reachable with nothing connected).
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            unitStore?.let { store ->
+                val current by store.system.collectAsState()
+                var menuOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(
+                            Icons.Filled.Straighten, contentDescription = "Display units",
+                            tint = TrTheme.colors.savedFlights,
+                        )
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        listOf(
+                            UnitSystem.METRIC to "Metric (SI)",
+                            UnitSystem.IMPERIAL to "Imperial",
+                        ).forEach { (sys, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                leadingIcon = {
+                                    if (current == sys) {
+                                        Icon(Icons.Filled.Check, contentDescription = null)
+                                    }
+                                },
+                                onClick = {
+                                    store.set(sys)
+                                    menuOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Image(
+                painterResource(R.drawable.tinkerbug_logo),
+                contentDescription = "Tinkerbug Robotics",
+                modifier = Modifier.height(30.dp),
+            )
+        }
+
         Text("TinkerRocket", fontSize = 34.sp, fontWeight = FontWeight.Bold)
 
         // Update banner (plan §1 sideload loop): informational, never modal —

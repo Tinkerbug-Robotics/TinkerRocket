@@ -72,6 +72,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             // Design-token theme (iOS reference values) — see app/theme/.
             TinkerRocketTheme {
+                val unitSystem by container.units.system.collectAsState()
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem provides unitSystem,
+                ) {
                 Surface(Modifier.fillMaxSize().statusBarsPadding()) {
                     val granted by permissionsGranted
                     var demoFleet by remember {
@@ -243,6 +247,7 @@ class MainActivity : ComponentActivity() {
                                     onMyDevices = { showMyDevices = true },
                                     onSavedFlights = { showSavedFlights = true },
                                     onDriftCast = { showDriftCast = true },
+                                    unitStore = container.units,
                                     updateVersion = update?.versionName,
                                     onGetUpdate = {
                                         update?.let {
@@ -258,6 +263,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
                 }
             }
         }

@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import java.util.Locale
 
 /**
@@ -324,16 +325,18 @@ fun DashboardScreen(
             }
         }
 
-        // Altitude row (bench: baro only until the FC rail is up)
+        // Altitude row (bench: baro only until the FC rail is up).  Display
+        // converts per the global units setting (#160); wire stays SI.
+        val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatCard(
                 "Baro alt",
-                telemetry.pressureAlt?.let { String.format(Locale.ROOT, "%.1f m", it) } ?: "—",
+                telemetry.pressureAlt?.let { UnitFormatter.altitude(it.toDouble(), units) } ?: "—",
                 Modifier.weight(1f),
             )
             StatCard(
                 "Max alt",
-                telemetry.maxAltM?.let { String.format(Locale.ROOT, "%.1f m", it) } ?: "—",
+                telemetry.maxAltM?.let { UnitFormatter.altitude(it.toDouble(), units) } ?: "—",
                 Modifier.weight(1f),
             )
         }
@@ -411,8 +414,8 @@ private fun DirectionToRocketCard(
                         // Glyph points east (90°); rotate −90 to make it north-up.
                         modifier = Modifier.rotate(arrowAngle - 90f),
                     )
-                    val distText =
-                        if (dist < 1000) "%.0f m".format(dist) else "%.2f km".format(dist / 1000)
+                    val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
+                    val distText = UnitFormatter.distance(dist, units)
                     Text(
                         "$distText away",
                         style = MaterialTheme.typography.bodyMedium,
@@ -421,7 +424,8 @@ private fun DirectionToRocketCard(
                     if (phoneAlt != null && rocketAltM != null) {
                         val diff = rocketAltM - phoneAlt
                         Text(
-                            "%.0f m %s".format(kotlin.math.abs(diff), if (diff >= 0) "up" else "down"),
+                            UnitFormatter.altitude(kotlin.math.abs(diff), units) +
+                                (if (diff >= 0) " up" else " down"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
