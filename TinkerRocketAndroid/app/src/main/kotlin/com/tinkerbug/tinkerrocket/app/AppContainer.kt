@@ -55,6 +55,14 @@ class AppContainer(app: Application) {
     val updateChecker = UpdateChecker(app)
 
     /**
+     * App-wide display units (iOS #160 twin — same UserDefaults key name and
+     * raw values for the parity ledger's key inventory).  Declared before the
+     * announcer, which captures it for spoken units.  Wire/log/CSV stay SI;
+     * conversion happens only at display and speech.
+     */
+    val units = UnitStore(app)
+
+    /**
      * Voice callouts (#643): policy in :core:session, TextToSpeech behind the
      * AnnouncerSpeech seam.  App-scoped, unlike iOS's per-DashboardView
      * @StateObject — a mid-flight navigation away from the dashboard must not
@@ -68,6 +76,7 @@ class AppContainer(app: Application) {
             speech = ttsSpeaker,
             initialEnabled = prefs.getBoolean("voiceAnnouncementsEnabled", false),
             onEnabledChanged = { prefs.edit().putBoolean("voiceAnnouncementsEnabled", it).apply() },
+            unitSystem = { units.system.value },
         )
     }
 
@@ -212,6 +221,37 @@ private class PrefsKnownStorage(app: Application) : KnownDeviceStorage {
     }
     override fun loadLegacyKnownIds(): List<String>? = null
     override fun removeLegacyKnownIds() = Unit
+}
+
+/**
+ * App-wide display-unit setting (iOS #160 twin).  Same key ("unitSystem") and
+ * raw values ("metric"/"imperial") as the iOS @AppStorage, so the parity
+ * ledger's key inventory stays one list.  StateFlow so Compose recomposes on
+ * the spot — settings self-apply, never behind an Apply button (#144).
+ */
+class UnitStore(app: Application) {
+    private val prefs = app.getSharedPreferences("display_units", Context.MODE_PRIVATE)
+
+    private val _system = kotlinx.coroutines.flow.MutableStateFlow(
+        when (prefs.getString("unitSystem", "metric")) {
+            "imperial" -> com.tinkerbug.tinkerrocket.session.UnitSystem.IMPERIAL
+            else -> com.tinkerbug.tinkerrocket.session.UnitSystem.METRIC
+        },
+    )
+    val system: kotlinx.coroutines.flow.StateFlow<com.tinkerbug.tinkerrocket.session.UnitSystem> =
+        _system
+
+    fun set(value: com.tinkerbug.tinkerrocket.session.UnitSystem) {
+        _system.value = value
+        prefs.edit().putString(
+            "unitSystem",
+            if (value == com.tinkerbug.tinkerrocket.session.UnitSystem.IMPERIAL) {
+                "imperial"
+            } else {
+                "metric"
+            },
+        ).apply()
+    }
 }
 
 class TinkerRocketApp : Application() {

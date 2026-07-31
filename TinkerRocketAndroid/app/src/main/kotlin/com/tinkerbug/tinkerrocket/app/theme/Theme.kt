@@ -23,6 +23,15 @@ import androidx.compose.ui.graphics.Color
  */
 val LocalTrColors = staticCompositionLocalOf { TrColorsLight }
 
+/**
+ * Ambient display-unit system (iOS `UnitSystem.current` twin, #160).
+ * Provided from MainActivity off UnitStore's StateFlow; screens read
+ * `LocalUnitSystem.current` and hand it to UnitFormatter.
+ */
+val LocalUnitSystem = androidx.compose.runtime.compositionLocalOf {
+    com.tinkerbug.tinkerrocket.session.UnitSystem.METRIC
+}
+
 object TrTheme {
     val colors: TrColors
         @Composable get() = LocalTrColors.current
