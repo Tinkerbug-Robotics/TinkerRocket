@@ -8,14 +8,10 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.tinkerbug.tinkerrocket.app.theme.TinkerRocketTheme
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.FleetManager
 import kotlinx.coroutines.launch
@@ -73,8 +70,8 @@ class MainActivity : ComponentActivity() {
         container.fleetScope.launch { container.updateChecker.checkThrottled() }
 
         setContent {
-            val scheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-            MaterialTheme(colorScheme = scheme) {
+            // Design-token theme (iOS reference values) — see app/theme/.
+            TinkerRocketTheme {
                 Surface(Modifier.fillMaxSize().statusBarsPadding()) {
                     val granted by permissionsGranted
                     var demoFleet by remember {
@@ -210,7 +207,17 @@ class MainActivity : ComponentActivity() {
                         else -> {
                             var showMyDevices by remember { mutableStateOf(false) }
                             var showSavedFlights by remember { mutableStateOf(false) }
-                            if (showSavedFlights) {
+                            var showDriftCast by remember { mutableStateOf(false) }
+                            if (showDriftCast) {
+                                // Standalone wind/trajectory planner — runs
+                                // with no device, like the iOS top-screen
+                                // entry (#42; design pass 2026-07-30 promoted
+                                // it out of the map screen).
+                                DriftCastScreen(
+                                    container = container,
+                                    onBack = { showDriftCast = false },
+                                )
+                            } else if (showSavedFlights) {
                                 // #635: local cache only — no session needed.
                                 SavedFlightsScreen(onBack = { showSavedFlights = false })
                             } else if (showMyDevices) {
@@ -235,6 +242,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onMyDevices = { showMyDevices = true },
                                     onSavedFlights = { showSavedFlights = true },
+                                    onDriftCast = { showDriftCast = true },
                                     updateVersion = update?.versionName,
                                     onGetUpdate = {
                                         update?.let {

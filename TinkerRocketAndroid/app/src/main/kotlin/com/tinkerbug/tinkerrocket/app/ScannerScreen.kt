@@ -1,48 +1,93 @@
 package com.tinkerbug.tinkerrocket.app
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.ListAlt
+import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.tinkerbug.tinkerrocket.app.theme.TrActionButton
+import com.tinkerbug.tinkerrocket.app.theme.TrCard
+import com.tinkerbug.tinkerrocket.app.theme.TrCompactButton
+import com.tinkerbug.tinkerrocket.app.theme.TrShape
+import com.tinkerbug.tinkerrocket.app.theme.TrSignalBars
+import com.tinkerbug.tinkerrocket.app.theme.TrSpacing
+import com.tinkerbug.tinkerrocket.app.theme.TrStatusPill
+import com.tinkerbug.tinkerrocket.app.theme.TrTheme
+import com.tinkerbug.tinkerrocket.session.BleDeviceType
 import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.DiscoveredDevice
 import com.tinkerbug.tinkerrocket.session.FleetManager
 
+/**
+ * The top screen, mirroring the iOS layout (design pass 2026-07-30, iOS =
+ * reference): stacked full-width semantic buttons (Saved Flights / My
+ * Devices / Reverse Drift Cast), the Scan button + dot-status pill, and the
+ * Available Devices card whose rows are the connect controls — with the
+ * Virtual Rocket as the last row of the card, because it connects like a
+ * device.  Android-only content keeps its place: the update banner (sideload
+ * loop, plan §1) sits under the title.
+ *
+ * Behavior deltas kept on purpose: Android's scan self-terminates on the
+ * epoch-guarded window (no Stop toggle — a restarted scan deserves its full
+ * 15 s, ledger 2026-07-23), so the Scan button disables while scanning and
+ * the pill carries the state.
+ */
 @Composable
 fun ScannerScreen(
     fleet: FleetManager<DeviceSession>,
     onDemo: () -> Unit,
     onMyDevices: () -> Unit = {},
     onSavedFlights: () -> Unit = {},
+    onDriftCast: () -> Unit = {},
     updateVersion: String? = null,
     onGetUpdate: () -> Unit = {},
 ) {
     val discovered by fleet.discoveredDevices.collectAsState()
     val scanning by fleet.isScanning.collectAsState()
     val status by fleet.statusMessage.collectAsState()
+    val tr = TrTheme.colors
 
     Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(TrSpacing.screenPadding),
+        verticalArrangement = Arrangement.spacedBy(TrSpacing.stackSpacing),
     ) {
-        Text("TinkerRocket", style = MaterialTheme.typography.headlineMedium)
+        Text("TinkerRocket", fontSize = 34.sp, fontWeight = FontWeight.Bold)
+
         // Update banner (plan §1 sideload loop): informational, never modal —
         // launch-day work must be able to ignore it entirely.
         updateVersion?.let { v ->
@@ -55,54 +100,140 @@ fun ScannerScreen(
                 OutlinedButton(onClick = onGetUpdate) { Text("Get") }
             }
         }
-        // Primary row = the connected world; the spinner lives INSIDE the
-        // Scan button so the row's geometry never changes mid-scan (design
-        // pass 2026-07-30: a floating spinner squeezed the row and wrapped
-        // a button label — the clipped-Disconnect lesson again).
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { fleet.scan(userInitiated = true) }, enabled = !scanning) {
+
+        TrActionButton(
+            "Saved Flights", tr.savedFlights, onSavedFlights,
+            icon = Icons.Filled.Inventory2,
+        )
+        TrActionButton(
+            "My Devices", tr.myDevices, onMyDevices,
+            icon = Icons.AutoMirrored.Filled.ListAlt,
+        )
+        TrActionButton(
+            "Reverse Drift Cast", tr.driftCast, onDriftCast,
+            icon = Icons.Filled.Air,
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(TrSpacing.rowSpacing),
+        ) {
+            TrCompactButton(
+                "Scan", tr.scan,
+                onClick = { fleet.scan(userInitiated = true) },
+                enabled = !scanning,
+            )
+            TrStatusPill(
+                dotColor = if (scanning) tr.statusScanning else tr.statusIdle,
+                text = status,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        TrCard {
+            Text("Available Devices", style = MaterialTheme.typography.titleMedium)
+
+            if (discovered.isEmpty()) {
                 if (scanning) {
-                    CircularProgressIndicator(
-                        Modifier.padding(end = 8.dp).size(16.dp),
-                        strokeWidth = 2.dp,
+                    Column(
+                        Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Text(
+                            "Searching…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    Text(
+                        "No devices found. Tap Scan to search.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 10.dp),
                     )
                 }
-                Text(if (scanning) "Scanning…" else "Scan")
             }
-            Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = onMyDevices) { Text("My Devices") }
-        }
-        // Secondary row = the no-hardware world: cached flights (#635) and
-        // the Virtual Rocket (a FakeFirmware fleet in the real app stack —
-        // the no-hardware dev path, doubling as the try-the-app mode).
-        // "Virtual Rocket" names the THING; "Simulation" flies the real one.
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = onSavedFlights) { Text("Saved Flights") }
-            Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = onDemo) { Text("Virtual Rocket") }
-        }
-        Text(status, style = MaterialTheme.typography.bodyMedium)
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(discovered, key = { it.deviceId }) { dev ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text(dev.name, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "${dev.deviceId}  ${dev.rssi} dBm",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        Button(onClick = { fleet.connect(dev.deviceId) }) { Text("Connect") }
-                    }
-                }
+            discovered.forEach { dev ->
+                DeviceRow(dev) { fleet.connect(dev.deviceId) }
+            }
+
+            // Virtual Rocket: the no-hardware world, last row of the device
+            // card because it connects like a device (iOS placement).  Names
+            // the THING; "Simulation" flies the real one.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(
+                        tr.cardSecondary.copy(alpha = 0.6f),
+                        RoundedCornerShape(TrShape.radiusButton),
+                    )
+                    .clickable(onClick = onDemo)
+                    .padding(vertical = 8.dp, horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.AutoAwesome, contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text("Virtual Rocket", style = MaterialTheme.typography.bodyMedium)
             }
         }
+    }
+}
+
+/** iOS DevicePickerView row: type icon, name + role, signal bars; the row
+ *  itself is the connect control. */
+@Composable
+private fun DeviceRow(
+    dev: DiscoveredDevice,
+    onConnect: () -> Unit,
+) {
+    val tr = TrTheme.colors
+    // Registry hint outranks the name heuristic, matching the iOS scan site
+    // (renamed devices advertise raw names — only the registry knows them).
+    val type = dev.knownType ?: BleDeviceType.fromName(dev.name)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(tr.cardSecondary, RoundedCornerShape(TrShape.radiusButton))
+            .clickable(onClick = onConnect)
+            .padding(vertical = 8.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            when (type) {
+                BleDeviceType.ROCKET -> Icons.Filled.RocketLaunch
+                BleDeviceType.BASE_STATION -> Icons.Filled.CellTower
+                BleDeviceType.UNKNOWN -> Icons.AutoMirrored.Filled.HelpOutline
+            },
+            contentDescription = null,
+            modifier = Modifier.size(26.dp),
+            tint = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                dev.name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                when (type) {
+                    BleDeviceType.ROCKET -> "Rocket"
+                    BleDeviceType.BASE_STATION -> "Base Station"
+                    BleDeviceType.UNKNOWN -> "TinkerRocket device"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        TrSignalBars(dev.rssi)
     }
 }
 

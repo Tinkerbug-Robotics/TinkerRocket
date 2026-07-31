@@ -93,9 +93,9 @@ struct DashboardView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
+                            .background(TRColor.savedFlights)
                             .foregroundColor(.white)
-                            .cornerRadius(10)
+                            .cornerRadius(TRShape.radiusButton)
                         }
 
                         // One place to rename any known rocket/base station and
@@ -108,9 +108,9 @@ struct DashboardView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.indigo)
+                            .background(TRColor.myDevices)
                             .foregroundColor(.white)
-                            .cornerRadius(10)
+                            .cornerRadius(TRShape.radiusButton)
                         }
 
                         Button {
@@ -122,9 +122,9 @@ struct DashboardView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.red)
+                            .background(TRColor.driftCast)
                             .foregroundColor(.white)
-                            .cornerRadius(10)
+                            .cornerRadius(TRShape.radiusButton)
                         }
 
                         HStack(spacing: 12) {
@@ -139,9 +139,9 @@ struct DashboardView: View {
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 20)
                                     .padding(.vertical, 12)
-                                    .background(fleet.isScanning ? Color.red : Color.green)
+                                    .background(fleet.isScanning ? TRColor.scanActive : TRColor.scan)
                                     .foregroundColor(.white)
-                                    .cornerRadius(10)
+                                    .cornerRadius(TRShape.radiusButton)
                             }
 
                             ConnectionStatusView(
