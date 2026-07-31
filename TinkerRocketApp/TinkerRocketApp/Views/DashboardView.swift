@@ -871,18 +871,14 @@ struct RocketStateView: View {
     // guided path). The raw names read backwards (READY sounds MORE ready
     // than PRELAUNCH), and the old colors — READY green, PRELAUNCH orange —
     // reinforced the inversion. Render ONE "PRELAUNCH" label for both pad
-    // states and carry the real distinction in a readiness badge. Wire
-    // strings, CSV columns, and the announcer's raw-state logic are untouched.
+    // states; the banner COLOR carries the distinction (acquiring orange,
+    // ready green). The text badge that used to sit here ("EKF Ready" /
+    // "Acquiring GNSS") was removed 2026-07-31: "EKF Ready" beside an amber
+    // EKF health dot read as the app contradicting itself, and the sensor
+    // dots are the authority on live quality. Wire strings, CSV columns,
+    // and the announcer's raw-state logic are untouched.
     static func displayLabel(for state: String) -> String {
         state == "READY" ? "PRELAUNCH" : state
-    }
-    /// Badge (text, isReady) for the pad states; nil elsewhere.
-    static func padBadge(for state: String) -> (String, Bool)? {
-        switch state {
-        case "PRELAUNCH": return ("EKF Ready", true)
-        case "READY":     return ("Acquiring GNSS", false)
-        default:          return nil
-        }
     }
 
     var stateColor: Color {
@@ -901,11 +897,6 @@ struct RocketStateView: View {
             Text(Self.displayLabel(for: state))
                 .font(.system(size: 36, weight: .bold))
                 .foregroundColor(stateColor)
-            if let (text, ready) = Self.padBadge(for: state) {
-                Label(text, systemImage: ready ? "checkmark.seal.fill" : "hourglass")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(ready ? .green : .orange)
-            }
             switch hopBadge {
             case .active:
                 Label("Frequency Hopping", systemImage: "dot.radiowaves.left.and.right")
