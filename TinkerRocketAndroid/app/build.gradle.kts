@@ -91,6 +91,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    // Icon set for the iOS-parity screens (SF-symbol analogs: RocketLaunch,
+    // CellTower, Air, Inventory2, AutoAwesome…). R8 strips the unused bulk.
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.10.1")
     // Not used directly (MainActivity is a ComponentActivity) — pins the
     // transitive fragment above 1.3.0 so the ActivityResult APIs are safe on

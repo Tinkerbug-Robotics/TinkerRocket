@@ -40,6 +40,9 @@ jobs:
       - name: Check the generated section maps match the firmware sources
         run: python3 tools/gen_section_index.py --check
 
+      - name: Check the design tokens match design/tokens.json
+        run: python3 tools/gen_design_tokens.py --check
+
       - name: Check the protocol reference matches the wire definitions
         run: python3 tools/gen_protocol_reference.py --check
 

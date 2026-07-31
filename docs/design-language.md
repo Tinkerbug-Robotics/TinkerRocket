@@ -2,10 +2,27 @@
 
 *Started 2026-07-27, during the Android Phase 3 build-out.*
 
-Both apps stay native (SwiftUI / Compose) and keep platform idioms —
-"similar look and feel" means a shared **design language**, not identical
-widgets: the same information hierarchy, section order, color semantics, and
-terminology, so a user moving between phones never has to re-learn the app.
+Both apps stay native (SwiftUI / Compose).  **iOS is the design reference**
+(decision 2026-07-30, superseding the earlier idiom-first stance): Android
+aligns closely with the existing iOS app in content AND look-and-feel —
+same hierarchy, same semantic colors, same component shapes — except where
+platform differences make that difficult or unnatural.  What stays native:
+navigation mechanics (back gesture/bar vs swipe-back), touch feedback
+(ripple vs highlight), system dialogs and permission sheets, and fonts
+(SF Pro is Apple-licensed; Roboto renders the same sizes/weights).
+
+## Design tokens (the mechanism)
+
+`design/tokens.json` is the single source of truth: the Apple system-color
+values the iOS app has always rendered, lifted into semantic roles
+(savedFlights, driftCast, scan, statusScanning…), plus the surface family
+(systemGray6 cards), the TinkerRocket radius (10), and the spacing scale.
+`tools/gen_design_tokens.py` generates `DesignTokens.swift` and
+`DesignTokens.kt`; CI (`docs` job) fails if the generated files drift from
+the JSON.  Screens reach for roles — never raw palette colors — and Android
+composes the shared component vocabulary in `app/theme/DesignSystem.kt`
+(TrActionButton, TrCompactButton, TrStatusPill, TrCard, TrSignalBars),
+which are Compose renderings of the shapes the iOS app is built from.
 
 ## When alignment happens
 
@@ -35,7 +52,9 @@ terminology, so a user moving between phones never has to re-learn the app.
 
 "Rocket power" (not "FC power"), "Rockets via base station", "focused",
 "cont / open / fired", state strings verbatim from firmware (READY,
-INFLIGHT, DESCENT, LANDED…).
+PRELAUNCH, INFLIGHT, LANDED… — there is no DESCENT state; descent is
+INFLIGHT + the apogee flag, a lesson the virtual rocket's announcer outage
+taught on 2026-07-30).
 
 ## Back-port queue (Android → iOS)
 
