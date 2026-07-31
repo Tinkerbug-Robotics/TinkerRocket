@@ -118,15 +118,30 @@ Separately, this is the same **R_SPI budget** question as the rocket computer (H
 **Fix:** move U22 pin 8 off `OUT_VDD_SPI` to +3V3 (this board's +3V3 is a low-noise TPS62913 output, so it is clean), leave VDD_SPI with 0.1 µF + 1 µF **at pin 29**, and drop C97 to 1 µF.
 **If instead you keep the shared node:** it only works while firmware never enables PSRAM. `radio_board/sdkconfig.defaults` does not enable SPIRAM today — write that constraint down, because turning it on later silently breaks the rail.
 
-### 5. The 40 MHz crystal is 11 mm from the S3 and sits in the buck section
-Y6 is at (97.98, 126.19) with 10.9 mm and 11.5 mm of 0.1 mm B.Cu trace to XTAL_P/XTAL_N (pins 53/54 at x≈92.2). Y5 (32.768 kHz) is 2.24 mm away and is fine — the 40 MHz one is the outlier. It also lands right beside the converter cluster (U3 at 96.68,124.44; L8 at 93.47,125.92 — opposite side, so the four intervening planes do most of the shielding, but the placement is still backwards).
-The trace pair adds ~1 pF per leg of stray on the oscillator's high-impedance node and degrades startup margin on a 40 Ω-ESR part. There is no reason for it: the area immediately outboard of pins 53/54 is free.
-**Fix:** move Y6 + C90/C92 + L10 adjacent to U28 pins 53/54.
+### 5. ~~The 40 MHz crystal is 11 mm from the S3~~ — **RETRACTED, the layout is compliant**
+*Original claim: Y6 sits 11 mm from U28 with 10.9/11.5 mm traces to XTAL_P/XTAL_N, and should be moved adjacent to pins 53/54. **That was wrong**, and the proposed fix would have been a regression. Retracted 2026-07-30 after checking Espressif's ESP32-S3 PCB layout guideline rather than assuming a "keep it short" rule.*
+
+The guideline specifies a **minimum**, not a maximum: *"The crystal should be placed **far from** the clock pin to avoid interference on the chip. The gap should be **at least 2.0 mm**."* No maximum distance appears anywhere in it. Checked against the board:
+
+| rule | board | |
+|---|---|---|
+| "gap should be at least 2.0 mm" | 7.90 mm | ✓ |
+| "There should be no vias for the clock input and output traces" | 0 vias on XTAL nets | ✓ |
+| "It is best not to route any signal trace under the crystal" | 0 non-clock segments under Y6's courtyard | ✓ |
+| "two sides of the clock trace should be surrounded by ground copper" | GND pour on both sides | ✓ |
+
+The proposed fix failed on two counts: placing Y6 at 0.62 mm from pins 53/54 would have **violated the 2.0 mm minimum**, and relocating it to F.Cu requires two vias on the clock traces, which the guideline **explicitly prohibits**. It would also have moved the crystal to the same side as L8 at ~2.6 mm, against "do not place any magnetic components nearby."
+
+**What actually remains, both minor:**
+- **Ground via density.** The guideline asks for "high-density ground vias" encircling the clock trace. There are 9 GND vias within 1.5 mm of the run across 24.6 mm — 0.37/mm, one every ~2.7 mm. Tightening toward ~1/mm is cheap and is the only place the layout is light against a stated rule.
+- **L8 proximity.** A 2.2 µH buck inductor 4.52 mm away, against "do not place any magnetic components nearby… for example large inductance component." Mitigating: shielded VLS3012 part, opposite board side, four copper layers (In1 GND / In2 / In3 / In4 GND) in between. Judged acceptable; not worth a re-place.
+
+**Lesson for the next review:** "component should be close to the pin" is a real rule for decoupling and a *false* one for crystals on this part. Check the PCB layout guideline, not just the schematic checklist — they are separate documents and only the former covers placement.
 
 ### 6. Load caps on Y6 are ~2 pF too high for a 10 pF crystal
 ECS-400-10-37B2-CKY-TR is **CL = 10 pF**, 40 Ω ESR, ±10 ppm. The board fits **18 pF** on each leg: C_L = 18·18/36 + C_stray = 9 + (~1 pF trace + ~0.5 pF pad + ~2 pF pin) ≈ **12.5 pF**, i.e. roughly **−30 ppm** of pulling — outside the crystal's own ±10 ppm and outside Espressif's "tune to within ±10 ppm" instruction.
 Harmless for USB (±2500 ppm) and irrelevant to the LoRa link (the E220 has its own 32 MHz crystal), so it is not a boot risk — but fix it while the crystal is moving anyway.
-**Fix:** start at **12–15 pF** (once the traces are short, 15 pF; with the current 11 mm routing, 12 pF), then trim on the first article.
+**Fix:** fit **12 pF**, then trim on the first article. (The stray estimate assumes the existing 11 mm routing, which finding 5 now confirms is staying — so 12 pF, not the 12–15 pF range originally given when the crystal position was still in play.)
 
 ### 7. Host-UART polarity: the firmware placeholder is the reverse of the hardware
 Cable pin 3 = host RX ↔ daughterboard **GPIO6**; cable pin 4 = host TX ↔ daughterboard **GPIO5**. Both hosts confirm the convention (`out_computer/board_v8.h`: `LORA_UART_TX_PIN = 11 // LoRa_TX (label-perspective)` → J5.4; `base_station/board_v3.h`: TX = 35 → J6.4).
@@ -202,9 +217,9 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 
 ## Suggested order of work
 
-1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12–15 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
+1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); move U22 VCC to +3V3; VDD_SPI 0.1 µF + 1 µF (C97 10 µF → 1 µF); 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; LED resistors; Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
 2. **BOM:** ~~capacitors~~ (done, finding 3 — MPN/Mfr/MinVRating on all 27); still to do: FB1 MPN/Mfr fields, the three LEDs, Y5's ESR grade, and the same annotation pass over resistors/inductors/connectors/crystals/ICs.
-3. **Layout:** *Update PCB from Schematic* first (C95 re-route + place C14 at ~(93.40,128.8)); relocate Y6 + its caps + L10 next to pins 53/54; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
+3. **Layout:** ~~C95 re-route + place C14~~ (done); ~~relocate Y6~~ (retracted, finding 5 — layout is compliant); tighten GND via density along the clock traces toward ~1/mm; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
 5. **Firmware:** `HOST_UART_TX = 6`, `HOST_UART_RX = 5`; flash size to 16 MB; document "never init RF" and "never enable PSRAM unless VDD_SPI is re-fed".
 6. **Bench, once boards exist:** confirm the 40 MHz frequency error and trim C90/C92; scope VIN on hot-plug against the 18 V limit; measure the buck's loop response with the real ferrite bead; verify the SMA's return loss at 915 MHz.
