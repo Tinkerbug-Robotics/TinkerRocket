@@ -3931,6 +3931,16 @@
 	)
 	(wire
 		(pts
+			(xy 40.005 78.105) (xy 36.195 78.105)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "36ed0dc3-65eb-49cb-a9db-0f5604348738")
+	)
+	(wire
+		(pts
 			(xy 16.51 129.54) (xy 21.59 129.54)
 		)
 		(stroke
@@ -3948,6 +3958,16 @@
 			(type default)
 		)
 		(uuid "3bbeb771-da23-4c4f-962e-9720f2319a88")
+	)
+	(wire
+		(pts
+			(xy 40.005 69.215) (xy 36.195 69.215)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4277fa7f-8405-4940-b6a1-d20ecff59d4d")
 	)
 	(wire
 		(pts
@@ -4138,6 +4158,16 @@
 			(type default)
 		)
 		(uuid "7d754ac4-f13b-412e-a02a-95939167845c")
+	)
+	(wire
+		(pts
+			(xy 40.005 71.755) (xy 40.005 78.105)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8f5d7252-7368-4924-a0a0-c482d42d2cd6")
 	)
 	(wire
 		(pts
@@ -4371,6 +4401,16 @@
 	)
 	(wire
 		(pts
+			(xy 36.195 69.215) (xy 36.195 70.485)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fead701b-94fb-4785-a906-9c24610aed2a")
+	)
+	(wire
+		(pts
 			(xy 121.92 134.62) (xy 146.685 134.62)
 		)
 		(stroke
@@ -4381,7 +4421,7 @@
 	)
 	(global_label "GNSS_RX"
 		(shape input)
-		(at 40.005 71.755 180)
+		(at 28.575 78.105 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -4391,7 +4431,7 @@
 		)
 		(uuid "2fd3e489-86ef-4589-a2cd-3e0a3fcecb8f")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 28.5532 71.755 0)
+			(at 17.1232 78.105 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4453,7 +4493,7 @@
 	)
 	(global_label "GNSS_TX"
 		(shape input)
-		(at 40.005 69.215 180)
+		(at 28.575 70.485 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -4463,7 +4503,7 @@
 		)
 		(uuid "a053f98b-94f0-451d-8e42-2b0f66b1316e")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 28.8556 69.215 0)
+			(at 17.4256 70.485 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5426,6 +5466,85 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "L8")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 32.385 78.105 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "386bc3d7-f6ff-4d1a-a56e-b3f6a17f3691")
+		(property "Reference" "R7"
+			(at 32.385 75.565 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1 k"
+			(at 32.385 80.645 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 32.639 77.089 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 32.385 78.105 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 32.385 78.105 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "78d8c293-3356-4e76-947f-695231297cd7")
+		)
+		(pin "2"
+			(uuid "616bc746-4e7e-4ad3-bbd5-03f552267e02")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "R7")
 					(unit 1)
 				)
 			)
@@ -7433,6 +7552,85 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "H2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 32.385 70.485 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "b552da93-fb86-4709-9cc8-c3b753484a2e")
+		(property "Reference" "R8"
+			(at 32.385 67.945 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1 k"
+			(at 32.385 73.025 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 32.639 69.469 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 32.385 70.485 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 32.385 70.485 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "bd609d32-7850-4044-8e72-caa95da3680e")
+		)
+		(pin "2"
+			(uuid "a049dd31-bc78-4ab9-805b-2295355433bf")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "R8")
 					(unit 1)
 				)
 			)
