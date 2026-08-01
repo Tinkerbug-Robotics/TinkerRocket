@@ -4508,6 +4508,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-071ML"
+			(at 226.06 41.275 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 226.06 41.275 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "f392b6fe-8479-45bd-aa3e-9c1f1990feb4")
 		)
@@ -4743,6 +4765,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-072KL"
+			(at 97.155 114.935 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 97.155 114.935 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "37086ee6-2b05-445d-ac2b-3ec6af0fb08e")
 		)
@@ -4834,6 +4878,28 @@
 				)
 			)
 		)
+		(property "MPN" "WP710A10QBC/D"
+			(at 153.67 71.755 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Kingbright"
+			(at 153.67 71.755 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "a626d56f-ac8f-4112-a460-df84d7944b05")
 		)
@@ -4914,6 +4980,28 @@
 			)
 		)
 		(property "LCSC_Part_Number" "C2830320"
+			(at 66.675 156.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "FS8205A"
+			(at 66.675 156.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TECH PUBLIC"
 			(at 66.675 156.845 0)
 			(hide yes)
 			(show_name no)
@@ -5171,6 +5259,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-071ML"
+			(at 226.06 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 226.06 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "984a799b-e2ce-4a21-9409-f0489cd4b251")
 		)
@@ -5243,6 +5353,28 @@
 			)
 		)
 		(property "Description" "Temperature dependent resistor"
+			(at 90.17 74.93 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "103AT-2"
+			(at 90.17 74.93 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Semitec"
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -5333,6 +5465,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 22.86 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 22.86 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "2db3968f-d2b1-4567-bd3b-b67107239b7f")
 		)
@@ -5412,6 +5566,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 56.515 114.935 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 56.515 114.935 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "257475e5-0ac8-4f02-b697-017ecc5ff990")
 		)
@@ -5481,6 +5657,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 98.425 81.915 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07675RL"
+			(at 98.425 81.915 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 98.425 81.915 0)
 			(hide yes)
 			(show_name no)
@@ -5876,6 +6074,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "USB4110-GF-A"
+			(at 44.45 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "GCT"
+			(at 44.45 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "S1"
 			(uuid "bf788b37-9314-442b-87cc-7bc1ed8dc146")
 		)
@@ -5987,6 +6207,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 217.805 51.435 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 217.805 51.435 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 217.805 51.435 0)
 			(hide yes)
 			(show_name no)
@@ -6155,6 +6397,28 @@
 			)
 		)
 		(property "LCSC_Part_Number" "C351410"
+			(at 76.835 114.935 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "DW01A"
+			(at 76.835 114.935 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "PUOLOP"
 			(at 76.835 114.935 0)
 			(hide yes)
 			(show_name no)
@@ -6392,6 +6656,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "BH-18650-A5BJ001-2D"
+			(at 21.59 144.78 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "MYOUNG"
+			(at 21.59 144.78 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "N"
 			(uuid "16dcb557-1937-49c0-9ed4-ace6023a71df")
 		)
@@ -6542,6 +6828,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 62.23 18.415 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "SP0503BAHTG"
+			(at 62.23 18.415 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Littelfuse"
 			(at 62.23 18.415 0)
 			(hide yes)
 			(show_name no)
@@ -6789,6 +7097,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "BQ21040DBVR"
+			(at 116.205 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TI"
+			(at 116.205 71.12 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "4"
 			(uuid "da1ca72b-f908-43f0-943a-f50dd2d9e101")
 		)
@@ -6882,6 +7212,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 80.645 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 80.645 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "b11e6f20-6d32-4b52-9f97-d912b365ce2b")
 		)
@@ -6951,6 +7303,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 153.67 79.375 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07150RL"
+			(at 153.67 79.375 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 153.67 79.375 0)
 			(hide yes)
 			(show_name no)
@@ -7041,6 +7415,28 @@
 			)
 		)
 		(property "LCSC_Part_Number" "C2830320"
+			(at 179.705 146.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "FS8205A"
+			(at 179.705 146.685 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TECH PUBLIC"
 			(at 179.705 146.685 0)
 			(hide yes)
 			(show_name no)
@@ -7310,6 +7706,28 @@
 				)
 			)
 		)
+		(property "MPN" "FS8205A"
+			(at 139.7 156.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TECH PUBLIC"
+			(at 139.7 156.845 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "e49994ba-9422-4fbb-a2fd-2980b0684938")
 		)
@@ -7559,6 +7977,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 139.065 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 139.065 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "3e90eb68-5e7e-46b7-a735-f57086bde3d9")
 		)
@@ -7706,6 +8146,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 64.135 100.965 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100RL"
+			(at 64.135 100.965 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 64.135 100.965 0)
 			(hide yes)
 			(show_name no)
@@ -7940,6 +8402,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 66.04 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 66.04 54.61 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 66.04 54.61 0)
 			(hide yes)
 			(show_name no)

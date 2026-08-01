@@ -4458,6 +4458,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B224KO5NNNC"
+			(at 94.615 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 94.615 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "8da36605-ac40-4e46-b093-4045269e3eca")
 		)
@@ -4693,6 +4715,28 @@
 				)
 			)
 		)
+		(property "MPN" "BLM18PG471SN1D"
+			(at 204.47 40.005 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Murata"
+			(at 204.47 40.005 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "aff84edc-4a2a-4d6c-a12e-06665645e21b")
 		)
@@ -4764,6 +4808,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 28.575 100.965 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 28.575 100.965 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 28.575 100.965 0)
 			(hide yes)
 			(show_name no)
@@ -5084,6 +5150,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-071KL"
+			(at 140.97 34.29 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 140.97 34.29 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "7d67710a-0b28-4294-bc27-8b86b66403f8")
 		)
@@ -5158,6 +5246,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 229.87 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BM05B-SRSS-TB"
+			(at 229.87 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "JST"
 			(at 229.87 45.085 0)
 			(hide yes)
 			(show_name no)
@@ -5262,6 +5372,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 145.415 39.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 145.415 39.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "e369359b-9510-4c14-9bac-dc337bdb61a9")
 		)
@@ -5333,6 +5465,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 63.5 170.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "ISM6HG256XTR"
+			(at 63.5 170.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "STMicro"
 			(at 63.5 170.18 0)
 			(hide yes)
 			(show_name no)
@@ -5535,6 +5689,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 102.235 118.11 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 102.235 118.11 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "4a5f7b30-e79e-4e58-bc7d-6dc14d0e617d")
 		)
@@ -5606,6 +5782,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 182.88 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 182.88 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 182.88 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -5688,6 +5886,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 65.405 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "IIS2MDCTR"
+			(at 65.405 45.72 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "STMicro"
 			(at 65.405 45.72 0)
 			(hide yes)
 			(show_name no)
@@ -5857,6 +6077,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "PMPB14XNX"
+			(at 161.925 38.1 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Nexperia"
+			(at 161.925 38.1 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "5"
 			(uuid "1ceb7221-3540-4907-b10c-95c44053af8c")
 		)
@@ -5946,6 +6188,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 22.86 164.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 22.86 164.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 22.86 164.465 0)
 			(hide yes)
 			(show_name no)
@@ -6102,6 +6366,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 106.68 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 106.68 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 106.68 184.15 0)
 			(hide yes)
 			(show_name no)
@@ -6338,6 +6624,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 16.51 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 16.51 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 16.51 45.085 0)
 			(hide yes)
 			(show_name no)
@@ -6662,6 +6970,28 @@
 				)
 			)
 		)
+		(property "MPN" "BMP585"
+			(at 66.04 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Bosch"
+			(at 66.04 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "4"
 			(uuid "64351a29-bf9e-4d32-86e4-51cf78f1af51")
 		)
@@ -6754,6 +7084,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 23.495 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 23.495 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 23.495 45.085 0)
 			(hide yes)
 			(show_name no)

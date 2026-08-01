@@ -5315,6 +5315,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C120JB5NNNC"
+			(at 74.295 53.975 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 74.295 53.975 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "cfa92c96-03db-4659-9439-daeee0725eed")
 		)
@@ -5384,6 +5406,28 @@
 			)
 		)
 		(property "Description" "Inductor, small symbol"
+			(at 97.155 36.195 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "LQW15AN2N7C00D"
+			(at 97.155 36.195 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Murata"
 			(at 97.155 36.195 0)
 			(hide yes)
 			(show_name no)
@@ -5473,6 +5517,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0722RL"
+			(at 187.325 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 187.325 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "371a46f4-fdf9-4497-991c-bd5febfa8a22")
 		)
@@ -5544,6 +5610,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 198.12 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 198.12 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 198.12 27.305 0)
 			(hide yes)
 			(show_name no)
@@ -5791,6 +5879,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B103KB5NNNC"
+			(at 191.135 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 191.135 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "1d8f4f4f-d055-4516-b26d-cb207f9a42d2")
 		)
@@ -5907,7 +6017,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "SC-32S-32.768kHz-12.5pF"
+		(property "Value" "ABS07-32.768KHZ-T"
 			(at 81.915 82.5499 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5942,6 +6052,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 79.375 81.28 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "ABS07-32.768KHZ-T"
+			(at 79.375 81.28 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Abracon"
 			(at 79.375 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -6189,6 +6321,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C220JB5NNNC"
+			(at 77.47 90.805 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 77.47 90.805 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "6b7d0ac6-a347-4810-851c-3823ed3a17b6")
 		)
@@ -6261,6 +6415,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 175.26 128.905 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 175.26 128.905 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 175.26 128.905 0)
 			(hide yes)
 			(show_name no)
@@ -6344,6 +6520,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 76.835 168.275 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BM04B-SRSS-TB"
+			(at 76.835 168.275 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "JST"
 			(at 76.835 168.275 0)
 			(hide yes)
 			(show_name no)
@@ -6517,6 +6715,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 238.125 111.125 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 238.125 111.125 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "a0dc5c18-782a-4e8c-b45a-34f148c35fa7")
 		)
@@ -6586,6 +6806,28 @@
 			)
 		)
 		(property "Description" "Inductor, small symbol"
+			(at 215.9 46.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "LQG15HS2N0S02D"
+			(at 215.9 46.355 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Murata"
 			(at 215.9 46.355 0)
 			(hide yes)
 			(show_name no)
@@ -6755,6 +6997,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 36.83 114.3 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 36.83 114.3 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "c8d2226d-b5a9-4047-8bbc-6a753cddd8d7")
 		)
@@ -6825,6 +7089,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 196.215 99.695 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0722RL"
+			(at 196.215 99.695 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 196.215 99.695 0)
 			(hide yes)
 			(show_name no)
@@ -7071,6 +7357,28 @@
 				)
 			)
 		)
+		(property "MPN" "LQW15AN24NH00D"
+			(at 100.965 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Murata"
+			(at 100.965 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "19b774f3-589e-4ec2-886c-46b5c049290b")
 		)
@@ -7142,6 +7450,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 221.615 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 221.615 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 221.615 50.165 0)
 			(hide yes)
 			(show_name no)
@@ -7233,6 +7563,28 @@
 				)
 			)
 		)
+		(property "MPN" "479480001"
+			(at 55.88 36.195 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Molex"
+			(at 55.88 36.195 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "44347950-5499-4a3c-97e5-52d1b5cc581c")
 		)
@@ -7310,6 +7662,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 191.135 55.245 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 191.135 55.245 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 191.135 55.245 0)
 			(hide yes)
 			(show_name no)
@@ -7545,6 +7919,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 245.11 111.125 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 245.11 111.125 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 245.11 111.125 0)
 			(hide yes)
 			(show_name no)
@@ -7932,6 +8328,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "ECS-400-10-37B2-CKY-TR"
+			(at 85.725 61.595 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "ECS"
+			(at 85.725 61.595 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "62c4fb2b-faf9-40e3-b618-ff5fc1749326")
 		)
@@ -8009,6 +8427,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 230.505 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 230.505 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 230.505 50.165 0)
 			(hide yes)
 			(show_name no)
@@ -8334,6 +8774,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 237.49 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 237.49 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "d6c74387-068c-4e8c-a233-3e227bb4c0f2")
 		)
@@ -8571,6 +9033,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C120JB5NNNC"
+			(at 85.725 70.485 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 85.725 70.485 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "76cf52e9-95ce-433a-9749-b990d64cc9ac")
 		)
@@ -8642,6 +9126,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 207.645 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 207.645 50.165 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 207.645 50.165 0)
 			(hide yes)
 			(show_name no)
@@ -9045,6 +9551,28 @@
 				)
 			)
 		)
+		(property "MPN" "CC0402CRNPO9BN1R5"
+			(at 100.965 40.005 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 100.965 40.005 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "63668e5e-8e48-453d-9d9e-ef30fe9dac4b")
 		)
@@ -9438,6 +9966,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 111.125 48.895 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 111.125 48.895 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "3fc2d9b8-77ee-4365-88c8-b763645b74d9")
 		)
@@ -9760,6 +10310,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "KMR221GLFS"
+			(at 209.55 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "C&K"
+			(at 209.55 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "4"
 			(uuid "3ca534e2-4bb4-4346-91f2-667e6083f592")
 		)
@@ -9850,6 +10422,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 205.105 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 205.105 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "e97098fb-6ae9-4b9e-9b6b-6950b88f746d")
 		)
@@ -9922,6 +10516,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 21.59 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "W25Q128JVSIQ"
+			(at 21.59 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Winbond"
 			(at 21.59 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -10187,6 +10803,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 198.755 52.705 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 198.755 52.705 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "d3234b96-c1b3-48e5-b0b4-d1955a85a078")
 		)
@@ -10326,6 +10964,28 @@
 					(size 1.27 1.27)
 				)
 				(justify bottom)
+			)
+		)
+		(property "MPN" "ESP32-S3RH2"
+			(at 146.05 81.915 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Espressif"
+			(at 146.05 81.915 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 			)
 		)
 		(pin "1"
@@ -10572,6 +11232,28 @@
 				)
 			)
 		)
+		(property "MPN" "LQW15AN4N3C00D"
+			(at 86.995 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Murata"
+			(at 86.995 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "26c2617c-5dab-4ec3-b764-45fc19213602")
 		)
@@ -10643,6 +11325,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 183.515 36.83 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 183.515 36.83 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 183.515 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -10734,6 +11438,28 @@
 				)
 			)
 		)
+		(property "MPN" "CC0402CRNPO9BN1R5"
+			(at 91.44 40.005 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 91.44 40.005 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "33553988-12f1-43aa-882c-b1a4c510f6a0")
 		)
@@ -10815,6 +11541,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05C220JB5NNNC"
+			(at 66.04 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 66.04 80.01 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "0a2439ee-319c-47f2-8da1-7cba93b76baa")
 		)
@@ -10886,6 +11634,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 175.895 36.83 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 175.895 36.83 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 175.895 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -11047,6 +11817,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 111.125 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 111.125 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 111.125 38.735 0)
 			(hide yes)
 			(show_name no)
