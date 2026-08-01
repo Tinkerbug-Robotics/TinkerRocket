@@ -5271,7 +5271,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "18 pF"
+		(property "Value" "12 pF"
 			(at 74.295 56.515 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8527,7 +8527,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "18 pF"
+		(property "Value" "12 pF"
 			(at 85.725 73.025 0)
 			(show_name no)
 			(do_not_autoplace no)
