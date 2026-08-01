@@ -5191,17 +5191,6 @@
 			(embedded_fonts no)
 		)
 	)
-	(text "#658 fit trial -- JST VH 2-pin (B2P-VH, 3.96 mm) candidate to replace\nthe 2 A JST PH battery input J7. Intentionally UNCONNECTED: placed only to\ncheck mechanical fit on the PCB. Through-hole, 1.7 mm drills. Delete or wire\nup once the connector decision is made."
-		(exclude_from_sim no)
-		(at 165.1 71.12 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "0344bdb0-b130-4487-a9ce-0490dc538298")
-	)
 	(text "6 V over coltage"
 		(exclude_from_sim no)
 		(at 93.98 31.75 0)
@@ -7655,6 +7644,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 133.985 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 133.985 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "db6fb67a-2cb7-4527-b789-f4eb5818e5ac")
 		)
@@ -7808,6 +7819,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "USB4110-GF-A"
+			(at 43.815 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "GCT"
+			(at 43.815 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "A6"
 			(uuid "38e0ebb4-64cc-4148-96fa-163a9d8db4e1")
 		)
@@ -7921,6 +7954,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 194.31 144.145 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 194.31 144.145 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 194.31 144.145 0)
 			(hide yes)
 			(show_name no)
@@ -8090,6 +8145,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-07100RL"
+			(at 203.2 140.335 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 203.2 140.335 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "edbffe1e-9026-46f5-9a28-d4570fe5ddf0")
 		)
@@ -8169,6 +8246,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-071K5L"
+			(at 118.11 57.785 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 118.11 57.785 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "012e4082-fb7f-4f31-a9e4-0461ef5302ab")
 		)
@@ -8238,6 +8337,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 20.955 37.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 20.955 37.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 20.955 37.465 0)
 			(hide yes)
 			(show_name no)
@@ -8329,6 +8450,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 32.385 156.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 32.385 156.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "ea8db8e0-cb2d-427f-88dd-4b117bb7a49b")
 		)
@@ -8398,6 +8541,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 118.11 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0712KL"
+			(at 118.11 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 118.11 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -8489,6 +8654,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 226.695 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 226.695 72.39 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "a92220b6-720f-424b-8987-ca6d738946f1")
 		)
@@ -8558,6 +8745,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 113.03 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0749K9L"
+			(at 113.03 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 113.03 27.305 0)
 			(hide yes)
 			(show_name no)
@@ -8802,6 +9011,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 113.03 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 113.03 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "9b513dad-3ca5-4aa1-9fec-dade96e26184")
 		)
@@ -8873,6 +9104,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 128.905 171.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B103KB5NNNC"
+			(at 128.905 171.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 128.905 171.45 0)
 			(hide yes)
 			(show_name no)
@@ -9118,6 +9371,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 65.405 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 65.405 43.815 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "c402d2dc-9046-43b1-bde7-8c1dc2d806d4")
 		)
@@ -9199,6 +9474,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 198.12 53.975 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 198.12 53.975 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "6e7231d4-7e33-497d-bbcc-9b55f8c7b2bb")
 		)
@@ -9270,6 +9567,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 67.31 171.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CC0402KRX7R9BB222"
+			(at 67.31 171.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 67.31 171.45 0)
 			(hide yes)
 			(show_name no)
@@ -9374,88 +9693,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector_Generic:Conn_01x02")
-		(at 161.925 164.465 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "56ef4f3b-0e61-4abb-af47-0e4d97aa30d8")
-		(property "Reference" "J7"
-			(at 158.75 164.4651 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "JST_B2B-PH-SM4-TB"
-			(at 158.75 161.9251 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Footprints:JST_B2B-PH-SM4-TB"
-			(at 161.925 164.465 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 161.925 164.465 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)"
-			(at 161.925 164.465 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "9e3ca3c7-9e5a-45cd-81d2-bce535a592a4")
-		)
-		(pin "2"
-			(uuid "100a6f11-3f9d-4d39-bac8-e5fe2d5d2082")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "J7")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:C")
 		(at 119.38 176.53 0)
 		(unit 1)
@@ -9511,6 +9748,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 119.38 176.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B103KB5NNNC"
+			(at 119.38 176.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 119.38 176.53 0)
 			(hide yes)
 			(show_name no)
@@ -9601,6 +9860,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 153.035 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 153.035 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "8f85775e-a6fc-402a-989d-91a4886bd336")
 		)
@@ -9672,6 +9953,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 229.87 147.955 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "TPS22918DBVR"
+			(at 229.87 147.955 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TI"
 			(at 229.87 147.955 0)
 			(hide yes)
 			(show_name no)
@@ -9853,6 +10156,28 @@
 				)
 			)
 		)
+		(property "MPN" "SP0503BAHTG"
+			(at 98.425 65.405 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Littelfuse"
+			(at 98.425 65.405 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "d31be396-0439-4b85-a81c-84fa1755554a")
 		)
@@ -10007,6 +10332,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 107.315 97.155 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 107.315 97.155 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 107.315 97.155 0)
 			(hide yes)
 			(show_name no)
@@ -10406,6 +10753,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-07210KL"
+			(at 53.975 166.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 53.975 166.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "e4e7c5bb-f55a-442b-81b1-4022908d3490")
 		)
@@ -10592,6 +10961,28 @@
 					(size 1.27 1.27)
 				)
 				(justify bottom)
+			)
+		)
+		(property "MPN" "TPS2121RUXR"
+			(at 150.495 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TI"
+			(at 150.495 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 			)
 		)
 		(pin "10"
@@ -10783,6 +11174,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 136.525 108.585 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 136.525 108.585 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "6ec5cc17-fc08-4720-ac59-65b6a990c868")
 		)
@@ -10800,7 +11213,7 @@
 	)
 	(symbol
 		(lib_id "Connector_Generic:Conn_01x02")
-		(at 180.34 88.9 180)
+		(at 161.925 164.465 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10810,7 +11223,7 @@
 		(dnp no)
 		(uuid "7448e12f-fd37-41be-b141-eb389f224338")
 		(property "Reference" "J8"
-			(at 177.165 88.9001 0)
+			(at 158.75 164.4651 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10821,7 +11234,7 @@
 			)
 		)
 		(property "Value" "JST_B2P-VH"
-			(at 177.165 86.3601 0)
+			(at 158.75 161.9251 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10833,7 +11246,7 @@
 			)
 		)
 		(property "Footprint" "Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical"
-			(at 180.34 88.9 0)
+			(at 161.925 164.465 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10844,7 +11257,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 180.34 88.9 0)
+			(at 161.925 164.465 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10855,7 +11268,29 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x02, script generated (kicad-library-utils/schlib/autogen/connector/)"
-			(at 180.34 88.9 0)
+			(at 161.925 164.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "B2P-VH(LF)(SN)"
+			(at 161.925 164.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "JST"
+			(at 161.925 164.465 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11092,6 +11527,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 249.555 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "INA230AIRGTR"
+			(at 249.555 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TI"
 			(at 249.555 52.07 0)
 			(hide yes)
 			(show_name no)
@@ -11375,6 +11832,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 20.955 168.91 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CUS10S30,H3F"
+			(at 20.955 168.91 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Toshiba"
 			(at 20.955 168.91 0)
 			(hide yes)
 			(show_name no)
@@ -11677,6 +12156,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "VLS3012CX-2R2M-1"
+			(at 38.1 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TDK"
+			(at 38.1 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "ab0762cf-7875-4a73-a512-eceba014180d")
 		)
@@ -11908,6 +12409,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "TPS62152RGTR"
+			(at 85.09 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TI"
+			(at 85.09 113.665 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "16"
 			(uuid "7a5f4c55-41a7-4b36-af79-e5ee6098ccf5")
 		)
@@ -12024,6 +12547,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 145.415 163.195 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 145.415 163.195 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 145.415 163.195 0)
 			(hide yes)
 			(show_name no)
@@ -12290,7 +12835,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MP" "TPS259824LNRGER"
+		(property "MP" "TPS259824LNRGET"
 			(at 94.615 170.18 0)
 			(hide yes)
 			(show_name no)
@@ -12336,6 +12881,28 @@
 					(size 1.27 1.27)
 				)
 				(justify bottom)
+			)
+		)
+		(property "MPN" "TPS259824LNRGET"
+			(at 94.615 170.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TI"
+			(at 94.615 170.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 			)
 		)
 		(pin "26"
@@ -12491,6 +13058,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 59.055 166.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 59.055 166.37 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "754cf92f-e7c5-478a-974c-a86a1a12d990")
 		)
@@ -12572,6 +13161,28 @@
 				)
 			)
 		)
+		(property "MPN" "CSSH0805FT2L00"
+			(at 212.09 50.8 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Stackpole"
+			(at 212.09 50.8 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "7c8ed647-4a67-40a3-800b-7d979d305239")
 		)
@@ -12643,6 +13254,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 55.245 122.555 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05C391JB5NNNC"
+			(at 55.245 122.555 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 55.245 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -12800,6 +13433,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 72.39 182.245 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-07127RL"
+			(at 72.39 182.245 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 72.39 182.245 0)
 			(hide yes)
 			(show_name no)
@@ -13035,6 +13690,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 53.975 156.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-071ML"
+			(at 53.975 156.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 53.975 156.21 0)
 			(hide yes)
 			(show_name no)
@@ -13436,6 +14113,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 131.445 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 131.445 27.305 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "8df37801-230f-4316-b608-5d3dae025640")
 		)
@@ -13605,6 +14304,28 @@
 				)
 			)
 		)
+		(property "MPN" "XL-1005UGC"
+			(at 153.035 105.41 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Xinglight"
+			(at 153.035 105.41 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "378ea46d-ba0e-4216-8ed5-8fb17f73b2af")
 		)
@@ -13754,6 +14475,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 263.525 144.145 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CC0402KRX7R9BB222"
+			(at 263.525 144.145 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 263.525 144.145 0)
 			(hide yes)
 			(show_name no)
@@ -14056,6 +14799,28 @@
 				(justify bottom)
 			)
 		)
+		(property "MPN" "VLS3012CX-2R2M-1"
+			(at 123.825 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "TDK"
+			(at 123.825 102.235 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "2"
 			(uuid "8be34685-16ac-4ea9-bbf8-ac0b8c9f88bd")
 		)
@@ -14212,6 +14977,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0715K4L"
+			(at 129.54 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 129.54 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "8e807d9f-bfeb-4966-a869-9b5d17ceb16c")
 		)
@@ -14293,6 +15080,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL21A476MQYNNNE"
+			(at 203.2 153.035 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 203.2 153.035 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "cffe3e38-6d07-4613-8e45-21e0f22bac04")
 		)
@@ -14364,6 +15173,28 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 180.975 36.83 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A105KO5NNNC"
+			(at 180.975 36.83 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 180.975 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -14533,6 +15364,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL21A226MOQNNNE"
+			(at 51.435 100.33 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 51.435 100.33 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "df0326bb-6829-4cb8-ad03-aaaf0f7817c2")
 		)
@@ -14614,6 +15467,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 188.595 53.975 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 188.595 53.975 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "8969f415-d7a0-452a-a551-1d068bda7938")
 		)
@@ -14683,6 +15558,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 129.54 57.785 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 129.54 57.785 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 129.54 57.785 0)
 			(hide yes)
 			(show_name no)
@@ -14928,6 +15825,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-0718K7L"
+			(at 144.145 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 144.145 73.66 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "182474d7-3f23-4090-99f6-8d38631833f1")
 		)
@@ -15079,6 +15998,28 @@
 			)
 		)
 		(property "Description" ""
+			(at 171.45 33.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "TCJE337M016R0050"
+			(at 171.45 33.02 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Kemet"
 			(at 171.45 33.02 0)
 			(hide yes)
 			(show_name no)
@@ -15404,6 +16345,28 @@
 				)
 			)
 		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 41.275 156.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 41.275 156.21 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "8576c636-4681-45cd-9407-c08a5ae46db4")
 		)
@@ -15483,6 +16446,28 @@
 				)
 			)
 		)
+		(property "MPN" "RC0402FR-07100KL"
+			(at 127 153.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 127 153.67 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "7b2ef119-6a8b-4974-8fc7-4470cb26bce4")
 		)
@@ -15552,6 +16537,28 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 131.445 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-075K11L"
+			(at 131.445 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
 			(at 131.445 35.56 0)
 			(hide yes)
 			(show_name no)

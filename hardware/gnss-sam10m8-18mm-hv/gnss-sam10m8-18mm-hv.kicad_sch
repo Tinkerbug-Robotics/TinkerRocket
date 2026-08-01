@@ -3710,6 +3710,12 @@
 		(uuid "cd93e979-9484-4d02-bf27-768c7e835223")
 	)
 	(junction
+		(at 183.515 130.81)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "cf306ca6-a537-465d-bd8a-177a0542fd3c")
+	)
+	(junction
 		(at 161.925 91.44)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3808,6 +3814,16 @@
 			(type default)
 		)
 		(uuid "0aab2788-2d00-4f34-ba4b-fa33e1a375f6")
+	)
+	(wire
+		(pts
+			(xy 183.515 130.81) (xy 191.77 130.81)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0bbe9f3a-c2d9-4af6-9c54-f370f3ff88c5")
 	)
 	(wire
 		(pts
@@ -4311,7 +4327,7 @@
 	)
 	(wire
 		(pts
-			(xy 171.45 130.81) (xy 191.77 130.81)
+			(xy 171.45 130.81) (xy 183.515 130.81)
 		)
 		(stroke
 			(width 0)
@@ -6124,6 +6140,84 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "R2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 183.515 138.43 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "7151f529-4440-4d2f-bf05-ce62ee4e5ee4")
+		(property "Reference" "#PWR018"
+			(at 183.515 144.78 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 183.515 142.875 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 183.515 138.43 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 183.515 138.43 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 183.515 138.43 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "b836336b-36cd-4308-a4c7-3061b2ed435d")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR018")
 					(unit 1)
 				)
 			)
@@ -7953,6 +8047,88 @@
 	)
 	(symbol
 		(lib_id "Device:C")
+		(at 183.515 134.62 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ce36325a-7259-4617-841a-2cd2edd1f4c4")
+		(property "Reference" "C15"
+			(at 187.325 133.3499 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "22 uF"
+			(at 187.325 135.8899 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 184.4802 138.43 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 183.515 134.62 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 183.515 134.62 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "9b5b9286-46fd-42f5-9f60-4c7e0b06e5d5")
+		)
+		(pin "2"
+			(uuid "699a87be-639c-46e7-aba5-41d1689d2e86")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "C15")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
 		(at 180.34 34.925 0)
 		(unit 1)
 		(body_style 1)
@@ -8134,7 +8310,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 163.195 135.8899 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8298,7 +8474,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "47 uF"
+		(property "Value" "22 uF"
 			(at 175.26 135.8899 0)
 			(show_name no)
 			(do_not_autoplace no)
