@@ -87,11 +87,12 @@ struct __attribute__((packed)) TxFrameHeader
 };
 static_assert(sizeof(TxFrameHeader) == 1, "TxFrameHeader must be 1 byte");
 
-// Mirrors the radio-parameter fields of TR_LoRa_Comms::Config. The five
-// reconfigure() parameters (freq/sf/bw/cr/power) apply at any time; the
-// boot-fixed fields (preamble/flags) only take effect if the radio has not
-// begun yet (e.g. first SET_CONFIG after a failed-at-boot radio) — matching
-// the direct-SPI driver, which also fixes them at begin().
+// Mirrors the radio-parameter fields of TR_LoRa_Comms::Config. Every field
+// is authoritative on every SET_CONFIG: the modem applies freq/sf/bw/cr/power
+// via reconfigure() and preamble/flags via applyFrameParams() (all are
+// runtime-settable SX126x commands). Hosts may assume the STATUS ack means
+// the full config — including preamble — is what is on the air; the airtime
+// accounting in RocketComputerTypes.h depends on that.
 struct __attribute__((packed)) RadioConfigData
 {
     float freq_mhz;

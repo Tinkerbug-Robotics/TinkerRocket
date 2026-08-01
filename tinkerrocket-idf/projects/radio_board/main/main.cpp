@@ -374,14 +374,26 @@ static void handleSetConfig(const uint8_t* payload, size_t len)
 
     if (!radio_up)
     {
-        // Radio never came up (or wasn't wired at boot) — full begin() so the
-        // boot-fixed fields (preamble/flags) from the host apply too.
+        // Radio never came up (or wasn't wired at boot) — full begin(), which
+        // applies every field including preamble/flags.
         radio_up = radio.begin(radioConfigFromMsg(d), config::DEBUG);
     }
     else
     {
-        radio.reconfigure(d.freq_mhz, d.spreading_factor, d.bandwidth_khz,
-                          d.coding_rate, d.tx_power_dbm);
+        // SET_CONFIG is fully authoritative: modulation via reconfigure(),
+        // then the frame-format fields (preamble/CRC/gain/syncword) via
+        // applyFrameParams(). Without the second half, a host whose preamble
+        // differs from our boot default would silently keep ours — its
+        // airtime model (FCC dwell accounting, RocketComputerTypes.h) counts
+        // preamble symbols it never actually got.
+        if (radio.reconfigure(d.freq_mhz, d.spreading_factor, d.bandwidth_khz,
+                              d.coding_rate, d.tx_power_dbm))
+        {
+            (void)radio.applyFrameParams(
+                d.preamble_len, (d.flags & CFG_FLAG_CRC_ON) != 0,
+                (d.flags & CFG_FLAG_RX_BOOSTED_GAIN) != 0,
+                (d.flags & CFG_FLAG_SYNCWORD_PRIVATE) != 0);
+        }
     }
     if (radio_up && d.start_rx)
     {
@@ -561,7 +573,13 @@ extern "C" void app_main(void)
     boot.spreading_factor = config::BOOT_SF;
     boot.coding_rate = config::BOOT_CR;
     boot.tx_power_dbm = config::BOOT_TX_POWER_DBM;
-    boot.preamble_len = 16;
+    // 12, matching both hosts' LORA_PREAMBLE_LEN. This mattered more than it
+    // looks: the hosts' airtime model (LORA_TELEM_PREAMBLE_SYMS,
+    // RocketComputerTypes.h) assumes their preamble is what's on the air,
+    // and the FCC dwell budget on the tightest hop rung has ~2 ms of margin
+    // — a 16-symbol boot default that survived (pre-applyFrameParams) blew
+    // that budget silently.
+    boot.preamble_len = 12;
     boot.flags = CFG_FLAG_CRC_ON | CFG_FLAG_RX_BOOSTED_GAIN |
                  CFG_FLAG_SYNCWORD_PRIVATE;
     // Probe first: if the module is not answering at the pin level, the

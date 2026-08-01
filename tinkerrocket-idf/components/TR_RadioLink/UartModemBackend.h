@@ -137,8 +137,21 @@ private:
     // STATUS ack tracking for reconfigure()
     uint32_t status_rx_count_ = 0;
 
-    // BOOT config re-push deferred out of the frame handler (see onFrame)
+    // BOOT config re-push deferred out of the frame handler (see onFrame).
+    // Durable: stays set until a pushConfig() succeeds; send() refuses while
+    // pending (the modem is on boot defaults until the push lands).
     bool config_repush_pending_ = false;
+    uint32_t repush_retry_at_ms_ = 0;
+
+    // Periodic link-health poll + change-triggered logging (see service())
+    static constexpr uint32_t STATUS_POLL_MS = 2000;
+    static constexpr uint32_t HEALTH_LOG_MS = 5000;
+    uint32_t status_poll_at_ms_ = 0;
+    uint32_t health_log_at_ms_ = 0;
+    uint32_t health_host_crc_snap_ = 0;
+    uint32_t health_host_resync_snap_ = 0;
+    uint32_t health_modem_crc_snap_ = 0;
+    uint32_t health_modem_resync_snap_ = 0;
 
     // Scan state (cached SCAN_RESULT; see startScan comment)
     bool scan_active_ = false;

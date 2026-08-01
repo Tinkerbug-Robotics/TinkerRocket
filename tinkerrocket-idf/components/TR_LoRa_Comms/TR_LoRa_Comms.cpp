@@ -572,6 +572,71 @@ rollback:
 }
 
 // ============================================================================
+// Frame-format parameters (preamble/CRC/gain/syncword) — runtime application
+// ============================================================================
+
+bool TR_LoRa_Comms::applyFrameParams(uint16_t preamble_len, bool crc_on,
+                                     bool rx_boosted_gain,
+                                     bool syncword_private)
+{
+    if (!enabled_ || radio_ == nullptr)
+    {
+        return false;
+    }
+    if (tx_ongoing_ || isScanActive())
+    {
+        // Same no-retune-mid-TX rule as reconfigure(); the caller retries
+        // when idle. No wait mode — the one caller (the UART modem's
+        // SET_CONFIG path, #409) runs right after a completed reconfigure.
+        return false;
+    }
+
+    // Exit RX mode, mirroring reconfigure(): SetPacketParams while the
+    // receiver is armed is exactly the ambiguity we avoid there.
+    rx_mode_ = false;
+    rx_done_ = false;
+
+    int16_t st = radio_->setPreambleLength(preamble_len);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        if (debug_) ESP_LOGE(TAG, "applyFrameParams setPreamble failed: %d", st);
+        return false;
+    }
+    st = radio_->setCRC(crc_on);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        if (debug_) ESP_LOGE(TAG, "applyFrameParams setCRC failed: %d", st);
+        return false;
+    }
+    st = radio_->setRxBoostedGainMode(rx_boosted_gain);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        if (debug_) ESP_LOGE(TAG, "applyFrameParams setRxBoostedGain failed: %d", st);
+        return false;
+    }
+    st = radio_->setSyncWord(syncword_private ? RADIOLIB_SX126X_SYNC_WORD_PRIVATE
+                                              : RADIOLIB_SX126X_SYNC_WORD_PUBLIC);
+    if (st != RADIOLIB_ERR_NONE)
+    {
+        stats_.last_error = st;
+        if (debug_) ESP_LOGE(TAG, "applyFrameParams setSyncWord failed: %d", st);
+        return false;
+    }
+
+    if (debug_)
+    {
+        ESP_LOGI(TAG, "frame params applied: preamble=%u crc=%d boost=%d "
+                      "syncword=%s",
+                 (unsigned)preamble_len, (int)crc_on, (int)rx_boosted_gain,
+                 syncword_private ? "private" : "public");
+    }
+    return true;
+}
+
+// ============================================================================
 // Lightweight frequency-only retune for per-packet hopping (#40 / #41)
 // ============================================================================
 
