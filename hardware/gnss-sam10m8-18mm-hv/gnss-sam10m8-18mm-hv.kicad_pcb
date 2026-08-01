@@ -7,6 +7,9 @@
 		(legacy_teardrops no)
 	)
 	(paper "A4")
+	(title_block
+		(rev "V2")
+	)
 	(layers
 		(0 "F.Cu" signal)
 		(4 "In1.Cu" signal)
@@ -7165,7 +7168,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "TinkerRocket\nGNSS SAM-M10Q\nV2"
+	(gr_text "TinkerRocket\nGNSS SAM-M10Q\n${REVISION}"
 		(at 53.15 43.29 0)
 		(layer "B.SilkS")
 		(uuid "aeb8bc6d-37d4-42df-85ef-fd672e324ff2")
