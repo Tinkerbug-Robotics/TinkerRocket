@@ -2548,7 +2548,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "MX35UF4G24AD-Z4I8"
+			(property "Datasheet" ""
 				(at 8.382 14.732 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -9294,7 +9294,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "W25Q64JVXGIQ TR"
+		(property "Datasheet" ""
 			(at 62.865 109.855 0)
 			(hide yes)
 			(show_name no)

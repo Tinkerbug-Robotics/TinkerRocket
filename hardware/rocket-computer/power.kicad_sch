@@ -13139,7 +13139,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "PMR18EZPFV2L00"
+		(property "Datasheet" ""
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)

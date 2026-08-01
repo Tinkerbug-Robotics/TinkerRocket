@@ -268,7 +268,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "MP2672GD-0000-Z"
+			(property "Datasheet" ""
 				(at -16.51 8.89 0)
 				(show_name no)
 				(do_not_autoplace no)

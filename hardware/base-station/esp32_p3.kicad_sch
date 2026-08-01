@@ -10503,7 +10503,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "W25Q64JVXGIQ TR"
+		(property "Datasheet" ""
 			(at 21.59 115.57 0)
 			(hide yes)
 			(show_name no)

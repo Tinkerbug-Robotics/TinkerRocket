@@ -1761,7 +1761,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "TPN4R712MD"
+			(property "Datasheet" ""
 				(at 6.985 3.175 0)
 				(show_name no)
 				(do_not_autoplace no)
