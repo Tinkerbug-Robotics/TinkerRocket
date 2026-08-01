@@ -109,15 +109,67 @@ class AppContainer(app: Application) {
             )
         }
 
+    // MapLibre keeps its own on-disk HTTP/tile cache (mbgl-offline.db) and
+    // its native Cache-Control parser ignores no-store — left enabled it
+    // would persist Google satellite tiles (forbidden by provider terms)
+    // and shadow the proxy's cache semantics.  ALL intended caching lives
+    // in OfflineTileCache, so kill the ambient cache: purge anything ever
+    // stored, then cap it at zero.
+    init {
+        org.maplibre.android.MapLibre.getInstance(app)
+        val offline = org.maplibre.android.offline.OfflineManager.getInstance(app)
+        offline.clearAmbientCache(null)
+        offline.setMaximumAmbientCacheSize(0, null)
+    }
+
     // Offline maps: flat-file cache in noBackupFilesDir (never OS-purged,
     // never backed up — field data must survive storage pressure) + the
     // localhost read-through proxy MapLibre's raster sources fetch from.
     val tileCache = com.tinkerbug.tinkerrocket.maps.OfflineTileCache(
         File(app.noBackupFilesDir, "OfflineTiles"),
     )
-    val tileProxy = com.tinkerbug.tinkerrocket.maps.TileProxyServer(tileCache).apply { start() }
+    // Google satellite (Map Tiles API) is the online-only extra basemap:
+    // keyed builds offer it in the picker; keyless forks never construct
+    // the upstream and the picker skips it.  The proxy never lets these
+    // tiles near the offline cache (provider terms) — offline stays USGS.
+    val googleMapsAvailable: Boolean =
+        com.tinkerbug.tinkerrocket.BuildConfig.TR_MAPS_API_KEY.isNotEmpty()
+    val tileProxy = com.tinkerbug.tinkerrocket.maps.TileProxyServer(
+        tileCache,
+        googleUpstream = if (googleMapsAvailable) {
+            com.tinkerbug.tinkerrocket.maps.GoogleTileUpstream(
+                apiKey = com.tinkerbug.tinkerrocket.BuildConfig.TR_MAPS_API_KEY,
+                // App-attestation for the Android-restricted key: computed
+                // from whatever cert actually signed THIS apk, so debug and
+                // release builds each present their own fingerprint (both
+                // are enrolled in the key's console restriction).
+                appPackage = app.packageName,
+                appCertSha1 = signingCertSha1(app),
+            )
+        } else {
+            null
+        },
+    ).apply { start() }
     // Saved-region manifest lives beside the tile tree (iOS: App Support root).
     val regionStore = com.tinkerbug.tinkerrocket.maps.OfflineRegionStore(app.noBackupFilesDir, tileCache)
+
+    /**
+     * SHA-1 of this APK's signing certificate, uppercase hex without
+     * separators — the X-Android-Cert format Google validates against the
+     * Maps key's "Android apps" restriction.
+     */
+    private fun signingCertSha1(app: Application): String? = runCatching {
+        @Suppress("DEPRECATION")
+        val info = app.packageManager.getPackageInfo(
+            app.packageName,
+            android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
+        )
+        val signer = info.signingInfo?.apkContentsSigners?.firstOrNull()
+            ?: return@runCatching null
+        java.security.MessageDigest.getInstance("SHA-1")
+            .digest(signer.toByteArray())
+            .joinToString("") { "%02X".format(it) }
+    }.getOrNull()
 
     val fleet: FleetManager<DeviceSession> = run {
         lateinit var fleetRef: FleetManager<DeviceSession>

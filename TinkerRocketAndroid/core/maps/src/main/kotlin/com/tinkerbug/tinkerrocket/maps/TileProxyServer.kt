@@ -30,8 +30,14 @@ public class TileProxyServer(
     private val cache: OfflineTileCache,
     /** source key → upstream URL template; injectable for tests. */
     private val upstreamTemplates: Map<String, String> =
-        TileSource.entries.associate { it.key to it.urlTemplate },
+        TileSource.entries.mapNotNull { s -> s.urlTemplate?.let { s.key to it } }.toMap(),
     private val userAgent: String = "TinkerRocketApp/1.0 (offline map cache)",
+    /**
+     * Session-token upstream for [TileSource.GOOGLE_SATELLITE]; null when no
+     * API key is configured — the source then serves placeholders.  Online-
+     * only by provider terms: this path never reads or writes [cache].
+     */
+    private val googleUpstream: GoogleTileUpstream? = null,
 ) {
     private var serverSocket: ServerSocket? = null
     private val running = AtomicBoolean(false)
@@ -93,6 +99,16 @@ public class TileProxyServer(
                 if (line.isEmpty()) break
             }
 
+            if (ATTRIBUTION_RE.matches(requestLine)) {
+                val attr = googleUpstream?.attribution()
+                if (attr != null) {
+                    respond(sock, 200, "text/plain; charset=utf-8", attr.toByteArray(), noStore = true)
+                } else {
+                    respond(sock, 404, "text/plain", "no attribution".toByteArray())
+                }
+                return
+            }
+
             val m = REQUEST_RE.matchEntire(requestLine)
             if (m == null) {
                 respond(sock, 404, "text/plain", "not found".toByteArray())
@@ -102,6 +118,34 @@ public class TileProxyServer(
             val z = zs.toInt()
             val x = xs.toInt()
             val y = ys.toInt()
+
+            // Online-only sources (provider terms forbid persistence) bypass
+            // the offline cache in BOTH directions — a stale cached tile from
+            // any earlier state must never serve.  no-store is stamped as
+            // HTTP hygiene, but MapLibre's native parser ignores it — the
+            // client-side guarantees are the volatile source flag plus the
+            // app-wide ambient-cache kill (see MapScreen / AppContainer).
+            if (TileSource.fromKey(source)?.cacheable == false) {
+                val fetch = if (source == TileSource.GOOGLE_SATELLITE.key) {
+                    googleUpstream?.fetchTile(z, x, y)
+                } else {
+                    null
+                }
+                when (fetch) {
+                    is GoogleTileUpstream.TileFetch.Ok ->
+                        respond(sock, 200, contentType(fetch.bytes), fetch.bytes, noStore = true)
+                    // 503 = temporary to MapLibre: it retries with backoff,
+                    // so tiles that raced session creation fill in.  A 200
+                    // placeholder would stick for the whole style session.
+                    GoogleTileUpstream.TileFetch.Retry ->
+                        respond(sock, 503, "text/plain", "tile pending".toByteArray(), noStore = true)
+                    // Definitive no-imagery, or no upstream at all (keyless
+                    // build): the neutral hatch, like any offline gap.
+                    GoogleTileUpstream.TileFetch.NoData, null ->
+                        respond(sock, 200, "image/png", placeholder, noStore = true)
+                }
+                return
+            }
 
             cache.tileData(source, z, x, y)?.let {
                 respond(sock, 200, contentType(it), it)
@@ -141,15 +185,23 @@ public class TileProxyServer(
         }.getOrNull()
     }
 
-    private fun respond(sock: Socket, code: Int, type: String, body: ByteArray) {
+    private fun respond(
+        sock: Socket,
+        code: Int,
+        type: String,
+        body: ByteArray,
+        noStore: Boolean = false,
+    ) {
         runCatching {
             val out = sock.getOutputStream()
             val status = if (code == 200) "200 OK" else "$code Error"
+            val cacheControl = if (noStore) "Cache-Control: no-store\r\n" else ""
             out.write(
                 (
                     "HTTP/1.1 $status\r\n" +
                         "Content-Type: $type\r\n" +
                         "Content-Length: ${body.size}\r\n" +
+                        cacheControl +
                         "Access-Control-Allow-Origin: *\r\n" +
                         "Connection: close\r\n\r\n"
                     ).toByteArray(),
@@ -168,5 +220,8 @@ public class TileProxyServer(
 
     private companion object {
         val REQUEST_RE = Regex("""GET /tile/([A-Za-z0-9_]+)/(\d+)/(\d+)/(\d+) HTTP/1\.[01]""")
+
+        /** Copyright string for the active Google session (display policy). */
+        val ATTRIBUTION_RE = Regex("""GET /meta/googleSatellite/attribution HTTP/1\.[01]""")
     }
 }

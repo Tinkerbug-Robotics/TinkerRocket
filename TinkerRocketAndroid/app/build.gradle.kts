@@ -20,10 +20,23 @@ android {
         // installs both key on it); bump BOTH before tagging android-v<name>.
         versionCode = 5
         versionName = "1.0.1"
+
+        // Google Map Tiles API key (online-only satellite basemap).  Same
+        // env-var discipline as release signing below: never in the repo;
+        // forks without it just don't get the Google source in the picker.
+        // A client-side Maps key necessarily ships in the APK — it is
+        // API-restricted server-side to the Map Tiles API only.
+        buildConfigField(
+            "String",
+            "TR_MAPS_API_KEY",
+            "\"${System.getenv("TR_ANDROID_MAPS_API_KEY").orEmpty()}\"",
+        )
     }
 
     buildFeatures {
         compose = true
+        // For the Maps key constant below — AGP 9 defaults buildConfig off.
+        buildConfig = true
     }
 
     // Release signing (plan §2.5): source is public, the key is not.  The
@@ -81,6 +94,9 @@ dependencies {
     // (plan §1 Maps row — Google Maps ToS forbids tile caching; MapLibre's
     // own OfflineManager is evictable SQLite, the silent-data-loss iOS
     // designed around).  Pinned per the dependency policy.
+    // Google satellite (Map Tiles API) later joined as an ONLINE-ONLY
+    // source riding the same proxy, never cached — offline stays USGS, so
+    // the ToS objection above doesn't apply to it.
     implementation("org.maplibre.gl:android-sdk:11.8.8")
 
     // Phone GPS for direction/distance-to-rocket (fused provider; Pixel/GMS).
