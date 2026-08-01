@@ -80,6 +80,32 @@ TEST(UartLinkCodec, PackGoldenFrame)
     const uint16_t crc = calcCRC16(crc_input, sizeof(crc_input));
     EXPECT_EQ(frame[9], static_cast<uint8_t>(crc >> 8));
     EXPECT_EQ(frame[10], static_cast<uint8_t>(crc & 0xFF));
+
+    // The check above proves pack() calls calcCRC16 — it cannot catch a change
+    // to the CRC *parameters*, because the expectation moves with them. Pin
+    // the literal bytes too. These same constants are carried by the bench
+    // host (tools/bench_radio_modem.py, GOLDEN), which reimplements the CRC
+    // rather than linking this one, so the two implementations cannot drift
+    // apart silently — which is the entire point of a golden-byte test.
+    const std::vector<uint8_t> golden = {0xAA, 0x55, 0xAA, 0x55, 0x42, 0x03,
+                                         0x01, 0x02, 0x03, 0x00, 0x66};
+    EXPECT_EQ(frame, golden);
+}
+
+TEST(UartLinkCodec, PackGoldenEmptyPayload)
+{
+    // len = 0 is the common case on this link (GET_STATUS / GET_IDENTITY /
+    // START_RX are all payload-free), and it is the edge a length-handling
+    // regression breaks first.
+    using namespace radio_modem;
+    const std::vector<uint8_t> golden_identity = {0xAA, 0x55, 0xAA, 0x55,
+                                                  MSG_GET_IDENTITY, 0x00,
+                                                  0x04, 0x00};
+    const std::vector<uint8_t> golden_status = {0xAA, 0x55, 0xAA, 0x55,
+                                                MSG_GET_STATUS, 0x00,
+                                                0x06, 0x00};
+    EXPECT_EQ(packVec(MSG_GET_IDENTITY, {}), golden_identity);
+    EXPECT_EQ(packVec(MSG_GET_STATUS, {}), golden_status);
 }
 
 TEST(UartLinkCodec, PackRejectsBadArgs)
