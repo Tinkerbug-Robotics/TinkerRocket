@@ -54,12 +54,29 @@ def test_deframer_recovers_from_garbage_and_corruption(modem):
     d = modem.Deframer()
     good = modem.pack(0x33, b"\x01\x02")
     assert list(d.feed(b"\x00\xFF\xAA\xAA\x13\x55" + good)) == [(0x33, b"\x01\x02")]
-    assert d.resync_bytes == 6
+    # 5, not 6 — see the note in Deframer. Confirmed against the on-chip
+    # self-test and pinned identically in tests_cpp.
+    assert d.resync_bytes == 5
 
     d = modem.Deframer()
     bad = bytearray(modem.pack(0x44, b"\x0A\x14\x1E"))
     bad[7] ^= 0xFF
     assert list(d.feed(bytes(bad) + modem.pack(0x55, b"\x2A"))) == [(0x55, b"\x2A")]
+    assert d.crc_fails == 1
+
+
+def test_truncated_frame_costs_exactly_two(modem):
+    """The behaviour a scan-for-SOF host implementation gets wrong.
+
+    Length-driven framing means a truncated frame eats the next frame's SOF
+    as its own payload/CRC. A host that instead re-anchors on the next SOF
+    loses one frame where the modem loses two, and would report better link
+    quality than the link actually has.
+    """
+    d = modem.Deframer()
+    truncated = modem.pack(0x66, bytes(range(1, 9)))[:-4]
+    stream = truncated + modem.pack(0x77, b"\xEE") + modem.pack(0x78, b"\xEF")
+    assert list(d.feed(stream)) == [(0x78, b"\xEF")]  # 0x77 is the casualty
     assert d.crc_fails == 1
 
 

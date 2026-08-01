@@ -111,51 +111,98 @@ def pack(msg_type: int, payload: bytes = b"") -> bytes:
 
 
 class Deframer:
-    """Byte-at-a-time deframer mirroring tr_msg::MsgDeframer.
+    """Byte-at-a-time port of tr_msg::MsgDeframer (TR_MsgCodec.cpp).
 
-    Same recovery contract: garbage is discarded while hunting for SOF, a
-    CRC-failed frame is dropped and counted, and the next good frame parses.
+    This is a state machine and not a `buf.find(SOF)` scan on purpose, because
+    the two are NOT equivalent and the difference is observable on a real
+    link:
+
+      * `resync_bytes` differs. The firmware counts bytes its state machine
+        discards, and a stray 0xAA that becomes a SOF candidate is accounted
+        for differently than a byte simply skipped over. On the canonical
+        `00 FF AA AA 13 55` garbage prefix the firmware counts 5, a find-based
+        scan counts 6. That number is reported to hosts in
+        STATUS.uart_rx_resync_bytes, so a bench tool that computes it
+        differently mis-reports link health.
+
+      * Recovery after a TRUNCATED frame differs, which is the one that
+        matters. This framer is length-driven: a frame cut short leaves it
+        consuming the *next* frame's bytes as payload/CRC, so a truncation
+        costs two frames, not one. A find-based scan would re-anchor on the
+        next SOF and lose only one -- i.e. it would quietly report better
+        behaviour than the modem actually has.
+
+    Both divergences were found by running the on-chip bench self-test
+    (TR_BENCH_SELFTEST) against this file's expectations.
     """
 
+    SOF_BYTES = (0xAA, 0x55, 0xAA, 0x55)
+
+    # States, mirroring St:: in TR_MsgCodec.h
+    _HUNT0, _HUNT1, _HUNT2, _HUNT3, _TYPE, _LEN, _PAYLOAD, _CRC0, _CRC1 = range(9)
+
     def __init__(self):
-        self.buf = bytearray()
+        self.state = self._HUNT0
+        self.body = bytearray()   # type + len + payload, what the CRC covers
+        self.payload_len = 0
+        self.crc_hi = 0
         self.frames = 0
         self.crc_fails = 0
         self.resync_bytes = 0
 
+    def _rehunt(self, b: int):
+        """tr_msg::MsgDeframer::rehunt — a stray 0xAA restarts one byte in."""
+        self.resync_bytes += 1
+        self.state = self._HUNT1 if b == 0xAA else self._HUNT0
+
     def feed(self, data: bytes):
         """Yield (type, payload) for each complete CRC-valid frame."""
-        self.buf.extend(data)
-        while True:
-            start = self.buf.find(SOF)
-            if start < 0:
-                # Keep the last 3 bytes: a SOF may straddle this chunk.
-                drop = max(0, len(self.buf) - 3)
-                self.resync_bytes += drop
-                del self.buf[:drop]
-                return
-            if start > 0:
-                self.resync_bytes += start
-                del self.buf[:start]
-            if len(self.buf) < 6:
-                return
-            msg_type, length = self.buf[4], self.buf[5]
-            total = 4 + 2 + length + 2
-            if len(self.buf) < total:
-                return
-            body = bytes(self.buf[4:6 + length])
-            got = struct.unpack(">H", bytes(self.buf[6 + length:total]))[0]
-            if got == crc16(body):
-                self.frames += 1
-                payload = bytes(self.buf[6:6 + length])
-                del self.buf[:total]
-                yield msg_type, payload
-            else:
-                self.crc_fails += 1
-                # Drop only the SOF so a real frame starting inside this one's
-                # bytes is still found -- same as rehunt() in the firmware.
-                self.resync_bytes += 1
-                del self.buf[:1]
+        for b in data:
+            if self.state == self._HUNT0:
+                if b == 0xAA:
+                    self.state = self._HUNT1
+                else:
+                    self.resync_bytes += 1
+            elif self.state == self._HUNT1:
+                if b == 0x55:
+                    self.state = self._HUNT2
+                elif b == 0xAA:
+                    # AA AA 55 ... — the second AA may start the real SOF.
+                    self.resync_bytes += 1
+                else:
+                    self._rehunt(b)
+            elif self.state == self._HUNT2:
+                if b == 0xAA:
+                    self.state = self._HUNT3
+                else:
+                    self._rehunt(b)
+            elif self.state == self._HUNT3:
+                if b == 0x55:
+                    self.state = self._TYPE
+                else:
+                    self._rehunt(b)
+            elif self.state == self._TYPE:
+                self.body = bytearray([b])
+                self.state = self._LEN
+            elif self.state == self._LEN:
+                self.body.append(b)
+                self.payload_len = b
+                self.state = self._PAYLOAD if b > 0 else self._CRC0
+            elif self.state == self._PAYLOAD:
+                self.body.append(b)
+                if len(self.body) - 2 >= self.payload_len:
+                    self.state = self._CRC0
+            elif self.state == self._CRC0:
+                self.crc_hi = b
+                self.state = self._CRC1
+            elif self.state == self._CRC1:
+                expected = (self.crc_hi << 8) | b
+                self.state = self._HUNT0
+                if crc16(bytes(self.body)) == expected:
+                    self.frames += 1
+                    yield self.body[0], bytes(self.body[2:])
+                else:
+                    self.crc_fails += 1
 
 
 # ---------------------------------------------------------------------------
@@ -387,14 +434,33 @@ def selftest() -> int:
         print("ok  frame reassembles across arbitrary chunk boundaries")
 
     # Leading garbage (including a false SOF prefix) then a good frame.
+    # resync_bytes == 5, not 6: the firmware counts what its state machine
+    # discards, and one 0xAA is consumed as a SOF candidate rather than
+    # dropped. Verified against the on-chip self-test — do not "fix" to 6.
     d = Deframer()
     good = pack(0x33, b"\x01\x02")
     got = list(d.feed(b"\x00\xFF\xAA\xAA\x13\x55" + good))
-    if got != [(0x33, b"\x01\x02")] or d.resync_bytes != 6:
-        print(f"FAIL resync: {got!r} resync={d.resync_bytes}")
+    if got != [(0x33, b"\x01\x02")] or d.resync_bytes != 5:
+        print(f"FAIL resync: {got!r} resync={d.resync_bytes} (want 5)")
         failures += 1
     else:
         print(f"ok  resynchronizes past garbage ({d.resync_bytes} B discarded)")
+
+    # A truncated frame costs TWO frames, not one. This framer is
+    # length-driven, so a frame cut short keeps consuming: it eats the next
+    # frame's SOF as its own payload/CRC, fails the CRC, and only recovers on
+    # the frame after that. Documented in TR_MsgCodec.h as "a rare drop is
+    # recovered by the next frame"; pinned here because a find-based deframer
+    # would lose only one and thereby overstate link quality.
+    d = Deframer()
+    truncated = pack(0x66, bytes(range(1, 9)))[:-4]
+    got = list(d.feed(truncated + pack(0x77, b"\xEE") + pack(0x78, b"\xEF")))
+    if got != [(0x78, b"\xEF")] or d.crc_fails != 1:
+        print(f"FAIL truncation: {got!r} crc_fails={d.crc_fails} "
+              f"(want only 0x78 through, 1 CRC fail)")
+        failures += 1
+    else:
+        print("ok  truncated frame swallows exactly one follower, then recovers")
 
     # A corrupted frame is dropped and counted; the next one still parses.
     d = Deframer()

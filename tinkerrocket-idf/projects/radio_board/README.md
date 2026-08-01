@@ -200,7 +200,43 @@ LED may be very dim or dark; see the config.h bench note.)
 If the S3 does not enumerate over USB at all, the reverse-polarity damage
 reached past the radio and the rest of this plan is moot.
 
-**Step 2 — the link is alive.** Expect `BOOT` within ~1 s of power-up and an
+**Step 2 — link + receive path, still USB only.** A separate bench image runs
+an on-chip self-test at boot. It needs no adapter, no host and no antenna:
+
+```bash
+idf.py -B build_bench -DTR_BENCH_SELFTEST=1 build
+idf.py -B build_bench -p <usb-port> flash monitor
+```
+
+The UART half puts the peripheral in **internal loopback**, so the whole
+framing path — codec, driver ring buffers, deframer — runs at the real 921600
+baud with the pins unconnected. The radio half sweeps 902–928 MHz in RX and
+reads RSSI back, which exercises the SPI command path, 53 synthesiser retunes,
+RX-mode entry, the RXEN half of the RF switch, and the RSSI readback. Nothing
+transmits, so it is safe with no antenna fitted.
+
+Result on the as-built board (2026-08-01), all 9 checks:
+
+```
+ok  round trip, 7 payload sizes 0..255 B, bytes identical
+    24 frames (6120 B on the wire) in 67557 us -> 91 kB/s
+ok  24-frame back-to-back burst, none dropped
+    discarded 5 B hunting for SOF (6 B of garbage in)
+ok  resyncs past garbage incl. a false SOF, counts 5 of 6 B
+ok  CRC-corrupted frame dropped + counted, next frame survives
+ok  truncated frame swallows exactly one follower, then recovers
+ok  on-chip codec matches the host golden frame
+    53 samples 902-928 MHz: min -117, mean -115, max -109 dBm
+ok  RSSI is a noise floor, not a stuck rail
+```
+
+91 kB/s is ~99 % of the 92.16 kB/s line rate at 921600 8N1, so the baud is
+real and the ring buffers keep up.
+
+**Reflash the production image before plugging into a host** — the bench build
+runs loopback traffic out of the TX pin at boot.
+
+**Step 3 — the link is alive.** Expect `BOOT` within ~1 s of power-up and an
 `IDENTITY` on demand. `protocol=v1`, `chip=LLCC68`, `band=850.000-930.000`,
 and an `fw=` git sha that matches what you flashed:
 
@@ -213,7 +249,7 @@ mismatch. `STATUS` also reports `uart_crc_fail` / `uart_resync` — nonzero
 there means the link is up but noisy, which is a different problem from
 silent.
 
-**Step 3 — the radio came up.** `SET_CONFIG` is acked with a `STATUS`, and
+**Step 4 — the radio came up.** `SET_CONFIG` is acked with a `STATUS`, and
 that ack is the only proof the LLCC68 actually initialised — `radio=DOWN`
 means the modem is alive with dead RF:
 
@@ -221,7 +257,7 @@ means the modem is alive with dead RF:
 python3 tools/bench_radio_modem.py -p PORT --config 915 125 10 7 20
 ```
 
-**Step 4 — flow control.** Push more frames than the 8-deep credit window and
+**Step 5 — flow control.** Push more frames than the 8-deep credit window and
 confirm `0 unanswered`. That is the "a TX frame must never be silently
 dropped" clause of #409 as a number:
 
@@ -229,7 +265,7 @@ dropped" clause of #409 as a number:
 python3 tools/bench_radio_modem.py -p PORT --tx DEADBEEF --repeat 50
 ```
 
-**Step 5 — over the air (the #409 acceptance criterion).** With a second
+**Step 6 — over the air (the #409 acceptance criterion).** With a second
 radio on the same parameters, `--listen` on one end and `--tx` on the other;
 `RX_FRAME` carries the air bytes back verbatim with RSSI/SNR. Then repeat
 against an **unmodified deployed base station**, transmitting bytes its
@@ -240,8 +276,8 @@ tunnel and the credit return, not application interop.
 quickest way to confirm the RF switch and antenna path are doing something.
 
 **Not yet run on hardware.** Everything above is bench-ready but unexecuted:
-the daughterboard has not been brought up. Steps 1–5 need a board on the bench
-and a go-ahead.
+steps 3-6 need a UART adapter on J6 and, for step 6, a second radio or a
+deployed base station. Steps 1 and 2 are DONE on the as-built board.
 
 ## Tests
 

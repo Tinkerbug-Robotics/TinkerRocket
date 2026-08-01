@@ -28,6 +28,10 @@
 
 #include "config.h"
 
+#ifdef TR_BENCH_SELFTEST
+#include "bench_selftest.h"
+#endif
+
 // ---- Board constraints -------------------------------------------------------
 // LoRa V3 hardware facts that a future sdkconfig edit could violate silently.
 // The two that map to a settable Kconfig symbol fail the build rather than the
@@ -578,6 +582,14 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "radio init FAILED (RadioLib %d) — modem alive, RF dead "
                       "(host sees radio_enabled=0)", rs.last_error);
     }
+
+#ifdef TR_BENCH_SELFTEST
+    // Bench build only (see main/CMakeLists.txt). Runs before BOOT is
+    // announced so a host can never see the loopback traffic ahead of the
+    // handshake — though a bench image should not be plugged into a host at
+    // all.
+    bench::runSelfTest(uart_link, radio, config::HOST_UART_PORT, radio_up);
+#endif
 
     // Announce boot: identity payload doubles as the host's signal to reset
     // its credit window (our TX queue is empty now).
