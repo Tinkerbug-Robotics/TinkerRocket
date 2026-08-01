@@ -26,9 +26,13 @@ public const val ESTIMATED_TILE_BYTES: Long = 25_000
 public class TileDownloader(
     private val cache: OfflineTileCache,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO),
-    /** source key → upstream URL template; injectable for tests. */
+    /**
+     * source key → upstream URL template; injectable for tests.  Sources
+     * with a null template (online-only, e.g. Google) are absent, so
+     * [start] no-ops for them — they can never be region-downloaded.
+     */
     private val upstreamTemplates: Map<String, String> =
-        TileSource.entries.associate { it.key to it.urlTemplate },
+        TileSource.entries.mapNotNull { s -> s.urlTemplate?.let { s.key to it } }.toMap(),
     private val userAgent: String = "TinkerRocketApp/1.0 (offline map cache)",
 ) {
     public enum class Phase { IDLE, DOWNLOADING, FINISHED, CANCELLED }
