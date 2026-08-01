@@ -17,6 +17,7 @@
 #include <driver/gpio.h>
 #include <esp_app_desc.h>
 #include <esp_log.h>
+#include <esp_rom_sys.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -107,6 +108,23 @@ static void initLeds()
     ledWrite(config::LED_TX_PIN, false);
 }
 
+// One visible blink at boot. On a board powered from J6 with no USB attached
+// this is the only sign the S3 is running at all, which matters when the
+// question is "is anything on this board alive". Blocking is fine here —
+// nothing is listening yet.
+static void blinkBoot()
+{
+    for (int i = 0; i < 2; i++)
+    {
+        ledWrite(config::LED_RX_PIN, true);
+        ledWrite(config::LED_TX_PIN, true);
+        vTaskDelay(pdMS_TO_TICKS(120));
+        ledWrite(config::LED_RX_PIN, false);
+        ledWrite(config::LED_TX_PIN, false);
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+}
+
 static void pulseRxLed()
 {
     ledWrite(config::LED_RX_PIN, true);
@@ -121,6 +139,109 @@ static void serviceLeds()
         ledWrite(config::LED_RX_PIN, false);
         rx_led_off_at_ms = 0;
     }
+}
+
+// ---- Radio hardware probe ----------------------------------------------------
+// Runs BEFORE TR_LoRa_Comms claims the pins, and answers a question begin()
+// cannot: is the E220 module electrically there at all? A failed begin() is
+// ambiguous -- dead module, dead SPI, or a config the chip rejected all look
+// the same from the return code. This separates "the module is not answering
+// at the pin level" from "the module answers but the link setup failed", which
+// is the first thing worth knowing on a board that has seen reverse polarity.
+//
+// The test is a pull fight. U14's BUSY (pad 11) and DIO1 (pad 20) are
+// push-pull outputs of the LLCC68 with no board pull resistors, so:
+//   * level follows our internal pull  -> nothing is driving it (module
+//     unpowered, dead, or the joint is open)
+//   * level holds against our pull     -> the module is driving it, alive
+// After a reset the LLCC68 holds BUSY high through its internal boot and
+// releases it in standby (~1 ms typical), so a BUSY stuck high past the
+// timeout is the same verdict as a floating one, reported separately because
+// the fix differs (dead die vs. no VCC / open joint).
+
+struct RadioProbe
+{
+    bool busy_driven = false;    // something is holding BUSY against our pull
+    bool busy_released = false;  // BUSY went low after reset, i.e. booted
+    bool dio1_driven = false;
+    uint32_t busy_release_us = 0;
+};
+
+static bool pinHoldsAgainstPull(gpio_num_t pin)
+{
+    // Read with an internal pull-up, then a pull-down. A floating pin follows
+    // both; a driven pin reads the same level twice.
+    gpio_set_pull_mode(pin, GPIO_PULLUP_ONLY);
+    esp_rom_delay_us(200);
+    const int with_pu = gpio_get_level(pin);
+    gpio_set_pull_mode(pin, GPIO_PULLDOWN_ONLY);
+    esp_rom_delay_us(200);
+    const int with_pd = gpio_get_level(pin);
+    gpio_set_pull_mode(pin, GPIO_FLOATING);
+    return with_pu == with_pd;
+}
+
+static RadioProbe probeRadioHardware()
+{
+    RadioProbe p = {};
+    const gpio_num_t rst = static_cast<gpio_num_t>(config::LORA_RST_PIN);
+    const gpio_num_t busy = static_cast<gpio_num_t>(config::LORA_BUSY_PIN);
+    const gpio_num_t dio1 = static_cast<gpio_num_t>(config::LORA_DIO1_PIN);
+
+    gpio_config_t out = {};
+    out.pin_bit_mask = 1ULL << config::LORA_RST_PIN;
+    out.mode = GPIO_MODE_OUTPUT;
+    gpio_config(&out);
+
+    gpio_config_t in = {};
+    in.pin_bit_mask = (1ULL << config::LORA_BUSY_PIN) |
+                      (1ULL << config::LORA_DIO1_PIN);
+    in.mode = GPIO_MODE_INPUT;
+    gpio_config(&in);
+
+    // Same reset shape TR_LoRa_Comms::begin() uses, so a module that survives
+    // this one will see nothing new from the driver.
+    gpio_set_level(rst, 0);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(rst, 1);
+
+    const int64_t t0 = esp_timer_get_time();
+    while (esp_timer_get_time() - t0 < 50'000)
+    {
+        if (gpio_get_level(busy) == 0)
+        {
+            p.busy_released = true;
+            p.busy_release_us = static_cast<uint32_t>(esp_timer_get_time() - t0);
+            break;
+        }
+        esp_rom_delay_us(100);
+    }
+
+    p.busy_driven = pinHoldsAgainstPull(busy);
+    p.dio1_driven = pinHoldsAgainstPull(dio1);
+    return p;
+}
+
+static void logRadioProbe(const RadioProbe& p)
+{
+    if (p.busy_released && p.busy_driven)
+    {
+        ESP_LOGI(TAG, "radio probe: module ALIVE — BUSY released %u us after "
+                      "reset and is driven (DIO1 %s)",
+                 p.busy_release_us, p.dio1_driven ? "driven" : "floating");
+        return;
+    }
+    if (!p.busy_driven)
+    {
+        ESP_LOGE(TAG, "radio probe: BUSY is FLOATING — nothing is driving U14 "
+                      "pad 11. The module is unpowered, dead, or its joints are "
+                      "open. Check +3V3 at U14 pad 1 before suspecting "
+                      "firmware.");
+        return;
+    }
+    ESP_LOGE(TAG, "radio probe: BUSY driven but STUCK HIGH past 50 ms — the "
+                  "module has power and is driving the pin, but never finished "
+                  "its boot. Suspect a damaged die or a bad NRST/SPI joint.");
 }
 
 static void sendTxResult(uint8_t seq, bool ok)
@@ -418,6 +539,7 @@ extern "C" void app_main(void)
              PROTOCOL_VERSION);
 
     initLeds();
+    blinkBoot();
 
     TR_UART_Link::Config ucfg = {};
     ucfg.port = config::HOST_UART_PORT;
@@ -438,6 +560,10 @@ extern "C" void app_main(void)
     boot.preamble_len = 16;
     boot.flags = CFG_FLAG_CRC_ON | CFG_FLAG_RX_BOOSTED_GAIN |
                  CFG_FLAG_SYNCWORD_PRIVATE;
+    // Probe first: if the module is not answering at the pin level, the
+    // begin() failure below is a symptom, not the finding.
+    logRadioProbe(probeRadioHardware());
+
     radio_up = radio.begin(radioConfigFromMsg(boot), config::DEBUG);
     if (radio_up)
     {
@@ -447,8 +573,10 @@ extern "C" void app_main(void)
     }
     else
     {
-        ESP_LOGE(TAG, "radio init FAILED — modem alive, RF dead (host sees "
-                      "radio_enabled=0)");
+        TR_LoRa_Comms::Stats rs = {};
+        radio.getStats(rs);
+        ESP_LOGE(TAG, "radio init FAILED (RadioLib %d) — modem alive, RF dead "
+                      "(host sees radio_enabled=0)", rs.last_error);
     }
 
     // Announce boot: identity payload doubles as the host's signal to reset

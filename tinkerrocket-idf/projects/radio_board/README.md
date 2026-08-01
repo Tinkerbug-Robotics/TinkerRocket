@@ -169,7 +169,38 @@ rocket or a base station wired up to get started.
 python3 tools/bench_radio_modem.py --selftest
 ```
 
-**Step 1 — the link is alive.** Expect `BOOT` within ~1 s of power-up and an
+**Step 1 — is the radio alive at all?** USB-C only; no UART adapter, no host,
+no J6. The board in hand was subjected to a **backwards power connector**, so
+this comes before anything about the link — there is no point debugging a
+protocol against a dead module.
+
+```bash
+idf.py -p <usb-port> flash monitor
+```
+
+The firmware probes the E220 at the pin level before the driver touches the
+SPI bus, because a failed `begin()` cannot tell a dead module from a rejected
+config. BUSY and DIO1 are push-pull module outputs with no board pull
+resistors, so the probe fights them with the S3's internal pulls: a level that
+follows the pull means nothing is driving the pin.
+
+| Boot line | Reading |
+|-----------|---------|
+| `radio probe: module ALIVE — BUSY released N us after reset and is driven` | The module has power, booted, and drives its pins. If `begin()` still fails after this, the fault is on SPI or in config — not the module. |
+| `radio probe: BUSY is FLOATING` | Nothing drives U14 pad 11. Module unpowered, dead, or open joints. **Measure +3V3 at U14 pad 1 first.** This is the expected signature of reverse-polarity damage. |
+| `radio probe: BUSY driven but STUCK HIGH past 50 ms` | Powered and driving, but never finished its internal boot — damaged die, or a bad NRST/SPI joint. |
+| `radio init FAILED (RadioLib <code>)` | The RadioLib code narrows it further: `-2` is chip-not-found (SPI silent), the `-70x` family are SPI command failures. |
+| `radio up, listening at 915.0 MHz SF10` | Radio is good; move on. |
+
+Two LED blinks at boot say the S3 itself is running — the only such sign if
+the board is powered from J6 with no USB attached. (D6 is a hardwired power
+LED and proves only that the rail is up. Note R59/R60 are 10 kΩ, so the blue
+LED may be very dim or dark; see the config.h bench note.)
+
+If the S3 does not enumerate over USB at all, the reverse-polarity damage
+reached past the radio and the rest of this plan is moot.
+
+**Step 2 — the link is alive.** Expect `BOOT` within ~1 s of power-up and an
 `IDENTITY` on demand. `protocol=v1`, `chip=LLCC68`, `band=850.000-930.000`,
 and an `fw=` git sha that matches what you flashed:
 
@@ -182,7 +213,7 @@ mismatch. `STATUS` also reports `uart_crc_fail` / `uart_resync` — nonzero
 there means the link is up but noisy, which is a different problem from
 silent.
 
-**Step 2 — the radio came up.** `SET_CONFIG` is acked with a `STATUS`, and
+**Step 3 — the radio came up.** `SET_CONFIG` is acked with a `STATUS`, and
 that ack is the only proof the LLCC68 actually initialised — `radio=DOWN`
 means the modem is alive with dead RF:
 
@@ -190,7 +221,7 @@ means the modem is alive with dead RF:
 python3 tools/bench_radio_modem.py -p PORT --config 915 125 10 7 20
 ```
 
-**Step 3 — flow control.** Push more frames than the 8-deep credit window and
+**Step 4 — flow control.** Push more frames than the 8-deep credit window and
 confirm `0 unanswered`. That is the "a TX frame must never be silently
 dropped" clause of #409 as a number:
 
@@ -198,7 +229,7 @@ dropped" clause of #409 as a number:
 python3 tools/bench_radio_modem.py -p PORT --tx DEADBEEF --repeat 50
 ```
 
-**Step 4 — over the air (the #409 acceptance criterion).** With a second
+**Step 5 — over the air (the #409 acceptance criterion).** With a second
 radio on the same parameters, `--listen` on one end and `--tx` on the other;
 `RX_FRAME` carries the air bytes back verbatim with RSSI/SNR. Then repeat
 against an **unmodified deployed base station**, transmitting bytes its
@@ -209,7 +240,7 @@ tunnel and the credit return, not application interop.
 quickest way to confirm the RF switch and antenna path are doing something.
 
 **Not yet run on hardware.** Everything above is bench-ready but unexecuted:
-the daughterboard has not been brought up. Steps 1–4 need a board on the bench
+the daughterboard has not been brought up. Steps 1–5 need a board on the bench
 and a go-ahead.
 
 ## Tests
