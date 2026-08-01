@@ -5104,7 +5104,7 @@
 	)
 	(wire
 		(pts
-			(xy 139.7 50.165) (xy 127 50.165)
+			(xy 139.065 50.165) (xy 127 50.165)
 		)
 		(stroke
 			(width 0)
@@ -5654,16 +5654,6 @@
 	)
 	(wire
 		(pts
-			(xy 144.78 57.785) (xy 146.05 57.785)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ae872efb-a6b3-48df-aed6-2ccaf6f63736")
-	)
-	(wire
-		(pts
 			(xy 126.365 161.925) (xy 126.365 164.465)
 		)
 		(stroke
@@ -5791,6 +5781,16 @@
 			(type default)
 		)
 		(uuid "cfc21700-80a4-43a4-b6dc-da7db09f2d15")
+	)
+	(wire
+		(pts
+			(xy 139.065 58.42) (xy 161.925 58.42)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d0134ef2-cef7-4432-850a-9b830350d88b")
 	)
 	(wire
 		(pts
@@ -5924,17 +5924,7 @@
 	)
 	(wire
 		(pts
-			(xy 146.05 57.785) (xy 146.05 58.42)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f0fa18f7-0590-4331-89b6-e798882c0cef")
-	)
-	(wire
-		(pts
-			(xy 139.7 50.165) (xy 139.7 57.785)
+			(xy 139.065 50.165) (xy 139.065 58.42)
 		)
 		(stroke
 			(width 0)
@@ -5961,16 +5951,6 @@
 			(type default)
 		)
 		(uuid "fc45312a-34aa-402c-824d-de704083ffd9")
-	)
-	(wire
-		(pts
-			(xy 146.05 58.42) (xy 161.925 58.42)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fd4e8ec5-9217-4bb4-a9e3-326471d324cf")
 	)
 	(wire
 		(pts
@@ -10684,6 +10664,83 @@
 		)
 	)
 	(symbol
+		(lib_id "power:+3V3")
+		(at 73.025 64.135 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "7d063d6b-d960-4540-98a1-4fe4cf53c3de")
+		(property "Reference" "#PWR055"
+			(at 73.025 67.945 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 73.025 60.325 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 73.025 64.135 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 73.025 64.135 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 73.025 64.135 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "3eb890b1-ba9a-4ae6-9ad1-0177ffe6ce01")
+		)
+		(instances
+			(project "rocket-computer"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
+					(reference "#PWR055")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Custom:BLM18PG471SN1D")
 		(at 110.49 153.67 0)
 		(unit 1)
@@ -11770,7 +11827,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "9f25128f-d3ce-4d45-8c3c-fa27bd3f5df2")
 		(property "Reference" "#PWR053"
 			(at 84.455 72.39 0)
@@ -11784,7 +11840,7 @@
 			)
 		)
 		(property "Value" "+3V3"
-			(at 84.455 64.135 0)
+			(at 84.455 64.77 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -12220,85 +12276,6 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
 					(reference "C34")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+3V3")
-		(at 73.025 64.135 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "ac05591b-b4b4-4047-a440-0a79bfe26b27")
-		(property "Reference" "#PWR047"
-			(at 73.025 67.945 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "+3V3"
-			(at 73.025 59.69 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 73.025 64.135 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 73.025 64.135 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 73.025 64.135 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "9ab76247-1643-46d8-9d30-b6ea7d435933")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
-					(reference "#PWR047")
 					(unit 1)
 				)
 			)
@@ -13336,107 +13313,6 @@
 			(project "rocket-computer"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
 					(reference "#PWR048")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:L_Small")
-		(at 142.24 57.785 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "cb55be97-9891-4526-831e-d926d181f102")
-		(property "Reference" "L3"
-			(at 142.24 53.34 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "24 nH"
-			(at 142.24 55.245 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Inductor_SMD:L_0402_1005Metric"
-			(at 142.24 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 142.24 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Inductor, small symbol"
-			(at 142.24 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "LQW15AN24NH00D"
-			(at 142.24 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Murata"
-			(at 142.24 57.785 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "d7a02055-817c-4de5-9459-ac4db886f85e")
-		)
-		(pin "2"
-			(uuid "1275cb09-8e42-4dd3-8dfd-0772a535e14e")
-		)
-		(instances
-			(project "rocket-computer"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
-					(reference "L3")
 					(unit 1)
 				)
 			)

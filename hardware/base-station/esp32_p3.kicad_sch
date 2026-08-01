@@ -3785,16 +3785,6 @@
 	)
 	(wire
 		(pts
-			(xy 103.505 63.5) (xy 104.775 63.5)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "00f37746-2a39-4a4c-af51-dfdbf44cf8e7")
-	)
-	(wire
-		(pts
 			(xy 238.125 106.045) (xy 238.125 107.315)
 		)
 		(stroke
@@ -3825,16 +3815,6 @@
 	)
 	(wire
 		(pts
-			(xy 104.775 64.135) (xy 120.65 64.135)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "190fd691-cf49-4f1d-b6dd-d3f2955e5c27")
-	)
-	(wire
-		(pts
 			(xy 187.96 56.515) (xy 187.96 67.31)
 		)
 		(stroke
@@ -3845,7 +3825,7 @@
 	)
 	(wire
 		(pts
-			(xy 98.425 55.88) (xy 98.425 63.5)
+			(xy 98.425 55.88) (xy 98.425 64.135)
 		)
 		(stroke
 			(width 0)
@@ -4185,6 +4165,16 @@
 	)
 	(wire
 		(pts
+			(xy 98.425 64.135) (xy 120.65 64.135)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b3bc1880-1c37-4806-bc46-35b53a021df6")
+	)
+	(wire
+		(pts
 			(xy 198.12 23.495) (xy 191.135 23.495)
 		)
 		(stroke
@@ -4242,16 +4232,6 @@
 			(type default)
 		)
 		(uuid "c209a1ad-a693-4c1f-a16c-b6f1c92fb1c6")
-	)
-	(wire
-		(pts
-			(xy 104.775 63.5) (xy 104.775 64.135)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c29e92a7-fd54-41a5-8125-0d9cc3d046a9")
 	)
 	(wire
 		(pts
@@ -7288,107 +7268,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
 					(reference "#PWR011")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:L_Small")
-		(at 100.965 63.5 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "571955e3-79e2-4759-8bdb-ae9115be6bfc")
-		(property "Reference" "L2"
-			(at 100.965 59.055 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "24 nH"
-			(at 100.965 60.96 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Inductor_SMD:L_0402_1005Metric"
-			(at 100.965 63.5 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 100.965 63.5 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Inductor, small symbol"
-			(at 100.965 63.5 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "LQW15AN24NH00D"
-			(at 100.965 63.5 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Murata"
-			(at 100.965 63.5 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "19b774f3-589e-4ec2-886c-46b5c049290b")
-		)
-		(pin "2"
-			(uuid "4f5801b3-a005-4c05-97ea-b84887a5a9b2")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "L2")
 					(unit 1)
 				)
 			)
