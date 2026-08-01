@@ -138,7 +138,13 @@ class AppContainer(app: Application) {
         tileCache,
         googleUpstream = if (googleMapsAvailable) {
             com.tinkerbug.tinkerrocket.maps.GoogleTileUpstream(
-                com.tinkerbug.tinkerrocket.BuildConfig.TR_MAPS_API_KEY,
+                apiKey = com.tinkerbug.tinkerrocket.BuildConfig.TR_MAPS_API_KEY,
+                // App-attestation for the Android-restricted key: computed
+                // from whatever cert actually signed THIS apk, so debug and
+                // release builds each present their own fingerprint (both
+                // are enrolled in the key's console restriction).
+                appPackage = app.packageName,
+                appCertSha1 = signingCertSha1(app),
             )
         } else {
             null
@@ -146,6 +152,24 @@ class AppContainer(app: Application) {
     ).apply { start() }
     // Saved-region manifest lives beside the tile tree (iOS: App Support root).
     val regionStore = com.tinkerbug.tinkerrocket.maps.OfflineRegionStore(app.noBackupFilesDir, tileCache)
+
+    /**
+     * SHA-1 of this APK's signing certificate, uppercase hex without
+     * separators — the X-Android-Cert format Google validates against the
+     * Maps key's "Android apps" restriction.
+     */
+    private fun signingCertSha1(app: Application): String? = runCatching {
+        @Suppress("DEPRECATION")
+        val info = app.packageManager.getPackageInfo(
+            app.packageName,
+            android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES,
+        )
+        val signer = info.signingInfo?.apkContentsSigners?.firstOrNull()
+            ?: return@runCatching null
+        java.security.MessageDigest.getInstance("SHA-1")
+            .digest(signer.toByteArray())
+            .joinToString("") { "%02X".format(it) }
+    }.getOrNull()
 
     val fleet: FleetManager<DeviceSession> = run {
         lateinit var fleetRef: FleetManager<DeviceSession>

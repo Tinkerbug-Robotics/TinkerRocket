@@ -26,6 +26,8 @@ private class FakeGoogleApi : AutoCloseable {
     val sessionAttempts = AtomicInteger(0)
     val tileCalls = AtomicInteger(0)
     val viewportCalls = AtomicInteger(0)
+    val lastSessionHeaders = java.util.concurrent.ConcurrentHashMap<String, String>()
+    val lastTileHeaders = java.util.concurrent.ConcurrentHashMap<String, String>()
     @Volatile var failSessions = false
     @Volatile var rejectAllTiles = false
     @Volatile var omitExpiry = false
@@ -46,12 +48,13 @@ private class FakeGoogleApi : AutoCloseable {
                     val reader = c.getInputStream().bufferedReader(Charsets.ISO_8859_1)
                     val requestLine = reader.readLine() ?: return@use
                     var contentLength = 0
+                    val headers = mutableMapOf<String, String>()
                     while (true) {
                         val line = reader.readLine() ?: break
                         if (line.isEmpty()) break
-                        if (line.startsWith("Content-Length:", ignoreCase = true)) {
-                            contentLength = line.substringAfter(':').trim().toInt()
-                        }
+                        val name = line.substringBefore(':').trim().lowercase()
+                        headers[name] = line.substringAfter(':').trim()
+                        if (name == "content-length") contentLength = headers[name]!!.toInt()
                     }
                     if (contentLength > 0) {
                         val buf = CharArray(contentLength)
@@ -78,6 +81,8 @@ private class FakeGoogleApi : AutoCloseable {
                     when {
                         requestLine.startsWith("POST /v1/createSession") -> {
                             sessionAttempts.incrementAndGet()
+                            lastSessionHeaders.clear()
+                            lastSessionHeaders.putAll(headers)
                             if (failSessions) {
                                 send(500, "boom".toByteArray())
                             } else {
@@ -93,6 +98,8 @@ private class FakeGoogleApi : AutoCloseable {
                         }
                         path.startsWith("/v1/2dtiles/") -> {
                             tileCalls.incrementAndGet()
+                            lastTileHeaders.clear()
+                            lastTileHeaders.putAll(headers)
                             if (sessionParam == currentToken && !rejectAllTiles) {
                                 send(200, tileBody)
                             } else {
@@ -219,6 +226,29 @@ class GoogleTileUpstreamTest {
         assertIs<GoogleTileUpstream.TileFetch.Retry>(upstream.fetchTile(5, 4, 3))
         assertEquals(2, api.tileCalls.get(), "exactly initial + one retry")
         assertEquals(2, api.sessionCalls.get(), "exactly initial + one renewal")
+    }
+
+    @Test
+    fun appAttestationHeaders_sentOnSessionAndTiles_whenConfigured() {
+        val upstream = GoogleTileUpstream(
+            apiKey = "test-key",
+            baseUrl = api.baseUrl,
+            renewMinIntervalMs = 0,
+            appPackage = "com.tinkerbug.tinkerrocket",
+            appCertSha1 = "E0DAC586432101BC48A5158E65908ECD15E2B432",
+        )
+        assertContentEquals(api.tileBody, okBytes(upstream.fetchTile(5, 4, 3)))
+        assertEquals("com.tinkerbug.tinkerrocket", api.lastSessionHeaders["x-android-package"])
+        assertEquals("E0DAC586432101BC48A5158E65908ECD15E2B432", api.lastSessionHeaders["x-android-cert"])
+        assertEquals("com.tinkerbug.tinkerrocket", api.lastTileHeaders["x-android-package"])
+        assertEquals("E0DAC586432101BC48A5158E65908ECD15E2B432", api.lastTileHeaders["x-android-cert"])
+    }
+
+    @Test
+    fun appAttestationHeaders_absentByDefault() {
+        val upstream = upstreamFor(api)
+        okBytes(upstream.fetchTile(5, 4, 3))
+        assertNull(api.lastTileHeaders["x-android-package"], "unconfigured upstream must not attest")
     }
 
     @Test

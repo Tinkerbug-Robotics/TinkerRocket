@@ -27,6 +27,16 @@ public class GoogleTileUpstream(
     /** Floor between forced renewals — bounds createSession spam when a run
      *  of tiles genuinely 4xxes.  Tests pass 0 for deterministic renewal. */
     private val renewMinIntervalMs: Long = 5_000,
+    /**
+     * App-attestation headers for an Android-application-restricted key:
+     * the calling package plus its signing-cert SHA-1 (uppercase hex, no
+     * colons).  Google validates X-Android-Package/X-Android-Cert against
+     * the key's "Android apps" restriction, so an extracted key is useless
+     * outside an APK signed with the same cert.  Null = headers omitted
+     * (unrestricted key).
+     */
+    private val appPackage: String? = null,
+    private val appCertSha1: String? = null,
 ) {
     private class Session(val token: String, val expiryEpochSec: Long)
 
@@ -146,7 +156,7 @@ public class GoogleTileUpstream(
     private fun createSession(): Session? = runCatching {
         val conn = URL("$baseUrl/v1/createSession?key=$apiKey").openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
-        conn.setRequestProperty("User-Agent", userAgent)
+        applyCommonHeaders(conn)
         conn.setRequestProperty("Content-Type", "application/json")
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000
@@ -190,7 +200,7 @@ public class GoogleTileUpstream(
 
     private fun <T> httpGet(url: String, read: (HttpURLConnection) -> T): T {
         val conn = URL(url).openConnection() as HttpURLConnection
-        conn.setRequestProperty("User-Agent", userAgent)
+        applyCommonHeaders(conn)
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000
         try {
@@ -198,6 +208,12 @@ public class GoogleTileUpstream(
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun applyCommonHeaders(conn: HttpURLConnection) {
+        conn.setRequestProperty("User-Agent", userAgent)
+        appPackage?.let { conn.setRequestProperty("X-Android-Package", it) }
+        appCertSha1?.let { conn.setRequestProperty("X-Android-Cert", it) }
     }
 
     private companion object {
