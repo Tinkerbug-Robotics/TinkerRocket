@@ -74,7 +74,7 @@ The land pattern already matches: Würth's recommended pad is 1.0 × 1.2 mm with
 **Remaining action:** none electrically — just get `782853200` into the BOM (see finding 3), because nothing in the schematic, BOM or footprint records it today.
 **Note for bench:** TI's own examples cluster at 8–10 Ω / 12.7–15.9 nH, so this runs ~2× their inductance — worth ~3 dB more ripple attenuation at 2.2 MHz at the cost of phase margin. In spec, but it makes the first-article loop-response measurement (work order step 6) worth doing rather than skipping.
 
-### 3. BOM had no MPN field — **capacitors DONE**, remaining parts still open
+### 3. BOM had no MPN field — **CLOSED 2026-08-01**
 No component carried an MPN field; a handful of SnapEDA-sourced parts (J2, L8, S3, U3) have inconsistent `MP`/`MF`/`MANUFACTURER`/`DigiKey_Part_Number` fields, so no single export produced a purchasable BOM, and **no passive had a voltage rating, dielectric or tolerance.**
 
 **Done 2026-07-30 (capacitors).** All 27 capacitors now carry `MPN`, `Mfr` and `MinVRating` fields in the schematic, sourced from `Circuit Board BOMs/TinkerRocket_CrossBoard_BOM.xlsx` (sheet "Cross-Board BOM"). Field names mirror the spreadsheet columns so the two stay diff-checkable; `MinVRating` is the *design requirement*, not the part's rating (e.g. the 470 nF requirement is 6.3 V while `CL05A474KP5NNNC` is a 10 V part). Verified: nets unchanged, ERC error count unchanged, BOM export emits all three fields on every capacitor row.
@@ -93,12 +93,45 @@ No component carried an MPN field; a handful of SnapEDA-sourced parts (J2, L8, S
 
 **COUT changed in the same pass — see finding 3a.**
 
-**Still open (non-capacitor):**
-- **D4 "Blue" / D5 "Red" / D6 "LED"** — no part, no Vf (see finding 6).
-- **Y5 "SC-32S-32.768kHz-12.5pF"** — Espressif requires **ESR ≤ 70 kΩ**, which is exactly the typical max for this size class. Pin the grade.
-- FB1 = 782853200 (finding 2) — the Value field carries it; it should also get `MPN`/`Mfr` for consistency with the caps.
-- U22's `Datasheet` field still reads `W25Q64JVXGIQ TR`, inherited from the symbol it was derived from (the Description property says so). Harmless today because nothing orders from it — but it is a live trap now that MPN fields exist. Clear it.
-- The resistors, inductors, connectors, crystals and ICs still have no `MPN`/`Mfr`; the spreadsheet has rows for them, so the same one-pass annotation would close it.
+**Done 2026-08-01 (everything else).** The same annotation pass ran over the
+resistors, inductors, LEDs, connectors, crystals and ICs — and, since the trap
+is identical on the sibling boards, over **rocket-computer and base-station**
+too. **401 of 401 purchasable parts now carry `MPN` and `Mfr`.** The only
+exemptions are three DNP v3.x provisions on the rocket-computer (R74/R75
+499 k, R76 0 R): not fitted, never purchased, correctly absent from the BOM.
+
+Each sub-item above, resolved:
+
+- **D4/D5/D6** — D6's value was the placeholder `LED` with no colour, so no
+  part could attach; it is now `Green` / `XL-1005UGC`. D4 = `APHHS1005QBC/D`
+  (Kingbright), D5 = `NCD0402R1` (NationStar).
+- **Y5** — replaced with **`ABS07-32.768KHZ-T`** (Abracon), which pins the
+  grade Espressif requires: 12.5 pF load, **ESR 70 kΩ max**. The existing
+  `XTAL_SC-32S_3215` footprint is kept — both parts are 2-pad 3.2 × 1.5 mm
+  tuning forks, so the land is right and only the footprint's *name* now reads
+  for the superseded vendor. Same swap applied to rocket Y1/Y3 and base Y1.
+- **FB1** — now carries `MPN`/`Mfr` (782853200 / Würth) like the caps.
+- **U22's `Datasheet`** — cleared. The sweep for that trap found **eight**
+  across the three boards, two of them naming a genuinely different device
+  rather than a stale revision: rocket **U9** read `TPN4R712MD` when the part
+  is the `CSD16323Q3` pyro FET, and **R72** read `PMR18EZPFV2L00` when the
+  shunt is `CSSH0805FT2L00`. All cleared (commit `59d2c67`).
+
+Two stale legacy `MP` fields also disagreed with both the Value and the BOM
+and were corrected — a symbol carrying two part numbers is exactly the
+wrong-part-order hazard this finding is about:
+
+- rocket **U19** `TPS259824LNRGER` → `…RGET`. Same die and RGE-24 package; the
+  suffix is reel quantity, and `power-eco.md` documents RGET deliberately.
+- base **U9** `TPS63021DSJR` → `TPS63020DSJR`. These are **not**
+  interchangeable — 63021 is fixed 3.3 V, 63020 is adjustable. U9 pin 3 (FB)
+  drives a real divider (R13 1 M / R16 180 k → 0.5 × (1 + 1M/180k) = 3.28 V),
+  which only the adjustable part uses. The BOM was right and the `MP` field
+  was wrong.
+
+Also normalised: LoRa **R74** `10 K` → `10 k`, whose capital K had been
+splitting one part across two BOM lines. ERC clean on all three boards after
+the pass (commit `bdcc507`).
 
 ### 3a. COUT: 2 × 47 µF 6.3 V → 3 × 22 µF 16 V — **DONE (schematic), PCB pending**
 C11/C13 were `CL21A476MQYNNNE` (47 µF, **6.3 V** X5R, 0805) on `Net-(U3-VO)`, which is the TPS62913's COUT — specified as **40 µF min / 47 nom / 80 µF max effective**. A 6.3 V 0805 X5R sitting at 3.3 V is at 52 % of rated voltage, where that class typically loses 55–70 %: two of them land ≈28–42 µF, straddling and probably under the floor.
@@ -240,11 +273,29 @@ Related: the rocket computer *can* power-cycle this board (J5 pin 1 is switched 
 J8's fab outline draws the connector body to **y = 103.32** and the board-slot region from 103.32 → 104.97, where the pads begin. The actual Edge.Cuts top edge is **y = 103.70**. The board therefore does not bottom out in the connector by 0.38 mm; retention becomes solder-only, and the pin/tab overlap shifts. Pads are 3.5 mm long so there is solderable area either way.
 **Fix:** check against the RF Solutions CON-SMA-EDGE-S mechanical drawing and move the edge (or the footprint) to match. On a high-g vehicle with a coax pigtail hanging off it, a connector that is not butted is worth 10 minutes.
 
-### 17. 54 unplugged vias-in-pad, two of them in sub-0.25 mm lands
-Board settings are `tenting yes / plugging no / filling no`. Same-net via-in-pad appears in 54 SMD pads. Most are benign (0805 GND pads, the 3×3 EPAD array). Two are not:
-- **U28 pad 29 (VDD_SPI): a 0.3 mm-drill / 0.4 mm-pad via inside a 0.22 mm-wide QFN land** on a 0.4 mm-pitch part — the annulus is wider than the land.
+### 17. ~~54 unplugged vias-in-pad, two of them in sub-0.25 mm lands~~ — **CLOSED 2026-08-01, both ways**
+Board settings were `tenting yes / plugging no / filling no`. Same-net via-in-pad appeared in 54 SMD pads. Most were benign (0805 GND pads, the 3×3 EPAD array). Two were not:
+- **U28 pad 29 (VDD_SPI): a 0.3 mm-drill / 0.4 mm-pad via inside a 0.22 mm-wide QFN land** on a 0.4 mm-pitch part — the annulus was wider than the land.
 - **U3 pad 4 (PGND): a 0.3 mm-drill via inside a 1.0 × 0.2 mm land.**
-Both are solder-wicking and bridging hazards. Either move them out of the land or specify IPC-4761 Type VII (filled and capped) on the fab notes.
+
+Both were solder-wicking and bridging hazards. The review offered two fixes;
+both were taken.
+
+**The two hazards are gone** — the user removed those specific vias from the
+lands, so the sub-0.25 mm cases no longer exist.
+
+**And the remaining benign via-in-pad is now declared.** The board file said
+`(filling no) (capping no)`, so nothing in the exported data told the fab what
+the layout actually needs. It now declares **IPC-4761 Type VII (filled and
+capped)**, which is the process via-in-pad requires. Applied to
+lora-daughterboard and rocket-computer — both 6-layer, both with via-in-pad.
+**base-station is deliberately left at `no`**: it is 4-layer and does not get
+the treatment.
+
+This matters beyond solder defects: it is a *cost and process* declaration. A
+fab quoting a 6-layer board with filled-and-capped vias prices differently
+than one quoting plain tented vias, and an undeclared Type VII requirement is
+the kind of thing that surfaces as a post-quote change order.
 
 ### 18. Stackup declares no impedance control, and there is one netclass at 0.09 mm
 `dielectric_constraints: no`, `copper_finish: None`, and a single `Default` netclass with **track width 0.09 mm and clearance 0.09 mm**. For a 915 MHz board whose antenna feed depends on the F.Cu-to-In1 prepreg being 0.1 mm, the fab needs to be told (a) this is a controlled-impedance layer pair, or at minimum (b) that the F/In1 prepreg thickness is not theirs to substitute. Most 6-layer house stackups will not give you 0.1 mm there by default — and the calculated 46–48 Ω moves with it.
@@ -265,8 +316,8 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 ## Suggested order of work
 
 1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); ~~move U22 VCC to +3V3~~ (done, finding 4); ~~C97 10 µF → 1 µF~~ **(reverted — see finding 4a)**; ~~0.1 µF at VDD3P3_RTC~~ (done, finding 8); PG → a spare GPIO; VSYS TVS; ~~LED resistors~~ (closed, finding 9); Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
-2. **BOM:** ~~capacitors~~ (done, finding 3 — MPN/Mfr/MinVRating on all 27); still to do: FB1 MPN/Mfr fields, the three LEDs, Y5's ESR grade, and the same annotation pass over resistors/inductors/connectors/crystals/ICs.
-3. **Layout:** ~~C95 re-route + place C14~~ (done); ~~relocate Y6~~ (retracted, finding 5 — layout is compliant); tighten GND via density along the clock traces toward ~1/mm; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
-4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
+2. **BOM:** ~~capacitors~~ ~~FB1 MPN/Mfr~~ ~~the three LEDs~~ ~~Y5's ESR grade~~ ~~the annotation pass over resistors/inductors/connectors/crystals/ICs~~ — **all done, finding 3 closed.** 401/401 purchasable parts across all three ESP32 boards carry MPN/Mfr; eight stale part numbers cleared out of `Datasheet` fields; two contradicting legacy `MP` fields corrected.
+3. **Layout:** ~~C95 re-route + place C14~~ (done); ~~relocate Y6~~ (retracted, finding 5 — layout is compliant); tighten GND via density along the clock traces toward ~1/mm; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); ~~vias out of U28.29 and U3.4~~ (done, finding 17); refdes silkscreen; ~~tie H1–H4 to GND~~ (done); fix the SMA board-edge offset.
+4. **Fab package:** ~~declare filled-and-capped vias~~ (done, finding 17 — the board file now carries IPC-4761 Type VII); declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
 5. **Firmware** (owner: user): `HOST_UART_TX = 6`, `HOST_UART_RX = 5`; flash size to 16 MB; document "never init RF" and "never enable PSRAM unless VDD_SPI is re-fed".
 6. **Bench, once boards exist:** confirm the 40 MHz frequency error and trim C90/C92; scope VIN on hot-plug against the 18 V limit; measure the buck's loop response with the real ferrite bead; verify the SMA's return loss at 915 MHz.
