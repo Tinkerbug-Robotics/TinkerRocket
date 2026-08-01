@@ -10988,6 +10988,82 @@
 		)
 	)
 	(symbol
+		(lib_id "Mechanical:Fiducial")
+		(at 165.1 184.15 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "0b589928-5e5e-48ad-a3cb-cb0763dc0b3d")
+		(property "Reference" "FID4"
+			(at 168.275 182.8799 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Fiducial"
+			(at 168.275 185.4199 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
+			(at 165.1 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 165.1 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Fiducial Marker"
+			(at 165.1 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "FID4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:VSS")
 		(at 51.435 133.35 0)
 		(mirror x)
@@ -11141,6 +11217,82 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "R60")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Mechanical:Fiducial")
+		(at 151.13 184.15 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "0c173deb-659e-4e3d-a7e4-53a81bffcefe")
+		(property "Reference" "FID3"
+			(at 154.305 182.8799 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Fiducial"
+			(at 154.305 185.4199 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
+			(at 151.13 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 151.13 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Fiducial Marker"
+			(at 151.13 184.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "FID3")
 					(unit 1)
 				)
 			)
@@ -13202,6 +13354,82 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "D5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Mechanical:Fiducial")
+		(at 165.1 174.625 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "3c348e27-e3fe-44de-a75d-45f4e16cdb3c")
+		(property "Reference" "FID6"
+			(at 168.275 173.3549 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Fiducial"
+			(at 168.275 175.8949 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
+			(at 165.1 174.625 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 165.1 174.625 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Fiducial Marker"
+			(at 165.1 174.625 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "FID6")
 					(unit 1)
 				)
 			)
@@ -19221,7 +19449,7 @@
 	)
 	(symbol
 		(lib_id "Mechanical:Fiducial")
-		(at 132.715 193.04 0)
+		(at 151.13 192.405 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -19232,7 +19460,7 @@
 		(fields_autoplaced yes)
 		(uuid "b1fdfac8-43b1-4337-a294-da2bbeed1483")
 		(property "Reference" "FID1"
-			(at 135.89 191.7699 0)
+			(at 154.305 191.1349 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -19243,7 +19471,7 @@
 			)
 		)
 		(property "Value" "Fiducial"
-			(at 135.89 194.3099 0)
+			(at 154.305 193.6749 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -19254,7 +19482,7 @@
 			)
 		)
 		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
-			(at 132.715 193.04 0)
+			(at 151.13 192.405 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19265,7 +19493,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 132.715 193.04 0)
+			(at 151.13 192.405 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19276,7 +19504,7 @@
 			)
 		)
 		(property "Description" "Fiducial Marker"
-			(at 132.715 193.04 0)
+			(at 151.13 192.405 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20780,7 +21008,7 @@
 	)
 	(symbol
 		(lib_id "Mechanical:Fiducial")
-		(at 146.685 193.04 0)
+		(at 151.13 174.625 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -20789,9 +21017,9 @@
 		(in_pos_files yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "e56a157a-bf25-46a5-94a9-338959804a46")
-		(property "Reference" "FID2"
-			(at 149.86 191.7699 0)
+		(uuid "e556827e-042d-4b04-9a54-a3ef5f63d479")
+		(property "Reference" "FID5"
+			(at 154.305 173.3549 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -20802,7 +21030,7 @@
 			)
 		)
 		(property "Value" "Fiducial"
-			(at 149.86 194.3099 0)
+			(at 154.305 175.8949 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -20813,7 +21041,7 @@
 			)
 		)
 		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
-			(at 146.685 193.04 0)
+			(at 151.13 174.625 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20824,7 +21052,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 146.685 193.04 0)
+			(at 151.13 174.625 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20835,7 +21063,83 @@
 			)
 		)
 		(property "Description" "Fiducial Marker"
-			(at 146.685 193.04 0)
+			(at 151.13 174.625 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "FID5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Mechanical:Fiducial")
+		(at 165.1 192.405 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e56a157a-bf25-46a5-94a9-338959804a46")
+		(property "Reference" "FID2"
+			(at 168.275 191.1349 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Fiducial"
+			(at 168.275 193.6749 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Fiducial:Fiducial_0.5mm_Mask1mm"
+			(at 165.1 192.405 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 165.1 192.405 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Fiducial Marker"
+			(at 165.1 192.405 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)

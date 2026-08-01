@@ -1,12 +1,12 @@
 (footprint "XTAL_ECS-400-10-37B2-CKY-TR"
-	(version 20241229)
+	(version 20260206)
 	(generator "pcbnew")
-	(generator_version "9.0")
+	(generator_version "10.0")
 	(layer "F.Cu")
 	(property "Reference" "REF**"
 		(at 0.682 -1.7014 0)
 		(layer "F.SilkS")
-		(uuid "12325578-a27a-4b9c-9169-26d394403ca7")
+		(uuid "a3641963-ca75-4810-8062-34d2ea310584")
 		(effects
 			(font
 				(size 0.64 0.64)
@@ -17,7 +17,7 @@
 	(property "Value" "XTAL_ECS-400-10-37B2-CKY-TR"
 		(at 9.6228 2.2714 0)
 		(layer "F.Fab")
-		(uuid "cdb39486-8e54-44f5-b208-e3ce9e6bdbb9")
+		(uuid "eee78c47-3f67-4efc-8365-252ac764da12")
 		(effects
 			(font
 				(size 0.64 0.64)
@@ -29,7 +29,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "be53bfe8-9fe8-4701-980a-6306109e67fa")
+		(uuid "42a99c6e-c107-4bd0-97df-2da62f0b4cd5")
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -41,7 +41,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "6ff4940a-1733-41f6-8303-a6dc9429812b")
+		(uuid "a8e8ea06-35b8-40b1-b77a-afa5b00b2455")
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -50,6 +50,18 @@
 		)
 	)
 	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_rect
+		(start -1.35 -1.15)
+		(end 1.36 1.13)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "8efb4f3e-073f-41bf-aa43-3c994cab469f")
+	)
 	(fp_line
 		(start -1.35 -1.15)
 		(end -1.35 1.15)
@@ -58,7 +70,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "8183e49b-1660-4800-9b8f-15c2d107cf70")
+		(uuid "dcf2ed6b-fb45-4552-abb6-ad5aa3a1ac0d")
 	)
 	(fp_line
 		(start -1.35 1.15)
@@ -68,7 +80,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "42e1ad6b-aa44-4cbc-88c2-dbed4a9be527")
+		(uuid "a2af454b-2f65-4ca1-aed4-24af0d7c2acb")
 	)
 	(fp_line
 		(start 1.35 -1.15)
@@ -78,7 +90,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "2f499eb7-a0f8-4a78-9343-680f4d8b47ae")
+		(uuid "1cfc70a4-c7df-49eb-a0c8-a9de1eaf08be")
 	)
 	(fp_line
 		(start 1.35 1.15)
@@ -88,7 +100,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "3ea6ad47-a699-48f7-8aad-7071a47a2f4b")
+		(uuid "be039d52-d36c-4bf3-91df-365ae4eb322e")
 	)
 	(fp_line
 		(start -1 -0.8)
@@ -98,7 +110,7 @@
 			(type solid)
 		)
 		(layer "F.Fab")
-		(uuid "84c7836b-c643-41ef-83a0-e3c5ecf45eef")
+		(uuid "97cd3652-7f74-41ba-9938-9007b7d7e7d8")
 	)
 	(fp_line
 		(start -1 0.8)
@@ -108,7 +120,7 @@
 			(type solid)
 		)
 		(layer "F.Fab")
-		(uuid "19632fc8-30bf-4f00-adfd-43ba5bf0b7b0")
+		(uuid "a90f28f4-c84f-4778-bb7a-6c8b324f4c93")
 	)
 	(fp_line
 		(start 1 -0.8)
@@ -118,7 +130,7 @@
 			(type solid)
 		)
 		(layer "F.Fab")
-		(uuid "a6e725c0-ebb7-4678-aef5-a0eb1f457449")
+		(uuid "a04d4c7f-5788-41e6-8a0a-18becad02919")
 	)
 	(fp_line
 		(start 1 0.8)
@@ -128,7 +140,7 @@
 			(type solid)
 		)
 		(layer "F.Fab")
-		(uuid "821b30d2-cf52-4215-9438-28230fa068ea")
+		(uuid "2369ae7a-1a62-4449-ab39-f529f8034ee7")
 	)
 	(fp_circle
 		(center -0.675 1.525)
@@ -139,35 +151,35 @@
 		)
 		(fill no)
 		(layer "F.Fab")
-		(uuid "9982a1f8-c095-4263-89e0-3e31ca60a5f7")
+		(uuid "fd6c5a0d-e5b8-4a53-80a8-f44bdb22aad1")
 	)
 	(pad "1" smd rect
 		(at -0.675 0.525)
 		(size 0.85 0.75)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(solder_mask_margin 0.05)
-		(uuid "c48e8ede-d6a3-4a14-aa00-ce716ef2ca31")
+		(uuid "38771b67-0e40-40cd-8ae9-91ccf13038cf")
 	)
 	(pad "2" smd rect
 		(at 0.675 0.525)
 		(size 0.85 0.75)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(solder_mask_margin 0.05)
-		(uuid "9f6bd54d-b8f1-4629-9fd3-257ba98b2ffc")
+		(uuid "164a8214-af99-4f6a-a106-09f1592ea0e7")
 	)
 	(pad "3" smd rect
 		(at 0.675 -0.525)
 		(size 0.85 0.75)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(solder_mask_margin 0.05)
-		(uuid "f4354e04-0b06-43cf-8ab6-b6c3a86700c9")
+		(uuid "7bdd2445-d18d-4b06-b235-1f393f97ccf1")
 	)
 	(pad "4" smd rect
 		(at -0.675 -0.525)
 		(size 0.85 0.75)
 		(layers "F.Cu" "F.Mask" "F.Paste")
 		(solder_mask_margin 0.05)
-		(uuid "1f20d1fb-57b1-4328-b73d-6365762d9be3")
+		(uuid "33aaff31-6674-4150-aa01-568223d34674")
 	)
 	(embedded_fonts no)
 	(model "${KIPRJMOD}/../3dmodels/ECS-400-10-37B2-CKY-TR.step"
