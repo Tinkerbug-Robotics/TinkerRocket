@@ -109,6 +109,19 @@ class AppContainer(app: Application) {
             )
         }
 
+    // MapLibre keeps its own on-disk HTTP/tile cache (mbgl-offline.db) and
+    // its native Cache-Control parser ignores no-store — left enabled it
+    // would persist Google satellite tiles (forbidden by provider terms)
+    // and shadow the proxy's cache semantics.  ALL intended caching lives
+    // in OfflineTileCache, so kill the ambient cache: purge anything ever
+    // stored, then cap it at zero.
+    init {
+        org.maplibre.android.MapLibre.getInstance(app)
+        val offline = org.maplibre.android.offline.OfflineManager.getInstance(app)
+        offline.clearAmbientCache(null)
+        offline.setMaximumAmbientCacheSize(0, null)
+    }
+
     // Offline maps: flat-file cache in noBackupFilesDir (never OS-purged,
     // never backed up — field data must survive storage pressure) + the
     // localhost read-through proxy MapLibre's raster sources fetch from.

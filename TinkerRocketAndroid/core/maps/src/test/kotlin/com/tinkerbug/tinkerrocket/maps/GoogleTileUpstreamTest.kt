@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -22,9 +23,12 @@ import kotlin.test.assertTrue
 private class FakeGoogleApi : AutoCloseable {
     val socket = ServerSocket(0, 10, InetAddress.getLoopbackAddress())
     val sessionCalls = AtomicInteger(0)
+    val sessionAttempts = AtomicInteger(0)
     val tileCalls = AtomicInteger(0)
     val viewportCalls = AtomicInteger(0)
     @Volatile var failSessions = false
+    @Volatile var rejectAllTiles = false
+    @Volatile var omitExpiry = false
     @Volatile var currentToken = "tok-0" // pre-rotation: nothing accepted yet
     val tileBody = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3) // JPEG magic
     val copyright = "Imagery ©2026 TerraMetrics"
@@ -73,21 +77,27 @@ private class FakeGoogleApi : AutoCloseable {
                     val sessionParam = Regex("""[?&]session=([^&]+)""").find(path)?.groupValues?.get(1)
                     when {
                         requestLine.startsWith("POST /v1/createSession") -> {
+                            sessionAttempts.incrementAndGet()
                             if (failSessions) {
                                 send(500, "boom".toByteArray())
                             } else {
                                 val tok = "tok-${sessionCalls.incrementAndGet()}"
                                 currentToken = tok
+                                val expiryField = if (omitExpiry) "" else ""","expiry":"9999999999""""
                                 send(
                                     200,
-                                    ("""{"session":"$tok","expiry":"9999999999",""" +
+                                    ("""{"session":"$tok"$expiryField,""" +
                                         """"tileWidth":256,"tileHeight":256,"imageFormat":"jpeg"}""").toByteArray(),
                                 )
                             }
                         }
                         path.startsWith("/v1/2dtiles/") -> {
                             tileCalls.incrementAndGet()
-                            if (sessionParam == currentToken) send(200, tileBody) else send(403, ByteArray(0))
+                            if (sessionParam == currentToken && !rejectAllTiles) {
+                                send(200, tileBody)
+                            } else {
+                                send(403, ByteArray(0))
+                            }
                         }
                         path.startsWith("/tile/v1/viewport") -> {
                             viewportCalls.incrementAndGet()
@@ -110,6 +120,9 @@ private class FakeGoogleApi : AutoCloseable {
 private fun upstreamFor(api: FakeGoogleApi): GoogleTileUpstream =
     GoogleTileUpstream(apiKey = "test-key", baseUrl = api.baseUrl, renewMinIntervalMs = 0)
 
+private fun okBytes(f: GoogleTileUpstream.TileFetch): ByteArray =
+    assertIs<GoogleTileUpstream.TileFetch.Ok>(f).bytes
+
 class GoogleTileUpstreamTest {
 
     private val api = FakeGoogleApi()
@@ -121,27 +134,49 @@ class GoogleTileUpstreamTest {
     fun sessionCreatedLazily_thenReusedAcrossTiles() {
         val upstream = upstreamFor(api)
         assertEquals(0, api.sessionCalls.get(), "no session before first tile")
-        repeat(3) { i -> assertContentEquals(api.tileBody, upstream.fetchTile(5, 4, i)) }
+        repeat(3) { i -> assertContentEquals(api.tileBody, okBytes(upstream.fetchTile(5, 4, i))) }
         assertEquals(1, api.sessionCalls.get(), "one session shared by all tiles")
     }
 
     @Test
     fun deadSession_renewsOnceAndRetries() {
         val upstream = upstreamFor(api)
-        assertContentEquals(api.tileBody, upstream.fetchTile(5, 4, 3))
+        assertContentEquals(api.tileBody, okBytes(upstream.fetchTile(5, 4, 3)))
         api.invalidateSessions()
-        assertContentEquals(api.tileBody, upstream.fetchTile(5, 4, 4), "renew-and-retry must recover")
+        assertContentEquals(
+            api.tileBody,
+            okBytes(upstream.fetchTile(5, 4, 4)),
+            "renew-and-retry must recover",
+        )
         assertEquals(2, api.sessionCalls.get())
     }
 
     @Test
-    fun createSessionFailure_yieldsNullTile() {
+    fun createSessionFailure_isRetryThenRecovers() {
         api.failSessions = true
         val upstream = upstreamFor(api)
-        assertNull(upstream.fetchTile(5, 4, 3))
+        assertIs<GoogleTileUpstream.TileFetch.Retry>(upstream.fetchTile(5, 4, 3))
         // Recovery once the API comes back.
         api.failSessions = false
-        assertContentEquals(api.tileBody, upstream.fetchTile(5, 4, 3))
+        assertContentEquals(api.tileBody, okBytes(upstream.fetchTile(5, 4, 3)))
+    }
+
+    @Test
+    fun concurrentFirstFetch_allWaitForOneSession() {
+        // The first viewport: MapLibre fires many tile requests at once.
+        // All must ride ONE createSession and return real imagery — the
+        // losers wait on the latch instead of degrading to placeholders.
+        val upstream = upstreamFor(api)
+        val results = java.util.Collections.synchronizedList(
+            mutableListOf<GoogleTileUpstream.TileFetch>(),
+        )
+        val threads = (0 until 6).map { i ->
+            Thread { results.add(upstream.fetchTile(5, 4, i)) }.apply { start() }
+        }
+        threads.forEach { it.join(15_000) }
+        assertEquals(6, results.size)
+        results.forEach { assertContentEquals(api.tileBody, okBytes(it)) }
+        assertEquals(1, api.sessionAttempts.get(), "one createSession shared by all racers")
     }
 
     @Test
@@ -150,6 +185,50 @@ class GoogleTileUpstreamTest {
         assertEquals(api.copyright, upstream.attribution())
         assertEquals(api.copyright, upstream.attribution())
         assertEquals(1, api.viewportCalls.get(), "second call must be memoized")
+    }
+
+    @Test
+    fun attribution_renewsOnDeadSession() {
+        val upstream = upstreamFor(api)
+        assertContentEquals(api.tileBody, okBytes(upstream.fetchTile(5, 4, 3)))
+        api.invalidateSessions()
+        assertEquals(api.copyright, upstream.attribution(), "must renew-and-retry like fetchTile")
+    }
+
+    @Test
+    fun noSession_createAttemptsHonorFloor_noSpamAndNoWedge() {
+        // Dead network at the field: create attempts must be bounded by the
+        // floor and every throttled call must return Retry IMMEDIATELY —
+        // queued proxy workers may not stack behind serialized createSession.
+        api.failSessions = true
+        val upstream = GoogleTileUpstream(
+            apiKey = "test-key",
+            baseUrl = api.baseUrl,
+            renewMinIntervalMs = 60_000,
+        )
+        repeat(10) { assertIs<GoogleTileUpstream.TileFetch.Retry>(upstream.fetchTile(5, 4, it)) }
+        assertEquals(1, api.sessionAttempts.get(), "floor must bound createSession attempts")
+    }
+
+    @Test
+    fun persistentTileRejection_renewsExactlyOnce() {
+        // Revoked/misrestricted key: every token 403s.  fetchTile must do
+        // initial + one renewed retry, then give up — never loop.
+        api.rejectAllTiles = true
+        val upstream = upstreamFor(api)
+        assertIs<GoogleTileUpstream.TileFetch.Retry>(upstream.fetchTile(5, 4, 3))
+        assertEquals(2, api.tileCalls.get(), "exactly initial + one retry")
+        assertEquals(2, api.sessionCalls.get(), "exactly initial + one renewal")
+    }
+
+    @Test
+    fun missingExpiry_sessionStillReused() {
+        // An absent expiry must fall back to a sane TTL, not "always
+        // stale" — which would silently bill a createSession per tile.
+        api.omitExpiry = true
+        val upstream = upstreamFor(api)
+        repeat(3) { assertContentEquals(api.tileBody, okBytes(upstream.fetchTile(5, 4, it))) }
+        assertEquals(1, api.sessionCalls.get())
     }
 }
 
@@ -202,11 +281,12 @@ class TileProxyServerGoogleTest {
     }
 
     @Test
-    fun googleUpstreamFailure_servesPlaceholderNoStore() {
+    fun googleUpstreamFailure_serves503NoStore() {
+        // Transient failure → 503 so MapLibre retries with backoff; a 200
+        // placeholder would stick for the whole style session.
         api.failSessions = true
-        val (code, body, cacheControl) = get("/tile/googleSatellite/5/4/3")
-        assertEquals(200, code)
-        assertEquals(0x89.toByte(), body[0], "hatch placeholder on failure")
+        val (code, _, cacheControl) = get("/tile/googleSatellite/5/4/3")
+        assertEquals(503, code)
         assertEquals("no-store", cacheControl)
     }
 

@@ -160,6 +160,15 @@ fun MapScreen(
             Style.Builder().fromJson(rasterStyleJson(proxy, source))
         }
         map.setStyle(builder) { style ->
+            if (!openFreeMap && !source.cacheable) {
+                // Online-only source: MapLibre's native Cache-Control parser
+                // reads only max-age/must-revalidate, so the proxy's
+                // no-store alone would NOT keep tiles out of the on-disk
+                // ambient cache — volatile is the per-source "never
+                // persist" switch.  The ambient cache is also disabled
+                // app-wide in AppContainer; this is defense in depth.
+                style.getSource("usgs")?.isVolatile = true
+            }
             installPredictionLayers(style, prediction)
             installPhoneDot(style, phoneFix)
             installRocketMarker(style, fix?.latitude, fix?.longitude)
@@ -293,10 +302,13 @@ fun MapScreen(
     }
 
     // Map Tiles display policy wants the live copyright string alongside the
-    // Google name; the proxy memoizes it — fetch when the source comes up.
-    LaunchedEffect(source, mapRef) {
-        if (source == TileSource.GOOGLE_SATELLITE && googleAttribution == null) {
+    // Google name; the proxy memoizes it.  Keep retrying while the source is
+    // active — a first fetch racing a slow createSession must not pin the
+    // static fallback for the whole session.  Cancelled on source switch.
+    LaunchedEffect(source) {
+        while (source == TileSource.GOOGLE_SATELLITE && googleAttribution == null) {
             googleAttribution = fetchGoogleAttribution(proxy)
+            if (googleAttribution == null) kotlinx.coroutines.delay(10_000)
         }
     }
 

@@ -32,38 +32,57 @@ public class GoogleTileUpstream(
 
     private val lock = Any()
     private var session: Session? = null
-    private var lastCreateMs: Long = 0
+    private var lastCreateAttemptMs: Long = 0
     private var cachedAttribution: String? = null
+    private var createLatch: java.util.concurrent.CountDownLatch? = null
+
+    /** Outcome of a tile fetch — the proxy maps these to HTTP semantics. */
+    public sealed interface TileFetch {
+        public class Ok(public val bytes: ByteArray) : TileFetch
+
+        /**
+         * Transient — session pending, network hiccup, upstream 5xx.  The
+         * proxy answers 503 so MapLibre retries with backoff; a 200
+         * placeholder would be sticky for the whole style session.
+         */
+        public object Retry : TileFetch
+
+        /** Definitive no-imagery (404) — render the no-data placeholder. */
+        public object NoData : TileFetch
+    }
 
     /**
-     * Fetch one satellite tile (slippy z/x/y).  Null on any failure — the
-     * proxy then serves its placeholder, matching template-source semantics.
-     * A 4xx that looks like a dead session triggers ONE renew-and-retry.
+     * Fetch one satellite tile (slippy z/x/y).  A 4xx that looks like a
+     * dead session triggers ONE renew-and-retry, never a loop.
      */
-    public fun fetchTile(z: Int, x: Int, y: Int): ByteArray? {
-        val token = ensureSession(force = false) ?: return null
+    public fun fetchTile(z: Int, x: Int, y: Int): TileFetch {
+        val token = ensureSession(force = false) ?: return TileFetch.Retry
         val first = getTile(z, x, y, token)
-        if (first.body != null) return first.body
-        if (first.code !in SESSION_DEAD_CODES) return null
-        val renewed = ensureSession(force = true) ?: return null
-        return getTile(z, x, y, renewed).body
+        first.body?.let { return TileFetch.Ok(it) }
+        if (first.code in SESSION_DEAD_CODES) {
+            val renewed = ensureSession(force = true) ?: return TileFetch.Retry
+            val second = getTile(z, x, y, renewed)
+            second.body?.let { return TileFetch.Ok(it) }
+            return if (second.code == 404) TileFetch.NoData else TileFetch.Retry
+        }
+        return if (first.code == 404) TileFetch.NoData else TileFetch.Retry
     }
 
     /**
      * The copyright string the Map Tiles API display policy requires while
-     * these tiles are shown.  Fetched once from the viewport endpoint at a
+     * these tiles are shown.  Fetched from the viewport endpoint at a
      * world-spanning bound and memoized; null until a fetch succeeds.
+     * Mirrors [fetchTile]'s one renew-and-retry on a dead session.
      */
     public fun attribution(): String? {
         synchronized(lock) { cachedAttribution?.let { return it } }
         val token = ensureSession(force = false) ?: return null
-        val url = "$baseUrl/tile/v1/viewport?session=$token&key=$apiKey" +
-            "&zoom=1&north=85&south=-85&east=180&west=-180"
-        val body = runCatching {
-            httpGet(url) { conn ->
-                if (conn.responseCode != 200) null else conn.inputStream.readBytes()
-            }
-        }.getOrNull() ?: return null
+        var result = getViewport(token)
+        if (result.body == null && result.code in SESSION_DEAD_CODES) {
+            val renewed = ensureSession(force = true) ?: return null
+            result = getViewport(renewed)
+        }
+        val body = result.body ?: return null
         val copyright = runCatching {
             Json.parseToJsonElement(body.decodeToString())
                 .jsonObject["copyright"]?.jsonPrimitive?.content
@@ -76,19 +95,52 @@ public class GoogleTileUpstream(
 
     /**
      * Returns a usable token, creating a session if absent, expired, or
-     * [force]d.  Single-flight under [lock]; forced renewals are throttled
-     * so a run of genuine 4xx tiles can't spam createSession.
+     * [force]d.  createSession runs OUTSIDE the lock and single-flight:
+     * one thread creates while concurrent callers WAIT on a latch, bounded
+     * by [SESSION_WAIT_MS] — on a healthy network the whole first viewport
+     * of tiles just waits ~300 ms for the one createSession and renders
+     * real imagery, while on a dead network waiters unblock quickly and
+     * the proxy's fixed worker pool can't wedge for minutes.  EVERY create
+     * attempt (not just forced renewals) honors the [renewMinIntervalMs]
+     * floor, so a dead network can't spam billed createSession calls.
      */
-    private fun ensureSession(force: Boolean): String? = synchronized(lock) {
+    private fun ensureSession(force: Boolean): String? {
         val now = System.currentTimeMillis()
-        val current = session
-        val fresh = current != null && now / 1000 < current.expiryEpochSec - EXPIRY_MARGIN_SEC
-        if (fresh && !force) return current.token
-        if (force && now - lastCreateMs < renewMinIntervalMs) return current?.token
-        lastCreateMs = now
-        val created = createSession()
-        session = created ?: session
-        created?.token
+        var awaitLatch: java.util.concurrent.CountDownLatch? = null
+        synchronized(lock) {
+            val current = session
+            val fresh = current != null && now / 1000 < current.expiryEpochSec - EXPIRY_MARGIN_SEC
+            if (fresh && !force) return current.token
+            val inFlight = createLatch
+            if (inFlight != null) {
+                awaitLatch = inFlight
+            } else {
+                if (now - lastCreateAttemptMs < renewMinIntervalMs) {
+                    return if (fresh) current?.token else null
+                }
+                lastCreateAttemptMs = now
+                createLatch = java.util.concurrent.CountDownLatch(1)
+            }
+        }
+        awaitLatch?.let { latch ->
+            latch.await(SESSION_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+            synchronized(lock) {
+                val current = session
+                val fresh = current != null &&
+                    System.currentTimeMillis() / 1000 < current.expiryEpochSec - EXPIRY_MARGIN_SEC
+                return if (fresh) current.token else null
+            }
+        }
+        try {
+            val created = createSession()
+            synchronized(lock) { if (created != null) session = created }
+            return created?.token
+        } finally {
+            synchronized(lock) {
+                createLatch?.countDown()
+                createLatch = null
+            }
+        }
     }
 
     private fun createSession(): Session? = runCatching {
@@ -104,8 +156,13 @@ public class GoogleTileUpstream(
             if (conn.responseCode != 200) return@runCatching null
             val obj = Json.parseToJsonElement(conn.inputStream.readBytes().decodeToString()).jsonObject
             val token = obj["session"]?.jsonPrimitive?.content ?: return@runCatching null
-            // Docs serialize expiry as a string of epoch seconds; be lenient.
-            val expiry = obj["expiry"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+            // Docs serialize expiry as a string of epoch seconds; be lenient —
+            // an absent/unparseable expiry must NOT read as "already stale"
+            // (that would silently pair every tile with a billed
+            // createSession), so fall back to a conservative week (the
+            // documented lifetime is ~two weeks).
+            val expiry = obj["expiry"]?.jsonPrimitive?.content?.toLongOrNull()
+                ?: (System.currentTimeMillis() / 1000 + FALLBACK_TTL_SEC)
             Session(token, expiry)
         } finally {
             conn.disconnect()
@@ -116,6 +173,16 @@ public class GoogleTileUpstream(
 
     private fun getTile(z: Int, x: Int, y: Int, token: String): TileResult = runCatching {
         httpGet("$baseUrl/v1/2dtiles/$z/$x/$y?session=$token&key=$apiKey") { conn ->
+            val code = conn.responseCode
+            TileResult(code, if (code == 200) conn.inputStream.readBytes() else null)
+        }
+    }.getOrElse { TileResult(-1, null) }
+
+    private fun getViewport(token: String): TileResult = runCatching {
+        httpGet(
+            "$baseUrl/tile/v1/viewport?session=$token&key=$apiKey" +
+                "&zoom=1&north=85&south=-85&east=180&west=-180",
+        ) { conn ->
             val code = conn.responseCode
             TileResult(code, if (code == 200) conn.inputStream.readBytes() else null)
         }
@@ -139,6 +206,12 @@ public class GoogleTileUpstream(
 
         /** Renew this long before the server-reported expiry. */
         const val EXPIRY_MARGIN_SEC = 3_600L
+
+        /** Session TTL assumed when the response omits a parseable expiry. */
+        const val FALLBACK_TTL_SEC = 7L * 24 * 3_600
+
+        /** Longest a tile fetch waits for another thread's createSession. */
+        const val SESSION_WAIT_MS = 6_000L
 
         /**
          * Codes that plausibly mean "session token dead" (expired/revoked).

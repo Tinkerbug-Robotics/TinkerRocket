@@ -121,18 +121,28 @@ public class TileProxyServer(
 
             // Online-only sources (provider terms forbid persistence) bypass
             // the offline cache in BOTH directions — a stale cached tile from
-            // any earlier state must never serve — and carry no-store so
-            // MapLibre's own HTTP cache doesn't persist them either.
+            // any earlier state must never serve.  no-store is stamped as
+            // HTTP hygiene, but MapLibre's native parser ignores it — the
+            // client-side guarantees are the volatile source flag plus the
+            // app-wide ambient-cache kill (see MapScreen / AppContainer).
             if (TileSource.fromKey(source)?.cacheable == false) {
-                val fetched = if (source == TileSource.GOOGLE_SATELLITE.key) {
+                val fetch = if (source == TileSource.GOOGLE_SATELLITE.key) {
                     googleUpstream?.fetchTile(z, x, y)
                 } else {
                     null
                 }
-                if (fetched != null) {
-                    respond(sock, 200, contentType(fetched), fetched, noStore = true)
-                } else {
-                    respond(sock, 200, "image/png", placeholder, noStore = true)
+                when (fetch) {
+                    is GoogleTileUpstream.TileFetch.Ok ->
+                        respond(sock, 200, contentType(fetch.bytes), fetch.bytes, noStore = true)
+                    // 503 = temporary to MapLibre: it retries with backoff,
+                    // so tiles that raced session creation fill in.  A 200
+                    // placeholder would stick for the whole style session.
+                    GoogleTileUpstream.TileFetch.Retry ->
+                        respond(sock, 503, "text/plain", "tile pending".toByteArray(), noStore = true)
+                    // Definitive no-imagery, or no upstream at all (keyless
+                    // build): the neutral hatch, like any offline gap.
+                    GoogleTileUpstream.TileFetch.NoData, null ->
+                        respond(sock, 200, "image/png", placeholder, noStore = true)
                 }
                 return
             }
