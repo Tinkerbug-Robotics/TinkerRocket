@@ -187,8 +187,14 @@ Note the root cause is a naming trap worth fixing in the schematic too: on the d
 
 ## Should fix / decide consciously
 
-### 8. VDD3P3_RTC (pin 20) has no local 0.1 µF
-Espressif asks for a 0.1 µF close to each digital supply pin. Pin 46 (VDD3P3_CPU) has C101 at 1.34 mm ✓; **pin 20's nearest cap on +3V3 is 4.27 mm away** (C99), because the space to the left of U28 is taken by Y5 and the USB resistors. A 0402 fits around (84.3, 118.5).
+### 8. ~~VDD3P3_RTC (pin 20) has no local 0.1 µF~~ — **FIXED 2026-08-01**
+Espressif asks for a 0.1 µF close to each digital supply pin. Pin 46 (VDD3P3_CPU) had C101 at 1.34 mm ✓; **pin 20's nearest cap on +3V3 was 4.27 mm away** (C99), because the space to the left of U28 is taken by Y5 and the USB resistors.
+
+**Fixed:** C99 moved to **F.Cu at (84.73, 120.57)** — the opposite side, directly over pin 20 at (85.38, 119.78). **1.02 mm lateral**, 1.90 mm through-board, with a +3V3 via 0.06 mm from the pad (effectively via-in-pad) and a GND via at 0.62 mm.
+
+**Opposite-side is fine on this stackup**, and worth recording why, because it would not be on a 2-layer board. The delivery path is not copper from cap to pin — it is the **In2 (+3V3) / In3 (GND) plane pair at 0.1 mm spacing**, which the cap feeds through a short via and which then delivers under the chip with very low spreading inductance. Estimated loop inductance ~1.5–2 nH (via-dominated) against ~2–3 nH before (lateral-spreading-dominated): the ~1 nH the through-board vias cost is less than the 3.25 mm of lateral distance removed.
+
+**Process note.** The first attempt at this move put C99's +3V3 pad and its via into GND copper and squeezed the XTAL_32K_P track, taking the board from 1 DRC error to 15 + 1 unconnected — a +3V3-to-GND short at 0.0000 mm actual clearance, the mirror image of the GND-via-in-+3V3-plane short elsewhere on this board. It was cleaned up in the next pass. The lesson is that in this corridor (between U28's left edge, Y5 and the USB resistors) there is no room to move anything without re-running DRC immediately — an electrical argument for a placement is not a check that the placement fits.
 
 ### 9. ~~LED series resistors are 10 kΩ~~ — **CLOSED, refuted on hardware**
 *Original claim: 10 kΩ from 3.3 V gives 140 µA (red) and 0–70 µA (blue), and a blue part with Vf > 3.3 V would not conduct at all. **Closed 2026-07-31** — the same 10 kΩ arrangement is in service on existing boards and the LEDs are clearly visible.*
@@ -197,9 +203,17 @@ The arithmetic was right; the inference from it was not. I reasoned from a gener
 
 Still worth doing at some point: **pin actual LED MPNs** so Vf is a known quantity rather than an assumption — this is the only reason the question was open to argument in the first place.
 
-### 10. Two fiducials, one per side, 0.5 mm — and FID1 is inside the USB connector's courtyard
-FID1 (B.Cu, 102.08,115.73) sits fully inside J2's courtyard (x 95.76–104.19, y 111.41–124.31) — that is the board's **only DRC error**. FID2 is at the same X/Y on the front. A 0.5 mm copper dot is below the 1 mm many assemblers require, and one fiducial per side gives no rotational reference for a 0.4 mm-pitch QFN-56 plus a 1.27 mm-pitch shielded module.
-**Fix:** three fiducials per populated side, 1.0 mm copper / 2.0 mm mask, asymmetric, ≥5 mm from the edge, clear of all courtyards. Same finding as rocket-computer H12 — the same mistake has been made twice.
+### 10. Only one fiducial per side, at 0.5 mm — **restated; the courtyard overlap is not the issue**
+*Originally written as "FID1 is inside the USB connector's courtyard". That part was over-weighted and is **withdrawn** — see below.*
+
+**The overlap does not matter.** Fiducials are read by the placement machine on a **bare board, before any component is placed**, so FID1 sitting inside J2's courtyard does not obscure it at the moment it is used. It is a geometry complaint (and the board's only remaining DRC error), not a functional one.
+
+**What does matter:**
+- **Count.** One fiducial per side gives the machine **translation correction only**. Rotation and scale need at least two per side, placed far apart; three asymmetric is the norm. On a board carrying a 0.4 mm-pitch QFN-56 chip-down (U28) that is the part worth fixing.
+- **Size.** 0.5 mm copper is below what many assemblers specify — 1.0 mm copper with a 2.0 mm mask opening is the common requirement. Confirm against whoever is building these before committing.
+- **Exposed copper under a metal shell.** FID1 is an unnetted 0.5 mm dot with a 1 mm mask opening sitting under the USB-C body. Floating copper under a grounded shell is not a fault, but it is a solder-bridge and debris trap for no benefit.
+
+**Fix:** two or three fiducials per populated side, sized to the assembler's spec, placed asymmetrically and well apart. Repositioning FID1 falls out of that, and the DRC error clears as a side effect. Same underlying gap as rocket-computer H12.
 
 ### 11. There are no reference designators on the silkscreen
 All 66 refdes properties are `(hide yes)`. The silkscreen gerbers contain only outlines, pin-1 marks and four board texts (`LoRa V3`, `PWR`, `T`, `R`). Nothing on this board can be identified during assembly inspection, bring-up or rework. On a 22 × 27 mm board you will not fit all of them — but at minimum the ICs, connectors, the LEDs, the crystals and the ferrite bead should be marked, and a pin-1 dot for U28 and U22.
@@ -250,7 +264,7 @@ Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI 
 
 ## Suggested order of work
 
-1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); ~~move U22 VCC to +3V3~~ (done, finding 4); ~~C97 10 µF → 1 µF~~ **(reverted — see finding 4a)**; 0.1 µF at VDD3P3_RTC; PG → a spare GPIO; VSYS TVS; ~~LED resistors~~ (closed, finding 9); Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
+1. **Schematic edits:** ~~move C95 to the CHIP_PU node~~ (done); ~~COUT 2x47 uF -> 3x22 uF~~ (done, finding 3a); ~~move U22 VCC to +3V3~~ (done, finding 4); ~~C97 10 µF → 1 µF~~ **(reverted — see finding 4a)**; ~~0.1 µF at VDD3P3_RTC~~ (done, finding 8); PG → a spare GPIO; VSYS TVS; ~~LED resistors~~ (closed, finding 9); Y6 load caps 18 pF → 12 pF; series terminators on LoRa_TX/RX; rename `LoRa_TX`/`LoRa_RX` to host-perspective-explicit names.
 2. **BOM:** ~~capacitors~~ (done, finding 3 — MPN/Mfr/MinVRating on all 27); still to do: FB1 MPN/Mfr fields, the three LEDs, Y5's ESR grade, and the same annotation pass over resistors/inductors/connectors/crystals/ICs.
 3. **Layout:** ~~C95 re-route + place C14~~ (done); ~~relocate Y6~~ (retracted, finding 5 — layout is compliant); tighten GND via density along the clock traces toward ~1/mm; pull C8/C9 in toward VIN; via at PSNS; three 1 mm fiducials per side (delete FID1 from under J2); vias out of U28.29 and U3.4; refdes silkscreen; tie H1–H4 to GND; fix the SMA board-edge offset.
 4. **Fab package:** declare the F/In1 prepreg (or full controlled impedance) on the fab notes; raise the netclass minimum off 0.09 mm if you want a cheaper tier; re-enable the courtyard DRC checks and re-run; clear the silk violations.
