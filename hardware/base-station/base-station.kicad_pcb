@@ -7,6 +7,9 @@
 		(legacy_teardrops no)
 	)
 	(paper "A4")
+	(title_block
+		(rev "V5")
+	)
 	(layers
 		(0 "F.Cu" signal)
 		(4 "In1.Cu" signal)
@@ -26305,7 +26308,7 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "TinkerRocket\nBase Station V5"
+	(gr_text "TinkerRocket\nBase Station ${REVISION}"
 		(at 74.54 123.61 90)
 		(layer "F.SilkS")
 		(uuid "1f5c02ba-8316-4aba-ba92-7cd7a5b67c77")
