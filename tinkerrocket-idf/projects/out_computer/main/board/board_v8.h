@@ -58,12 +58,16 @@ struct board_pins
 
     // --- Radio daughterboard host link (consumed by the UART-modem backend,
     //     #410; constants staged here so the pin map is complete) ---
-    // Schematic labels LoRa_TX/LoRa_RX: wired as-labeled (TX net = OC
-    // transmit). CAUTION: TX/RX label perspective has been wrong on this
-    // schematic family before (RunCam, #234) — if the daughterboard's BOOT
-    // message never arrives on bring-up, swap these two first.
-    static constexpr int LORA_UART_TX_PIN = 11;  // LoRa_TX (label-perspective)
-    static constexpr int LORA_UART_RX_PIN = 10;  // LoRa_RX (label-perspective)
+    // CONFIRMED against both PCBs' pad->net maps, not the labels alone: our
+    // J5.4 (net LoRa_TX, GPIO11) lands on the daughterboard's J6.4 (its net
+    // LoRa_RX, its GPIO5), and our J5.3 (net LoRa_RX, GPIO10) lands on its
+    // J6.3 (its net LoRa_TX, its GPIO6). The two boards name the nets from
+    // their own perspective, so the same pair of names appears on both ends
+    // of a crossed link — the cable pin number is the only unambiguous
+    // reference. (This is the trap that #234/RunCam hit; it is resolved here,
+    // so do NOT "fix" it by swapping these two on bring-up.)
+    static constexpr int LORA_UART_TX_PIN = 11;  // LoRa_TX -> J5.4 (CONFIRMED)
+    static constexpr int LORA_UART_RX_PIN = 10;  // LoRa_RX <- J5.3 (CONFIRMED)
     // Daughterboard power gate (high = powered), like CAM_ACT for the RunCam.
     // Also the recovery hammer for a wedged/bricked daughterboard (#412).
     static constexpr int LORA_ACT_PIN = 12;      // LoRa_ACT (CONFIRMED)

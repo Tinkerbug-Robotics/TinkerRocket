@@ -27,6 +27,29 @@
 
 #include "config.h"
 
+// ---- Board constraints -------------------------------------------------------
+// LoRa V3 hardware facts that a future sdkconfig edit could violate silently.
+// The two that map to a settable Kconfig symbol fail the build rather than the
+// bench; the third has no such symbol and is stated here so it is at least on
+// the page next to the code it constrains.
+//
+// NO 2.4 GHz, EVER. The S3's LNA_IN (pin 1) is left floating on this board
+// with no matching network, and the RF supply is a 2 nH 0402 + 100 nF. Nothing
+// in this firmware may call esp_wifi_init() or esp_bt_controller_init().
+// (CONFIG_ESP_WIFI_ENABLED cannot be asserted on: it is a non-prompt SoC
+// capability symbol, always y on an S3 — the BT half below is the settable one.)
+
+#ifdef CONFIG_BT_ENABLED
+#error "radio_board: the daughterboard leaves the S3's LNA_IN floating with no \
+matching network — no 2.4 GHz radio may be brought up on this board."
+#endif
+#ifdef CONFIG_SPIRAM
+#error "radio_board: the as-built board's S3 has no in-package PSRAM at all, \
+and on the S3RH2 revision the PSRAM shares VDD_SPI (fed through ~14 ohm) with \
+the boot flash — both active sags that rail under the 2.7 V minimum of each. \
+See sdkconfig.defaults."
+#endif
+
 static const char* TAG = "radio_board";
 
 using namespace radio_modem;
