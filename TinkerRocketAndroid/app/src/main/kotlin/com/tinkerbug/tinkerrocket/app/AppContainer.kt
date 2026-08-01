@@ -115,7 +115,22 @@ class AppContainer(app: Application) {
     val tileCache = com.tinkerbug.tinkerrocket.maps.OfflineTileCache(
         File(app.noBackupFilesDir, "OfflineTiles"),
     )
-    val tileProxy = com.tinkerbug.tinkerrocket.maps.TileProxyServer(tileCache).apply { start() }
+    // Google satellite (Map Tiles API) is the online-only extra basemap:
+    // keyed builds offer it in the picker; keyless forks never construct
+    // the upstream and the picker skips it.  The proxy never lets these
+    // tiles near the offline cache (provider terms) — offline stays USGS.
+    val googleMapsAvailable: Boolean =
+        com.tinkerbug.tinkerrocket.BuildConfig.TR_MAPS_API_KEY.isNotEmpty()
+    val tileProxy = com.tinkerbug.tinkerrocket.maps.TileProxyServer(
+        tileCache,
+        googleUpstream = if (googleMapsAvailable) {
+            com.tinkerbug.tinkerrocket.maps.GoogleTileUpstream(
+                com.tinkerbug.tinkerrocket.BuildConfig.TR_MAPS_API_KEY,
+            )
+        } else {
+            null
+        },
+    ).apply { start() }
     // Saved-region manifest lives beside the tile tree (iOS: App Support root).
     val regionStore = com.tinkerbug.tinkerrocket.maps.OfflineRegionStore(app.noBackupFilesDir, tileCache)
 

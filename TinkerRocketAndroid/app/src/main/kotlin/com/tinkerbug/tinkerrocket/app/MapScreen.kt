@@ -79,6 +79,8 @@ fun MapScreen(
     session: DeviceSession?,
     predictor: LandingPredictor? = null,
     phoneLocation: PhoneLocationManager? = null,
+    /** True when the build carries a Map Tiles API key (AppContainer). */
+    googleAvailable: Boolean = false,
 ) {
     // Phone dot runs with the map (ref-counted manager).
     if (phoneLocation != null) {
@@ -114,8 +116,10 @@ fun MapScreen(
     var source by remember { mutableStateOf(TileSource.USGS_IMAGERY_TOPO) }
     // Basemap-decision (plan §8 #2): USGS raster = DEFAULT + the only
     // offline/cacheable path; OpenFreeMap Liberty (keyless vector, ODbL)
-    // is the online-only option for international browsing.
+    // and Google Satellite (Map Tiles API, key'd builds) are the
+    // online-only options.
     var openFreeMap by remember { mutableStateOf(false) }
+    var googleAttribution by remember { mutableStateOf<String?>(null) }
     var follow by remember { mutableStateOf(true) }
 
     // The map handle once ready; state so recomposition sees it.
@@ -238,9 +242,22 @@ fun MapScreen(
                     }
                     source == TileSource.USGS_IMAGERY_TOPO -> source = TileSource.USGS_TOPO
                     source == TileSource.USGS_TOPO -> source = TileSource.USGS_IMAGERY
-                    else -> openFreeMap = true
+                    source == TileSource.USGS_IMAGERY && googleAvailable ->
+                        source = TileSource.GOOGLE_SATELLITE
+                    else -> {
+                        source = TileSource.USGS_IMAGERY_TOPO
+                        openFreeMap = true
+                    }
                 }
-            }) { Text(if (openFreeMap) "OpenFreeMap (online)" else source.displayName) }
+            }) {
+                Text(
+                    when {
+                        openFreeMap -> "OpenFreeMap (online)"
+                        source == TileSource.GOOGLE_SATELLITE -> "Google Satellite (online)"
+                        else -> source.displayName
+                    },
+                )
+            }
             if (!follow) {
                 OutlinedButton(onClick = {
                     follow = true
@@ -261,11 +278,25 @@ fun MapScreen(
         ) {
             Row {
                 Text(
-                    if (openFreeMap) OPENFREEMAP_ATTRIBUTION else TileSource.ATTRIBUTION,
+                    when {
+                        openFreeMap -> OPENFREEMAP_ATTRIBUTION
+                        source == TileSource.GOOGLE_SATELLITE ->
+                            googleAttribution?.let { "Google · $it" }
+                                ?: TileSource.GOOGLE_ATTRIBUTION
+                        else -> TileSource.ATTRIBUTION
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                 )
             }
+        }
+    }
+
+    // Map Tiles display policy wants the live copyright string alongside the
+    // Google name; the proxy memoizes it — fetch when the source comes up.
+    LaunchedEffect(source, mapRef) {
+        if (source == TileSource.GOOGLE_SATELLITE && googleAttribution == null) {
+            googleAttribution = fetchGoogleAttribution(proxy)
         }
     }
 
@@ -283,6 +314,27 @@ fun MapScreen(
 private const val OPENFREEMAP_STYLE_URI = "https://tiles.openfreemap.org/styles/liberty"
 private const val OPENFREEMAP_ATTRIBUTION =
     "OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors"
+
+/** Live Google copyright via the proxy's memoized /meta route. */
+private suspend fun fetchGoogleAttribution(proxy: TileProxyServer): String? =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val conn = java.net.URL(
+                "http://127.0.0.1:${proxy.port}/meta/googleSatellite/attribution",
+            ).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 5_000
+            conn.readTimeout = 10_000
+            try {
+                if (conn.responseCode == 200) {
+                    conn.inputStream.readBytes().decodeToString()
+                } else {
+                    null
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
+    }
 
 private const val ROCKET_SOURCE = "rocket-src"
 private const val ROCKET_LAYER = "rocket-layer"
