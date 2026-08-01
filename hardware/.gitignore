@@ -46,3 +46,4 @@ fp-info-cache
 # `gerbers/*` alone would only match hardware/gerbers/ — hence the `**/`.)
 **/gerbers/*
 !**/gerbers/.gitkeep
+*.bak-*
