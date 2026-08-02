@@ -253,7 +253,7 @@ Sensitivity is ~15 ppm per pF of C_L, so a ±1 pF error in the stray estimate is
 
 **Done 2026-08-01.** C90/C92 are `CL05C120JB5NNNC` 12 pF in both schematic and copper. Applied fleet-wide — all four ECS-400 networks across the three boards now use 12 pF, which is what made the base-station's short clock traces visible as the outlier (issue #704, closed: its legs went 3.7/7.2 mm → 8.94/11.83 mm, and the four networks now sit within 2.3 ppm of each other). The first-article measure-and-trim above still stands as the real close-out.
 
-### 7. Host-UART polarity: the firmware placeholder is the reverse of the hardware
+### 7. ~~Host-UART polarity: the firmware placeholder is the reverse of the hardware~~ — **FIXED 2026-08-02**
 Cable pin 3 = host RX ↔ daughterboard **GPIO6**; cable pin 4 = host TX ↔ daughterboard **GPIO5**. Both hosts confirm the convention (`out_computer/board_v8.h`: `LORA_UART_TX_PIN = 11 // LoRa_TX (label-perspective)` → J5.4; `base_station/board_v3.h`: TX = 35 → J6.4).
 `radio_board/main/config.h` currently has:
 ```
@@ -261,7 +261,17 @@ static constexpr int HOST_UART_TX = 5;   // TODO: TBD from V8 schematic
 static constexpr int HOST_UART_RX = 6;   // TODO: TBD from V8 schematic
 ```
 That is backwards. As written the modem drives GPIO5 onto cable pin 4 — **the same wire the host is driving** (two push-pull CMOS outputs in contention) — and listens on GPIO6, which nothing drives. The TODO comments say the values were never resolved; now they can be: **TX = 6, RX = 5**.
-Note the root cause is a naming trap worth fixing in the schematic too: on the daughterboard the net named `LoRa_TX` is the pin the daughterboard **receives** on (the labels are host-perspective on all three boards). Rename to `HOST_TX`/`HOST_RX`, or annotate the sheet, or the next person will re-derive it wrong.
+**Fixed 2026-08-02** in `radio_board/main/config.h`: `HOST_UART_TX = 6`, `HOST_UART_RX = 5`, and both `// TODO: TBD from V8 schematic` comments removed.
+
+**Correction to the original note.** It said "on the daughterboard the net named `LoRa_TX` is the pin the daughterboard **receives** on (the labels are host-perspective on all three boards)". That is wrong, and the wrong version is more confusing than the truth. Traced end-to-end from the netlists of all three boards:
+
+| | cable pin 3 | cable pin 4 |
+|---|---|---|
+| rocket-computer | `LoRa_RX`, U15 GPIO10 = **OC's RX** | `LoRa_TX`, U15 GPIO11 = **OC's TX** |
+| base-station | `LoRa_RX`, U3 GPIO36 = **BS's RX** | `LoRa_TX`, U3 GPIO35 = **BS's TX** |
+| daughterboard | `LoRa_TX`, U28 GPIO6 = **its TX** | `LoRa_RX`, U28 GPIO5 = **its RX** |
+
+Every board names its UART nets from **its own** perspective, not the host's, and the cable is straight-through. The crossover is achieved precisely *because* each end names the same wire differently — cable pin 3 is `LoRa_TX` on the daughterboard and `LoRa_RX` on both hosts. That is a coherent convention, not a mistake; the trap is only that the same string means opposite things depending which board's netlist you are reading, so the pin assignment must come from the schematic and never from a net name seen on the other side. `config.h` now carries that reasoning inline.
 
 ---
 
@@ -302,7 +312,7 @@ Still worth doing at some point: **pin actual LED MPNs** so Vf is a known quanti
 ### 11. There are no reference designators on the silkscreen
 All 66 refdes properties are `(hide yes)`. The silkscreen gerbers contain only outlines, pin-1 marks and four board texts (`LoRa V3`, `PWR`, `T`, `R`). Nothing on this board can be identified during assembly inspection, bring-up or rework. On a 22 × 27 mm board you will not fit all of them — but at minimum the ICs, connectors, the LEDs, the crystals and the ferrite bead should be marked, and a pin-1 dot for U28 and U22.
 
-### 12. Hot-plug onto a live 2S pack, with no TVS and no bulk on VSYS
+### 12. ~~Hot-plug onto a live 2S pack, with no TVS and no bulk on VSYS~~ — **CLOSED 2026-08-02, SMF10A fitted here and on both GNSS boards**
 Rocket-computer J5 pin 2 is unswitched VBATT (`Net-(J5-Pin_2)` = {FL2.2, J5.2}), so plugging the daughterboard in always hot-connects a live 6.4–8.4 V pack. On this board VBUS/+BATT go straight through a Schottky into **VSYS, which has no capacitor at all** — the first bulk is C8/C9 (44 µF nominal) *behind* the CM choke. Cable + choke leakage inductance ringing into that cap can approach 2 × V_pack ≈ 16.8 V against the TPS62913's **18 V** abs max; the DCR of the choke and diode probably damp it, but "probably" on a 3-cent part is the wrong trade.
 **Fix:** a TVS on VSYS (SMAJ12A / SMBJ13A class, standoff above 8.4 V, clamp well under 18 V), and consider a small bulk cap on VSYS ahead of the choke. This also covers the USB side, where 44 µF of ceramic behind a diode exceeds the USB inrush guidance.
 
@@ -335,9 +345,13 @@ Related: the rocket computer *can* power-cycle this board (J5 pin 1 is switched 
 - ~~**PSNS (pin 7) — "Connect directly to the system GND plane with a via."** The nearest via was **1.19 mm** away; the pin reached ground through the F.Cu pour.~~ **DONE 2026-08-01 — a GND via now sits at the pad (0.00 mm).**
 - The FB divider's high side taps +3V3 next to R6, i.e. near the converter rather than at the load, so the remote sense is nominal rather than real. With a full In2 plane the IR drop is small — noting it for completeness.
 
-### 16. SMA: the board edge is 0.38 mm short of where the footprint puts the connector face
+### 16. SMA: the board edge is 0.38 mm short of where the footprint puts the connector face — **OPEN, needs a physical check**
 J8's fab outline draws the connector body to **y = 103.32** and the board-slot region from 103.32 → 104.97, where the pads begin. The actual Edge.Cuts top edge is **y = 103.70**. The board therefore does not bottom out in the connector by 0.38 mm; retention becomes solder-only, and the pin/tab overlap shifts. Pads are 3.5 mm long so there is solderable area either way.
 **Fix:** check against the RF Solutions CON-SMA-EDGE-S mechanical drawing and move the edge (or the footprint) to match. On a high-g vehicle with a coax pigtail hanging off it, a connector that is not butted is worth 10 minutes.
+
+**Status 2026-08-02 — still open, and it needs a part in hand rather than more analysis.** J8 sits at (92.4, 106.7225) rot -90 against a board that spans x 81.86–103.86, y 103.70–131.20, so the connector launches off the y-minimum edge. The 0.38 mm is the gap between where `Edge.Cuts` puts the board edge and where the `CON-SMA-EDGE-S` footprint expects the connector's inner face to land.
+
+Deliberately **not** fixed by moving the edge: this is an edge-launch SMA whose body straddles the board edge, so the number that matters is how the real connector's slot seats on the real board thickness (1.6 mm), and that is a caliper measurement, not a CAD one. Worth doing before fab because it is mechanical and unrecoverable — if the slot does not seat, the centre pin does not land on the feed. Also note the part itself is a supply risk carried elsewhere in this review: CON-SMA-EDGE-S was 0 stock everywhere with a 20-week lead, so whichever connector is actually bought is the one to measure.
 
 ### 17. ~~54 unplugged vias-in-pad, two of them in sub-0.25 mm lands~~ — **CLOSED 2026-08-01, both ways**
 Board settings were `tenting yes / plugging no / filling no`. Same-net via-in-pad appeared in 54 SMD pads. Most were benign (0805 GND pads, the 3×3 EPAD array). Two were not:
@@ -363,9 +377,25 @@ fab quoting a 6-layer board with filled-and-capped vias prices differently
 than one quoting plain tented vias, and an undeclared Type VII requirement is
 the kind of thing that surfaces as a post-quote change order.
 
-### 18. Stackup declares no impedance control, and there is one netclass at 0.09 mm
+### 18. ~~Stackup declares no impedance control, and there is one netclass at 0.09 mm~~ — **BOTH DONE 2026-08-02**
 `dielectric_constraints: no`, `copper_finish: None`, and a single `Default` netclass with **track width 0.09 mm and clearance 0.09 mm**. For a 915 MHz board whose antenna feed depends on the F.Cu-to-In1 prepreg being 0.1 mm, the fab needs to be told (a) this is a controlled-impedance layer pair, or at minimum (b) that the F/In1 prepreg thickness is not theirs to substitute. Most 6-layer house stackups will not give you 0.1 mm there by default — and the calculated 46–48 Ω moves with it.
 Also: 0.09 mm/0.09 mm is an advanced spec that pushes the price up; only L_MOSI actually uses 0.09 mm (2.9 mm of it). Raising the class minimum to 0.1 mm and re-routing that one net would likely drop a fab tier.
+
+**Both done 2026-08-02, and verified in the fab-facing output rather than just the board file.**
+
+**18a — impedance control declared.** `dielectric_constraints` set to `yes`. The effect is bigger than the setting name suggests: exporting gerbers before and after, the F.Cu/In1.Cu dielectric entry in the `.gbrjob` changed from
+
+```
+{Type: Dielectric, Thickness: 0.1, Material: FR4}                              <- before
+{Type: Dielectric, Thickness: 0.1, Material: FR4, DielectricConstant: 4.5,     <- after
+ LossTangent: 0.02}
+```
+
+The fab was previously receiving a thickness with **no dielectric constant**, so nothing in the package pinned the impedance of the layer pair the 46-48 Ohm antenna feed depends on. It now ships the full spec. (A human-readable fab note is still worth adding — most houses quote from a fab drawing, not by parsing the job file.)
+
+**18b — netclass minimum raised to 0.1 mm.** Cheaper than the review estimated: only **6.84 mm of track (1.9%)** sat at 0.09 mm, across two nets — `L_MOSI` (2.94 mm) and `Net-(C90-Pad1)` (3.90 mm, the crystal leg, which post-dates the review). Those 7 segments were widened to 0.1 mm and the netclass, `min_track_width` and `min_clearance` all moved 0.09 -> 0.1. `MinLineWidth` in the `.gbrjob` follows, 0.09 -> 0.1, which is the number a fab quotes against.
+
+**Also re-enabled here:** `missing_courtyard`, `pth_inside_courtyard` and `npth_inside_courtyard` went from `ignore` back to `error` (finding 19). Those were off during layout, which is exactly when they are worth having on -- it is the setting that hid the rocket-computer's C12 collision.
 
 ### 19. Smaller items
 - **`missing_courtyard` is set to `ignore`** in the DRC config (along with `pth_inside_courtyard`/`npth_inside_courtyard`). Every footprint here does have a courtyard, so nothing is hiding — but this is the exact setting that made the rocket-computer C12 collision invisible. Turn it back on.

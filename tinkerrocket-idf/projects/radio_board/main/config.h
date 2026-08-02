@@ -5,16 +5,25 @@
 // Radio daughterboard (ESP32-S3) pin/board configuration (#409).
 //
 // LoRa + LED pins are from the V8 daughterboard schematic (L_* / LED nets).
-// TODO: host-link UART pins are still placeholders — set from the schematic's
-// host-connector nets before flashing real hardware.
 struct config
 {
     // ---- UART link to the host (OC on the rocket, BS on the ground) --------
     // The modem must never care which host it is plugged into (#409:
     // host-agnostic, swappable matched pairs).
     static constexpr uart_port_t HOST_UART_PORT = UART_NUM_1;
-    static constexpr int HOST_UART_TX = 5;   // TODO: TBD from V8 schematic
-    static constexpr int HOST_UART_RX = 6;   // TODO: TBD from V8 schematic
+    // Each board names these nets from ITS OWN perspective and the cable is
+    // straight-through, so one wire has two different names depending which end
+    // you read it from. Cable pin 3 is "LoRa_TX" here and "LoRa_RX" on the host;
+    // pin 4 is the reverse. Never derive these from the host's net names -- the
+    // crossover is what makes the link work. Verified against both hosts:
+    //
+    //   GPIO6 -> LoRa_TX -> J6.3 -> host RX   (OC GPIO10 / BS GPIO36)
+    //   GPIO5 <- LoRa_RX <- J6.4 <- host TX   (OC GPIO11 / BS GPIO35)
+    //
+    // Reversing them drives GPIO5 into the host's TX: two push-pull CMOS
+    // outputs on one wire, and nothing listening on the other.
+    static constexpr int HOST_UART_TX = 6;
+    static constexpr int HOST_UART_RX = 5;
     // Sized for tunnel traffic (LoRa airtime dominates), not raw UART
     // capability; must match the host side (#410).
     static constexpr int HOST_UART_BAUD = 921'600;
