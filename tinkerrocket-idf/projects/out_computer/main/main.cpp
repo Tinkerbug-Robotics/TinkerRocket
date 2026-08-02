@@ -6132,6 +6132,30 @@ static void loop_oc()
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
 
+    // Preemption catch: wall time spent OUTSIDE this function, measured from
+    // the previous iteration's exit to this one's entry.  The catch-all below
+    // times the body only, so it is structurally blind to the case where
+    // oc_loop passes its body-end timer, yields at vTaskDelay(1), and then a
+    // higher-priority Core-1 task (the I2S parser at prio 6, NimBLE, an IRQ)
+    // holds the core for a long stretch before oc_loop is scheduled again.
+    // That window looks like a clean loop from inside the body but still gaps
+    // every stream the loop feeds.
+    //
+    // Measured exit→entry, not entry→entry, so a slow body is reported once by
+    // the catch-all rather than twice.  Nominal gap is the ~1 ms vTaskDelay(1)
+    // (CONFIG_FREERTOS_HZ=1000) in both active and idle mode — the 20 ms
+    // IDLE_LOOP_DELAY_MS sleep happens inside the body — so at a 100 ms
+    // threshold this only fires on a genuine multi-tick deschedule.
+    static int64_t _loop_oc_last_exit_us = 0;
+    if (_loop_oc_last_exit_us != 0) {
+        const int64_t _preempt_dt = _loop_oc_t0 - _loop_oc_last_exit_us;
+        if (_preempt_dt > LOOP_STALL_THRESHOLD_US) {
+            ESP_LOGW("LOOP_STALL",
+                     "loop_oc off-core %lld us between iterations (preempted)",
+                     (long long)_preempt_dt);
+        }
+    }
+
     // #398 item 3: drain one paced config-readback frame (if any) per pass.
     // Outside the pwr_pin_on gate so connect-time readback (low-power mode)
     // drains too. Replaces the old inline delay(50) chain in sendCurrentConfig.
@@ -7556,6 +7580,7 @@ static void loop_oc()
                  (long long)_loop_oc_dt);
     }
 
+    _loop_oc_last_exit_us = esp_timer_get_time();
     vTaskDelay(1);  // yield to FreeRTOS scheduler
 }
 
