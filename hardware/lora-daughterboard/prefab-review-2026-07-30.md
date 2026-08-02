@@ -22,6 +22,27 @@ Bottom: ESP32-S3RH2 (QFN-56), W25Q128 boot flash, USB-C, JST-SH host link, both 
 - **EN/SYNC tied to VIN is legal** — TPS62913 abs max on VIN/EN/SYNC/PG/S-CONF is 18 V; the 2S pack tops out at 8.4 V.
 - **FB1 is 9.4 mm from U3 and 6.55 mm from L8** — well outside TI's ferrite-bead keepout region (Fig. 10-2).
 - **L10 = 24 nH in series with XTAL_P is prescribed**, not a mystery part: ESP32-S3 HDG says "add a series component on the XTAL_P clock trace… an inductor of 24 nH to reduce the impact of high-frequency crystal harmonics."
+
+> **2026-08-01 — removed, then restored; recording why so it is not removed again.**
+> The inductor was briefly deleted from all three S3 boards on the reasoning that
+> it does almost nothing at 40 MHz: 6.0 Ω against the 331 Ω of the 12 pF load cap,
+> worth −1.1 ppm, forming a ~297 MHz low-pass with that cap. Those numbers are
+> correct, and they are also the whole point — that low-pass is the function
+> Espressif is asking for, and on **these** boards it lands where it matters:
+>
+> | harmonic | frequency | falls in | attenuation |
+> |---|---|---|---|
+> | 23rd | **920 MHz** | **the 902–928 MHz LoRa band** | **−18.7 dB** |
+> | 61st | 2.44 GHz | the BLE band | −36.5 dB |
+>
+> A LoRa receiver working near −130 dBm does not need a large on-board spur to
+> lose sensitivity, and the 23rd harmonic of the S3's own crystal landing in its
+> own receive band is exactly the case the guideline is aimed at. The 1 ppm and
+> the 0402 saved by deleting it are not worth that. Restored in `e7b81a8`
+> (schematics; PCBs re-placed by hand, since the crystal areas had moved).
+> Side effect in the right direction: the +0.055 pF of effective load takes the
+> base-station's network from +10.9 to **+9.9 ppm**, inside ±10 (issue #704).
+
 - **R75/R76 = 22 Ω on USB D+/D− is per Espressif** ("reserve series resistors (initial value can be 22/33 Ω)"), and they sit ~2 mm from the S3 pins with the TVS at the connector.
 - **USB-C**: 5.11 k Rd on both CC (correct UFP), SP0503BAHTG TVS on VBUS/D+/D−, ORing Schottkys CUS10S30 (30 V/1 A, Vf 230 mV @100 mA) — CR3 also gives reverse-polarity protection on the battery input.
 - **Cross-board link is correct**: J6.1/2/3/4 = GND / +BATT / host-RX / host-TX matches rocket-computer J5 (`Net-(J5-Pin_1)` via Q10, `Net-(J5-Pin_2)` via FL2→VBATT, `LoRa_RX`→U15 GPIO10, `LoRa_TX`→U15 GPIO11) and base-station J6 (GND, V_LORA≈5.0 V from the TPS61023, GPIO36/GPIO35). Both host supplies land inside the TPS62913's 3–17 V VIN window (≈4.5 V from the BS after the Schottky + choke; 6.0–8.0 V from the rocket).
@@ -144,12 +165,36 @@ Applied: C11 and C13 revalued, **C14 added** at schematic (179.07, 150.495) with
 
 **Caveat:** the derating percentages are the usual range for the class, not measured — confirm both parts against Samsung's DC-bias curves. If the 22 µF derates worse than expected, a fourth (≈56–70 µF) still fits inside the 80 µF ceiling.
 
-### 4. VDD_SPI: no 0.1 µF at the pin, a 10 µF where Espressif says not to, both 6 mm away — and the boot flash shares the internal 14 Ω
+### 4. VDD_SPI: no 0.1 µF at the pin, a 10 µF where Espressif says not to, both 6 mm away — and the boot flash shares the internal 14 Ω — **RESOLVED 2026-08-01; the residual distance is accepted, with a firmware constraint**
 `OUT_VDD_SPI` = {U28.29, U22.8 (VCC), C96 1 µF, C97 10 µF}. C96/C97 are at (92.15, 113.6–114.6) — **1.6 mm from the flash but 6.1–6.3 mm from U28 pin 29** at (86.20,115.76). The rail reaches the chip over a 0.2 mm, 6.6 mm-long trace cut through the In2 plane.
 Espressif: "add extra **0.1 µF and 1 µF** decoupling capacitors **close to VDD_SPI**. Please do not add excessively large capacitors." There is no 0.1 µF at all, the 1 µF is 6 mm away, and the 10 µF is the thing they warn against.
 Separately, this is the same **R_SPI budget** question as the rocket computer (H7): in 3.3 V mode VDD_SPI is fed internally from VDD3P3_RTC through a **14 Ω** resistor, and on the **S3RH2 the in-package 2 MB quad PSRAM hangs on that same node** (min 2.7 V), as does the external W25Q128 (min 2.7 V, ≤20 mA read, ≤25 mA program/erase). Flash alone: 3.3 − 0.025×14 = 2.95 V — fine. Flash + PSRAM active (~50 mA): 3.3 − 0.70 = **2.60 V, below both minimums**, on the chip's *boot* flash.
 **Fix:** move U22 pin 8 off `OUT_VDD_SPI` to +3V3 (this board's +3V3 is a low-noise TPS62913 output, so it is clean), leave VDD_SPI with 0.1 µF + 1 µF **at pin 29**, and drop C97 to 1 µF.
 **If instead you keep the shared node:** it only works while firmware never enables PSRAM. `radio_board/sdkconfig.defaults` does not enable SPIRAM today — write that constraint down, because turning it on later silently breaks the rail.
+
+**Resolution 2026-08-01.** The load moved, and that changes the answer more than moving the caps would have. As built:
+
+```
+OUT_VDD_SPI = { U28.29, C96 10 µF, C97 100 nF }        <- three items, nothing else
+U22.8 (VCC) = +3V3                                      <- flash is off this rail
+```
+
+- **The flash is off the rail**, so its 20–25 mA never crosses the 14 Ω. That was the whole 2.60 V problem above, and it is gone.
+- **The 0.1 µF that was genuinely missing now exists** (C97). The composition is now 0.1 µF + 10 µF — Espressif asks for 0.1 µF + 1 µF, and finding 4a already argued why the bulk stays 10 µF here.
+- **PSRAM is disabled**, so the in-package die draws leakage only: `radio_board/sdkconfig.defaults` contains no `CONFIG_SPIRAM` line at all and IDF leaves it off unless asked.
+
+**What is left on the rail is the SPI pad ring alone** — SPICLK/SPID/SPIQ/SPIWP/SPIHD/SPICS0 (pins 30–35) switching at 80 MHz (`CONFIG_ESPTOOLPY_FLASHFREQ_80M=y`). Each line drives ~10 pF of short trace plus flash input, so I ≈ C·V·f ≈ 2.6 mA for the clock and less for the data lines — **under ~10 mA average**, a 0.14 V DC drop through the 14 Ω, against no external device on the rail that has a Vmin to violate.
+
+**So the 6 mm is accepted, and it is worth being explicit about why rather than just declining the rework.** Six millimetres over a close plane is ~2–3 nH plus vias, call it 3–4 nH:
+
+| | C96/C97 at 6 mm | the only alternative: the internal 14 Ω |
+|---|---|---|
+| at 80 MHz | ~1.8 Ω | 14 Ω |
+| at 300 MHz | ~6.6 Ω | 14 Ω |
+
+Even at 6 mm the local capacitance is **~8× lower impedance than the chip's own internal feed** at the clock frequency. Moving it to 1 mm buys another 3–4×, but the benefit scales with the current being switched and that is now under 10 mA: a 50 mA fast transient into ~2 Ω is ~100 mV on a 3.16 V rail, ~3%, on an internal pad supply. Not worth re-working a finished layout for.
+
+**Firmware constraint — this is the part that must not be lost.** Setting `CONFIG_SPIRAM=y` puts the in-package PSRAM's current back on this node, behind the 14 Ω, and reinstates both the DC drop and the decoupling-distance argument in full. **This board must not enable PSRAM without re-feeding VDD_SPI.** Same class of constraint as "never init RF" in finding 19.
 
 ### 4a. VDD_SPI bulk: C97 stays at 10 µF (the HDG warning does not apply here)
 Finding 4 originally cut C97 from 10 µF to 100 nF on the strength of Espressif's *"do not add excessively large capacitors"*. Tracing the mechanism behind that warning, neither driver applies to this board, so **C97 was put back to 10 µF**:
@@ -190,7 +235,7 @@ The proposed fix failed on two counts: placing Y6 at 0.62 mm from pins 53/54 wou
 
 **Lesson for the next review:** "component should be close to the pin" is a real rule for decoupling and a *false* one for crystals on this part. Check the PCB layout guideline, not just the schematic checklist — they are separate documents and only the former covers placement.
 
-### 6. Load caps on Y6 are too high for a 10 pF crystal — **fit 12 pF**
+### 6. ~~Load caps on Y6 are too high for a 10 pF crystal~~ — **DONE 2026-08-01, 12 pF fitted**
 ECS-400-10-37B2-CKY-TR is **CL = 10 pF**, 40 Ω ESR, ±10 ppm. Per-leg stray with the existing 11 mm routing: ~0.95 pF trace (0.086 pF/mm on B.Cu over In4 at 0.1 mm) + ~0.5 pF pad + **2.0 pF pin** (S3 datasheet Table 5-4, C_IN) = **3.45 pF**.
 
 | C1 = C2 | C_L actual | freq error | startup margin vs 18 pF |
@@ -205,6 +250,8 @@ ECS-400-10-37B2-CKY-TR is **CL = 10 pF**, 40 Ω ESR, ±10 ppm. Per-leg stray wit
 **The real reason to change is margin, not accuracy.** |Rneg| ∝ gm/(ω²·C1·C2), so 18 → 12 pF more than doubles the oscillator's negative resistance against a 40 Ω-ESR part. Frequency accuracy barely matters here: USB tolerates ±2500 ppm, the S3's RF is unused, and LoRa timing comes from the E220's own 32 MHz crystal.
 
 Sensitivity is ~15 ppm per pF of C_L, so a ±1 pF error in the stray estimate is worth about that much — measure and trim on the first article as Espressif instructs.
+
+**Done 2026-08-01.** C90/C92 are `CL05C120JB5NNNC` 12 pF in both schematic and copper. Applied fleet-wide — all four ECS-400 networks across the three boards now use 12 pF, which is what made the base-station's short clock traces visible as the outlier (issue #704, closed: its legs went 3.7/7.2 mm → 8.94/11.83 mm, and the four networks now sit within 2.3 ppm of each other). The first-article measure-and-trim above still stands as the real close-out.
 
 ### 7. Host-UART polarity: the firmware placeholder is the reverse of the hardware
 Cable pin 3 = host RX ↔ daughterboard **GPIO6**; cable pin 4 = host TX ↔ daughterboard **GPIO5**. Both hosts confirm the convention (`out_computer/board_v8.h`: `LORA_UART_TX_PIN = 11 // LoRa_TX (label-perspective)` → J5.4; `base_station/board_v3.h`: TX = 35 → J6.4).
@@ -248,6 +295,10 @@ Still worth doing at some point: **pin actual LED MPNs** so Vf is a known quanti
 
 **Fix:** two or three fiducials per populated side, sized to the assembler's spec, placed asymmetrically and well apart. Repositioning FID1 falls out of that, and the DRC error clears as a side effect. Same underlying gap as rocket-computer H12.
 
+**Count DONE 2026-08-01 — size still open.** There are now **six fiducials, three per side, asymmetric**: F.Cu FID2 (102.09, 115.77), FID3 (86.97, 107.89), FID4 (90.64, 123.85); B.Cu FID1 (102.08, 115.73), FID5 (86.99, 107.91), FID6 (93.18, 130.17). That gives the placement machine rotation and scale, not just translation, which was the part that mattered for a 0.4 mm-pitch QFN-56.
+
+**Still 0.5 mm copper** — confirm against whoever is building these before committing, since 1.0 mm copper / 2.0 mm mask is the common requirement. The two remaining board DRC errors are FID1/J2 and FID6/J6 courtyard overlaps, which per the reasoning above are geometry complaints rather than functional ones.
+
 ### 11. There are no reference designators on the silkscreen
 All 66 refdes properties are `(hide yes)`. The silkscreen gerbers contain only outlines, pin-1 marks and four board texts (`LoRa V3`, `PWR`, `T`, `R`). Nothing on this board can be identified during assembly inspection, bring-up or rework. On a 22 × 27 mm board you will not fit all of them — but at minimum the ICs, connectors, the LEDs, the crystals and the ferrite bead should be marked, and a pin-1 dot for U28 and U22.
 
@@ -255,10 +306,25 @@ All 66 refdes properties are `(hide yes)`. The silkscreen gerbers contain only o
 Rocket-computer J5 pin 2 is unswitched VBATT (`Net-(J5-Pin_2)` = {FL2.2, J5.2}), so plugging the daughterboard in always hot-connects a live 6.4–8.4 V pack. On this board VBUS/+BATT go straight through a Schottky into **VSYS, which has no capacitor at all** — the first bulk is C8/C9 (44 µF nominal) *behind* the CM choke. Cable + choke leakage inductance ringing into that cap can approach 2 × V_pack ≈ 16.8 V against the TPS62913's **18 V** abs max; the DCR of the choke and diode probably damp it, but "probably" on a 3-cent part is the wrong trade.
 **Fix:** a TVS on VSYS (SMAJ12A / SMBJ13A class, standoff above 8.4 V, clamp well under 18 V), and consider a small bulk cap on VSYS ahead of the choke. This also covers the USB side, where 44 µF of ceramic behind a diode exceeds the USB inrush guidance.
 
-### 13. 921.6 kbaud host UART with no series termination and a ground return that only exists through the CM choke
+### 13. 921.6 kbaud host UART with no series termination — **series R DONE 2026-08-01 (1 kΩ, not 33 Ω — see below)**; the CM-choke ground return stands
 `HOST_UART_BAUD = 921'600` over an unshielded 1 mm-pitch JST-SH cable running next to a 22 dBm 915 MHz transmitter, with **no series resistors at either driver** and no ESD on LoRa_TX/LoRa_RX.
 More interesting: **`VSS` (J6.1) reaches board GND only through FL1's second winding** — the same house pattern as the GNSS daughterboards (verified: their J4.3/J4.4 → FL1 → VIN/GND is identical). That is a deliberate common-mode filter on the power pair, and it is fine for DC. But the UART's return current has no counterpart in the other winding, so it sees the choke as common mode, and the signal pair itself is unfiltered while the power pair is. Worth a conscious decision rather than inheritance.
 **Suggest:** 33 Ω series source terminators at each driver (there is room on this board; the host side is a separate change), and confirm the DLW21SN670HQ2L's rated current and DCR against the real load — measured budget is **~90 mA from the rocket (7.4 V) and ~145 mA from the base station (4.6 V)**, against a nominal ~370–400 mA rating for this 0805 class. Comfortable, but it has never been written down.
+
+**Done 2026-08-01 — but with 1 kΩ, not 33 Ω, and the difference is worth recording.** R77/R78 now sit in series on `LoRa_RX`/`LoRa_TX` between the chip and J6 pins 3/4. 33 Ω would have been a *source terminator*, sized to match the driver's output impedance to the cable so reflections are absorbed at the source. 1 kΩ is not that — it is slew-rate and fault-current limiting.
+
+That is fine here, and arguably the better fit for the actual risk. At 921.6 kbaud the bit period is 1085 ns and the cable is well under a metre, so the line is electrically short: reflections settle in a few ns, orders of magnitude inside a bit, and were never the failure mode. What the finding actually cared about was radiated coupling next to a 22 dBm 915 MHz transmitter, and a 1 kΩ series element attacks that directly by limiting edge rate and fault current.
+
+The cost is rise time, which stays comfortable:
+
+| cable + input C | RC | 10–90 % rise | fraction of a bit |
+|---|---|---|---|
+| 30 pF | 30 ns | 66 ns | 6 % |
+| 60 pF | 60 ns | 132 ns | 12 % |
+| 100 pF | 100 ns | 220 ns | 20 % |
+| 150 pF | 150 ns | 330 ns | 30 % |
+
+A UART samples mid-bit, so anything under ~40 % is uncontentious. **The CM-choke ground return (VSS reaching GND only through FL1's second winding) is unchanged and remains an open, conscious inheritance.**
 
 ### 14. Power-good goes nowhere, and the base station cannot power-cycle the modem
 `Net-(U3-PG)` = {U3.5, R4.1} with R4 pulled up to `Net-(U3-VO)`. No GPIO sees it. Free telemetry left on the table — and PG is the one signal that would distinguish "modem hung" from "modem rail collapsed".
@@ -266,7 +332,7 @@ Related: the rocket computer *can* power-cycle this board (J5 pin 1 is switched 
 
 ### 15. Buck layout details that miss the datasheet
 - **C9 is 2.76 mm and C8 is 4.77 mm from VIN** (C7's 2.2 nF is at 1.25 mm and does carry the fastest edges). TI: place the input capacitors "as close as possible" to VIN/PGND. At 2.2 MHz this is the loop that matters most.
-- **PSNS (pin 7) — "Connect directly to the system GND plane with a via."** The nearest via is **1.19 mm** away; the pin reaches ground through the F.Cu pour. Put a via at the pad.
+- ~~**PSNS (pin 7) — "Connect directly to the system GND plane with a via."** The nearest via was **1.19 mm** away; the pin reached ground through the F.Cu pour.~~ **DONE 2026-08-01 — a GND via now sits at the pad (0.00 mm).**
 - The FB divider's high side taps +3V3 next to R6, i.e. near the converter rather than at the load, so the remote sense is nominal rather than real. With a full In2 plane the IR drop is small — noting it for completeness.
 
 ### 16. SMA: the board edge is 0.38 mm short of where the footprint puts the connector face
