@@ -3940,7 +3940,10 @@ static void setup_bs()
     }
     else
     {
-        ESP_LOGI(TAG, "BLE advertising as 'TinkerBaseStation'");
+        // The live unit name, not the compile-time default: this line read
+        // "TinkerBaseStation" on a board named "BaseStation V4", which is
+        // exactly the wrong thing to print while chasing a naming bug.
+        ESP_LOGI(TAG, "BLE advertising as '%s'", unit_name);
     }
 
     last_stats_ms = millis();

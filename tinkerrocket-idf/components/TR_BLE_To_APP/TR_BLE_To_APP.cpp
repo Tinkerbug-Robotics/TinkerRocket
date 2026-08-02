@@ -1024,7 +1024,12 @@ bool TR_BLE_To_APP::begin()
     nimble_port_freertos_init(nimble_host_task);
 
     ESP_LOGI(BLE_TAG, "Server started (NimBLE)");
-    ESP_LOGI(BLE_TAG, "Device name: %s", device_name_);
+    // Read the name back OUT of the stack rather than echoing our own copy:
+    // the bug this line now guards was the stack silently keeping "nimble"
+    // while device_name_ held the right string, so a log of device_name_
+    // looked perfectly healthy and proved nothing.
+    ESP_LOGI(BLE_TAG, "Device name: %s (GAP reports '%s')",
+             device_name_, ble_svc_gap_device_name());
 
     return true;
 }
