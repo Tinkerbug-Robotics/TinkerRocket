@@ -84,10 +84,10 @@ roughly a fifth of that in git).
 | `SAM-M10Q-00B.step` | 618 KB |
 | `SF-DFN8_EVS.step` | 83 KB |
 | `SMT-0540-T-9-R.step` | 80 KB |
+| `SOD-123FL.step` | 86 KB |
 | `SOIC8_4X5_ONS.step` | 149 KB |
 | `SP0503BAHTG.step` | 152 KB |
 | `SRP4020TA-1R5M.step` | 112 KB |
-| `SS24FL.step` | 86 KB |
 | `TAJC337M006RNJ.step` | 136 KB |
 | `TBLH11-350-05-BK.step` | 1291 KB |
 | `TPS2121RUXR.step` | 304 KB |
