@@ -25172,7 +25172,7 @@
 				)
 			)
 		)
-		(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown, 17 V clamp at 11.8 A, 200 W, SOD-123FL"
+		(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W peak pulse, SOD-123FL"
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -25221,6 +25221,42 @@
 			)
 		)
 		(property "MAXIMUM_PACKAGE_HEIGHT" "1.08mm"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Dist" "LCSC"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Dist_PN" "C5444308"
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify bottom)
+			)
+		)
+		(property "Notes" "Clamp must stay below the TPS62913 VIN abs max of 18 V. SMF12A clamps 19.9 V and is NOT a substitute. Standoff must clear the 8.4 V full-charge 2S pack, so 10 V is the only SMF step that fits both ends."
 			(at 0 0 0)
 			(show_name no)
 			(do_not_autoplace no)

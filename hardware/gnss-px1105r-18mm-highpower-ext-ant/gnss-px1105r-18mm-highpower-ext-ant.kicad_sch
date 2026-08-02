@@ -2042,6 +2042,232 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:SMF10A"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "CR"
+				(at -5.08 2.54 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "SMF10A"
+				(at -5.08 -3.81 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Footprint" "Footprints:SODFL3617X108N"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown, 17 V clamp at 11.8 A, 200 W, SOD-123FL"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MPN" "SMF10A"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Mfr" "PTTC"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Package" "SOD-123FL"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MAXIMUM_PACKAGE_HEIGHT" "1.08mm"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(symbol "SMF10A_0_0"
+				(polyline
+					(pts
+						(xy -2.54 0) (xy -1.27 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 1.27) (xy -1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy 1.27 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy -1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy 2.54 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.905 1.27) (xy 1.27 1.27) (xy 1.27 -1.27) (xy 0.635 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -5.08 0 0)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "A"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 5.08 0 180)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "C"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:TPS62913RPUR"
 			(pin_names
 				(offset 1.016)
@@ -3738,233 +3964,6 @@
 			)
 			(embedded_fonts no)
 		)
-
-		(symbol "Custom:SMF10A"
-			(pin_names
-				(offset 1.016)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "CR"
-				(at -5.08 2.54 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "Value" "SMF10A"
-				(at -5.08 -3.81 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "Footprint" "Footprints:SODFL3617X108N"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown, 17 V clamp at 11.8 A, 200 W, SOD-123FL"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "MPN" "SMF10A"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Mfr" "PTTC"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Package" "SOD-123FL"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "MAXIMUM_PACKAGE_HEIGHT" "1.08mm"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(symbol "SMF10A_0_0"
-				(polyline
-					(pts
-						(xy -2.54 0) (xy -1.27 0)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy -1.27 1.27) (xy -1.27 -1.27)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy -1.27 -1.27) (xy 1.27 0)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 1.27 0) (xy -1.27 1.27)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 1.905 1.27) (xy 1.27 1.27) (xy 1.27 -1.27) (xy 0.635 -1.27)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 1.27 0) (xy 2.54 0)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(pin passive line
-					(at -5.08 0 0)
-					(length 2.54)
-					(name ""
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "A"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 5.08 0 180)
-					(length 2.54)
-					(name ""
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "C"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
 	)
 	(text "Low Noise Power"
 		(exclude_from_sim no)
@@ -4082,6 +4081,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "772e3ed2-f8ff-4ca0-9cba-71d591d2ddc8")
+	)
+	(junction
+		(at 16.51 132.715)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "7e6405aa-0e89-4767-9b62-c812dc6bbb05")
 	)
 	(junction
 		(at 186.69 133.985)
@@ -4435,16 +4440,6 @@
 	)
 	(wire
 		(pts
-			(xy 19.685 142.875) (xy 24.765 142.875)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "898e01dd-e4f7-46f2-99ba-0a0529a0e113")
-	)
-	(wire
-		(pts
 			(xy 231.14 86.36) (xy 231.14 80.645)
 		)
 		(stroke
@@ -4615,7 +4610,7 @@
 	)
 	(wire
 		(pts
-			(xy 19.685 132.715) (xy 24.765 132.715)
+			(xy 16.51 132.715) (xy 24.765 132.715)
 		)
 		(stroke
 			(width 0)
@@ -5753,7 +5748,7 @@
 	)
 	(symbol
 		(lib_id "power:VDD")
-		(at 19.685 132.715 0)
+		(at 16.51 132.715 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -5764,7 +5759,7 @@
 		(fields_autoplaced yes)
 		(uuid "24654fa1-cd65-4d65-9b01-6fd9bb98378e")
 		(property "Reference" "#PWR03"
-			(at 19.685 136.525 0)
+			(at 16.51 136.525 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5775,7 +5770,7 @@
 			)
 		)
 		(property "Value" "VSYS"
-			(at 19.685 128.27 0)
+			(at 16.51 128.27 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -5785,7 +5780,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 19.685 132.715 0)
+			(at 16.51 132.715 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5796,7 +5791,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 19.685 132.715 0)
+			(at 16.51 132.715 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5807,7 +5802,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"VDD\""
-			(at 19.685 132.715 0)
+			(at 16.51 132.715 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7168,8 +7163,8 @@
 		)
 	)
 	(symbol
-		(lib_id "power:VSS")
-		(at 19.685 142.875 180)
+		(lib_id "power:GND")
+		(at 16.51 142.875 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -7177,10 +7172,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "6f084452-dbdd-4295-ab95-9e3c3cf27c23")
-		(property "Reference" "#PWR05"
-			(at 19.685 139.065 0)
+		(uuid "6e97cf5f-8f1e-4dd2-b774-6515bc85cb4c")
+		(property "Reference" "#PWR0961"
+			(at 16.51 149.225 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7190,18 +7184,19 @@
 				)
 			)
 		)
-		(property "Value" "VSS"
-			(at 19.685 147.32 0)
+		(property "Value" "GND"
+			(at 18.415 147.32 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Footprint" ""
-			(at 19.685 142.875 0)
+			(at 16.51 142.875 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7212,7 +7207,85 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 19.685 142.875 0)
+			(at 16.51 142.875 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 16.51 142.875 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e6848d43-eb59-4658-941d-8a50341b6428")
+		)
+		(instances
+			(project "gnss-px1105r-18mm-highpower-ext-ant"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR0961")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:VSS")
+		(at 24.765 142.875 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "6f084452-dbdd-4295-ab95-9e3c3cf27c23")
+		(property "Reference" "#PWR05"
+			(at 24.765 139.065 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "VSS"
+			(at 24.765 147.32 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 24.765 142.875 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 24.765 142.875 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7223,7 +7296,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"VSS\""
-			(at 19.685 142.875 0)
+			(at 24.765 142.875 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8368,6 +8441,136 @@
 		)
 	)
 	(symbol
+		(lib_id "Custom:SMF10A")
+		(at 16.51 137.795 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "a61a7153-9d03-4a44-b372-0ba4ed0589a5")
+		(property "Reference" "CR1"
+			(at 19.685 136.5249 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "SMF10A"
+			(at 19.685 139.0649 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Footprints:SODFL3617X108N"
+			(at 16.51 137.795 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 16.51 137.795 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W peak pulse, SOD-123FL"
+			(at 16.51 137.795 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "SMF10A"
+			(at 16.51 137.795 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "PTTC"
+			(at 16.51 137.795 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist" "LCSC"
+			(at 16.51 137.795 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist_PN" "C5444308"
+			(at 16.51 137.795 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Notes" "Clamp must stay below the TPS62913 VIN abs max of 18 V. SMF12A clamps 19.9 V and is NOT a substitute. Standoff must clear the 8.4 V full-charge 2S pack, so 10 V is the only SMF step that fits both ends."
+			(at 16.51 137.795 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "A"
+			(uuid "1194a380-6b04-4800-a1ad-1a70cc46001b")
+		)
+		(pin "C"
+			(uuid "e17abcf0-2ad6-4c64-b97c-53247386d87a")
+		)
+		(instances
+			(project "gnss-px1105r-18mm-highpower-ext-ant"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "CR1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 162.56 137.795 0)
 		(unit 1)
@@ -9400,259 +9603,6 @@
 				)
 			)
 		)
-	)
-	(symbol
-		(lib_id "Custom:SMF10A")
-		(at 60.0 150.0 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "85ea93a6-37c2-4275-8bb4-c8b8b9bc89e0")
-		(property "Reference" "CR1"
-			(at 60.0 146.19 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "SMF10A"
-			(at 60.0 153.81 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:SODFL3617X108N"
-			(at 60.0 150.0 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 60.0 150.0 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "SMF10A"
-			(at 60.0 150.0 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "PTTC"
-			(at 60.0 150.0 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "A"
-			(uuid "8ee73adc-266b-4bd8-a99e-3e9170b433e0")
-		)
-		(pin "C"
-			(uuid "83aea7f1-7af3-438e-9f00-4dbfc5d4e54a")
-		)
-		(instances
-			(project "gnss-px1105r-18mm-highpower-ext-ant"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "CR1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:VDD")
-		(at 65.08 142.38 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "e6ea437d-7d94-42f9-ac3c-0641c0f89fd9")
-		(property "Reference" "#PWR0960"
-			(at 65.08 146.19 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "VSYS"
-			(at 65.08 137.935 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 65.08 142.38 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 65.08 142.38 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"VDD\""
-			(at 65.08 142.38 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "b690c172-29b3-41ce-ad92-6aac05d645e9")
-		)
-		(instances
-			(project "gnss-px1105r-18mm-highpower-ext-ant"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR0960")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 54.92 157.62 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "3f1514f4-0932-4e8e-8fd5-f429696e842b")
-		(property "Reference" "#PWR0961"
-			(at 54.92 163.97 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 56.825 162.065 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 54.92 157.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 54.92 157.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 54.92 157.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "9592435e-2a50-4ecb-82fd-6f9758a10724")
-		)
-		(instances
-			(project "gnss-px1105r-18mm-highpower-ext-ant"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR0961")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 65.08 150.0) (xy 65.08 142.38)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "83c9d07e-e4a6-453f-9d91-b198b40a8dfc")
-	)
-	(wire
-		(pts
-			(xy 54.92 150.0) (xy 54.92 157.62)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "926cf15d-9354-4f08-b179-6492220bd70d")
 	)
 	(sheet_instances
 		(path "/"
