@@ -85,6 +85,7 @@ fun MapTab(container: AppContainer, session: DeviceSession?) {
                 session = session,
                 predictor = predictor,
                 phoneLocation = container.phoneLocation,
+                googleAvailable = container.googleMapsAvailable,
             )
             Row(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
                 TextButton(onClick = { route = "driftcast" }) { Text("Drift Cast") }
@@ -288,6 +289,9 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                     TileSource.USGS_IMAGERY_TOPO -> TileSource.USGS_TOPO
                     TileSource.USGS_TOPO -> TileSource.USGS_IMAGERY
                     TileSource.USGS_IMAGERY -> TileSource.USGS_IMAGERY_TOPO
+                    // Online-only source: never offered for download
+                    // (provider terms); unreachable from this cycle.
+                    TileSource.GOOGLE_SATELLITE -> TileSource.USGS_IMAGERY_TOPO
                 }
             }) { Text(source.displayName, style = MaterialTheme.typography.labelSmall) }
         }

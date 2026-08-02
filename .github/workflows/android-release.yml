@@ -49,6 +49,9 @@ jobs:
           TR_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.TR_ANDROID_KEYSTORE_PASSWORD }}
           TR_ANDROID_KEY_ALIAS: ${{ secrets.TR_ANDROID_KEY_ALIAS }}
           TR_ANDROID_KEY_PASSWORD: ${{ secrets.TR_ANDROID_KEY_PASSWORD }}
+          # Google Map Tiles key — releases must carry the Google Satellite
+          # basemap; without this secret the picker silently omits it.
+          TR_ANDROID_MAPS_API_KEY: ${{ secrets.TR_ANDROID_MAPS_API_KEY }}
         run: ./gradlew --no-daemon :app:assembleRelease
         working-directory: TinkerRocketAndroid
 
