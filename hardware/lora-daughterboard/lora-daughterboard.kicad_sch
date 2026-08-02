@@ -6735,6 +6735,129 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Mechanical:MountingHole_Pad"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 1.016)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom no)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "H"
+				(at 0 6.35 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "MountingHole_Pad"
+				(at 0 4.445 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "Mounting Hole with connection"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "mounting hole"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "MountingHole*Pad*"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "MountingHole_Pad_0_1"
+				(circle
+					(center 0 1.27)
+					(radius 1.27)
+					(stroke
+						(width 1.27)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "MountingHole_Pad_1_1"
+				(pin input line
+					(at 0 -2.54 90)
+					(length 2.54)
+					(name "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "power:+3V3"
 			(power global)
 			(pin_names
@@ -7527,40 +7650,39 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Mechanical:MountingHole_Pad"
-			(pin_numbers
-				(hide yes)
-			)
+
+		(symbol "Custom:SMF10A"
 			(pin_names
 				(offset 1.016)
-				(hide yes)
 			)
 			(exclude_from_sim no)
-			(in_bom no)
+			(in_bom yes)
 			(on_board yes)
 			(in_pos_files yes)
 			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "H"
-				(at 0 6.35 0)
+			(property "Reference" "CR"
+				(at -5.08 2.54 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left bottom)
 				)
 			)
-			(property "Value" "MountingHole_Pad"
-				(at 0 4.445 0)
+			(property "Value" "SMF10A"
+				(at -5.08 -3.81 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left bottom)
 				)
 			)
-			(property "Footprint" ""
+			(property "Footprint" "Footprints:SODFL3617X108N"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -7569,6 +7691,7 @@
 					(font
 						(size 1.27 1.27)
 					)
+					(justify bottom)
 				)
 			)
 			(property "Datasheet" ""
@@ -7582,7 +7705,7 @@
 					)
 				)
 			)
-			(property "Description" "Mounting Hole with connection"
+			(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown, 17 V clamp at 11.8 A, 200 W, SOD-123FL"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -7591,9 +7714,10 @@
 					(font
 						(size 1.27 1.27)
 					)
+					(justify bottom)
 				)
 			)
-			(property "ki_keywords" "mounting hole"
+			(property "MPN" "SMF10A"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -7602,9 +7726,10 @@
 					(font
 						(size 1.27 1.27)
 					)
+					(justify bottom)
 				)
 			)
-			(property "ki_fp_filters" "MountingHole*Pad*"
+			(property "Mfr" "PTTC"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -7613,36 +7738,138 @@
 					(font
 						(size 1.27 1.27)
 					)
+					(justify bottom)
 				)
 			)
-			(symbol "MountingHole_Pad_0_1"
-				(circle
-					(center 0 1.27)
-					(radius 1.27)
+			(property "Package" "SOD-123FL"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MAXIMUM_PACKAGE_HEIGHT" "1.08mm"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(symbol "SMF10A_0_0"
+				(polyline
+					(pts
+						(xy -2.54 0) (xy -1.27 0)
+					)
 					(stroke
-						(width 1.27)
+						(width 0.254)
 						(type default)
 					)
 					(fill
 						(type none)
 					)
 				)
-			)
-			(symbol "MountingHole_Pad_1_1"
-				(pin input line
-					(at 0 -2.54 90)
+				(polyline
+					(pts
+						(xy -1.27 1.27) (xy -1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy 1.27 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy -1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.905 1.27) (xy 1.27 1.27) (xy 1.27 -1.27) (xy 0.635 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 0) (xy 2.54 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(pin passive line
+					(at -5.08 0 0)
 					(length 2.54)
-					(name "1"
+					(name ""
 						(effects
 							(font
-								(size 1.27 1.27)
+								(size 1.016 1.016)
 							)
 						)
 					)
-					(number "1"
+					(number "A"
 						(effects
 							(font
-								(size 1.27 1.27)
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 5.08 0 180)
+					(length 2.54)
+					(name ""
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "C"
+						(effects
+							(font
+								(size 1.016 1.016)
 							)
 						)
 					)
@@ -7653,7 +7880,7 @@
 	)
 	(text "Power OR"
 		(exclude_from_sim no)
-		(at 31.75 81.28 0)
+		(at 81.28 74.93 0)
 		(effects
 			(font
 				(size 2.5 2.5)
@@ -7714,9 +7941,9 @@
 		)
 		(uuid "90a6090a-01d0-4bb3-b07d-d6250f70d1de")
 	)
-	(text "Board Connector"
+	(text "Rocket Computer Connector"
 		(exclude_from_sim no)
-		(at 25.4 111.125 0)
+		(at 15.875 93.98 0)
 		(effects
 			(font
 				(size 2.5 2.5)
@@ -7904,6 +8131,12 @@
 		(uuid "620ef898-2313-4cc6-ba4a-c483c0f74b55")
 	)
 	(junction
+		(at 104.775 83.82)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "664bdb16-8224-4a46-8702-2d524fb28bdd")
+	)
+	(junction
 		(at 263.525 43.18)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -8012,12 +8245,6 @@
 		(uuid "ca538add-87fe-4ee6-acd9-1b33ce4aa1c1")
 	)
 	(junction
-		(at 55.245 90.17)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "cf626b2f-ac54-494e-8ed0-eade8b4f347e")
-	)
-	(junction
 		(at 247.015 20.32)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -8119,7 +8346,7 @@
 	)
 	(wire
 		(pts
-			(xy 26.67 90.17) (xy 36.195 90.17)
+			(xy 76.2 83.82) (xy 85.725 83.82)
 		)
 		(stroke
 			(width 0)
@@ -8329,7 +8556,7 @@
 	)
 	(wire
 		(pts
-			(xy 55.245 90.17) (xy 55.245 101.6)
+			(xy 104.775 82.55) (xy 104.775 83.82)
 		)
 		(stroke
 			(width 0)
@@ -8346,16 +8573,6 @@
 			(type default)
 		)
 		(uuid "49535aa7-b643-4da8-ba51-b3c35b4ba6a9")
-	)
-	(wire
-		(pts
-			(xy 55.245 88.9) (xy 55.245 90.17)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4bc4b22d-9fb4-4de6-8283-f889be6ad219")
 	)
 	(wire
 		(pts
@@ -8459,7 +8676,7 @@
 	)
 	(wire
 		(pts
-			(xy 46.355 90.17) (xy 55.245 90.17)
+			(xy 95.885 83.82) (xy 104.775 83.82)
 		)
 		(stroke
 			(width 0)
@@ -8579,7 +8796,7 @@
 	)
 	(wire
 		(pts
-			(xy 46.355 101.6) (xy 55.245 101.6)
+			(xy 95.885 93.98) (xy 104.775 93.98)
 		)
 		(stroke
 			(width 0)
@@ -8699,7 +8916,7 @@
 	)
 	(wire
 		(pts
-			(xy 26.67 101.6) (xy 36.195 101.6)
+			(xy 76.2 93.98) (xy 85.725 93.98)
 		)
 		(stroke
 			(width 0)
@@ -8716,6 +8933,16 @@
 			(type default)
 		)
 		(uuid "907912f4-9eeb-457f-8807-023b49ab0e5a")
+	)
+	(wire
+		(pts
+			(xy 104.775 83.82) (xy 104.775 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "911bd9e3-8fc2-4e3e-842c-80cf015293d5")
 	)
 	(wire
 		(pts
@@ -9300,6 +9527,30 @@
 		(uuid "01e6f7b0-5cf2-430f-bdbb-1b2b117156b5")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 222.6674 106.6006 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "LoRa_TX"
+		(shape input)
+		(at 55.88 106.68 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "093572c6-1659-4c1c-8b92-91575245a181")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 66.606 106.68 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10223,6 +10474,30 @@
 			)
 		)
 	)
+	(global_label "LoRa_RX"
+		(shape input)
+		(at 55.88 101.6 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "d9c48452-a2e3-4209-8a7e-81a630cb2f72")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 66.9084 101.6 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "IND_1"
 		(shape input)
 		(at 99.695 31.75 90)
@@ -10646,7 +10921,7 @@
 	)
 	(symbol
 		(lib_id "Custom:CUS10S30_H3F")
-		(at 36.195 90.17 0)
+		(at 85.725 83.82 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10657,7 +10932,7 @@
 		(fields_autoplaced yes)
 		(uuid "05fff41e-f151-4944-aaab-d3590168b1d0")
 		(property "Reference" "CR1"
-			(at 41.275 83.82 0)
+			(at 90.805 77.47 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10667,7 +10942,7 @@
 			)
 		)
 		(property "Value" "CUS10S30_H3F"
-			(at 41.275 86.36 0)
+			(at 90.805 80.01 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10677,7 +10952,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:USC_TOS"
-			(at 36.195 90.17 0)
+			(at 85.725 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10689,7 +10964,7 @@
 			)
 		)
 		(property "Datasheet" "https://toshiba.semicon-storage.com/info/docget.jsp?did=14077&prodName=CUS10S30"
-			(at 36.195 90.17 0)
+			(at 85.725 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10701,7 +10976,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 36.195 90.17 0)
+			(at 85.725 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10712,7 +10987,7 @@
 			)
 		)
 		(property "MPN" "CUS10S30,H3F"
-			(at 36.195 90.17 0)
+			(at 85.725 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10723,7 +10998,7 @@
 			)
 		)
 		(property "Mfr" "Toshiba"
-			(at 36.195 90.17 0)
+			(at 85.725 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11627,6 +11902,84 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "FL1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 17.78 196.215 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "12aaab89-fe6a-45f8-b9f8-da49c9ffe307")
+		(property "Reference" "#PWR901"
+			(at 17.78 202.565 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 19.685 200.025 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 17.78 196.215 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 17.78 196.215 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 17.78 196.215 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "d6d956f8-bcbf-4854-aee9-faf718c8dad7")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR901")
 					(unit 1)
 				)
 			)
@@ -12715,7 +13068,7 @@
 	)
 	(symbol
 		(lib_id "power:VDD")
-		(at 55.245 88.9 0)
+		(at 104.775 82.55 0)
 		(mirror y)
 		(unit 1)
 		(body_style 1)
@@ -12726,7 +13079,7 @@
 		(dnp no)
 		(uuid "28c18883-5a94-4ab2-8d67-a9e3adf55035")
 		(property "Reference" "#PWR02"
-			(at 55.245 92.71 0)
+			(at 104.775 86.36 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12737,7 +13090,7 @@
 			)
 		)
 		(property "Value" "VSYS"
-			(at 55.245 85.09 0)
+			(at 104.775 78.74 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -12747,7 +13100,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 55.245 88.9 0)
+			(at 104.775 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12758,7 +13111,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 55.245 88.9 0)
+			(at 104.775 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12769,7 +13122,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"VDD\""
-			(at 55.245 88.9 0)
+			(at 104.775 82.55 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14152,7 +14505,7 @@
 	)
 	(symbol
 		(lib_id "Custom:CUS10S30_H3F")
-		(at 36.195 101.6 0)
+		(at 85.725 93.98 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -14163,7 +14516,7 @@
 		(fields_autoplaced yes)
 		(uuid "428adf5d-1a38-4895-b44a-23d2eeffb090")
 		(property "Reference" "CR3"
-			(at 41.275 95.25 0)
+			(at 90.805 87.63 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -14173,7 +14526,7 @@
 			)
 		)
 		(property "Value" "CUS10S30_H3F"
-			(at 41.275 97.79 0)
+			(at 90.805 90.17 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -14183,7 +14536,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:USC_TOS"
-			(at 36.195 101.6 0)
+			(at 85.725 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14195,7 +14548,7 @@
 			)
 		)
 		(property "Datasheet" "https://toshiba.semicon-storage.com/info/docget.jsp?did=14077&prodName=CUS10S30"
-			(at 36.195 101.6 0)
+			(at 85.725 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14207,7 +14560,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 36.195 101.6 0)
+			(at 85.725 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14218,7 +14571,7 @@
 			)
 		)
 		(property "MPN" "CUS10S30,H3F"
-			(at 36.195 101.6 0)
+			(at 85.725 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14229,7 +14582,7 @@
 			)
 		)
 		(property "Mfr" "Toshiba"
-			(at 36.195 101.6 0)
+			(at 85.725 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14428,84 +14781,6 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "#PWR09")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 56.515 195.58 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "be1d09ff-b675-4d83-80f8-dd35de5ac781")
-		(property "Reference" "#PWR903"
-			(at 56.515 201.93 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 58.42 199.39 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 56.515 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 56.515 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 56.515 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "83aaf432-fc06-4bb0-8f91-c3043993d4d9")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "#PWR903")
 					(unit 1)
 				)
 			)
@@ -16742,6 +17017,85 @@
 		)
 	)
 	(symbol
+		(lib_id "power:GND")
+		(at 25.4 106.68 0)
+		(mirror y)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "7090ffdd-ba81-434b-abd2-cede8f85ba4c")
+		(property "Reference" "#PWR017"
+			(at 25.4 113.03 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 23.495 110.49 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "c9e6ba87-9938-4cfd-ae1c-12d0464fcf60")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR017")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Custom:WE-CBA_0805")
 		(at 196.215 146.685 0)
 		(unit 1)
@@ -17067,84 +17421,6 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "C95")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 17.78 196.215 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "12aaab89-fe6a-45f8-b9f8-da49c9ffe307")
-		(property "Reference" "#PWR901"
-			(at 17.78 202.565 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 19.685 200.025 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 17.78 196.215 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 17.78 196.215 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 17.78 196.215 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "d6d956f8-bcbf-4854-aee9-faf718c8dad7")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "#PWR901")
 					(unit 1)
 				)
 			)
@@ -18000,6 +18276,116 @@
 		)
 	)
 	(symbol
+		(lib_id "Custom:SP0503BAHTG")
+		(at 25.4 106.68 0)
+		(mirror x)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "838a9638-eba6-45e0-86f4-c568f8d100ee")
+		(property "Reference" "CR4"
+			(at 40.64 95.885 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+			)
+		)
+		(property "Value" "SP0503BAHTG"
+			(at 40.64 97.79 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.524 1.524)
+				)
+			)
+		)
+		(property "Footprint" "Footprints:TVS-SP05_LTF"
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+					(italic yes)
+				)
+			)
+		)
+		(property "Datasheet" "SP0503BAHTG"
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+					(italic yes)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "SP0503BAHTG"
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Littelfuse"
+			(at 25.4 106.68 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "524c452d-dc7a-4765-8e33-cb53358e50fc")
+		)
+		(pin "2"
+			(uuid "924c9174-3895-456c-8ba3-c81901e74423")
+		)
+		(pin "4"
+			(uuid "3ebb7f17-1c16-470a-a5bc-68534eab648d")
+		)
+		(pin "3"
+			(uuid "bd2b41a7-18e2-4b7f-86f6-7388a2a897f4")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "CR4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 158.115 150.495 0)
 		(unit 1)
@@ -18531,6 +18917,84 @@
 		)
 	)
 	(symbol
+		(lib_id "power:GND")
+		(at 74.295 195.58 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "8e209886-df77-466b-b8b4-3be4f19d13ec")
+		(property "Reference" "#PWR904"
+			(at 74.295 201.93 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 76.2 199.39 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 74.295 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 74.295 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 74.295 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "fbb87480-8599-4184-916c-b7a5dd46a602")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR904")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 170.18 150.495 0)
 		(unit 1)
@@ -18640,6 +19104,84 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "C11")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 37.465 195.58 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "906f372b-bf05-4966-bda2-f671ecd3080c")
+		(property "Reference" "#PWR902"
+			(at 37.465 201.93 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 39.37 199.39 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 37.465 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 37.465 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 37.465 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "bb46698b-256e-46cf-aad9-71f4db4a179c")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR902")
 					(unit 1)
 				)
 			)
@@ -19646,7 +20188,7 @@
 	)
 	(symbol
 		(lib_id "power:+BATT")
-		(at 26.67 101.6 0)
+		(at 76.2 93.98 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -19657,7 +20199,7 @@
 		(fields_autoplaced yes)
 		(uuid "a1081d25-7ed3-4239-aadb-c8b63fbc5ffd")
 		(property "Reference" "#PWR04"
-			(at 26.67 105.41 0)
+			(at 76.2 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19668,7 +20210,7 @@
 			)
 		)
 		(property "Value" "+BATT"
-			(at 26.67 96.52 0)
+			(at 76.2 88.9 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -19678,7 +20220,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 26.67 101.6 0)
+			(at 76.2 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19689,7 +20231,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 26.67 101.6 0)
+			(at 76.2 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19700,7 +20242,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+BATT\""
-			(at 26.67 101.6 0)
+			(at 76.2 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19904,7 +20446,7 @@
 	)
 	(symbol
 		(lib_id "power:VBUS")
-		(at 26.67 90.17 0)
+		(at 76.2 83.82 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -19915,7 +20457,7 @@
 		(fields_autoplaced yes)
 		(uuid "a83839a1-638e-49a7-9646-b18124e15018")
 		(property "Reference" "#PWR021"
-			(at 26.67 93.98 0)
+			(at 76.2 87.63 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19926,7 +20468,7 @@
 			)
 		)
 		(property "Value" "VBUS"
-			(at 26.67 85.09 0)
+			(at 76.2 78.74 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -19936,7 +20478,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 26.67 90.17 0)
+			(at 76.2 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19947,7 +20489,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 26.67 90.17 0)
+			(at 76.2 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -19958,7 +20500,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"VBUS\""
-			(at 26.67 90.17 0)
+			(at 76.2 83.82 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -20725,6 +21267,84 @@
 		)
 	)
 	(symbol
+		(lib_id "power:GND")
+		(at 56.515 195.58 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "be1d09ff-b675-4d83-80f8-dd35de5ac781")
+		(property "Reference" "#PWR903"
+			(at 56.515 201.93 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 58.42 199.39 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 56.515 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 56.515 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 56.515 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "83aaf432-fc06-4bb0-8f91-c3043993d4d9")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR903")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Custom:E220-900MM22S")
 		(at 60.96 52.705 0)
 		(unit 1)
@@ -21417,84 +22037,6 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 37.465 195.58 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "906f372b-bf05-4966-bda2-f671ecd3080c")
-		(property "Reference" "#PWR902"
-			(at 37.465 201.93 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 39.37 199.39 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 37.465 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 37.465 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 37.465 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "bb46698b-256e-46cf-aad9-71f4db4a179c")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "#PWR902")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Mechanical:MountingHole_Pad")
 		(at 37.465 193.04 0)
 		(unit 1)
@@ -22017,84 +22559,6 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "#PWR0246")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 74.295 195.58 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "8e209886-df77-466b-b8b4-3be4f19d13ec")
-		(property "Reference" "#PWR904"
-			(at 74.295 201.93 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 76.2 199.39 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 74.295 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 74.295 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 74.295 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "fbb87480-8599-4184-916c-b7a5dd46a602")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "#PWR904")
 					(unit 1)
 				)
 			)
@@ -23933,6 +24397,177 @@
 				)
 			)
 		)
+	)
+	(symbol
+		(lib_id "Custom:SMF10A")
+		(at 99.695 88.9 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "dbbc3749-f65d-4634-9f24-9485c1aecbbf")
+		(property "Reference" "CR5"
+			(at 99.695 85.09 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "SMF10A"
+			(at 99.695 92.71000000000001 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Footprints:SODFL3617X108N"
+			(at 99.695 88.9 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 99.695 88.9 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "SMF10A"
+			(at 99.695 88.9 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "PTTC"
+			(at 99.695 88.9 0)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "A"
+			(uuid "d7f773db-4dcf-437d-b21a-3826608be3e1")
+		)
+		(pin "C"
+			(uuid "55762ad9-f0c4-4906-a0d7-1d149103e562")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "CR5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 94.615 96.52 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "436f47d1-6f99-40bf-85f7-ed2614d2472d")
+		(property "Reference" "#PWR0950"
+			(at 94.615 102.87 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 96.52 100.33 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 94.615 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 94.615 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 94.615 96.52 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "481f1265-dfb5-45bf-97b2-46f4ed7b7765")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "#PWR0950")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(junction
+		(at 104.775 88.9)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "60df23f3-35b4-432b-9ad7-b5a545b33467")
+	)
+	(wire
+		(pts
+			(xy 94.615 88.9) (xy 94.615 96.52)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3356bf2b-0dfe-4d8b-ae1c-3f14d4dd6699")
 	)
 	(sheet_instances
 		(path "/"
