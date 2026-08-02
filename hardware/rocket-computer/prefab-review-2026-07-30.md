@@ -520,6 +520,27 @@ This spin switched the peripheral branches from high-side (V8/ECO description: '
 
 BOM rows L1 (4.3 nH shunt at antenna), L2 (2.7 nH series match), L3 (24 nH XTAL_P series), L4 (2 nH VDD3P3 feed) carry only values and the generic Inductor_SMD:L_0402_1005Metric footprint — no manufacturer or MPN. L4 carries the full radio TX current (BLE TX peak 335 mA @21 dBm, Wi-Fi 340 mA, datasheet Tables 5-7/5-8) and the HDG explicitly asks for the VDD3P3 LC-filter inductor to be rated 500 mA or above; many 0402 RF inductors are 300 mA class and would sag/heat at TX bursts, degrading the exact camera-brownout class of problem this respin targets (different rail, same lesson). L1/L2 and C23/C24 (1.5 pF) are tuning-critical: tolerance class (e.g. 0.1 pF NP0, +/-0.1 nH wirewound) determines whether the bench tune is reproducible. The matching topology itself is correct: CLC pi at LNA_IN (C24 1.5 pF shunt, L2 2.7 nH series, C23 1.5 pF shunt) is inside Espressif's recommended windows (C 1.2-1.8 pF, L 2.0-3.0 nH), and L3 24 nH on XTAL_P is literally the HDG's suggested value — do not remove it.
 
+> **2026-08-01 — removed, then restored; recording why so it is not removed again.**
+> The inductor was briefly deleted from all three S3 boards on the reasoning that
+> it does almost nothing at 40 MHz: 6.0 Ω against the 331 Ω of the 12 pF load cap,
+> worth −1.1 ppm, forming a ~297 MHz low-pass with that cap. Those numbers are
+> correct, and they are also the whole point — that low-pass is the function
+> Espressif is asking for, and on **these** boards it lands where it matters:
+>
+> | harmonic | frequency | falls in | attenuation |
+> |---|---|---|---|
+> | 23rd | **920 MHz** | **the 902–928 MHz LoRa band** | **−18.7 dB** |
+> | 61st | 2.44 GHz | the BLE band | −36.5 dB |
+>
+> A LoRa receiver working near −130 dBm does not need a large on-board spur to
+> lose sensitivity, and the 23rd harmonic of the S3's own crystal landing in its
+> own receive band is exactly the case the guideline is aimed at. The 1 ppm and
+> the 0402 saved by deleting it are not worth that. Restored in `e7b81a8`
+> (schematics; PCBs re-placed by hand, since the crystal areas had moved).
+> Side effect in the right direction: the +0.055 pF of effective load takes the
+> base-station's network from +10.9 to **+9.9 ppm**, inside ±10 (issue #704).
+
+
 **Evidence:** bom-fresh.csv rows L1-L4: MPN and Manufacturer columns empty. netlist.net: Net-(U15-VDD3P3) = {U15.2, U15.3, C33 100nF, L4.1}; L4.2 = +3V3. HDG: 'The inductor's rated current is preferably 500 mA and above'; RF match 'CLC structure preferred', C 1.2~1.8 pF / L 2.0~3.0 nH; XTAL_P 'inductor of 24 nH' suggestion. Datasheet p66-67: BLE TX 335 mA / Wi-Fi TX 340 mA peak.
 
 **Fix:** Pin MPNs: L4 = multilayer/wirewound 2.0 nH 0402 rated >=500 mA (e.g. Murata LQW15A/LQG15HS class with current check); L1/L2 = +/-0.1 nH RF wirewound (LQW15A); C23/C24 = 1.5 pF +/-0.1 pF C0G; L3 = 24 nH RF 0402. Espressif also recommends 0201 for RF matching — 0402 is acceptable on this board but note the larger parasitics when bench-tuning.
@@ -1377,6 +1398,28 @@ Current state, reported factually per the review brief: U15 is ESP32-S3RH2 (embe
 *switched-domains / VBATT distribution — confidence medium*
 
 The VBATT net shows one 0.127 mm B.Cu segment (1.03 mm) and two 0.1 mm F.Cu segments (0.95 mm) - these serve the R56/R60 TPS2121 OV/CP sense dividers and similar taps; bulk current flows in the 18 mm-wide In2 VBATT pour plus 0.3-0.5 mm locals and 13 vias. No action needed; noted so a later reviewer does not re-derive it.
+
+### I58. VBATT was evaluated for a TVS clamp and REJECTED — the existing bulk is the clamp, and a better one than any TVS that fits
+*transient protection / VBATT — confidence high*
+
+**Do not re-raise this.** Raised 2026-08-01 while fitting SMF10A TVS clamps to the LoRa and both GNSS daughterboards, on the reasoning that four servos at 2–3 A stall are inductive loads on an externally-connected rail (J3 pins 15/16, J4.2) with nothing clamping it. The arithmetic does not support it.
+
+VBATT already carries **397 µF nominal** — C15 330 µF TCJE337M016R0050 polymer tantalum, plus C7/C14/C18 22 µF and C54 1 µF — call it **~364 µF effective** after derating the 16 V ceramics at 8.4 V (the polymer tantalum barely derates). Against the energies actually available on that net:
+
+| event | energy / charge | resulting rail rise |
+|---|---|---|
+| one servo disconnected at 3 A stall (1 µH harness) | 4.5 µJ | **157 mV** |
+| all four simultaneously | 18 µJ | **315 mV** |
+| 8 kV IEC 61000-4-2 contact discharge on a pin | 1.2 µC | **3.3 mV** |
+| 15 kV | 2.25 µC | **6.2 mV** |
+
+Nothing available can move the rail appreciably. This is the same 400 µF already credited in **I52** as the camera-brownout fix.
+
+**And no suitable part exists for the window anyway.** The lowest abs max on VBATT is the 16 V capacitors. The SMF10A fitted elsewhere on this fleet clamps at **17.0 V at 11.8 A — above them**; getting under 16 V at any real current needs a larger die purely for lower dynamic resistance (SMBJ class, ~3× the area), spent on a rail that cannot move 320 mV.
+
+**The structural reason the daughterboards differ**, so the analogy is not drawn again: their VSYS is an *input* that hot-plugs onto a live 2S pack with **zero capacitance at the entry point** (`VSYS = {FL1.1, J.3}` on the GNSS boards). VBATT is an *output*, behind the eFuse, into harnesses that mate once at assembly. Different exposure, different answer.
+
+What is worth watching on VBATT instead, neither a clamp: C15's derating (16 V polymer tantalum at 8.4 V = 53%, inside the ≤80% guideline for polymer, and polymer fails far more gracefully than MnO2 — recorded as checked); and reverse-polarity/miswiring on the J3 servo harness, which is a keying and labelling question that no TVS addresses.
 
 ## Checks the reviewers could NOT complete (open items)
 
