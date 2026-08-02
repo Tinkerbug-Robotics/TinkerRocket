@@ -1399,6 +1399,28 @@ Current state, reported factually per the review brief: U15 is ESP32-S3RH2 (embe
 
 The VBATT net shows one 0.127 mm B.Cu segment (1.03 mm) and two 0.1 mm F.Cu segments (0.95 mm) - these serve the R56/R60 TPS2121 OV/CP sense dividers and similar taps; bulk current flows in the 18 mm-wide In2 VBATT pour plus 0.3-0.5 mm locals and 13 vias. No action needed; noted so a later reviewer does not re-derive it.
 
+### I58. VBATT was evaluated for a TVS clamp and REJECTED — the existing bulk is the clamp, and a better one than any TVS that fits
+*transient protection / VBATT — confidence high*
+
+**Do not re-raise this.** Raised 2026-08-01 while fitting SMF10A TVS clamps to the LoRa and both GNSS daughterboards, on the reasoning that four servos at 2–3 A stall are inductive loads on an externally-connected rail (J3 pins 15/16, J4.2) with nothing clamping it. The arithmetic does not support it.
+
+VBATT already carries **397 µF nominal** — C15 330 µF TCJE337M016R0050 polymer tantalum, plus C7/C14/C18 22 µF and C54 1 µF — call it **~364 µF effective** after derating the 16 V ceramics at 8.4 V (the polymer tantalum barely derates). Against the energies actually available on that net:
+
+| event | energy / charge | resulting rail rise |
+|---|---|---|
+| one servo disconnected at 3 A stall (1 µH harness) | 4.5 µJ | **157 mV** |
+| all four simultaneously | 18 µJ | **315 mV** |
+| 8 kV IEC 61000-4-2 contact discharge on a pin | 1.2 µC | **3.3 mV** |
+| 15 kV | 2.25 µC | **6.2 mV** |
+
+Nothing available can move the rail appreciably. This is the same 400 µF already credited in **I52** as the camera-brownout fix.
+
+**And no suitable part exists for the window anyway.** The lowest abs max on VBATT is the 16 V capacitors. The SMF10A fitted elsewhere on this fleet clamps at **17.0 V at 11.8 A — above them**; getting under 16 V at any real current needs a larger die purely for lower dynamic resistance (SMBJ class, ~3× the area), spent on a rail that cannot move 320 mV.
+
+**The structural reason the daughterboards differ**, so the analogy is not drawn again: their VSYS is an *input* that hot-plugs onto a live 2S pack with **zero capacitance at the entry point** (`VSYS = {FL1.1, J.3}` on the GNSS boards). VBATT is an *output*, behind the eFuse, into harnesses that mate once at assembly. Different exposure, different answer.
+
+What is worth watching on VBATT instead, neither a clamp: C15's derating (16 V polymer tantalum at 8.4 V = 53%, inside the ≤80% guideline for polymer, and polymer fails far more gracefully than MnO2 — recorded as checked); and reverse-polarity/miswiring on the J3 servo harness, which is a keying and labelling question that no TVS addresses.
+
 ## Checks the reviewers could NOT complete (open items)
 
 - TDK VLS3012CX catalog PDF returned 403; Isat/Irated/DCR taken from the DigiKey product listing instead (1.89 A / 2.83 A / 74 mOhm)
