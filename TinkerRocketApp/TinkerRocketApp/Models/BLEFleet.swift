@@ -467,6 +467,23 @@ extension BLEFleet: CBCentralManagerDelegate {
 
         if let idx = discoveredDevices.firstIndex(where: { $0.id == peripheral.identifier }) {
             discoveredDevices[idx].rssi = RSSI.intValue
+            // Upgrade the name when a later report brings a real one. The
+            // board carries its name in the SCAN RESPONSE — flags plus the
+            // 128-bit service UUID leave only 8 characters of the 31-byte
+            // primary payload, too few for a unit name — and iOS reports the
+            // plain ADV_IND before the scan response merges into it, so a
+            // peripheral's FIRST sighting routinely has no local name and
+            // falls back to peripheral.name (the iOS-cached GAP name).
+            // Latching that first value pinned the fallback in the row
+            // forever, even once the real name arrived milliseconds later.
+            // Only a genuinely advertised name upgrades (never the
+            // peripheral.name fallback), so the row can't flap between the
+            // two sources.
+            if let advertisedName, advertisedName != discoveredDevices[idx].name {
+                discoveredDevices[idx].name = advertisedName
+                discoveredDevices[idx].knownType =
+                    knownDevices.deviceType(forAdvertisedName: advertisedName)
+            }
         } else {
             let device = DiscoveredDevice(
                 id: peripheral.identifier,
