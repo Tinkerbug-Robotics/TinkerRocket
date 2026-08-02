@@ -2973,6 +2973,12 @@
 		(uuid "2d9a2944-258f-4a8d-8915-b683f4de1679")
 	)
 	(junction
+		(at 142.875 43.18)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "328dfebd-73e6-4487-b519-770f42a3d049")
+	)
+	(junction
 		(at 209.55 44.45)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3093,6 +3099,12 @@
 		(uuid "cb24d49a-f5ba-4e98-85c6-23af699c3e4a")
 	)
 	(junction
+		(at 142.875 50.8)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "cf697ceb-a1b3-496b-9fad-3defebf4fcdc")
+	)
+	(junction
 		(at 233.68 44.45)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3172,7 +3184,7 @@
 	)
 	(wire
 		(pts
-			(xy 135.89 43.18) (xy 154.305 43.18)
+			(xy 135.89 43.18) (xy 142.875 43.18)
 		)
 		(stroke
 			(width 0)
@@ -3532,6 +3544,16 @@
 	)
 	(wire
 		(pts
+			(xy 142.875 43.18) (xy 154.305 43.18)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "80866158-52b6-4c1d-8052-c7516051faae")
+	)
+	(wire
+		(pts
 			(xy 196.85 78.105) (xy 200.025 78.105)
 		)
 		(stroke
@@ -3769,6 +3791,16 @@
 			(type default)
 		)
 		(uuid "c531a445-95c4-4ed2-a22f-6d43530cc61f")
+	)
+	(wire
+		(pts
+			(xy 142.875 43.18) (xy 142.875 50.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cbd2f99d-a68a-498e-a709-569158ba2b8e")
 	)
 	(wire
 		(pts
@@ -6512,7 +6544,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1 uF"
+		(property "Value" "10 uF"
 			(at 48.26 48.26 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6556,7 +6588,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL05A105KO5NNNC"
+		(property "MPN" "CL05A106MQ5NUNC"
 			(at 48.26 45.72 0)
 			(hide yes)
 			(show_name no)

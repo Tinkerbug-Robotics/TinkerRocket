@@ -3964,7 +3964,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_0805_2012Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 200.279 100.711 90)
 			(hide yes)
 			(show_name no)
@@ -3997,7 +3997,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0805FR-0760R4L"
+		(property "MPN" "CRCW120660R4FKEAHP"
 			(at 201.295 100.965 0)
 			(hide yes)
 			(show_name no)
@@ -4008,7 +4008,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Yageo"
+		(property "Mfr" "Vishay"
 			(at 201.295 100.965 0)
 			(hide yes)
 			(show_name no)
@@ -4725,7 +4725,7 @@
 				)
 			)
 		)
-		(property "Value" "6.04 k"
+		(property "Value" "10 k"
 			(at 182.245 73.66 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4768,7 +4768,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-076K04L"
+		(property "MPN" "RC0402FR-0710KL"
 			(at 180.34 73.025 0)
 			(hide yes)
 			(show_name no)
@@ -5350,7 +5350,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Resistor_SMD:R_0805_2012Metric"
+		(property "Footprint" "Resistor_SMD:R_1206_3216Metric"
 			(at 205.994 100.711 90)
 			(hide yes)
 			(show_name no)
@@ -5383,7 +5383,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0805FR-0760R4L"
+		(property "MPN" "CRCW120660R4FKEAHP"
 			(at 207.01 100.965 0)
 			(hide yes)
 			(show_name no)
@@ -5394,7 +5394,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Yageo"
+		(property "Mfr" "Vishay"
 			(at 207.01 100.965 0)
 			(hide yes)
 			(show_name no)
