@@ -151,7 +151,12 @@ void TR_BLE_To_APP::setName(const char* name)
     // so scanners see the new name immediately.
     if (s_instance_ == this)
     {
-        ble_svc_gap_device_name_set(device_name_);
+        int rc = ble_svc_gap_device_name_set(device_name_);
+        if (rc != 0)
+        {
+            ESP_LOGE(BLE_TAG, "ble_svc_gap_device_name_set('%s') failed, rc=%d",
+                     device_name_, rc);
+        }
         ble_gap_adv_stop();
         startAdvertising();
         ESP_LOGI(BLE_TAG, "BLE name changed to: %s", device_name_);
@@ -976,9 +981,6 @@ bool TR_BLE_To_APP::begin()
         return false;
     }
 
-    // Set the device name for GAP
-    ble_svc_gap_device_name_set(device_name_);
-
     // Request larger MTU (default is 23, max is 517)
     rc = ble_att_set_preferred_mtu(512);
     if (rc != 0)
@@ -990,6 +992,26 @@ bool TR_BLE_To_APP::begin()
     // Register mandatory GAP and GATT services
     ble_svc_gap_init();
     ble_svc_gatt_init();
+
+    // Set the GAP device name — AFTER ble_svc_gap_init(), never before.
+    //
+    // IDF v6 defaults CONFIG_BT_NIMBLE_STATIC_TO_DYNAMIC=y, and in that mode
+    // ble_svc_gap_init() calls ble_svc_gap_init_name(), which unconditionally
+    // reallocates the name buffer and copies the Kconfig default back into it
+    // ("nimble").  A name set before init is therefore silently thrown away
+    // (and leaked).  Under v5.3.2 the name was a plain static array that init
+    // never touched, so set-then-init worked — which is why every board's GAP
+    // Device Name characteristic read back as "nimble" after the v5 -> v6
+    // upgrade.  The scan response still carried the right name, but any
+    // scanner that falls back to the cached GAP name (CoreBluetooth's
+    // peripheral.name — the iOS scanner list, and bleak on macOS) showed
+    // "nimble" instead of TR-R-xxxx / TR-B-xxxx.
+    rc = ble_svc_gap_device_name_set(device_name_);
+    if (rc != 0)
+    {
+        ESP_LOGE(BLE_TAG, "ble_svc_gap_device_name_set('%s') failed, rc=%d",
+                 device_name_, rc);
+    }
 
     // Register our custom GATT services
     registerGattServices();

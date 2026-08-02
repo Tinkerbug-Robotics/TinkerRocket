@@ -72,7 +72,10 @@ enum DownloadState {
 struct DiscoveredDevice: Identifiable {
     let id: UUID
     let peripheral: CBPeripheral
-    let name: String
+    /// Mutable: the first advertising report for a peripheral often carries no
+    /// local name, so the name is upgraded when a later report brings the real
+    /// one (see BLEFleet.centralManager(_:didDiscover:...)).
+    var name: String
     var rssi: Int
 
     /// Type recovered from the known-device registry at discovery time
