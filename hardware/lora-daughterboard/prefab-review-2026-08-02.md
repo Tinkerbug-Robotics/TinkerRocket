@@ -79,11 +79,15 @@ Plus **six vias inside `U28`'s thermal-pad paste windows**. If the boards come b
 VIAS: FILLED WITH NON-CONDUCTIVE EPOXY AND PLATED OVER (CAPPED), IPC-4761 TYPE VII.
   MANDATORY AT U28.29, U3.4, U3.7, FL1.4 AND THE U28 THERMAL PAD.
   ALL OTHER VIAS TENTED BOTH SIDES.
-CONTROLLED IMPEDANCE: 50 OHM SINGLE-ENDED ON THE ANT NET, F.Cu REFERENCED TO In1.Cu,
-  0.100 mm PREPREG, Er 4.5 AT 915 MHz. DO NOT SUBSTITUTE THIS DIELECTRIC THICKNESS.
+STACKUP: JLC06161H-3313 (6L, 1.6 mm, 1 oz OUTER / 0.5 oz INNER). BUILD TO THIS TEMPLATE.
+CONTROLLED IMPEDANCE: 50 OHM SINGLE-ENDED ON THE ANT NET (F.Cu). In1.Cu AND In2.Cu ARE
+  DELIBERATELY VOIDED UNDER THE ANT PATH BY A RULE AREA; THE RF REFERENCE IS In3.Cu.
+  DO NOT FILL THAT VOID AND DO NOT SUBSTITUTE THE In2/In3 PREPREG THICKNESS.
 SURFACE FINISH: ENIG.
 SOLDER MASK: MIN DAM 0.08 mm AT U28 (0.4 mm PITCH); GANG THE OPENING IF NOT HOLDABLE.
 ```
+
+> **The stackup was rewritten on 2026-08-02** from an idealised 0.1/0.535/0.1/0.535/0.1 mm all-Er-4.5 stack to JLC06161H-3313 (prepreg 3313 0.0994 mm Er 4.10 / core NP-155F 0.550 mm Er 4.41 / prepreg 2116 0.1164 mm Er 4.16, inner copper 0.0152 mm, mask 0.01524 mm Er 3.8, ENIG). Note JLC's API returns **two** templates with the identical name `JLC06161H-3313`; the default is the 0.1164 mm middle prepreg (compressionThickness 1.546), not the 0.1088 mm variant. The stackup change moves the RF launch by only ~3 % — the plane void, not the stackup, is what fixes it.
 
 Confirm resin-fill-and-cap appears on the **quote** — it is a cost adder that gets silently dropped.
 
@@ -109,9 +113,21 @@ A 1.5 mm strip 0.1 mm over a plane is a ~10 Ω line — about **2.1 pF of shunt 
 
 Paid on **both** TX and RX, that is ~1 dB of link budget — roughly 10 % of range — thrown away at the connector. `Net-(U14-ANT)` has exactly two nodes (`J8.1`, `U14.6`): there is no pi-network, no matching part, nothing that could compensate it.
 
-**Fix:** add a copper rule area on **In1.Cu *and* In2.Cu** covering the `J8` signal pad plus ~0.3 mm margin (approximately x 91.30–93.50, y 103.70–108.80), making In3 (0.805 mm down) the RF reference for the launch.
+**Fix:** add a copper rule area on **In1.Cu *and* In2.Cu**, `copperpour not_allowed`, covering **the whole RF path** — the `J8` signal pad, the ANT trace, *and* `U14`'s ANT pad — approximately **x 91.50–93.28, y 103.66–110.95**. That makes In3 (0.789 mm down) the RF reference for the entire launch.
 
 **In2 must be included and this is the part that is easy to get wrong:** In2 is the **`+3V3` plane**, not ground. Relieving only In1 would leave the launch referenced to a power plane and inject 915 MHz return current straight onto `+3V3` at the antenna port. Voiding In2 there costs nothing — that region carries no `+3V3` load and is already perforated by the GND stitching antipads.
+
+**Void the whole path, not just the pad** (corrected 2026-08-02 after an initial recommendation to void under the pad only):
+
+| | J8 pad | ANT trace | U14 ANT pad | Cascade RL |
+|---|---|---|---|---|
+| No void | 10.6 Ω | 49.4 Ω | **19.2 Ω** | 10.3 dB |
+| Void under the pad only | 37.1 Ω | 49.4 Ω | **19.2 Ω** | 23.5 dB |
+| **Void over the whole path** | 37.1 Ω | 76.8 Ω | **49.6 Ω** | **39.1 dB** |
+
+`U14`'s own ANT pad is 0.75 mm wide and has exactly the same wide-pad-over-a-close-plane problem as `J8` — 19.2 Ω. A pad-only void leaves it in place, which is why it stops at 23.5 dB. Voiding the whole path also raises the 0.2 mm trace to 76.8 Ω, but that section is only **2.4° long** at 915 MHz, so it costs nothing measurable. Flat across 902–928 MHz (39.2 → 38.9 dB).
+
+> Two modelling caveats on the numbers above. They are zero-thickness conformal-mapping CBCPW; with 35 µm copper in a 127.5 µm gap (t/S = 0.27) the zero-thickness assumption is strained, and a finite-difference field solve puts the whole-path case nearer **28.5 dB** rather than 39.1 dB. The ranking and the decision are unaffected. Second, the analytic model overestimates the 0.2 mm trace by ~11 % (49.4 Ω zero-thickness vs 43.8 Ω finite-thickness, In1-referenced). Any future launch work on this board needs a finite-thickness model.
 
 *(The related finding that the F.Cu ground pour runs under the SMA centre pin is real and folded into the same fix. The claim that the pour comes within 0.13 mm of the ANT trace was geometrically refuted.)*
 
