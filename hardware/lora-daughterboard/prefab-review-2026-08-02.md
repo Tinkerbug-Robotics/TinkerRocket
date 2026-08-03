@@ -17,6 +17,33 @@ Notably, **zero of the 22 adjudicated findings were refuted** — but 16 of 22 c
 
 ---
 
+## STATUS 2026-08-03 — the fab gate is CLEAR
+
+Every blocker- and major-class item below that touched the board layout has been fixed and re-verified against the file. DRC: **22 → 15 violations, zero clearance errors, zero mask bridges, zero dangling vias, 0 unconnected pads.**
+
+| # | Item | Status |
+|---|---|---|
+| 1 | `+3V3` via 0.0598 mm from `CR4` pad 1 | **CLOSED** — via moved to (87.78, 124.86); gap now **0.3703 mm**, 3.7× the rule |
+| 2 | `+BATT` via bridging `J2`'s shield-pad mask window | **CLOSED** — via moved to (100.69, 121.10); mask web −0.002 → **+0.478 mm** |
+| 3 | Filled+capped vias never reach the fab | **OPEN** — needs the `Dwgs.User` fab note (nothing in the file can carry it) |
+| 4 | Surface finish `None` | **CLOSED** — `copper_finish` now `ENIG` |
+| 5 | SMA launch capacitive discontinuity | **CLOSED** — see below |
+| — | Stackup | **CLOSED** — now JLC06161H-3313, default variant, `(general (thickness))` recomputed to 1.5765 |
+
+**As-built RF launch, measured from the file and computed on the corrected stackup.** The In1+In2 rule area is `copperpour not_allowed`, spans x 91.285–93.536 × y 103.908–111.016, and a raster of the *cached fill polygons* confirms **In1 0 %, In2 0 %, In3 100 %** under all three of the J8 pad, the ANT trace and U14's ANT pad:
+
+| | Z₀ | | Return loss | VSWR | Round trip |
+|---|---|---|---|---|---|
+| J8 pad | 37.73 Ω | **902 MHz** | 41.7 dB | 1.02 | |
+| ANT trace | 77.82 Ω (2.4° — immaterial) | **915 MHz** | 41.6 dB | 1.02 | **0.001 dB** |
+| U14 ANT pad | 50.31 Ω | **928 MHz** | 41.4 dB | 1.02 | 0.01 % of range |
+
+Against 10.3 dB / VSWR 1.87 / 9.2 % of range lost with no void. The void half-width ended at **1.1255 mm**, past the ~1.2 mm point where the sensitivity to slot width flattens out — the earlier 0.8825 mm measurement was the most sensitive parameter in the whole analysis, so the wider window is worth having. One GND via at (91.39, 110.83) straddles the window edge; it sits 0.465 mm from the U14 pad, far outside the 0.1275 mm coplanar gap, so it is immaterial.
+
+**Still open before ordering:** the fab note (item 3 — it is the only remaining fab-gate item), the three fiducial/courtyard overlaps (`FID1`/`J2`, `FID4`/`U14`, `FID6`/`J6` — the three fiducials that are unusable anyway), the silkscreen items, and the non-layout items in the sections below.
+
+---
+
 ## Fab gate — fix before exporting gerbers
 
 ### 1. BLOCKER — `+3V3` via sits 0.0598 mm from `CR4` pad 1 (GND)
