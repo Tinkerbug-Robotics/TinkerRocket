@@ -32,6 +32,39 @@ static const char* phyName(uint8_t phy)
     }
 }
 
+// Disconnect reasons arrive as NimBLE host codes. Controller-originated ones are
+// BLE_HS_HCI_ERR(x) = 0x200 + x, so the raw number tells you nothing without the
+// spec open — the 2026-08-03 bench burned real time working out that the "520"
+// flooding the console was a supervision timeout and not somebody hanging up.
+// Decode the handful that actually show up on this link; anything else still
+// prints its number.
+//
+// The three worth recognising instantly:
+//   520 (0x08) timeout  — link died ON AIR. Nobody asked for it: RF, PHY or
+//                         connection-parameter margin. See the 1M|2M PHY fix.
+//   531 (0x13) remote   — the peer hung up cleanly (app backgrounded, user tap).
+//   534 (0x16) local    — we hung up. Normal after our own disconnect() call.
+static const char* disconnectReasonName(int reason)
+{
+    switch (reason)
+    {
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_SPVN_TMO):    return "supervision timeout — link lost on air";
+        case BLE_HS_HCI_ERR(BLE_ERR_REM_USER_CONN_TERM): return "remote user terminated";
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_TERM_LOCAL):  return "terminated locally";
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_ESTABLISHMENT): return "connection failed to be established";
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_TERM_MIC):    return "MIC failure";
+        case BLE_HS_HCI_ERR(BLE_ERR_UNSUPP_REM_FEATURE): return "unsupported remote feature";
+        case BLE_HS_HCI_ERR(BLE_ERR_INSTANT_PASSED):   return "instant passed — PHY/param update desync";
+        default:                                       return "see BLE_ERR_* / BLE_HS_*";
+    }
+}
+
+// Max airtime for a 251-octet LL PDU on the 1M PHY, per Core spec Vol 6 Part B
+// 4.5.10: (1 preamble + 4 access-address + 2 header + 251 payload + 4 MIC + 3 CRC)
+// bytes = 265 * 8 us = 2120 us. The 2M figure is half that; requesting the 1M
+// number is the safe ask because it covers whichever PHY the link settles on.
+static constexpr uint16_t kDleTxTime1MUs = 2120;
+
 // Spinlock protecting the command ring (#517) against races between the BLE
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -341,9 +374,19 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     // fragmented into ~19 LL packets, each with its own header and inter-frame
     // spacing. 251 octets collapses that to two. Purely a request — if the peer
     // declines, the link simply stays at 27 and nothing breaks.
+    //
+    // Ask for the octet maximum but NOT the time maximum. BLE_HCI_SET_DATALEN_TX_TIME_MAX
+    // is 0x4290 = 17040 us, which is the LE CODED PHY ceiling — the time it takes to
+    // put 251 octets on air at 125 kbps. We never use Coded. On 1M the same 251 octets
+    // occupy 2120 us, and on 2M about 1064 us, so asking for 17040 requests an airtime
+    // budget ~8x larger than the PDU can possibly need. Controllers are expected to
+    // clamp it, but it is a request no honest 1M/2M link should make, and an oversized
+    // max_tx_time is one of the inputs a controller uses when deciding what fits in a
+    // connection event. Ask for the real 1M ceiling instead; the octet count is what
+    // actually buys the throughput, and it is unchanged.
     const int dle_rc = ble_gap_set_data_len(conn_handle,
                                             BLE_HCI_SET_DATALEN_TX_OCTETS_MAX,
-                                            BLE_HCI_SET_DATALEN_TX_TIME_MAX);
+                                            kDleTxTime1MUs);
     if (dle_rc != 0)
     {
         ESP_LOGW(BLE_TAG, "Data-length extension request failed, rc=%d "
@@ -550,7 +593,7 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     // would be wrong.
     conn_param_due_ms_ = 0;
     conn_param_attempts_ = 0;
-    ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
+    ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d (%s)", reason, disconnectReasonName(reason));
 
     // Restart advertising so new devices can connect. Disconnect re-opens the
     // fast window (#541): reconnects are the common case right here.
