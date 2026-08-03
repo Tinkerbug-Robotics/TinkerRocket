@@ -1,9 +1,25 @@
 CONFIG_IDF_TARGET="esp32s3"
 
-# Flash — devkit modules are >=8MB; partition table stays within 4MB in case
-# the final daughterboard uses a smaller part.
+# Flash — 8 MB, settled from the as-built board: U22 = W25Q64JVXGIQ (64 Mbit).
+# This was previously 8 MB for a guess ("devkits are >=8MB, final part TBD");
+# it is now 8 MB for a reason. A later board revision fits a W25Q128 (16 MB) —
+# 8 MB is the safe value for both, since an 8 MB image runs on a 16 MB part
+# while the reverse bricks the boot. Do not raise this to match a schematic
+# without checking which board is in your hand. (Reading the flash part off a
+# stale field is the OC's 128-of-512 MB mistake, #492.)
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# PSRAM stays OFF — hardware constraint, not a preference, and it holds for
+# both board revisions for different reasons. The as-built board fits a plain
+# ESP32-S3 (no in-package PSRAM, so there is nothing to enable). The revision
+# that fits an S3RH2 has 2 MB of quad PSRAM hanging on VDD_SPI, which in 3.3 V
+# mode is fed internally from VDD3P3_RTC through ~14 ohm — and the external
+# boot flash shares that node. Flash alone (~25 mA) holds ~2.95 V; flash +
+# PSRAM active (~50 mA) sags to ~2.60 V, below both parts' 2.7 V minimum, i.e.
+# enabling PSRAM browns out the chip's own boot flash. Do not turn this on
+# unless VDD_SPI is re-fed (hardware pre-fab review finding 4).
+CONFIG_SPIRAM=n
 
 # FreeRTOS
 CONFIG_FREERTOS_HZ=1000

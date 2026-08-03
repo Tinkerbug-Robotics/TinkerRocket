@@ -49,10 +49,20 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     // S3 boot is ~1 s from the ACT edge; wait generously. If we attached to
     // an already-running modem (warm OC reboot), there is no BOOT coming, so
     // also poke GET_IDENTITY and accept either reply.
+    // GET_IDENTITY is re-sent through the wait, not fired once: on hosts
+    // without an ACT pin (the BS — J6 pin 1 is hard ground) an
+    // already-running modem sends no BOOT, so a single lost/garbled request
+    // frame would have been the difference between a radio and a radio-less
+    // session until someone power-cycled the daughterboard.
     const uint32_t deadline = millis() + 4000;
-    (void)link_.sendFrame(MSG_GET_IDENTITY, nullptr, 0);
+    uint32_t next_identity_ms = 0;
     while (millis() < deadline && !modem_alive_)
     {
+        if ((int32_t)(millis() - next_identity_ms) >= 0)
+        {
+            (void)link_.sendFrame(MSG_GET_IDENTITY, nullptr, 0);
+            next_identity_ms = millis() + 300;
+        }
         link_.poll(&UartModemBackend::onFrameTrampoline, this);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -151,6 +161,9 @@ bool UartModemBackend::pushConfig(float freq_mhz, uint8_t sf, float bw_khz,
             cfg_bw_khz_ = bw_khz;
             cfg_cr_ = cr;
             cfg_tx_power_ = d.tx_power_dbm;
+            // Any successful push satisfies a pending post-BOOT re-push —
+            // e.g. a host-driven reconfigure() racing the BOOT handler.
+            config_repush_pending_ = false;
             return true;
         }
         vTaskDelay(1);
@@ -282,6 +295,19 @@ void UartModemBackend::onFrame(uint8_t type, const uint8_t* payload, size_t len)
                 break;
             }
             memcpy(&identity_, payload, sizeof(identity_));
+            // Version-check EVERY identity, not just the one begin() sees:
+            // a BOOT can arrive because the daughterboard was reflashed or
+            // physically swapped under a running host, and re-arming
+            // modem_alive_ without the check would reintroduce the exact
+            // mis-parsing begin() refuses (#569 class).
+            if (identity_.protocol_version != PROTOCOL_VERSION)
+            {
+                ESP_LOGE(TAG, "modem protocol v%u != host v%u — radio stays "
+                              "disabled (mismatched daughterboard pair?)",
+                         identity_.protocol_version, PROTOCOL_VERSION);
+                modem_alive_ = false;
+                break;
+            }
             const bool was_alive = modem_alive_;
             modem_alive_ = true;
             if (type == MSG_BOOT)
@@ -335,19 +361,79 @@ void UartModemBackend::service()
     link_.poll(&UartModemBackend::onFrameTrampoline, this);
 
     // Deferred BOOT config re-push (see onFrame) — outside the poll handler.
-    if (config_repush_pending_ && modem_alive_)
+    // DURABLE: the pending flag stays set until a push actually succeeds,
+    // retrying on a timer. The modem announces BOOT exactly once, so this
+    // re-push is the only mechanism keeping the pair on one modulation
+    // after a daughterboard reboot/reflash — a single-shot push whose ack
+    // frame is lost would leave the modem on boot defaults while it keeps
+    // radiating and returning TX_RESULT ok=1: healthy-looking stats on a
+    // dead link. send() holds TX while this is pending for the same reason.
+    if (config_repush_pending_ && modem_alive_ &&
+        (int32_t)(millis() - repush_retry_at_ms_) >= 0)
     {
-        config_repush_pending_ = false;
-        (void)pushConfig(cfg_freq_mhz_, cfg_sf_, cfg_bw_khz_, cfg_cr_,
-                         cfg_tx_power_, /*start_rx=*/true,
-                         /*ack_timeout_ms=*/300);
+        // 500 ms matches begin(): the modem may be doing a full radio
+        // begin() (>=100 ms of fixed resets) before it can ack.
+        if (pushConfig(cfg_freq_mhz_, cfg_sf_, cfg_bw_khz_, cfg_cr_,
+                       cfg_tx_power_, /*start_rx=*/true,
+                       /*ack_timeout_ms=*/500))
+        {
+            config_repush_pending_ = false;
+            ESP_LOGI(TAG, "post-BOOT config re-push applied");
+        }
+        else
+        {
+            // Also the RF-dead recovery path: the modem retries a full
+            // radio begin() on every SET_CONFIG, so keep knocking (slowly).
+            repush_retry_at_ms_ = millis() + 2000;
+            ESP_LOGW(TAG, "post-BOOT config re-push failed — retrying in 2 s");
+        }
+    }
+
+    // Periodic link-health poll. STATUS carries the counters neither side
+    // logs otherwise (modem-side uart_rx_crc_fails/resync_bytes, air-side
+    // rx_crc_fail), and polling keeps the getStats() mirror fresh instead
+    // of frozen at the last SET_CONFIG ack. ~8 B up / 60 B down every 2 s
+    // is noise next to telemetry.
+    if (modem_alive_ && (int32_t)(millis() - status_poll_at_ms_) >= 0)
+    {
+        status_poll_at_ms_ = millis() + STATUS_POLL_MS;
+        (void)link_.sendFrame(MSG_GET_STATUS, nullptr, 0);
+    }
+
+    // Surface link degradation as it happens rather than on autopsy: log
+    // when either side's UART error counters moved. Host side = frames the
+    // modem sent us that arrived damaged; modem side = our frames damaged
+    // in the other direction.
+    if ((int32_t)(millis() - health_log_at_ms_) >= 0)
+    {
+        health_log_at_ms_ = millis() + HEALTH_LOG_MS;
+        TR_UART_Link::Stats ls = {};
+        link_.getStats(ls);
+        const uint32_t modem_crc = last_status_.uart_rx_crc_fails;
+        const uint32_t modem_rsn = last_status_.uart_rx_resync_bytes;
+        if (ls.rx_crc_fails != health_host_crc_snap_ ||
+            ls.rx_resync_bytes != health_host_resync_snap_ ||
+            modem_crc != health_modem_crc_snap_ ||
+            modem_rsn != health_modem_resync_snap_)
+        {
+            ESP_LOGW(TAG, "UART link health: host rx_crc=%u resync=%uB | "
+                          "modem rx_crc=%u resync=%uB",
+                     ls.rx_crc_fails, ls.rx_resync_bytes, modem_crc, modem_rsn);
+            health_host_crc_snap_ = ls.rx_crc_fails;
+            health_host_resync_snap_ = ls.rx_resync_bytes;
+            health_modem_crc_snap_ = modem_crc;
+            health_modem_resync_snap_ = modem_rsn;
+        }
     }
 }
 
 bool UartModemBackend::send(const uint8_t* payload, size_t len)
 {
-    if (!modem_alive_ || payload == nullptr || len == 0 ||
-        len > MAX_AIR_FRAME || tx_in_flight_)
+    // config_repush_pending_: the modem just rebooted and is still on its
+    // boot-default modulation — transmitting now would radiate on the wrong
+    // channel/SF. Refuse (caller retries next loop) until the re-push lands.
+    if (!modem_alive_ || config_repush_pending_ || payload == nullptr ||
+        len == 0 || len > MAX_AIR_FRAME || tx_in_flight_)
     {
         return false;
     }

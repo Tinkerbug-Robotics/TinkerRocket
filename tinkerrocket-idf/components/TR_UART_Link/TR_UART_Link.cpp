@@ -20,7 +20,17 @@ esp_err_t TR_UART_Link::begin(const Config& cfg)
         // connector.
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .rx_flow_ctrl_thresh = 0,
-        .source_clk = UART_SCLK_DEFAULT,
+        // XTAL, not the default APB, because APB is DFS-sensitive and the
+        // base station runs DFS (CONFIG_PM_DFS_INIT_AUTO, #518-era power
+        // work). The IDF UART driver holds its APB pm-lock only around TX,
+        // so with the divider programmed against APB=80 MHz a DFS drop to
+        // 40 MHz halves the effective RX baud — every frame the modem sends
+        // up fails CRC while our own TX keeps working, which presents as
+        // "downlink dead, uplink fine" with nothing pointing at the UART.
+        // esp_pm re-clocks only the CONSOLE uart for DFS; application UARTs
+        // are on their own. XTAL is a fixed 40 MHz on every board this link
+        // touches and carries 921600 with ~0.06% divider error.
+        .source_clk = UART_SCLK_XTAL,
         // Zero the sleep-power flags (allow_pd / backup_before_sleep) added in
         // IDF v6 — we don't power-gate this UART across light sleep.
         .flags = {},

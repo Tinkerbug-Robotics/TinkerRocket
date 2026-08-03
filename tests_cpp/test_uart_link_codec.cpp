@@ -80,6 +80,32 @@ TEST(UartLinkCodec, PackGoldenFrame)
     const uint16_t crc = calcCRC16(crc_input, sizeof(crc_input));
     EXPECT_EQ(frame[9], static_cast<uint8_t>(crc >> 8));
     EXPECT_EQ(frame[10], static_cast<uint8_t>(crc & 0xFF));
+
+    // The check above proves pack() calls calcCRC16 — it cannot catch a change
+    // to the CRC *parameters*, because the expectation moves with them. Pin
+    // the literal bytes too. These same constants are carried by the bench
+    // host (tools/bench_radio_modem.py, GOLDEN), which reimplements the CRC
+    // rather than linking this one, so the two implementations cannot drift
+    // apart silently — which is the entire point of a golden-byte test.
+    const std::vector<uint8_t> golden = {0xAA, 0x55, 0xAA, 0x55, 0x42, 0x03,
+                                         0x01, 0x02, 0x03, 0x00, 0x66};
+    EXPECT_EQ(frame, golden);
+}
+
+TEST(UartLinkCodec, PackGoldenEmptyPayload)
+{
+    // len = 0 is the common case on this link (GET_STATUS / GET_IDENTITY /
+    // START_RX are all payload-free), and it is the edge a length-handling
+    // regression breaks first.
+    using namespace radio_modem;
+    const std::vector<uint8_t> golden_identity = {0xAA, 0x55, 0xAA, 0x55,
+                                                  MSG_GET_IDENTITY, 0x00,
+                                                  0x04, 0x00};
+    const std::vector<uint8_t> golden_status = {0xAA, 0x55, 0xAA, 0x55,
+                                                MSG_GET_STATUS, 0x00,
+                                                0x06, 0x00};
+    EXPECT_EQ(packVec(MSG_GET_IDENTITY, {}), golden_identity);
+    EXPECT_EQ(packVec(MSG_GET_STATUS, {}), golden_status);
 }
 
 TEST(UartLinkCodec, PackRejectsBadArgs)
@@ -147,7 +173,15 @@ TEST(UartLinkCodec, ResyncThroughLeadingGarbage)
     const auto got = run(d, stream);
     ASSERT_EQ(got.size(), 1u);
     EXPECT_EQ(got[0].type, 0x33);
-    EXPECT_GT(d.stats().resync_bytes, 0u);
+
+    // Exactly 5, not "> 0" and not 6. Six bytes of garbage go in, but the
+    // counter tracks what the state machine DISCARDS, and one of the two
+    // 0xAAs is consumed as a SOF candidate rather than dropped (see rehunt).
+    // This is pinned rather than loose because the value is reported to hosts
+    // as STATUS.uart_rx_resync_bytes, and anything that recomputes it must
+    // agree — tools/bench_radio_modem.py got 6 with a scan-for-SOF deframer,
+    // and only the on-hardware self-test caught it.
+    EXPECT_EQ(d.stats().resync_bytes, 5u);
 }
 
 TEST(UartLinkCodec, CorruptedFrameDroppedNextFrameSurvives)
@@ -178,18 +212,20 @@ TEST(UartLinkCodec, TruncatedFrameThenNewSofRecovers)
     std::vector<uint8_t> stream = truncated;
     stream.insert(stream.end(), good.begin(), good.end());
 
-    // The truncated frame's tail is consumed as payload bytes of the partial
-    // frame; the CRC check then fails on whatever lands in the CRC slots, and
-    // the good frame that follows must still be recovered — worst case after
-    // one more frame's worth of resync. Send the good frame twice to prove
-    // the parser can't wedge permanently.
-    stream.insert(stream.end(), good.begin(), good.end());
+    // A truncation costs EXACTLY TWO frames. This framer is length-driven, so
+    // the partial frame keeps consuming: it swallows the next frame's SOF as
+    // its own payload/CRC, fails the CRC, and recovers on the frame after.
+    // The second frame is given a different type so the test can prove WHICH
+    // one was eaten rather than just that something got through.
+    const auto survivor = packVec(0x78, {0xEF});
+    stream.insert(stream.end(), survivor.begin(), survivor.end());
 
     const auto got = run(d, stream);
-    ASSERT_GE(got.size(), 1u);
-    EXPECT_EQ(got.back().type, 0x77);
-    ASSERT_EQ(got.back().payload.size(), 1u);
-    EXPECT_EQ(got.back().payload[0], 0xEE);
+    ASSERT_EQ(got.size(), 1u);
+    EXPECT_EQ(got[0].type, 0x78);  // 0x77 is the expected casualty
+    ASSERT_EQ(got[0].payload.size(), 1u);
+    EXPECT_EQ(got[0].payload[0], 0xEF);
+    EXPECT_EQ(d.stats().crc_fails, 1u);
 }
 
 TEST(UartLinkCodec, BackToBackFramesNoLoss)
