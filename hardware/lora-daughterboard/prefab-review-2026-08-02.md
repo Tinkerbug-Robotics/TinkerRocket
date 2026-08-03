@@ -25,7 +25,8 @@ Every blocker- and major-class item below that touched the board layout has been
 |---|---|---|
 | 1 | `+3V3` via 0.0598 mm from `CR4` pad 1 | **CLOSED** — via moved to (87.78, 124.86); gap now **0.3703 mm**, 3.7× the rule |
 | 2 | `+BATT` via bridging `J2`'s shield-pad mask window | **CLOSED** — via moved to (100.69, 121.10); mask web −0.002 → **+0.478 mm** |
-| 3 | Filled+capped vias never reach the fab | **OPEN** — needs the `Dwgs.User` fab note (nothing in the file can carry it) |
+| 3a | Filled+capped vias never reach the fab | **OPEN** — needs the `Dwgs.User` fab note; nothing in the file can carry it |
+| 3b | Four lands whose drill was ≥ the land dimension | **CLOSED** — `U28.29`, `U3.4`, `U3.7`, `FL1.4` all cleared; **0 such lands remain** (was 4), via-in-pad count 70 → 66 |
 | 4 | Surface finish `None` | **CLOSED** — `copper_finish` now `ENIG` |
 | 5 | SMA launch capacitive discontinuity | **CLOSED** — see below |
 | — | Stackup | **CLOSED** — now JLC06161H-3313, default variant, `(general (thickness))` recomputed to 1.5765 |
