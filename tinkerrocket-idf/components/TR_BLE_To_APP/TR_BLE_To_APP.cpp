@@ -362,12 +362,25 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     // ~1.5-2x slower as the price of being correct.
     //
     // 2M doubles the raw PHY rate and is independent of the connection interval, so
-    // it more than buys that back without going back outside the spec. If the peer
-    // declines, the link simply stays on 1M — hence the PHY_UPDATE_COMPLETE handler,
-    // which logs what we actually got rather than what we hoped for.
+    // it more than buys that back without going back outside the spec.
+    //
+    // BOTH bits, and this is load-bearing. The mask is not "which PHY do I prefer",
+    // it is "which PHYs am I willing to use at all" — a 2M-only mask forbids 1M, so
+    // the controller has nowhere to retreat to when 2M stops closing. 2M trades ~3 dB
+    // of sensitivity for the rate, and on a board whose BLE antenna is marginal that
+    // is the difference between a link and a supervision timeout: bench 2026-08-03
+    // saw connect -> DLE -> "PHY now: TX=2M RX=2M" -> reason=520 (HCI 0x08) within
+    // 0.6-1.6 s, every cycle, forever. With 1M in the mask the controller simply
+    // stays on (or falls back to) 1M and the link survives, slower but alive.
+    //
+    // The original comment here claimed "if the peer declines, the link simply stays
+    // on 1M". That was the intent and it was NOT what the code did — a peer that
+    // accepts 2M and then cannot sustain it is a different case from a peer that
+    // declines, and only the second one was handled. The PHY_UPDATE_COMPLETE handler
+    // still logs what we actually got rather than what we hoped for.
     const int phy_rc = ble_gap_set_prefered_le_phy(conn_handle,
-                                                   BLE_GAP_LE_PHY_2M_MASK,
-                                                   BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_1M_MASK | BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_1M_MASK | BLE_GAP_LE_PHY_2M_MASK,
                                                    BLE_GAP_LE_PHY_CODED_ANY);
     if (phy_rc != 0)
     {
