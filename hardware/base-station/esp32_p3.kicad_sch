@@ -3648,12 +3648,6 @@
 		(uuid "13597502-22ec-4c3f-9836-2733c3aa6b06")
 	)
 	(junction
-		(at 91.44 36.195)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "15977b04-8f42-4578-913a-2c95bc56c6ea")
-	)
-	(junction
 		(at 85.725 66.675)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3760,12 +3754,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "ed504c7f-73dc-4356-a7b2-244d48524c8b")
-	)
-	(junction
-		(at 100.965 36.195)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "fd4bb871-3a11-47cb-b551-db01b868bd1b")
 	)
 	(junction
 		(at 205.105 23.495)
@@ -4045,16 +4033,6 @@
 	)
 	(wire
 		(pts
-			(xy 99.695 36.195) (xy 100.965 36.195)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "5c1d2bf1-5171-4029-b492-bc46c86956ad")
-	)
-	(wire
-		(pts
 			(xy 207.645 46.355) (xy 213.36 46.355)
 		)
 		(stroke
@@ -4155,7 +4133,7 @@
 	)
 	(wire
 		(pts
-			(xy 91.44 36.195) (xy 94.615 36.195)
+			(xy 86.995 36.195) (xy 107.95 36.195)
 		)
 		(stroke
 			(width 0)
@@ -4232,16 +4210,6 @@
 			(type default)
 		)
 		(uuid "bd6e71fc-3a56-4d52-8d47-32c2505a2d6e")
-	)
-	(wire
-		(pts
-			(xy 100.965 36.195) (xy 107.95 36.195)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c209a1ad-a693-4c1f-a16c-b6f1c92fb1c6")
 	)
 	(wire
 		(pts
@@ -4372,16 +4340,6 @@
 			(type default)
 		)
 		(uuid "ed340029-c9f6-42b0-9457-2b5719b1263b")
-	)
-	(wire
-		(pts
-			(xy 86.995 36.195) (xy 91.44 36.195)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f50b8d29-47df-4dfb-af46-3fcff83c12f8")
 	)
 	(wire
 		(pts
@@ -4547,30 +4505,6 @@
 			)
 		)
 	)
-	(global_label "M_MOSI"
-		(shape input)
-		(at 171.45 69.215 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "44123a12-c4f6-45f8-88d4-44e55c755a19")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 181.4504 69.215 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
 	(global_label "SPI_HD"
 		(shape input)
 		(at 86.36 121.92 0)
@@ -4584,54 +4518,6 @@
 		(uuid "44b7ed40-4e77-4f93-9477-aca7c5b90cd9")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 95.9976 121.92 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(global_label "M_SCK"
-		(shape input)
-		(at 171.45 66.675 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "4cf07e34-0d67-4ecf-91cf-d56398faf60e")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 180.6037 66.675 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(global_label "M_FLASH_CS"
-		(shape input)
-		(at 171.45 71.755 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "4f5cd5c5-1b62-464e-8db8-57770a60335d")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 186.0466 71.755 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4907,30 +4793,6 @@
 			)
 		)
 	)
-	(global_label "M_MISO"
-		(shape input)
-		(at 171.45 74.295 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "99a45f04-16a9-4fbd-9e57-532bd9d060b8")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 181.4504 74.295 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
 	(global_label "LoRa_RX"
 		(shape input)
 		(at 171.45 114.935 0)
@@ -5120,6 +4982,30 @@
 					(size 1.27 1.27)
 				)
 				(justify right)
+			)
+		)
+	)
+	(global_label "LoRa_EN"
+		(shape input)
+		(at 171.45 104.775 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "f6388ae2-8df2-4f19-850f-9a54f1ad6a53")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 182.4784 104.775 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 	)
@@ -5347,107 +5233,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
 					(reference "C3")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:L_Small")
-		(at 97.155 36.195 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "05537c27-ca78-43cb-82dd-2d59e768213d")
-		(property "Reference" "L7"
-			(at 97.155 31.75 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "2.7 nH"
-			(at 97.155 33.655 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Inductor_SMD:L_0402_1005Metric"
-			(at 97.155 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 97.155 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Inductor, small symbol"
-			(at 97.155 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "LQW15AN2N7C00D"
-			(at 97.155 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Murata"
-			(at 97.155 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "d2fc257b-0fb7-4d74-88e5-97105ebfacb0")
-		)
-		(pin "2"
-			(uuid "0e480931-bb3e-46f5-92aa-dcd425e141c5")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "L7")
 					(unit 1)
 				)
 			)
@@ -6094,84 +5879,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
 					(reference "Y1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 100.965 43.815 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "139d2193-52d8-40d7-8ae4-fd621d0b36b3")
-		(property "Reference" "#PWR0110"
-			(at 100.965 50.165 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 102.87 47.625 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 100.965 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 100.965 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 100.965 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "afe76a5b-b1f3-4c50-b0b1-4b22cd82b994")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "#PWR0110")
 					(unit 1)
 				)
 			)
@@ -8890,84 +8597,6 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 91.44 43.815 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "7ef4a1d1-75f8-4530-9eb2-81201b7f1553")
-		(property "Reference" "#PWR0109"
-			(at 91.44 50.165 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 93.345 47.625 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 91.44 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 91.44 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 91.44 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "e19a0b46-5442-4869-b786-79aaa4337646")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "#PWR0109")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:C")
 		(at 85.725 70.485 0)
 		(unit 1)
@@ -9480,109 +9109,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
 					(reference "#PWR02")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 100.965 40.005 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "9d82de4d-3991-4896-b65d-97e430b5fd38")
-		(property "Reference" "C26"
-			(at 100.965 37.465 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "1.5 pF"
-			(at 100.965 42.545 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 101.9302 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 100.965 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 100.965 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CC0402CRNPO9BN1R5"
-			(at 100.965 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 100.965 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "63668e5e-8e48-453d-9d9e-ef30fe9dac4b")
-		)
-		(pin "2"
-			(uuid "15099df8-4894-4a60-a565-8133592ba0db")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "C26")
 					(unit 1)
 				)
 			)
@@ -11367,109 +10893,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
 					(reference "C10")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 91.44 40.005 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "f54cf562-4f56-47a7-b01f-b6792655387a")
-		(property "Reference" "C25"
-			(at 91.44 37.465 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "1.5 pF"
-			(at 91.44 42.545 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 92.4052 43.815 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 91.44 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 91.44 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CC0402CRNPO9BN1R5"
-			(at 91.44 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 91.44 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "33553988-12f1-43aa-882c-b1a4c510f6a0")
-		)
-		(pin "2"
-			(uuid "492ad3c6-1af2-44f8-be4d-909c47160c10")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "C25")
 					(unit 1)
 				)
 			)

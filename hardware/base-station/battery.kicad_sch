@@ -3110,7 +3110,7 @@
 	)
 	(text "1S Battery Voltage"
 		(exclude_from_sim no)
-		(at 208.28 27.94 0)
+		(at 208.28 21.59 0)
 		(effects
 			(font
 				(size 2.5 2.5)
@@ -4282,6 +4282,30 @@
 			)
 		)
 	)
+	(global_label "V_SWITCH"
+		(shape input)
+		(at 226.06 36.195 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "15a8377a-38ad-44aa-9a87-efbaf8858b97")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 226.06 24.3198 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
 	(global_label "D-"
 		(shape input)
 		(at 31.75 18.415 180)
@@ -5226,84 +5250,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/2379f198-28b9-4984-b470-63cb7f5b1a0e"
 					(reference "#PWR053")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:VCC")
-		(at 226.06 36.195 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "333152a7-ea3a-400d-8c4b-795a02191e23")
-		(property "Reference" "#PWR047"
-			(at 226.06 40.005 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "VCC"
-			(at 226.06 31.115 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 226.06 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 226.06 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"VCC\""
-			(at 226.06 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "ee8f58bb-d1c2-48ce-832b-0017fbbb8a7c")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/2379f198-28b9-4984-b470-63cb7f5b1a0e"
-					(reference "#PWR047")
 					(unit 1)
 				)
 			)
