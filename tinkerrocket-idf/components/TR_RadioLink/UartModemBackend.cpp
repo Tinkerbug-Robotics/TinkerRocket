@@ -38,10 +38,29 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         gpio_set_level((gpio_num_t)cfg.act_pin, 1);  // power the daughterboard
     }
 
+    // Every failure path below leaves the daughterboard UNPOWERED and the
+    // backend not-began. Previously they all returned false with act_pin still
+    // high and began_ already true, which cost two things: an unused 22 dBm
+    // radio module sat powered for the rest of the flight, and service() kept
+    // polling a link that begin() had just declared dead. LORA_ACT is also the
+    // recovery hammer for a wedged modem (#412) — dropping it means a later
+    // retry gets a genuine power cycle instead of re-poking a stuck part.
+    auto failClosed = [&]() -> bool
+    {
+        modem_alive_   = false;
+        began_         = false;
+        stats_.enabled = false;
+        if (cfg.act_pin >= 0)
+        {
+            gpio_set_level((gpio_num_t)cfg.act_pin, 0);
+        }
+        return false;
+    };
+
     if (link_.begin(cfg.uart) != ESP_OK)
     {
         ESP_LOGE(TAG, "UART link init failed");
-        return false;
+        return failClosed();
     }
     began_ = true;
 
@@ -54,7 +73,14 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     // already-running modem sends no BOOT, so a single lost/garbled request
     // frame would have been the difference between a radio and a radio-less
     // session until someone power-cycled the daughterboard.
-    const uint32_t deadline = millis() + 4000;
+    // 4 s is sized for the ACT-less host (the BS): there we are attaching to a
+    // modem that may already have been running for hours, so the only way in is
+    // to keep asking and hope one GET_IDENTITY lands. A host WITH an ACT pin
+    // just powered the module itself and knows the S3 boots in ~1 s from that
+    // edge, so 2.5 s is already 2.5x margin — and every extra second here is
+    // paid inside an initPeripherals() that can already block 30-90 s, on the
+    // exact path a user hits when the daughterboard is simply not plugged in.
+    const uint32_t deadline = millis() + (cfg.act_pin >= 0 ? 2500 : 4000);
     uint32_t next_identity_ms = 0;
     while (millis() < deadline && !modem_alive_)
     {
@@ -69,7 +95,7 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
     if (!modem_alive_)
     {
         ESP_LOGE(TAG, "no modem answer on the UART link — radio disabled");
-        return false;
+        return failClosed();
     }
     if (identity_.protocol_version != PROTOCOL_VERSION)
     {
@@ -78,8 +104,7 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         ESP_LOGE(TAG, "modem protocol v%u != host v%u — radio disabled "
                       "(mismatched daughterboard pair?)",
                  identity_.protocol_version, PROTOCOL_VERSION);
-        modem_alive_ = false;
-        return false;
+        return failClosed();
     }
     ESP_LOGI(TAG, "modem up: chip=%u fw=%.32s max_tx=%ddBm band=%.0f-%.0fMHz",
              identity_.chip, identity_.fw_version,
@@ -95,8 +120,7 @@ bool UartModemBackend::begin(const Config& cfg, float freq_mhz, uint8_t sf,
         // #569: covers both "no STATUS ack" and "ack with radio_enabled=0"
         // (RF dead on the daughterboard — pushConfig logs the specific cause).
         ESP_LOGE(TAG, "initial SET_CONFIG rejected — radio disabled");
-        modem_alive_ = false;
-        return false;
+        return failClosed();
     }
 
     stats_.enabled = true;
