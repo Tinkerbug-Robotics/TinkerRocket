@@ -22,8 +22,14 @@ cross-checked against the fabbed-and-working `rocket-computer` and `lora-daughte
 
 ## STATUS — updated 2026-08-04
 
-The board is now **DRC-clean: 0 errors, 0 unconnected items, 0 schematic-parity issues.** Only
-silkscreen warnings remain. Two findings below were **wrong** and are withdrawn; see the corrections.
+The board is **DRC-clean: 0 errors, 0 unconnected items, 0 schematic-parity issues.** Only
+silkscreen warnings remain (26 `silk_overlap`, 6 `silk_edge_clearance`, 2 `silk_over_copper`,
+2 `nonmirrored_text_on_back_layer`). Two findings below were **wrong** and are withdrawn; see the
+corrections.
+
+**The one open item that is a deliberate trade, not an oversight:** the antenna ships with `L4`
+(4.3 nH shunt) alone and no matching provision — see A1 under the antenna section. Characterise it
+on this build with the cell installed and carry the result into the next revision.
 
 | # | Finding | Status |
 |---|---|---|
@@ -434,10 +440,33 @@ element** relative to Molex's design intent. Add a 2.7 nH series where Molex cal
 1.5 pF shunt where Molex fits nothing, and the network is materially different from the
 characterised one. Nothing in DRC can see this.
 
-**Recommendation:** ship the first build at Molex's starting point — **`L4` 4.3 nH fitted, `C25`
-DNP, `L7` = 0 Ω, `C26` DNP** — then tune on a VNA. Keeping all four footprints is correct and worth
-preserving; populating all four by default is not. (`L4`'s `LQW15AN4N3C00D` vs Molex's
-`LQG15HS4N3B02` is fine — same 4.3 nH, wire-wound, higher Q.)
+**RESOLVED 2026-08-04 — shipping with the inductor only.** `C25`, `C26` and `L7` were removed
+(118 → 115 footprints). The network is now exactly Molex's §6.0 recommendation, with `C2` = 0 Ω
+realised as a direct trace:
+
+```
+U15.4 (ANT) ──┬────── direct trace ────── U3.1 (LNA_IN)
+              │
+           L4 = 4.3 nH        -> +j65.9 Ω at 2.44 GHz, inductive, correct sign
+              │
+             GND
+```
+
+(`L4`'s `LQW15AN4N3C00D` vs Molex's `LQG15HS4N3B02` is fine — same 4.3 nH, wire-wound, higher Q.)
+
+**Accepted trade, recorded deliberately.** Deleting the footprints rather than fitting them DNP means
+this build has **no tuning provision and no VNA break point**, and Molex is explicit that validation
+is the user's responsibility (§1.0) and that off-tune from surrounding metal "can be compensated
+through matching" (§4.2). This board differs from Molex's reference in every dimension that loads an
+antenna — 1.6 mm vs 0.8 mm, 4-layer vs 2-layer, 30 × 90 vs 100 × 40 mm, mid-edge vs corner, plus an
+18650 can 5.8 mm behind it — so some off-tune is expected. The decision is to accept that on this
+prototype and fold the measured result into the next iteration.
+
+**Carry into the next revision:** measure return loss and efficiency on an assembled unit **with the
+cell installed**, and restore a shunt/series/shunt provision (Molex's `C1`/`C2`/`C3` positions) so
+the next board can be tuned rather than characterised-and-respun. If the measured match is poor and
+this revision needs rescuing, `L4`'s own pads are the only place to intervene — a different shunt
+value is the single degree of freedom available.
 
 ### A2 — The "fixing pads" have no specified net; leave them isolated
 
