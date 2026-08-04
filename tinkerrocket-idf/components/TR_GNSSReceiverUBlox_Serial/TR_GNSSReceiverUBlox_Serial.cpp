@@ -71,22 +71,42 @@ bool TR_GNSSReceiverUBloxSerial::begin(uint8_t update_rate_hz_in,
 
     const uint32_t preferred_baud = 460800U;
     const uint32_t bootstrap_baud = preferred_baud;
-    const uint32_t probe_bauds[] = {9600U, 230400U, 115200U, 460800U, 38400U, 57600U};
+    // Order matters far more than it looks — see the deadline note below.
+    // 38400 FIRST because this is an M10-generation module: the SAM-M10Q's
+    // factory-default UART1 rate is 38400 8N1 (9600 is only used in safeboot).
+    // The old list led with 9600, which is the M8-era default, and buried 38400
+    // in 5th place — where the 35 s deadline expired before ever reaching it.
+    // A cold module therefore NEVER got probed at the one rate it was actually
+    // talking at (bench 2026-08-03: bytes seen on the wire, zero handshakes).
+    // 460800 is our own configured rate, tried by the bootstrap above already.
+    const uint32_t probe_bauds[] = {38400U, 9600U, 230400U, 115200U, 460800U, 57600U};
     uint32_t connected_baud = 0U;
     uint8_t active_rx = GNSS_RX;
     uint8_t active_tx = GNSS_TX;
 
     // Bring-up deadline (#557).  A dead or deaf-UART module used to hang begin()
     // forever in the retry loops below — delay() feeds the WDT, so the FC sat
-    // silently on the pad with no telemetry and no flight.  One full baud sweep
-    // (6 bauds x 2 orientations, each with a ~1.5 s begin() timeout) is ~27 s, so
-    // the budget must cover at least one complete sweep; 35 s leaves margin for
-    // the pre-sweep bootstrap/orientation probes.  On expiry begin() returns
+    // silently on the pad with no telemetry and no flight.
+    //
+    // THE OLD BUDGET WAS SIZED AGAINST A TIMING MODEL THAT IS ~6x OPTIMISTIC.
+    // It assumed "6 bauds x 2 orientations, each with a ~1.5 s begin() timeout
+    // is ~27 s".  A baud only costs ~1.5 s when hasSerialActivity() sees
+    // NOTHING.  That check is a bare uartAvailable() > 0 with no framing
+    // validation, so a real stream sampled at the WRONG baud still delivers
+    // bytes and still trips it — and then the expensive branch runs a 4500 ms
+    // begin(), a 250 ms drain, an activity window, and a second 4500 ms
+    // assumeSuccess begin().  Measured on the bench 2026-08-03: "Trying 9600"
+    // at t=7530 ms to "Trying 230400" at t=17006 ms = 9.5 s for ONE baud.
+    // Six of those is ~57 s, not 27 s, so 35 s never covered a full sweep — it
+    // died around the third entry.  With 38400 moved to the front a healthy
+    // cold module now connects on the first try, but keep the budget honest:
+    // 60 s covers a real worst-case sweep instead of silently truncating it.
+    // On expiry begin() returns
     // false and the collector continues in a GNSS-absent degraded mode.  The
     // loops still run one full attempt first (the deadline is only checked before
     // a *retry*), so a live-but-slow module is never cut off mid-sweep.  Compared
     // wrap-safe; boot-time millis() never wraps, but keep the idiom consistent.
-    const uint32_t kBeginTimeoutMs   = 35000U;
+    const uint32_t kBeginTimeoutMs   = 60000U;
     const uint32_t begin_deadline_ms = millis() + kBeginTimeoutMs;
     auto beginExpired = [&]() -> bool {
         return (int32_t)(millis() - begin_deadline_ms) >= 0;
