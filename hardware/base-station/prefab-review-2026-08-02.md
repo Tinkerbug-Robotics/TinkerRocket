@@ -20,7 +20,61 @@ cross-checked against the fabbed-and-working `rocket-computer` and `lora-daughte
 
 ---
 
-## Headline
+## STATUS — updated 2026-08-04
+
+The board is now **DRC-clean: 0 errors, 0 unconnected items, 0 schematic-parity issues.** Only
+silkscreen warnings remain. Two findings below were **wrong** and are withdrawn; see the corrections.
+
+| # | Finding | Status |
+|---|---|---|
+| B1 | `Net-(U2-VIN)` orphaned | **FIXED** — `V_SWITCH` now carries `C34.1`/`L8.1`/`U2.3` |
+| B2 | `R17`/`R18` wrong MPN | **FIXED** — `R17` 18.7 k `RC0402FR-0718K7L`, `R18` 1 k `RC0402FR-071KL` |
+| B3 | No vias in the exposed pads | **WITHDRAWN — my error.** See correction 1 |
+| B4 | `J4` XH part in an EH footprint | **PARTLY WITHDRAWN.** See correction 2. Kept as EH by decision |
+| B5 | Firmware board profile stale | **TRACKED** — issue #714, does not gate fab |
+| S6 | No series R on the LoRa UART | **WITHDRAWN** — the daughterboard's `R77`/`R78` (1 k each) sit between its ESP32 and the connector, so they limit injection in *both* directions |
+| S7 | Impedance not declared | **FIXED** — JLC04161H-7628 stackup, RF netclass, feed widened 0.20 → 0.36 mm |
+| S9 | Netclass defaults illegal | **FIXED** — via 0.45/0.30, and the board rules moved to JLC's standard tier |
+| S8 | In2 plane cut by power routing | **OPEN** |
+| N10–N18 | assorted | mostly **OPEN**, all low severity — see the residual list at the end |
+
+### Correction 1 — B3 was overstated; the via ring is fine
+
+The finding measured distance to *vias only* and ignored plated through-holes, and it treated
+"0 vias inside the pad" as the metric. The metric that matters is **spreading distance**, and the
+board is good: **15 GND vias sit within 1.5 mm of the S3's EPAD edge** (closest 0.32 mm, mean
+0.51 mm, distributed on all four sides). Path inductance EPAD → planes is roughly
+
+```
+15 vias in parallel              ~0.02 nH
++ ~0.5 mm of top-pour spreading  ~0.20 nH
+                          total  ~0.23 nH      (a 3x3 in-pad array would be ~0.04 nH)
+```
+
+0.23 nH is 3.5 Ω at 2.4 GHz — below the QFN's own paddle bond inductance. With no via filling
+available on a 4-layer order, a tight ring is the *correct* trade: it protects the EPAD solder joint,
+which matters more here than 0.2 nH. The sibling boards' in-pad vias are a different choice, not a
+better one. **Closed.**
+
+### Correction 2 — B4's "will not seat" claim was false
+
+KiCad's own `JST_XH_S3B-XH-A_1x03_P2.50mm_Horizontal` uses the **same 0.95 mm drill** as the EH
+footprint, and fabs treat that as the finished hole size, so an XH post (□0.64 mm, 0.905 mm diagonal)
+seats fine. The hole size was never the problem.
+
+What *is* different is the body: the real `S3B-XH-A` is **9.2 mm deep from the pin row vs the EH
+outline's 6.7 mm**. A side-entry housing only mounts one way, so the real connector overhangs the
+**board edge** by ~3.3 mm where the drawing shows 0.79 mm. (An earlier draft of this correction
+claimed a collision with the 18650 — that was an artifact of KiCad drawing its XH and EH horizontal
+footprints with the body on opposite sides of the pin row. There is no battery interference.)
+
+Kept on the EH footprint by decision, since the pads are identical and swapping would wrongly imply
+a different connector. **Residual: silk/courtyard/3D understate the real part by 2.5 mm at the board
+edge** — worth a note if the enclosure is tight there.
+
+---
+
+## Headline (as originally written)
 
 Five things should stop the gerbers. One of them — **B1** — is a regression introduced by
 implementing the previous review's own recommendation, and it leaves the 5 V rail that powers the
@@ -342,7 +396,59 @@ source, and several cost real time to clear.
 
 ---
 
-## Suggested order of work
+## Residual list as of 2026-08-04
+
+Nothing here blocks the gerbers. Ranked by what actually matters.
+
+**1. `In2.Cu` is a +3V3 plane cut by 104 mm of power routing, and it references every bottom-side
+signal** (S8, unchanged). `VCC` 52.8 mm + `V_SWITCH` 46.8 mm + `VDD_SPI` 6.5 + `V_LORA` 4.8 slice the
+pour through the middle third of the board, while `B.Cu` carries **332 mm of routing over 27 nets** —
+including `D+` 35.1 mm and `D−` 48.7 mm — all referenced to that fragmented plane 0.1 mm below.
+Cheapest fix: move `VCC`/`V_SWITCH` off In2, or swap the plane assignment so the layer adjacent to
+B.Cu is ground.
+
+**2. `VCC` on `In2.Cu` is now 0.5 oz copper.** 52.8 mm at 0.5 mm width → **~120 mΩ, ~120 mV/A**.
+Fixing the stackup surfaced this: JLC builds 4-layer with **0.5 oz inner** by default, so the old
+file's 0.035 mm inner layers were fiction. Widen that run, or confirm it is not a series path for
+charge current.
+
+**3. Re-enable `footprint_type_mismatch` in DRC severities.** Still `ignore`, along with
+`missing_courtyard`, `pth/npth_inside_courtyard`, `track_not_centered_on_via`. The first is the check
+that would have caught the `J4` XH-part-in-EH-footprint mismatch in the first place.
+
+**4. `lib_footprint_mismatch` on `Y2`** — the board's copy of `XTAL_ECS-400-10-37B2-CKY-TR` differs
+from the library. Reconcile before plotting so you know which one you shipped.
+
+**5. Silkscreen sweep** — 24 `silk_overlap`, 6 `silk_edge_clearance`, 2 `silk_over_copper`. The
+clipped ones on `J4` and `S1` carry orientation information; `BT2`'s reference designator runs across
+both of `D6`'s through-hole pads. Also the `+`/`-` marks on B.SilkS lack the mirror flag (positions
+are correct — `+` by `BT2.P`/`VCC`, `-` by `BT2.N`/`B−`).
+
+**6. Two dangling stubs** on `unconnected-(U3-GPIO11-Pad16)` and `-GPIO12-Pad17`, 0.27/0.28 mm at
+(57.88, 155.25) and (58.27, 155.25). Plus 7 sub-0.1 mm `V_SWITCH` junction stubs left over from the
+VIN rework — DRC reports no dangling ends on those, so they are cosmetic.
+
+**7. `S1`'s two Ø1.9 mm support-peg NPTHs at (59.03, 134.45) and (59.03, 138.85) sit under the
+18650.** Still unverified — check peg protrusion against the 1.6 mm board in the 3D viewer. A peg
+standing proud under a Li-ion wrapper is not something to find out later.
+
+**8. `MP2672A` input cap placement** — `C48` 4.41 mm from `U12` pin 1 (IN), `C54` 4.10 mm from pin 10
+(BATT), on a switcher whose default f_SW is 1.2 MHz. Everything else on the board decouples within
+1.2–2.2 mm.
+
+**9. `U15` dummy pads 1–3 are on isolated nets.** Molex calls them mechanical bonding pads; tying
+them to GND costs nothing and removes three floating islands under the antenna.
+
+**10. Inductor saturation** — `L8`/`L9` `VLS3012CX-2R2M-1` Isat ≈ 2.83 A against the TPS63020's 4 A
+switch limit and the TPS61023's 2.7 A min valley limit. In-spec for normal operation; a
+fault/startup robustness gap only.
+
+**11. `min_hole_clearance` left at 0.127 mm** by decision — JLC publishes 0.20 mm for via-hole-to-
+track, but boards have been manufactured at these clearances. Recorded, not actioned.
+
+---
+
+## Suggested order of work (as originally written)
 
 1. **B1** — reconnect `Net-(U2-VIN)` to `V_SWITCH`, delete the offending via, re-run DRC to zero.
 2. **B2** — `R17` → 22 k, `R18` → 1 k, both with matching MPNs. Then re-run the MPN-keyed BOM audit;
