@@ -172,6 +172,11 @@ class BLEFleet: NSObject, ObservableObject {
             bsFocus[pid] = rocketID
         }
         baseStation.focusRocketID = rocketID
+        // A deliberate choice — by the user or by the staleness heal — earns a
+        // fresh grace window, so the newly pinned rocket cannot be re-healed
+        // away before it has had a chance to transmit.
+        baseStation.focusPinGraceUntil =
+            Date().addingTimeInterval(BLEDevice.focusPinGraceInterval)
         if let remote = baseStation.remoteRockets.first(where: { $0.rocketID == rocketID }) {
             baseStation.telemetry = remote.telemetry
         }
@@ -223,6 +228,12 @@ class BLEFleet: NSObject, ObservableObject {
         seedTypeFromRegistry(device, peripheralID: peripheralID)
         if let focus = bsFocus[peripheralID] {
             device.focusRocketID = focus
+            // Arm the same grace window the first-latch path uses. Without it
+            // the re-seeded pin is immediately eligible for the staleness check
+            // in BLEDevice, whose roster is empty at this instant — so the
+            // first rocket heard after every reconnect would steal focus.
+            device.focusPinGraceUntil =
+                Date().addingTimeInterval(BLEDevice.focusPinGraceInterval)
         }
         deviceObservers[peripheralID] = device.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
