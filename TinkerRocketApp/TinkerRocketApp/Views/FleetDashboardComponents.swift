@@ -298,7 +298,27 @@ struct RelayRocketSectionView: View {
     let via: BLEDevice
     @ObservedObject var remote: RemoteRocket
     let collapsible: Bool
+    /// Supplies the latched per-rocket fix that the direction arrow needs —
+    /// BLEDevice.lastValidRocketFix only tracks the BS's FOCUSED rocket, and
+    /// this view renders the non-focused ones.
+    var fleet: BLEFleet? = nil
+    /// Phone location, also for the arrow. Optional so previews stay cheap.
+    var locationManager: LocationManager? = nil
     @State private var collapsed = false
+
+    /// Latched fix for THIS rocket, keyed by (network, rocket) — rocket ids
+    /// are only unique per network (#390).
+    private var rocketFix: LastValidRocketFix? {
+        fleet?.lastValidRocketFixes[RocketKey(networkID: via.networkID,
+                                              rocketID: remote.rocketID)]
+    }
+
+    /// Live if the last relayed frame is recent. Recomputed on every frame
+    /// (remote.lastSeen is @Published), so it only flips to stale once a newer
+    /// frame arrives — enough for the signal card's warning styling.
+    private var trackingHealthy: Bool {
+        Date().timeIntervalSince(remote.lastSeen) < 5
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -309,15 +329,21 @@ struct RelayRocketSectionView: View {
                 CollapsedRocketSummary(telemetry: remote.telemetry)
             } else {
                 RocketStateView(state: remote.telemetry.state)
-                FlightSummaryView(telemetry: remote.telemetry)
-                // isBaseStation: relayed frames carry the relaying BS's own
-                // battery fields, so the card shows the Rocket row AND the
-                // "Base Stn" row (charge/voltage/current) — same layout as
-                // the pre-#390 dashboard.  The strip's % is just a glance;
-                // this card is the real numbers.
-                BatteryView(telemetry: remote.telemetry, isBaseStation: true)
-                GPSView(telemetry: remote.telemetry, compact: true)
-                LoRaSignalView(telemetry: remote.telemetry)
+                // The same card stack the focused/direct dashboard renders.
+                // This branch used to hand-assemble a shorter list and had
+                // silently lost SignalStrengthView (arrow + GNSS bar + LoRa
+                // bars), IMUView, StatusFlagsView, FlightEventFlagsView and
+                // HealthCardView. isBaseStation: true — relayed frames carry
+                // the relaying BS's own battery fields, so the battery card
+                // shows the Rocket row AND the "Base Stn" row, same as before.
+                RocketTelemetryCards(
+                    telemetry: remote.telemetry,
+                    isBaseStation: true,
+                    bleRSSI: via.connectedRSSI,
+                    locationManager: locationManager,
+                    rocketFix: rocketFix,
+                    trackingHealthy: trackingHealthy
+                )
                 relayActions
             }
         }
