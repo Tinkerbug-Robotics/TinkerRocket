@@ -396,6 +396,95 @@ source, and several cost real time to clear.
 
 ---
 
+## Antenna — findings from Molex AS-479480001 Rev G (added 2026-08-04)
+
+The application specification was obtained and read in full. It settles the dummy-pad question and
+surfaces one finding that matters more than anything else left on the board.
+
+### A1 — The matching network does not match Molex's, and the shunt element has the wrong sign
+
+**§6.0** specifies an "L" network, with a layout figure and a component table:
+
+```
+ANT ──┬────── C2 = 0 Ω (series) ────── RF Signal
+      │
+   C1 = 4.3 nH   (Murata LQG15HS4N3B02)
+      │
+     GND                                 C3 = NA (not fitted)
+```
+
+The board, with **all four positions fitted, none DNP**:
+
+```
+U15.4 ──┬── L4  4.3 nH ── GND        <- matches Molex C1
+        ├── C25 1.5 pF ── GND        <- NOT in Molex's design
+        └── L7  2.7 nH (series) ──┬── U3.1 (LNA_IN)      <- Molex specifies 0 Ω here
+                                  └── C26 1.5 pF ── GND  <- Molex specifies NA here
+```
+
+At 2.44 GHz:
+
+| | |
+|---|---|
+| Molex `C1`, 4.3 nH alone | **+j65.9 Ω — inductive** |
+| This board, `L4` ∥ `C25` | **−j127.8 Ω — capacitive** (≈0.51 pF equivalent) |
+
+Fitting `C25` alongside `L4` does not merely shift the value — it **inverts the sign of the shunt
+element** relative to Molex's design intent. Add a 2.7 nH series where Molex calls for 0 Ω, plus a
+1.5 pF shunt where Molex fits nothing, and the network is materially different from the
+characterised one. Nothing in DRC can see this.
+
+**Recommendation:** ship the first build at Molex's starting point — **`L4` 4.3 nH fitted, `C25`
+DNP, `L7` = 0 Ω, `C26` DNP** — then tune on a VNA. Keeping all four footprints is correct and worth
+preserving; populating all four by default is not. (`L4`'s `LQW15AN4N3C00D` vs Molex's
+`LQG15HS4N3B02` is fine — same 4.3 nH, wire-wound, higher Q.)
+
+### A2 — The "fixing pads" have no specified net; leave them isolated
+
+**§4.1**: *"There are one feeding pad and **three fixing pads**."* Molex calls them **fixing** pads.
+Across all 17 pages the document **never specifies their net** — it neither requires grounding nor
+requires isolation.
+
+Given this is an LDS part whose plating visibly wraps the moulded body, and Molex nowhere states the
+fixing pads are internally isolated from the radiator, grounding them is an unforced risk on the one
+component whose behaviour is hardest to verify without a VNA. Three 0.86 mm squares are electrically
+invisible at λ/4 = 31 mm, so isolation costs nothing. **Leave `U15` pads 1–3 unconnected.**
+
+### A3 — The 18650 clears Molex's 5 mm plane rule, but only just
+
+**§7.1, §7.2 and §7.3 each state:** *"the minimum distance between antenna and plane ground is
+recommended to be **5mm**."* The 18650's steel can is exactly such a plane, parallel to the board and
+behind the antenna.
+
+Measured: the cell axis runs along y at x = 58.84 with a 9 mm radius. The antenna centre sits at
+x = 49.71 — **9.13 mm from the axis, so just outside the can's silhouette entirely**. At the
+antenna's inner edge (x = 51.21) the can surface is **5.82 mm below the antenna base**, plus holder
+standoff.
+
+So it passes, with ~0.8 mm of margin. But Molex's own data (Figures 7.1.1/7.1.2) shows that at 5 mm
+the resonance shifts and efficiency falls from ~78 % to ~56–65 %. **Tune the match with the cell
+installed, not on a bare board.**
+
+### A4 — Reference conditions differ; expect to retune regardless
+
+Molex's reference is a **100 × 40 × 0.8 mm double-sided** board with the antenna **at a corner**
+(§4.1). This board is 30.3 × 90.5 × 1.6 mm, 4-layer, antenna at the **middle of a long edge**. §4.2
+warns explicitly: *"the frequency resonant might be off-tune due to the loading of surrounding
+components especially metal plane. This off-tune can be compensated through matching"* and *"The peak
+gain will be degraded by 1 to 2 dBi in the actual implementation."*
+
+### A5 — Verified good, and one assembly note
+
+- **Ground stitching along the feed** matches the density of Molex's reference layout: 4 GND vias
+  within 1.0 mm of the feed, 7 within 1.5 mm, 13 within 2.5 mm.
+- **§5.0 assembly:** *"For mechanically challenging applications Molex recommends using surface mount
+  adhesive (e.g. Loctite 3611) before reflow soldering process, to ensure increased mechanical
+  retention on the PCB."* Worth adding to the assembly notes — it is a 0.03 g part on four small
+  pads on a field-carried unit. Reflow profile: peak 255–260 °C, ramp-up ≤3 °C/s, ramp-down
+  ≤6 °C/s, 60–150 s above 217 °C; recommended paste ALPHA CAP-390 SAC305.
+
+---
+
 ## Residual list as of 2026-08-04
 
 Nothing here blocks the gerbers. Ranked by what actually matters.
