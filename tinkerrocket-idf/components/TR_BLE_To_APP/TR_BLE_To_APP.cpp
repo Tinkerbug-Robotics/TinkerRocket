@@ -1654,6 +1654,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     size_t pos = 0;
     bool first = true;
     bool dropped = false;   // set when a field is skipped for lack of MTU room (#282)
+    // Set once Tier 1 finishes having lost anything. See the note at the Tier 2
+    // boundary: without it the packer is best-fit, not priority-ordered, and a
+    // tiny MTU keeps the LEAST important field while dropping every vital one.
+    bool tier1_incomplete = false;
 
     // #282: budget the build against the *actual* BLE send window, not just the
     // backing buffer.  sendTelemetry() drops the WHOLE notification when the
@@ -1684,6 +1688,9 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Returns true if `n` more bytes (plus the reserved tail) still fit within
     // the MTU-derived budget.
     auto room = [&](size_t n) -> bool {
+        // Hard stop once Tier 1 came up short: nothing below it is worth
+        // emitting if the operator-critical set did not survive.
+        if (tier1_incomplete) return false;
         return pos + n + kReserve <= cap;
     };
 
@@ -1757,7 +1764,14 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // and battery live, and only loses low-value extras (filename, link
     // stats, unit name) during the brief peak-payload window.
 
-    // ── Tier 1: recovery + dashboard-critical (never sacrificed) ──────────
+    // ── Tier 1: recovery + dashboard-critical ─────────────────────────────
+    // "Never sacrificed" in the sense that nothing BELOW this tier is emitted
+    // once any of it has been dropped (see the floor at the Tier 2 boundary).
+    // Under a genuinely tiny MTU some of Tier 1 can still be lost — the frame
+    // then carries only what fit, plus "tr":1. It is not a guarantee that every
+    // field here always ships; it is a guarantee that they outrank everything
+    // that follows, which is what the old wording wrongly implied was already
+    // true.
 
     // #570: source rocket id FIRST — it is the multi-rocket DEMUX KEY. The BS
     // relays every rocket on one characteristic and the app attributes each
@@ -1850,6 +1864,26 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("soc", data.soc, 1);
     addFloat("cur", data.current, 1);
     addFloat("vol", data.voltage, 2);
+
+    // Tier 1 is over. If ANY of it was dropped, stop here — do not let Tiers 2
+    // and 3 backfill the space it could not use.
+    //
+    // The packer is best-fit, not priority-ordered: room() skips a field that
+    // does not fit and keeps going, so a SMALLER field further down slips into
+    // the gap a bigger, more important one just failed to fill. Worse,
+    // keyBytes() charges one byte less while `first` is still true, so a field
+    // reached after everything above it was dropped is actively CHEAPER than
+    // the ones it outranks. At MTU 23 those two effects combine to emit
+    // {"af":"","tr":1} — the empty active-filename, a Tier 3 diagnostic, as the
+    // sole survivor while state, position, altitude and battery were all
+    // dropped. Observed on the bench 2026-08-03 and initially mistaken for a
+    // wire-format break. The header above claimed Tier 1 was "never
+    // sacrificed"; it was the only tier fully sacrificed.
+    //
+    // Best-fit is still right WITHIN the discretionary tiers — losing one bulky
+    // field to keep three small ones is a good trade there — so the floor is
+    // applied only at this boundary, not between Tier 2 and Tier 3.
+    tier1_incomplete = dropped;
 
     // ── Tier 2: attitude + IMU detail (dropped only under MTU pressure) ───
     // ("rid" moved to the head of Tier 1 — #570: it is the demux key.)
