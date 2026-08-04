@@ -16,11 +16,20 @@ struct board_pins
     static constexpr uint8_t SPI_SDI = 52;  // SENS_SDI
 
     // ### GNSS serial ###
-    // Schematic: GNSS_TX=3, GNSS_RX=4 (label perspective unverified — the
-    // driver's 9600-baud boot probe auto-detects a swap, as it did on V7).
+    // Label perspective RESOLVED 2026-08-03 against the as-built KiCad, both
+    // ends, pad->net->component-pin. The nets are named from the MODULE's
+    // point of view, not ours:
+    //   net GNSS_TX = P4 GPIO3 -> J3.2 -> SAM-M10Q U1 pad 13 = TXD (it drives)
+    //   net GNSS_RX = P4 GPIO4 -> J3.1 -> SAM-M10Q U1 pad 14 = RXD (it listens)
+    // So OUR receive pin is GPIO3 and OUR transmit pin is GPIO4 — the reverse
+    // of what the net names suggest if you read them from the FC's side. These
+    // constants are the FC's own rx/tx (they are passed straight to
+    // uartBegin(baud, rx, tx)), so they must be 3 and 4 in that order. V7 had
+    // it right; the V8 header had it backwards and the driver's swap probe was
+    // silently papering over it at ~1.5 s of boot cost.
     // GNSS_RXD2 net on GPIO2 (receiver's second UART) is unused by firmware.
-    static constexpr uint8_t GNSS_RX = 4;   // GNSS_RX
-    static constexpr uint8_t GNSS_TX = 3;   // GNSS_TX
+    static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
+    static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
 

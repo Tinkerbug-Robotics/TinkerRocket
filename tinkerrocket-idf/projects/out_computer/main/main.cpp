@@ -4159,6 +4159,17 @@ static void serviceLoRaUplink()
 
     lora_comms.service();  // Complete any pending TX (auto-enters RX after TX)
 
+    // Watchdog BEFORE the canSend() gate. Below it, the watchdog only ran in
+    // the state where it has nothing to do: a stuck TX means canSend() is
+    // false, which returned out of this function right here — so the one
+    // path meant to clear a wedge was unreachable from the wedge. Latent on
+    // V7 (DIO1 + the driver's own polling cleared tx_ongoing_ locally); on
+    // V8 the only nominal clear is the modem's TX_RESULT, so one lost UART
+    // frame would have pinned canSend() false forever: no telemetry, no
+    // beacons, and no uplink RX either (readPacket sits below the same
+    // gate). The BS has always ordered these correctly.
+    lora_comms.serviceTxWatchdog();  // Force-clear stuck TX (#105)
+
     // Only enter RX when radio is idle (not transmitting)
     if (!lora_comms.canSend()) return;
 
@@ -4182,7 +4193,6 @@ static void serviceLoRaUplink()
     // boards the interrupt may not trigger for RX-done.  pollDio1()
     // checks the pin level and sets rx_done_ if DIO1 is asserted.
     lora_comms.pollDio1();
-    lora_comms.serviceTxWatchdog();  // Force-clear stuck tx_ongoing_ (#105)
 
     // Non-blocking poll for uplink packet
     uint8_t rx_buf[32];

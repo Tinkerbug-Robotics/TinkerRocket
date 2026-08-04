@@ -32,6 +32,39 @@ static const char* phyName(uint8_t phy)
     }
 }
 
+// Disconnect reasons arrive as NimBLE host codes. Controller-originated ones are
+// BLE_HS_HCI_ERR(x) = 0x200 + x, so the raw number tells you nothing without the
+// spec open — the 2026-08-03 bench burned real time working out that the "520"
+// flooding the console was a supervision timeout and not somebody hanging up.
+// Decode the handful that actually show up on this link; anything else still
+// prints its number.
+//
+// The three worth recognising instantly:
+//   520 (0x08) timeout  — link died ON AIR. Nobody asked for it: RF, PHY or
+//                         connection-parameter margin. See the 1M|2M PHY fix.
+//   531 (0x13) remote   — the peer hung up cleanly (app backgrounded, user tap).
+//   534 (0x16) local    — we hung up. Normal after our own disconnect() call.
+static const char* disconnectReasonName(int reason)
+{
+    switch (reason)
+    {
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_SPVN_TMO):    return "supervision timeout — link lost on air";
+        case BLE_HS_HCI_ERR(BLE_ERR_REM_USER_CONN_TERM): return "remote user terminated";
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_TERM_LOCAL):  return "terminated locally";
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_ESTABLISHMENT): return "connection failed to be established";
+        case BLE_HS_HCI_ERR(BLE_ERR_CONN_TERM_MIC):    return "MIC failure";
+        case BLE_HS_HCI_ERR(BLE_ERR_UNSUPP_REM_FEATURE): return "unsupported remote feature";
+        case BLE_HS_HCI_ERR(BLE_ERR_INSTANT_PASSED):   return "instant passed — PHY/param update desync";
+        default:                                       return "see BLE_ERR_* / BLE_HS_*";
+    }
+}
+
+// Max airtime for a 251-octet LL PDU on the 1M PHY, per Core spec Vol 6 Part B
+// 4.5.10: (1 preamble + 4 access-address + 2 header + 251 payload + 4 MIC + 3 CRC)
+// bytes = 265 * 8 us = 2120 us. The 2M figure is half that; requesting the 1M
+// number is the safe ask because it covers whichever PHY the link settles on.
+static constexpr uint16_t kDleTxTime1MUs = 2120;
+
 // Spinlock protecting the command ring (#517) against races between the BLE
 // callback (runs on the NimBLE host task) and the main loop reading it.
 static portMUX_TYPE s_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -341,9 +374,19 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     // fragmented into ~19 LL packets, each with its own header and inter-frame
     // spacing. 251 octets collapses that to two. Purely a request — if the peer
     // declines, the link simply stays at 27 and nothing breaks.
+    //
+    // Ask for the octet maximum but NOT the time maximum. BLE_HCI_SET_DATALEN_TX_TIME_MAX
+    // is 0x4290 = 17040 us, which is the LE CODED PHY ceiling — the time it takes to
+    // put 251 octets on air at 125 kbps. We never use Coded. On 1M the same 251 octets
+    // occupy 2120 us, and on 2M about 1064 us, so asking for 17040 requests an airtime
+    // budget ~8x larger than the PDU can possibly need. Controllers are expected to
+    // clamp it, but it is a request no honest 1M/2M link should make, and an oversized
+    // max_tx_time is one of the inputs a controller uses when deciding what fits in a
+    // connection event. Ask for the real 1M ceiling instead; the octet count is what
+    // actually buys the throughput, and it is unchanged.
     const int dle_rc = ble_gap_set_data_len(conn_handle,
                                             BLE_HCI_SET_DATALEN_TX_OCTETS_MAX,
-                                            BLE_HCI_SET_DATALEN_TX_TIME_MAX);
+                                            kDleTxTime1MUs);
     if (dle_rc != 0)
     {
         ESP_LOGW(BLE_TAG, "Data-length extension request failed, rc=%d "
@@ -362,12 +405,25 @@ void TR_BLE_To_APP::onConnect(uint16_t conn_handle,
     // ~1.5-2x slower as the price of being correct.
     //
     // 2M doubles the raw PHY rate and is independent of the connection interval, so
-    // it more than buys that back without going back outside the spec. If the peer
-    // declines, the link simply stays on 1M — hence the PHY_UPDATE_COMPLETE handler,
-    // which logs what we actually got rather than what we hoped for.
+    // it more than buys that back without going back outside the spec.
+    //
+    // BOTH bits, and this is load-bearing. The mask is not "which PHY do I prefer",
+    // it is "which PHYs am I willing to use at all" — a 2M-only mask forbids 1M, so
+    // the controller has nowhere to retreat to when 2M stops closing. 2M trades ~3 dB
+    // of sensitivity for the rate, and on a board whose BLE antenna is marginal that
+    // is the difference between a link and a supervision timeout: bench 2026-08-03
+    // saw connect -> DLE -> "PHY now: TX=2M RX=2M" -> reason=520 (HCI 0x08) within
+    // 0.6-1.6 s, every cycle, forever. With 1M in the mask the controller simply
+    // stays on (or falls back to) 1M and the link survives, slower but alive.
+    //
+    // The original comment here claimed "if the peer declines, the link simply stays
+    // on 1M". That was the intent and it was NOT what the code did — a peer that
+    // accepts 2M and then cannot sustain it is a different case from a peer that
+    // declines, and only the second one was handled. The PHY_UPDATE_COMPLETE handler
+    // still logs what we actually got rather than what we hoped for.
     const int phy_rc = ble_gap_set_prefered_le_phy(conn_handle,
-                                                   BLE_GAP_LE_PHY_2M_MASK,
-                                                   BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_1M_MASK | BLE_GAP_LE_PHY_2M_MASK,
+                                                   BLE_GAP_LE_PHY_1M_MASK | BLE_GAP_LE_PHY_2M_MASK,
                                                    BLE_GAP_LE_PHY_CODED_ANY);
     if (phy_rc != 0)
     {
@@ -537,7 +593,7 @@ void TR_BLE_To_APP::onDisconnect(uint16_t conn_handle, int reason)
     // would be wrong.
     conn_param_due_ms_ = 0;
     conn_param_attempts_ = 0;
-    ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d", reason);
+    ESP_LOGW(BLE_TAG, "Device DISCONNECTED, reason=%d (%s)", reason, disconnectReasonName(reason));
 
     // Restart advertising so new devices can connect. Disconnect re-opens the
     // fast window (#541): reconnects are the common case right here.
@@ -1598,6 +1654,10 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     size_t pos = 0;
     bool first = true;
     bool dropped = false;   // set when a field is skipped for lack of MTU room (#282)
+    // Set once Tier 1 finishes having lost anything. See the note at the Tier 2
+    // boundary: without it the packer is best-fit, not priority-ordered, and a
+    // tiny MTU keeps the LEAST important field while dropping every vital one.
+    bool tier1_incomplete = false;
 
     // #282: budget the build against the *actual* BLE send window, not just the
     // backing buffer.  sendTelemetry() drops the WHOLE notification when the
@@ -1628,6 +1688,9 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // Returns true if `n` more bytes (plus the reserved tail) still fit within
     // the MTU-derived budget.
     auto room = [&](size_t n) -> bool {
+        // Hard stop once Tier 1 came up short: nothing below it is worth
+        // emitting if the operator-critical set did not survive.
+        if (tier1_incomplete) return false;
         return pos + n + kReserve <= cap;
     };
 
@@ -1701,7 +1764,14 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // and battery live, and only loses low-value extras (filename, link
     // stats, unit name) during the brief peak-payload window.
 
-    // ── Tier 1: recovery + dashboard-critical (never sacrificed) ──────────
+    // ── Tier 1: recovery + dashboard-critical ─────────────────────────────
+    // "Never sacrificed" in the sense that nothing BELOW this tier is emitted
+    // once any of it has been dropped (see the floor at the Tier 2 boundary).
+    // Under a genuinely tiny MTU some of Tier 1 can still be lost — the frame
+    // then carries only what fit, plus "tr":1. It is not a guarantee that every
+    // field here always ships; it is a guarantee that they outrank everything
+    // that follows, which is what the old wording wrongly implied was already
+    // true.
 
     // #570: source rocket id FIRST — it is the multi-rocket DEMUX KEY. The BS
     // relays every rocket on one characteristic and the app attributes each
@@ -1794,6 +1864,26 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     addFloat("soc", data.soc, 1);
     addFloat("cur", data.current, 1);
     addFloat("vol", data.voltage, 2);
+
+    // Tier 1 is over. If ANY of it was dropped, stop here — do not let Tiers 2
+    // and 3 backfill the space it could not use.
+    //
+    // The packer is best-fit, not priority-ordered: room() skips a field that
+    // does not fit and keeps going, so a SMALLER field further down slips into
+    // the gap a bigger, more important one just failed to fill. Worse,
+    // keyBytes() charges one byte less while `first` is still true, so a field
+    // reached after everything above it was dropped is actively CHEAPER than
+    // the ones it outranks. At MTU 23 those two effects combine to emit
+    // {"af":"","tr":1} — the empty active-filename, a Tier 3 diagnostic, as the
+    // sole survivor while state, position, altitude and battery were all
+    // dropped. Observed on the bench 2026-08-03 and initially mistaken for a
+    // wire-format break. The header above claimed Tier 1 was "never
+    // sacrificed"; it was the only tier fully sacrificed.
+    //
+    // Best-fit is still right WITHIN the discretionary tiers — losing one bulky
+    // field to keep three small ones is a good trade there — so the floor is
+    // applied only at this boundary, not between Tier 2 and Tier 3.
+    tier1_incomplete = dropped;
 
     // ── Tier 2: attitude + IMU detail (dropped only under MTU pressure) ───
     // ("rid" moved to the head of Tier 1 — #570: it is the demux key.)

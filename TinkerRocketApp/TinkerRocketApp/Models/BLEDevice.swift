@@ -169,6 +169,17 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// switches it explicitly. nil = no rocket heard yet this session.
     @Published var focusRocketID: UInt8?
 
+    /// Earliest moment the sticky focus pin may be re-evaluated (#390 follow-up).
+    /// Set whenever the pin is applied — on first latch and on every fleet
+    /// re-seed — so a rocket that simply has not transmitted yet since reconnect
+    /// cannot lose focus to whichever rocket happens to speak first.
+    var focusPinGraceUntil: Date?
+    /// How long after the pin is applied before staleness is considered at all.
+    static let focusPinGraceInterval: TimeInterval = 20
+    /// A pinned rocket unheard for longer than this is treated as gone.
+    /// Rockets relay at ~2 Hz, so this is ~30 missed frames.
+    static let focusPinStaleAfter: TimeInterval = 15
+
     /// When the last telemetry frame (any kind) was decoded on this link.
     /// Roster freshness for direct rocket links reads this.
     private(set) var lastTelemetryAt: Date?
@@ -1805,7 +1816,45 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // reconnect). This is what kills the last-heard recency race.
                 if focusRocketID == nil {
                     focusRocketID = rocketID
+                    focusPinGraceUntil = Date().addingTimeInterval(Self.focusPinGraceInterval)
                     fleet?.noteAutoFocus(baseStation: self, rocketID: rocketID)
+                } else if let pinned = focusRocketID, pinned != rocketID,
+                          Date() >= (focusPinGraceUntil ?? .distantPast),
+                          !remoteRockets.contains(where: {
+                              $0.rocketID == pinned &&
+                              Date().timeIntervalSince($0.lastSeen) < Self.focusPinStaleAfter
+                          }) {
+                    // SELF-HEAL a dangling pin. "Sticky" must not mean
+                    // "unfalsifiable": the pin is latched once above, re-seeded
+                    // from the in-memory fleet cache on every reconnect
+                    // (BLEFleet.adopt), and re-pushed to the BS as cmd 45 on
+                    // every reconnect — and that push sets focus_rid_pinned,
+                    // which DISABLES the BS's own 30 s auto-fallback. So a pin
+                    // naming a rocket that is no longer on the air wedged the
+                    // app onto the relay branch (no Signal card, no arrow, no
+                    // bars) with nothing left to recover it. Seen on the bench
+                    // 2026-08-03: strip showed "Rocket 1" while the section
+                    // header resolved the rocket actually being heard.
+                    //
+                    // Both guards are load-bearing. The grace window stops a
+                    // rocket that has merely not transmitted since reconnect
+                    // from losing focus to whoever speaks first — without it
+                    // this fires immediately after adopt(), when the roster is
+                    // still empty, and steals focus every single reconnect. The
+                    // lastSeen test (not mere roster membership) stops a stale
+                    // roster entry from propping up a pin for a rocket that has
+                    // been off the air for minutes.
+                    print("[BS] focus pin rid=\(pinned) is stale — re-latching to rid=\(rocketID)")
+                    focusPinGraceUntil = Date().addingTimeInterval(Self.focusPinGraceInterval)
+                    // setFocus, NOT noteAutoFocus. noteAutoFocus only writes the
+                    // fleet cache when it is still nil, so healing through it
+                    // would fix this device and leave the STALE rid in bsFocus —
+                    // which BLEFleet.adopt re-seeds on the very next reconnect,
+                    // resurrecting the wedge. setFocus overwrites the cache and
+                    // also re-mirrors telemetry, re-points the latched fix, and
+                    // pushes cmd 45 so the BS stops relaying under the pin we
+                    // just abandoned (its own fallback is disabled while pinned).
+                    fleet?.setFocus(baseStation: self, rocketID: rocketID)
                 }
 
                 // Record the fix for EVERY relayed rocket (map/roster read the

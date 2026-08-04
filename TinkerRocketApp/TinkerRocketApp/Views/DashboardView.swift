@@ -438,7 +438,9 @@ struct ConnectedFleetView: View {
                 RelayRocketSectionView(subject: subject,
                                        via: relay.baseStation,
                                        remote: relay.remote,
-                                       collapsible: multi)
+                                       collapsible: multi,
+                                       fleet: fleet,
+                                       locationManager: locationManager)
             }
         }
 
@@ -648,81 +650,26 @@ struct ConnectedDashboardView: View {
                 }
             }
 
-            if showRocketViews && device.isBaseStation {
-                FlightSummaryView(telemetry: device.telemetry)
-                    .opacity(staleOpacity)
-            }
-
-            SignalStrengthView(
+            // The whole rocket telemetry stack — see RocketTelemetryCards.
+            // Rendered from the same definition the BS-relay branch uses, so
+            // the two can no longer drift. Orientation on a BS link comes from
+            // the LoRa-relayed flags2 field (#390); the shared view picks that
+            // over the direct-link values below.
+            RocketTelemetryCards(
                 telemetry: device.telemetry,
-                bleRSSI: device.connectedRSSI,
                 isBaseStation: device.isBaseStation,
-                locationManager: device.isBaseStation ? locationManager : nil,
-                rocketFix: device.isBaseStation ? device.lastValidRocketFix : nil,
-                trackingHealthy: dataStatus == .live
+                bleRSSI: device.connectedRSSI,
+                locationManager: locationManager,
+                rocketFix: device.lastValidRocketFix,
+                trackingHealthy: dataStatus == .live,
+                directOrientationName: device.imuOrientationName,
+                directOrientationMode: device.imuOrientationMode,
+                staleOpacity: staleOpacity,
+                showRocketViews: showRocketViews,
+                // On SYNCING (searching, no rocket data yet) keep the BS-only
+                // battery so the operator still has a live indicator.
+                showBSOnlyBattery: device.isBaseStation && dataStatus == .syncing
             )
-
-            // Rocket battery. The BS battery row moved to the BS strip +
-            // BaseStationDetailView (#390) — this section is about the
-            // rocket, whatever link carries it. On SYNCING (searching, no
-            // rocket data yet) keep the BS-only battery so the operator
-            // still has a live indicator.
-            if device.isBaseStation && dataStatus == .syncing {
-                BSOnlyBatteryView(telemetry: device.telemetry)
-            } else {
-                // Rocket row + "Base Stn" row on a BS link, same as
-                // pre-#390: the strip-tile bare % phone-tested as ambiguous,
-                // and splitting battery info across two places wasn't worth
-                // a shorter card.
-                BatteryView(telemetry: device.telemetry,
-                            isBaseStation: device.isBaseStation)
-                    .opacity(staleOpacity)
-            }
-
-            if showRocketViews {
-                // Orientation on a BS link comes from the LoRa-relayed
-                // flags2 field (#390) — before that the BS had no way to
-                // know it and this line was blanked deliberately.
-                IMUView(telemetry: device.telemetry,
-                        isBaseStation: device.isBaseStation,
-                        orientationName: device.isBaseStation
-                            ? device.telemetry.relayedOrientationName
-                            : device.imuOrientationName,
-                        orientationMode: device.isBaseStation
-                            ? device.telemetry.relayedOrientationMode
-                            : device.imuOrientationMode)
-                    .opacity(staleOpacity)
-            }
-
-            if showRocketViews && !device.isBaseStation {
-                FlightSummaryView(telemetry: device.telemetry)
-                    .opacity(staleOpacity)
-            }
-
-            if showRocketViews {
-                GPSView(telemetry: device.telemetry, compact: true)
-                    .opacity(staleOpacity)
-            }
-
-            StatusFlagsView(telemetry: device.telemetry,
-                            isBaseStation: device.isBaseStation)
-                .opacity(showRocketViews ? staleOpacity : 1.0)
-
-            // Flight-event flag chips — Android → iOS back-port
-            // (docs/design-language.md queue, user-requested 2026-07-27).
-            // Shown on BS links too: the relay carries the focused rocket's
-            // fs bits (#138), and mid-flight these chips are exactly what
-            // the operator is watching.
-            FlightEventFlagsView(telemetry: device.telemetry)
-                .opacity(showRocketViews ? staleOpacity : 1.0)
-
-            // Pre-launch sensor health scorecard + go/no-go (#303), sitting just
-            // above the pyro channels.  Only shown once the rocket reports a
-            // scorecard ("h" present → hasSensorHealth).
-            if showRocketViews && device.telemetry.hasSensorHealth {
-                HealthCardView(telemetry: device.telemetry)
-                    .opacity(staleOpacity)
-            }
 
             if !device.isBaseStation {
                 PyroChannelsView(device: device)
@@ -749,6 +696,132 @@ struct ConnectedDashboardView: View {
                     .background(Color.red)
                     .foregroundColor(.white)
                     .cornerRadius(10)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Shared rocket telemetry cards
+
+/// The rocket telemetry card stack, rendered identically on every link type.
+///
+/// This exists because the two dashboards used to assemble this list by hand
+/// and drifted apart. `ConnectedDashboardView` had the full set;
+/// `RelayRocketSectionView` — the branch you land on when watching a rocket
+/// through a base station — was silently missing `SignalStrengthView` and with
+/// it the direction arrow, the GNSS bar AND the LoRa bars, plus `IMUView`,
+/// `StatusFlagsView`, `FlightEventFlagsView` and `HealthCardView`. Bench
+/// 2026-08-03: three "features" appeared to vanish at once, which is what a
+/// missing shared container looks like from the outside.
+///
+/// One definition, two call sites. A card added here cannot exist on one path
+/// and not the other, which is the actual bug being fixed — the missing cards
+/// were only the symptom.
+///
+/// Card ORDER reproduces the previous ConnectedDashboardView exactly, including
+/// the quirk that FlightSummaryView sits ABOVE the signal card on a base-station
+/// link and BELOW the IMU card on a direct one. That is deliberate: preserving
+/// it keeps this refactor invisible on the dashboard that already worked.
+struct RocketTelemetryCards: View {
+    let telemetry: TelemetryData
+    let isBaseStation: Bool
+    var bleRSSI: Int? = nil
+    var locationManager: LocationManager? = nil
+    var rocketFix: LastValidRocketFix? = nil
+    var trackingHealthy: Bool = false
+    /// Board→rocket mounting orientation for a DIRECT link. On a BS link the
+    /// orientation is relayed in flags2 (#390) and read off the telemetry
+    /// instead, so callers only supply the direct-link values.
+    var directOrientationName: String = ""
+    var directOrientationMode: IMUOrientationMode = .unknown
+    /// Dimming applied while the stream is stale; 1.0 when live.
+    var staleOpacity: Double = 1.0
+    /// False while a BS link is still searching and has no rocket data yet —
+    /// suppresses the rocket-specific cards without hiding link status.
+    var showRocketViews: Bool = true
+    /// BS link that is syncing: show the BS-only battery so the operator keeps
+    /// a live indicator before any rocket data arrives.
+    var showBSOnlyBattery: Bool = false
+
+    var body: some View {
+        Group {
+            Group {
+                if showRocketViews && isBaseStation {
+                    FlightSummaryView(telemetry: telemetry)
+                        .opacity(staleOpacity)
+                }
+
+                SignalStrengthView(
+                    telemetry: telemetry,
+                    bleRSSI: bleRSSI,
+                    isBaseStation: isBaseStation,
+                    locationManager: isBaseStation ? locationManager : nil,
+                    rocketFix: isBaseStation ? rocketFix : nil,
+                    trackingHealthy: trackingHealthy
+                )
+
+                if showBSOnlyBattery {
+                    BSOnlyBatteryView(telemetry: telemetry)
+                } else {
+                    // Rocket row + "Base Stn" row on a BS link, same as
+                    // pre-#390: the strip-tile bare % phone-tested as
+                    // ambiguous, and splitting battery info across two places
+                    // wasn't worth a shorter card.
+                    BatteryView(telemetry: telemetry, isBaseStation: isBaseStation)
+                        .opacity(staleOpacity)
+                }
+
+                if showRocketViews {
+                    IMUView(telemetry: telemetry,
+                            isBaseStation: isBaseStation,
+                            orientationName: isBaseStation
+                                ? telemetry.relayedOrientationName
+                                : directOrientationName,
+                            orientationMode: isBaseStation
+                                ? telemetry.relayedOrientationMode
+                                : directOrientationMode)
+                        .opacity(staleOpacity)
+                }
+
+                if showRocketViews && !isBaseStation {
+                    FlightSummaryView(telemetry: telemetry)
+                        .opacity(staleOpacity)
+                }
+            }
+
+            Group {
+                if showRocketViews {
+                    GPSView(telemetry: telemetry, compact: true)
+                        .opacity(staleOpacity)
+                }
+
+                // Numeric RSSI/SNR. The signal card's LoRa bar carries RSSI but
+                // NOT snr, and this is the only place snr surfaces at all — it
+                // used to be relay-only, so a BS link on the focused path could
+                // never show it. LoRa-carried links only; a direct rocket link
+                // has no LoRa hop to report.
+                if isBaseStation {
+                    LoRaSignalView(telemetry: telemetry)
+                        .opacity(staleOpacity)
+                }
+
+                StatusFlagsView(telemetry: telemetry, isBaseStation: isBaseStation)
+                    .opacity(showRocketViews ? staleOpacity : 1.0)
+
+                // Flight-event flag chips — Android → iOS back-port
+                // (docs/design-language.md queue, user-requested 2026-07-27).
+                // Shown on BS links too: the relay carries the focused rocket's
+                // fs bits (#138), and mid-flight these chips are exactly what
+                // the operator is watching.
+                FlightEventFlagsView(telemetry: telemetry)
+                    .opacity(showRocketViews ? staleOpacity : 1.0)
+
+                // Pre-launch sensor health scorecard + go/no-go (#303).  Only
+                // shown once the rocket reports a scorecard ("h" present).
+                if showRocketViews && telemetry.hasSensorHealth {
+                    HealthCardView(telemetry: telemetry)
+                        .opacity(staleOpacity)
                 }
             }
         }

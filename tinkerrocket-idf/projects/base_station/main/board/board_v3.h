@@ -33,13 +33,16 @@ struct board_pins
     static constexpr int LORA_DIO3_PIN = -1;
 
     // --- Radio daughterboard host link ---
-    // Schematic labels LoRa_TX (GPIO35) / LoRa_RX (GPIO36): wired as-labeled
-    // (TX net = BS transmit), matching the OC V8 convention. CAUTION: TX/RX
-    // label perspective has been wrong on this schematic family before
-    // (RunCam, #234) — if the daughterboard's BOOT message never arrives on
-    // bring-up, swap these two first.
-    static constexpr int LORA_UART_TX_PIN = 35;  // LoRa_TX (label-perspective)
-    static constexpr int LORA_UART_RX_PIN = 36;  // LoRa_RX (label-perspective)
+    // CONFIRMED against both PCBs' pad->net maps, not the labels alone: our
+    // J6.4 (net LoRa_TX, GPIO35) lands on the daughterboard's J6.4 (its net
+    // LoRa_RX, its GPIO5), and our J6.3 (net LoRa_RX, GPIO36) lands on its
+    // J6.3 (its net LoRa_TX, its GPIO6). The two boards name the nets from
+    // their own perspective, so the same pair of names appears on both ends
+    // of a crossed link — the cable pin number is the only unambiguous
+    // reference. (This is the trap that #234/RunCam hit; it is resolved here,
+    // so do NOT "fix" it by swapping these two on bring-up.)
+    static constexpr int LORA_UART_TX_PIN = 35;  // LoRa_TX -> J6.4 (CONFIRMED)
+    static constexpr int LORA_UART_RX_PIN = 36;  // LoRa_RX <- J6.3 (CONFIRMED)
     // No daughterboard power-gate net identified on the V3 schematic (the OC
     // V8 has LoRa_ACT); set if one exists — it's also the recovery hammer for
     // a wedged daughterboard (#412).

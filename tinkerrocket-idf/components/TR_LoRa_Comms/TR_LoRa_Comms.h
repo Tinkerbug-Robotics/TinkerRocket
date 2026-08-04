@@ -108,6 +108,20 @@ public:
     bool reconfigure(float freq_mhz, uint8_t sf, float bw_khz, uint8_t cr, int8_t tx_power,
                      bool wait_for_tx = true);
 
+    // Apply the frame-format parameters that begin() fixes (preamble length,
+    // CRC, RX boosted gain, sync word). These were historically "boot-fixed"
+    // only because this class exposed no setter — the underlying SX126x
+    // commands are runtime-settable. Needed by the UART radio modem (#409):
+    // its SET_CONFIG carries all eight radio fields and must be fully
+    // authoritative, or a host whose preamble differs from the modem's boot
+    // default silently gets the wrong airtime per packet (the FCC dwell
+    // budget in RocketComputerTypes.h is computed from the host's value).
+    // Call only while the radio is idle (canSend() && !isScanActive());
+    // returns false otherwise. Like reconfigure(), exits RX mode — the
+    // caller re-enters RX (startReceive) afterwards.
+    bool applyFrameParams(uint16_t preamble_len, bool crc_on,
+                          bool rx_boosted_gain, bool syncword_private);
+
     // Lightweight frequency-only retune for per-packet hopping (#40 / #41).
     // Unlike reconfigure(), this does not touch BW/SF/CR/power — those
     // remain locked across hops within a session.  Returns false if the
