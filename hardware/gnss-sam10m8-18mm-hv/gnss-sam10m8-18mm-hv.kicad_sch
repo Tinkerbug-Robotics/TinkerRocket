@@ -4077,6 +4077,12 @@
 		(uuid "a80e9048-10f6-40d4-b433-e048a87bdcd6")
 	)
 	(junction
+		(at 51.435 86.36)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "afef8fd2-9719-4f4e-96fb-aeb10ada079c")
+	)
+	(junction
 		(at 193.675 31.115)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -4153,6 +4159,30 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "f87b9f62-b73a-4ff5-ba4a-27666d868cd4")
+	)
+	(no_connect
+		(at 116.205 55.88)
+		(uuid "1753b419-829a-468f-95c5-a9b4f7af6813")
+	)
+	(no_connect
+		(at 161.925 45.72)
+		(uuid "61405328-57a6-4889-97d1-b21b9521d84c")
+	)
+	(no_connect
+		(at 121.92 138.43)
+		(uuid "b7a8fbd6-3fb8-42b9-b051-a28cc6bc65e0")
+	)
+	(no_connect
+		(at 161.925 58.42)
+		(uuid "c916fb9a-6b66-42e8-b404-e8ef88169ad0")
+	)
+	(no_connect
+		(at 116.205 60.96)
+		(uuid "de863b28-8bae-4918-90fa-0981139d61e5")
+	)
+	(no_connect
+		(at 161.925 55.88)
+		(uuid "e40782ab-5072-450b-9b71-17a7beb524b1")
 	)
 	(wire
 		(pts
@@ -4276,13 +4306,33 @@
 	)
 	(wire
 		(pts
-			(xy 146.685 130.81) (xy 148.59 130.81)
+			(xy 51.435 86.36) (xy 53.975 86.36)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "289ea2f2-3beb-4b02-9551-70ce0124e886")
+	)
+	(wire
+		(pts
+			(xy 146.685 130.81) (xy 159.385 130.81)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
 		(uuid "2a47e467-3000-4d0e-abcc-894674ddf562")
+	)
+	(wire
+		(pts
+			(xy 161.925 50.8) (xy 177.165 50.8)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2cbee06d-6b64-4467-ba43-472d90a77c9a")
 	)
 	(wire
 		(pts
@@ -4436,6 +4486,16 @@
 	)
 	(wire
 		(pts
+			(xy 51.435 81.915) (xy 51.435 86.36)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5f51b051-161d-473c-a226-1a5a3630b851")
+	)
+	(wire
+		(pts
 			(xy 207.01 130.81) (xy 208.28 130.81)
 		)
 		(stroke
@@ -4463,16 +4523,6 @@
 			(type default)
 		)
 		(uuid "6adce333-e314-4193-8495-6063f0e4e771")
-	)
-	(wire
-		(pts
-			(xy 161.925 50.8) (xy 164.465 50.8)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "6b4953e3-6e7a-4ebd-94b7-874400664930")
 	)
 	(wire
 		(pts
@@ -4523,6 +4573,16 @@
 			(type default)
 		)
 		(uuid "7d754ac4-f13b-412e-a02a-95939167845c")
+	)
+	(wire
+		(pts
+			(xy 40.005 61.595) (xy 40.005 57.15)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "825ad18d-372a-43a9-8dee-84f205647987")
 	)
 	(wire
 		(pts
@@ -4593,6 +4653,16 @@
 			(type default)
 		)
 		(uuid "b89e13c8-2dd9-4d82-842d-07eeb953b4ee")
+	)
+	(wire
+		(pts
+			(xy 53.975 81.915) (xy 53.975 86.36)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "baef6905-ccd5-40aa-a03e-c4cc1731a4f4")
 	)
 	(wire
 		(pts
@@ -4696,6 +4766,16 @@
 	)
 	(wire
 		(pts
+			(xy 40.005 57.15) (xy 36.195 57.15)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e3b4debb-96a5-405b-9ce5-755e74797f07")
+	)
+	(wire
+		(pts
 			(xy 167.64 31.115) (xy 180.34 31.115)
 		)
 		(stroke
@@ -4703,16 +4783,6 @@
 			(type default)
 		)
 		(uuid "e500516a-3bd4-497e-8b89-aac46c59cc6a")
-	)
-	(wire
-		(pts
-			(xy 148.59 130.81) (xy 159.385 130.81)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e9b97c65-3495-4293-af65-9170e1a717b7")
 	)
 	(wire
 		(pts
@@ -4763,6 +4833,16 @@
 			(type default)
 		)
 		(uuid "f9043d61-d0bb-4410-8d1b-4186001ba5ce")
+	)
+	(wire
+		(pts
+			(xy 193.675 31.115) (xy 206.375 31.115)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fc2f723e-a605-4ebe-8bd8-b1e1a0d63ec5")
 	)
 	(wire
 		(pts
@@ -4832,6 +4912,30 @@
 			)
 		)
 	)
+	(global_label "PPS"
+		(shape input)
+		(at 28.575 57.15 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "8e28ade0-eff4-4ac0-8ee4-a1a4119e3c58")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 28.575 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "GNSS_TX"
 		(shape input)
 		(at 28.575 70.485 180)
@@ -4869,6 +4973,30 @@
 		(uuid "c410a5e8-171a-471b-ab9e-e5bbeb2d2d12")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 173.0744 63.5 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "PPS"
+		(shape input)
+		(at 172.085 50.8 90)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "caffe4ff-220a-46bc-b1cf-828c25d4086a")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 172.085 44.0653 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5077,6 +5205,240 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "FL1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 139.7 189.23 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "0a6b1ac1-a2cd-44e3-91cd-71447a8c8c2f")
+		(property "Reference" "#PWR036"
+			(at 139.7 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 139.7 193.675 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 139.7 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 139.7 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 139.7 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "8801623d-cd3b-4483-ac3d-20030c010a74")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR036")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 100.965 189.23 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "0afab06a-5017-4cc6-87f8-e4aa51581fd5")
+		(property "Reference" "#PWR034"
+			(at 100.965 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 100.965 193.675 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 100.965 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 100.965 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 100.965 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "1e492ae8-b52f-4999-ad6a-27e1ac077bcb")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR034")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 206.375 38.735 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "0f2e5c6e-a263-4303-8b33-06a7c2228e37")
+		(property "Reference" "#PWR031"
+			(at 206.375 45.085 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 206.375 43.18 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 206.375 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 206.375 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 206.375 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "faba1253-fa20-4e65-b951-568b4c8bc56b")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR031")
 					(unit 1)
 				)
 			)
@@ -5977,6 +6339,84 @@
 	)
 	(symbol
 		(lib_id "power:GND")
+		(at 51.435 86.36 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "43a1af12-f51e-47c8-afcf-e721640e4b6c")
+		(property "Reference" "#PWR032"
+			(at 51.435 92.71 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 51.435 90.805 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 51.435 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 51.435 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 51.435 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "e5e9d399-db30-4a93-99b8-7e5910001f9e")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR032")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
 		(at 220.98 138.43 0)
 		(unit 1)
 		(body_style 1)
@@ -6048,6 +6488,84 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "#PWR017")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 158.75 189.23 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "4694427b-976b-410f-89e8-a2a35e4e9c1e")
+		(property "Reference" "#PWR037"
+			(at 158.75 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 158.75 193.675 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 158.75 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 158.75 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 158.75 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "1242f1e9-680a-4ef8-bee0-f76cdfe53169")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR037")
 					(unit 1)
 				)
 			)
@@ -6215,6 +6733,12 @@
 		)
 		(pin "5"
 			(uuid "e0bd0855-cc34-4393-9da3-e9403f05b31d")
+		)
+		(pin "6"
+			(uuid "e3a3891d-9d63-48ee-be56-5f6649379bdb")
+		)
+		(pin "7"
+			(uuid "01d659db-78ef-4f6e-875a-5196f78d6af5")
 		)
 		(instances
 			(project "gnss-sam10m8-18mm-hv"
@@ -6477,6 +7001,84 @@
 		)
 	)
 	(symbol
+		(lib_id "power:VSS")
+		(at 15.24 139.7 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "61cd9e85-8788-4765-8f8d-5816dd71b49f")
+		(property "Reference" "#PWR021"
+			(at 15.24 135.89 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "VSS"
+			(at 15.24 144.145 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 15.24 139.7 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 15.24 139.7 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"VSS\""
+			(at 15.24 139.7 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "a3ddef23-b128-4fef-84d6-99f4596ad73e")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR021")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 183.515 138.43 0)
 		(unit 1)
@@ -6635,7 +7237,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 179.705 50.8 0)
+		(at 184.785 58.42 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6646,7 +7248,7 @@
 		(fields_autoplaced yes)
 		(uuid "75888ae6-9390-421a-8b7a-8227270a6137")
 		(property "Reference" "#PWR07"
-			(at 179.705 57.15 0)
+			(at 184.785 64.77 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6657,7 +7259,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 179.705 55.245 0)
+			(at 184.785 62.865 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6667,7 +7269,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 179.705 50.8 0)
+			(at 184.785 58.42 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6678,7 +7280,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 179.705 50.8 0)
+			(at 184.785 58.42 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6689,7 +7291,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 179.705 50.8 0)
+			(at 184.785 58.42 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6713,7 +7315,7 @@
 	)
 	(symbol
 		(lib_id "Device:LED")
-		(at 175.895 50.8 180)
+		(at 184.785 54.61 90)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6724,27 +7326,29 @@
 		(fields_autoplaced yes)
 		(uuid "787afbc9-00ed-4f23-b162-220743331c63")
 		(property "Reference" "D1"
-			(at 177.4825 43.815 0)
+			(at 187.96 54.9274 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Value" "Green"
-			(at 177.4825 46.355 0)
+			(at 187.96 57.4674 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Footprint" "LED_SMD:LED_0402_1005Metric"
-			(at 175.895 50.8 0)
+			(at 184.785 54.61 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6755,7 +7359,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 175.895 50.8 0)
+			(at 184.785 54.61 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6766,7 +7370,7 @@
 			)
 		)
 		(property "Description" "Light emitting diode"
-			(at 175.895 50.8 0)
+			(at 184.785 54.61 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6777,7 +7381,7 @@
 			)
 		)
 		(property "Sim.Pins" "1=K 2=A"
-			(at 175.895 50.8 0)
+			(at 184.785 54.61 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6803,6 +7407,88 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:C")
+		(at 206.375 34.925 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "7a04cac6-0c06-48c8-b042-4b11047ec8d7")
+		(property "Reference" "C16"
+			(at 210.185 33.6549 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100 nF"
+			(at 210.185 36.1949 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 207.3402 38.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 206.375 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 206.375 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "49307fe5-c7ba-4f21-851d-61197050da20")
+		)
+		(pin "2"
+			(uuid "354cdbcb-00fb-4eaa-b446-db0f9dc2bd1d")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "C16")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Custom:SMF10A")
 		(at 15.24 134.62 90)
 		(unit 1)
@@ -6812,7 +7498,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "7ccf0a99-20a1-472a-b4e1-b8da88e13b32")
 		(property "Reference" "CR1"
 			(at 18.26 133.3499 90)
@@ -6859,7 +7544,8 @@
 			)
 		)
 		(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W peak pulse, SOD-123FL"
-			(at 15.24 134.62 0)
+			(at 3.175 130.81 90)
+			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6893,6 +7579,8 @@
 		(property "Dist" "LCSC"
 			(at 15.24 134.62 0)
 			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6902,6 +7590,8 @@
 		(property "Dist_PN" "C5444308"
 			(at 15.24 134.62 0)
 			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6911,6 +7601,8 @@
 		(property "Notes" "Clamp must stay below the TPS62913 VIN abs max of 18 V. SMF12A clamps 19.9 V and is NOT a substitute. Standoff must clear the 8.4 V full-charge 2S pack, so 10 V is the only SMF step that fits both ends."
 			(at 15.24 134.62 0)
 			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7242,6 +7934,84 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "#PWR010")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 120.65 189.23 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "8cbed38e-1a2d-4038-b704-553bfddc58c8")
+		(property "Reference" "#PWR035"
+			(at 120.65 195.58 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 120.65 193.675 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 120.65 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 120.65 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 120.65 189.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "af74309e-15d6-4e5b-a367-3ae61fa858b1")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "#PWR035")
 					(unit 1)
 				)
 			)
@@ -7664,7 +8434,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "22 uF"
 			(at 63.5 134.6199 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7796,6 +8566,85 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "#PWR016")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 32.385 57.15 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "aa18b9e9-4197-4006-b34a-fc4df7bcf558")
+		(property "Reference" "R9"
+			(at 32.385 54.61 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "1 k"
+			(at 32.385 59.69 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 32.639 56.134 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 32.385 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 32.385 57.15 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "ffd678f4-34e2-4c2b-b5d2-63856803233d")
+		)
+		(pin "2"
+			(uuid "b51a782a-8a9a-478d-9a96-21a030fa2bc8")
+		)
+		(instances
+			(project "gnss-sam10m8-18mm-hv"
+				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
+					(reference "R9")
 					(unit 1)
 				)
 			)
@@ -8347,84 +9196,6 @@
 			(project "gnss-sam10m8-18mm-hv"
 				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
 					(reference "#PWR013")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:VSS")
-		(at 15.24 139.7 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "beb8e4a1-5352-456b-ae43-1ae7293cb132")
-		(property "Reference" "#PWR0961"
-			(at 15.24 146.05 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "VSS"
-			(at 15.24 144.145 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 15.24 139.7 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 15.24 139.7 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"VSS\""
-			(at 15.24 139.7 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "03adf46e-426e-46f6-832a-114a669dd79d")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR0961")
 					(unit 1)
 				)
 			)
@@ -9255,7 +10026,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10 uF"
+		(property "Value" "22 uF"
 			(at 50.8 134.6199 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9316,7 +10087,7 @@
 	)
 	(symbol
 		(lib_id "Device:R_US")
-		(at 168.275 50.8 90)
+		(at 180.975 50.8 90)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -9327,7 +10098,7 @@
 		(fields_autoplaced yes)
 		(uuid "f039dd34-c9b5-4d5b-a752-1cfc40cb0f82")
 		(property "Reference" "R1"
-			(at 168.275 44.45 90)
+			(at 180.975 44.45 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9337,7 +10108,7 @@
 			)
 		)
 		(property "Value" "10 k"
-			(at 168.275 46.99 90)
+			(at 180.975 46.99 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9347,7 +10118,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 168.529 49.784 90)
+			(at 181.229 49.784 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9358,7 +10129,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 168.275 50.8 0)
+			(at 180.975 50.8 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9369,7 +10140,7 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
-			(at 168.275 50.8 0)
+			(at 180.975 50.8 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9707,765 +10478,6 @@
 					(reference "#PWR02")
 					(unit 1)
 				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 32.385 57.15 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "aa18b9e9-4197-4006-b34a-fc4df7bcf558")
-		(property "Reference" "R9"
-			(at 32.385 54.61 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "1 k"
-			(at 32.385 59.69 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 32.639 56.134 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 32.385 57.15 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 32.385 57.15 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "ffd678f4-34e2-4c2b-b5d2-63856803233d")
-		)
-		(pin "2"
-			(uuid "b51a782a-8a9a-478d-9a96-21a030fa2bc8")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "R9")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "Device:C")
-		(at 206.375 34.925 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "7a04cac6-0c06-48c8-b042-4b11047ec8d7")
-		(property "Reference" "C16"
-			(at 210.185 33.6549 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "100 nF"
-			(at 210.185 36.1949 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 207.3402 38.735 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 206.375 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Unpolarized capacitor"
-			(at 206.375 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "49307fe5-c7ba-4f21-851d-61197050da20")
-		)
-		(pin "2"
-			(uuid "354cdbcb-00fb-4eaa-b446-db0f9dc2bd1d")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "C16")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "power:GND")
-		(at 206.375 38.735 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "0f2e5c6e-a263-4303-8b33-06a7c2228e37")
-		(property "Reference" "#PWR031"
-			(at 206.375 45.085 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 206.375 43.18 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 206.375 38.735 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 206.375 38.735 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 206.375 38.735 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "faba1253-fa20-4e65-b951-568b4c8bc56b")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR031")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "power:GND")
-		(at 51.435 86.36 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "43a1af12-f51e-47c8-afcf-e721640e4b6c")
-		(property "Reference" "#PWR032"
-			(at 51.435 92.71 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 51.435 90.805 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 51.435 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 51.435 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 51.435 86.36 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "e5e9d399-db30-4a93-99b8-7e5910001f9e")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR032")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "power:GND")
-		(at 100.965 189.23 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "0afab06a-5017-4cc6-87f8-e4aa51581fd5")
-		(property "Reference" "#PWR034"
-			(at 100.965 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 100.965 193.675 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 100.965 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 100.965 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 100.965 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "1e492ae8-b52f-4999-ad6a-27e1ac077bcb")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR034")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "power:GND")
-		(at 120.65 189.23 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "8cbed38e-1a2d-4038-b704-553bfddc58c8")
-		(property "Reference" "#PWR035"
-			(at 120.65 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 120.65 193.675 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 120.65 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 120.65 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 120.65 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "af74309e-15d6-4e5b-a367-3ae61fa858b1")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR035")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "power:GND")
-		(at 139.7 189.23 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "0a6b1ac1-a2cd-44e3-91cd-71447a8c8c2f")
-		(property "Reference" "#PWR036"
-			(at 139.7 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 139.7 193.675 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 139.7 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 139.7 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 139.7 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "8801623d-cd3b-4483-ac3d-20030c010a74")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR036")
-					(unit 1)
-				)
-			)
-		)
-	)	(symbol
-		(lib_id "power:GND")
-		(at 158.75 189.23 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "4694427b-976b-410f-89e8-a2a35e4e9c1e")
-		(property "Reference" "#PWR037"
-			(at 158.75 195.58 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 158.75 193.675 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 158.75 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 158.75 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 158.75 189.23 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "1242f1e9-680a-4ef8-bee0-f76cdfe53169")
-		)
-		(instances
-			(project "gnss-sam10m8-18mm-hv"
-				(path "/a61d9c6a-d8dd-4945-858b-535894b4ed8b"
-					(reference "#PWR037")
-					(unit 1)
-				)
-			)
-		)
-	)	(wire
-		(pts
-			(xy 40.005 61.595) (xy 40.005 57.15)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "825ad18d-372a-43a9-8dee-84f205647987")
-	)
-	(wire
-		(pts
-			(xy 40.005 57.15) (xy 36.195 57.15)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e3b4debb-96a5-405b-9ce5-755e74797f07")
-	)
-	(wire
-		(pts
-			(xy 193.675 31.115) (xy 206.375 31.115)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fc2f723e-a605-4ebe-8bd8-b1e1a0d63ec5")
-	)
-	(wire
-		(pts
-			(xy 51.435 81.915) (xy 51.435 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "5f51b051-161d-473c-a226-1a5a3630b851")
-	)
-	(wire
-		(pts
-			(xy 53.975 81.915) (xy 53.975 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "baef6905-ccd5-40aa-a03e-c4cc1731a4f4")
-	)
-	(wire
-		(pts
-			(xy 51.435 86.36) (xy 53.975 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "289ea2f2-3beb-4b02-9551-70ce0124e886")
-	)
-	(no_connect
-		(at 121.92 138.43)
-		(uuid "b7a8fbd6-3fb8-42b9-b051-a28cc6bc65e0")
-	)
-	(no_connect
-		(at 161.925 45.72)
-		(uuid "61405328-57a6-4889-97d1-b21b9521d84c")
-	)
-	(no_connect
-		(at 116.205 55.88)
-		(uuid "1753b419-829a-468f-95c5-a9b4f7af6813")
-	)
-	(no_connect
-		(at 161.925 55.88)
-		(uuid "e40782ab-5072-450b-9b71-17a7beb524b1")
-	)
-	(no_connect
-		(at 161.925 58.42)
-		(uuid "c916fb9a-6b66-42e8-b404-e8ef88169ad0")
-	)
-	(no_connect
-		(at 116.205 60.96)
-		(uuid "de863b28-8bae-4918-90fa-0981139d61e5")
-	)
-	(junction
-		(at 51.435 86.36)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "afef8fd2-9719-4f4e-96fb-aeb10ada079c")
-	)
-	(global_label "PPS"
-		(shape input)
-		(at 28.575 57.15 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "8e28ade0-eff4-4ac0-8ee4-a1a4119e3c58")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 28.575 57.15 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(global_label "PPS"
-		(shape input)
-		(at 161.925 50.8 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "caffe4ff-220a-46bc-b1cf-828c25d4086a")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 161.925 50.8 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
 			)
 		)
 	)
