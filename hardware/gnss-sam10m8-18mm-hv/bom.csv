@@ -1,0 +1,21 @@
+"Id";"Designator";"Footprint";"Quantity";"Designation";"Supplier and ref";"MPN";"Constraint"
+1;"C1, C12, C14";"C_0805_2012Metric";3;"22 uF";;;"second-stage Cf: needs >=20 uF effective at 3.3 V bias, total <200 uF. Any 22 uF 0805 6.3 V+ part meets this."
+2;"C5, C16";"C_0402_1005Metric";2;"100 nF";;;
+3;"C6";"C_0402_1005Metric";1;"100 pF";;;
+4;"C7";"C_0402_1005Metric";1;"2.2 nF";;"";"VIN high-frequency cap: needs >=25 V rating. 0402 parts are 50 V by default."
+5;"C8, C9";"C_0805_2012Metric";2;"10 uF";;"TDK C2012X7S1E106M125AC";"MUST be >=16 V. VIN is raw pack: 7.4 V nominal, 8.4 V on a full 2S, and CR1 does not clamp until 11.1 V. The default 22 uF 0805 at every distributor is 6.3 V or 10 V -- a 6.3 V part would be operated over its rating. 2 x 10 uF 25 V is TI's own reference value (SLVSFP4B CIN), clears the 5 uF effective minimum after DC-bias derating, and halves hot-plug inrush versus 2 x 22 uF."
+6;"C10";"C_0402_1005Metric";1;"470 nF";;;"C_NR/SS: TI characterisation value, sets a 5.0 ms soft start."
+7;"C11, C13, C15";"C_0805_2012Metric";3;"22 uF";;"TDK C2012X7S1A226M125AC";"MUST land 40-80 uF EFFECTIVE at 3.33 V bias (SLVSFP4B 8.2.2.2.3 -- the loop compensation is internal and non-adjustable). Verify against the part's DC-bias curve, not the nameplate: a common 22 uF 0805 6.3 V X5R derates to ~10-12 uF each, giving 30-36 uF, which is BELOW the minimum. The X7S part above holds ~15-16 uF each, ~46 uF total."
+8;"CR1";"SODFL3617X108N";1;"SMF10A";;"Littelfuse SMF10A";"Do not substitute SMF12A. Standoff 10 V clears a full 8.4 V 2S pack; Vc max 17 V at 11.8 A stays under the TPS62913's 18 V absolute maximum with 1 V to spare. SMF12A clamps at 19.9 V and would exceed it."
+9;"D1, D3";"LED_0402_1005Metric";2;"Green";;;"Green Vf (~1.8-2.4 V) is load-bearing on D1: it is the only thing holding TIMEPULSE/SAFEBOOT_N above the safeboot threshold at startup. Do not fit a low-Vf part and do not replace D1 with a plain resistor to ground."
+10;"FB1";"WE-CBA_0805_W4.0";1;"782853200";;"Wurth 782853200";"20 ohm at 100 MHz / 8 mohm DCR / 5 A. L ~= 31.8 nH, inside the 50 nH stability limit for the internal compensation (SLVSFP4B 8.2.2.2.4)."
+11;"FL1";"FIL_DLW21SN670HQ2L";1;"DLW21SN670HQ2L";;"Murata DLW21SN670HQ2L";"Rated 320 mA."
+12;"H1, H2, H3, H4";"MountingHole_2.2mm_M2_DIN965_Pad";4;"MountingHole";;;"Pads are tied to GND. Note DIN965 is a countersunk head and will not seat flat on a plain pad."
+13;"J3";"CONN_BM05B-SRSS-TB_JST";1;"BM05B-SRSS-TB";;"JST BM05B-SRSS-TB";"Pin 5 carries TIMEPULSE (PPS) on this board. On gnss-px1105r the same pin is RXD2, driven by the host. See the board-identification note."
+14;"L8";"IND_VLS3012CX-2R2M-1";1;"VLS3012CX-2R2M-1";;"TDK VLS3012CX-2R2M-1";"2.2 uH, ~2.55 A / 74 mohm."
+15;"R1, R3";"R_0402_1005Metric";2;"10 k";;;"LED series. At 10 k both LEDs run 0.13 mA and are barely visible indoors; 1.5-2.2 k gives ~7x brightness and stays inside the 2 mA TIMEPULSE limit."
+16;"R2, R7, R8, R9";"R_0402_1005Metric";4;"1 k";;;"R7/R8 are UART series protection; R9 is the PPS series resistor into J3.5."
+17;"R5";"R_0402_1005Metric";1;"15.4 k";;;"FB divider high side. With R6 and Vfb = 0.800 V this sets 3.330 V."
+18;"R6";"R_0402_1005Metric";1;"4.87 k";;;"FB divider low side; TI reference value."
+19;"U1";"XCVR_SAM-M10Q-00B";1;"SAM-M10Q-00B";;"u-blox SAM-M10Q-00B";"Patch antenna faces the B.Cu side of the board."
+20;"U3";"IC_TPS62913RPUR";1;"TPS62913RPUR";;"TI TPS62913RPUR";

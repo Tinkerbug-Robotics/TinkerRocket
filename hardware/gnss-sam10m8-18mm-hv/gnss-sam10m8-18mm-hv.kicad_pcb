@@ -1306,7 +1306,7 @@
 				)
 			)
 		)
-		(property "Value" "22 uF"
+		(property "Value" "10 uF"
 			(at 0 1.68 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -6297,7 +6297,7 @@
 				)
 			)
 		)
-		(property "Value" "22 uF"
+		(property "Value" "10 uF"
 			(at 0 1.68 90)
 			(layer "F.Fab")
 			(hide yes)
