@@ -318,13 +318,12 @@
 		(uuid "123fadfe-186d-420e-b9e0-316767b691ea")
 		(at 54.05 43.03 90)
 		(property "Reference" "L8"
-			(at 0.282 -2.4064 90)
+			(at -2.27 1.55)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "588f429e-8154-4c4a-a5c5-053a15d38306")
 			(effects
 				(font
-					(size 0.64 0.64)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 			)
@@ -1613,14 +1612,13 @@
 		(uuid "3e086a58-fe3d-4e17-9c09-f47c678411ad")
 		(at 50.815 44.32 180)
 		(property "Reference" "U3"
-			(at 0.074 -1.9548 0)
+			(at 2.815 2.52)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "28dd3293-6d39-417d-aa26-55c38096fe81")
 			(effects
 				(font
-					(size 0.48 0.48)
-					(thickness 0.12)
+					(size 0.85 0.85)
+					(thickness 0.15)
 				)
 			)
 		)
@@ -2350,13 +2348,12 @@
 		(uuid "52b60ed0-fb58-4f22-86e8-976ee7beb4d8")
 		(at 52.51 54.665 180)
 		(property "Reference" "CR1"
-			(at 0.635 -2.032 0)
+			(at 4.0 0.0)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "9bdc266e-e8b3-4cdf-a24a-36e887dd293d")
 			(effects
 				(font
-					(size 1 1)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 			)
@@ -3305,13 +3302,12 @@
 		(uuid "5a995239-242c-4342-abe0-272f675e2927")
 		(at 59.72 37.46)
 		(property "Reference" "FB1"
-			(at 0 -1.835 0)
+			(at 0.0 -1.4)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "b8be4fcf-5971-4404-8cb2-e9087c966641")
 			(effects
 				(font
-					(size 1 1)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 			)
@@ -4811,14 +4807,13 @@
 		(at 53.010002 50.853401)
 		(tags "BM05B-SRSS-TB ")
 		(property "Reference" "J3"
-			(at 0 -1.4284 0)
+			(at 0.0 -3.6)
 			(unlocked yes)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "514ead60-6922-4109-8c64-2b42af9f1358")
 			(effects
 				(font
-					(size 1 1)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 			)
@@ -5093,13 +5088,12 @@
 		(descr "Resistor SMD 0402 (1005 Metric), square (rectangular) end terminal, IPC-7351 nominal, (Body size source: IPC-SM-782 page 72, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf), generated with kicad-footprint-generator")
 		(tags "resistor")
 		(property "Reference" "R9"
-			(at 0 -1.17 0)
+			(at 0.0 -1.2)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "952e4c92-2734-4b11-831e-66c77050f66b")
 			(effects
 				(font
-					(size 1 1)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 			)
@@ -5301,13 +5295,12 @@
 		(descr "Capacitor SMD 0402 (1005 Metric), square (rectangular) end terminal, IPC-7351 nominal, (Body size source: IPC-SM-782 page 76, https://www.pcb-3d.com/wordpress/wp-content/uploads/ipc-sm-782a_amendment_1_and_2.pdf)")
 		(tags "capacitor")
 		(property "Reference" "C16"
-			(at 0 -1.16 0)
+			(at 0.0 -1.2)
 			(layer "F.SilkS")
-			(hide yes)
 			(uuid "2a012380-aaef-491f-961c-f49910877e36")
 			(effects
 				(font
-					(size 1 1)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 			)
@@ -6446,11 +6439,10 @@
 		(property "Reference" "U1"
 			(at -4.825 8.885 90)
 			(layer "B.SilkS")
-			(hide yes)
 			(uuid "3d4ebbec-74ae-4e37-b860-aee396e88fce")
 			(effects
 				(font
-					(size 1 1)
+					(size 0.85 0.85)
 					(thickness 0.15)
 				)
 				(justify mirror)
@@ -8263,19 +8255,6 @@
 			(justify left bottom)
 		)
 	)
-	(gr_text "TinkerRocket\nGNSS SAM-M10Q\n${REVISION}"
-		(at 53.15 43.29 0)
-		(layer "B.SilkS")
-		(uuid "aeb8bc6d-37d4-42df-85ef-fd672e324ff2")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.2)
-				(bold yes)
-			)
-			(justify mirror)
-		)
-	)
 	(segment
 		(start 62.445 40.155)
 		(end 63.055 40.155)
@@ -10050,6 +10029,67 @@
 		(layer "F.Cu")
 		(net "Net-(J3-Pad5)")
 		(uuid "55111a2d-bca2-47b3-9ea5-b7a2f19854ec")
+	)
+	(gr_text "TinkerRocket"
+		(at 52.5 51.4 0)
+		(layer "B.SilkS")
+		(uuid "5a1b72b5-642f-4143-99f0-2b6a501fe839")
+		(effects
+			(font
+				(size 0.85 0.85)
+				(thickness 0.15)
+				(bold yes)
+			)
+			(justify mirror)
+		)
+	)
+	(gr_text "SAM-M10Q ${REVISION}"
+		(at 52.5 52.75 0)
+		(layer "B.SilkS")
+		(uuid "f7c16989-83b8-426c-b383-fde6a8dc12d8")
+		(effects
+			(font
+				(size 0.85 0.85)
+				(thickness 0.15)
+			)
+			(justify mirror)
+		)
+	)
+	(gr_text "ANTENNA SIDE"
+		(at 52.5 54.1 0)
+		(layer "B.SilkS")
+		(uuid "631238b1-3ee5-4d75-b3c9-ba731ad4fc92")
+		(effects
+			(font
+				(size 0.85 0.85)
+				(thickness 0.15)
+			)
+			(justify mirror)
+		)
+	)
+	(gr_text "SAM-M10Q"
+		(at 51.3 30.9 0)
+		(layer "F.SilkS")
+		(uuid "97f65a5d-8df4-4a3d-94b5-92b34ceac8de")
+		(effects
+			(font
+				(size 0.85 0.85)
+				(thickness 0.15)
+				(bold yes)
+			)
+		)
+	)
+	(gr_text "1"
+		(at 56.3 48.1 0)
+		(layer "F.SilkS")
+		(uuid "2feb13c8-c95a-4ea8-a76f-973110ed6499")
+		(effects
+			(font
+				(size 0.85 0.85)
+				(thickness 0.15)
+				(bold yes)
+			)
+		)
 	)
 	(zone
 		(net "+3V3")
