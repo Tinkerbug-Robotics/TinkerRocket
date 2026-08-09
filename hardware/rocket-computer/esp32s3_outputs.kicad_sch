@@ -8958,6 +8958,17 @@
 				)
 			)
 		)
+		(property "Mfr" "Samsung"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "44dd2c69-3b23-46af-bbe5-6b487326e3c8")
 		)

@@ -5247,7 +5247,7 @@
 				)
 			)
 		)
-		(property "Mfr" "STMicro"
+		(property "Mfr" "Samsung"
 			(at 63.5 170.18 0)
 			(hide yes)
 			(show_name no)

@@ -12294,6 +12294,17 @@
 				)
 			)
 		)
+		(property "Mfr" "Samsung"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "ab6436fe-3be0-4c65-aa2e-dd522d341551")
 		)
@@ -12373,6 +12384,17 @@
 			)
 		)
 		(property "MPN" "CL05B103KB5NNNC"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
 			(at 0 0 0)
 			(hide yes)
 			(show_name no)
@@ -14385,7 +14407,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-073K3L"
+		(property "MPN" "RC0402FR-072K2L"
 			(at 231.775 30.48 0)
 			(hide yes)
 			(show_name no)
@@ -18661,7 +18683,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-073K3L"
+		(property "MPN" "RC0402FR-071KL"
 			(at 266.065 113.03 0)
 			(hide yes)
 			(show_name no)
