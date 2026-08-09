@@ -885,6 +885,14 @@ static float max_speed_mps = 0.0f;
 
 static uint32_t lora_tx_ok = 0;
 static uint32_t lora_tx_fail = 0;
+// LORA_MSG (0xF1) records accepted by the flight-log ring.  Tracked separately
+// from lora_tx_ok because the two diverge for a real reason: enqueueFrame()
+// drops the record whenever no logging session is open, so tx_ok climbing
+// while logged stays flat is the normal pad state, not a fault.  Once a
+// session IS open the two must climb together — a gap between them means the
+// ring is overrunning and the seq record the post-flight loss analysis
+// depends on is being dropped.
+static uint32_t lora_tx_logged = 0;
 // #150: uplinks dropped by the network-id filter.  Counted (and logged in
 // the periodic LoRa stats line) because the #133-era nid-drift regression
 // was invisible precisely because this drop path said nothing.
@@ -3359,6 +3367,46 @@ static void serviceLoRa()
     if (lora_comms.send(payload, sizeof(payload)))
     {
         lora_tx_ok++;
+
+        // Persist the exact 65 B that just went on the air as a LORA_MSG
+        // (0xF1) record.  The type has always been in the wire format and
+        // every decoder already knows it, but nothing had emitted it — so
+        // the rocket log carried no evidence the radio had even keyed up,
+        // and a lost base-station log meant the whole downlink measurement
+        // was gone (2026-08-08 Kaua'i range test).  The frame carries `seq`,
+        // so diffing the seq set logged here against the seq column in the
+        // base station's lora_*.csv yields true per-packet loss without
+        // needing both logs to survive.
+        //
+        // Logged AFTER send() returns true and BEFORE lora_tx_seq++, so the
+        // record holds the seq actually transmitted, and a failed
+        // startTransmit() leaves no record — the log is exactly what was
+        // radiated, which is what makes the seq diff meaningful.
+        //
+        // Deliberately no timestamp field: the payload stays byte-identical
+        // to LoRaData (65 B, what MSG_EXPECTED_LEN and every parser already
+        // expect), and the record's position between IMU frames dates it to
+        // ~256 us — better than an OC timestamp could, since esp_timer here
+        // is a different clock domain from the FC time_us that every other
+        // log record carries.
+        //
+        // enqueueFrame() drops the frame when no session is open, so this
+        // costs nothing off-session; on-session it is 65 B + 8 B of framing
+        // at LORA_TX_RATE_HZ (146 B/s at 2 Hz).  Name beacons are NOT logged
+        // — they are a different, variable-length payload and would break
+        // the fixed 65 B expectation for this type.
+        {
+            uint8_t lora_frame[MAX_FRAME];
+            size_t  lora_frame_len = 0;
+            if (TR_I2C_Interface::packMessage(LORA_MSG,
+                                              payload, sizeof(payload),
+                                              lora_frame, sizeof(lora_frame),
+                                              lora_frame_len))
+            {
+                if (logger.enqueueFrame(lora_frame, lora_frame_len)) lora_tx_logged++;
+            }
+        }
+
         // Advance the seq AFTER a successful send — failed startTransmit()
         // means nothing went over the air, so the BS shouldn't see a gap.
         lora_tx_seq++;
@@ -5095,9 +5143,13 @@ static void printStats()
         {
             TR_LoRa_Comms::Stats ls = {};
             lora_comms.getStats(ls);
-            ESP_LOGI("LORA", "LoRa tx=%lu/%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu nid_drop=%lu rxmode=%c",
+            // logged= counts LORA_MSG records the flight-log ring accepted.
+            // Expect it to track tx= once a session is open, and to stay at 0
+            // on the pad with no session — see lora_tx_logged.
+            ESP_LOGI("LORA", "LoRa tx=%lu/%lu logged=%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu nid_drop=%lu rxmode=%c",
                           (unsigned long)ls.tx_ok,
                           (unsigned long)ls.tx_fail,
+                          (unsigned long)lora_tx_logged,
                           (unsigned long)ls.rx_count,
                           (unsigned long)ls.rx_crc_fail,
                           (unsigned long)lora_low_snr_drops,
