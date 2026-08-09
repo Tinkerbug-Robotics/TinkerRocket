@@ -26,6 +26,8 @@ Takeaway: peripherals are already well-isolated. The architecture gaps are (1) M
 **What:** Add bulk on the **`VCC`** node (U2 OUT, pins 1/8 — the `[VCC]` net at U2.1/U2.8/L9.1).
 **Value (chosen):** **1× TCJE337M016R0050** — 330 µF, 16 V, tantalum-polymer, E-case, ~50 mΩ ESR — **‖ 10 µF X7R** ceramic. (Same part as the servo cap C10 → BOM consolidation; single cap chosen for board-space constraints.)
 **Why:** When servos/camera sag the raw VBATT node (mux IN1), the TPS2121 reverse-blocks IN1 and this cap holds `VCC` up while the buck keeps regulating 3.3 V (valid down to VCC ≈ 3.5 V). Sized by energy (buck draws constant power, so input current rises as VCC sags): `t = ½C(V_start²−V_min²)·η / P_load`. At the actual ~50 mA MCU load (~0.17 W), 330 µF from 8.4→3.5 V gives **~52 ms** hold-up — ~10–50× a vibration/micro-dropout; even at a 500 mA burst it still holds ~5 ms. Voltage derating is comfortable (8.4 V on 16 V ≈ 53%, within the ~80% polymer-tant ceiling); polymer tant also has a benign failure mode and good cold stability. *(If MCU load ever climbs well above ~200 mA at low battery, add a 2nd 330 µF in parallel — but 50 mA leaves large margin.)*
+> **CORRECTION 2026-08-08 (worklist H-8/D-3).** The 52 ms figure above does not describe the board as flown and must not be used for sizing. Three things changed or were wrong: (1) the ~50 mA load assumption — the 3V3 chain now carries the S3 *and* the P4 domain (via U30), a realistic flight load of 0.5–0.8 A, which cuts the hold-up to **~3 ms**; (2) C15's 330 µF has moved to the servo branch output, so C56 is the only hold-up on this node; (3) the eFuse outage this was implicitly sized against is **~92 ms** (C46 = 2.2 nF on RETRY_DLY per TPS25982 Table 7-5), so ride-through was never within 30× of closing. The design intent is superseded: transient sags are absorbed *upstream* by the EN/UVLO deglitch (C94, τ ≈ 174 ms, worklist H-1), and any event that still trips the eFuse produces a clean reboot with deployment energy preserved on V_CAP. See WORKLIST.md H-8 for the full arithmetic.
+
 **Soft-start — ✅ verified adequate (no change):** the cap charges through U2 at power-on/USB insert. The existing **C7 = 1 µF** on SS gives an output slew of ~78 V/s (TPS2121: 100 nF ≈ 780 V/s, scales inversely with C_SS), so inrush = C_OUT·dV/dt ≈ 340 µF × 78 V/s ≈ **27 mA** — roughly two orders of magnitude below the R16-set current limit (amps range; TPS2121 min ~1 A) and trivially within the tantalum's surge tolerance. Output ramps gently to ~8.4 V over ~100 ms. No change to C7 needed.
 **Watch:** Observe **polarity** — + to VCC, − to GND.
 **Placement:** directly across VCC–GND at U2 OUT; keep the buck's existing local input cap (C16) after L9.
@@ -124,8 +126,8 @@ Goal (per the "S3 up first at minimal power" intent): when only S3 (+3V3) is pow
 
 | Threat | Before | After |
 |--------|--------|-------|
-| Servo/vibration ms sag | Resets MCUs | Held by VCC hold-up + mux reverse-block (Change 1) |
-| Sustained low pack | −BATT cutoff, no deglitch, floats ground, can chatter | High-side eFuse, UVLO 6.4 V, deglitched, latched (Change 2) |
+| Servo/vibration ms sag | Resets MCUs | Absorbed upstream by the C94 EN/UVLO deglitch; the Change-1 hold-up is ~3 ms at flight load, not 52 ms — see the 2026-08-08 correction above |
+| Sustained low pack | −BATT cutoff, no deglitch, floats ground, can chatter | High-side eFuse, UVLO 6.91/6.34 V, deglitched by C94 (τ ≈ 174 ms, added 2026-08-06 — did not exist when this row was first written), **auto-retry not latched** (~92 ms × ~1024 per C46/C45) (Change 2) |
 | Radio/GNSS/cam transient | Shared rails | Already switched; shed in firmware; local bulk (Change 3) |
 | Pyro energy vs logic | — | Fully isolated (supercap = pyro only) |
 | Sneak-power into off P4 domain | S3 drives log memory (U11/U12) + SPI on VPP → back-powers VPP | Memory on always-on rail + firmware tristate; off-state VPP ≈ 0 (Change 6) |
