@@ -7808,7 +7808,7 @@
 				)
 			)
 		)
-		(property "Value" "18.7 k"
+		(property "Value" "100 k"
 			(at 69.215 130.81 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7851,7 +7851,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0718K7L"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 71.755 130.81 0)
 			(hide yes)
 			(show_name no)

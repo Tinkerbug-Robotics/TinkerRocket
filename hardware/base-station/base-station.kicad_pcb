@@ -19002,7 +19002,7 @@
 				)
 			)
 		)
-		(property "Value" "18.7 k"
+		(property "Value" "100 k"
 			(at 0 1.17 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -19048,7 +19048,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0718K7L"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -19896,7 +19896,7 @@
 				)
 			)
 		)
-		(property "Value" "100 k"
+		(property "Value" "180 k"
 			(at 0 1.17 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -19942,7 +19942,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-07100KL"
+		(property "MPN" "RC0402FR-07180KL"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -24280,7 +24280,7 @@
 				)
 			)
 		)
-		(property "Value" "300 k"
+		(property "Value" "1 M"
 			(at 0 1.17 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -24326,7 +24326,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-07300KL"
+		(property "MPN" "RC0402FR-071ML"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")

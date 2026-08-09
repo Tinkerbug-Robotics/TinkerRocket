@@ -14357,7 +14357,7 @@
 				)
 			)
 		)
-		(property "Value" "2.2 k"
+		(property "Value" "2 k"
 			(at 235.585 31.75 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14399,7 +14399,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-072K2L"
+		(property "MPN" "RC0402FR-072KL"
 			(at 231.775 30.48 0)
 			(hide yes)
 			(show_name no)

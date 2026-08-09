@@ -42325,7 +42325,7 @@
 				)
 			)
 		)
-		(property "Value" "10"
+		(property "Value" "22"
 			(at 0 1.17 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -42371,7 +42371,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710RL"
+		(property "MPN" "RC0402FR-0722RL"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -55226,7 +55226,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "2.2 k"
+		(property "Value" "2 k"
 			(at 0 -1.17 180)
 			(layer "B.Fab")
 			(hide yes)
@@ -55276,7 +55276,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "RC0402FR-073K3L"
+		(property "MPN" "RC0402FR-072KL"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "B.Fab")
