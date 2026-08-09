@@ -276,8 +276,7 @@ TinkerRocket/
 ├── Data_Analysis/              # Flight-log analysis and plotting scripts
 ├── tools/                      # Wire-code guards, doc generators, bench utilities
 │
-├── .github/workflows/          # CI (see below)
-└── ARCHIVE/                    # Previous hardware iterations
+└── .github/workflows/          # CI (see below)
 ```
 
 ## Building
