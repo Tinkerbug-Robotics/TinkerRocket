@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-89 codes. The dispatch on both ends is a flat first-match chain, so
+90 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -97,7 +97,7 @@ this list is CI-enforced for uniqueness.
 | `0xEA` | `SENSOR_CAL_READ` | OC → FC | OC→FC: publish current NVS sensor cal |
 | `0xE0` | `SENSOR_CAL_STATUS_MSG` | FC → OC | FC→OC: SensorCalStatusData |
 | `0xE1` | `FLIGHT_SETTINGS_MSG` | FC → OC |  |
-| `0xE2` | `LOG_BUFFER_STATS_MSG` | FC → OC |  |
+| `0xE2` | `LOG_BUFFER_STATS_MSG` | OC → log | OC→self: 28-byte LogBufferStatsData, ~1 Hz, straight to the log |
 | `0xE3` | `OTA_BEGIN_PENDING` | OC → FC | OC→FC: OTA_BEGIN_MSG payload follows |
 | `0xE4` | `OTA_BEGIN_MSG` | FC → OC | [size:4 LE][sha256:32] = 36 bytes |
 | `0xE5` | `OTA_FINISH_CMD` | OC → FC | OC→FC: finalize + verify + reboot |
@@ -117,8 +117,9 @@ this list is CI-enforced for uniqueness.
 | `0xF7` | `GUIDANCE_POINT_PENDING` | OC → FC | OC→FC: payload follows as GUIDANCE_POINT_MSG |
 | `0xF8` | `GUIDANCE_POINT_MSG` | FC → OC | 20-byte GuidancePointData |
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
+| `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 
-> 54 of these 89 codes carry no comment in the header,
+> 53 of these 90 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -162,6 +163,7 @@ that changes size fails the build rather than corrupting a log silently.
 | `SimConfigData` | 16 |
 | `RocketStorageStatsData` | 15 |
 | `MagCalApplyData` | 14 |
+| `LoRaUplinkData` | 13 |
 | `BMP585Data` | 12 |
 | `MagCalMMCOffset` | 12 |
 | `IIS2MDCData` | 10 |
@@ -344,6 +346,12 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
 | `LORA_PROTO_VERSION` | `0x04` (4) |  |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
+| `LORA_UL_ACCEPTED` | `0x01` (1) | passed every filter, command dispatched |
+| `LORA_UL_MALFORMED` | `0x10` (16) | bad sync byte or short frame |
+| `LORA_UL_NID_DROP` | `0x04` (4) | wrong network_id |
+| `LORA_UL_NOT_FOR_US` | `0x08` (8) | our network, another rocket_id |
+| `LORA_UL_SNR_DROP` | `0x02` (2) | under loraMinValidSnrDb for the current SF |
+| `LORA_UPLINK_MSG` | `0xF9` (249) | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `LORA_VEL_APOGEE` | `0x02` (2) | bit 1 |
 
 Factory rendezvous parameters — the channel both ends fall back to, and the

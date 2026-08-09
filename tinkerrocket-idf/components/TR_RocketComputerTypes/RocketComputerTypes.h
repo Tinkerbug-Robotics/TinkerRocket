@@ -1881,7 +1881,7 @@ static constexpr uint8_t FLIGHT_SETTINGS_MSG = 0xE1;
 // actually used and whether a smaller / cheaper chip would have fit
 // (the MR25H10 is 128 KB; payload here lets us compare against the real
 // high-water mark per flight).  See LogBufferStatsData.
-static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;
+static constexpr uint8_t LOG_BUFFER_STATS_MSG = 0xE2;  // OC→self: 28-byte LogBufferStatsData, ~1 Hz, straight to the log
 
 // --- OTA firmware relay to the Flight Computer (#8 Phase 4) ---
 // Control plane rides the OC↔FC I2C link: the OC stages OTA_BEGIN_PENDING
@@ -2007,7 +2007,10 @@ typedef struct __attribute__((packed))
 } LoRaUplinkData;
 static_assert(sizeof(LoRaUplinkData) == 13, "LoRaUplinkData must be 13 bytes");
 
-static constexpr uint8_t LORA_UPLINK_MSG     = 0xF9;
+// The trailing marker is load-bearing: gen_protocol_reference.py reads the
+// SAME-LINE comment, and without it infers "FC → OC" from the _MSG suffix and
+// publishes this as a link message, which it never is.
+static constexpr uint8_t LORA_UPLINK_MSG     = 0xF9;  // OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log
 
 // LoRaUplinkData.flags — the disposition of the decode.  Exactly one of these
 // is set; they are separate bits rather than an enum so a reader can mask for
