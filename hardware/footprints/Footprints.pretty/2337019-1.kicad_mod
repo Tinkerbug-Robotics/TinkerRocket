@@ -1,10 +1,10 @@
 (footprint "2337019-1"
-	(version 20241129)
+	(version 20260206)
 	(generator "pcbnew")
-	(generator_version "9.0")
+	(generator_version "10.0")
 	(layer "F.Cu")
 	(property "Reference" "J14"
-		(at 1.83 -3.1 -90)
+		(at 1.83 -3.1 270)
 		(layer "F.SilkS")
 		(hide yes)
 		(uuid "2272638c-e387-40b4-b9e0-48db4176a194")
@@ -16,25 +16,13 @@
 		)
 	)
 	(property "Value" "2337019-1"
-		(at 2.6487 -1.559 -90)
+		(at 2.6487 -1.559 270)
 		(layer "F.Fab")
 		(hide yes)
 		(uuid "f1892696-d12c-49b7-b698-e01c261d3d33")
 		(effects
 			(font
 				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(property "Footprint" ""
-		(at 0 0 0)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "0655ea18-9d0b-462b-8c8b-83dbfc60c918")
-		(effects
-			(font
-				(size 1.27 1.27)
 				(thickness 0.15)
 			)
 		)
@@ -65,7 +53,32 @@
 			)
 		)
 	)
+	(property "Field4" "*"
+		(at 0 0 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "35c88521-57f5-4000-859d-f2eb1bc539c5")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Field5" "*"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "d406be65-ae2f-4139-88d6-460387862f43")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
 	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
 	(fp_line
 		(start -1.63 1.13)
 		(end -1.1 1.67)
@@ -215,30 +228,6 @@
 		)
 		(layer "F.Fab")
 		(uuid "aedfa497-919a-4e32-8c16-1a37c2436d66")
-	)
-	(fp_text user "*"
-		(at 0 0 0)
-		(layer "F.SilkS")
-		(hide yes)
-		(uuid "f39003ad-e2dc-42be-bf4b-288b89693ba0")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
-	)
-	(fp_text user "*"
-		(at 0 0 0)
-		(layer "F.Fab")
-		(hide yes)
-		(uuid "9c4195be-d25f-4a27-8a50-ebd33683d4d1")
-		(effects
-			(font
-				(size 1 1)
-				(thickness 0.15)
-			)
-		)
 	)
 	(pad "1" smd rect
 		(at 0 -1.57685)
