@@ -411,8 +411,22 @@ struct ConnectedFleetView: View {
             BaseStationStripView(bs: bs)
                 // Phone GPS drives the direction-to-rocket arrow — only
                 // useful while a base station is relaying positions.
-                .onAppear { locationManager.startUpdates() }
+                .onAppear {
+                    locationManager.startUpdates()
+                    // Re-report promptly on (re)appear: the fix at the start
+                    // of a logging session is the one worth having.
+                    locationManager.resetFixThrottle()
+                }
                 .onDisappear { locationManager.stopUpdates() }
+                // …and, since the phone IS the base station's position, push
+                // it down so the CSV records it. The BS has no GNSS, so
+                // without this the range between the two ends is displayed
+                // and then discarded, and a range test cannot be
+                // reconstructed from its own logs. Throttled inside
+                // reportFix; the BS ignores it unless a session is open.
+                .onReceive(locationManager.$userLocation) { _ in
+                    locationManager.reportFix(to: bs)
+                }
         }
 
         ForEach(displayed) { subject in

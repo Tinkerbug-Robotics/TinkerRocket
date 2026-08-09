@@ -1284,6 +1284,33 @@ static inline float currentRxFreqMHz()
     return lora_freq_mhz;
 }
 
+// Record the operator's phone fix as an EVENT row (BLE_BS_CMD_SET_PHONE_FIX).
+//
+// This is the base station's position, which nothing else in the system
+// captures: the BS has no GNSS, so every lat/lon in this CSV is the ROCKET's
+// relayed position. Range -- the whole point of a range test -- was therefore
+// unreconstructable from the logs alone.
+//
+// Emitted as an EVENT row rather than a new column because the schema already
+// has the mechanism (state == "EVENT", free-text `event`), every existing
+// parser already skips those rows, and the fix arrives on its own cadence
+// rather than per packet. Range is then a one-line offline computation
+// against the rocket lat/lon on the surrounding telemetry rows.
+//
+// The event text is space-separated: `event` is a CSV field and a comma here
+// would silently shift every column to its right.
+static void logPhoneFixEvent(int32_t lat_e7, int32_t lon_e7,
+                             int16_t alt_m, uint8_t h_acc_m)
+{
+    if (!logging_active || log_file == nullptr) return;
+    char ev[96];
+    snprintf(ev, sizeof(ev),
+             "phone_fix lat=%.7f lon=%.7f alt=%d hacc=%u",
+             (double)lat_e7 * 1e-7, (double)lon_e7 * 1e-7,
+             (int)alt_m, (unsigned)h_acc_m);
+    logHopEvent(ev, currentRxFreqMHz());
+}
+
 // ==========================================================================
 // SECTION: BLE file operations (list, delete, download)
 // ==========================================================================
@@ -4831,6 +4858,28 @@ static void loop_bs()
             // If a sequential-named log was opened before sync arrived,
             // promote it to its proper timestamped name now (#168).
             renameOpenLogIfSequential();
+        }
+    }
+    else if (ble_cmd == BLE_BS_CMD_SET_PHONE_FIX)
+    {
+        // Where the base station actually is.  Logged, never acted on --
+        // nothing in the BS behaviour depends on this, it exists purely so
+        // the CSV records the range.
+        const uint8_t* payload = ble_app.getCommandPayload();
+        size_t payload_len = ble_app.getCommandPayloadLength();
+        if (payload_len >= 11)
+        {
+            int32_t lat_e7, lon_e7;
+            int16_t alt_m;
+            memcpy(&lat_e7, payload + 0, 4);
+            memcpy(&lon_e7, payload + 4, 4);
+            memcpy(&alt_m,  payload + 8, 2);
+            const uint8_t h_acc_m = payload[10];
+            logPhoneFixEvent(lat_e7, lon_e7, alt_m, h_acc_m);
+            ESP_LOGI(TAG, "[LOG] phone fix %.7f, %.7f alt=%d hacc=%u%s",
+                     (double)lat_e7 * 1e-7, (double)lon_e7 * 1e-7,
+                     (int)alt_m, (unsigned)h_acc_m,
+                     logging_active ? "" : " (no session open -- not logged)");
         }
     }
     else if (ble_cmd == BLE_BS_CMD_LORA_RECONFIG)

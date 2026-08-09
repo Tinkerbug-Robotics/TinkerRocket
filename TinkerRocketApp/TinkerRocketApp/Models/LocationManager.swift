@@ -14,10 +14,25 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     @Published var userLocation: CLLocationCoordinate2D?
     @Published var userAltitude: Double?  // Phone GPS altitude in meters (MSL)
+    @Published var userAccuracy: Double?  // Horizontal accuracy in meters; nil when invalid
     @Published var heading: Double = 0    // True north compass heading in degrees
 
     private let manager = CLLocationManager()
     private var isRunning = false
+
+    // Throttle state for reportFix(to:).  Lives here rather than in a global
+    // because the fix and its cadence are this object's business, and it keeps
+    // the sender free of shared mutable state.
+    private var lastFixSentAt: Date?
+    private var lastFixSentFrom: CLLocationCoordinate2D?
+
+    /// Minimum wall time between phone-fix pushes while the operator stands
+    /// still.  distanceFilter is 5 m, so an unthrottled push would put a BLE
+    /// write and a log row on every few steps, competing with telemetry RX.
+    private let fixMinInterval: TimeInterval = 30
+    /// Movement that forces a push regardless of the interval — actually
+    /// repositioning the base station should reach the log promptly.
+    private let fixForceDistance: CLLocationDistance = 25
 
     override init() {
         super.init()
@@ -51,6 +66,45 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         manager.stopUpdatingHeading()
     }
 
+    // MARK: - Phone fix -> base station
+
+    /// Push the current fix to `device` as BLE_BS_CMD_SET_PHONE_FIX, throttled.
+    ///
+    /// The base station is wherever the phone is, and the BS has no GNSS of
+    /// its own, so this is the only way the range between the two ends ever
+    /// reaches a log file. The BS writes the row only while a logging session
+    /// is open, so calling this off-session costs one BLE write and nothing
+    /// else. Safe to call on every location update.
+    func reportFix(to device: BLEDevice) {
+        guard let coord = userLocation, CLLocationCoordinate2DIsValid(coord) else { return }
+
+        let now = Date()
+        if let sentAt = lastFixSentAt, let from = lastFixSentFrom {
+            let moved = CLLocation(latitude: from.latitude, longitude: from.longitude)
+                .distance(from: CLLocation(latitude: coord.latitude, longitude: coord.longitude))
+            if now.timeIntervalSince(sentAt) < fixMinInterval && moved < fixForceDistance {
+                return
+            }
+        }
+        lastFixSentAt = now
+        lastFixSentFrom = coord
+
+        // 47 == BLE_BS_CMD_SET_PHONE_FIX. Literal on purpose — see the note
+        // in PhoneFixCodec about the CI parity sweep.
+        device.sendRawCommand(47,
+                              payload: PhoneFixCodec.encode(coord,
+                                                            altitude: userAltitude,
+                                                            accuracy: userAccuracy))
+    }
+
+    /// Drop the throttle so the next fix is pushed immediately.  Called on
+    /// (re)connect: the fix at the START of a log is the one that matters, and
+    /// a timestamp left over from the previous session could suppress it.
+    func resetFixThrottle() {
+        lastFixSentAt = nil
+        lastFixSentFrom = nil
+    }
+
     // MARK: - CLLocationManagerDelegate
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -59,6 +113,9 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             if loc.verticalAccuracy >= 0 {
                 userAltitude = loc.altitude
             }
+            // Negative means the fix is invalid, per CLLocation — publish nil
+            // rather than a negative "accuracy" that would log as garbage.
+            userAccuracy = loc.horizontalAccuracy >= 0 ? loc.horizontalAccuracy : nil
         }
     }
 
