@@ -893,6 +893,12 @@ static uint32_t lora_tx_fail = 0;
 // ring is overrunning and the seq record the post-flight loss analysis
 // depends on is being dropped.
 static uint32_t lora_tx_logged = 0;
+// LORA_UPLINK_MSG (0xF9) records accepted by the ring — every decode the radio
+// handed up, not just the ones that passed the filters, so this climbs faster
+// than lora_uplink_rx_count whenever the link is noisy.  That difference is
+// itself the signal: uplink_rx flat while logged climbs means packets are
+// arriving but landing under the SNR floor.
+static uint32_t lora_uplink_logged = 0;
 // #150: uplinks dropped by the network-id filter.  Counted (and logged in
 // the periodic LoRa stats line) because the #133-era nid-drift regression
 // was invisible precisely because this drop path said nothing.
@@ -4200,6 +4206,44 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     }
 }
 
+// Write one LORA_UPLINK_MSG (0xF9) record for a decode the radio handed up.
+//
+// The rocket's only measurement of the RF path.  A transmitter cannot read its
+// own downlink RSSI, so 0xF1 gives loss but not signal strength; these records
+// give signal strength, on the reciprocal path, whether or not the base
+// station's own log survives.  Every disposition is recorded — accepted,
+// low-SNR, wrong network, not addressed to us, malformed — because a decode
+// that was discarded still measures the channel just as well as one that was
+// acted on.
+//
+// Rate is bounded by how often the base station actually transmits (a ~30 s
+// heartbeat plus operator commands), so this is a handful of 13 B records per
+// minute, not a stream.  enqueueFrame() drops it when no session is open.
+static void logUplinkRx(const TR_LoRa_Comms::Stats& ls, uint8_t cmd, uint8_t flags)
+{
+    LoRaUplinkData ul = {};
+    ul.time_us       = (uint32_t)esp_timer_get_time();
+    ul.rssi_dbm_x10  = loraPackTenths(ls.last_rssi);
+    ul.snr_db_x10    = loraPackTenths(ls.last_snr);
+    const float mhz  = lora_comms.currentFrequencyMHz();
+    const float khz  = (mhz - 900.0f) * 1000.0f;
+    ul.freq_khz_o900 = (khz < 0.0f) ? 0u
+                     : (khz > 65535.0f) ? 65535u
+                     : (uint16_t)(khz + 0.5f);
+    ul.sf            = lora_comms.currentSpreadingFactor();
+    ul.cmd           = cmd;
+    ul.flags         = flags;
+
+    uint8_t frame[MAX_FRAME];
+    size_t  frame_len = 0;
+    if (TR_I2C_Interface::packMessage(LORA_UPLINK_MSG,
+                                      (const uint8_t*)&ul, sizeof(ul),
+                                      frame, sizeof(frame), frame_len))
+    {
+        if (logger.enqueueFrame(frame, frame_len)) lora_uplink_logged++;
+    }
+}
+
 /// Enter RX mode between TX cycles and check for uplink commands
 static void serviceLoRaUplink()
 {
@@ -4259,6 +4303,11 @@ static void serviceLoRaUplink()
         if (ls.last_snr < min_snr)
         {
             lora_low_snr_drops++;
+            // Logged before the return.  These are the samples nearest the
+            // floor — dropping them from the record would bias the logged
+            // RSSI distribution upward exactly where the link is marginal,
+            // which is the regime the log exists to characterise.
+            logUplinkRx(ls, 0, LORA_UL_SNR_DROP);
             ESP_LOGW("LORA", "RX drop: SNR %.1f dB < %.1f dB floor (SF%u) "
                               "— likely noise-floor false positive",
                      (double)ls.last_snr, (double)min_snr,
@@ -4281,16 +4330,36 @@ static void serviceLoRaUplink()
                 uint8_t payload_len = rx_buf[5];
                 if (rx_len >= (size_t)(6 + payload_len))
                 {
+                    logUplinkRx(ls, cmd, LORA_UL_ACCEPTED);
                     processUplinkCommand(cmd, &rx_buf[6], payload_len);
                     lora_uplink_rx_count++;
                     last_uplink_rx_ms = millis();
                     if (hop_active_) hop_session_uplink_count++;
                 }
+                else
+                {
+                    // Header said payload_len but the frame is short — a
+                    // truncated decode, which is a real signal-quality data
+                    // point, not a nothing.
+                    logUplinkRx(ls, cmd, LORA_UL_MALFORMED);
+                }
             }
             else if (pkt_nid != network_id)
             {
                 lora_uplink_nid_drops++;   // #150: no more silent nid drops
+                logUplinkRx(ls, 0, LORA_UL_NID_DROP);
             }
+            else
+            {
+                // Our network, addressed to a different rocket.  Still a clean
+                // decode off the air, so its RSSI is as valid a path-loss
+                // sample as one addressed to us.
+                logUplinkRx(ls, 0, LORA_UL_NOT_FOR_US);
+            }
+        }
+        else
+        {
+            logUplinkRx(ls, 0, LORA_UL_MALFORMED);
         }
         // readPacket() internally re-enters RX mode after reading
     }
@@ -5146,7 +5215,7 @@ static void printStats()
             // logged= counts LORA_MSG records the flight-log ring accepted.
             // Expect it to track tx= once a session is open, and to stay at 0
             // on the pad with no session — see lora_tx_logged.
-            ESP_LOGI("LORA", "LoRa tx=%lu/%lu logged=%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu nid_drop=%lu rxmode=%c",
+            ESP_LOGI("LORA", "LoRa tx=%lu/%lu logged=%lu rx=%lu crc_fail=%lu low_snr=%lu isr=%lu uplink_rx=%lu ul_logged=%lu nid_drop=%lu rxmode=%c",
                           (unsigned long)ls.tx_ok,
                           (unsigned long)ls.tx_fail,
                           (unsigned long)lora_tx_logged,
@@ -5155,6 +5224,7 @@ static void printStats()
                           (unsigned long)lora_low_snr_drops,
                           (unsigned long)ls.isr_count,
                           (unsigned long)lora_uplink_rx_count,
+                          (unsigned long)lora_uplink_logged,
                           (unsigned long)lora_uplink_nid_drops,
                           ls.rx_mode ? 'Y' : 'N');
         }

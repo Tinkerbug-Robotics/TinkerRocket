@@ -55,6 +55,7 @@ CODE_TO_STRUCT = {
     0xA6: "POWERData",
     0xD1: "IIS2MDCData",
     0xF1: "LoRaData",
+    0xF9: "LoRaUplinkData",
 }
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)

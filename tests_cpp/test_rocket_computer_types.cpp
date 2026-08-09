@@ -29,6 +29,7 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(POWERData),      10u);
     EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
     EXPECT_EQ(sizeof(LoRaData),       65u);  // #191: +ENU vel +flags2, -derived Euler/speed
+    EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
 }
@@ -1436,6 +1437,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(GUIDANCE_POINT_PENDING),   MT(GUIDANCE_POINT_MSG),
         // #402: FC->OC slave TX-ring desync recovery trigger.
         MT(I2C_TX_RESYNC),
+        // OC-self-emitted uplink RX record — the rocket's only RF measurement.
+        MT(LORA_UPLINK_MSG),
     };
 #undef MT
 
@@ -1458,7 +1461,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 87 = 80 prior + guidance/fin config pair codes (were missing, #386 gap)
     //    + I2C_TX_RESYNC (#402) + IMU rate config pair (BLE cmd 67).
     // 89 = 87 + Drift-Cast guidance point pair (#435, BLE cmd 28).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 89u)
+    // 90 = 89 + LORA_UPLINK_MSG (OC-self-emitted uplink RSSI/SNR record).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 90u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

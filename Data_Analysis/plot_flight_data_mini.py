@@ -78,6 +78,7 @@ MSG_END_FLIGHT        = 0xA8
 MSG_IIS2MDC           = 0xD1  # new-PCB IIS2MDC magnetometer raw frame
 MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
+MSG_LORA_UPLINK       = 0xF9  # OC-self-emitted uplink RSSI/SNR record
 MSG_GUIDANCE_TELEM    = 0xCA  # GuidanceTelemData, ~10 Hz during guided coast
 
 MSG_NAMES = {
@@ -93,6 +94,7 @@ MSG_NAMES = {
     MSG_END_FLIGHT:       "EndFlight",
     MSG_LOG_BUFFER_STATS: "LogBufferStats",
     MSG_LORA:             "LoRa",
+    MSG_LORA_UPLINK:      "LoRaUplink",
     MSG_GUIDANCE_TELEM:   "Guidance",
 }
 
@@ -110,6 +112,7 @@ MSG_EXPECTED_LEN = {
     MSG_START_LOGGING:     None,  # variable / no payload
     MSG_END_FLIGHT:        None,
     MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
+    MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
     MSG_LORA:              65,  # sizeof(LoRaData) — #572: was a stale 49; sweep on struct-size changes (#227)
     MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }

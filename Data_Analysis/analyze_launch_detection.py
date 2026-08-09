@@ -37,6 +37,7 @@ MSG_POWER            = 0xA6
 MSG_START_LOGGING    = 0xA7
 MSG_END_FLIGHT       = 0xA8
 MSG_LORA             = 0xF1
+MSG_LORA_UPLINK      = 0xF9  # OC-self-emitted uplink RSSI/SNR record
 
 MSG_NAMES = {
     MSG_OUT_STATUS_QUERY: "OUT_STATUS_QUERY",
@@ -49,6 +50,7 @@ MSG_NAMES = {
     MSG_START_LOGGING:    "StartLogging",
     MSG_END_FLIGHT:       "EndFlight",
     MSG_LORA:             "LoRa",
+    MSG_LORA_UPLINK:      "LoRaUplink",
 }
 
 MSG_EXPECTED_LEN = {
@@ -61,6 +63,7 @@ MSG_EXPECTED_LEN = {
     MSG_POWER:            10,
     MSG_START_LOGGING:    None,
     MSG_END_FLIGHT:       None,
+    MSG_LORA_UPLINK:      13,   # sizeof(LoRaUplinkData)
     MSG_LORA:             65,   # sizeof(LoRaData) — #572: was a stale 49; sweep on struct-size changes (#227)
 }
 
