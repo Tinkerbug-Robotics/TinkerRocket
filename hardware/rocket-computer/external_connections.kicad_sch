@@ -12262,6 +12262,13 @@
 				)
 			)
 		)
+		(property "Mfr" "Samsung"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects (font (size 1.27 1.27)))
+		)
 		(property "Datasheet" ""
 			(at 222.885 34.29 0)
 			(hide yes)
@@ -12284,17 +12291,6 @@
 			)
 		)
 		(property "MPN" "CL05B103KB5NNNC"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
 			(at 0 0 0)
 			(hide yes)
 			(show_name no)
@@ -12362,6 +12358,13 @@
 				)
 			)
 		)
+		(property "Mfr" "Samsung"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects (font (size 1.27 1.27)))
+		)
 		(property "Datasheet" ""
 			(at 257.175 116.84 0)
 			(hide yes)
@@ -12384,17 +12387,6 @@
 			)
 		)
 		(property "MPN" "CL05B103KB5NNNC"
-			(at 0 0 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
 			(at 0 0 0)
 			(hide yes)
 			(show_name no)

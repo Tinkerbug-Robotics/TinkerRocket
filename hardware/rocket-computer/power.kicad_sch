@@ -15419,6 +15419,13 @@
 				)
 			)
 		)
+		(property "Mfr" "Samsung"
+			(at 0 0 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects (font (size 1.27 1.27)))
+		)
 		(property "Datasheet" ""
 			(at 217.805 148.59 0)
 			(hide yes)
@@ -15441,17 +15448,6 @@
 			)
 		)
 		(property "MPN" "CL05B103KB5NNNC"
-			(at -25.4 5.715 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
 			(at -25.4 5.715 0)
 			(hide yes)
 			(show_name no)
