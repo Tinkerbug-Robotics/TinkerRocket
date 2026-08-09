@@ -66,6 +66,10 @@ public object BleCommandId {
     public const val SET_ROCKET_ID: Int = 42       // [rid u8] 1..254
     public const val SET_FOCUS_ROCKET_BS: Int = 45 // [rid u8], 0 = auto (#390)
     public const val BS_LOGGING: Int = 46          // [bool] (#390)
+    // Phone GPS fix -> BS CSV as an EVENT row. The BS has no GNSS, so this is
+    // the only record of where the base station was, i.e. of the range.
+    // [lat_e7 i32][lon_e7 i32][alt_m i16][h_acc_m u8] = 11 B, little-endian.
+    public const val SET_PHONE_FIX_BS: Int = 47
 
     // cmd 50 is the canonical dual-namespace number (the checker's docstring
     // example): mag-cal start on a rocket link, relay envelope on a BS link.

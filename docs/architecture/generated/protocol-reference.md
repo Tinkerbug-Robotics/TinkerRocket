@@ -251,7 +251,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Base Station
 
-20 commands.
+21 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -273,6 +273,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 41 | `BLE_BS_CMD_SET_NETWORK_ID` | Set network_id — payload: [nid:1] |
 | 45 | `BLE_BS_CMD_SET_FOCUS_ROCKET` | #390: pin the radio focus to one rocket. Payload: [rid], 0 = back to auto (sticky first-heard). RAM-only on… |
 | 46 | `BLE_BS_CMD_SET_BS_LOGGING` | #390: BS-only CSV logging control for the app's base-station screen. Payload: [on]. Unlike legacy cmd 23 this… |
+| 47 | `BLE_BS_CMD_SET_PHONE_FIX` | Where the base station actually is. Logged, never acted on -- nothing in the BS behaviour depends on this, it… |
 | 50 | `BLE_BS_CMD_RELAY_TO_ROCKET` | Relay command to a specific rocket via LoRa uplink Payload: [target_rid:1][inner_cmd:1][inner_payload:0..33… |
 | 60 | `BLE_BS_CMD_FREQ_SCAN` | Frequency scan (base-station radio, pre-launch collision avoidance). Payload: [start_mhz f32][stop_mhz… |
 

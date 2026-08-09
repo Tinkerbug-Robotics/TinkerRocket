@@ -284,6 +284,16 @@ static constexpr uint8_t BLE_BS_CMD_SET_FOCUS_ROCKET  = 45;
 // #390: BS-only CSV logging toggle ([on]) — decoupled from the legacy
 // cmd 23, which also broadcasts a rocket-logging uplink.
 static constexpr uint8_t BLE_BS_CMD_SET_BS_LOGGING    = 46;
+// Phone GPS fix, pushed by the app so the CSV records where the base station
+// actually was.  The BS has no GNSS of its own -- the lat/lon columns in the
+// log are the ROCKET's relayed position -- so until now nothing anywhere
+// recorded the one number a range test is about: the distance between the two
+// ends.  The app computes and displays that distance live from the phone fix,
+// then throws it away; the 2026-08-08 Kaua'i test was reconstructed only
+// because the operator remembered the site.
+// Payload: [lat_e7 i32][lon_e7 i32][alt_m i16][h_acc_m u8] = 11 B.
+// 1e-7 deg matches GNSSData and is ~1 cm -- far finer than any phone fix.
+static constexpr uint8_t BLE_BS_CMD_SET_PHONE_FIX     = 47;
 static constexpr uint8_t BLE_BS_CMD_RELAY_TO_ROCKET   = 50;
 static constexpr uint8_t BLE_BS_CMD_FREQ_SCAN         = 60;
 
