@@ -3227,6 +3227,144 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:R-667995"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 20.32 10.16 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Value" "R-667995"
+				(at 20.32 7.62 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Footprint" "Footprints:R-667995_MIT"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+				)
+			)
+			(property "Datasheet" "R-667995"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+				)
+			)
+			(property "Description" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_locked" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "R-667995"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "R-667995_MIT R-667995_MIT-M R-667995_MIT-L"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "R-667995_0_1"
+				(polyline
+					(pts (xy -2.54 0) (xy -2.54 1.27))
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+				(polyline
+					(pts (xy 2.54 0) (xy 2.54 1.27))
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+				(polyline
+					(pts (xy -3.81 2.54) (xy 3.81 2.54))
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+				(polyline
+					(pts (xy 0 2.54) (xy 0 4.445))
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+				(polyline
+					(pts (xy -1.905 4.445) (xy 1.905 4.445))
+					(stroke (width 0.254) (type default))
+					(fill (type none))
+				)
+			)
+			(symbol "R-667995_1_1"
+				(pin passive line
+					(at -7.62 0 0)
+					(length 5.08)
+					(name "1" (effects (font (size 1.27 1.27))))
+					(number "1" (effects (font (size 1.27 1.27))))
+				)
+				(pin passive line
+					(at 7.62 0 180)
+					(length 5.08)
+					(name "2" (effects (font (size 1.27 1.27))))
+					(number "2" (effects (font (size 1.27 1.27))))
+				)
+			)
+		)
 		(symbol "Custom:KMR221GLFS"
 			(pin_names
 				(offset 1.016)
@@ -7992,12 +8130,6 @@
 		(uuid "021327f5-d6e1-47b4-8c53-361a8c974d43")
 	)
 	(junction
-		(at 70.485 160.655)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "088e71dc-cc71-43f5-b24c-c1e0e331e545")
-	)
-	(junction
 		(at 70.485 145.415)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -8038,12 +8170,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "2b5d113f-ac4f-4914-aea1-2f6e17398669")
-	)
-	(junction
-		(at 104.775 88.9)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "2eed4271-ef68-4aa7-a0e9-77cdf28b41fc")
 	)
 	(junction
 		(at 238.76 105.41)
@@ -8178,6 +8304,12 @@
 		(uuid "7fc4616b-6b48-4ffd-87a6-daf2b606ae98")
 	)
 	(junction
+		(at 85.09 154.305)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "87b09c78-2b18-4a59-b562-25015357f995")
+	)
+	(junction
 		(at 85.09 149.225)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -8232,6 +8364,18 @@
 		(uuid "b48ad183-ebaf-49f9-834b-9954c06a77d1")
 	)
 	(junction
+		(at 15.24 155.575)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "b89c916d-d42e-4c1f-ab3d-9ffdd5a3152f")
+	)
+	(junction
+		(at 15.24 145.415)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "bffc5365-94cb-4b41-aaa8-9aabff34d245")
+	)
+	(junction
 		(at 238.76 113.03)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -8272,12 +8416,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "e89709a1-e768-428f-9078-676d1b3d5cef")
-	)
-	(junction
-		(at 148.59 146.685)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "f0a5f32c-38d2-4f30-8c06-9e938c2525df")
 	)
 	(wire
 		(pts
@@ -8551,6 +8689,16 @@
 	)
 	(wire
 		(pts
+			(xy 85.09 154.305) (xy 85.09 160.655)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "43ed07e9-33ba-48c4-80e7-6a93b945674c")
+	)
+	(wire
+		(pts
 			(xy 233.045 155.575) (xy 233.045 156.21)
 		)
 		(stroke
@@ -8571,16 +8719,6 @@
 	)
 	(wire
 		(pts
-			(xy 70.485 160.655) (xy 77.47 160.655)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "49535aa7-b643-4da8-ba51-b3c35b4ba6a9")
-	)
-	(wire
-		(pts
 			(xy 260.35 43.18) (xy 263.525 43.18)
 		)
 		(stroke
@@ -8591,7 +8729,7 @@
 	)
 	(wire
 		(pts
-			(xy 104.775 88.9) (xy 104.775 93.98)
+			(xy 104.775 83.82) (xy 104.775 93.98)
 		)
 		(stroke
 			(width 0)
@@ -8721,16 +8859,6 @@
 	)
 	(wire
 		(pts
-			(xy 120.65 154.305) (xy 148.59 154.305)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "67a9e877-4180-44df-ba19-62f050990807")
-	)
-	(wire
-		(pts
 			(xy 139.065 63.5) (xy 162.56 63.5)
 		)
 		(stroke
@@ -8781,7 +8909,7 @@
 	)
 	(wire
 		(pts
-			(xy 70.485 155.575) (xy 70.485 160.655)
+			(xy 70.485 155.575) (xy 70.485 165.735)
 		)
 		(stroke
 			(width 0)
@@ -8948,16 +9076,6 @@
 			(type default)
 		)
 		(uuid "907912f4-9eeb-457f-8807-023b49ab0e5a")
-	)
-	(wire
-		(pts
-			(xy 104.775 83.82) (xy 104.775 88.9)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "911bd9e3-8fc2-4e3e-842c-80cf015293d5")
 	)
 	(wire
 		(pts
@@ -9221,26 +9339,6 @@
 	)
 	(wire
 		(pts
-			(xy 114.935 90.17) (xy 114.935 88.9)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c5fa35e7-2052-4b93-8f82-96687afa5747")
-	)
-	(wire
-		(pts
-			(xy 70.485 160.655) (xy 70.485 165.735)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c995422f-ab85-4787-bec9-e9324d0993c5")
-	)
-	(wire
-		(pts
 			(xy 50.8 42.545) (xy 50.8 31.115)
 		)
 		(stroke
@@ -9251,7 +9349,7 @@
 	)
 	(wire
 		(pts
-			(xy 146.685 146.685) (xy 148.59 146.685)
+			(xy 146.685 146.685) (xy 158.115 146.685)
 		)
 		(stroke
 			(width 0)
@@ -9268,16 +9366,6 @@
 			(type default)
 		)
 		(uuid "cd5b20fb-9f33-4684-b036-ec78bff851b5")
-	)
-	(wire
-		(pts
-			(xy 148.59 146.685) (xy 158.115 146.685)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "cfbb2a77-538b-46bf-9a11-fc02ba3db447")
 	)
 	(wire
 		(pts
@@ -14735,84 +14823,6 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 114.935 90.17 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "436f47d1-6f99-40bf-85f7-ed2614d2472d")
-		(property "Reference" "#PWR0950"
-			(at 114.935 96.52 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 116.84 93.98 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 114.935 90.17 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 114.935 90.17 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 114.935 90.17 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "481f1265-dfb5-45bf-97b2-46f4ed7b7765")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "#PWR0950")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
 		(at 228.6 130.81 0)
 		(unit 1)
 		(body_style 1)
@@ -16097,7 +16107,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:KMR221GLFS")
+		(lib_id "Custom:R-667995")
 		(at 251.46 66.04 0)
 		(unit 1)
 		(body_style 1)
@@ -16118,7 +16128,7 @@
 				)
 			)
 		)
-		(property "Value" "KMR221GLFS"
+		(property "Value" "R-667995"
 			(at 251.6505 61.595 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16128,7 +16138,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:SW_KMR221GLFS"
+		(property "Footprint" "Footprints:R-667995_MIT"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16151,7 +16161,7 @@
 				)
 			)
 		)
-		(property "Description" "Switch Tactile N.O. SPST Button Gull Wing 0.05A 32VDC 1VA 200000Cycles 2N SMD Automotive T/R"
+		(property "Description" "Tactile switch, SPST-NO, top actuated, SMD, 0.02 A 15 VDC, 3.0 x 2.0 mm, 163 gf, 500k cycles, IPX8"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16163,7 +16173,7 @@
 				(justify bottom)
 			)
 		)
-		(property "DigiKey_Part_Number" "108-KMR221GLFSCT-ND"
+		(property "DigiKey_Part_Number" ""
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16175,7 +16185,7 @@
 				(justify bottom)
 			)
 		)
-		(property "SnapEDA_Link" "https://www.snapeda.com/parts/KMR221G%20LFS/C%2526K/view-part/?ref=snap"
+		(property "SnapEDA_Link" ""
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16199,7 +16209,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Check_prices" "https://www.snapeda.com/parts/KMR221G%20LFS/C%2526K/view-part/?ref=eda"
+		(property "Check_prices" ""
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16211,7 +16221,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MF" "CK"
+		(property "MF" "Mitsumi Electric"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16223,7 +16233,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MP" "KMR221G LFS"
+		(property "MP" "R-667995"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16235,7 +16245,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MANUFACTURER" "CnK"
+		(property "MANUFACTURER" "Mitsumi Electric"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16247,7 +16257,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MPN" "KMR221GLFS"
+		(property "MPN" "R-667995"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16258,7 +16268,7 @@
 				)
 			)
 		)
-		(property "Mfr" "C&K"
+		(property "Mfr" "Mitsumi Electric"
 			(at 251.46 66.04 0)
 			(hide yes)
 			(show_name no)
@@ -16268,21 +16278,12 @@
 					(size 1.27 1.27)
 				)
 			)
-		)
-		(pin "4"
-			(uuid "f7eb4cf5-04a9-46d3-9041-7fc77afed5a2")
-		)
-		(pin "5"
-			(uuid "d48779dc-270a-493f-aece-c4520e9ab215")
 		)
 		(pin "1"
 			(uuid "881f82a7-6088-4552-8a82-9ee2bf84e885")
 		)
 		(pin "2"
 			(uuid "6a80805f-a514-4849-bd5e-b8db9dc5ed37")
-		)
-		(pin "3"
-			(uuid "f14e8fdc-a2c1-43cd-b038-b87a994055ad")
 		)
 		(instances
 			(project "lora-daughterboard"
@@ -20368,108 +20369,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:R_US")
-		(at 81.28 160.655 270)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "a25ab462-aabe-4c66-af37-c8c372681e49")
-		(property "Reference" "R8"
-			(at 81.28 154.305 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "7.5 k"
-			(at 81.28 156.845 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 81.026 161.671 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 81.28 160.655 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 81.28 160.655 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-077K5L"
-			(at 81.28 160.655 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 81.28 160.655 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "4a90fef7-e1a8-44d4-9af3-197b7182addd")
-		)
-		(pin "2"
-			(uuid "efab0257-78a4-471c-86bd-82c0e1c030cb")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "R8")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:GND")
 		(at 259.08 68.58 0)
 		(unit 1)
@@ -22320,134 +22219,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:SMF10A")
-		(at 109.855 88.9 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "dbbc3749-f65d-4634-9f24-9485c1aecbbf")
-		(property "Reference" "CR5"
-			(at 109.855 82.55 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "SMF10A"
-			(at 109.855 85.09 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:SODFL3617X108N"
-			(at 109.855 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 109.855 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W peak pulse, SOD-123FL"
-			(at 109.855 88.9 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "SMF10A"
-			(at 109.855 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "PTTC"
-			(at 109.855 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Dist" "LCSC"
-			(at 109.855 88.9 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Dist_PN" "C5444308"
-			(at 109.855 88.9 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Notes" "Clamp must stay below the TPS62913 VIN abs max of 18 V. SMF12A clamps 19.9 V and is NOT a substitute. Standoff must clear the 8.4 V full-charge 2S pack, so 10 V is the only SMF step that fits both ends."
-			(at 109.855 88.9 0)
-			(hide yes)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "A"
-			(uuid "d7f773db-4dcf-437d-b21a-3826608be3e1")
-		)
-		(pin "C"
-			(uuid "55762ad9-f0c4-4906-a0d7-1d149103e562")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "CR5")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:C")
 		(at 233.045 24.13 0)
 		(unit 1)
@@ -22712,6 +22483,142 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "#PWR014")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Custom:SMF10A")
+		(at 15.24 150.495 90)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "e1bc5439-c9b8-40bb-b9f1-a25b1ae15bcf")
+		(property "Reference" "CR6"
+			(at 18.26 149.2249 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "SMF10A"
+			(at 18.26 151.7649 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" "Footprints:SODFL3617X108N"
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "TVS diode, unidirectional, 10 V standoff, 11.1 V breakdown min, 17 V clamp at 11.8 A Ipp, 200 W peak pulse, SOD-123FL"
+			(at 3.175 146.685 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "SMF10A"
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "PTTC"
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist" "LCSC"
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist_PN" "C5444308"
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Notes" "Clamp must stay below the TPS62913 VIN abs max of 18 V. SMF12A clamps 19.9 V and is NOT a substitute. Standoff must clear the 8.4 V full-charge 2S pack, so 10 V is the only SMF step that fits both ends."
+			(at 15.24 150.495 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "A"
+			(uuid "9836d0b7-0866-4c52-b110-ac60749fa137")
+		)
+		(pin "C"
+			(uuid "27b3382c-bd85-4e35-83a0-7906469229f7")
+		)
+		(instances
+			(project "lora-daughterboard"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
+					(reference "CR6")
 					(unit 1)
 				)
 			)
@@ -23021,110 +22928,6 @@
 			(project "lora-daughterboard"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
 					(reference "FID2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 148.59 150.495 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "e57cdcd4-af44-402a-9b91-e594e31b2966")
-		(property "Reference" "R4"
-			(at 151.13 149.2249 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "10 k"
-			(at 151.13 151.7649 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 147.574 150.241 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 148.59 150.495 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 148.59 150.495 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 148.59 150.495 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 148.59 150.495 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "36ff1b26-0621-4e97-9ca1-bb051c9dec63")
-		)
-		(pin "2"
-			(uuid "3ad36934-6c8b-417b-8367-4893fdaae009")
-		)
-		(instances
-			(project "lora-daughterboard"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(reference "R4")
 					(unit 1)
 				)
 			)
