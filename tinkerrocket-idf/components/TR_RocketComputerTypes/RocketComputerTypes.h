@@ -1973,6 +1973,61 @@ struct __attribute__((packed)) OtaRelayStatusData {
 
 static constexpr uint8_t LORA_MSG            = 0xF1;
 
+// --- LoRa uplink RX log record (LORA_UPLINK_MSG payload) --------------------
+// OC self-emitted, one per uplink packet the radio hands up, logged straight
+// into the flight log.
+//
+// This is the only rocket-side measurement of link quality that exists.  A
+// transmitter cannot measure its own downlink, so LoRaData (0xF1) carries no
+// RSSI — it gives per-packet LOSS via `seq`, not signal strength.  What the
+// rocket CAN measure is the packets coming the other way: the base station's
+// ~30 s heartbeat plus any operator command.  Channel reciprocity makes the
+// uplink RSSI a good proxy for the downlink path, so a flight whose base
+// station log is lost still yields a path-loss history.
+//
+// Every decode is logged, INCLUDING the ones thrown away.  The low-SNR drops
+// are the marginal-link samples — the packets that arrived too weak to trust
+// are exactly the evidence you want when asking how close to the floor the
+// link was running, and counting them without recording their RSSI throws
+// away the interesting half of the distribution.
+typedef struct __attribute__((packed))
+{
+    uint32_t time_us;       // OC esp_timer at RX.  Note this is the OC clock,
+                            // NOT the FC time_us the sensor records carry;
+                            // the record's position in the log stream is what
+                            // ties it to flight time.  Kept anyway because it
+                            // shares a clock with LOG_BUFFER_STATS_MSG and is
+                            // what lines these up against the base station.
+    int16_t  rssi_dbm_x10;  // dBm * 10
+    int16_t  snr_db_x10;    // dB * 10
+    uint16_t freq_khz_o900; // (MHz - 900) * 1000; covers the whole 902-928 band
+    uint8_t  sf;            // spreading factor in use at RX (rendezvous differs)
+    uint8_t  cmd;           // uplink command byte, 0 when not parsed that far
+    uint8_t  flags;         // LORA_UL_* below
+} LoRaUplinkData;
+static_assert(sizeof(LoRaUplinkData) == 13, "LoRaUplinkData must be 13 bytes");
+
+static constexpr uint8_t LORA_UPLINK_MSG     = 0xF9;
+
+// LoRaUplinkData.flags — the disposition of the decode.  Exactly one of these
+// is set; they are separate bits rather than an enum so a reader can mask for
+// "anything that reached us" (all of them) vs "acted on" (ACCEPTED).
+static constexpr uint8_t LORA_UL_ACCEPTED   = (1u << 0);  // passed every filter, command dispatched
+static constexpr uint8_t LORA_UL_SNR_DROP   = (1u << 1);  // under loraMinValidSnrDb for the current SF
+static constexpr uint8_t LORA_UL_NID_DROP   = (1u << 2);  // wrong network_id
+static constexpr uint8_t LORA_UL_NOT_FOR_US = (1u << 3);  // our network, another rocket_id
+static constexpr uint8_t LORA_UL_MALFORMED  = (1u << 4);  // bad sync byte or short frame
+
+// 0.1-unit fixed point, saturating.  NAN and out-of-range readings clamp
+// rather than wrap: a garbage RSSI that wraps to a plausible value would be
+// indistinguishable from a real one in the log.
+static inline int16_t loraPackTenths(float v)
+{
+    if (!(v > -3276.7f)) return -32767;   // also catches NAN
+    if (v > 3276.7f)     return 32767;
+    return (int16_t)(v * 10.0f + (v >= 0.0f ? 0.5f : -0.5f));
+}
+
 // Camera types
 static constexpr uint8_t CAM_TYPE_NONE   = 0;
 static constexpr uint8_t CAM_TYPE_GOPRO  = 1;

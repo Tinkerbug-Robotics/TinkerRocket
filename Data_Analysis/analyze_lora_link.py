@@ -38,8 +38,16 @@ from collections import Counter
 
 PREAMBLE = b'\xAA\x55\xAA\x55'
 MSG_LORA = 0xF1
+MSG_LORA_UPLINK = 0xF9        # OC-self-emitted uplink RX record
 MSG_ISM6HG256 = 0xA2          # carries FC time_us; dates neighbouring records
 SIZE_OF_LORA_DATA = 65
+SIZE_OF_LORA_UPLINK = 13
+
+# LoRaUplinkData: time_us, rssi*10, snr*10, (MHz-900)*1000, sf, cmd, flags
+FMT_LORA_UPLINK = '<IhhHBBB'
+UL_FLAGS = [(1 << 0, 'accepted'), (1 << 1, 'snr_drop'), (1 << 2, 'nid_drop'),
+            (1 << 3, 'not_for_us'), (1 << 4, 'malformed')]
+LORA_CMD_HEARTBEAT = 0xFE
 
 # LoRaData prefix — the routing header plus the two fields worth reporting.
 # Offsets are pinned by static_asserts in RocketComputerTypes.h.
@@ -76,10 +84,19 @@ def read_rocket_bin(path):
     interval (~256 us), which beats a second clock domain.
     """
     rows, imu_frames, t_last = [], 0, None
+    uplinks = []
     for mtype, payload in iter_frames(path):
         if mtype == MSG_ISM6HG256 and len(payload) >= 4:
             t_last = struct.unpack_from('<I', payload, 0)[0] / 1e6
             imu_frames += 1
+        elif mtype == MSG_LORA_UPLINK:
+            if len(payload) != SIZE_OF_LORA_UPLINK:
+                continue
+            tus, rssi, snr, fkhz, sf, cmd, fl = struct.unpack(FMT_LORA_UPLINK, payload)
+            uplinks.append(dict(t_s=t_last, oc_t_s=tus / 1e6, rssi=rssi / 10.0,
+                                snr=snr / 10.0, freq_mhz=900.0 + fkhz / 1000.0,
+                                sf=sf, cmd=cmd, flags=fl,
+                                disp=next((n for b, n in UL_FLAGS if fl & b), 'unknown')))
         elif mtype == MSG_LORA:
             if len(payload) != SIZE_OF_LORA_DATA:
                 print(f"  ! 0xF1 record with {len(payload)} B payload, expected "
@@ -91,7 +108,7 @@ def read_rocket_bin(path):
                              next_ch=nch, num_sats=sats & ~LORA_LOGGING_BIT,
                              logging=bool(sats & LORA_LOGGING_BIT),
                              pdop=pdop / 10.0))
-    return rows, imu_frames
+    return rows, imu_frames, uplinks
 
 
 def read_bs_csv(path):
@@ -137,7 +154,7 @@ def main():
     tx, rx = [], []
 
     if args.binpath:
-        tx, imu = read_rocket_bin(args.binpath)
+        tx, imu, ul = read_rocket_bin(args.binpath)
         print(f"rocket log  {args.binpath}")
         if not tx:
             print(f"  no 0xF1 LORA_MSG records ({imu} IMU frames present).")
@@ -156,6 +173,26 @@ def main():
                   + ("   (0xFF=255 => not hopping, fixed channel)" if 255 in hop else ""))
             if tx[0]['t_s'] is not None and tx[-1]['t_s'] is not None:
                 print(f"  spans FC t = {tx[0]['t_s']:.3f}..{tx[-1]['t_s']:.3f} s")
+
+        # Uplink RX (0xF9) — the rocket's own measurement of the RF path.
+        if ul:
+            acc = [u for u in ul if u['disp'] == 'accepted']
+            print(f"\n  uplink decodes heard by the rocket: {len(ul)}")
+            by = {}
+            for u in ul:
+                by[u['disp']] = by.get(u['disp'], 0) + 1
+            print(f"    disposition: {by}")
+            print(describe('    rssi (dBm)', [u['rssi'] for u in ul]))
+            print(describe('    snr  (dB) ', [u['snr'] for u in ul]))
+            if acc and len(acc) != len(ul):
+                print(describe('    rssi, accepted only', [u['rssi'] for u in acc]))
+            hb = sum(1 for u in ul if u['cmd'] == LORA_CMD_HEARTBEAT)
+            print(f"    {hb} were base-station heartbeats (cmd 0xFE)")
+            sfs = sorted({u['sf'] for u in ul}); fs = sorted({round(u['freq_mhz'], 3) for u in ul})
+            print(f"    SF {sfs}   freq {fs} MHz")
+        else:
+            print("  no 0xF9 uplink records — the rocket heard nothing from the "
+                  "base station, or predates uplink RX logging")
 
     if args.bspath:
         rx = read_bs_csv(args.bspath)
