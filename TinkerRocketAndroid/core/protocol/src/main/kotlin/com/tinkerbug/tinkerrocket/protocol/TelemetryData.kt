@@ -154,6 +154,26 @@ public data class TelemetryData(
     // valid, low-priority tail fields absent by design.
     val fieldsTrimmed: Boolean = false,
 ) {
+    /**
+     * iOS `socDisplay` twin.  Clamped to 0..100 for display only — the stored
+     * value and the CSV keep whatever came off the wire.  SOC is packed as an
+     * i16 spanning -25..125% for headroom, so an exact 0% round-trips to
+     * -0.00077 and "%.1f%%" prints it as "-0.0%", which is what a rocket
+     * running off USB shows on every line.  Em dash for absent, as elsewhere
+     * on this dashboard (iOS says "N/A" here).
+     */
+    public val socDisplay: String
+        get() = soc?.let {
+            // The `+ 0f` is what actually kills "-0.0%", and it is not
+            // redundant with coerceIn: the OC prints SOC to one decimal, so an
+            // exact 0% arrives as the literal -0.0, and -0.0 == 0.0 means
+            // coerceIn considers it already in range and hands it back
+            // untouched.  Adding positive zero is the IEEE way to drop the
+            // sign.  coerceIn still earns its place for a genuinely
+            // out-of-range value.
+            String.format(java.util.Locale.ROOT, "%.1f%%", it.coerceIn(0f, 100f) + 0f)
+        } ?: "—"
+
     // ── Telemetry freshness (#95) ─────────────────────────────────────────
     public enum class DataStatus(public val raw: Int) {
         LIVE(0), STALE(1), SYNCING(2);

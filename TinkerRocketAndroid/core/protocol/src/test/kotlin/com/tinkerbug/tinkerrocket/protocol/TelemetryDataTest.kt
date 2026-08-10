@@ -476,4 +476,21 @@ class TelemetryDataTest {
         assertEquals(IMUOrientationMode.UNKNOWN, zero.relayedOrientationMode)
         assertEquals("", zero.relayedOrientationName)
     }
+
+    @Test
+    fun `soc display never shows a negative percent`() {
+        // A rocket on USB sits below the 2S curve, so the OC clamps SOC to 0
+        // before packing.  The i16 spans -25..125% for headroom, so an exact
+        // 0% comes back as -0.00077 and printed as "-0.0%" on the dashboard.
+        // The one that actually shipped: the OC prints SOC to one decimal,
+        // so an exact 0% arrives as the literal -0.0, which is == 0.0 and so
+        // survives any clamp untouched.
+        assertEquals("0.0%", TelemetryData(soc = -0.0f).socDisplay)
+        assertEquals("0.0%", TelemetryData(soc = -0.00077f).socDisplay)
+        assertEquals("0.0%", TelemetryData(soc = -25f).socDisplay)
+        assertEquals("100.0%", TelemetryData(soc = 125f).socDisplay)
+        // In-range values are untouched, and absent stays absent.
+        assertEquals("42.5%", TelemetryData(soc = 42.5f).socDisplay)
+        assertEquals("\u2014", TelemetryData(soc = null).socDisplay)
+    }
 }

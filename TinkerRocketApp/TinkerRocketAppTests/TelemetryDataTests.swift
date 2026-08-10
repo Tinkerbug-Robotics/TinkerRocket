@@ -344,4 +344,26 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(zero.relayedOrientationMode, .unknown)
         XCTAssertEqual(zero.relayedOrientationName, "")
     }
+
+    func testSocDisplayNeverShowsANegativePercent() {
+        // A rocket on USB sits below the 2S curve, so the OC clamps SOC to 0
+        // before packing. The i16 spans -25...125% for headroom, so an exact
+        // 0% comes back as -0.00077 and printed as "-0.0%" on the dashboard.
+        func display(_ soc: Float?) -> String {
+            var t = TelemetryData()
+            t.soc = soc
+            return t.socDisplay
+        }
+
+        // The one that actually shipped: the OC prints SOC to one decimal,
+        // so an exact 0% arrives as the literal -0.0, which is == 0 and so
+        // survives any clamp untouched.
+        XCTAssertEqual(display(-0.0), "0.0%")
+        XCTAssertEqual(display(-0.00077), "0.0%")
+        XCTAssertEqual(display(-25), "0.0%")
+        XCTAssertEqual(display(125), "100.0%")
+        // In-range values are untouched, and absent stays absent.
+        XCTAssertEqual(display(42.5), "42.5%")
+        XCTAssertEqual(display(nil), "N/A")
+    }
 }
