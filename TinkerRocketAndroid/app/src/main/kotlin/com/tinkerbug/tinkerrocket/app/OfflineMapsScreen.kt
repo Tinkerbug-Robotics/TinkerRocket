@@ -100,9 +100,16 @@ fun MapTab(container: AppContainer, session: DeviceSession?) {
         "driftcast" -> DriftCastScreen(container = container, onBack = { route = "map" })
         else -> SaveAreaScreen(
             container = container,
+            // Rocket, else the PHONE, else the continental-US centroid.
+            // Without the phone step this opened in Kansas whenever the
+            // rocket had no fix — which is every time you save an area
+            // before flying, i.e. always. You save imagery for where you
+            // are, and the phone knows where that is.
             initialCenter = session?.lastValidRocketFix?.value
                 ?.let { LatLng(it.latitude, it.longitude) }
-                ?: LatLng(39.8283, -98.5795), // continental-US fallback
+                ?: container.phoneLocation.location.value
+                    ?.let { LatLng(it.lat, it.lon) }
+                ?: LatLng(39.8283, -98.5795),
             onDone = { route = "offline" },
         )
     }
