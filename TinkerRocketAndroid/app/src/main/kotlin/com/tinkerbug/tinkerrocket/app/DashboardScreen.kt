@@ -313,10 +313,13 @@ fun DashboardScreen(
             // the newest window expires so the spinner swaps back to a badge.
             var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
             LaunchedEffect(contPendingUntil) {
-                nowMs = System.currentTimeMillis()
-                while (contPendingUntil.values.any { it > System.currentTimeMillis() }) {
-                    delay(150)
+                // The state and the loop condition must read the SAME sample —
+                // sampling twice lets a deadline fall between them and strands
+                // the spinner on forever (nothing rewrites nowMs after exit).
+                while (true) {
                     nowMs = System.currentTimeMillis()
+                    if (contPendingUntil.values.none { it > nowMs }) break
+                    delay(150)
                 }
             }
             val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
@@ -865,10 +868,18 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
     }
 }
 
-/** Binary-unit byte formatting to match iOS ByteCountFormatter(.binary). */
-private fun fmtBytes(bytes: Long): String = when {
-    bytes >= 1L shl 30 -> String.format(Locale.ROOT, "%.1f GB", bytes / 1073741824.0)
-    else -> String.format(Locale.ROOT, "%.0f MB", bytes / 1048576.0)
+/**
+ * Binary-unit byte formatting to match iOS `ByteCountFormatter` with
+ * `countStyle = .binary` and `[.useMB, .useGB]`: MB to one fraction digit,
+ * GB to two, trailing zeros trimmed ("305.2 MB", "1.42 GB", "1 GB").
+ */
+private fun fmtBytes(bytes: Long): String {
+    val (value, unit, decimals) =
+        if (bytes >= 1L shl 30) Triple(bytes / 1073741824.0, "GB", 2)
+        else Triple(bytes / 1048576.0, "MB", 1)
+    val text = String.format(Locale.ROOT, "%.${decimals}f", value)
+        .trimEnd('0').trimEnd('.')
+    return "$text $unit"
 }
 
 /**

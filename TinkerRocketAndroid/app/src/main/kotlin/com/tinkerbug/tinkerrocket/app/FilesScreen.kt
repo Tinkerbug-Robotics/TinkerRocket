@@ -273,10 +273,13 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                 },
                 confirmButton = {
                     TextButton(onClick = {
+                        // No refetch: deleteFiles drops the row optimistically,
+                        // so the user stays on the page they were reading (iOS
+                        // resyncs only after a BULK delete, which can empty the
+                        // current page).
                         session.deleteFiles(listOf(doomed.name))
                         status = "Deleted ${displayTitle(doomed)}"
                         fileToDelete = null
-                        session.requestFileList(0)
                     }) { Text("Delete") }
                 },
                 dismissButton = {

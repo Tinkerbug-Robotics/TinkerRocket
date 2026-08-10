@@ -14,6 +14,7 @@ import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.ImuOrientMsg
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
 import com.tinkerbug.tinkerrocket.protocol.OtaStatusUpdate
+import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketStorageStats
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
@@ -936,10 +937,30 @@ public class DeviceSession(
      * [rocketConfig] so the dashboard pyro tiles update live — the firmware
      * does NOT re-send config_pyro after a pyro-config write, only on the
      * next connect/readback.
+     *
+     * Mirrors the SAME four channels the push carries, and only when a
+     * readback already exists (iOS `if var cfg = device.rocketConfig`):
+     * fabricating a config here would render the un-pushed fields as
+     * device-reported truth when the device has reported nothing yet.
      */
-    public fun mirrorPyroConfig(mutate: (RocketConfig) -> RocketConfig) {
+    public fun mirrorPyroConfig(channels: List<PyroChannelConfig>) {
+        if (channels.size != 4) return
         scope.launch {
-            _rocketConfig.value = mutate(_rocketConfig.value ?: RocketConfig())
+            val cfg = _rocketConfig.value ?: return@launch
+            _rocketConfig.value = cfg.copy(
+                pyro1Enabled = channels[0].enabled,
+                pyro1TriggerMode = channels[0].mode,
+                pyro1TriggerValue = channels[0].value,
+                pyro2Enabled = channels[1].enabled,
+                pyro2TriggerMode = channels[1].mode,
+                pyro2TriggerValue = channels[1].value,
+                pyro3Enabled = channels[2].enabled,
+                pyro3TriggerMode = channels[2].mode,
+                pyro3TriggerValue = channels[2].value,
+                pyro4Enabled = channels[3].enabled,
+                pyro4TriggerMode = channels[3].mode,
+                pyro4TriggerValue = channels[3].value,
+            )
         }
     }
 

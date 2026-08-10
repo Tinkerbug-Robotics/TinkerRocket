@@ -177,15 +177,33 @@ class DeviceSessionTest {
     }
 
     @Test
-    fun mirrorPyroConfig_foldsIntoRocketConfigWithoutReadback() = runTest {
+    fun mirrorPyroConfig_appliesAllFourChannels_onlyOverAReadback() = runTest {
         val h = startedSession { configPyroJson = null; configJson = null }
         runCurrent()
-        // No readback arrived — the mirror starts from a default RocketConfig
-        // (iOS applyPyroConfig mirrors into `rocketConfig ?? RocketConfig()`).
-        h.session.mirrorPyroConfig { it.copy(pyro2Enabled = true, pyro2TriggerValue = 42f) }
+        val channels = List(4) { i ->
+            com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig(
+                enabled = i == 1, mode = 1, value = 42f,
+            )
+        }
+
+        // No readback yet: the mirror must NOT fabricate a config, or the
+        // dashboard would render defaults as device-reported truth (iOS
+        // mirrors only inside `if var cfg = device.rocketConfig`).
+        h.session.mirrorPyroConfig(channels)
         runCurrent()
-        assertEquals(true, h.session.rocketConfig.value?.pyro2Enabled)
-        assertEquals(42f, h.session.rocketConfig.value?.pyro2TriggerValue)
+        assertNull(h.session.rocketConfig.value)
+
+        // Once a readback exists, the mirror lands — all four channels, the
+        // same payload cmd 34 carried.
+        h.fw.emitTelemetryJson("""{"type":"config_pyro","p1e":true,"p1v":1.0}""")
+        runCurrent()
+        h.session.mirrorPyroConfig(channels)
+        runCurrent()
+        val cfg = assertNotNull(h.session.rocketConfig.value)
+        assertFalse(cfg.pyro1Enabled)            // the readback's true, overwritten
+        assertTrue(cfg.pyro2Enabled)
+        assertEquals(42f, cfg.pyro4TriggerValue)
+        assertEquals(1, cfg.pyro3TriggerMode)
     }
 
     // ── Identity readback ────────────────────────────────────────────────

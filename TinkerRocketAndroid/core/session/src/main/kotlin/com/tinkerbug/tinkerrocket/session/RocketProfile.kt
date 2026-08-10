@@ -129,6 +129,12 @@ public data class RocketProfile(
         /** Standard hobby servo: 120° across a 1000 µs span. */
         public const val STANDARD_FIN_DEG_PER_US: Float = 120.0f / 1000.0f
 
+        /** `IMU_ORIENT_AUTO` (RocketComputerTypes.h): pad auto-detect. */
+        public const val IMU_ORIENT_AUTO: Int = 0xFF
+
+        /** Whitelisted ISM6HG256 log rates; 0 = the dynamic 4k→1k schedule. */
+        public val IMU_RATES_HZ: List<Int> = listOf(0, 960, 1920, 3840)
+
         public fun standardFinTravelDeg(minUs: Int, maxUs: Int): Float =
             (maxUs - minUs) * STANDARD_FIN_DEG_PER_US
 
@@ -339,9 +345,17 @@ public object RocketProfileCodec {
             pnKpPos = o.float("pnKpPos") ?: d.pnKpPos,
             pnKdVel = o.float("pnKdVel") ?: d.pnKdVel,
             pnGuidanceLaw = o.int("pnGuidanceLaw") ?: d.pnGuidanceLaw,
-            cameraType = o.int("cameraType") ?: d.cameraType,
-            imuOrientSetting = o.int("imuOrientSetting") ?: d.imuOrientSetting,
-            imuRateHz = o.int("imuRateHz") ?: d.imuRateHz,
+            // Normalize enum-ish ints on load.  Older builds edited these as
+            // free-typed numbers, so a stored value can sit outside the range
+            // the firmware defines; the pickers that replaced those fields
+            // would then SHOW a valid choice while the syncer pushed the
+            // stored one.  Clamping here fixes display and wire together
+            // (iOS clamps on write via UInt8(clamping:)).
+            cameraType = (o.int("cameraType") ?: d.cameraType).coerceIn(0, 2),
+            imuOrientSetting = (o.int("imuOrientSetting") ?: d.imuOrientSetting)
+                .let { if (it == RocketProfile.IMU_ORIENT_AUTO || it in 0..23) it else 0 },
+            imuRateHz = (o.int("imuRateHz") ?: d.imuRateHz)
+                .let { if (it in RocketProfile.IMU_RATES_HZ) it else d.imuRateHz },
             servoBias1 = o.int("servoBias1") ?: d.servoBias1,
             servoBias2 = o.int("servoBias2") ?: d.servoBias2,
             servoBias3 = o.int("servoBias3") ?: d.servoBias3,
@@ -373,16 +387,18 @@ public object RocketProfileCodec {
                 )
             } ?: d.rollWaypoints,
             pyro1Enabled = o.bool("pyro1Enabled") ?: d.pyro1Enabled,
-            pyro1TriggerMode = o.int("pyro1TriggerMode") ?: d.pyro1TriggerMode,
+            // Same normalization: the FC matches trigger mode with ==, so an
+            // out-of-range mode is a channel that silently never fires.
+            pyro1TriggerMode = (o.int("pyro1TriggerMode") ?: d.pyro1TriggerMode).coerceIn(0, 1),
             pyro1TriggerValue = o.float("pyro1TriggerValue") ?: d.pyro1TriggerValue,
             pyro2Enabled = o.bool("pyro2Enabled") ?: d.pyro2Enabled,
-            pyro2TriggerMode = o.int("pyro2TriggerMode") ?: d.pyro2TriggerMode,
+            pyro2TriggerMode = (o.int("pyro2TriggerMode") ?: d.pyro2TriggerMode).coerceIn(0, 1),
             pyro2TriggerValue = o.float("pyro2TriggerValue") ?: d.pyro2TriggerValue,
             pyro3Enabled = o.bool("pyro3Enabled") ?: d.pyro3Enabled,
-            pyro3TriggerMode = o.int("pyro3TriggerMode") ?: d.pyro3TriggerMode,
+            pyro3TriggerMode = (o.int("pyro3TriggerMode") ?: d.pyro3TriggerMode).coerceIn(0, 1),
             pyro3TriggerValue = o.float("pyro3TriggerValue") ?: d.pyro3TriggerValue,
             pyro4Enabled = o.bool("pyro4Enabled") ?: d.pyro4Enabled,
-            pyro4TriggerMode = o.int("pyro4TriggerMode") ?: d.pyro4TriggerMode,
+            pyro4TriggerMode = (o.int("pyro4TriggerMode") ?: d.pyro4TriggerMode).coerceIn(0, 1),
             pyro4TriggerValue = o.float("pyro4TriggerValue") ?: d.pyro4TriggerValue,
             drogueRateFps = o.dbl("drogueRateFps") ?: d.drogueRateFps,
             mainRateFps = o.dbl("mainRateFps") ?: d.mainRateFps,

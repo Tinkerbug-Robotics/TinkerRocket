@@ -253,7 +253,7 @@ fun SettingsScreen(
                 )
             } else {
                 Caption(
-                    "Detects the nose axis from gravity on the pad. It can't observe fin " +
+                    "Detects the nose axis from gravity on the pad. It can’t observe fin " +
                         "clocking, so this is fine only for non-controlled flights — not " +
                         "roll or guidance.",
                 )
@@ -484,60 +484,48 @@ fun SettingsScreen(
             1, active.pyro1Enabled, active.pyro1TriggerMode, active.pyro1TriggerValue, session,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro1Enabled = v) }
-                session?.mirrorPyroConfig { it.copy(pyro1Enabled = v) }
             },
             onMode = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro1TriggerMode = v) }
-                session?.mirrorPyroConfig { it.copy(pyro1TriggerMode = v) }
             },
             onValue = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro1TriggerValue = v) }
-                session?.mirrorPyroConfig { it.copy(pyro1TriggerValue = v) }
             },
         )
         PyroChannelSection(
             2, active.pyro2Enabled, active.pyro2TriggerMode, active.pyro2TriggerValue, session,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro2Enabled = v) }
-                session?.mirrorPyroConfig { it.copy(pyro2Enabled = v) }
             },
             onMode = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro2TriggerMode = v) }
-                session?.mirrorPyroConfig { it.copy(pyro2TriggerMode = v) }
             },
             onValue = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro2TriggerValue = v) }
-                session?.mirrorPyroConfig { it.copy(pyro2TriggerValue = v) }
             },
         )
         PyroChannelSection(
             3, active.pyro3Enabled, active.pyro3TriggerMode, active.pyro3TriggerValue, session,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro3Enabled = v) }
-                session?.mirrorPyroConfig { it.copy(pyro3Enabled = v) }
             },
             onMode = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro3TriggerMode = v) }
-                session?.mirrorPyroConfig { it.copy(pyro3TriggerMode = v) }
             },
             onValue = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro3TriggerValue = v) }
-                session?.mirrorPyroConfig { it.copy(pyro3TriggerValue = v) }
             },
         )
         PyroChannelSection(
             4, active.pyro4Enabled, active.pyro4TriggerMode, active.pyro4TriggerValue, session,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro4Enabled = v) }
-                session?.mirrorPyroConfig { it.copy(pyro4Enabled = v) }
             },
             onMode = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro4TriggerMode = v) }
-                session?.mirrorPyroConfig { it.copy(pyro4TriggerMode = v) }
             },
             onValue = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro4TriggerValue = v) }
-                session?.mirrorPyroConfig { it.copy(pyro4TriggerValue = v) }
             },
         )
         Caption(
@@ -546,16 +534,24 @@ fun SettingsScreen(
         )
 
         // ── Recovery — app-side landing prediction, nothing on the wire ──
-        Section("Recovery (landing prediction)") {
+        Section("Recovery") {
+            // iOS applyRecoveryConfig validation: rates and the deploy
+            // altitude must be > 0 (a rate ≤ 0.1 fps degrades simulateDescent
+            // to "lands where it is"); drag k accepts 0 (gravity-only) but
+            // never a negative, which would turn the drag term into thrust
+            // and blow the ballistic prediction up.
             FieldRow {
                 NumField("Drogue ft/s", fmtD(active.drogueRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
+                    s.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
                 }
                 NumField("Main ft/s", fmtD(active.mainRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
+                    s.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
                 }
                 NumField("Main alt ft", fmtD(active.mainDeployAltAglFt), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
+                    s.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
                 }
             }
             Caption(
@@ -567,7 +563,8 @@ fun SettingsScreen(
             // the other three recovery fields were ported together).
             FieldRow {
                 NumField("Drag k 1/m", fmtD(active.ballisticDragK), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
+                    s.toDoubleOrNull()?.takeIf { it >= 0 }
+                        ?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
                 }
             }
             Caption(
@@ -866,10 +863,13 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
     // TESTING ends on a clock edge — tick until the window expires.
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(contPendingUntil) {
-        nowMs = System.currentTimeMillis()
-        while ((contPendingUntil[channel] ?: 0L) > System.currentTimeMillis()) {
-            delay(150)
+        // The state and the loop condition must read the SAME sample —
+        // sampling twice lets the deadline fall between them and strands the
+        // spinner on forever (nothing rewrites nowMs once the loop exits).
+        while (true) {
             nowMs = System.currentTimeMillis()
+            if ((contPendingUntil[channel] ?: 0L) <= nowMs) break
+            delay(150)
         }
     }
     val testing = (contPendingUntil[channel] ?: 0L) > nowMs
