@@ -1,0 +1,51 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      k;
+}
+
+dimensions      [0 2 -2 0 0 0 0];
+
+// k = 1.5 * (U * TI)^2, TI = 1%, U = 95 m/s
+// k = 1.5 * (0.95)^2 = 1.35
+internalField   uniform 1.35;
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform 1.35;
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+
+    farfield
+    {
+        type            freestream;
+        freestreamValue uniform 1.35;
+    }
+
+    bodyTube
+    {
+        type            kqRWallFunction;
+        value           uniform 1.35;
+    }
+
+    fincan
+    {
+        type            kqRWallFunction;
+        value           uniform 1.35;
+    }
+
+    finTab
+    {
+        type            kqRWallFunction;
+        value           uniform 1.35;
+    }
+}

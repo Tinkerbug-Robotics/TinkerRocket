@@ -1,0 +1,48 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+
+dimensions      [0 1 -1 0 0 0 0];
+
+// Freestream velocity along Z (chord/flow direction)
+// Overridden by run_sweep.sh for each velocity
+internalField   uniform (0 0 95);
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform (0 0 95);
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+
+    farfield
+    {
+        type            freestreamVelocity;
+        freestreamValue uniform (0 0 95);
+    }
+
+    bodyTube
+    {
+        type            noSlip;
+    }
+
+    fincan
+    {
+        type            noSlip;
+    }
+
+    finTab
+    {
+        type            noSlip;
+    }
+}

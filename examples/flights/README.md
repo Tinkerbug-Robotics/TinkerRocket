@@ -4,6 +4,12 @@ Four real flights from a single day at CENJARS, 2026-07-05, kept here so the too
 [`Data_Analysis/flight_report/`](../../Data_Analysis/flight_report/) has something to run
 against without asking you to fly first.
 
+Vehicles also get per-rocket folders here as they move through build and analysis:
+
+| Folder | Vehicle | Status |
+|--------|---------|--------|
+| [`L2_100mm_Rolly_Polly_V/`](L2_100mm_Rolly_Polly_V/) | Rolly Polly V, 100 mm L2 | Pre-flight: CFD fin-tab sweep + first-flight roll PID tune |
+
 | File | Vehicle | Size | Max altitude | Max speed | Apogee | Burnout | Firmware |
 |------|---------|------|--------------|-----------|--------|---------|----------|
 | [`flight_20260705_174532.bin`](flight_20260705_174532.bin) | Rolly Polly, 54 mm | 5.2 MB | 357 m | 98 m/s | 8.0 s | 1.4 s | `0c8c132` |
