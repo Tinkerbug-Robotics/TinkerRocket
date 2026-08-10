@@ -25,6 +25,8 @@ private class FakeTileUpstream : AutoCloseable {
     val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
     val hits = AtomicInteger(0)
     @Volatile var respond404 = false
+    /** Stall each response, so a run stays alive long enough to cancel it. */
+    @Volatile var delayMs = 0L
     val body = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3, 4)
 
     val template = "http://127.0.0.1:${socket.localPort}/t/{z}/{y}/{x}"
@@ -37,6 +39,7 @@ private class FakeTileUpstream : AutoCloseable {
                     client.use { c ->
                         c.getInputStream().bufferedReader(Charsets.ISO_8859_1).readLine() ?: return@use
                         hits.incrementAndGet()
+                        if (delayMs > 0) Thread.sleep(delayMs)
                         val out = c.getOutputStream()
                         if (respond404) {
                             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
@@ -126,6 +129,61 @@ class TileDownloaderTest {
     fun unknownSource_isIgnored() {
         downloader.start(region, "nosuch")
         assertEquals(TileDownloader.Phase.IDLE, downloader.phase.value)
+    }
+
+    @Test
+    fun cancel_removesOnlyWhatThisRunWrote() {
+        // One tile is already on disk from an earlier, saved region. A cancel
+        // must undo THIS run without punching a hole in that one.
+        val all = TileMath.tiles(region)
+        val preExisting = all.first()
+        cache.store(upstream.body, "src", preExisting.z, preExisting.x, preExisting.y)
+
+        upstream.delayMs = 40      // keep the run alive long enough to cancel
+        downloader.start(region, "src")
+        runBlocking { delay(60) }
+        downloader.cancel()
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.CANCELLED, downloader.phase.value)
+        assertContentEquals(
+            upstream.body,
+            cache.tileData("src", preExisting.z, preExisting.x, preExisting.y),
+            "a cancel must not delete a tile it did not create",
+        )
+        // Nothing this run fetched is left behind: no region records those
+        // tiles, so anything kept here could never be found or reclaimed.
+        val leaked = all.filter { it != preExisting }
+            .count { cache.tileData("src", it.z, it.x, it.y) != null }
+        assertEquals(0, leaked, "cancelled run leaked $leaked tiles")
+    }
+
+    @Test
+    fun finish_handsTotalsToTheCaller_soTheRegionOutlivesTheScreen() {
+        // The downloader records the region itself; the screen only navigates.
+        // When the UI owned this, backing out mid-run finished the download
+        // into a manifest nobody wrote.
+        var savedTiles = -1
+        var savedBytes = -1L
+        downloader.start(region, "src") { tiles, bytes -> savedTiles = tiles; savedBytes = bytes }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
+        assertEquals(8, savedTiles)
+        assertEquals(8L * upstream.body.size, savedBytes)
+    }
+
+    @Test
+    fun cancel_doesNotRecordARegion() {
+        upstream.delayMs = 40
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        runBlocking { delay(60) }
+        downloader.cancel()
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.CANCELLED, downloader.phase.value)
+        assertEquals(false, recorded, "a cancelled run must not save a region")
     }
 }
 

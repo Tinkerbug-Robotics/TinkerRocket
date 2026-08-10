@@ -28,14 +28,34 @@ final class TileDownloader: ObservableObject {
     private let session = URLSession(configuration: .default)
     private let maxConcurrent = 5
 
+    /// Tiles THIS run wrote — cache hits are excluded, because `fetchOne`
+    /// returns early on them. It is the undo log for a cancel: see `start`.
+    private var created: [TileXYZ] = []
+    private let createdLock = NSLock()
+
     var isRunning: Bool { phase == .downloading }
 
-    func start(region: RegionSpec, source: TileSource) {
+    /// Download `region` and, on success, hand the totals to `onFinished` so
+    /// the caller can record it.
+    ///
+    /// Both terminal outcomes are settled HERE rather than by whoever is
+    /// watching `phase`, because the work outlives the sheet that started it.
+    /// When the view owned them, dismissing mid-run left the download to
+    /// finish into a manifest nobody wrote — a whole region of tiles on disk
+    /// that the storage total could not see and Delete could never reclaim.
+    ///
+    /// A cancel deletes exactly what this run created, which is a precise
+    /// undo: tiles already on disk are never re-fetched, so an overlapping
+    /// saved region keeps every tile it had.
+    func start(region: RegionSpec,
+               source: TileSource,
+               onFinished: ((Int, Int64) -> Void)? = nil) {
         guard let template = source.urlTemplate, !isRunning else { return }
         let tiles = TileMath.tiles(for: region)
         let key = source.rawValue
 
         cancelFlag = false
+        createdLock.lock(); created.removeAll(); createdLock.unlock()
         phase = .downloading
         total = tiles.count
         done = 0
@@ -58,8 +78,23 @@ final class TileDownloader: ObservableObject {
             }
             group.wait()
 
+            // cancel() is a flag, not task cancellation, so this cleanup is
+            // guaranteed to run.
+            self.createdLock.lock()
+            let mine = self.created
+            self.created.removeAll()
+            self.createdLock.unlock()
+
+            if self.cancelFlag {
+                OfflineTileCache.shared.removeTiles(source: key, tiles: mine)
+            }
             DispatchQueue.main.async {
-                self.phase = self.cancelFlag ? .cancelled : .finished
+                if self.cancelFlag {
+                    self.phase = .cancelled
+                } else {
+                    onFinished?(self.total, self.bytes)
+                    self.phase = .finished
+                }
             }
         }
     }
@@ -100,6 +135,9 @@ final class TileDownloader: ObservableObject {
             if let data = data,
                let http = response as? HTTPURLResponse, http.statusCode == 200 {
                 OfflineTileCache.shared.store(data, source: key, z: t.z, x: t.x, y: t.y)
+                self.createdLock.lock()
+                self.created.append(t)
+                self.createdLock.unlock()
                 completion(data.count)
             } else {
                 completion(0)  // missing/4xx tile — count it so progress completes

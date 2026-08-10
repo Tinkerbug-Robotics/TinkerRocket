@@ -213,23 +213,13 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     val tooBig = estMb > 200
     val defaultName = "Area %.3f, %.3f".format(centerLat, centerLon)
 
-    // Save the region once the download finishes (iOS onChange(.finished)).
+    // Recording the region belongs to the downloader (it hands us the
+    // totals when it succeeds), because it outlives this screen — backing
+    // out mid-download used to let the run finish with nobody left to write
+    // the manifest, stranding the whole region's tiles on disk.  All that is
+    // left here is leaving the screen.
     LaunchedEffect(phase) {
-        if (phase == TileDownloader.Phase.FINISHED) {
-            container.fleetScope.launch {
-                container.regionStore.add(
-                    OfflineRegion(
-                        name = name.ifBlank { defaultName },
-                        lat = centerLat, lon = centerLon,
-                        radiusMeters = radiusKm * 1000,
-                        minZoom = 10, maxZoom = maxZoom.toInt(),
-                        source = source.key, tileCount = total, bytes = bytes,
-                        savedAtMs = System.currentTimeMillis(),
-                    ),
-                )
-            }
-            onDone()
-        }
+        if (phase == TileDownloader.Phase.FINISHED) onDone()
     }
 
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
@@ -352,7 +342,22 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 ) { Text("Cancel download") }
             } else {
                 Button(
-                    onClick = { downloader.start(spec, source.key) },
+                    onClick = {
+                        val regionName = name.ifBlank { defaultName }
+                        downloader.start(spec, source.key) { tileCount, byteCount ->
+                            container.regionStore.add(
+                                OfflineRegion(
+                                    name = regionName,
+                                    lat = centerLat, lon = centerLon,
+                                    radiusMeters = radiusKm * 1000,
+                                    minZoom = 10, maxZoom = maxZoom.toInt(),
+                                    source = source.key,
+                                    tileCount = tileCount, bytes = byteCount,
+                                    savedAtMs = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Download $tileCount tiles") }
             }

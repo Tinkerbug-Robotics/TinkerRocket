@@ -150,7 +150,21 @@ struct SaveAreaView: View {
                             }
                         } else {
                             Button {
-                                downloader.start(region: spec, source: source)
+                                // The downloader records the region, not this
+                                // sheet: it outlives us, and a dismissal
+                                // mid-run used to finish the download with
+                                // nobody left to write the manifest.
+                                let regionName = name.isEmpty ? defaultName : name
+                                let center = region.center
+                                downloader.start(region: spec, source: source) { tiles, byteCount in
+                                    store.add(OfflineRegion(
+                                        name: regionName,
+                                        lat: center.latitude, lon: center.longitude,
+                                        radiusMeters: radiusKm * 1000,
+                                        minZoom: 10, maxZoom: Int(maxZoom),
+                                        source: source.rawValue, tileCount: tiles,
+                                        bytes: byteCount, savedAt: Date()))
+                                }
                             } label: {
                                 Label("Download \(tileCount) tiles", systemImage: "arrow.down.circle.fill")
                                     .fontWeight(.semibold)
@@ -169,12 +183,6 @@ struct SaveAreaView: View {
             }
             .onChange(of: downloader.phase) { phase in
                 guard phase == .finished else { return }
-                store.add(OfflineRegion(
-                    name: name.isEmpty ? defaultName : name,
-                    lat: region.center.latitude, lon: region.center.longitude,
-                    radiusMeters: radiusKm * 1000, minZoom: 10, maxZoom: Int(maxZoom),
-                    source: source.rawValue, tileCount: downloader.total,
-                    bytes: downloader.bytes, savedAt: Date()))
                 dismiss()
             }
         }

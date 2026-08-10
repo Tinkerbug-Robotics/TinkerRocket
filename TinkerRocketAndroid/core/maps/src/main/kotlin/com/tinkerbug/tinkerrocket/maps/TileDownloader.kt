@@ -3,6 +3,8 @@ package com.tinkerbug.tinkerrocket.maps
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,14 +54,40 @@ public class TileDownloader(
     @Volatile private var cancelFlag = false
     private var job: Job? = null
 
+    /**
+     * Tiles THIS run wrote — cache hits are excluded, because [fetchOne]
+     * returns early on them.  It is the undo log for a cancel: see [start].
+     */
+    private val created = mutableListOf<TileXYZ>()
+
     public val isRunning: Boolean get() = _phase.value == Phase.DOWNLOADING
 
-    public fun start(region: RegionSpec, sourceKey: String) {
+    /**
+     * Download [region] and, on success, hand the totals to [onFinished] so
+     * the caller can record it.
+     *
+     * Both terminal outcomes are settled HERE rather than by whoever is
+     * watching [phase], because this runs on its own scope and outlives the
+     * screen that started it.  When the UI owned them, backing out mid-run
+     * left the download to finish into a manifest nobody wrote — a whole
+     * region of tiles on disk that the storage total could not see and
+     * Delete could never reclaim.
+     *
+     * A cancel deletes exactly what this run created, which is a precise
+     * undo: tiles that were already on disk are never re-fetched, so an
+     * overlapping saved region keeps every tile it had.
+     */
+    public fun start(
+        region: RegionSpec,
+        sourceKey: String,
+        onFinished: ((tileCount: Int, bytes: Long) -> Unit)? = null,
+    ) {
         val template = upstreamTemplates[sourceKey] ?: return
         if (isRunning) return
         val tiles = TileMath.tiles(region)
 
         cancelFlag = false
+        synchronized(created) { created.clear() }
         _phase.value = Phase.DOWNLOADING
         _total.value = tiles.size
         _done.value = 0
@@ -76,8 +104,24 @@ public class TileDownloader(
                     }
                 }
             }
+            // Drain first: cancel() only flips a flag and the fetches are
+            // blocking, so workers that already passed the check will finish
+            // and store AFTER cancel() returned.  Rolling back before this
+            // join would miss exactly those tiles.
             workers.forEach { it.join() }
-            _phase.value = if (cancelFlag) Phase.CANCELLED else Phase.FINISHED
+            // NonCancellable so the rollback still runs if this job is ever
+            // bound to a lifecycle scope and cancelled for real — leaking the
+            // tiles is worse than a few file deletes during teardown.
+            withContext(NonCancellable) {
+                val mine = synchronized(created) { created.toList().also { created.clear() } }
+                if (cancelFlag) {
+                    cache.removeTiles(sourceKey, mine)
+                    _phase.value = Phase.CANCELLED
+                } else {
+                    onFinished?.invoke(_total.value, _bytes.value)
+                    _phase.value = Phase.FINISHED
+                }
+            }
         }
     }
 
@@ -115,6 +159,7 @@ public class TileDownloader(
                 if (conn.responseCode != 200) return@runCatching 0
                 val data = conn.inputStream.readBytes()
                 cache.store(data, key, t.z, t.x, t.y)
+                synchronized(created) { created += t }
                 data.size
             } finally {
                 conn.disconnect()
