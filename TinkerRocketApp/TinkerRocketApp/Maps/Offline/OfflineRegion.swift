@@ -43,12 +43,21 @@ final class OfflineRegionStore: ObservableObject {
 
     private let url: URL
     private let fm = FileManager.default
+    private let cache: OfflineTileCache
 
-    init() {
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        try? fm.createDirectory(at: base, withIntermediateDirectories: true)
-        url = base.appendingPathComponent("offline_regions.json")
+    /// Test seam: manifest directory and tile cache injected, so a test
+    /// never touches the real ones (Android's store takes both the same way).
+    init(directory: URL, cache: OfflineTileCache = .shared) {
+        self.cache = cache
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        url = directory.appendingPathComponent("offline_regions.json")
         load()
+    }
+
+    convenience init() {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        self.init(directory: base)
     }
 
     var totalBytes: Int64 { regions.reduce(0) { $0 + $1.bytes } }
@@ -80,7 +89,7 @@ final class OfflineRegionStore: ObservableObject {
             .filter { $0.source == region.source }
             .flatMap { TileMath.tiles(for: $0.spec) })
         let doomed = TileMath.tiles(for: region.spec).filter { !keep.contains($0) }
-        OfflineTileCache.shared.removeTiles(source: region.source, tiles: doomed)
+        cache.removeTiles(source: region.source, tiles: doomed)
         regions = survivors
         save()
     }

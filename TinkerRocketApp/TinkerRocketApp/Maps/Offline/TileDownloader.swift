@@ -35,8 +35,18 @@ final class TileDownloader: ObservableObject {
     @Published private(set) var failed = 0
 
     private var cancelFlag = false
-    private let session = URLSession(configuration: .default)
+    private let session: URLSession
+    private let cache: OfflineTileCache
     private let maxConcurrent = 5
+
+    /// Test seam: cache and session injected so a test can point at a scratch
+    /// directory and a stubbed upstream (Android's downloader takes both the
+    /// same way). Production uses the defaults.
+    init(cache: OfflineTileCache = .shared,
+         session: URLSession = URLSession(configuration: .default)) {
+        self.cache = cache
+        self.session = session
+    }
 
     /// Tiles THIS run wrote — cache hits are excluded, because `fetchOne`
     /// returns early on them. It is the undo log for a cancel: see `start`.
@@ -111,7 +121,7 @@ final class TileDownloader: ObservableObject {
             // nothing.
             let nothingArrived = tiles.count > 0 && failures == tiles.count
             if self.cancelFlag || nothingArrived {
-                OfflineTileCache.shared.removeTiles(source: key, tiles: mine)
+                self.cache.removeTiles(source: key, tiles: mine)
             }
             DispatchQueue.main.async {
                 if self.cancelFlag {
@@ -153,7 +163,7 @@ final class TileDownloader: ObservableObject {
     /// so progress still completes either way.
     private func fetchOne(_ t: TileXYZ, key: String, template: String,
                           completion: @escaping (Int?) -> Void) {
-        if let data = OfflineTileCache.shared.tileData(source: key, z: t.z, x: t.x, y: t.y) {
+        if let data = cache.tileData(source: key, z: t.z, x: t.x, y: t.y) {
             completion(data.count)
             return
         }
@@ -168,7 +178,7 @@ final class TileDownloader: ObservableObject {
         session.dataTask(with: req) { data, response, _ in
             if let data = data,
                let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                OfflineTileCache.shared.store(data, source: key, z: t.z, x: t.x, y: t.y)
+                self.cache.store(data, source: key, z: t.z, x: t.x, y: t.y)
                 self.createdLock.lock()
                 self.created.append(t)
                 self.createdLock.unlock()

@@ -21,11 +21,19 @@ final class OfflineTileCache {
     private let root: URL
     private let fm = FileManager.default
 
-    private init() {
-        let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        root = base.appendingPathComponent("OfflineTiles", isDirectory: true)
+    /// Point the cache at a specific directory. Production uses `shared`;
+    /// tests use a scratch directory so they never touch the real cache
+    /// (Android's cache takes its directory the same way).
+    init(root: URL) {
+        self.root = root
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
         excludeFromBackup(root)
+    }
+
+    private convenience init() {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        self.init(root: base.appendingPathComponent("OfflineTiles", isDirectory: true))
     }
 
     /// Cached bytes for a tile, or nil if not stored.
