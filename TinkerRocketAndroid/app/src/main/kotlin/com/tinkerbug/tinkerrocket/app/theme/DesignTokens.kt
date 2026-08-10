@@ -31,6 +31,7 @@ class TrColors(
     val voiceReady: Color,
     val voiceWarn: Color,
     val voiceError: Color,
+    val orientWarn: Color,
     val background: Color,
     val card: Color,
     val cardSecondary: Color,
@@ -53,6 +54,7 @@ val TrColorsLight = TrColors(
     voiceReady = Color(0xFF34C759),  // green
     voiceWarn = Color(0xFFFF9500),  // orange
     voiceError = Color(0xFFFF3B30),  // red
+    orientWarn = Color(0xFFFF9500),  // orange
     background = Color(0xFFFFFFFF),
     card = Color(0xFFF2F2F7),
     cardSecondary = Color(0xFFE5E5EA),
@@ -75,6 +77,7 @@ val TrColorsDark = TrColors(
     voiceReady = Color(0xFF30D158),  // green
     voiceWarn = Color(0xFFFF9F0A),  // orange
     voiceError = Color(0xFFFF453A),  // red
+    orientWarn = Color(0xFFFF9F0A),  // orange
     background = Color(0xFF000000),
     card = Color(0xFF1C1C1E),
     cardSecondary = Color(0xFF2C2C2E),

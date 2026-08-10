@@ -22,6 +22,10 @@ class UnitFormatterTest {
         assertEquals("16404 ft", UnitFormatter.altitude(5000.0, i))
         assertEquals("m", UnitFormatter.altitudeUnit(m))
         assertEquals("ft", UnitFormatter.altitudeUnit(i))
+        // Raw conversion (iOS metersToDisplay) — the pyro trigger text
+        // composes "%.0f%s on descent" from these two.
+        assertEquals(150.0, UnitFormatter.altitudeValue(150.0, m), 0.0001)
+        assertEquals(492.126, UnitFormatter.altitudeValue(150.0, i), 0.001)
     }
 
     @Test

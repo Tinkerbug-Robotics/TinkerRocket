@@ -144,6 +144,38 @@ class DeviceSessionTest {
         assertEquals(123f, cfg.pyro1TriggerValue)
     }
 
+    // ── Pyro continuity test (cmd 35) ────────────────────────────────────
+
+    @Test
+    fun pyroContTest_sendsFrameAndOpensTestingWindow() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+
+        h.session.sendPyroContTest(2)
+        runCurrent()
+
+        // Wire bytes: [35, channel] (golden-pinned in CommandsGoldenTest).
+        assertContentEquals(
+            Commands.pyroContTest(2),
+            h.fw.commandFrames.first { it[0].toInt() == BleCommandId.PYRO_CONT_TEST },
+        )
+        // Per-channel window — only the tested channel shows TESTING.
+        assertTrue(h.session.contTestPending(2))
+        assertFalse(h.session.contTestPending(1))
+
+        // Window is exactly the iOS 2.5 s round-trip allowance.
+        advanceTimeBy(DeviceSession.CONT_TEST_PENDING_WINDOW_MS - 1)
+        assertTrue(h.session.contTestPending(2))
+        advanceTimeBy(1)
+        assertFalse(h.session.contTestPending(2))
+
+        // A re-test reopens (iOS: newer tap extends the deadline).
+        h.session.sendPyroContTest(2)
+        runCurrent()
+        assertTrue(h.session.contTestPending(2))
+    }
+
     // ── Identity readback ────────────────────────────────────────────────
 
     @Test
@@ -574,6 +606,7 @@ class DeviceSessionTest {
         h.session.markSimLaunched()
         h.session.beginPowerOn()
         h.session.requestFileList(0)
+        h.session.sendPyroContTest(3)
         advanceTimeBy(500)
         runCurrent()
         advanceTimeBy(1500)   // an RSSI tick populates connectedRssi
@@ -597,6 +630,7 @@ class DeviceSessionTest {
         assertFalse(h.session.simLaunched.value)
         assertFalse(h.session.poweringOn.value)
         assertNull(h.session.rocketConfig.value)
+        assertTrue(h.session.contTestPendingUntil.value.isEmpty())
         assertNull(h.session.magCalStatus.value)
         assertNull(h.session.sensorCalStatus.value)
         assertNull(h.session.guidanceEcho.value)

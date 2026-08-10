@@ -10,26 +10,34 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -88,6 +96,8 @@ fun DashboardScreen(
     val poweringOn by session.poweringOn.collectAsState()
     val remoteRockets by session.remoteRockets.collectAsState()
     val focusRocketId by session.focusRocketId.collectAsState()
+    val imuOrientName by session.imuOrientationName.collectAsState()
+    val imuOrientMode by session.imuOrientationMode.collectAsState()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -177,7 +187,14 @@ fun DashboardScreen(
 
         SignalCard(telemetry, rssi, session.isBaseStation)
         BatteryCard(telemetry)
-        ImuCard(telemetry, session.isBaseStation)
+        // Orientation source is picked strictly by link type (iOS
+        // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
+        // imu_orient config readback.  No cross-fallback on either platform.
+        ImuCard(
+            telemetry, session.isBaseStation,
+            orientationName = if (session.isBaseStation) telemetry.relayedOrientationName else imuOrientName,
+            orientationMode = if (session.isBaseStation) telemetry.relayedOrientationMode else imuOrientMode,
+        )
 
         if (!session.isBaseStation) FlightSummaryCard(telemetry)
 
@@ -271,26 +288,94 @@ fun DashboardScreen(
             }
         }
 
-        // Pyro tiles: iOS card form (2x2 grid, direct rocket links only —
-        // iOS hides pyro on BS links).  Fail-safe rendering — a channel
-        // shows green ONLY on continuity AND live data.  Config-driven
-        // "Disabled"/trigger text + Test Continuity need the 0xB1 config
-        // readback Android doesn't parse yet (ledger follow-up).
+        // Pyro tiles: iOS PyroChannelsView twin (2x2 grid, direct rocket
+        // links only — iOS hides pyro on BS links).  Badge ladder per tile:
+        // FIRED beats everything; CONT/NO CONT shows while armed or for 5 s
+        // after that tile's manual test (single-reveal state — a second tap
+        // MOVES the reveal, the iOS quirk included); a TESTING spinner
+        // replaces the badge while cmd 35 round-trips BLE→OC→I2C→FC (#411).
+        // Continuity is trusted only from a LIVE frame (#297) — a stale
+        // frame fails safe to NO CONT.
         if (!session.isBaseStation) {
+            val config by session.rocketConfig.collectAsState()
+            val contPendingUntil by session.contTestPendingUntil.collectAsState()
+            var contTestChannel by remember { mutableStateOf(0) }
+            LaunchedEffect(contTestChannel) {
+                if (contTestChannel != 0) {
+                    delay(5_000)
+                    contTestChannel = 0
+                }
+            }
+            // TESTING ends on a clock edge, not a state change — tick until
+            // the newest window expires so the spinner swaps back to a badge.
+            var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(contPendingUntil) {
+                nowMs = System.currentTimeMillis()
+                while (contPendingUntil.values.any { it > System.currentTimeMillis() }) {
+                    delay(150)
+                    nowMs = System.currentTimeMillis()
+                }
+            }
+            val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
+            val live = dataStatus == TelemetryData.DataStatus.LIVE
+            val armed = telemetry.pyroArmed
+            val inflight = telemetry.state == "INFLIGHT"
+
+            // iOS pyroChannelConfig(_:): no readback yet → (false, 0, 0),
+            // which renders "Disabled" until the cmd-20 burst lands (~1 s).
+            fun channelConfig(ch: Int): Triple<Boolean, Int, Float> {
+                val c = config ?: return Triple(false, 0, 0f)
+                return when (ch) {
+                    1 -> Triple(c.pyro1Enabled, c.pyro1TriggerMode, c.pyro1TriggerValue)
+                    2 -> Triple(c.pyro2Enabled, c.pyro2TriggerMode, c.pyro2TriggerValue)
+                    3 -> Triple(c.pyro3Enabled, c.pyro3TriggerMode, c.pyro3TriggerValue)
+                    else -> Triple(c.pyro4Enabled, c.pyro4TriggerMode, c.pyro4TriggerValue)
+                }
+            }
+
+            // iOS triggerDescription: mode 0 = seconds after apogee; else
+            // altitude, stored in meters, shown in the display unit with no
+            // space before the unit ("150m on descent" / "492ft on descent").
+            fun triggerText(mode: Int, value: Float): String =
+                if (mode == 0) String.format(Locale.ROOT, "%.1fs after apogee", value)
+                else String.format(
+                    Locale.ROOT, "%.0f%s on descent",
+                    UnitFormatter.altitudeValue(value.toDouble(), units),
+                    UnitFormatter.altitudeUnit(units),
+                )
+
+            @Composable
+            fun tile(ch: Int, cont: Boolean, fired: Boolean, modifier: Modifier) {
+                val (enabled, mode, value) = channelConfig(ch)
+                PyroTile(
+                    ch = ch,
+                    text = if (enabled) triggerText(mode, value) else "Disabled",
+                    fired = fired,
+                    continuity = cont && live,
+                    revealed = armed || contTestChannel == ch,
+                    testing = (contPendingUntil[ch] ?: 0L) > nowMs,
+                    showTestButton = !armed && !fired && !inflight,
+                    onTestContinuity = {
+                        session.sendPyroContTest(ch)
+                        contTestChannel = ch
+                    },
+                    modifier = modifier,
+                )
+            }
+
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Pyro Channels${if (telemetry.pyroArmed) " — ARMED" else ""}",
+                        "Pyro Channels${if (armed) " — ARMED" else ""}",
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    val live = dataStatus == TelemetryData.DataStatus.LIVE
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PyroTile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, live, Modifier.weight(1f))
-                        PyroTile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, live, Modifier.weight(1f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        tile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, Modifier.weight(1f))
+                        tile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, Modifier.weight(1f))
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PyroTile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, live, Modifier.weight(1f))
-                        PyroTile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, live, Modifier.weight(1f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        tile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, Modifier.weight(1f))
+                        tile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, Modifier.weight(1f))
                     }
                 }
             }
@@ -510,29 +595,86 @@ private fun StatCard(
     }
 }
 
+/**
+ * iOS pyroTile twin.  Header: "CH n" + the badge ladder — FIRED beats the
+ * continuity badge; CONT/NO CONT renders only while [revealed] (armed, or
+ * the 5 s window after this tile's manual test); a TESTING spinner replaces
+ * it while the cmd-35 round trip is pending.  [continuity] must already be
+ * live-gated by the caller (#297).  Below the header: the trigger text or
+ * "Disabled".  Tap-to-configure stays iOS-only for now — Android edits pyro
+ * config on the Settings screen.
+ */
 @Composable
-private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean, modifier: Modifier = Modifier) {
-    val color = when {
-        fired -> Color(0xFF616161)
-        continuity && live -> Color(0xFF2E7D32)   // green requires cont AND live
-        else -> Color(0xFF9E9E9E)
-    }
+private fun PyroTile(
+    ch: Int,
+    text: String,
+    fired: Boolean,
+    continuity: Boolean,
+    revealed: Boolean,
+    testing: Boolean,
+    showTestButton: Boolean,
+    onTestContinuity: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Column(
         modifier
-            .background(color, RoundedCornerShape(8.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .background(
+                com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.cardSecondary,
+                RoundedCornerShape(8.dp),
+            )
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text("CH $ch", color = Color.White, style = MaterialTheme.typography.labelMedium)
-        Text(
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "CH $ch",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = bold),
+                modifier = Modifier.weight(1f),
+            )
             when {
-                fired -> "fired"
-                continuity -> "cont"
-                else -> "open"
-            },
-            color = Color.White,
-            style = MaterialTheme.typography.bodySmall,
-        )
+                fired -> Text(
+                    "FIRED",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
+                    modifier = Modifier
+                        .background(Color(0xFFF57C00), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+                revealed && testing -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    Text(
+                        "TESTING",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
+                    )
+                }
+                revealed -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    val c = if (continuity) Color(0xFF2E7D32) else Color(0xFFB00020)
+                    Box(Modifier.size(8.dp).background(c, CircleShape))
+                    Text(
+                        if (continuity) "CONT" else "NO CONT",
+                        color = c,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
+                    )
+                }
+            }
+        }
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (showTestButton) {
+            Text(
+                "Test Continuity",
+                color = Color(0xFF1E88E5),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.clickable(onClick = onTestContinuity),
+            )
+        }
     }
 }
 
@@ -1051,25 +1193,44 @@ private fun BatteryCard(telemetry: TelemetryData) {
 }
 
 /**
- * iOS IMUView twin: Low-G / High-G / Gyro XYZ triplets.  The nose
- * orientation annotation shows on BS links (relayed flags2, #390); direct
- * links need the 0xB1 config readback Android doesn't parse yet (ledger).
+ * iOS IMUView twin: Low-G / High-G / Gyro XYZ triplets.  High-G rides the
+ * direct link only (not relayed over LoRa).  The nose annotation renders
+ * whichever orientation source the caller picked — orange when the pad
+ * auto-detect landed off-axis, the flyer's cue to check the mounting
+ * before arming.  Acceleration rows convert to g in Imperial (iOS IMURow).
  */
 @Composable
-private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+private fun ImuCard(
+    telemetry: TelemetryData,
+    isBaseStation: Boolean,
+    orientationName: String,
+    orientationMode: IMUOrientationMode,
+) {
     val caption = MaterialTheme.typography.bodySmall
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
 
     @Composable
-    fun triplet(label: String, unit: String, x: Float?, y: Float?, z: Float?, decimals: Int) {
+    fun triplet(
+        label: String, unit: String, x: Float?, y: Float?, z: Float?, decimals: Int,
+        acceleration: Boolean = false,
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.width(70.dp)) {
                 Text(label, style = caption)
-                Text(unit, style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (acceleration) UnitFormatter.accelerationUnit(units) else unit,
+                    style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             listOf(x, y, z).forEach { v ->
                 Text(
-                    v?.let { String.format(Locale.ROOT, "%.${decimals}f", it) } ?: "—",
+                    v?.let {
+                        val shown = if (acceleration) {
+                            UnitFormatter.accelerationValue(it.toDouble(), units)
+                        } else it.toDouble()
+                        String.format(Locale.ROOT, "%.${decimals}f", shown)
+                    } ?: "—",
                     style = caption.copy(fontFamily = mono),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     modifier = Modifier.weight(1f),
@@ -1082,12 +1243,13 @@ private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("IMU", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                val orient = if (isBaseStation) telemetry.relayedOrientationName else ""
-                if (orient.isNotEmpty()) {
+                if (orientationName.isNotEmpty()) {
                     Text(
-                        "nose: $orient",
+                        "nose: $orientationName (${orientationMode.label})",
                         style = caption,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (orientationMode == IMUOrientationMode.AUTO_EXACT) {
+                            com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.orientWarn
+                        } else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -1102,8 +1264,10 @@ private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     )
                 }
             }
-            triplet("Low-G", "m/s²", telemetry.lowGX, telemetry.lowGY, telemetry.lowGZ, 2)
-            triplet("High-G", "m/s²", telemetry.highGX, telemetry.highGY, telemetry.highGZ, 1)
+            triplet("Low-G", "m/s²", telemetry.lowGX, telemetry.lowGY, telemetry.lowGZ, 2, acceleration = true)
+            if (!isBaseStation) {
+                triplet("High-G", "m/s²", telemetry.highGX, telemetry.highGY, telemetry.highGZ, 1, acceleration = true)
+            }
             triplet("Gyro", "°/s", telemetry.gyroX, telemetry.gyroY, telemetry.gyroZ, 1)
         }
     }
