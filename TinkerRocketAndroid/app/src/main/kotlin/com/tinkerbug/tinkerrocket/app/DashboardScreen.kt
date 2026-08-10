@@ -1235,7 +1235,7 @@ private fun BatteryCard(telemetry: TelemetryData) {
             Row(Modifier.fillMaxWidth()) {
                 Text("Rocket", style = caption, modifier = Modifier.width(70.dp))
                 listOf(
-                    telemetry.soc?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—",
+                    telemetry.socDisplay,
                     telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
                     telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
                 ).forEach {
