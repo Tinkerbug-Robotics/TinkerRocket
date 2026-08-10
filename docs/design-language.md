@@ -49,6 +49,16 @@ which are Compose renderings of the shapes the iOS app is built from.
 | Color semantics | green = good/latched, amber = degraded, red = bad/stale-alert, purple = focused/selected, gray = inactive/unknown |
 | Focused rocket | purple-filled chip labeled "focused"; unfocused chips show their live state text |
 
+## Map conventions (settled 2026-08-10)
+
+| Element | Rule |
+|---|---|
+| Floating controls | **Nothing renders directly on tile imagery.** Every badge, button, and label over a map sits on a plate — iOS `.ultraThinMaterial`, Android the systemGray6 token fill (`TrMapPlate`; Compose has no live-blur, and opaque is the stronger choice over imagery anyway). Contrast over imagery is a coin flip you lose: a blue-on-imagery source chip was unreadable over pale desert satellite while the plated attribution bar two corners away was perfect (Pixel 8, 2026-08-10) |
+| Basemap selection | A **menu** listing every source, the active one checked, one glyph per source — never a cycling button. A control that reveals one of five options per tap is how a shipped basemap reads as missing |
+| Offline distinction | `TileSource.pickerLabel` on both platforms: "(online)" appended to any source a saved offline area cannot cover (provider terms). Shown on every source row AND on the active-source plate — it is what "will this still draw at the launch site" depends on. "Manage offline maps…" is the last item of the same menu, where it reads as the answer to those markers |
+| Active basemap | Named on the **bottom-leading attribution plate** (source name bold, provider attribution under it), not on the control that changes it — which is a bare 44pt/44dp glyph |
+| Control column | Top-trailing, source picker above recenter, 44pt/44dp square plates, 12pt/dp gutter. Divergence: Android hides recenter while follow is live (it would be a no-op); iOS always shows it |
+
 ## Terminology (both platforms)
 
 "Rocket power" (not "FC power"), "Rockets via base station", "focused",

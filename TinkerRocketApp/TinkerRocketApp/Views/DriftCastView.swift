@@ -732,7 +732,7 @@ struct DriftCastView: View {
                 Menu {
                     Picker("Map source", selection: $tileSource) {
                         ForEach(TileSource.allCases) { src in
-                            Label(src.displayName, systemImage: src.symbol).tag(src)
+                            Label(src.pickerLabel, systemImage: src.symbol).tag(src)
                         }
                     }
                     Divider()

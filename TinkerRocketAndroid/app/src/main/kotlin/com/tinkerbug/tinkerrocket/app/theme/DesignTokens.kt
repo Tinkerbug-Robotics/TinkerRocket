@@ -25,6 +25,7 @@ class TrColors(
     val simulate: Color,
     val servoTest: Color,
     val freqScan: Color,
+    val mapControl: Color,
     val statusConnected: Color,
     val statusScanning: Color,
     val statusIdle: Color,
@@ -48,6 +49,7 @@ val TrColorsLight = TrColors(
     simulate = Color(0xFFFF9500),  // orange
     servoTest = Color(0xFF30B0C7),  // teal
     freqScan = Color(0xFFAF52DE),  // purple
+    mapControl = Color(0xFF007AFF),  // blue
     statusConnected = Color(0xFF34C759),  // green
     statusScanning = Color(0xFFFF9500),  // orange
     statusIdle = Color(0xFF8E8E93),  // gray
@@ -71,6 +73,7 @@ val TrColorsDark = TrColors(
     simulate = Color(0xFFFF9F0A),  // orange
     servoTest = Color(0xFF40C8E0),  // teal
     freqScan = Color(0xFFBF5AF2),  // purple
+    mapControl = Color(0xFF0A84FF),  // blue
     statusConnected = Color(0xFF30D158),  // green
     statusScanning = Color(0xFFFF9F0A),  // orange
     statusIdle = Color(0xFF8E8E93),  // gray

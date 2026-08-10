@@ -1,13 +1,13 @@
 package com.tinkerbug.tinkerrocket.app
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -21,8 +21,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.tinkerbug.tinkerrocket.app.theme.TrMapIconButton
+import com.tinkerbug.tinkerrocket.app.theme.TrMapPlate
+import com.tinkerbug.tinkerrocket.app.theme.TrSpacing
+import com.tinkerbug.tinkerrocket.app.theme.TrTheme
 import com.tinkerbug.tinkerrocket.maps.TileProxyServer
 import com.tinkerbug.tinkerrocket.maps.TileSource
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -81,6 +87,8 @@ fun MapScreen(
     phoneLocation: PhoneLocationManager? = null,
     /** True when the build carries a Map Tiles API key (AppContainer). */
     googleAvailable: Boolean = false,
+    /** Opens the offline-areas manager from the basemap menu (iOS parity). */
+    onManageOffline: (() -> Unit)? = null,
 ) {
     // Phone dot runs with the map (ref-counted manager).
     if (phoneLocation != null) {
@@ -113,12 +121,13 @@ fun MapScreen(
             ?: kotlinx.coroutines.flow.MutableStateFlow(null)
         ).collectAsState()
 
-    var source by remember { mutableStateOf(TileSource.USGS_IMAGERY_TOPO) }
     // Basemap-decision (plan §8 #2): USGS raster = DEFAULT + the only
     // offline/cacheable path; OpenFreeMap Liberty (keyless vector, ODbL)
     // and Google Satellite (Map Tiles API, key'd builds) are the
-    // online-only options.
-    var openFreeMap by remember { mutableStateOf(false) }
+    // online-only options.  One state, not a source + an openFreeMap flag:
+    // the picker is a list of five, and a flag beside an enum can express
+    // combinations that aren't on it.
+    var basemap by remember { mutableStateOf(Basemap.USGS_IMAGERY_TOPO) }
     var googleAttribution by remember { mutableStateOf<String?>(null) }
     var follow by remember { mutableStateOf(true) }
 
@@ -152,15 +161,16 @@ fun MapScreen(
 
     // Style install/swap: a swap is a FULL reload — overlays are re-added in
     // the callback every time (the layer-reinstall pattern the spike proves).
-    LaunchedEffect(mapRef, source, openFreeMap) {
+    LaunchedEffect(mapRef, basemap) {
         val map = mapRef ?: return@LaunchedEffect
-        val builder = if (openFreeMap) {
+        val raster = basemap.tileSource
+        val builder = if (raster == null) {
             Style.Builder().fromUri(OPENFREEMAP_STYLE_URI)
         } else {
-            Style.Builder().fromJson(rasterStyleJson(proxy, source))
+            Style.Builder().fromJson(rasterStyleJson(proxy, raster))
         }
         map.setStyle(builder) { style ->
-            if (!openFreeMap && !source.cacheable) {
+            if (raster != null && !raster.cacheable) {
                 // Online-only source: MapLibre's native Cache-Control parser
                 // reads only max-age/must-revalidate, so the proxy's
                 // no-store alone would NOT keep tiles out of the on-disk
@@ -229,73 +239,69 @@ fun MapScreen(
                 ageS < 30 -> Color(0xFFFBC02D)
                 else -> Color(0xFFE53935)
             }
-            Surface(
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
-                tonalElevation = 2.dp,
-            ) {
+            TrMapPlate(Modifier.align(Alignment.TopStart).padding(TrSpacing.rowSpacing)) {
                 Text(
                     "⚑ landing ±%.0f m · T+%ds ago".format(p.uncertaintyMeters, ageS),
                     style = MaterialTheme.typography.labelMedium,
                     color = color,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                 )
             }
         }
 
-        Column(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-            OutlinedButton(onClick = {
-                when {
-                    openFreeMap -> {
-                        openFreeMap = false
-                        source = TileSource.USGS_IMAGERY_TOPO
-                    }
-                    source == TileSource.USGS_IMAGERY_TOPO -> source = TileSource.USGS_TOPO
-                    source == TileSource.USGS_TOPO -> source = TileSource.USGS_IMAGERY
-                    source == TileSource.USGS_IMAGERY && googleAvailable ->
-                        source = TileSource.GOOGLE_SATELLITE
-                    else -> {
-                        source = TileSource.USGS_IMAGERY_TOPO
-                        openFreeMap = true
-                    }
-                }
-            }) {
-                Text(
-                    when {
-                        openFreeMap -> "OpenFreeMap (online)"
-                        source == TileSource.GOOGLE_SATELLITE -> "Google Satellite (online)"
-                        else -> source.displayName
-                    },
-                )
-            }
-            if (!follow) {
-                OutlinedButton(onClick = {
-                    follow = true
-                    val f = fix
-                    val map = mapRef
-                    if (f != null && map != null) {
-                        map.animateCamera(
-                            CameraUpdateFactory.newLatLngZoom(LatLng(f.latitude, f.longitude), 15.0),
-                        )
-                    }
-                }) { Text("Recenter") }
-            }
-        }
-
-        Surface(
-            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp),
-            tonalElevation = 2.dp,
+        // Floating controls, iOS MapView.swift arrangement: source menu over
+        // recenter, top-trailing, each a 44dp glyph on a plate.
+        Column(
+            Modifier.align(Alignment.TopEnd).padding(TrSpacing.rowSpacing),
+            verticalArrangement = Arrangement.spacedBy(TrSpacing.rowSpacing),
         ) {
-            Row {
-                Text(
-                    when {
-                        openFreeMap -> OPENFREEMAP_ATTRIBUTION
-                        source == TileSource.GOOGLE_SATELLITE ->
-                            googleAttribution?.let { "Google · $it" }
-                                ?: TileSource.GOOGLE_ATTRIBUTION
-                        else -> TileSource.ATTRIBUTION
+            BasemapMenuButton(
+                selected = basemap,
+                options = Basemap.options(googleAvailable),
+                onSelect = { basemap = it },
+                onManageOffline = onManageOffline,
+            )
+            // Only while follow is broken — recentering while already
+            // following is a no-op, and iOS's always-visible button is the
+            // divergence this keeps (see the parity ledger).
+            if (!follow) {
+                TrMapIconButton(
+                    icon = Icons.Filled.MyLocation,
+                    contentDescription = "Recenter on the rocket",
+                    tint = TrTheme.colors.mapControl,
+                    onClick = {
+                        follow = true
+                        val f = fix
+                        val map = mapRef
+                        if (f != null && map != null) {
+                            map.animateCamera(
+                                CameraUpdateFactory.newLatLngZoom(
+                                    LatLng(f.latitude, f.longitude),
+                                    15.0,
+                                ),
+                            )
+                        }
                     },
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
+        }
+
+        // Active source + attribution (iOS bottom-leading plate).  The source
+        // name lives HERE, not on the button that changes it: this plate is
+        // already the most readable thing on the screen, and it frees the
+        // control up top to be a 44dp glyph like its iOS twin.
+        TrMapPlate(Modifier.align(Alignment.BottomStart).padding(TrSpacing.rowSpacing)) {
+            Column(Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
+                Text(
+                    basemap.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    basemap.attribution(googleAttribution),
+                    fontSize = 9.sp,
+                    lineHeight = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -305,8 +311,8 @@ fun MapScreen(
     // Google name; the proxy memoizes it.  Keep retrying while the source is
     // active — a first fetch racing a slow createSession must not pin the
     // static fallback for the whole session.  Cancelled on source switch.
-    LaunchedEffect(source) {
-        while (source == TileSource.GOOGLE_SATELLITE && googleAttribution == null) {
+    LaunchedEffect(basemap) {
+        while (basemap == Basemap.GOOGLE_SATELLITE && googleAttribution == null) {
             googleAttribution = fetchGoogleAttribution(proxy)
             if (googleAttribution == null) kotlinx.coroutines.delay(10_000)
         }
@@ -331,11 +337,6 @@ fun MapScreen(
         initialCentered = true
     }
 }
-
-/** OpenFreeMap Liberty — keyless vector style, online-only, never cached. */
-private const val OPENFREEMAP_STYLE_URI = "https://tiles.openfreemap.org/styles/liberty"
-private const val OPENFREEMAP_ATTRIBUTION =
-    "OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors"
 
 /** Live Google copyright via the proxy's memoized /meta route. */
 private suspend fun fetchGoogleAttribution(proxy: TileProxyServer): String? =

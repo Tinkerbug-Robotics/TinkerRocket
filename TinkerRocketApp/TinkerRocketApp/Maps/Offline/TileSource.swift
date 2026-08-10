@@ -35,6 +35,15 @@ enum TileSource: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Label for the source menu and the map's active-source plate.
+    /// "(online)" marks the sources no saved area can cover — the distinction
+    /// that matters at a launch site with no signal, and the reason the menu
+    /// lists every source instead of hiding them behind a cycling control.
+    /// Twin: `TileSource.pickerLabel` in the Android app's Basemap.kt.
+    var pickerLabel: String {
+        isCacheable ? displayName : "\(displayName) (online)"
+    }
+
     /// SF Symbol for the source menu.
     var symbol: String {
         switch self {

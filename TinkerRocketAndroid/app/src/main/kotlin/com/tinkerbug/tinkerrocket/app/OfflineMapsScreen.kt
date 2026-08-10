@@ -40,6 +40,8 @@ import com.tinkerbug.tinkerrocket.maps.OfflineRegion
 import com.tinkerbug.tinkerrocket.maps.RegionSpec
 import com.tinkerbug.tinkerrocket.maps.TileDownloader
 import com.tinkerbug.tinkerrocket.maps.TileMath
+import com.tinkerbug.tinkerrocket.app.theme.TrMapPlate
+import com.tinkerbug.tinkerrocket.app.theme.TrSpacing
 import com.tinkerbug.tinkerrocket.maps.TileSource
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import kotlinx.coroutines.launch
@@ -86,10 +88,22 @@ fun MapTab(container: AppContainer, session: DeviceSession?) {
                 predictor = predictor,
                 phoneLocation = container.phoneLocation,
                 googleAvailable = container.googleMapsAvailable,
+                onManageOffline = { route = "offline" },
             )
-            Row(Modifier.align(Alignment.BottomEnd).padding(8.dp)) {
-                TextButton(onClick = { route = "driftcast" }) { Text("Drift Cast") }
-                TextButton(onClick = { route = "offline" }) { Text("Offline maps") }
+            // Drift Cast keeps its map-screen entry.  "Offline maps" moved
+            // into the basemap menu — iOS's placement, and the one where the
+            // "(online)" row markers make it read as the answer to them.
+            // Plated for the reason everything on this screen now is: bare
+            // text over tile imagery is a contrast coin flip.
+            TrMapPlate(
+                Modifier.align(Alignment.BottomEnd).padding(TrSpacing.rowSpacing),
+                onClick = { route = "driftcast" },
+            ) {
+                Text(
+                    "Drift Cast",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                )
             }
         }
         "offline" -> OfflineMapsScreen(
@@ -289,16 +303,15 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 Text("Cancel")
             }
             Text("Save area offline", style = MaterialTheme.typography.titleMedium)
-            OutlinedButton(onClick = {
-                source = when (source) {
-                    TileSource.USGS_IMAGERY_TOPO -> TileSource.USGS_TOPO
-                    TileSource.USGS_TOPO -> TileSource.USGS_IMAGERY
-                    TileSource.USGS_IMAGERY -> TileSource.USGS_IMAGERY_TOPO
-                    // Online-only source: never offered for download
-                    // (provider terms); unreachable from this cycle.
-                    TileSource.GOOGLE_SATELLITE -> TileSource.USGS_IMAGERY_TOPO
-                }
-            }) { Text(source.displayName, style = MaterialTheme.typography.labelSmall) }
+            // Same picker rows as the map's basemap menu.  The list is the
+            // cacheable sources only — an online-only source can't be saved
+            // for offline use by its provider's terms, so it is never an
+            // option here rather than a cycle step that silently skips.
+            TileSourcePickerButton(
+                selected = source,
+                options = DOWNLOADABLE_SOURCES,
+                onSelect = { source = it },
+            )
         }
 
         Box(Modifier.fillMaxWidth().height(280.dp)) {

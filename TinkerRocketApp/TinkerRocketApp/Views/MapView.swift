@@ -274,8 +274,11 @@ struct MapView: View {
                 .frame(maxWidth: .infinity, alignment: .top)
 
             // Active source + attribution, so it's clear which provider renders.
+            // The name carries the "(online)" marker too: this plate is the
+            // one place the active basemap is always visible, so it is where
+            // "this will go blank out of signal" belongs.
             VStack(alignment: .leading, spacing: 1) {
-                Text(tileSource.displayName)
+                Text(tileSource.pickerLabel)
                     .font(.caption.bold())
                 if let attr = tileSource.attribution {
                     Text(attr)
@@ -296,9 +299,13 @@ struct MapView: View {
             VStack(spacing: 12) {
                 // Map source picker + offline downloads (shared with Drift Cast).
                 Menu {
+                    // A Picker (not Buttons) so the active row gets the
+                    // framework checkmark; rows carry the online/offline
+                    // marker, which is what makes "Manage offline maps…"
+                    // below read as the answer to it.
                     Picker("Map source", selection: $tileSource) {
                         ForEach(TileSource.allCases) { src in
-                            Label(src.displayName, systemImage: src.symbol).tag(src)
+                            Label(src.pickerLabel, systemImage: src.symbol).tag(src)
                         }
                     }
                     Divider()
