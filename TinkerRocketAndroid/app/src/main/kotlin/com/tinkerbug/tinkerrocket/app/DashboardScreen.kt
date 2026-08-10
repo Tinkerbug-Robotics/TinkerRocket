@@ -88,7 +88,24 @@ fun DashboardScreen(
     if (phoneLocation != null) {
         androidx.compose.runtime.DisposableEffect(Unit) {
             phoneLocation.start()
+            // The fix at the START of a logging session is the one worth
+            // having; a timestamp left from the previous session would
+            // otherwise suppress it (iOS resets on the same edge).
+            phoneLocation.resetFixThrottle()
             onDispose { phoneLocation.stop() }
+        }
+        // The phone IS the base station's position — the BS has no GNSS —
+        // so push it down and let the BS write it into its CSV.  Without
+        // this the range between the two ends is displayed once and then
+        // discarded, and a range test cannot be reconstructed from its own
+        // logs (the 2026-08-08 Kaua'i test only survived because the site
+        // was remembered).  Throttled inside reportFix; the BS ignores the
+        // write unless a logging session is open.
+        if (session.isBaseStation) {
+            val phoneFixForPush by phoneLocation.location.collectAsState()
+            LaunchedEffect(phoneFixForPush) {
+                if (phoneFixForPush != null) phoneLocation.reportFix(session)
+            }
         }
     }
     val telemetry by session.telemetry.collectAsState()

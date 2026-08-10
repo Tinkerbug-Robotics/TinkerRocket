@@ -327,6 +327,21 @@ public object Commands {
         }
     }
 
+    /**
+     * cmd 47 — the phone's GPS fix, pushed to the BASE STATION so its log
+     * records where it was.  `[lat_e7 i32][lon_e7 i32][alt_m i16][h_acc u8]`.
+     * The BS has no GNSS of its own; without this the range between the two
+     * ends is shown once and then lost.  Layout in [PhoneFixCodec].
+     */
+    public fun setPhoneFix(
+        latDeg: Double,
+        lonDeg: Double,
+        altitudeM: Double?,
+        accuracyM: Double?,
+    ): ByteArray = frame(BleCommandId.SET_PHONE_FIX_BS) {
+        bytes(PhoneFixCodec.encode(latDeg, lonDeg, altitudeM, accuracyM))
+    }
+
     /** cmd 35 — manual continuity test. `[channel u8]`. */
     public fun pyroContTest(channel: Int): ByteArray =
         frame(BleCommandId.PYRO_CONT_TEST) { u8(channel) }
