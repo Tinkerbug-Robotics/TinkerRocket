@@ -1,0 +1,51 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      omega;
+}
+
+dimensions      [0 0 -1 0 0 0 0];
+
+// omega = k^0.5 / (Cmu^0.25 * l), Cmu=0.09, l=0.01m
+// omega = 1.35^0.5 / (0.09^0.25 * 0.01) = 212
+internalField   uniform 212;
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform 212;
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+
+    farfield
+    {
+        type            freestream;
+        freestreamValue uniform 212;
+    }
+
+    bodyTube
+    {
+        type            omegaWallFunction;
+        value           uniform 212;
+    }
+
+    fincan
+    {
+        type            omegaWallFunction;
+        value           uniform 212;
+    }
+
+    finTab
+    {
+        type            omegaWallFunction;
+        value           uniform 212;
+    }
+}
