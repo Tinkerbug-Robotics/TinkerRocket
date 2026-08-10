@@ -17,6 +17,12 @@ import Combine
 let kEstimatedTileBytes: Int64 = 25_000
 
 final class TileDownloader: ObservableObject {
+
+    /// Main-actor isolated (it drives SwiftUI) but with a nonisolated deinit —
+    /// see OfflineTileCache for why an isolated deinit aborts the process on
+    /// iOS 26.2 at this deployment target.
+    nonisolated deinit {}
+
     /// `.failed` means NOTHING was retrieved — every tile errored or 404'd
     /// and none was already cached. It is a distinct outcome from `.finished`
     /// because a run with no connectivity used to reach `.finished` with 0

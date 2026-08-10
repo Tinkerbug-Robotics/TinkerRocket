@@ -39,6 +39,11 @@ struct OfflineRegion: Identifiable, Codable, Equatable {
 final class OfflineRegionStore: ObservableObject {
     static let shared = OfflineRegionStore()
 
+    /// This one stays main-actor isolated — it drives SwiftUI — so it only
+    /// opts its deinit out. See OfflineTileCache for why an isolated deinit
+    /// aborts the process on iOS 26.2 at this deployment target.
+    nonisolated deinit {}
+
     @Published private(set) var regions: [OfflineRegion] = []
 
     private let url: URL

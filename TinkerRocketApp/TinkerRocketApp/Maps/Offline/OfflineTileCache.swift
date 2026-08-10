@@ -15,7 +15,18 @@
 
 import Foundation
 
-final class OfflineTileCache {
+/// `nonisolated` on purpose. The module builds with
+/// SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor, which would make this cache
+/// main-actor isolated — wrong for a file-backed store that the downloader's
+/// concurrent workers and the tile overlay both call off the main thread.
+///
+/// It also has to be nonisolated to be destroyable. A main-actor class holding
+/// a non-Sendable stored property (`fm`) gets an isolated deinit, and with the
+/// app's iOS 16 deployment target the executor hop comes from the back-deployed
+/// shim, which double-frees on iOS 26.2 and aborts the process. Production
+/// never noticed because `shared` is never released; the first code to ever
+/// deallocate one of these was a test.
+nonisolated final class OfflineTileCache {
     static let shared = OfflineTileCache()
 
     private let root: URL
