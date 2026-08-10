@@ -88,6 +88,17 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
 
     var status by remember { mutableStateOf<String?>(null) }
 
+    // Whether a row already has a CSV is read off the FILESYSTEM, which Compose
+    // cannot observe — so it needs an explicit invalidation signal.  Without
+    // one the row goes stale exactly when it matters: `downloadState.active`
+    // clears BEFORE the CSV is written, so the row recomposes with no CSV, and
+    // the later `status` update doesn't invalidate it (the row never reads
+    // status).  A finished download kept showing its download arrow until the
+    // screen was left and re-entered.  Bumping this after a conversion both
+    // fixes that and caches the stat, which was otherwise re-run for every
+    // visible row on every recomposition.
+    var csvEpoch by remember { mutableStateOf(0) }
+
     // #634 multi-select, mirroring iOS FileManagerView: keyed by file NAME, not
     // index, so a selection survives paging — you can select across pages and
     // the count reflects the whole set even when some rows aren't visible.
@@ -297,11 +308,14 @@ fun FilesScreen(device: FleetDevice<DeviceSession>, fleetScope: CoroutineScope) 
                         status = null
                         fleetScope.launch {
                             status = downloadAndConvert(context, session, file)
+                            csvEpoch++      // a CSV may now exist for this row
                         }
                     },
                     onShare = { shareCsvIfPresent(context, file) },
                     onChart = { chartCsv = csvFileFor(context, file.name) },
-                    hasCsv = csvFileFor(context, file.name).exists(),
+                    hasCsv = remember(file.name, csvEpoch) {
+                        csvFileFor(context, file.name).exists()
+                    },
                     selecting = selecting,
                     selected = file.name in selection,
                     onToggleSelected = {
