@@ -1,11 +1,13 @@
 package com.tinkerbug.tinkerrocket.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
@@ -34,6 +36,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -882,18 +885,30 @@ internal fun StorageCard(
 ) {
     val (title, subtitle, used, reserved, free, total, autoEvicted) = when {
         isBaseStation && bs != null && bs.totalBytes > 0 -> {
-            val backend = listOf("SPIFFS", "SD card", "NAND").getOrElse(bs.backend) { "?" }
-            StorageRow("Base station storage", backend, bs.usedBytes, bs.reservedBytes,
+            // iOS backendName: 0 = internal flash, 2 = external NAND,
+            // anything else = SD card.
+            val backend = when (bs.backend) {
+                0 -> "Internal flash"
+                2 -> "External NAND"
+                else -> "SD card"
+            }
+            StorageRow("Base Station Storage", backend, bs.usedBytes, bs.reservedBytes,
                 bs.freeBytes, bs.totalBytes, false)
         }
         !isBaseStation && rocket != null && rocket.initialized -> {
             val n = rocket.flightCount
-            StorageRow("Rocket storage", "$n flight${if (n == 1) "" else "s"}",
+            StorageRow("Rocket Storage", "$n flight${if (n == 1) "" else "s"}",
                 rocket.usedBytes, rocket.reservedBytes, rocket.freeBytes,
                 rocket.totalBytes, rocket.autoEvicted)
         }
         else -> return
     }
+    // iOS StorageSegmentBar palette (system orange/green + systemGray2) via
+    // the nearest-value token roles, so dark theme tracks iOS too.
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val usedColor = tr.logging
+    val reservedColor = tr.statusIdle
+    val freeColor = tr.scan
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -904,43 +919,58 @@ internal fun StorageCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // Segment bar: used | reserved | free, weighted by bytes.
+            // Segment bar: used | reserved | free, weighted by bytes — the
+            // iOS capsule with a hairline outline.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color(0x22777777), RoundedCornerShape(4.dp)),
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .border(0.5.dp, Color(0x66777777), RoundedCornerShape(7.dp)),
             ) {
                 val t = total.coerceAtLeast(1)
                 @Composable
                 fun seg(bytes: Long, color: Color) {
                     val w = bytes.toFloat() / t
                     if (w > 0f) {
-                        Text(
-                            "",
-                            modifier = Modifier
+                        Box(
+                            Modifier
                                 .weight(w.coerceAtLeast(0.001f))
-                                .background(color)
-                                .padding(vertical = 5.dp),
+                                .fillMaxHeight()
+                                .background(color),
                         )
                     }
                 }
-                seg(used, Color(0xFFF57C00))
-                seg(reserved, Color(0xFF9E9E9E))
-                seg(free, Color(0xFF2E7D32))
+                seg(used, usedColor)
+                seg(reserved, reservedColor)
+                seg(free, freeColor)
             }
+            // iOS legend: 10dp rounded swatch + "<label> <bytes>" caption.
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Used ${fmtBytes(used)}", style = MaterialTheme.typography.bodySmall)
-                if (reserved > 0) {
-                    Text("Reserved ${fmtBytes(reserved)}", style = MaterialTheme.typography.bodySmall)
+                @Composable
+                fun legend(color: Color, label: String, bytes: Long) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(Modifier.size(10.dp).background(color, RoundedCornerShape(2.dp)))
+                        Text(
+                            "$label ${fmtBytes(bytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-                Text("Free ${fmtBytes(free)}", style = MaterialTheme.typography.bodySmall)
+                legend(usedColor, "Used", used)
+                if (reserved > 0) legend(reservedColor, "Reserved", reserved)
+                legend(freeColor, "Free", free)
             }
             if (autoEvicted) {
                 // #315 rolling buffer: surface that data rolled off at arm
                 // time rather than being silently dropped.
                 Text(
                     "↻ Auto-reclaimed oldest flight(s) this session",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
