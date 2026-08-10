@@ -17,11 +17,11 @@ configuration blocks.
 
 | Quantity | Value |
 |---|---|
-| Tab roll authority K<sub>t</sub> (per tab, about body axis) | 2.76 / 11.48 / 26.16 mN·m/deg at 40 / 80 / 120 m/s (R² ≈ 0.995) |
+| Tab roll authority K<sub>t</sub> (per tab, about body axis) | 2.68 / 11.18 / 25.48 mN·m/deg at 40 / 80 / 120 m/s (R² ≈ 0.995) |
 | Built-in trim asymmetry | ≈ 0.6° equivalent tab (offset scales with q) |
-| Roll inertia I<sub>roll</sub> | 18.3 × 10⁻³ kg·m² (fin set 7.6 × 10⁻³, CAD volume integral) |
+| Roll inertia I<sub>roll</sub> | 17.7 × 10⁻³ kg·m² (fin set 7.1 × 10⁻³, CAD volume integral) |
 | Plant gain K<sub>plant</sub> at 50 m/s | ≈ 56 deg/s² per tab-deg (4 tabs common-mode) |
-| **First-flight gains** (V<sub>ref</sub> = 50 m/s) | **KP = 0.224, KI = 0.134, KD = 0** — 2.0 Hz crossover, ≈ 64° phase margin |
+| **First-flight gains** (V<sub>ref</sub> = 50 m/s) | **KP = 0.223, KI = 0.134, KD = 0** — 2.0 Hz crossover, ≈ 64° phase margin |
 | Motors | J435WS (V<sub>max</sub> ≈ 91 m/s), J570W (V<sub>max</sub> ≈ 119 m/s) |
 
 Gain schedule, ±20° command clamp, 40 dps integral separation, and the 10 Hz D-filter
@@ -61,6 +61,13 @@ python3 generate_report.py    # the HTML report
 ## Provenance
 
 CFD run 2026-08-09 (OpenFOAM v2412, Docker, ~272k cells/case, all mesh-quality checks
-clean, zero failed cases). Motor data from thrustcurve.org. The moment arm assumes the
-fin root plane sits 44 mm from the centerline (mid boat-tail); the ±7 mm extremes move
-K<sub>t</sub> by ∓6% — inside the controller's margins either way.
+clean, zero failed cases). Motor data from thrustcurve.org.
+
+The moment arm uses a **measured** mount radius: the tab's inboard edge is 95.8 mm from
+the centerline, and that edge is at X = 54.68 mm in the CAD, so the fin root plane sits
+at D<sub>axis</sub> = 41.1 mm. Results were first published against a 44 mm mid-boat-tail
+estimate and revised 2026-08-10 when the real dimension was measured — K<sub>t</sub> fell
+2.6% and I<sub>roll</sub> fell 3.1%, but the PID gains barely moved (KP 0.224 → 0.223)
+because the mount radius scales tab torque and fin inertia together and largely cancels
+in K<sub>plant</sub> = 4·K<sub>t</sub>/I<sub>roll</sub>. Remaining sensitivity is ±0.9%
+on K<sub>t</sub> for ±1 mm of measurement error.

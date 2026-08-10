@@ -7,10 +7,11 @@ Sources:
   - Fin roll inertia integrated from the actual CAD solids (STEP file),
     with the fin-set mass override distributed over the CAD volume.
 
-Assumption (documented in the report): the fin root plane sits at
-D_AXIS = 44 mm from the rocket centerline (mid boat-tail radius; the
-transition runs r=51.1 -> 37.5 mm over the fin root). Sensitivity to
-D_AXIS in [37.5, 51.1] is reported.
+Measured (2026-08-10): the tab's inboard edge is 95.8 mm from the rocket
+centerline. That edge is at X = 54.68 mm in the CAD frame, so the fin root
+plane sits at D_AXIS = 95.8 - 54.68 = 41.1 mm. (The earlier 44 mm
+mid-boat-tail estimate was 2.9 mm too far out.) Sensitivity to +-1 mm of
+measurement error is reported.
 
 Roll damping via strip theory on the exposed fin planform:
   Kd_aero(V) = 0.5 * rho * V * a_eff * N * integral( c(h) * (D+h)^2 dh )
@@ -27,8 +28,8 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 STEP = os.path.join(HERE, "100 mm Rocket Airfoil.step")
 
-D_AXIS = 0.044          # m, root plane -> rocket axis (assumption, see above)
-D_RANGE = (0.0375, 0.0511)
+D_AXIS = 0.0411         # m, root plane -> rocket axis (measured: tab inboard edge 95.8 mm from centerline)
+D_RANGE = (0.0401, 0.0421)   # +-1 mm on the measurement
 RHO = 1.225
 N_FINS = 4
 FINSET_MASS = 1.076     # kg, OpenRocket override for the whole 4-fin set

@@ -357,7 +357,8 @@ both motor options: AeroTech J435WS (V<sub>max</sub> ≈ 91&nbsp;m/s) and J570W
 <tr><td>Hinge</td><td>spanwise torque rod, ∅3 mm, round-nose cove, 0.5 mm gaps</td></tr>
 <tr><td>Number of fins/tabs</td><td>4 (cruciform, all tabs driven common-mode for roll)</td></tr>
 <tr><td>Mount</td><td>boat-tail transition, r = 51.1 → 37.5 mm over the root chord</td></tr>
-<tr><td>Root plane → axis distance D<sub>axis</sub></td><td><strong>44 mm assumed</strong> (mid boat-tail; sensitivity in §9)</td></tr>
+<tr><td>Tab inboard edge → centerline</td><td><strong>95.8 mm (measured)</strong></td></tr>
+<tr><td>Root plane → axis distance D<sub>axis</sub></td><td><strong>41.1 mm</strong> (= 95.8 − 54.68, from the measurement above)</td></tr>
 </table>
 
 <p>The STEP assembly contains the fin blade, the control tab (round-nose flap on a spanwise
@@ -447,7 +448,7 @@ averaged for the reported values.</em></p>
 <table>
 <tr><th>Group</th><th>I_roll (10⁻³ kg·m²)</th></tr>
 <tr><td>Airframe (tubes, nose, couplers, recovery, motor)</td><td>{plant['I_airframe']*1e3:.2f}</td></tr>
-<tr><td>Fin set ×4 (CAD volume integral, D_axis 44 mm)</td><td>{plant['I_fins']*1e3:.2f}</td></tr>
+<tr><td>Fin set ×4 (CAD volume integral, D_axis {plant['D_axis']*1000:.1f} mm)</td><td>{plant['I_fins']*1e3:.2f}</td></tr>
 <tr><td><strong>Total I_roll</strong></td><td><strong>{plant['I_roll']*1e3:.2f}</strong></td></tr>
 </table>
 <p>Propellant burn changes I_roll by &lt;1% (on-axis mass), so launch and burnout values are
@@ -554,8 +555,8 @@ rd.roll_damping_K    = {plant['Kd_aero_per_V']:.2e}    # N·m/(m/s · rad/s), st
 <h2 id="s9">9. Limitations &amp; Uncertainty</h2>
 <table>
 <tr><th>Source</th><th>Effect on Kt</th></tr>
-<tr><td>D_axis assumption 44 mm (boat-tail range 37.5–51.1)</td>
-    <td>{sens[0]:+.1f}% / {sens[1]:+.1f}% at the extremes</td></tr>
+<tr><td>D_axis 41.1 mm, from the measured 95.8 mm tab-edge radius (±1 mm)</td>
+    <td>{sens[0]:+.1f}% / {sens[1]:+.1f}%</td></tr>
 <tr><td>0.5 mm hinge gaps sealed by mesh resolution</td><td>slight overestimate (a few %; leakage ignored)</td></tr>
 <tr><td>Flat wall instead of curved boat-tail at root</td><td>small; tab is mid-span, away from the root</td></tr>
 <tr><td>Single fin (no fin–fin interference, no body vortices)</td><td>consistent with 67 mm methodology</td></tr>
@@ -614,7 +615,7 @@ def main():
 
     # D_axis sensitivity on Kt at 80
     sens = []
-    for d in (0.0375, 0.0511):
+    for d in (0.0401, 0.0421):
         vc = an[80]['cases']
         mr = [c['M'][2] + c['F'][1] * d for c in vc]
         A = np.vstack([an[80]['angles'], np.ones(len(mr))]).T

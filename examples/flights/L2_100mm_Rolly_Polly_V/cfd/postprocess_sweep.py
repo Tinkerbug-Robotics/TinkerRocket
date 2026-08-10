@@ -19,7 +19,7 @@ import re
 import sys
 import json
 
-D_AXIS = 0.044          # m (root plane -> axis; see roll_inertia.py)
+D_AXIS = 0.0411         # m (root plane -> axis; MEASURED: tab inboard edge at 95.8 mm from centerline, edge at X=54.68)
 RHO = 1.225
 N_AVG = 200
 
