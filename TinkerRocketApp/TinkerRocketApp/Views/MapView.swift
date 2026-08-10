@@ -201,16 +201,20 @@ struct RocketMapView: UIViewRepresentable {
 
 struct MapView: View {
     @ObservedObject var device: BLEDevice
+    @ObservedObject var locationManager: LocationManager
     @EnvironmentObject var profileStore: RocketProfileStore
 
     @StateObject private var landingPredictor = LandingPredictor()
 
     @State private var tileSource: TileSource = .appleHybrid
+    // Only a placeholder until onAppear picks the rocket or the phone; it is
+    // never what the flyer sees unless both are unavailable.
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.334_900, longitude: -122.009_020),
         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
     )
     @State private var hasInitializedRegion = false
+    @State private var hasCenteredOnPhone = false
     @State private var showOfflineMaps = false
 
     /// Always reads from the latched last-valid fix (#140), not raw
@@ -326,8 +330,14 @@ struct MapView: View {
                 hasInitializedRegion = true
             }
         }
+        .onReceive(locationManager.$userLocation) { _ in
+            // A cold GPS lands well after the map does; take the first fix,
+            // but never over a rocket we are already showing.
+            if rocketCoordinate == nil { centerOnPhone() }
+        }
         .onAppear {
             centerOnRocket()
+            if rocketCoordinate == nil { centerOnPhone() }
             landingPredictor.attach(device: device, profileStore: profileStore)
         }
         .onDisappear {
@@ -387,6 +397,22 @@ struct MapView: View {
             center: coordinate,
             span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
         )
+    }
+
+    /// Opening point when the rocket has no fix yet — which is the normal
+    /// case on the pad, where this screen is opened.  The phone knows where
+    /// it is, so start there instead of on a default that is nowhere near
+    /// the flyer.  Deliberately does NOT set `hasInitializedRegion`: the
+    /// rocket's first fix must still take the camera.
+    private func centerOnPhone() {
+        guard !hasCenteredOnPhone,
+              let coordinate = locationManager.userLocation,
+              CLLocationCoordinate2DIsValid(coordinate) else { return }
+        region = MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        hasCenteredOnPhone = true
     }
 
     /// Callout text under the marker.  Shows sat count and the age of

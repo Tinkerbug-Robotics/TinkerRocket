@@ -198,7 +198,7 @@ struct DashboardView: View {
                                 Image(systemName: "book.fill")
                             }
 
-                            NavigationLink(destination: MapView(device: device)) {
+                            NavigationLink(destination: MapView(device: device, locationManager: locationManager)) {
                                 Image(systemName: "map.fill")
                             }
 
