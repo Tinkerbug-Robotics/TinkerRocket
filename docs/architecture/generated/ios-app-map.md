@@ -3,28 +3,28 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 26,720 lines across 70 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 26,737 lines across 70 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
 
-## `(root)/` — 2 files, 91 lines
+## `(root)/` — 2 files, 92 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 61 | `TRColor`, `TRShape`, `TRSpacing` |
+| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 62 | `TRColor`, `TRShape`, `TRSpacing` |
 | [TinkerRocketAppApp.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/TinkerRocketAppApp.swift) | 30 | `TinkerRocketAppApp` |
 
 
-## `Maps/Offline/` — 8 files, 787 lines
+## `Maps/Offline/` — 8 files, 796 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
 | [TileDownloader.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/TileDownloader.swift) | 208 | `TileDownloader` |
 | [OfflineTileCache.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/OfflineTileCache.swift) | 116 | — |
 | [OfflineRegion.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/OfflineRegion.swift) | 114 | `OfflineRegion`, `OfflineRegionStore` |
+| [TileSource.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/TileSource.swift) | 100 | `TileSource` |
 | [TileMath.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/TileMath.swift) | 92 | `TileXYZ`, `RegionSpec`, `TileMath` |
-| [TileSource.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/TileSource.swift) | 91 | `TileSource` |
 | [CachingTileOverlay.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/CachingTileOverlay.swift) | 78 | `CachingTileOverlay` |
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 | [BasemapOverlayController.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/BasemapOverlayController.swift) | 36 | `BasemapOverlayController` |
@@ -78,7 +78,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 27 files, 13,815 lines
+## `Views/` — 27 files, 13,822 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -98,7 +98,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Zoom & Pan State · Zoom Helpers · Body · Chart View · Zoom Indicator · Gestures · Data Loading · Chart Series Update · Progressive LOD Re-decimation · Binary Search Helpers |
 | [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 503 | `PyroTestState`, `TickCounter`, `PyroTestView`, `SlowMoCameraManager`, `CameraPreviewView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | State Machine · Tick Counter (ObservableObject so SwiftUI can observe it) · View · Top Bar · Center Display · Bottom Controls · Actions · Slow-Mo Camera Manager · Camera Preview (UIViewRepresentable) |
-| [MapView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MapView.swift) | 449 | `PredictedLandingAnnotation`, `RocketMapView`, `MapView` |
+| [MapView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MapView.swift) | 456 | `PredictedLandingAnnotation`, `RocketMapView`, `MapView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | UIViewRepresentable MKMapView wrapper · Main Map View · Preview |
 | [FleetDashboardComponents.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FleetDashboardComponents.swift) | 426 | `PairSwitcherView`, `UnitsBarView`, `RocketChip`, `BaseStationStripView`, `RocketSectionHeader`, `RelayRocketSectionView`, +1 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Pair switcher (≥2 base stations) · Units bar (roster chips) · Base-station strip · Rocket section header · Non-focused relayed rocket section |
@@ -122,4 +122,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 70 files, 26,720 lines.
+Total: 70 files, 26,737 lines.
