@@ -35,6 +35,11 @@ public object UnitFormatter {
     public fun altitudeValue(meters: Double, system: UnitSystem): Double =
         if (system == UnitSystem.METRIC) meters else meters * FEET_PER_METER
 
+    /** Inverse of [altitudeValue] (iOS `displayToMeters`) — parse a user
+     *  entry in the display unit back to canonical meters. */
+    public fun altitudeToMeters(display: Double, system: UnitSystem): Double =
+        if (system == UnitSystem.METRIC) display else display / FEET_PER_METER
+
     // ── Horizontal distance (promotes to km / mi when large) ─────────────
 
     public fun distance(meters: Double, system: UnitSystem): String = when (system) {

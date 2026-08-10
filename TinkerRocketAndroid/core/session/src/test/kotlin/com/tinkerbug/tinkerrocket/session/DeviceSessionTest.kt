@@ -176,6 +176,18 @@ class DeviceSessionTest {
         assertTrue(h.session.contTestPending(2))
     }
 
+    @Test
+    fun mirrorPyroConfig_foldsIntoRocketConfigWithoutReadback() = runTest {
+        val h = startedSession { configPyroJson = null; configJson = null }
+        runCurrent()
+        // No readback arrived — the mirror starts from a default RocketConfig
+        // (iOS applyPyroConfig mirrors into `rocketConfig ?? RocketConfig()`).
+        h.session.mirrorPyroConfig { it.copy(pyro2Enabled = true, pyro2TriggerValue = 42f) }
+        runCurrent()
+        assertEquals(true, h.session.rocketConfig.value?.pyro2Enabled)
+        assertEquals(42f, h.session.rocketConfig.value?.pyro2TriggerValue)
+    }
+
     // ── Identity readback ────────────────────────────────────────────────
 
     @Test

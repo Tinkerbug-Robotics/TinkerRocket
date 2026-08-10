@@ -931,6 +931,18 @@ public class DeviceSession(
     public fun contTestPending(channel: Int): Boolean =
         (_contTestPendingUntil.value[channel] ?: 0L) > clock()
 
+    /**
+     * iOS applyPyroConfig step 3: mirror an optimistic cmd-34 push into
+     * [rocketConfig] so the dashboard pyro tiles update live — the firmware
+     * does NOT re-send config_pyro after a pyro-config write, only on the
+     * next connect/readback.
+     */
+    public fun mirrorPyroConfig(mutate: (RocketConfig) -> RocketConfig) {
+        scope.launch {
+            _rocketConfig.value = mutate(_rocketConfig.value ?: RocketConfig())
+        }
+    }
+
     public fun markSimLaunched() {
         scope.launch {
             _simLaunched.value = true
