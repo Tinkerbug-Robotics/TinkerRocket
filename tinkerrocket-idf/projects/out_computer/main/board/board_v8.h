@@ -71,4 +71,20 @@ struct board_pins
     // Daughterboard power gate (high = powered), like CAM_ACT for the RunCam.
     // Also the recovery hammer for a wedged/bricked daughterboard (#412).
     static constexpr int LORA_ACT_PIN = 12;      // LoRa_ACT (CONFIRMED)
+
+    // --- High-side-switch current monitors (V9 close-out: TPS22811 U26/U28) ---
+    // IMON sources GIMON x ILOAD into a ground-referenced gain resistor:
+    //   ILOAD = V(pin) / (IMON_GAIN_A_PER_A * R).
+    // GIMON is 95.3 uA/A typical but 82.9-107.6 over temp (datasheet, at
+    // 1.5 A) — calibrate against a known load before trusting absolute amps.
+    // Gain resistors per hardware PR #728: CAM R85 = 2.0 k (2.2 k in the
+    // original V9 close-out) and SERVO R88 = 1.0 k — deliberately landing
+    // BOTH channels near 0.286 V at their design currents (camera 1.5 A,
+    // servo 3 A per high-side-switch-design.md). Nothing reads these yet;
+    // staged so the first implementation cannot inherit the 2.2 k scale.
+    static constexpr int   CAM_IMON_GPIO      = 8;         // CAM_IMON, ADC1_CH7
+    static constexpr int   SERVO_IMON_GPIO    = 9;         // SERVO_IMON, ADC1_CH8
+    static constexpr float IMON_GAIN_A_PER_A  = 95.3e-6f;  // TPS22811 GIMON typ
+    static constexpr float CAM_IMON_R_OHM     = 2000.0f;   // R85 (PR #728)
+    static constexpr float SERVO_IMON_R_OHM   = 1000.0f;   // R88
 };
