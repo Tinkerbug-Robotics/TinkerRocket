@@ -38,6 +38,11 @@ struct RocketMapView: UIViewRepresentable {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.mapType = tileSource.appleMapType
+        // Where the flyer is standing. The whole screen is about walking to
+        // the rocket, and without this the map never showed one end of that
+        // walk. MapKit draws nothing until location is authorised, so this
+        // is safe regardless of permission state.
+        mapView.showsUserLocation = true
         mapView.setRegion(region, animated: false)
         context.coordinator.basemap.apply(tileSource, to: mapView)
         return mapView
@@ -53,7 +58,10 @@ struct RocketMapView: UIViewRepresentable {
         // Reset annotations + DATA overlays each pass (cheap).  The basemap tile
         // overlay is managed separately above so it isn't torn down/reloaded on
         // every telemetry tick.
-        mapView.removeAnnotations(mapView.annotations)
+        // MKUserLocation lives in `annotations` too, and it is MapKit's, not
+        // ours — tearing it down every telemetry tick fights the framework
+        // for the one annotation we do not manage.
+        mapView.removeAnnotations(mapView.annotations.filter { !($0 is MKUserLocation) })
         mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
 
         if let coordinate = rocketCoordinate {
@@ -138,6 +146,10 @@ struct RocketMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView,
                      viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // nil = MapKit's own blue dot. Without this the fall-through
+            // below would give the flyer's own position the red rocket pin,
+            // i.e. two rockets on the map and no way to tell them apart.
+            if annotation is MKUserLocation { return nil }
             if annotation is PredictedLandingAnnotation {
                 let id = "PredictedLandingPin"
                 var view = mapView.dequeueReusableAnnotationView(withIdentifier: id)
