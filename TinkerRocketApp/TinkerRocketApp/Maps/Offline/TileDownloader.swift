@@ -122,10 +122,21 @@ final class TileDownloader: ObservableObject {
             let failures = self.failedCount
             self.createdLock.unlock()
 
-            // Every single tile failed: no connectivity, or the upstream is
-            // down. Recording this would put an area in the list that holds
-            // nothing.
-            let nothingArrived = tiles.count > 0 && failures == tiles.count
+            // Nothing new was retrieved and something failed, so this run
+            // accomplished nothing and there is no area to record.
+            //
+            // Not `failures == tiles.count`: that misses the case this was
+            // found in on the Android bench. The preview map caches tiles
+            // through the same cache, so with the network down 13 of 2991
+            // tiles were already on disk, `failures` came in 13 short of the
+            // total, and a 13 km area was saved holding 0.2% of itself.
+            //
+            // Not zero bytes either — a cache hit reports its size, so those
+            // 13 tiles counted as ~200 KB. `mine` holds exactly the tiles this
+            // run pulled off the network, which is the question being asked.
+            // Empty with no failures is the honest opposite — every tile was
+            // already cached — and still saves.
+            let nothingArrived = mine.isEmpty && failures > 0
             if self.cancelFlag || nothingArrived {
                 self.cache.removeTiles(source: key, tiles: mine)
             }

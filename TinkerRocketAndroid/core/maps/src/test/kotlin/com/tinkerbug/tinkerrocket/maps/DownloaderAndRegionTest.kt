@@ -26,6 +26,8 @@ private class FakeTileUpstream : AutoCloseable {
     val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
     val hits = AtomicInteger(0)
     @Volatile var respond404 = false
+    /** 404 only the paths containing one of these, to fail a chosen tile. */
+    @Volatile var fail404Matching: List<String> = emptyList()
     /** Stall each response, so a run stays alive long enough to cancel it. */
     @Volatile var delayMs = 0L
     val body = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3, 4)
@@ -38,11 +40,12 @@ private class FakeTileUpstream : AutoCloseable {
                 val client = try { socket.accept() } catch (_: Exception) { break }
                 Thread {
                     client.use { c ->
-                        c.getInputStream().bufferedReader(Charsets.ISO_8859_1).readLine() ?: return@use
+                        val requestLine = c.getInputStream()
+                            .bufferedReader(Charsets.ISO_8859_1).readLine() ?: return@use
                         hits.incrementAndGet()
                         if (delayMs > 0) Thread.sleep(delayMs)
                         val out = c.getOutputStream()
-                        if (respond404) {
+                        if (respond404 || fail404Matching.any { requestLine.contains(it) }) {
                             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                         } else {
                             out.write(
@@ -134,18 +137,53 @@ class TileDownloaderTest {
 
     @Test
     fun someTilesMissing_stillFinishes_butCountsTheFailures() {
-        // A few edge tiles 404ing is normal and must not block the save; the
+        // A few edge tiles 404ing is normal — USGS really does 404 some tiles
+        // at some zooms, mostly over water — and must not block the save; the
         // count is what tells the operator the area is partly covered.
-        val all = TileMath.tiles(region)
-        cache.store(upstream.body, "src", all[0].z, all[0].x, all[0].y)
-        upstream.respond404 = true
+        val doomed = TileMath.tiles(region)[0]
+        upstream.fail404Matching = listOf("/${doomed.z}/${doomed.y}/${doomed.x}")
         var recordedTiles = -1
         downloader.start(region, "src") { tiles, _ -> recordedTiles = tiles }
         awaitTerminal()
 
         assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
-        assertEquals(7, downloader.failed.value, "every uncached tile failed")
+        assertEquals(1, downloader.failed.value, "only the one 404 counts as failed")
         assertEquals(8, recordedTiles, "the region is still recorded")
+    }
+
+    @Test
+    fun cachedTilesDoNotRescueARunThatRetrievedNothing() {
+        // Found on the bench, not by reading code.  With the network down, the
+        // preview map had already cached 13 of 2991 tiles through the same
+        // proxy, so `failed` came in short of `total`, the old test passed, and
+        // a 13 km area was saved holding 0.2% of itself.  A byte count can't
+        // answer this either: a cache hit reports its size, so those 13 tiles
+        // read as ~200 KB of "progress".
+        val alreadyThere = TileMath.tiles(region)[0]
+        cache.store(upstream.body, "src", alreadyThere.z, alreadyThere.x, alreadyThere.y)
+        upstream.respond404 = true
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FAILED, downloader.phase.value)
+        assertEquals(7, downloader.failed.value)
+        assertEquals(false, recorded, "an area holding one tile of eight is not an area")
+    }
+
+    @Test
+    fun fullyCachedRegion_stillSaves() {
+        // The honest opposite: re-saving an area you already have retrieves
+        // nothing and fails nothing, and must still be recorded.
+        for (t in TileMath.tiles(region)) cache.store(upstream.body, "src", t.z, t.x, t.y)
+        upstream.respond404 = true      // any network use would fail
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
+        assertEquals(0, downloader.failed.value)
+        assertEquals(true, recorded)
     }
 
     @Test

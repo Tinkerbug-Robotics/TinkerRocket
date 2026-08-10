@@ -132,15 +132,26 @@ public class TileDownloader(
             // tiles is worse than a few file deletes during teardown.
             withContext(NonCancellable) {
                 val mine = synchronized(created) { created.toList().also { created.clear() } }
-                val nothingArrived = _total.value > 0 && _failed.value == _total.value
+                // Nothing new was retrieved and something failed, so this run
+                // accomplished nothing and there is no area to record.
+                //
+                // Not `failed == total`: that misses the case this was found
+                // in on the bench.  The preview map caches tiles through the
+                // same proxy, so with the network down 13 of 2991 tiles were
+                // already on disk, `failed` came in 13 short of `total`, and a
+                // 13 km area was saved holding 0.2% of itself.
+                //
+                // Not zero bytes either — a cache hit reports its size, so
+                // those 13 tiles counted as ~200 KB.  `created` holds exactly
+                // the tiles this run pulled off the network, which is the
+                // question being asked.  Empty with no failures is the honest
+                // opposite — every tile was already cached — and still saves.
+                val nothingArrived = mine.isEmpty() && _failed.value > 0
                 when {
                     cancelFlag -> {
                         cache.removeTiles(sourceKey, mine)
                         _phase.value = Phase.CANCELLED
                     }
-                    // Every single tile failed: no connectivity, or the
-                    // upstream is down.  Recording this would put an area in
-                    // the list that holds nothing.
                     nothingArrived -> {
                         cache.removeTiles(sourceKey, mine)
                         _phase.value = Phase.FAILED

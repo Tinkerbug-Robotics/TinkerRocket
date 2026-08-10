@@ -241,18 +241,28 @@ final class OfflineRegionStoreTests: XCTestCase {
 private final class StubTileProtocol: URLProtocol {
     nonisolated(unsafe) static var body = Data([0xFF, 0xD8, 1, 2, 3, 4])
     nonisolated(unsafe) static var respond404 = false
+    /// 404 only the URLs containing one of these, so a test can fail a chosen
+    /// tile instead of the whole run.
+    nonisolated(unsafe) static var fail404Matching: [String] = []
     nonisolated(unsafe) static var hits = 0
     nonisolated(unsafe) static let lock = NSLock()
 
     static func reset() {
-        lock.lock(); hits = 0; respond404 = false; lock.unlock()
+        lock.lock(); hits = 0; respond404 = false; fail404Matching = []; lock.unlock()
     }
+
+    /// The ArcGIS path segment for a tile, ordered z/y/x.
+    static func urlFragment(for t: TileXYZ) -> String { "\(t.z)/\(t.y)/\(t.x)" }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        Self.lock.lock(); Self.hits += 1; let fail = Self.respond404; Self.lock.unlock()
+        let path = request.url?.absoluteString ?? ""
+        Self.lock.lock()
+        Self.hits += 1
+        let fail = Self.respond404 || Self.fail404Matching.contains { path.contains($0) }
+        Self.lock.unlock()
         let response = HTTPURLResponse(url: request.url!,
                                        statusCode: fail ? 404 : 200,
                                        httpVersion: nil, headerFields: nil)!
@@ -338,21 +348,59 @@ final class TileDownloaderTests: XCTestCase {
         XCTAssertEqual(cache.byteCount(source: "usgsImagery"), 0, "404s must not be cached")
     }
 
-    /// A few edge tiles 404ing is normal and must not block the save.
+    /// A few edge tiles 404ing is normal and must not block the save. USGS
+    /// genuinely 404s some tiles at some zooms, mostly over water.
     func testPartialFailureStillFinishesAndCountsFailures() {
         let cache = OfflineTileCache(root: tempDir())
-        let first = TileMath.tiles(for: region)[0]
-        cache.store(StubTileProtocol.body, source: "usgsImagery",
-                    z: first.z, x: first.x, y: first.y)
-        StubTileProtocol.respond404 = true
+        let doomed = TileMath.tiles(for: region)[0]
+        StubTileProtocol.fail404Matching = [StubTileProtocol.urlFragment(for: doomed)]
         let d = makeDownloader(cache: cache)
         var recorded = false
         d.start(region: region, source: .usgsImagery) { _, _ in recorded = true }
         awaitTerminal(d)
 
         XCTAssertEqual(d.phase, .finished)
-        XCTAssertEqual(d.failed, 7, "every uncached tile failed")
+        XCTAssertEqual(d.failed, 1, "only the one 404 counts as failed")
         XCTAssertTrue(recorded, "the region is still recorded")
+    }
+
+    /// The bench case that got past `failed == total`. Panning the preview map
+    /// caches tiles through the same cache, so with the network down a run is
+    /// short of a total failure by however many tiles happened to be on disk —
+    /// and a 13 km area was saved holding 0.2% of itself. Cache hits also
+    /// report their byte size, so a byte count can't answer this either.
+    func testCachedTilesDoNotRescueARunThatRetrievedNothing() {
+        let cache = OfflineTileCache(root: tempDir())
+        let alreadyThere = TileMath.tiles(for: region)[0]
+        cache.store(StubTileProtocol.body, source: "usgsImagery",
+                    z: alreadyThere.z, x: alreadyThere.x, y: alreadyThere.y)
+        StubTileProtocol.respond404 = true
+        let d = makeDownloader(cache: cache)
+        var recorded = false
+        d.start(region: region, source: .usgsImagery) { _, _ in recorded = true }
+        awaitTerminal(d)
+
+        XCTAssertEqual(d.phase, .failed, "nothing was retrieved, so nothing was saved")
+        XCTAssertEqual(d.failed, 7)
+        XCTAssertFalse(recorded, "an area holding one tile of eight is not an area")
+    }
+
+    /// The honest opposite: re-saving an area you already have retrieves
+    /// nothing and fails nothing, and must still be recorded.
+    func testFullyCachedRegionStillSaves() {
+        let cache = OfflineTileCache(root: tempDir())
+        for t in TileMath.tiles(for: region) {
+            cache.store(StubTileProtocol.body, source: "usgsImagery", z: t.z, x: t.x, y: t.y)
+        }
+        StubTileProtocol.respond404 = true      // any network use would fail
+        let d = makeDownloader(cache: cache)
+        var recorded = false
+        d.start(region: region, source: .usgsImagery) { _, _ in recorded = true }
+        awaitTerminal(d)
+
+        XCTAssertEqual(d.phase, .finished)
+        XCTAssertEqual(d.failed, 0)
+        XCTAssertTrue(recorded)
     }
 
     func testUnknownSourceIsIgnored() {
