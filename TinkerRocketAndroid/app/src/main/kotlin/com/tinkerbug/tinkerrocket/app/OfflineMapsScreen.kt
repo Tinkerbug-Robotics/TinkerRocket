@@ -204,9 +204,16 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     val total by downloader.total.collectAsState()
     val bytes by downloader.bytes.collectAsState()
 
+    // Never ask deeper than the source actually serves.  The USGS basemaps
+    // stop at 16; a request for 17/18 404s every tile in the band, and the
+    // downloader counts a 404 as done with 0 bytes — so the deeper levels
+    // padded the estimate with tiles that could never arrive and downloaded
+    // nothing.  Also re-clamps a value left over from a deeper source.
+    val effectiveMaxZoom = minOf(maxZoom.toInt(), source.maxZoom)
+
     val spec = RegionSpec(
         centerLat = centerLat, centerLon = centerLon,
-        radiusMeters = radiusKm * 1000, minZoom = 10, maxZoom = maxZoom.toInt(),
+        radiusMeters = radiusKm * 1000, minZoom = 10, maxZoom = effectiveMaxZoom,
     )
     val tileCount = TileMath.tileCount(spec)
     val estMb = tileCount * ESTIMATED_TILE_BYTES / 1_048_576.0
@@ -299,7 +306,10 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
 
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SliderRow("Radius", "%.1f km".format(radiusKm), radiusKm, 1.0..20.0) { radiusKm = (it * 2).toInt() / 2.0 }
-            SliderRow("Detail (max zoom)", "z${maxZoom.toInt()}", maxZoom, 13.0..18.0) { maxZoom = it.toInt().toDouble() }
+            SliderRow(
+                "Detail (max zoom)", "z$effectiveMaxZoom", maxZoom,
+                13.0..source.maxZoom.toDouble().coerceAtLeast(13.0),
+            ) { maxZoom = it.toInt().toDouble() }
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Estimate", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -350,7 +360,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                                     name = regionName,
                                     lat = centerLat, lon = centerLon,
                                     radiusMeters = radiusKm * 1000,
-                                    minZoom = 10, maxZoom = maxZoom.toInt(),
+                                    minZoom = 10, maxZoom = effectiveMaxZoom,
                                     source = source.key,
                                     tileCount = tileCount, bytes = byteCount,
                                     savedAtMs = System.currentTimeMillis(),

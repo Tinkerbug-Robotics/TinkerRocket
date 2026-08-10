@@ -53,6 +53,15 @@ enum TileSource: String, CaseIterable, Identifiable {
     /// USGS (public domain) yes; Apple no.
     var isCacheable: Bool { !isAppleBasemap }
 
+    /// Deepest zoom this source actually serves.  The USGS ArcGIS basemaps
+    /// stop at 16 — asking for 17/18 returns 404 for every tile in the band,
+    /// which the downloader counts as done with 0 bytes, so an over-deep
+    /// request silently inflates the estimate and downloads nothing.
+    /// Matches Android's per-source `TileSource.maxZoom`.
+    var maxZoom: Int {
+        isAppleBasemap ? 19 : 16
+    }
+
     /// MKMapType for the Apple cases. For USGS cases the value is irrelevant
     /// (the overlay replaces the basemap) but `.standard` keeps Apple from
     /// fetching its own imagery underneath.

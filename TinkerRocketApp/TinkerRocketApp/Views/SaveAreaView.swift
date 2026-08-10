@@ -88,9 +88,14 @@ struct SaveAreaView: View {
             span: MKCoordinateSpan(latitudeDelta: 0.15, longitudeDelta: 0.15)))
     }
 
+    /// Never deeper than the source actually serves: those bands are all
+    /// 404s, which the downloader counts as done with 0 bytes, so they would
+    /// pad the estimate with tiles that can never arrive.
+    private var effectiveMaxZoom: Int { min(Int(maxZoom), source.maxZoom) }
+
     private var spec: RegionSpec {
         RegionSpec(center: region.center, radiusMeters: radiusKm * 1000,
-                   minZoom: 10, maxZoom: Int(maxZoom))
+                   minZoom: 10, maxZoom: effectiveMaxZoom)
     }
     private var tileCount: Int { TileMath.tileCount(for: spec) }
     private var estMB: Double { Double(Int64(tileCount) * kEstimatedTileBytes) / 1_048_576 }
@@ -119,7 +124,8 @@ struct SaveAreaView: View {
                         sliderRow(title: "Radius", value: String(format: "%.1f km", radiusKm),
                                   binding: $radiusKm, range: 1...20, step: 0.5)
                         sliderRow(title: "Detail (max zoom)", value: "z\(Int(maxZoom))",
-                                  binding: $maxZoom, range: 13...18, step: 1)
+                                  binding: $maxZoom,
+                                  range: 13...Double(source.maxZoom), step: 1)
                         HStack {
                             Text("Estimate").foregroundColor(.secondary)
                             Spacer()
@@ -161,7 +167,7 @@ struct SaveAreaView: View {
                                         name: regionName,
                                         lat: center.latitude, lon: center.longitude,
                                         radiusMeters: radiusKm * 1000,
-                                        minZoom: 10, maxZoom: Int(maxZoom),
+                                        minZoom: 10, maxZoom: effectiveMaxZoom,
                                         source: source.rawValue, tileCount: tiles,
                                         bytes: byteCount, savedAt: Date()))
                                 }
