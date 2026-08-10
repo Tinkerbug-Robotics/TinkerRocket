@@ -72,13 +72,29 @@ public class OfflineRegionStore(
     }
 
     /**
-     * Remove a region from the manifest and delete its tiles from disk.
-     * (Overlapping regions are rare here; a shared tile that gets removed
-     * will simply re-download next time it's viewed online.)
+     * Remove a region from the manifest and delete the tiles no SURVIVING
+     * region still needs.
+     *
+     * Deleting by geometry alone punched holes in overlapping regions: two
+     * areas over the same launch site share tile paths, so dropping one took
+     * the shared tiles with it and left the other quietly incomplete.  The
+     * old comment shrugged that a lost tile "will simply re-download next
+     * time it's viewed online" — which is true at home and exactly wrong at
+     * a field with no signal, where these regions are the entire point.
+     *
+     * Only same-source regions can share tiles (the source is a directory in
+     * the path), so the keep-set is built from those alone.  Tiles cached
+     * passively by panning the map are not claimed by any region and are
+     * still removed if they fall inside — they cost one re-fetch online, and
+     * tracking them would mean refcounting the whole cache.
      */
     public fun delete(region: OfflineRegion) {
-        cache.removeTiles(region.source, TileMath.tiles(region.spec))
-        _regions.value = _regions.value.filterNot { it.id == region.id }
+        val survivors = _regions.value.filterNot { it.id == region.id }
+        val keep = survivors
+            .filter { it.source == region.source }
+            .flatMapTo(HashSet()) { TileMath.tiles(it.spec) }
+        cache.removeTiles(region.source, TileMath.tiles(region.spec).filterNot { it in keep })
+        _regions.value = survivors
         save()
     }
 

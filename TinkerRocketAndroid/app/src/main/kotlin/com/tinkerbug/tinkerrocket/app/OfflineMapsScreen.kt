@@ -100,9 +100,16 @@ fun MapTab(container: AppContainer, session: DeviceSession?) {
         "driftcast" -> DriftCastScreen(container = container, onBack = { route = "map" })
         else -> SaveAreaScreen(
             container = container,
+            // Rocket, else the PHONE, else the continental-US centroid.
+            // Without the phone step this opened in Kansas whenever the
+            // rocket had no fix — which is every time you save an area
+            // before flying, i.e. always. You save imagery for where you
+            // are, and the phone knows where that is.
             initialCenter = session?.lastValidRocketFix?.value
                 ?.let { LatLng(it.latitude, it.longitude) }
-                ?: LatLng(39.8283, -98.5795), // continental-US fallback
+                ?: container.phoneLocation.location.value
+                    ?.let { LatLng(it.lat, it.lon) }
+                ?: LatLng(39.8283, -98.5795),
             onDone = { route = "offline" },
         )
     }
@@ -203,33 +210,31 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     val done by downloader.done.collectAsState()
     val total by downloader.total.collectAsState()
     val bytes by downloader.bytes.collectAsState()
+    val failed by downloader.failed.collectAsState()
+
+    // Never ask deeper than the source actually serves.  The USGS basemaps
+    // stop at 16; a request for 17/18 404s every tile in the band, and the
+    // downloader counts a 404 as done with 0 bytes — so the deeper levels
+    // padded the estimate with tiles that could never arrive and downloaded
+    // nothing.  Also re-clamps a value left over from a deeper source.
+    val effectiveMaxZoom = minOf(maxZoom.toInt(), source.maxZoom)
 
     val spec = RegionSpec(
         centerLat = centerLat, centerLon = centerLon,
-        radiusMeters = radiusKm * 1000, minZoom = 10, maxZoom = maxZoom.toInt(),
+        radiusMeters = radiusKm * 1000, minZoom = 10, maxZoom = effectiveMaxZoom,
     )
     val tileCount = TileMath.tileCount(spec)
     val estMb = tileCount * ESTIMATED_TILE_BYTES / 1_048_576.0
     val tooBig = estMb > 200
     val defaultName = "Area %.3f, %.3f".format(centerLat, centerLon)
 
-    // Save the region once the download finishes (iOS onChange(.finished)).
+    // Recording the region belongs to the downloader (it hands us the
+    // totals when it succeeds), because it outlives this screen — backing
+    // out mid-download used to let the run finish with nobody left to write
+    // the manifest, stranding the whole region's tiles on disk.  All that is
+    // left here is leaving the screen.
     LaunchedEffect(phase) {
-        if (phase == TileDownloader.Phase.FINISHED) {
-            container.fleetScope.launch {
-                container.regionStore.add(
-                    OfflineRegion(
-                        name = name.ifBlank { defaultName },
-                        lat = centerLat, lon = centerLon,
-                        radiusMeters = radiusKm * 1000,
-                        minZoom = 10, maxZoom = maxZoom.toInt(),
-                        source = source.key, tileCount = total, bytes = bytes,
-                        savedAtMs = System.currentTimeMillis(),
-                    ),
-                )
-            }
-            onDone()
-        }
+        if (phase == TileDownloader.Phase.FINISHED) onDone()
     }
 
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
@@ -309,7 +314,10 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
 
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SliderRow("Radius", "%.1f km".format(radiusKm), radiusKm, 1.0..20.0) { radiusKm = (it * 2).toInt() / 2.0 }
-            SliderRow("Detail (max zoom)", "z${maxZoom.toInt()}", maxZoom, 13.0..18.0) { maxZoom = it.toInt().toDouble() }
+            SliderRow(
+                "Detail (max zoom)", "z$effectiveMaxZoom", maxZoom,
+                13.0..source.maxZoom.toDouble().coerceAtLeast(13.0),
+            ) { maxZoom = it.toInt().toDouble() }
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Estimate", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -335,16 +343,32 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            // A run that reached nothing used to end silently on a saved
+            // 0 MB area — the failure only showed up at the field.
+            if (phase == TileDownloader.Phase.FAILED) {
+                Text(
+                    "Download failed — no tiles could be fetched. Check your " +
+                        "connection and try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
             if (phase == TileDownloader.Phase.DOWNLOADING) {
                 LinearProgressIndicator(
                     progress = { if (total > 0) done.toFloat() / total else 0f },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "$done / $total tiles · %.0f MB".format(bytes / 1_048_576.0),
+                    "$done / $total tiles · %.0f MB".format(bytes / 1_048_576.0) +
+                        // Visible AS IT HAPPENS: the screen closes on success,
+                        // so this is the only place a partly-covered area can
+                        // admit it.
+                        if (failed > 0) " · $failed failed" else "",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (failed > 0) Color(0xFFFFA000)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedButton(
                     onClick = { downloader.cancel() },
@@ -352,7 +376,22 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 ) { Text("Cancel download") }
             } else {
                 Button(
-                    onClick = { downloader.start(spec, source.key) },
+                    onClick = {
+                        val regionName = name.ifBlank { defaultName }
+                        downloader.start(spec, source.key) { tileCount, byteCount ->
+                            container.regionStore.add(
+                                OfflineRegion(
+                                    name = regionName,
+                                    lat = centerLat, lon = centerLon,
+                                    radiusMeters = radiusKm * 1000,
+                                    minZoom = 10, maxZoom = effectiveMaxZoom,
+                                    source = source.key,
+                                    tileCount = tileCount, bytes = byteCount,
+                                    savedAtMs = System.currentTimeMillis(),
+                                ),
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Download $tileCount tiles") }
             }

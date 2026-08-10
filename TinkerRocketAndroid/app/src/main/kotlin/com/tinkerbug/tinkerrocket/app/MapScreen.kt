@@ -312,13 +312,23 @@ fun MapScreen(
         }
     }
 
-    // First camera: latched fix if we have one, else the last map position.
-    LaunchedEffect(mapRef) {
+    // First camera: the rocket's latched fix when we already have one, else
+    // the PHONE — the map is opened on the pad, before the rocket has a fix,
+    // and opening on the whole planet when the phone knows exactly where it
+    // is helps nobody.  Fires on the first fix of either kind (a cold GPS
+    // lands well after the map does), once only, and never against a user
+    // who has already panned (`follow` clears on gesture).  A rocket fix
+    // arriving later still takes the camera — that's the follow effect above,
+    // which pans at the zoom the user is on.
+    var initialCentered by remember { mutableStateOf(false) }
+    LaunchedEffect(mapRef, fix, phoneFix) {
         val map = mapRef ?: return@LaunchedEffect
-        val f = fix
-        if (f != null) {
-            map.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(f.latitude, f.longitude), 15.0))
-        }
+        if (initialCentered || !follow) return@LaunchedEffect
+        val target = fix?.let { LatLng(it.latitude, it.longitude) }
+            ?: phoneFix?.let { LatLng(it.lat, it.lon) }
+            ?: return@LaunchedEffect
+        map.moveCamera(CameraUpdateFactory.newLatLngZoom(target, 15.0))
+        initialCentered = true
     }
 }
 

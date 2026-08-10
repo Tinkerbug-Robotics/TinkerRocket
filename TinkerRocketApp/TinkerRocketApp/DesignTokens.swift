@@ -25,6 +25,7 @@ enum TRColor {
     static let voiceReady = dynamic(0x34C759, 0x30D158)  // green
     static let voiceWarn = dynamic(0xFF9500, 0xFF9F0A)  // orange
     static let voiceError = dynamic(0xFF3B30, 0xFF453A)  // red
+    static let orientWarn = dynamic(0xFF9500, 0xFF9F0A)  // orange
 
     static let background = dynamic(0xFFFFFF, 0x000000)
     static let card = dynamic(0xF2F2F7, 0x1C1C1E)

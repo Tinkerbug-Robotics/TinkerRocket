@@ -45,7 +45,10 @@ final class CachingTileOverlay: MKTileOverlay {
         super.init(urlTemplate: source.urlTemplate)
         canReplaceMapContent = true
         minimumZ = 0
-        maximumZ = 19
+        // Per-source: USGS stops at 16, so asking deeper just 404s every
+        // tile.  MapKit over-zooms the last available level instead, which
+        // is what the flyer wants on the recovery walk.
+        maximumZ = source.maxZoom
     }
 
     override func loadTile(at path: MKTileOverlayPath,

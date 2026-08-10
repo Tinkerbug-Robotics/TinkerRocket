@@ -298,16 +298,20 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 s.sendCommandFrame(Commands.imuRate(profile.imuRateHz))
             }
             ConfigGroup.SOUNDS -> s.sendCommandFrame(Commands.soundsEnable(profile.soundsEnabled))
-            ConfigGroup.PYRO -> s.sendCommandFrame(
-                Commands.pyroConfig(
-                    listOf(
-                        PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
-                        PyroChannelConfig(profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
-                        PyroChannelConfig(profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
-                        PyroChannelConfig(profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
-                    ),
-                ),
-            )
+            ConfigGroup.PYRO -> {
+                val channels = listOf(
+                    PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
+                    PyroChannelConfig(profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
+                    PyroChannelConfig(profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
+                    PyroChannelConfig(profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
+                )
+                s.sendCommandFrame(Commands.pyroConfig(channels))
+                // iOS applyPyroConfig step 3, from the ONE source the push
+                // used: the firmware never echoes config_pyro after a write,
+                // so without this the dashboard tiles show the last readback
+                // until the next connect.
+                s.mirrorPyroConfig(channels)
+            }
         }
     }
 

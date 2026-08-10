@@ -14,6 +14,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -25,6 +26,10 @@ private class FakeTileUpstream : AutoCloseable {
     val socket = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
     val hits = AtomicInteger(0)
     @Volatile var respond404 = false
+    /** 404 only the paths containing one of these, to fail a chosen tile. */
+    @Volatile var fail404Matching: List<String> = emptyList()
+    /** Stall each response, so a run stays alive long enough to cancel it. */
+    @Volatile var delayMs = 0L
     val body = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3, 4)
 
     val template = "http://127.0.0.1:${socket.localPort}/t/{z}/{y}/{x}"
@@ -35,10 +40,12 @@ private class FakeTileUpstream : AutoCloseable {
                 val client = try { socket.accept() } catch (_: Exception) { break }
                 Thread {
                     client.use { c ->
-                        c.getInputStream().bufferedReader(Charsets.ISO_8859_1).readLine() ?: return@use
+                        val requestLine = c.getInputStream()
+                            .bufferedReader(Charsets.ISO_8859_1).readLine() ?: return@use
                         hits.incrementAndGet()
+                        if (delayMs > 0) Thread.sleep(delayMs)
                         val out = c.getOutputStream()
-                        if (respond404) {
+                        if (respond404 || fail404Matching.any { requestLine.contains(it) }) {
                             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                         } else {
                             out.write(
@@ -111,21 +118,133 @@ class TileDownloaderTest {
     }
 
     @Test
-    fun missingTiles_countAsZeroBytes_progressStillCompletes() {
+    fun everyTileMissing_isFAILED_notAQuietlyEmptyRegion() {
+        // The no-signal case this feature exists for.  It used to reach
+        // FINISHED with 0 bytes and save a 0 MB area that looked real in the
+        // list — the emptiness only surfaced at the field.
         upstream.respond404 = true
-        downloader.start(region, "src")
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FAILED, downloader.phase.value)
+        assertEquals(8, downloader.done.value, "progress still completes")
+        assertEquals(8, downloader.failed.value)
+        assertEquals(0L, downloader.bytes.value)
+        assertEquals(false, recorded, "a run that fetched nothing must not save a region")
+        assertNull(cache.tileData("src", 12, 1195, 1551), "404 must not be cached")
+    }
+
+    @Test
+    fun someTilesMissing_stillFinishes_butCountsTheFailures() {
+        // A few edge tiles 404ing is normal — USGS really does 404 some tiles
+        // at some zooms, mostly over water — and must not block the save; the
+        // count is what tells the operator the area is partly covered.
+        val doomed = TileMath.tiles(region)[0]
+        upstream.fail404Matching = listOf("/${doomed.z}/${doomed.y}/${doomed.x}")
+        var recordedTiles = -1
+        downloader.start(region, "src") { tiles, _ -> recordedTiles = tiles }
         awaitTerminal()
 
         assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
-        assertEquals(8, downloader.done.value)
-        assertEquals(0L, downloader.bytes.value)
-        assertNull(cache.tileData("src", 12, 1195, 1551), "404 must not be cached")
+        assertEquals(1, downloader.failed.value, "only the one 404 counts as failed")
+        assertEquals(8, recordedTiles, "the region is still recorded")
+    }
+
+    @Test
+    fun cachedTilesDoNotRescueARunThatRetrievedNothing() {
+        // Found on the bench, not by reading code.  With the network down, the
+        // preview map had already cached 13 of 2991 tiles through the same
+        // proxy, so `failed` came in short of `total`, the old test passed, and
+        // a 13 km area was saved holding 0.2% of itself.  A byte count can't
+        // answer this either: a cache hit reports its size, so those 13 tiles
+        // read as ~200 KB of "progress".
+        val alreadyThere = TileMath.tiles(region)[0]
+        cache.store(upstream.body, "src", alreadyThere.z, alreadyThere.x, alreadyThere.y)
+        upstream.respond404 = true
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FAILED, downloader.phase.value)
+        assertEquals(7, downloader.failed.value)
+        assertEquals(false, recorded, "an area holding one tile of eight is not an area")
+    }
+
+    @Test
+    fun fullyCachedRegion_stillSaves() {
+        // The honest opposite: re-saving an area you already have retrieves
+        // nothing and fails nothing, and must still be recorded.
+        for (t in TileMath.tiles(region)) cache.store(upstream.body, "src", t.z, t.x, t.y)
+        upstream.respond404 = true      // any network use would fail
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
+        assertEquals(0, downloader.failed.value)
+        assertEquals(true, recorded)
     }
 
     @Test
     fun unknownSource_isIgnored() {
         downloader.start(region, "nosuch")
         assertEquals(TileDownloader.Phase.IDLE, downloader.phase.value)
+    }
+
+    @Test
+    fun cancel_removesOnlyWhatThisRunWrote() {
+        // One tile is already on disk from an earlier, saved region. A cancel
+        // must undo THIS run without punching a hole in that one.
+        val all = TileMath.tiles(region)
+        val preExisting = all.first()
+        cache.store(upstream.body, "src", preExisting.z, preExisting.x, preExisting.y)
+
+        upstream.delayMs = 40      // keep the run alive long enough to cancel
+        downloader.start(region, "src")
+        runBlocking { delay(60) }
+        downloader.cancel()
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.CANCELLED, downloader.phase.value)
+        assertContentEquals(
+            upstream.body,
+            cache.tileData("src", preExisting.z, preExisting.x, preExisting.y),
+            "a cancel must not delete a tile it did not create",
+        )
+        // Nothing this run fetched is left behind: no region records those
+        // tiles, so anything kept here could never be found or reclaimed.
+        val leaked = all.filter { it != preExisting }
+            .count { cache.tileData("src", it.z, it.x, it.y) != null }
+        assertEquals(0, leaked, "cancelled run leaked $leaked tiles")
+    }
+
+    @Test
+    fun finish_handsTotalsToTheCaller_soTheRegionOutlivesTheScreen() {
+        // The downloader records the region itself; the screen only navigates.
+        // When the UI owned this, backing out mid-run finished the download
+        // into a manifest nobody wrote.
+        var savedTiles = -1
+        var savedBytes = -1L
+        downloader.start(region, "src") { tiles, bytes -> savedTiles = tiles; savedBytes = bytes }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
+        assertEquals(8, savedTiles)
+        assertEquals(8L * upstream.body.size, savedBytes)
+    }
+
+    @Test
+    fun cancel_doesNotRecordARegion() {
+        upstream.delayMs = 40
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        runBlocking { delay(60) }
+        downloader.cancel()
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.CANCELLED, downloader.phase.value)
+        assertEquals(false, recorded, "a cancelled run must not save a region")
     }
 }
 
@@ -181,6 +300,62 @@ class OfflineRegionStoreTest {
         store.delete(r)
         assertEquals(emptyList(), store.regions.value)
         assertEquals(0L, cache.byteCount(r.source), "tiles must be reclaimed")
+    }
+
+    @Test
+    fun delete_keepsTilesAnOverlappingRegionStillNeeds() {
+        // Two saved areas over the same site share tile paths.  Deleting one
+        // used to take the shared tiles with it, leaving the survivor quietly
+        // incomplete — discovered offline at the field, which is the only
+        // place it matters.
+        val cache = OfflineTileCache(tempDir())
+        val store = OfflineRegionStore(tempDir(), cache)
+        val big = region(name = "Wide").copy(radiusMeters = 3_000.0)
+        val small = region(name = "Tight").copy(radiusMeters = 800.0)
+        val sharedTiles = TileMath.tiles(small.spec).toSet()
+        assertTrue(
+            TileMath.tiles(big.spec).toSet().containsAll(sharedTiles),
+            "test premise: the small region is inside the big one",
+        )
+        (TileMath.tiles(big.spec) + TileMath.tiles(small.spec)).toSet().forEach {
+            cache.store(byteArrayOf(1), big.source, it.z, it.x, it.y)
+        }
+        store.add(big)
+        store.add(small)
+
+        store.delete(big)
+
+        // Everything the survivor covers is still on disk...
+        sharedTiles.forEach {
+            assertNotNull(
+                cache.tileData(small.source, it.z, it.x, it.y),
+                "deleting the wide area punched a hole in the tight one at $it",
+            )
+        }
+        // ...and everything only the deleted area covered is gone.
+        val onlyBig = TileMath.tiles(big.spec).filterNot { it in sharedTiles }
+        assertTrue(onlyBig.isNotEmpty(), "test premise: the big region is strictly larger")
+        assertEquals(
+            0,
+            onlyBig.count { cache.tileData(big.source, it.z, it.x, it.y) != null },
+            "tiles no surviving region needs must be reclaimed",
+        )
+    }
+
+    @Test
+    fun delete_ignoresOverlapFromADifferentSource() {
+        // Sources are separate directories, so identical z/x/y in another
+        // source is a different file and must not protect anything.
+        val cache = OfflineTileCache(tempDir())
+        val store = OfflineRegionStore(tempDir(), cache)
+        val mine = region(name = "Imagery")
+        val otherSource = region(name = "Topo").copy(source = "usgsTopo")
+        TileMath.tiles(mine.spec).forEach { cache.store(byteArrayOf(1), mine.source, it.z, it.x, it.y) }
+        store.add(mine)
+        store.add(otherSource)
+
+        store.delete(mine)
+        assertEquals(0L, cache.byteCount(mine.source), "another source must not pin these tiles")
     }
 
     @Test

@@ -14,6 +14,7 @@ import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.ImuOrientMsg
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
 import com.tinkerbug.tinkerrocket.protocol.OtaStatusUpdate
+import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketStorageStats
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
@@ -177,6 +178,17 @@ public class DeviceSession(
 
     private val _imuOrientationMode = MutableStateFlow(IMUOrientationMode.UNKNOWN)
     public val imuOrientationMode: StateFlow<IMUOrientationMode> = _imuOrientationMode.asStateFlow()
+
+    /**
+     * iOS `contTestPendingUntil` twin: per-channel deadline (session-clock
+     * millis) while a manual continuity test round-trips BLE→OC→I2C→FC and
+     * back through telemetry "ps" bits (#411).  Displays show TESTING
+     * instead of the cached reading until the deadline — the pre-test value
+     * is exactly the number the user asked to refresh.  Expired entries stay
+     * in the map (same as iOS); readers compare against the clock.
+     */
+    private val _contTestPendingUntil = MutableStateFlow<Map<Int, Long>>(emptyMap())
+    public val contTestPendingUntil: StateFlow<Map<Int, Long>> = _contTestPendingUntil.asStateFlow()
 
     // ── Files / downloads ────────────────────────────────────────────────
 
@@ -355,6 +367,9 @@ public class DeviceSession(
         clearSimBannerNow()
         clearPoweringOnNow()
         _rocketConfig.value = null
+        // iOS equivalent is implicit: BLEDevice is recreated per connection,
+        // taking its contTestPendingUntil map with it.
+        _contTestPendingUntil.value = emptyMap()
         // Stale REVIEW must not bleed across sessions (#96); the FC
         // republishes IDLE on reconnect anyway.
         _magCalStatus.value = null
@@ -898,6 +913,57 @@ public class DeviceSession(
 
     public fun requestConfig(): Unit = sendBareCommand(BleCommandId.REQUEST_CONFIG)
 
+    /**
+     * Manual pyro continuity test — cmd 35, `[channel 1..4]` (direct rocket
+     * links only; the pyro card never renders on BS links).  Opens the
+     * per-channel TESTING window; the result arrives implicitly in later
+     * telemetry frames' "ps" bits — no dedicated reply, timeout, or failure
+     * state on the wire.
+     */
+    public fun sendPyroContTest(channel: Int) {
+        scope.launch {
+            _contTestPendingUntil.value = _contTestPendingUntil.value +
+                (channel to clock() + CONT_TEST_PENDING_WINDOW_MS)
+            writeCommand(Commands.pyroContTest(channel))
+        }
+    }
+
+    /** True while [channel]'s TESTING window is open. */
+    public fun contTestPending(channel: Int): Boolean =
+        (_contTestPendingUntil.value[channel] ?: 0L) > clock()
+
+    /**
+     * iOS applyPyroConfig step 3: mirror an optimistic cmd-34 push into
+     * [rocketConfig] so the dashboard pyro tiles update live — the firmware
+     * does NOT re-send config_pyro after a pyro-config write, only on the
+     * next connect/readback.
+     *
+     * Mirrors the SAME four channels the push carries, and only when a
+     * readback already exists (iOS `if var cfg = device.rocketConfig`):
+     * fabricating a config here would render the un-pushed fields as
+     * device-reported truth when the device has reported nothing yet.
+     */
+    public fun mirrorPyroConfig(channels: List<PyroChannelConfig>) {
+        if (channels.size != 4) return
+        scope.launch {
+            val cfg = _rocketConfig.value ?: return@launch
+            _rocketConfig.value = cfg.copy(
+                pyro1Enabled = channels[0].enabled,
+                pyro1TriggerMode = channels[0].mode,
+                pyro1TriggerValue = channels[0].value,
+                pyro2Enabled = channels[1].enabled,
+                pyro2TriggerMode = channels[1].mode,
+                pyro2TriggerValue = channels[1].value,
+                pyro3Enabled = channels[2].enabled,
+                pyro3TriggerMode = channels[2].mode,
+                pyro3TriggerValue = channels[2].value,
+                pyro4Enabled = channels[3].enabled,
+                pyro4TriggerMode = channels[3].mode,
+                pyro4TriggerValue = channels[3].value,
+            )
+        }
+    }
+
     public fun markSimLaunched() {
         scope.launch {
             _simLaunched.value = true
@@ -1026,6 +1092,10 @@ public class DeviceSession(
 
         /** iOS asyncAfter(1.0) between discovery and the cmd-20 readback. */
         public const val CONNECT_CONFIG_DELAY_MS: Long = 1_000
+
+        /** iOS `BLEDevice.contTestPendingWindow` — the continuity-test
+         *  round-trip allowance before displays trust "ps" bits again. */
+        public const val CONT_TEST_PENDING_WINDOW_MS: Long = 2_500
 
         /** iOS asyncAfter(0.5) between the cmd-2 write and the explicit read. */
         public const val FILE_LIST_READ_DELAY_MS: Long = 500

@@ -38,6 +38,11 @@ struct RocketMapView: UIViewRepresentable {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.mapType = tileSource.appleMapType
+        // Where the flyer is standing. The whole screen is about walking to
+        // the rocket, and without this the map never showed one end of that
+        // walk. MapKit draws nothing until location is authorised, so this
+        // is safe regardless of permission state.
+        mapView.showsUserLocation = true
         mapView.setRegion(region, animated: false)
         context.coordinator.basemap.apply(tileSource, to: mapView)
         return mapView
@@ -53,7 +58,10 @@ struct RocketMapView: UIViewRepresentable {
         // Reset annotations + DATA overlays each pass (cheap).  The basemap tile
         // overlay is managed separately above so it isn't torn down/reloaded on
         // every telemetry tick.
-        mapView.removeAnnotations(mapView.annotations)
+        // MKUserLocation lives in `annotations` too, and it is MapKit's, not
+        // ours — tearing it down every telemetry tick fights the framework
+        // for the one annotation we do not manage.
+        mapView.removeAnnotations(mapView.annotations.filter { !($0 is MKUserLocation) })
         mapView.removeOverlays(mapView.overlays.filter { !($0 is MKTileOverlay) })
 
         if let coordinate = rocketCoordinate {
@@ -138,6 +146,10 @@ struct RocketMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView,
                      viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // nil = MapKit's own blue dot. Without this the fall-through
+            // below would give the flyer's own position the red rocket pin,
+            // i.e. two rockets on the map and no way to tell them apart.
+            if annotation is MKUserLocation { return nil }
             if annotation is PredictedLandingAnnotation {
                 let id = "PredictedLandingPin"
                 var view = mapView.dequeueReusableAnnotationView(withIdentifier: id)
@@ -201,16 +213,20 @@ struct RocketMapView: UIViewRepresentable {
 
 struct MapView: View {
     @ObservedObject var device: BLEDevice
+    @ObservedObject var locationManager: LocationManager
     @EnvironmentObject var profileStore: RocketProfileStore
 
     @StateObject private var landingPredictor = LandingPredictor()
 
     @State private var tileSource: TileSource = .appleHybrid
+    // Only a placeholder until onAppear picks the rocket or the phone; it is
+    // never what the flyer sees unless both are unavailable.
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 37.334_900, longitude: -122.009_020),
         span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
     )
     @State private var hasInitializedRegion = false
+    @State private var hasCenteredOnPhone = false
     @State private var showOfflineMaps = false
 
     /// Always reads from the latched last-valid fix (#140), not raw
@@ -326,8 +342,14 @@ struct MapView: View {
                 hasInitializedRegion = true
             }
         }
+        .onReceive(locationManager.$userLocation) { _ in
+            // A cold GPS lands well after the map does; take the first fix,
+            // but never over a rocket we are already showing.
+            if rocketCoordinate == nil { centerOnPhone() }
+        }
         .onAppear {
             centerOnRocket()
+            if rocketCoordinate == nil { centerOnPhone() }
             landingPredictor.attach(device: device, profileStore: profileStore)
         }
         .onDisappear {
@@ -387,6 +409,22 @@ struct MapView: View {
             center: coordinate,
             span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
         )
+    }
+
+    /// Opening point when the rocket has no fix yet — which is the normal
+    /// case on the pad, where this screen is opened.  The phone knows where
+    /// it is, so start there instead of on a default that is nowhere near
+    /// the flyer.  Deliberately does NOT set `hasInitializedRegion`: the
+    /// rocket's first fix must still take the camera.
+    private func centerOnPhone() {
+        guard !hasCenteredOnPhone,
+              let coordinate = locationManager.userLocation,
+              CLLocationCoordinate2DIsValid(coordinate) else { return }
+        region = MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        hasCenteredOnPhone = true
     }
 
     /// Callout text under the marker.  Shows sat count and the age of

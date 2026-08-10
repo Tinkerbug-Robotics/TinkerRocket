@@ -144,6 +144,68 @@ class DeviceSessionTest {
         assertEquals(123f, cfg.pyro1TriggerValue)
     }
 
+    // ── Pyro continuity test (cmd 35) ────────────────────────────────────
+
+    @Test
+    fun pyroContTest_sendsFrameAndOpensTestingWindow() = runTest {
+        val h = startedSession()
+        advanceTimeBy(1000)
+        runCurrent()
+
+        h.session.sendPyroContTest(2)
+        runCurrent()
+
+        // Wire bytes: [35, channel] (golden-pinned in CommandsGoldenTest).
+        assertContentEquals(
+            Commands.pyroContTest(2),
+            h.fw.commandFrames.first { it[0].toInt() == BleCommandId.PYRO_CONT_TEST },
+        )
+        // Per-channel window — only the tested channel shows TESTING.
+        assertTrue(h.session.contTestPending(2))
+        assertFalse(h.session.contTestPending(1))
+
+        // Window is exactly the iOS 2.5 s round-trip allowance.
+        advanceTimeBy(DeviceSession.CONT_TEST_PENDING_WINDOW_MS - 1)
+        assertTrue(h.session.contTestPending(2))
+        advanceTimeBy(1)
+        assertFalse(h.session.contTestPending(2))
+
+        // A re-test reopens (iOS: newer tap extends the deadline).
+        h.session.sendPyroContTest(2)
+        runCurrent()
+        assertTrue(h.session.contTestPending(2))
+    }
+
+    @Test
+    fun mirrorPyroConfig_appliesAllFourChannels_onlyOverAReadback() = runTest {
+        val h = startedSession { configPyroJson = null; configJson = null }
+        runCurrent()
+        val channels = List(4) { i ->
+            com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig(
+                enabled = i == 1, mode = 1, value = 42f,
+            )
+        }
+
+        // No readback yet: the mirror must NOT fabricate a config, or the
+        // dashboard would render defaults as device-reported truth (iOS
+        // mirrors only inside `if var cfg = device.rocketConfig`).
+        h.session.mirrorPyroConfig(channels)
+        runCurrent()
+        assertNull(h.session.rocketConfig.value)
+
+        // Once a readback exists, the mirror lands — all four channels, the
+        // same payload cmd 34 carried.
+        h.fw.emitTelemetryJson("""{"type":"config_pyro","p1e":true,"p1v":1.0}""")
+        runCurrent()
+        h.session.mirrorPyroConfig(channels)
+        runCurrent()
+        val cfg = assertNotNull(h.session.rocketConfig.value)
+        assertFalse(cfg.pyro1Enabled)            // the readback's true, overwritten
+        assertTrue(cfg.pyro2Enabled)
+        assertEquals(42f, cfg.pyro4TriggerValue)
+        assertEquals(1, cfg.pyro3TriggerMode)
+    }
+
     // ── Identity readback ────────────────────────────────────────────────
 
     @Test
@@ -574,6 +636,7 @@ class DeviceSessionTest {
         h.session.markSimLaunched()
         h.session.beginPowerOn()
         h.session.requestFileList(0)
+        h.session.sendPyroContTest(3)
         advanceTimeBy(500)
         runCurrent()
         advanceTimeBy(1500)   // an RSSI tick populates connectedRssi
@@ -597,6 +660,7 @@ class DeviceSessionTest {
         assertFalse(h.session.simLaunched.value)
         assertFalse(h.session.poweringOn.value)
         assertNull(h.session.rocketConfig.value)
+        assertTrue(h.session.contTestPendingUntil.value.isEmpty())
         assertNull(h.session.magCalStatus.value)
         assertNull(h.session.sensorCalStatus.value)
         assertNull(h.session.guidanceEcho.value)
