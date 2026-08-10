@@ -67,20 +67,28 @@ commit produced it, and says `-dirty` if the tree had uncommitted changes.
 
 ## Current state
 
-Tagged at introduction of this scheme (2026-08-01):
+Fab set 2026-08-09 — all six boards tagged as a set at 5e3a426. Four fab
+packages were exported and uploaded that evening (base-station v5, lora
+v3, rocket-computer v9, sam10m8 v2), each verified geometry-identical —
+every copper/mask/paste/silk/edge layer, timestamps aside — to plots
+from the tagged commit, so the tags are the record of what was sent. No
+export existed for servo-adapter or px1105r. The as-uploaded zips ride
+on the `hardware-fab-2026-08-09` GitHub release (fab output stays out of
+the tree, per hardware/.gitignore); reference plots at the tags cover
+the two boards without an upload. DRC below is
+`--severity-error --schematic-parity` at tagging.
 
 | board | version | DRC at tagging |
 |---|---|---|
-| gnss-px1105r-18mm-highpower-ext-ant | v1.0.0 | 0 errors ✓ |
-| gnss-sam10m8-18mm-hv | v2.0.0 | 0 errors ✓ |
+| base-station | v5.0.0 | 0 errors ✓ |
+| lora-daughterboard | v3.0.0 | 3 courtyard overlaps (review-waived), 0 unconnected |
+| rocket-computer | v9.0.0 | 3 courtyard overlaps (review-waived), 0 unconnected |
+| servo-adapter | v1.0.0 | 4 courtyard overlaps (J1 vs C1/C3/C4, waived); silkscreen still has no `${REVISION}` |
+| gnss-sam10m8-18mm-hv | v2.1.0 | 0 errors ✓ |
+| gnss-px1105r-18mm-highpower-ext-ant | v1.1.0 | 6 errors — stale zone fills from 8f87aa0 shorted +3V3 to two GND vias and the GND pour to two RXD2 tracks in the *stored artwork*; design intent sound. Refilled and cleared to 0 in the commit after the tag; verify which artwork the fab actually received. |
 
-Not tagged — these are not in a releasable state and a tag would imply otherwise:
-
-| board | blocker |
-|---|---|
-| rocket-computer | 237 DRC errors, 26 unconnected — battery rework mid-flight, J8 unwired |
-| base-station | 10 × malformed_courtyard on U15 (antenna footprint) |
-| lora-daughterboard | 2 courtyard overlaps; PCB still lags the schematic (C18 unplaced, C90/C92 read 18 pF in copper, U22 pad 8 on the wrong net) |
-| servo-adapter | 4 courtyard overlaps (J1 vs C1/C3/C4); no version on silkscreen yet |
-
-Tag each as its DRC clears.
+The gnss v1.1.0 / v2.1.0 tags supersede v1.0.0 / v2.0.0, which were never
+fabricated. Copper changed in the 8f87aa0 net merge — strictly a major
+bump — but the silkscreen majors stay V1 / V2 because no prior revision
+ever reached a fab; the tag majors follow the silkscreen on the physical
+boards.
