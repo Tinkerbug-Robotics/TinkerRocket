@@ -14,6 +14,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -239,6 +240,62 @@ class OfflineRegionStoreTest {
         store.delete(r)
         assertEquals(emptyList(), store.regions.value)
         assertEquals(0L, cache.byteCount(r.source), "tiles must be reclaimed")
+    }
+
+    @Test
+    fun delete_keepsTilesAnOverlappingRegionStillNeeds() {
+        // Two saved areas over the same site share tile paths.  Deleting one
+        // used to take the shared tiles with it, leaving the survivor quietly
+        // incomplete — discovered offline at the field, which is the only
+        // place it matters.
+        val cache = OfflineTileCache(tempDir())
+        val store = OfflineRegionStore(tempDir(), cache)
+        val big = region(name = "Wide").copy(radiusMeters = 3_000.0)
+        val small = region(name = "Tight").copy(radiusMeters = 800.0)
+        val sharedTiles = TileMath.tiles(small.spec).toSet()
+        assertTrue(
+            TileMath.tiles(big.spec).toSet().containsAll(sharedTiles),
+            "test premise: the small region is inside the big one",
+        )
+        (TileMath.tiles(big.spec) + TileMath.tiles(small.spec)).toSet().forEach {
+            cache.store(byteArrayOf(1), big.source, it.z, it.x, it.y)
+        }
+        store.add(big)
+        store.add(small)
+
+        store.delete(big)
+
+        // Everything the survivor covers is still on disk...
+        sharedTiles.forEach {
+            assertNotNull(
+                cache.tileData(small.source, it.z, it.x, it.y),
+                "deleting the wide area punched a hole in the tight one at $it",
+            )
+        }
+        // ...and everything only the deleted area covered is gone.
+        val onlyBig = TileMath.tiles(big.spec).filterNot { it in sharedTiles }
+        assertTrue(onlyBig.isNotEmpty(), "test premise: the big region is strictly larger")
+        assertEquals(
+            0,
+            onlyBig.count { cache.tileData(big.source, it.z, it.x, it.y) != null },
+            "tiles no surviving region needs must be reclaimed",
+        )
+    }
+
+    @Test
+    fun delete_ignoresOverlapFromADifferentSource() {
+        // Sources are separate directories, so identical z/x/y in another
+        // source is a different file and must not protect anything.
+        val cache = OfflineTileCache(tempDir())
+        val store = OfflineRegionStore(tempDir(), cache)
+        val mine = region(name = "Imagery")
+        val otherSource = region(name = "Topo").copy(source = "usgsTopo")
+        TileMath.tiles(mine.spec).forEach { cache.store(byteArrayOf(1), mine.source, it.z, it.x, it.y) }
+        store.add(mine)
+        store.add(otherSource)
+
+        store.delete(mine)
+        assertEquals(0L, cache.byteCount(mine.source), "another source must not pin these tiles")
     }
 
     @Test

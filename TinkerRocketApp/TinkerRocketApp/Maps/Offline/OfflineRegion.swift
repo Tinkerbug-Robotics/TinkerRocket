@@ -59,13 +59,29 @@ final class OfflineRegionStore: ObservableObject {
         save()
     }
 
-    /// Remove a region from the manifest and delete its tiles from disk.
-    /// (Overlapping regions are rare here; a shared tile that gets removed will
-    /// simply re-download next time it's viewed online.)
+    /// Remove a region from the manifest and delete the tiles no SURVIVING
+    /// region still needs.
+    ///
+    /// Deleting by geometry alone punched holes in overlapping regions: two
+    /// areas over the same launch site share tile paths, so dropping one took
+    /// the shared tiles with it and left the other quietly incomplete. The old
+    /// comment shrugged that a lost tile "will simply re-download next time
+    /// it's viewed online" — true at home, and exactly wrong at a field with
+    /// no signal, where these regions are the entire point.
+    ///
+    /// Only same-source regions can share tiles (the source is a directory in
+    /// the path), so the keep-set is built from those alone. Tiles cached
+    /// passively by panning the map are claimed by no region and are still
+    /// removed if they fall inside — they cost one re-fetch online, and
+    /// tracking them would mean refcounting the whole cache.
     func delete(_ region: OfflineRegion) {
-        OfflineTileCache.shared.removeTiles(source: region.source,
-                                            tiles: TileMath.tiles(for: region.spec))
-        regions.removeAll { $0.id == region.id }
+        let survivors = regions.filter { $0.id != region.id }
+        let keep = Set(survivors
+            .filter { $0.source == region.source }
+            .flatMap { TileMath.tiles(for: $0.spec) })
+        let doomed = TileMath.tiles(for: region.spec).filter { !keep.contains($0) }
+        OfflineTileCache.shared.removeTiles(source: region.source, tiles: doomed)
+        regions = survivors
         save()
     }
 
