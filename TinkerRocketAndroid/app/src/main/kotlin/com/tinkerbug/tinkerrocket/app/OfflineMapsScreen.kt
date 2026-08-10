@@ -203,6 +203,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     val done by downloader.done.collectAsState()
     val total by downloader.total.collectAsState()
     val bytes by downloader.bytes.collectAsState()
+    val failed by downloader.failed.collectAsState()
 
     // Never ask deeper than the source actually serves.  The USGS basemaps
     // stop at 16; a request for 17/18 404s every tile in the band, and the
@@ -335,16 +336,32 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            // A run that reached nothing used to end silently on a saved
+            // 0 MB area — the failure only showed up at the field.
+            if (phase == TileDownloader.Phase.FAILED) {
+                Text(
+                    "Download failed — no tiles could be fetched. Check your " +
+                        "connection and try again.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
             if (phase == TileDownloader.Phase.DOWNLOADING) {
                 LinearProgressIndicator(
                     progress = { if (total > 0) done.toFloat() / total else 0f },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "$done / $total tiles · %.0f MB".format(bytes / 1_048_576.0),
+                    "$done / $total tiles · %.0f MB".format(bytes / 1_048_576.0) +
+                        // Visible AS IT HAPPENS: the screen closes on success,
+                        // so this is the only place a partly-covered area can
+                        // admit it.
+                        if (failed > 0) " · $failed failed" else "",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (failed > 0) Color(0xFFFFA000)
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedButton(
                     onClick = { downloader.cancel() },

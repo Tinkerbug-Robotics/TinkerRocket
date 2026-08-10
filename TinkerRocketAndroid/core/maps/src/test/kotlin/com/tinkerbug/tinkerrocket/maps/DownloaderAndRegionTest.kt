@@ -115,15 +115,37 @@ class TileDownloaderTest {
     }
 
     @Test
-    fun missingTiles_countAsZeroBytes_progressStillCompletes() {
+    fun everyTileMissing_isFAILED_notAQuietlyEmptyRegion() {
+        // The no-signal case this feature exists for.  It used to reach
+        // FINISHED with 0 bytes and save a 0 MB area that looked real in the
+        // list — the emptiness only surfaced at the field.
         upstream.respond404 = true
-        downloader.start(region, "src")
+        var recorded = false
+        downloader.start(region, "src") { _, _ -> recorded = true }
+        awaitTerminal()
+
+        assertEquals(TileDownloader.Phase.FAILED, downloader.phase.value)
+        assertEquals(8, downloader.done.value, "progress still completes")
+        assertEquals(8, downloader.failed.value)
+        assertEquals(0L, downloader.bytes.value)
+        assertEquals(false, recorded, "a run that fetched nothing must not save a region")
+        assertNull(cache.tileData("src", 12, 1195, 1551), "404 must not be cached")
+    }
+
+    @Test
+    fun someTilesMissing_stillFinishes_butCountsTheFailures() {
+        // A few edge tiles 404ing is normal and must not block the save; the
+        // count is what tells the operator the area is partly covered.
+        val all = TileMath.tiles(region)
+        cache.store(upstream.body, "src", all[0].z, all[0].x, all[0].y)
+        upstream.respond404 = true
+        var recordedTiles = -1
+        downloader.start(region, "src") { tiles, _ -> recordedTiles = tiles }
         awaitTerminal()
 
         assertEquals(TileDownloader.Phase.FINISHED, downloader.phase.value)
-        assertEquals(8, downloader.done.value)
-        assertEquals(0L, downloader.bytes.value)
-        assertNull(cache.tileData("src", 12, 1195, 1551), "404 must not be cached")
+        assertEquals(7, downloader.failed.value, "every uncached tile failed")
+        assertEquals(8, recordedTiles, "the region is still recorded")
     }
 
     @Test

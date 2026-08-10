@@ -37,7 +37,15 @@ public class TileDownloader(
         TileSource.entries.mapNotNull { s -> s.urlTemplate?.let { s.key to it } }.toMap(),
     private val userAgent: String = "TinkerRocketApp/1.0 (offline map cache)",
 ) {
-    public enum class Phase { IDLE, DOWNLOADING, FINISHED, CANCELLED }
+    /**
+     * [FAILED] means NOTHING was retrieved — every tile errored or 404'd and
+     * none was already cached.  It is a distinct outcome from [FINISHED]
+     * because a run with no connectivity used to reach FINISHED with 0
+     * bytes and save a 0 MB region: a saved area that looks real in the
+     * list, and is discovered empty at the field with no signal, which is
+     * the one place it was meant to work.
+     */
+    public enum class Phase { IDLE, DOWNLOADING, FINISHED, CANCELLED, FAILED }
 
     private val _phase = MutableStateFlow(Phase.IDLE)
     public val phase: StateFlow<Phase> = _phase.asStateFlow()
@@ -50,6 +58,15 @@ public class TileDownloader(
 
     private val _bytes = MutableStateFlow(0L)
     public val bytes: StateFlow<Long> = _bytes.asStateFlow()
+
+    /**
+     * Tiles that errored or answered non-200.  Surfaced so a partly-covered
+     * area can say so instead of looking complete — the count is the only
+     * evidence, since a missing tile is indistinguishable from one that was
+     * never requested once the run ends.
+     */
+    private val _failed = MutableStateFlow(0)
+    public val failed: StateFlow<Int> = _failed.asStateFlow()
 
     @Volatile private var cancelFlag = false
     private var job: Job? = null
@@ -92,6 +109,7 @@ public class TileDownloader(
         _total.value = tiles.size
         _done.value = 0
         _bytes.value = 0
+        _failed.value = 0
 
         job = scope.launch {
             val sem = Semaphore(MAX_CONCURRENT)
@@ -114,12 +132,23 @@ public class TileDownloader(
             // tiles is worse than a few file deletes during teardown.
             withContext(NonCancellable) {
                 val mine = synchronized(created) { created.toList().also { created.clear() } }
-                if (cancelFlag) {
-                    cache.removeTiles(sourceKey, mine)
-                    _phase.value = Phase.CANCELLED
-                } else {
-                    onFinished?.invoke(_total.value, _bytes.value)
-                    _phase.value = Phase.FINISHED
+                val nothingArrived = _total.value > 0 && _failed.value == _total.value
+                when {
+                    cancelFlag -> {
+                        cache.removeTiles(sourceKey, mine)
+                        _phase.value = Phase.CANCELLED
+                    }
+                    // Every single tile failed: no connectivity, or the
+                    // upstream is down.  Recording this would put an area in
+                    // the list that holds nothing.
+                    nothingArrived -> {
+                        cache.removeTiles(sourceKey, mine)
+                        _phase.value = Phase.FAILED
+                    }
+                    else -> {
+                        onFinished?.invoke(_total.value, _bytes.value)
+                        _phase.value = Phase.FINISHED
+                    }
                 }
             }
         }
@@ -135,15 +164,22 @@ public class TileDownloader(
         _done.value = 0
         _total.value = 0
         _bytes.value = 0
+        _failed.value = 0
     }
 
-    private fun report(byteCount: Int) {
+    /** @param byteCount bytes retrieved, or null when the tile failed. */
+    private fun report(byteCount: Int?) {
         _done.update { it + 1 }
-        _bytes.update { it + byteCount }
+        if (byteCount == null) _failed.update { it + 1 } else _bytes.update { it + byteCount }
     }
 
-    /** Fetch (or read from cache) one tile; returns its byte size (0 = miss). */
-    private fun fetchOne(t: TileXYZ, key: String, template: String): Int {
+    /**
+     * Fetch (or read from cache) one tile.  Returns its byte size, or null
+     * when it errored or answered non-200 — distinct from a zero-byte body,
+     * because "nothing came back" is exactly what a failed run needs to
+     * count.  Progress still advances either way, so it always completes.
+     */
+    private fun fetchOne(t: TileXYZ, key: String, template: String): Int? {
         cache.tileData(key, t.z, t.x, t.y)?.let { return it.size }
 
         val url = template
@@ -156,7 +192,7 @@ public class TileDownloader(
             conn.connectTimeout = 10_000
             conn.readTimeout = 15_000
             try {
-                if (conn.responseCode != 200) return@runCatching 0
+                if (conn.responseCode != 200) return@runCatching null
                 val data = conn.inputStream.readBytes()
                 cache.store(data, key, t.z, t.x, t.y)
                 synchronized(created) { created += t }
@@ -164,7 +200,7 @@ public class TileDownloader(
             } finally {
                 conn.disconnect()
             }
-        }.getOrDefault(0) // missing/4xx tile — count it so progress completes
+        }.getOrNull() // unreachable/4xx — counted as failed, progress continues
     }
 
     private companion object {

@@ -17,12 +17,22 @@ import Combine
 let kEstimatedTileBytes: Int64 = 25_000
 
 final class TileDownloader: ObservableObject {
-    enum Phase: Equatable { case idle, downloading, finished, cancelled }
+    /// `.failed` means NOTHING was retrieved — every tile errored or 404'd
+    /// and none was already cached. It is a distinct outcome from `.finished`
+    /// because a run with no connectivity used to reach `.finished` with 0
+    /// bytes and save a 0 MB region: a saved area that looks real in the
+    /// list, and is discovered empty at the field with no signal, which is
+    /// the one place it was meant to work.
+    enum Phase: Equatable { case idle, downloading, finished, cancelled, failed }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var done = 0
     @Published private(set) var total = 0
     @Published private(set) var bytes: Int64 = 0
+
+    /// Tiles that errored or answered non-200. Surfaced so a partly-covered
+    /// area can say so instead of looking complete.
+    @Published private(set) var failed = 0
 
     private var cancelFlag = false
     private let session = URLSession(configuration: .default)
@@ -32,6 +42,9 @@ final class TileDownloader: ObservableObject {
     /// returns early on them. It is the undo log for a cancel: see `start`.
     private var created: [TileXYZ] = []
     private let createdLock = NSLock()
+    /// Off-main tally of `failed`, so the terminal decision doesn't have to
+    /// hop to the main queue to read the @Published mirror.
+    private var failedCount = 0
 
     var isRunning: Bool { phase == .downloading }
 
@@ -55,11 +68,12 @@ final class TileDownloader: ObservableObject {
         let key = source.rawValue
 
         cancelFlag = false
-        createdLock.lock(); created.removeAll(); createdLock.unlock()
+        createdLock.lock(); created.removeAll(); failedCount = 0; createdLock.unlock()
         phase = .downloading
         total = tiles.count
         done = 0
         bytes = 0
+        failed = 0
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
@@ -85,12 +99,25 @@ final class TileDownloader: ObservableObject {
             self.created.removeAll()
             self.createdLock.unlock()
 
-            if self.cancelFlag {
+            // Read the off-main tally, not the @Published mirror, so the
+            // deletes stay off the main thread — a large cancelled run is
+            // thousands of file removals.
+            self.createdLock.lock()
+            let failures = self.failedCount
+            self.createdLock.unlock()
+
+            // Every single tile failed: no connectivity, or the upstream is
+            // down. Recording this would put an area in the list that holds
+            // nothing.
+            let nothingArrived = tiles.count > 0 && failures == tiles.count
+            if self.cancelFlag || nothingArrived {
                 OfflineTileCache.shared.removeTiles(source: key, tiles: mine)
             }
             DispatchQueue.main.async {
                 if self.cancelFlag {
                     self.phase = .cancelled
+                } else if nothingArrived {
+                    self.phase = .failed
                 } else {
                     onFinished?(self.total, self.bytes)
                     self.phase = .finished
@@ -103,22 +130,29 @@ final class TileDownloader: ObservableObject {
 
     func reset() {
         guard !isRunning else { return }
-        phase = .idle; done = 0; total = 0; bytes = 0
+        phase = .idle; done = 0; total = 0; bytes = 0; failed = 0
     }
 
     // MARK: - Internals
 
-    private func report(_ byteCount: Int) {
+    /// - Parameter byteCount: bytes retrieved, or nil when the tile failed.
+    private func report(_ byteCount: Int?) {
+        if byteCount == nil {
+            createdLock.lock(); failedCount += 1; createdLock.unlock()
+        }
         DispatchQueue.main.async {
             self.done += 1
-            self.bytes += Int64(byteCount)
+            if let byteCount { self.bytes += Int64(byteCount) } else { self.failed += 1 }
         }
     }
 
     /// Fetch (or read from cache) one tile, then call completion with its byte
-    /// size. Completion is always called exactly once.
+    /// size — or nil when it errored or answered non-200, which is distinct
+    /// from a zero-byte body because "nothing came back" is exactly what a
+    /// failed run needs to count. Completion is always called exactly once,
+    /// so progress still completes either way.
     private func fetchOne(_ t: TileXYZ, key: String, template: String,
-                          completion: @escaping (Int) -> Void) {
+                          completion: @escaping (Int?) -> Void) {
         if let data = OfflineTileCache.shared.tileData(source: key, z: t.z, x: t.x, y: t.y) {
             completion(data.count)
             return
@@ -127,7 +161,7 @@ final class TileDownloader: ObservableObject {
             .replacingOccurrences(of: "{z}", with: "\(t.z)")
             .replacingOccurrences(of: "{x}", with: "\(t.x)")
             .replacingOccurrences(of: "{y}", with: "\(t.y)")
-        guard let url = URL(string: urlStr) else { completion(0); return }
+        guard let url = URL(string: urlStr) else { completion(nil); return }
 
         var req = URLRequest(url: url)
         req.setValue("TinkerRocketApp/1.0 (offline map cache)", forHTTPHeaderField: "User-Agent")
@@ -140,7 +174,7 @@ final class TileDownloader: ObservableObject {
                 self.createdLock.unlock()
                 completion(data.count)
             } else {
-                completion(0)  // missing/4xx tile — count it so progress completes
+                completion(nil)  // unreachable/4xx — counted as failed
             }
         }.resume()
     }

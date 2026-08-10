@@ -146,15 +146,29 @@ struct SaveAreaView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 ProgressView(value: downloader.total > 0
                                              ? Double(downloader.done) / Double(downloader.total) : 0)
+                                // The failed count is visible AS IT HAPPENS:
+                                // the sheet closes on success, so this is the
+                                // only place a partly-covered area can admit
+                                // it.
                                 Text("\(downloader.done) / \(downloader.total) tiles · "
-                                     + String(format: "%.0f MB", Double(downloader.bytes) / 1_048_576))
+                                     + String(format: "%.0f MB", Double(downloader.bytes) / 1_048_576)
+                                     + (downloader.failed > 0 ? " · \(downloader.failed) failed" : ""))
                                     .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(downloader.failed > 0 ? .orange : .secondary)
                                 Button(role: .cancel) { downloader.cancel() } label: {
                                     Text("Cancel").frame(maxWidth: .infinity)
                                 }
                             }
                         } else {
+                            // A run that reached nothing used to end silently
+                            // on a saved 0 MB area — the failure only showed
+                            // up at the field.
+                            if downloader.phase == .failed {
+                                Text("Download failed — no tiles could be fetched. "
+                                     + "Check your connection and try again.")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
                             Button {
                                 // The downloader records the region, not this
                                 // sheet: it outlives us, and a dismissal
