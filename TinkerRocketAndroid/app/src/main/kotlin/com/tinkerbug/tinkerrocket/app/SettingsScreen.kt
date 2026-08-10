@@ -918,7 +918,12 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
     }
 }
 
-/** iOS segmented Picker analog: evenly-split single-select chips. */
+/**
+ * iOS segmented Picker analog: evenly-split single-select chips.  Labels
+ * stay on ONE line and shrink to fit instead of wrapping — an equal-weight
+ * four-up row is narrower than "Dynamic" at body size, and a chip reading
+ * "Dynami / c" is worse than a smaller one that reads.
+ */
 @Composable
 private fun SegmentedPicker(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -926,7 +931,15 @@ private fun SegmentedPicker(options: List<String>, selected: Int, onSelect: (Int
             FilterChip(
                 selected = i == selected,
                 onClick = { if (i != selected) onSelect(i) },
-                label = { Text(label) },
+                label = {
+                    Text(
+                        label,
+                        maxLines = 1,
+                        style = MaterialTheme.typography.labelMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -1007,8 +1020,16 @@ private fun TextPromptDialog(
     )
 }
 
+// iOS formatInt / formatDecimal: whole values print as integers, everything
+// else via "%.6f" with trailing zeros stripped.  Kotlin's toString() would
+// render small magnitudes in scientific notation — a Drag k of 0.0005 showed
+// as "5.0E-4", which is both an iOS mismatch and a number nobody wants to
+// retype.
+private fun plainDecimal(v: Double): String =
+    String.format(Locale.ROOT, "%.6f", v).trimEnd('0').let { if (it.endsWith(".")) it + "0" else it }
+
 private fun fmt(f: Float): String =
-    if (f == f.toLong().toFloat()) f.toLong().toString() else f.toString()
+    if (f == f.toLong().toFloat()) f.toLong().toString() else plainDecimal(f.toDouble())
 
 private fun fmtD(d: Double): String =
-    if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+    if (d == d.toLong().toDouble()) d.toLong().toString() else plainDecimal(d)
