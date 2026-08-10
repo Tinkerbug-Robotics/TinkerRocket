@@ -5785,7 +5785,7 @@
 				)
 			)
 		)
-		(property "Value" "675"
+		(property "Value" "680"
 			(at 95.885 81.915 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5828,7 +5828,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-07675RL"
+		(property "MPN" "RC0402FR-07680RL"
 			(at 98.425 81.915 0)
 			(hide yes)
 			(show_name no)
