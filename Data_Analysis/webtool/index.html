@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TinkerRocket Post-Flight Analysis</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
+<style>
+  :root {
+    --bg: #10141a;
+    --panel: #1a212b;
+    --panel-2: #212a37;
+    --line: #2e3947;
+    --text: #e6edf5;
+    --muted: #93a1b3;
+    --accent: #4da3ff;
+    --ok: #4ec97a;
+    --warn: #e5b34c;
+    --err: #ef6a6a;
+    font-size: 16px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  header { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; margin-bottom: .25rem; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .tagline { color: var(--muted); margin: 0 0 1.5rem; }
+  .badge {
+    font-size: .75rem; padding: .15rem .6rem; border-radius: 999px;
+    background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+  }
+  .badge.ready { color: var(--ok); border-color: var(--ok); }
+  .badge.failed { color: var(--err); border-color: var(--err); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  .panel h2 { font-size: 1rem; margin: 0 0 .75rem; }
+  .panel.collapsed { padding: .6rem 1.25rem; }
+  .panel.collapsed h2 { margin: 0; color: var(--muted); font-weight: 500; }
+  .panel.collapsed ul { display: none; }
+
+  ul.steps { list-style: none; margin: 0; padding: 0; }
+  ul.steps li { padding: .2rem 0; color: var(--muted); }
+  ul.steps li.active { color: var(--text); }
+  ul.steps li.active::before { content: "⏳ "; }
+  ul.steps li.done { color: var(--ok); }
+  ul.steps li.done::before { content: "✓ "; }
+  ul.steps li.pending::before { content: "· "; }
+  ul.steps li.failed { color: var(--err); }
+  ul.steps li.failed::before { content: "✗ "; }
+
+  #dropzone {
+    border: 2px dashed var(--line); border-radius: 12px;
+    padding: 2rem 1.5rem; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.dragging { border-color: var(--accent); background: var(--panel-2); }
+  #dropzone.disabled { opacity: .5; cursor: default; }
+  #dropzone p { margin: .25rem 0; }
+  #dropzone .hint { color: var(--muted); font-size: .85rem; }
+  #dropzone label { color: var(--accent); cursor: pointer; text-decoration: underline; }
+  #file-input { display: none; }
+
+  .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
+  .controls label { color: var(--muted); font-size: .9rem; }
+  input[type="text"], select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: .45rem .7rem; font-size: .95rem;
+  }
+  input[type="text"] { width: 12rem; }
+  button, a.button {
+    background: var(--accent); color: #0b1017; font-weight: 600; border: 0;
+    border-radius: 8px; padding: .5rem 1rem; font-size: .95rem; cursor: pointer;
+    text-decoration: none; display: inline-block;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.secondary, a.button.secondary {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  }
+
+  #run-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+  #run-elapsed { color: var(--muted); font-variant-numeric: tabular-nums; }
+  ul#module-list { list-style: none; margin: .75rem 0 0; padding: 0; columns: 2; column-gap: 2rem; }
+  ul#module-list li {
+    display: flex; gap: .5rem; align-items: baseline; padding: .15rem 0;
+    break-inside: avoid; font-size: .9rem;
+  }
+  ul#module-list li .mod-status { width: 1.1em; text-align: center; }
+  ul#module-list li.active .mod-status::before { content: "⏳"; }
+  ul#module-list li.ok .mod-status { color: var(--ok); }
+  ul#module-list li.warn .mod-status { color: var(--warn); }
+  ul#module-list li.error .mod-status { color: var(--err); }
+  ul#module-list li .mod-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  ul#module-list li .mod-detail { color: var(--muted); font-size: .8rem; margin-left: auto; }
+
+  #error-box {
+    background: #35191c; border: 1px solid var(--err); color: #ffd9d9;
+    border-radius: 8px; padding: .75rem 1rem; margin-top: 1rem;
+    white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem;
+  }
+
+  #result-head { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-bottom: .75rem; }
+  #result-head h2 { margin: 0; flex: 1; }
+  #report-frame {
+    width: 100%; height: 75vh; border: 1px solid var(--line);
+    border-radius: 8px; background: #fff;
+  }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 2rem; }
+  @media (max-width: 700px) { ul#module-list { columns: 1; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>🚀 TinkerRocket Post-Flight Analysis</h1>
+    <span id="engine-badge" class="badge">starting engine…</span>
+  </header>
+  <!-- Precise wording matters: the analysis really is local, but the report's
+       recovery map fetches basemap tiles for the launch area, which tells the
+       tile server roughly where you flew. Claiming nothing leaves the machine
+       would be false. -->
+  <p class="tagline">
+    Your flight log is analyzed entirely in your browser and is never uploaded.
+    The recovery map loads map imagery from OpenStreetMap, which reveals the
+    launch area to that service; everything else works offline.
+  </p>
+
+  <section class="panel" id="startup-panel">
+    <h2>Analysis engine</h2>
+    <ul class="steps" id="startup-list"></ul>
+  </section>
+
+  <section class="panel">
+    <h2>Flight data</h2>
+    <div id="dropzone" class="disabled">
+      <p><strong>Drop your flight files here</strong> or <label for="file-input">browse…</label></p>
+      <p class="hint">flight_YYYYMMDD_HHMMSS.bin (required) — plus the matching .json / .csv and any lora_*.csv for the full report</p>
+      <input type="file" id="file-input" multiple disabled>
+    </div>
+    <div class="controls">
+      <label for="rocket-name">Rocket name</label>
+      <input type="text" id="rocket-name" value="My Rocket">
+      <!-- Optional throughout: the log cannot know these, but nothing except
+           the impulse figures depends on them. Leaving them blank costs you
+           those rows and nothing else. -->
+      <label for="mass">Liftoff mass</label>
+      <input type="number" id="mass" step="0.001" min="0" placeholder="kg" style="width:6.5rem">
+      <label for="motor">Motor</label>
+      <input type="text" id="motor" placeholder="e.g. I200" style="width:7rem">
+      <label for="level">Report</label>
+      <select id="level">
+        <option value="flight" selected>Flight — summary and charts</option>
+        <option value="engineering">Engineering — full diagnostics</option>
+      </select>
+      <span style="flex:1"></span>
+      <button id="sample-btn" class="secondary" disabled>Try the sample flight</button>
+    </div>
+    <p class="hint" style="margin:.6rem 0 0">
+      Mass and motor are optional — they unlock total impulse, average thrust and
+      the motor-class check. Everything else in the report is measured from the
+      log alone.
+    </p>
+    <div id="error-box" hidden></div>
+  </section>
+
+  <section class="panel" id="run-panel" hidden>
+    <div id="run-head">
+      <h2 id="run-status">Analyzing…</h2>
+      <span id="run-elapsed"></span>
+    </div>
+    <ul id="module-list"></ul>
+  </section>
+
+  <section class="panel" id="result-panel" hidden>
+    <div id="result-head">
+      <h2>Report</h2>
+      <a id="open-btn" class="button secondary" target="_blank" rel="noopener">Open full page</a>
+      <a id="download-btn" class="button">Download report</a>
+    </div>
+    <!-- The report needs scripts (Plotly charts) and a non-opaque origin (its
+         table-of-contents anchors); allow-scripts alone leaves the anchors dead.
+         Together these two flags let the frame reach its same-origin parent, so
+         treat this as no security boundary — it still blocks top-navigation,
+         popups and forms. That is acceptable because the report is generated by
+         our own autoescaped template from the user's local files, and the only
+         script in it is the vendored plotly bundle plus our init code. -->
+    <iframe id="report-frame" sandbox="allow-scripts allow-same-origin"></iframe>
+  </section>
+
+  <footer>
+    Proof of concept — runs the repository's <code>flight_report</code> Python package unmodified via
+    <a href="https://pyodide.org" style="color:var(--accent)">Pyodide</a> (Python compiled to WebAssembly).
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
