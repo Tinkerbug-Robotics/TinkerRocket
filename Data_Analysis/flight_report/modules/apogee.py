@@ -127,23 +127,19 @@ def _emphasize_events(spec: dict, lo=None, hi=None) -> None:
             shape["line"] = {"color": color, "width": 1.6, "dash": "dash"}
 
 
-def _window(res, marks: Optional[dict[str, float]] = None) -> tuple[Optional[float], Optional[float]]:
-    """The plotted span: around the apogee call, extended to reach any mark.
+def _window(res) -> tuple[Optional[float], Optional[float]]:
+    """The turnover: a few seconds either side of the apogee call.
 
-    Landing is tens of seconds after apogee, so including it stretches the
-    chart well beyond the turnover it was cropped to. That is the trade the
-    marks are worth: the section then covers the whole recovery sequence, and
-    the apogee detail is a zoom away rather than a separate chart.
+    Deliberately tight. Landing is ~70 s later, and stretching this to reach it
+    squeezes the four detector marks — the thing the chart exists to separate —
+    into a couple of percent of the width. Anything outside this span is marked
+    on the recovery chart below instead.
     """
     t_master = res["sim_fires"].get("apogee_flag")
     t_raw, _ = res["raw_palt"]
     if t_master is None or not t_raw:
         return None, None
-    lo = max(0.0, t_master - _BEFORE)
-    hi = t_master + _AFTER
-    if marks:
-        hi = max(hi, max(marks.values()) + 2.0)
-    return lo, min(hi, t_raw[-1])
+    return max(0.0, t_master - _BEFORE), min(t_master + _AFTER, t_raw[-1])
 
 
 def _crop(ts, vs, lo, hi):
@@ -157,7 +153,7 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     t_sim, v_sim = res["sim_alt"]
     if not t_sim:
         return None
-    lo, hi = _window(res, marks)
+    lo, hi = _window(res)
     t_raw, v_raw = res["raw_palt"]
 
     traces = []
@@ -202,7 +198,9 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     t_master = res["sim_fires"].get("apogee_flag")
     if t_master is not None:
         events[_MASTER_APOGEE] = round(float(t_master), 3)
-    events.update(marks)
+    # Only the marks that fall inside the turnover — a pyro that fired here
+    # belongs on this chart; the rest go on the recovery chart below.
+    events.update({k: v for k, v in marks.items() if lo is None or lo <= v <= hi})
 
     spec = chart("chart-apogee-vote", "Apogee detection — which detector fired when",
                  traces, y_title="Altitude", y_unit="m", events=events, height=400)
@@ -211,9 +209,7 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     _emphasize_events(spec, lo, hi)
     if spec:
         note = ("Each marker is one detector calling apogee; the master flag, which fires "
-                "the charge, latches from their votes. The window runs to the landing "
-                "declaration, so the detectors sit close together — zoom into the "
-                "turnover to separate them.")
+                "the charge, latches from their votes.")
         if res.get("baro_reject_t"):
             note += (f" Baro was rejected {len(res['baro_reject_t'])} times here, by "
                      "design, while the vehicle was too fast for pressure to be reliable.")
@@ -221,9 +217,51 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     return spec
 
 
-def _lane_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
+def _recovery_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
+    """Apogee to touchdown, carrying the marks that fall outside the turnover.
+
+    Its own chart rather than a wider window on the one above: the two spans
+    differ by a factor of thirty, and one axis cannot serve both. This one answers
+    "what happened after the charge fired and when did it decide it was down",
+    which is a different question from "which detector called it".
+    """
+    t_sim, v_sim = res["sim_alt"]
+    if not t_sim:
+        return None
+    _, turnover_hi = _window(res)
+    t_master = res["sim_fires"].get("apogee_flag")
+    if t_master is None:
+        return None
+
+    outside = {k: v for k, v in marks.items()
+               if turnover_hi is None or v > turnover_hi}
+    if not outside:
+        return None
+
+    lo = max(0.0, t_master - 2.0)
+    hi = min(max(outside.values()) + 3.0, t_sim[-1])
+    st, sv = _crop(t_sim, v_sim, lo, hi)
+    if len(st) < 2:
+        return None
+
+    spec = chart("chart-recovery", "Descent and landing",
+                 [trace(st, sv, "Baro Filtered", "#333333")],
+                 y_title="Altitude", y_unit="m",
+                 events={k: round(v, 3) for k, v in outside.items()}, height=300)
+    if not spec:
+        return None
+    spec["layout"]["xaxis"]["range"] = [lo, hi]
+    _emphasize_events(spec, lo, hi)
+    named = ", ".join(sorted(outside))
+    spec["note"] = (f"The descent to touchdown, carrying the events that fall outside the "
+                    f"turnover above: {named}. Recovery runs tens of seconds while the "
+                    f"turnover runs a few, so the two need separate axes.")
+    return spec
+
+
+def _lane_chart(res) -> Optional[dict[str, Any]]:
     """One row per detector, showing every span where its condition held."""
-    lo, hi = _window(res, marks)
+    lo, hi = _window(res)
     rows = [("vel", res["vel_periods"]), ("baro", res["baro_periods"]),
             ("gps", res["gps_periods"]), ("pitch", res["pitch_periods"])]
 
@@ -298,7 +336,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         return result
 
     marks = _log_events(recs)
-    charts = [c for c in (_altitude_chart(res, marks), _lane_chart(res, marks)) if c]
+    charts = [c for c in (_altitude_chart(res, marks), _lane_chart(res)) if c]
     if not charts:
         result.warnings.append("The replay ran but produced no altitude series to plot.")
         return result
@@ -314,15 +352,22 @@ def analyze(flight: Flight) -> AnalysisResult:
         top["layout"]["margin"] = {"l": 70, "r": 20, "t": 40, "b": 6}
         bottom["layout"]["margin"] = {"l": 70, "r": 20, "t": 8, "b": 42}
         bottom["layout"]["title"] = {"text": "", "font": {"size": 14}}
-        # Top-right. The detector marks cluster at the apogee turnover on the
-        # left of this window and the rejection marks run along the floor, so
-        # the upper right is the only corner that is reliably empty.
-        top["layout"]["legend"] = {"x": 0.992, "xanchor": "right", "y": 0.98,
+        # Top-left: over this window the vehicle is still climbing on the left
+        # and descending on the right, so the upper left is the empty corner.
+        # The rejection marks run along the floor, ruling out the bottom.
+        top["layout"]["legend"] = {"x": 0.008, "xanchor": "left", "y": 0.98,
                                    "yanchor": "top", "font": {"size": 10},
                                    "bgcolor": "rgba(255,255,255,0.72)"}
         # One caption, under the pair.
         bottom["note"] = ((top.pop("note", "") or "") + " " +
                           (bottom.get("note") or "")).strip()
         top["note"] = ""
+
+    # Standalone, not stacked: it covers a span thirty times longer, so it does
+    # not share the axis above and must not look as though it does.
+    recovery = _recovery_chart(res, marks)
+    if recovery:
+        charts.append(recovery)
+
     result.charts = charts
     return result
