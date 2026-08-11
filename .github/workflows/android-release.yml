@@ -21,6 +21,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags: the version check below reads the previous
+          # android-v* tag's build.gradle.kts.  The default depth-1 checkout
+          # fetches only the tagged commit and `git show <prev-tag>:...` fails.
+          fetch-depth: 0
 
       - uses: actions/setup-java@v4
         with:
@@ -55,9 +60,10 @@ jobs:
         run: ./gradlew --no-daemon :app:assembleRelease
         working-directory: TinkerRocketAndroid
 
-      - name: Verify the APK is signed with the release key (not debug)
+      - name: Verify the APK — release-signed, version matches the tag, versionCode advanced
         run: |
           APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
+          GRADLE=TinkerRocketAndroid/app/build.gradle.kts
           ls -la "$APK"
           # Runners ship several build-tools versions — a bare glob expands to
           # multiple paths and the first binary eats the second as an argument.
@@ -70,6 +76,57 @@ jobs:
               echo "::error::APK is debug-signed — the release signing env did not take"
               exit 1 ;;
           esac
+
+          # The signer check says the APK is ours; it says nothing about which
+          # version is inside it.  android-v0.9.0 shipped an APK reporting
+          # versionName 0.1.0-phase3 and this workflow published it clean.  Read
+          # the version out of the built APK itself — not out of the gradle file
+          # — so a bump left uncommitted in a working tree cannot pass.
+          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          # `|| true`: steps run under bash -e, and a no-match grep here would
+          # abort with no explanation — let the emptiness check below report it.
+          BADGING=$("$AAPT2" dump badging "$APK" | grep -m1 '^package:' || true)
+          echo "$BADGING"
+          APK_NAME=$(printf '%s\n' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          APK_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+          if [ -z "$APK_NAME" ] || [ -z "$APK_CODE" ]; then
+            echo "::error::could not read versionName/versionCode from $APK — aapt2 badging line was: $BADGING"
+            exit 1
+          fi
+
+          # 1. The APK must call itself what the tag calls it.  A mismatch here
+          #    is what pins a phantom "update available" banner on every install
+          #    forever: UpdateChecker reads the *installed* versionName, and any
+          #    release strictly ahead of it stays offered, persisted across
+          #    restarts.  A 1.0.3 release against a 1.0.2-reporting install
+          #    never clears — no later release can fix an APK already out.
+          EXPECTED_NAME="${GITHUB_REF_NAME#android-v}"
+          if [ "$APK_NAME" != "$EXPECTED_NAME" ]; then
+            echo "::error::version mismatch: tag $GITHUB_REF_NAME expects versionName '$EXPECTED_NAME' but the APK reports '$APK_NAME' (versionCode $APK_CODE). Set versionName = \"$EXPECTED_NAME\" in $GRADLE, commit it, then move the tag onto that commit — the bump was probably never committed."
+            exit 1
+          fi
+          echo "versionName '$APK_NAME' matches tag $GITHUB_REF_NAME"
+
+          # 2. versionCode must strictly increase, or sideload/Play refuse the
+          #    install as a downgrade.  Compare against the previous android-v*
+          #    tag in version order (needs the fetch-depth: 0 checkout above).
+          PREV_TAG=$(git tag -l 'android-v*' | sort -V | awk -v cur="$GITHUB_REF_NAME" '$0 == cur { exit } { prev = $0 } END { print prev }')
+          if [ -z "$PREV_TAG" ]; then
+            echo "::notice::$GITHUB_REF_NAME is the earliest android-v* tag — no previous versionCode to compare against"
+          else
+            # `grep versionCode` alone matches the explanatory comment above the
+            # field first and parses to nothing; anchor on the assignment.
+            PREV_CODE=$(git show "$PREV_TAG:$GRADLE" | sed -n 's/.*versionCode *= *\([0-9][0-9]*\).*/\1/p' | head -1)
+            if [ -z "$PREV_CODE" ]; then
+              echo "::error::could not read versionCode from $GRADLE at $PREV_TAG — the file may have moved or the field been renamed since that tag. Fix this check's path/pattern before releasing."
+              exit 1
+            fi
+            if [ "$APK_CODE" -le "$PREV_CODE" ]; then
+              echo "::error::versionCode did not advance: $GITHUB_REF_NAME builds versionCode $APK_CODE but $PREV_TAG already shipped $PREV_CODE. Set versionCode = $((PREV_CODE + 1)) (or higher) in $GRADLE, commit it, then move the tag onto that commit. Installs of $PREV_TAG will reject this APK as a downgrade."
+              exit 1
+            fi
+            echo "versionCode $APK_CODE advances on $PREV_TAG's $PREV_CODE"
+          fi
 
       - name: Attach APK to the GitHub release
         env:
