@@ -186,6 +186,17 @@ fun DashboardScreen(
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
+        //
+        // Direct links only, as on iOS ("rocket only, confirmed by telemetry",
+        // DashboardView.swift:574, which gates the same branch on
+        // deviceType == .rocket).  The power pin is an OC-local signal that the
+        // LoRa relay does not carry: on a base-station link fs bit 0x10 is
+        // always clear, so this card read a confident "OFF" with a Power on
+        // button directly above a live banner from a rocket that was plainly
+        // powered and reporting READY (bench 2026-08-11, fs=128 = bsLogging
+        // only). Offering to power on a running rocket is worse than showing
+        // nothing.
+        if (!session.isBaseStation) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Rocket power", style = MaterialTheme.typography.titleMedium)
@@ -208,6 +219,7 @@ fun DashboardScreen(
                     }
                 }
             }
+        }
         }
 
         // iOS section order (screenshots 2026-07-31): the summary sits right
