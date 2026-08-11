@@ -350,6 +350,36 @@ def test_plotly_trajectory_lives_in_detailed(reports: dict[str, Path]) -> None:
     assert "chart-trajectory" in eng, "the 3D trajectory chart vanished instead of moving"
 
 
+def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
+    """Recovery events belong on their own chart, not on the turnover's axis.
+
+    The turnover chart exists to separate four detector calls that land within a
+    second or two of each other. Landing is tens of seconds later, so marking it
+    there — which is how this was first written — compresses those calls into a
+    sliver. The split is the point; this catches a merge that undoes it.
+    """
+    specs = dict(_chart_specs(report_html.read_text(encoding="utf-8")))
+    vote, recovery = specs.get("chart-apogee-vote"), specs.get("chart-recovery")
+    assert vote, "apogee turnover chart missing"
+    assert recovery, "recovery chart missing"
+
+    def labels(spec: dict) -> set[str]:
+        return {a.get("text") for a in spec["layout"].get("annotations", [])}
+
+    lo, hi = vote["layout"]["xaxis"]["range"]
+    assert hi - lo < 20.0, f"turnover window is {hi - lo:.0f} s wide; it should be seconds"
+    assert {"True Apogee", "Master Apogee"} <= labels(vote), (
+        f"turnover chart lost its apogee marks: {sorted(labels(vote))}"
+    )
+    assert "Landed" not in labels(vote), "landing declaration stretched the turnover window"
+    assert "Landed" in labels(recovery), (
+        f"recovery chart is missing the landing declaration: {sorted(labels(recovery))}"
+    )
+    # It has to actually reach the landing it marks.
+    r_lo, r_hi = recovery["layout"]["xaxis"]["range"]
+    assert r_hi > hi, "recovery chart ends before the turnover chart does"
+
+
 def test_charts_keep_every_sample(report_html: Path) -> None:
     """No decimation in the file: the chart must carry the full logged series.
 
