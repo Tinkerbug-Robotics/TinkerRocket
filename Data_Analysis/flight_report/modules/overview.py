@@ -25,6 +25,7 @@ from plot_flight_data_mini import (  # noqa: E402
 )
 
 from ..charts import COLORS, chart, trace, trajectory_3d
+from ..events import markers
 from ..flight import Flight
 from ..imu import G
 from ..registry import AnalysisResult
@@ -51,18 +52,14 @@ def _t(records, t0_us):
     return (get_array(records, "time_us") - t0_us) / 1e6
 
 
-def _events(records, t0_us) -> dict[str, float]:
-    """First occurrence of each flight event, in seconds since t0."""
-    ns = records.get("NonSensor") or []
-    keys = {"launch": "launch", "burnout": "burnout",
-            "apogee": "alt_apogee", "landed": "alt_landed"}
-    out: dict[str, float] = {}
-    for label, flag in keys.items():
-        for r in ns:
-            if r.get(flag):
-                out[label] = round((r["time_us"] - t0_us) / 1e6, 3)
-                break
-    return out
+def _events(flight) -> dict[str, float]:
+    """Every marker these charts draw, measured off the sensor record.
+
+    See events.py. These used to be the flags, which put the "Apogee" line on
+    the still-climbing part of the altitude trace — the barometric detector's
+    vote fires before the peak, not after it.
+    """
+    return {k: round(v, 3) for k, v in markers(flight).items() if v is not None}
 
 
 def _altitude_chart(recs, t0, events):
@@ -337,7 +334,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         result.warnings.append("No timestamped records — nothing to chart.")
         return result
 
-    events = _events(recs, t0)
+    events = _events(flight)
     # No ground-track chart here: the flight report's geography is the 3D globe.
     # The ENU chart and the flat recovery map both live in the detailed report, along
     # with the 3D Plotly trajectory — see _trajectory_chart for why that one is
@@ -363,7 +360,7 @@ def analyze_sensors(flight: Flight) -> AnalysisResult:
         result.warnings.append("No timestamped records — nothing to chart.")
         return result
 
-    events = _events(recs, t0)
+    events = _events(flight)
     return _build(result, [
         lambda: _accel_chart(recs, t0, events),
         lambda: _gyro_chart(recs, t0, events),

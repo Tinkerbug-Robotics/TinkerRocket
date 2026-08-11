@@ -59,6 +59,7 @@ from plot_flight_data_mini import get_array  # noqa: E402
 
 from ..cesium_bundle import CesiumPatchError, CesiumUnavailable, cesium_source
 from ..charts import chart, trace
+from ..events import markers
 from ..flight import Flight
 from ..registry import AnalysisResult
 from ..units import q
@@ -89,17 +90,14 @@ def _t(records, t0_us) -> np.ndarray:
     return (get_array(records, "time_us") - t0_us) / 1e6
 
 
-def _events(recs, t0_us) -> dict[str, Optional[float]]:
-    ns = recs.get("NonSensor") or []
-    out: dict[str, Optional[float]] = {}
-    for label, flag in (("launch", "launch"), ("apogee", "alt_apogee"),
-                        ("landed", "alt_landed")):
-        out[label] = None
-        for r in ns:
-            if r.get(flag):
-                out[label] = (r["time_us"] - t0_us) / 1e6
-                break
-    return out
+def _events(flight) -> dict[str, Optional[float]]:
+    """Measured flight events; see events.py.
+
+    Also the fallback bound for the plotted window, which is why it matters that
+    these are not detector votes: a boost-phase false vote used to clip the whole
+    3D track to the first second of flight.
+    """
+    return markers(flight)
 
 
 def _pad_reference(gnss, t, launch_s) -> Optional[tuple[float, float, float]]:
@@ -308,7 +306,7 @@ def _apogee_m(track: dict) -> float:
     return max(track["positions"][2::3])
 
 
-def _accel_sats_chart(recs, t0) -> Optional[dict[str, Any]]:
+def _accel_sats_chart(flight, recs, t0) -> Optional[dict[str, Any]]:
     """Acceleration against satellite count, on one time axis.
 
     The two tracks above diverge because the receiver loses lock under boost.
@@ -320,7 +318,7 @@ def _accel_sats_chart(recs, t0) -> Optional[dict[str, Any]]:
     if not imu or not gnss or "num_sats" not in gnss[0]:
         return None
 
-    events = _events(recs, t0)
+    events = _events(flight)
     t_imu = _t(imu, t0)
     start = events.get("launch")
     end = events.get("landed") or events.get("apogee")
@@ -366,7 +364,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         result.warnings.append("No timestamped records — nothing to place on the map.")
         return result
 
-    events = _events(recs, t0)
+    events = _events(flight)
     gnss = recs.get("GNSS") or []
     t_gnss = _t(gnss, t0) if gnss else np.zeros(0)
     pad = _pad_reference(gnss, t_gnss, events.get("launch"))
@@ -445,7 +443,7 @@ def analyze(flight: Flight) -> AnalysisResult:
                     "GNSS fixes. Imagery loads from Esri when the report is opened, so "
                     "this view needs a connection; the rest of the report does not.")
     result.globes = [spec]
-    accel_sats = _accel_sats_chart(recs, t0)
+    accel_sats = _accel_sats_chart(flight, recs, t0)
     result.charts = [accel_sats] if accel_sats else []
     return result
 

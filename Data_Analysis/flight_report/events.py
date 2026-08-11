@@ -305,6 +305,25 @@ def measured(flight) -> dict[str, Optional[float]]:
     return out
 
 
+def markers(flight) -> dict[str, Optional[float]]:
+    """Measured events, but with the launch flag standing in when first motion
+    cannot be measured.
+
+    For anchoring, not for quoting. Chart windows and the globe's pad reference
+    are all pinned to launch, and a log that opens mid-boost has no measurable
+    one — which would silently widen every window to the whole record and take
+    the pad datum from a second of powered flight. At chart scale the flag's
+    fifth of a second does not show, so it is the right answer there.
+
+    The summary card must NOT use this: a burn time started from a flag 0.2 s
+    late is wrong by 13 per cent, which is the whole reason events.py exists.
+    """
+    out = dict(measured(flight))
+    if out["launch"] is None:
+        out["launch"] = _flag_time(flight.records, flight.t0_us, "launch")
+    return out
+
+
 def span(events: dict[str, Optional[float]], a: str, b: str) -> Optional[float]:
     """Seconds from event `a` to event `b`, or None if either is missing.
 

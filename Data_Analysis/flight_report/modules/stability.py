@@ -28,6 +28,7 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array  # noqa: E402
 
 from ..charts import COLORS, chart, trace
+from ..events import measured
 from ..flight import Flight
 from ..registry import AnalysisResult
 from ..units import q
@@ -68,9 +69,9 @@ def analyze(flight: Flight) -> AnalysisResult:
         return result
 
     t = (get_array(ns, "time_us") - t0) / 1e6
-    launch = _event(ns, t0, "launch")
-    burnout = _event(ns, t0, "burnout")
-    apogee = _event(ns, t0, "alt_apogee")
+    ev = measured(flight)
+    launch, burnout = ev["launch"], ev["burnout"]
+    ejection, apogee = ev["ejection"], ev["apogee"]
 
     if launch is None:
         result.warnings.append("No launch detected — no pad attitude to measure tilt against.")
@@ -101,8 +102,13 @@ def analyze(flight: Flight) -> AnalysisResult:
                 float(np.interp(burnout, t, tilt)), "°", 1,
                 suffix=" from the rail",
             )
-    if apogee is not None:
-        metrics["Tilt at apogee"] = q(float(np.interp(apogee, t, tilt)), "°", 1)
+    # At ejection, not at apogee. The airframe swings freely under a deploying
+    # canopy, so an angle taken after the charge describes the recovery system
+    # rather than the rocket — and a rocket can deploy before it stops climbing.
+    # The sample flight ejects a second early: tilt reads 37.8° at the charge,
+    # 49.9° at apogee and 100.3° two tenths later, all of the growth being tumble.
+    if ejection is not None:
+        metrics["Tilt at ejection"] = q(float(np.interp(ejection, t, tilt)), "°", 1)
 
     boost_max = None
     if burnout is not None:
@@ -120,13 +126,16 @@ def analyze(flight: Flight) -> AnalysisResult:
     result.metrics = metrics
 
     # Chart the powered and coasting phases; once the chute is out the airframe
-    # swings freely and the angle stops describing the vehicle's flight.
-    end = apogee if apogee is not None else float(t[-1])
+    # swings freely and the angle stops describing the vehicle's flight. That
+    # cut is the ejection, which this used to approximate with apogee — fine
+    # until a flight deploys early, when it charts a second of tumble.
+    end = ejection if ejection is not None else (apogee if apogee is not None else float(t[-1]))
     window = (t >= launch - 1.0) & (t <= end + 0.5)
     if window.sum() > 10:
         events = {k: val for k, val in
-                  (("launch", launch), ("burnout", burnout), ("apogee", apogee))
-                  if val is not None}
+                  (("launch", launch), ("burnout", burnout),
+                   ("ejection", ejection), ("apogee", apogee))
+                  if val is not None and val <= end + 0.5}
         spec = chart(
             "chart-tilt", "Tilt away from the pad attitude",
             [trace(t[window], tilt[window], "Tilt", COLORS[3])],
