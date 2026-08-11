@@ -16,6 +16,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_BIN = REPO_ROOT / "tests" / "test_data" / "flight_20260615_170318.bin"
+# A complete flight, pad to touchdown. GOLDEN_BIN deliberately is not one: its
+# record opens at 8.1 g, already under thrust, so it has no measurable liftoff.
+SAMPLE_BIN = REPO_ROOT / "examples" / "flights" / "flight_20260705_174532.bin"
 
 # A few tests reach into the report package directly rather than through the
 # rendered HTML. Data_Analysis has no __init__.py, so it is put on the path the
@@ -348,6 +351,49 @@ def test_plotly_trajectory_lives_in_detailed(reports: dict[str, Path]) -> None:
         "same trajectory"
     )
     assert "chart-trajectory" in eng, "the 3D trajectory chart vanished instead of moving"
+
+
+def test_measured_events_beat_the_flags() -> None:
+    """The card's timings come from the sensor record, not the declarations.
+
+    Each flag latches only once its detector is confident, so it lands after the
+    thing it names. Apogee has no single flag at all — five detectors vote — and
+    reading the barometric vote as "apogee" is what made the summary card
+    disagree with the flight computer's own record by 1.15 s.
+    """
+    from flight_report.events import measured
+    from flight_report.flight import Flight
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    ev = measured(flight)
+    ns = flight.records["NonSensor"]
+    t0 = flight.t0_us
+
+    def flag(name: str) -> float:
+        return next((r["time_us"] - t0) / 1e6 for r in ns if r.get(name))
+
+    for key in ("launch", "burnout", "apogee", "ejection", "landed"):
+        assert ev[key] is not None, f"{key} was not measured on the sample flight"
+
+    # Measured events precede the declarations that chase them.
+    assert ev["launch"] < flag("launch"), "measured launch is not before the launch flag"
+    assert ev["burnout"] < flag("burnout"), "measured burnout is not before the burnout flag"
+    assert flag("launch") - ev["launch"] < 1.0, "measured launch is implausibly early"
+
+    # Apogee must not be any single detector's vote.
+    for vote in ("alt_apogee", "vel_apogee", "gps_apogee", "pitch_apogee"):
+        assert abs(ev["apogee"] - flag(vote)) > 1e-6, (
+            f"apogee collapsed onto the {vote} detector's vote"
+        )
+
+    # Ordering, and the fact this flight deployed before it stopped climbing —
+    # which is exactly why the barometric vote is not an apogee.
+    assert ev["launch"] < ev["burnout"] < ev["ejection"] < ev["landed"]
+    assert ev["ejection"] < ev["apogee"], (
+        "the sample flight ejects ~1 s before apogee; if this flips, the ejection "
+        "detector has latched onto something else"
+    )
 
 
 def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:

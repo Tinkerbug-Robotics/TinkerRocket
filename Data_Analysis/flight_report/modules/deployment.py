@@ -158,7 +158,13 @@ def analyze(flight: Flight) -> AnalysisResult:
         peak_i = int(np.argmax(alt))
         peak_t, peak_alt = float(t[peak_i]), float(alt[peak_i])
         lag = ev["apogee"] - peak_t
-        metrics["True apogee"] = q(peak_alt, "m", 1, suffix=f" at {peak_t:.2f} s")
+        # Named for the sensor, not "True apogee": the Apogee Detection section
+        # already uses that phrase for the GNSS Doppler velocity crossing, which
+        # is a different instant (7.66 s vs 8.34 s on the sample flight, because
+        # the ejection charge lands on the pressure peak the barometer is being
+        # asked to find).
+        metrics["Peak barometric altitude"] = q(peak_alt, "m", 1,
+                                                suffix=f" at {peak_t:.2f} s")
 
         # How far below the peak the vehicle was when the flag went up. Stated in
         # both directions: still climbing if the call was early, already falling

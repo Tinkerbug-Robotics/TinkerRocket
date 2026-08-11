@@ -27,6 +27,7 @@ from plot_flight_data_mini import get_array, gnss_to_enu, pressure_to_altitude  
 
 from markupsafe import Markup
 
+from .events import measured, span as _span
 from .imu import accel_magnitude
 from .units import q
 
@@ -42,18 +43,29 @@ def _cell(label: str, value: Optional[float], unit: str, places: int = 1,
     return {"label": label, "q": q(value, unit, places, suffix), "hint": hint}
 
 
-def _event_times(records, t0_us) -> dict[str, Optional[float]]:
-    """Seconds since t0 for the first occurrence of each flight event."""
+def _event_times(flight) -> dict[str, Optional[float]]:
+    """Seconds since t0 for each flight event, measured rather than declared.
+
+    See events.py. The card used to read the flags, which meant "time to apogee"
+    was the barometric detector's vote minus the launch declaration — two
+    different kinds of lateness, one of them 1.15 s.
+    """
+    return measured(flight)
+
+
+def _eject_hint(records) -> str:
+    """Where the ejection time came from: a channel that logged it, or the trace.
+
+    Worth saying on the card. A pyro time is recorded by the thing that fired;
+    a motor ejection is inferred from the transient it leaves in the
+    accelerometer, and a reader is entitled to know which they are looking at.
+    """
     ns = records.get("NonSensor") or []
-    out: dict[str, Optional[float]] = {}
-    for label, flag in (("launch", "launch"), ("burnout", "burnout"),
-                        ("apogee", "alt_apogee"), ("landed", "alt_landed")):
-        out[label] = None
-        for r in ns:
-            if r.get(flag):
-                out[label] = (r["time_us"] - t0_us) / 1e6
-                break
-    return out
+    for ch in (1, 2, 3, 4):
+        key = f"pyro{ch}_fired"
+        if ns and key in ns[0] and any(r.get(key) for r in ns):
+            return f"pyro {ch} firing"
+    return "ejection, found in the accelerometer"
 
 
 def _baro_agl(records) -> Optional[np.ndarray]:
@@ -76,7 +88,7 @@ def compute_summary(flight) -> list[dict[str, Any]]:
         return []
 
     cells: list[dict[str, Any]] = []
-    events = _event_times(recs, t0)
+    events = _event_times(flight)
 
     # --- Apogee altitude -----------------------------------------------------
     alt = _baro_agl(recs)
@@ -122,9 +134,12 @@ def compute_summary(flight) -> list[dict[str, Any]]:
     # --- Peak acceleration (boost only) --------------------------------------
     # Measured over launch->burnout on purpose. Touchdown and the ejection
     # charge both slam the accelerometer far harder than the motor does — on the
-    # sample flight the whole-flight peak is 146 G at the moment of landing,
-    # against 5.1 G under thrust — so a whole-flight max would headline an impact
-    # as though it were the rocket's acceleration.
+    # sample flight the whole-flight peak is 77 G, and the ejection charge alone
+    # is 38 G, against 9.5 G under thrust — so a whole-flight max would headline
+    # a bang as though it were the rocket's acceleration.
+    #
+    # The bounds are the measured burn, not the flags, so the window no longer
+    # opens 0.2 s after the motor lit.
     imu = recs.get("ISM6HG256") or []
     if imu:
         if events["launch"] is not None and events["burnout"] is not None:
@@ -144,12 +159,24 @@ def compute_summary(flight) -> list[dict[str, Any]]:
                                f"{hint_window} · {which}"))
 
     # --- Timing --------------------------------------------------------------
-    if events["launch"] is not None and events["apogee"] is not None:
-        cells.append(_cell("Time to apogee", events["apogee"] - events["launch"], "s", 2,
-                           "launch to apogee detection"))
+    # Chronological: the burn, then the coast, then the top, then the whole
+    # thing. Every one of them is measured off the sensor record and starts from
+    # the same instant of first motion, so they add up.
+    burn = _span(events, "launch", "burnout")
+    if burn is not None:
+        cells.append(_cell("Burn time", burn, "s", 2, "first motion to thrust ending"))
+
+    coast = _span(events, "burnout", "ejection")
+    if coast is not None:
+        cells.append(_cell("Coast time", coast, "s", 2, f"burnout to {_eject_hint(recs)}"))
+
+    to_apogee = _span(events, "launch", "apogee")
+    if to_apogee is not None:
+        cells.append(_cell("Time to apogee", to_apogee, "s", 2, "first motion to peak altitude"))
+
     if events["launch"] is not None and events["landed"] is not None:
         cells.append(_cell("Flight time", events["landed"] - events["launch"], "s", 1,
-                           "launch to touchdown"))
+                           "first motion to touchdown"))
 
     # --- Where it came down --------------------------------------------------
     if gnss:

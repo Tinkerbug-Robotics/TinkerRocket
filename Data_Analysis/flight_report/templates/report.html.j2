@@ -145,16 +145,20 @@
 {% endif %}
 
 {% if show_raw_detail %}
+{# As recorded by the flight computer itself, from the .json sidecar — not the
+   flight report's recomputation from the log. Keeping both is the point of a
+   detailed review, but the labels have to say which is which: "Apogee" on the
+   summary card is an altitude, and these two are times. #}
 <div class="summary-grid">
   {% if sidecar.get('apogee_time_s') is not none %}
   <div class="cell">
-    <div class="label">Apogee</div>
+    <div class="label">Time to apogee</div>
     <div class="value">{{ "%.2f"|format(sidecar['apogee_time_s']) }} s</div>
   </div>
   {% endif %}
   {% if sidecar.get('burnout_time_s') is not none %}
   <div class="cell">
-    <div class="label">Burnout</div>
+    <div class="label">Time to burnout</div>
     <div class="value">{{ "%.2f"|format(sidecar['burnout_time_s']) }} s</div>
   </div>
   {% endif %}
