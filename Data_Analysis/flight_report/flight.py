@@ -33,6 +33,12 @@ class Flight:
     csv_path: Optional[Path] = None
     json_path: Optional[Path] = None
 
+    # Facts the log cannot know — liftoff mass, motor designation. Supplied by
+    # the web tool's entry form; empty from the CLI, which has nowhere to ask.
+    # Modules must degrade rather than fail when a key is absent: a missing mass
+    # should cost you the impulse figure, not the report.
+    metadata: dict[str, Any] = field(default_factory=dict)
+
     # Cached parse results (populated by .load())
     _records: Optional[dict[str, list[dict[str, Any]]]] = field(default=None, repr=False)
     _stats: Optional[dict[str, Any]] = field(default=None, repr=False)
