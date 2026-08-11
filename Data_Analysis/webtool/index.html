@@ -148,13 +148,6 @@
     <div class="controls">
       <label for="rocket-name">Rocket name</label>
       <input type="text" id="rocket-name" value="My Rocket">
-      <!-- Optional throughout: the log cannot know these, but nothing except
-           the impulse figures depends on them. Leaving them blank costs you
-           those rows and nothing else. -->
-      <label for="mass">Liftoff mass</label>
-      <input type="number" id="mass" step="0.001" min="0" placeholder="kg" style="width:6.5rem">
-      <label for="motor">Motor</label>
-      <input type="text" id="motor" placeholder="e.g. I200" style="width:7rem">
       <label for="level">Report</label>
       <select id="level">
         <option value="flight" selected>Flight — summary and charts</option>
@@ -163,11 +156,6 @@
       <span style="flex:1"></span>
       <button id="sample-btn" class="secondary" disabled>Try the sample flight</button>
     </div>
-    <p class="hint" style="margin:.6rem 0 0">
-      Mass and motor are optional — they unlock total impulse, average thrust and
-      the motor-class check. Everything else in the report is measured from the
-      log alone.
-    </p>
     <div id="error-box" hidden></div>
   </section>
 

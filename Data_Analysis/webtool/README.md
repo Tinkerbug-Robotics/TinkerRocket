@@ -60,37 +60,27 @@ CLI exactly.
 
 - **Flight** (`<stem>_report.html`) — the headline read. Summary card (apogee,
   max speed, peak boost acceleration, time to apogee, flight time, landing
-  distance and bearing), interactive altitude, velocity, ground-track and state
-  charts, and a **Deployment & Recovery** section. No static figures, no raw JSON
-  dump, no parser stats.
+  distance and bearing), a 3D flight path on satellite imagery, then interactive
+  charts running position -> velocity -> acceleration, roll control, apogee
+  detection, stability, per-sensor sample rates and log health. No static
+  figures, no raw JSON dump, no parser stats.
 - **Detailed data review** (`<stem>_report_detailed.html`) — everything else: the 26
   kinematics figures, full-rate interactive accelerometer and gyro charts, frame
   gaps, timestamps, sensor noise, GNSS health, kinematic-checks replay, roll PID,
   guidance, LoRa, MRAM log buffer, settings snapshot and parser stats.
 
-### Flight metadata (web tool only)
+### Flight metadata
 
-Liftoff mass and motor designation sit on the entry screen next to the rocket
-name. They are **web-only by design** — the CLI has nowhere to ask, so
-`Flight.metadata` is simply empty there — and they are **optional**: a blank
-field costs you the rows that need it and nothing else. The report never fails
-for want of metadata.
+`Flight.metadata` holds facts the log cannot know, keyed by name. Nothing reads
+it today. It was fed by two entry-screen fields — liftoff mass and motor
+designation — which existed only to unlock the Motor Performance section; both
+the fields and the section were removed, because two inputs between dropping a
+log and reading a report is two too many. Recorded as a potential enhancement in
+[#750](https://github.com/Tinkerbug-Robotics/TinkerRocket/issues/750), which is
+also where the reasoning behind the removed figures lives.
 
-What that buys, in the Motor Performance section:
-
-| Always (log alone) | Needs liftoff mass | Needs motor designation |
-|---|---|---|
-| Burn time, peak and average acceleration, thrust-to-weight, speed at burnout | Measured impulse, average thrust, measured class | Class cross-check against the tube |
-
-Thrust-to-weight needs no mass because the mass cancels — the accelerometer
-measures specific force, so |a|/g *is* the ratio. That is the one motor number
-that is always available.
-
-**The impulse figure is honest about being an underestimate.** The accelerometer
-measures specific force, so integrating it gives thrust *minus* drag. It is
-labelled "net of drag" and the class-mismatch warning says so, because quoting
-it as total impulse would flatter every motor on the shelf. Mass outside
-0.01–500 kg is treated as a typo and ignored rather than propagated.
+The attribute and the worker's pass-through are kept deliberately: they are the
+whole cost of bringing that section back.
 
 ### Deployment & Recovery
 
