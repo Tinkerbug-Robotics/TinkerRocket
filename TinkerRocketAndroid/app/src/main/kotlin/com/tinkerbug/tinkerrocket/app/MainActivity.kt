@@ -145,12 +145,35 @@ class MainActivity : ComponentActivity() {
                         // next batch of destinations (plan §4).
                         activeDevice != null -> {
                             var tab by remember { mutableStateOf(0) }
+                            // Which tool sub-screen is open, hoisted out of
+                            // DashboardScreen so the top bar can see it. The bar
+                            // is drawn ABOVE this `when`, so it stays on screen
+                            // over a tool -- and its chevron used to read `tab`,
+                            // which is still 0 there, so it took the DISCONNECT
+                            // branch. That is the one exit a teardown hook cannot
+                            // cover: the GATT goes down before the composition
+                            // unwinds, so the cleanup write lands on a dead
+                            // transport and the FC stays in servo-test or
+                            // mag-cal with nothing on screen to say so.
+                            var tool by remember { mutableStateOf<String?>(null) }
+                            // An active-device hop swaps the session underneath a
+                            // tool screen without disposing it (FleetManager falls
+                            // through to a surviving key rather than null), which
+                            // would leave the screen driving a different rocket.
+                            LaunchedEffect(activeDevice.deviceId) { tool = null }
                             androidx.compose.foundation.layout.Column {
                                 // iOS toolbar arrangement (design pass):
                                 // chevron + units | book · map · voice · gear.
                                 ConnectedTopBar(
                                     tab = tab,
-                                    onTab = { tab = it },
+                                    toolOpen = tool != null,
+                                    onCloseTool = { tool = null },
+                                    // Closing the tool on a tab change is load
+                                    // bearing now that `tool` outlives the tab:
+                                    // otherwise returning to tab 0 would re-enter
+                                    // the tool and re-fire its entry command,
+                                    // re-arming servo test after the stop went out.
+                                    onTab = { tool = null; tab = it },
                                     onDisconnect = {
                                         fleet.disconnect(activeDevice.deviceId)
                                         demoFleet = null
@@ -166,6 +189,8 @@ class MainActivity : ComponentActivity() {
                                         phoneLocation = container.phoneLocation,
                                         profileStore = container.profileStore,
                                         container = container,
+                                        tool = tool,
+                                        onTool = { tool = it },
                                         onDisconnect = {
                                             fleet.disconnect(activeDevice.deviceId)
                                             demoFleet = null

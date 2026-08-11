@@ -17,6 +17,25 @@ public enum class MagCalSubType(public val raw: Int) {
      */
     VERIFYING(5);
 
+    /**
+     * Is a calibration in flight, such that leaving the screen must abort it?
+     *
+     * The set matters in both directions.  Leaving during any of these three
+     * strands the FC in MAG_CALIBRATION with the magnetometer offsets zeroed,
+     * and that state has NO launch-detect failsafe by design — kinematicChecks
+     * is skipped in MAG_CALIBRATION, so nothing ever clears it on its own.
+     * VERIFYING is the sharpest of the three: a 60 s firmware timeout runs
+     * evaluateVerify() whether or not the app is still watching, so walking
+     * away can commit a permanent NVS calibration nobody reviewed.
+     *
+     * APPLIED must NOT be in the set. The FC rests in APPLIED whenever a
+     * calibration exists, and MagCalibrator::abort() forces ABORTED from ANY
+     * state — so aborting on the way out of a successful save would throw the
+     * calibration away.
+     */
+    public val needsAbortOnLeave: Boolean
+        get() = this == SAMPLING || this == REVIEW || this == VERIFYING
+
     public companion object {
         /** Unknown raw values fall back to [IDLE], mirroring the iOS `?? .idle`. */
         public fun fromRaw(raw: Int): MagCalSubType =

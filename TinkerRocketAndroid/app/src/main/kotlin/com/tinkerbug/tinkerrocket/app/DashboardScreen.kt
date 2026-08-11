@@ -63,23 +63,29 @@ fun DashboardScreen(
     phoneLocation: PhoneLocationManager? = null,
     profileStore: com.tinkerbug.tinkerrocket.session.RocketProfileStore? = null,
     container: AppContainer? = null,
+    tool: String? = null,
+    onTool: (String?) -> Unit = {},
 ) {
     val session = device.session
 
-    // Tools sub-routes (iOS: sheets from the dashboard).
-    var tool by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf<String?>(null)
-    }
+    // Tools sub-routes (iOS: sheets from the dashboard).  The route state is
+    // owned by MainActivity, not here, so the top bar drawn above this screen
+    // can tell that a tool is open -- see ConnectedTopBar's chevron.
     when (tool) {
-        "servo" -> { ServoTestScreen(session, profileStore, onBack = { tool = null }); return }
-        "sim" -> { SimulationScreen(session, onBack = { tool = null }); return }
-        "scan" -> { FreqScanScreen(session, onBack = { tool = null }); return }
-        "magcal" -> { MagCalScreen(session, syncer, onBack = { tool = null }); return }
+        "servo" -> { ServoTestScreen(session, profileStore, onBack = { onTool(null) }); return }
+        "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
+        "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
+        "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
         "ota" -> {
+            // The return sits outside the null check so an unroutable state
+            // renders nothing rather than falling through into the dashboard
+            // body.  One screen per route state is the invariant the teardown
+            // hooks rest on: two screens composed at once would mean a tool's
+            // onDispose never runs while its route is still selected.
             if (container != null) {
-                FirmwareUpdateScreen(container, device.deviceId, session, onBack = { tool = null })
-                return
+                FirmwareUpdateScreen(container, device.deviceId, session, onBack = { onTool(null) })
             }
+            return
         }
     }
 
@@ -118,6 +124,10 @@ fun DashboardScreen(
     val focusRocketId by session.focusRocketId.collectAsState()
     val imuOrientName by session.imuOrientationName.collectAsState()
     val imuOrientMode by session.imuOrientationMode.collectAsState()
+    // iOS isOnPadState (DashboardView.swift:2422) — the two states in which a
+    // ground test is allowed to move control surfaces.
+    val simLaunched by session.simLaunched.collectAsState()
+    val onPad = telemetry.state == "READY" || telemetry.state == "PRELAUNCH"
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -420,20 +430,34 @@ fun DashboardScreen(
                 val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!session.isBaseStation) {
+                        // iOS canStartGroundTest (DashboardView.swift:2437) gates this
+                        // button, and Android had no gate at all -- opening the screen
+                        // sends cmd 24 immediately, and the FC only refuses it from
+                        // INFLIGHT or MAG_CALIBRATION, so a rocket in DESCENT or LANDED
+                        // would deflect its fins on a tap.  The FC's only failsafe for a
+                        // stranded servo test is launch detection: there is no idle or
+                        // link-loss timeout, and neither computer clears it on
+                        // disconnect.
+                        //
+                        // iOS's third term, !groundTestActive, has no Android equivalent
+                        // yet -- the Ground Test screen is not ported -- so it is
+                        // vacuously satisfied rather than omitted by oversight.
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Servo test", tr.servoTest, { tool = "servo" })
+                            "Servo test", tr.servoTest, { onTool("servo") },
+                            enabled = onPad && !simLaunched,
+                        )
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Mag cal", tr.myDevices, { tool = "magcal" })
+                            "Mag cal", tr.myDevices, { onTool("magcal") })
                     }
                     com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                        "Simulate", tr.simulate, { tool = "sim" })
+                        "Simulate", tr.simulate, { onTool("sim") })
                     if (session.isBaseStation) {
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Freq scan", tr.freqScan, { tool = "scan" })
+                            "Freq scan", tr.freqScan, { onTool("scan") })
                     }
                     if (container != null) {
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Firmware", tr.camera, { tool = "ota" })
+                            "Firmware", tr.camera, { onTool("ota") })
                     }
                 }
             }
