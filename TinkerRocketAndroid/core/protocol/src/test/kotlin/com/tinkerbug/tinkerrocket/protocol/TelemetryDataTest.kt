@@ -493,4 +493,14 @@ class TelemetryDataTest {
         assertEquals("42.5%", TelemetryData(soc = 42.5f).socDisplay)
         assertEquals("\u2014", TelemetryData(soc = null).socDisplay)
     }
+
+    @Test
+    fun `base station soc display follows the same rules as the rocket's`() {
+        // The BS pack empties the same way and would print the same "-0.0%".
+        assertEquals("0.0%", TelemetryData(bsSoc = -0.0f).bsSocDisplay)
+        assertEquals("100.0%", TelemetryData(bsSoc = 125f).bsSocDisplay)
+        assertEquals("98.2%", TelemetryData(bsSoc = 98.2f).bsSocDisplay)
+        // Absent on a direct rocket link, where the row is not rendered at all.
+        assertEquals("\u2014", TelemetryData(bsSoc = null).bsSocDisplay)
+    }
 }

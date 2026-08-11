@@ -216,7 +216,7 @@ fun DashboardScreen(
         if (session.isBaseStation) FlightSummaryCard(telemetry)
 
         SignalCard(telemetry, rssi, session.isBaseStation)
-        BatteryCard(telemetry)
+        BatteryCard(telemetry, session.isBaseStation)
         // Orientation source is picked strictly by link type (iOS
         // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
         // imu_orient config readback.  No cross-fallback on either platform.
@@ -1237,11 +1237,36 @@ private fun SignalBar(fraction: Float, value: String, label: String) {
     }
 }
 
-/** iOS BatteryView twin: Charge / Voltage / Current row for the rocket. */
+/**
+ * iOS BatteryView twin: Charge / Voltage / Current, one row per pack.
+ *
+ * The base-station row is not decoration.  On a BS link the operator is
+ * holding the base station, and its own pack is the one that ends the session
+ * when it dies — the rocket's is relayed from something on the pad.  The BS
+ * sends bsoc/bvol/bcur in every telemetry frame and the decoder has always
+ * parsed them; only the row was missing, so the numbers arrived and were
+ * dropped on the floor (bench 2026-08-11: the console read
+ * "[BATT] 4.18 V | 98% SoC | 456 mA" while the card showed one Rocket row).
+ */
 @Composable
-private fun BatteryCard(telemetry: TelemetryData) {
+private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
     val caption = MaterialTheme.typography.bodySmall
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+
+    @Composable
+    fun row(label: String, charge: String, voltage: String, current: String) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(label, style = caption, modifier = Modifier.width(70.dp))
+            listOf(charge, voltage, current).forEach {
+                Text(
+                    it, style = caption.copy(fontFamily = mono),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Battery", style = MaterialTheme.typography.titleMedium)
@@ -1256,19 +1281,20 @@ private fun BatteryCard(telemetry: TelemetryData) {
                     )
                 }
             }
-            Row(Modifier.fillMaxWidth()) {
-                Text("Rocket", style = caption, modifier = Modifier.width(70.dp))
-                listOf(
-                    telemetry.socDisplay,
-                    telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
-                    telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
-                ).forEach {
-                    Text(
-                        it, style = caption.copy(fontFamily = mono),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            row(
+                "Rocket",
+                telemetry.socDisplay,
+                telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+            )
+            // iOS DashboardView.swift:1294 gates the same row the same way.
+            if (isBaseStation) {
+                row(
+                    "Base Stn",
+                    telemetry.bsSocDisplay,
+                    telemetry.bsVoltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                    telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+                )
             }
         }
     }

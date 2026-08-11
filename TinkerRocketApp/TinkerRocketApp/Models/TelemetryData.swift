@@ -518,9 +518,12 @@ struct TelemetryData: Codable {
     }
 
     // Base station battery display helpers
+    /// Same clamp and negative-zero guard as `socDisplay` — the base station's
+    /// pack reaches 0 the same way the rocket's does, and would print the same
+    /// "-0.0%".
     var bsSocDisplay: String {
         if let soc = bs_soc {
-            return String(format: "%.1f%%", soc)
+            return String(format: "%.1f%%", min(100, max(0, soc)) + 0)
         }
         return "N/A"
     }
