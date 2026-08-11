@@ -351,16 +351,62 @@ def _baro_eject_time(flight, t0, launch_t, burnout_t, apogee_t):
     return float(tb[idx[0]]) if idx.size else None
 
 
-def analyze(flight: Flight) -> AnalysisResult:
-    result = AnalysisResult(name="roll_pid", title="Roll PID Tracking & Tuning")
+
+def tuning(K_plant: float, kp_flight: float | None) -> dict:
+    """Loop stability with the gains that flew, and the gains to fly next time.
+
+    Shared by the engineering roll-PID section and the flight-level roll section
+    so the two cannot recommend different numbers for the same flight. Phase
+    margin is the first-order servo lag plus the loop delay subtracted from the
+    90° a pure integrator would give; the recommendation places the crossover at
+    `_F_TARGET_HZ` and adds whatever derivative term buys back the phase needed
+    to reach `_PM_TARGET_DEG`.
+    """
+    pm_current: float | None = None
+    f_c_current: float | None = None
+    if kp_flight is not None:
+        omega_c = abs(K_plant) * kp_flight
+        f_c_current = omega_c / (2 * np.pi)
+        servo_lag = np.degrees(np.arctan(omega_c * _DEFAULT_SERVO_TAU_S))
+        delay_lag = np.degrees(omega_c * _DEFAULT_COMPUTER_DELAY_S)
+        pm_current = float(90.0 - servo_lag - delay_lag)
+
+    omega_target = 2 * np.pi * _F_TARGET_HZ
+    kp_new = omega_target / abs(K_plant)
+    servo_lag_t = np.degrees(np.arctan(omega_target * _DEFAULT_SERVO_TAU_S))
+    delay_lag_t = np.degrees(omega_target * _DEFAULT_COMPUTER_DELAY_S)
+    pm_p_only = 90.0 - servo_lag_t - delay_lag_t
+    phase_deficit = max(0.0, _PM_TARGET_DEG - pm_p_only)
+    kd_over_kp = np.tan(np.radians(phase_deficit)) / omega_target if phase_deficit > 0 else 0.0
+    return {
+        "pm_current": pm_current,
+        "f_c_current": f_c_current,
+        "kp_new": kp_new,
+        "kd_new": max(kp_new * kd_over_kp, 1e-4),
+        "ki_new": 0.05 * kp_new * omega_target,
+        "pm_p_only": pm_p_only,
+    }
+
+
+def roll_series(flight: Flight) -> dict:
+    """Every series and flag the roll analysis needs, computed once.
+
+    Shared by the engineering `roll_pid` section and the flight-level `roll`
+    section so both agree on what the flight was. In particular
+    `has_angle_profile` — "did roll *angle* control actually fly?" — is not the
+    sidecar's word for it: a mislabelled export is cross-checked against the
+    servo command with an R² fit and can be overruled here.
+
+    Returns `{"abort": reason}` when there is nothing to analyze.
+    """
+    warnings: list[str] = []
     recs = flight.records
     t0 = flight.t0_us
 
     imu = recs.get("ISM6HG256") or []
     ns = recs.get("NonSensor") or []
     if not imu or not ns:
-        result.warnings.append("Need IMU + NonSensor records for roll-PID analysis.")
-        return result
+        return {"abort": "Need IMU + NonSensor records for roll-PID analysis."}
 
     # ── Times relative to log start ──
     t_imu = (get_array(imu, "time_us") - t0) / 1e6
@@ -369,8 +415,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     cmd = get_array(ns, "roll_cmd")
 
     if cmd.size == 0 or np.max(np.abs(cmd)) < 0.05:
-        result.warnings.append("No active roll command — not a guidance flight.")
-        return result
+        return {"abort": "No active roll command — not a guidance flight."}
 
     # ── Launch time (NonSensor flag, falls back to first |cmd|>0) ──
     launch_t = None
@@ -395,8 +440,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     # ── Control engagement ──
     nz_idx = np.where(np.abs(cmd) > 0.05)[0]
     if nz_idx.size == 0:
-        result.warnings.append("Command samples all below 0.05° — no control engaged.")
-        return result
+        return {"abort": "Command samples all below 0.05° — no control engaged."}
     t_control_on = float(t_ns[nz_idx[0]])
 
     # ── Plant gain estimate (first 1 s of active control) ──
@@ -577,7 +621,7 @@ def analyze(flight: Flight) -> AnalysisResult:
                                    "trusting sidecar mode")
             elif r2_null - r2_angle > 0.25 and r2_null > 0.3:
                 has_angle_profile = False
-                result.warnings.append(
+                warnings.append(
                     f"Sidecar claims roll mode '{claimed_mode}' but the servo "
                     f"command fits pure rate-null (R²={r2_null:.2f}) far better "
                     f"than the angle cascade (R²={r2_angle:.2f}) — the stored "
@@ -592,36 +636,116 @@ def analyze(flight: Flight) -> AnalysisResult:
             else:
                 flown_mode_note = (f"inconclusive (servo fit R²: angle {r2_angle:.2f}, "
                                    f"rate-null {r2_null:.2f}) — trusting sidecar mode")
+    return {
+        "K_plant": K_plant,
+        "angle_peak": angle_peak,
+        "angle_rms": angle_rms,
+        "burnout_t": burnout_t,
+        "cmd": cmd,
+        "eject_baro": eject_baro,
+        "eject_t": eject_t,
+        "fft_freqs": fft_freqs,
+        "fft_mag": fft_mag,
+        "flown_mode_note": flown_mode_note,
+        "g": g,
+        "has_angle_profile": has_angle_profile,
+        "has_wp_angles": has_wp_angles,
+        "osc_freq": osc_freq,
+        "peak_rate": peak_rate,
+        "profile_ramp": profile_ramp,
+        "r_squared": r_squared,
+        "rate_cap_cfg": rate_cap_cfg,
+        "rc_cfg": rc_cfg,
+        "rms_rate": rms_rate,
+        "semantics": semantics,
+        "speed": speed,
+        "ss_t0": ss_t0,
+        "ss_t1": ss_t1,
+        "t_control_on": t_control_on,
+        "t_imu": t_imu,
+        "t_ns": t_ns,
+        "track_act": track_act,
+        "track_err": track_err,
+        "track_is_ang": track_is_ang,
+        "track_ratecmd": track_ratecmd,
+        "track_tgt": track_tgt,
+        "track_tw": track_tw,
+        "v_mean": v_mean,
+        "win_end": win_end,
+        "wps": wps,
+        "track_cmd": track_cmd,
+        "kp_angle_cfg": kp_angle_cfg,
+        "rate_setpt": rate_setpt,
+        "claimed_mode": claimed_mode,
+        "launch_t": launch_t,
+        "warnings": warnings,
+    }
+
+
+def analyze(flight: Flight) -> AnalysisResult:
+    result = AnalysisResult(name="roll_pid", title="Roll PID Tracking & Tuning")
+
+    s = roll_series(flight)
+    if "abort" in s:
+        result.warnings.append(s["abort"])
+        return result
+    result.warnings.extend(s["warnings"])
+    K_plant = s["K_plant"]
+    angle_peak = s["angle_peak"]
+    angle_rms = s["angle_rms"]
+    burnout_t = s["burnout_t"]
+    cmd = s["cmd"]
+    eject_baro = s["eject_baro"]
+    eject_t = s["eject_t"]
+    fft_freqs = s["fft_freqs"]
+    fft_mag = s["fft_mag"]
+    flown_mode_note = s["flown_mode_note"]
+    g = s["g"]
+    has_angle_profile = s["has_angle_profile"]
+    has_wp_angles = s["has_wp_angles"]
+    osc_freq = s["osc_freq"]
+    peak_rate = s["peak_rate"]
+    profile_ramp = s["profile_ramp"]
+    r_squared = s["r_squared"]
+    rate_cap_cfg = s["rate_cap_cfg"]
+    rc_cfg = s["rc_cfg"]
+    rms_rate = s["rms_rate"]
+    semantics = s["semantics"]
+    speed = s["speed"]
+    ss_t0 = s["ss_t0"]
+    ss_t1 = s["ss_t1"]
+    t_control_on = s["t_control_on"]
+    t_imu = s["t_imu"]
+    t_ns = s["t_ns"]
+    track_act = s["track_act"]
+    track_err = s["track_err"]
+    track_is_ang = s["track_is_ang"]
+    track_ratecmd = s["track_ratecmd"]
+    track_tgt = s["track_tgt"]
+    track_tw = s["track_tw"]
+    v_mean = s["v_mean"]
+    win_end = s["win_end"]
+    wps = s["wps"]
+    track_cmd = s["track_cmd"]
+    kp_angle_cfg = s["kp_angle_cfg"]
+    rate_setpt = s["rate_setpt"]
+    claimed_mode = s["claimed_mode"]
+    launch_t = s["launch_t"]
+
 
     # ── Current gains (from sidecar if available) ──
     kp_flight, ki_flight, kd_flight = _gain_from_sidecar(flight.sidecar)
     kp_angle_flight = rc_cfg.get("kp_angle")
 
-    # ── Stability with current gains ──
-    pm_current: float | None = None
-    f_c_current: float | None = None
-    if kp_flight is not None:
-        omega_c = abs(K_plant) * kp_flight
-        f_c_current = omega_c / (2 * np.pi)
-        servo_lag = np.degrees(np.arctan(omega_c * _DEFAULT_SERVO_TAU_S))
-        delay_lag = np.degrees(omega_c * _DEFAULT_COMPUTER_DELAY_S)
-        pm_current = float(90.0 - servo_lag - delay_lag)
-        if pm_current < 30:
-            result.warnings.append(
-                f"Low phase margin with flown gains: {pm_current:.0f}° "
-                f"— oscillation expected."
-            )
-
-    # ── Tuning recommendation ──
-    omega_target = 2 * np.pi * _F_TARGET_HZ
-    kp_new = omega_target / abs(K_plant)
-    servo_lag_t = np.degrees(np.arctan(omega_target * _DEFAULT_SERVO_TAU_S))
-    delay_lag_t = np.degrees(omega_target * _DEFAULT_COMPUTER_DELAY_S)
-    pm_p_only = 90.0 - servo_lag_t - delay_lag_t
-    phase_deficit = max(0.0, _PM_TARGET_DEG - pm_p_only)
-    kd_over_kp = np.tan(np.radians(phase_deficit)) / omega_target if phase_deficit > 0 else 0.0
-    kd_new = max(kp_new * kd_over_kp, 1e-4)
-    ki_new = 0.05 * kp_new * omega_target
+    tune = tuning(K_plant, kp_flight)
+    pm_current = tune["pm_current"]
+    f_c_current = tune["f_c_current"]
+    kp_new, ki_new, kd_new = tune["kp_new"], tune["ki_new"], tune["kd_new"]
+    if pm_current is not None and pm_current < 30:
+        result.warnings.append(
+            f"Low phase margin with flown gains: {pm_current:.0f}° "
+            f"— oscillation expected."
+        )
 
     # ── Metrics ──
     metrics: dict[str, object] = {
@@ -828,7 +952,7 @@ def analyze(flight: Flight) -> AnalysisResult:
                                      xytext=(2, 2), textcoords="offset points")
         else:
             # Step semantics: label each ANGLE segment with its effective
-            # command (the NEXT waypoint's angle), centred on the visible part
+            # command (the NEXT waypoint's angle), centered on the visible part
             # of the segment — not the waypoint angle at the waypoint time,
             # which reads as "hold this from here" and is wrong.
             seg_spans = [(wps[i][0], wps[i + 1][0], wps[i + 1][1], wps[i][2])

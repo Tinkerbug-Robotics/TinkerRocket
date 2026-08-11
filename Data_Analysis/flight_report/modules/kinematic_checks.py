@@ -493,9 +493,10 @@ def analyze(flight: Flight) -> AnalysisResult:
     result.metrics = metrics
 
     # ── Figures ─────────────────────────────────────────────────────────────
-    fig = _plot_apogee_voting(res)
-    if fig is not None:
-        result.figures.append(fig)
+    # The apogee-voting figure moved to the flight report, where it is drawn
+    # interactively by `modules/apogee.py` from this same replay. It is not
+    # repeated here: the registry's rule is one thing in one place, and the
+    # metrics above already carry the replay-vs-logged comparison it supported.
     fig = _plot_landing_voting(res)
     if fig is not None:
         result.figures.append(fig)
