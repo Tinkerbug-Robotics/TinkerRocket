@@ -132,7 +132,7 @@ _ACCEL_SERIES = [
 
 
 def _accel_chart_axes(recs, t0, events, chart_id, title, end_key, note):
-    """Per-axis acceleration from both accelerometers, as the engineering plots show it.
+    """Per-axis acceleration from both accelerometers, as the detailed report's plots show it.
 
     Three axes times two sensors. In G rather than m/s² because that is what the
     hobby quotes and what the summary card reports, and because at rest the
@@ -260,7 +260,7 @@ def _trajectory_chart(recs, t0, events):
     draw and not part of the trajectory. Everything between launch and landing
     is kept at full resolution.
 
-    Engineering-level, since the globe module draws the same path over real
+    Detailed-level, since the globe module draws the same path over real
     imagery in the flight report. Kept rather than deleted because it survives
     two things the globe does not: no network when the report is opened (Cesium
     fetches imagery and terrain at view time, and model rocketry happens in
@@ -324,7 +324,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     Deliberately excludes the raw IMU series. Accelerometer and gyro log at ~1 kHz
     for the whole session — several hundred thousand samples, most of them the
     rocket sitting on the pad — and carrying them at full resolution would make
-    the flight report several times heavier than the engineering one. They live
+    the flight report several times heavier than the detailed one. They live
     in `analyze_sensors` instead, where detail costs nothing.
     """
     result = AnalysisResult(name="overview", title="Flight Overview")
@@ -339,7 +339,7 @@ def analyze(flight: Flight) -> AnalysisResult:
 
     events = _events(recs, t0)
     # No ground-track chart here: the flight report's geography is the 3D globe.
-    # The ENU chart and the flat recovery map both live in engineering, along
+    # The ENU chart and the flat recovery map both live in the detailed report, along
     # with the 3D Plotly trajectory — see _trajectory_chart for why that one is
     # kept rather than deleted.
     # Position, then velocity, then acceleration — each the derivative of the one
@@ -354,7 +354,7 @@ def analyze(flight: Flight) -> AnalysisResult:
 
 
 def analyze_sensors(flight: Flight) -> AnalysisResult:
-    """Engineering-level charts: raw inertial sensors at full logged rate."""
+    """Detailed-level charts: raw inertial sensors at full logged rate."""
     result = AnalysisResult(name="sensor_charts", title="Inertial Sensors (interactive)")
     recs = flight.records
     t0 = flight.t0_us

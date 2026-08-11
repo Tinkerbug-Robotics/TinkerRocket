@@ -32,12 +32,12 @@ class AnalysisResult:
 AnalyzeFn = Callable[["Flight"], AnalysisResult]
 
 # Report levels. FLIGHT answers "how did my rocket fly?" and is what a flyer
-# reads; ENGINEERING is board bring-up and firmware validation. A module belongs
-# to exactly one — anything a flyer needs from an engineering module should be
+# reads; DETAILED is board bring-up and firmware validation. A module belongs
+# to exactly one — anything a flyer needs from an detailed-level module should be
 # rolled up into a FLIGHT-level module rather than shown twice.
 LEVEL_FLIGHT = "flight"
-LEVEL_ENGINEERING = "engineering"
-LEVELS = (LEVEL_FLIGHT, LEVEL_ENGINEERING)
+LEVEL_DETAILED = "detailed"
+LEVELS = (LEVEL_FLIGHT, LEVEL_DETAILED)
 
 
 def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
@@ -48,6 +48,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         globe,
         roll,
         apogee,
+        sample_rates,
         stability,
         motor,
         health,
@@ -76,26 +77,31 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         ("roll",              roll.analyze,              LEVEL_FLIGHT),
         ("apogee",            apogee.analyze,            LEVEL_FLIGHT),
         ("stability",         stability.analyze,         LEVEL_FLIGHT),
+        # Above Motor Performance: a sensor that logged short makes every
+        # number below it thinner than it looks. Still in the detailed report
+        # too, alongside the gap analysis it comes from.
+        ("sample_rates",      sample_rates.analyze,      LEVEL_FLIGHT),
         ("motor",             motor.analyze,             LEVEL_FLIGHT),
         ("health",            health.analyze,            LEVEL_FLIGHT),
-        ("sensor_charts",     overview.analyze_sensors,  LEVEL_ENGINEERING),
-        ("kinematics",        kinematics.analyze,        LEVEL_ENGINEERING),
-        ("gaps",              gaps.analyze,              LEVEL_ENGINEERING),
-        ("timestamps",        timestamps.analyze,        LEVEL_ENGINEERING),
-        ("launch_detection",  launch_detection.analyze,  LEVEL_ENGINEERING),
+        ("sensor_charts",     overview.analyze_sensors,  LEVEL_DETAILED),
+        ("kinematics",        kinematics.analyze,        LEVEL_DETAILED),
+        ("gaps",              gaps.analyze,              LEVEL_DETAILED),
+        ("timestamps",        timestamps.analyze,        LEVEL_DETAILED),
+        ("launch_detection",  launch_detection.analyze,  LEVEL_DETAILED),
         # Deployment & recovery — descent profile, the flat ground-track map and
-        # the KML links. Engineering-level for now; note this leaves the flight
-        # report with no map that works without a network, since the 3D globe
-        # fetches its imagery when the report is opened.
-        ("deployment",        deployment.analyze,        LEVEL_ENGINEERING),
-        ("pyro_apogee",       pyro_apogee.analyze,       LEVEL_ENGINEERING),
-        ("sensor_noise",      sensor_noise.analyze,      LEVEL_ENGINEERING),
-        ("gnss_staleness",    gnss_staleness.analyze,    LEVEL_ENGINEERING),
-        ("kinematic_checks",  kinematic_checks.analyze,  LEVEL_ENGINEERING),
-        ("roll_pid",          roll_pid.analyze,          LEVEL_ENGINEERING),
-        ("guidance",          guidance.analyze,          LEVEL_ENGINEERING),
-        ("lora",              lora.analyze,              LEVEL_ENGINEERING),
-        ("log_buffer",        log_buffer.analyze,        LEVEL_ENGINEERING),
+        # the KML links. Detailed-level by decision: the flat map is the one that
+        # still draws with no network (it degrades to graph paper with the track
+        # on it), so it lives with the rest of the diagnostic set rather than
+        # duplicating the globe in the flight report.
+        ("deployment",        deployment.analyze,        LEVEL_DETAILED),
+        ("pyro_apogee",       pyro_apogee.analyze,       LEVEL_DETAILED),
+        ("sensor_noise",      sensor_noise.analyze,      LEVEL_DETAILED),
+        ("gnss_staleness",    gnss_staleness.analyze,    LEVEL_DETAILED),
+        ("kinematic_checks",  kinematic_checks.analyze,  LEVEL_DETAILED),
+        ("roll_pid",          roll_pid.analyze,          LEVEL_DETAILED),
+        ("guidance",          guidance.analyze,          LEVEL_DETAILED),
+        ("lora",              lora.analyze,              LEVEL_DETAILED),
+        ("log_buffer",        log_buffer.analyze,        LEVEL_DETAILED),
     ]
 
 

@@ -3,7 +3,7 @@
 Two tracks are drawn, deliberately:
 
 * the **navigation filter** — the onboard fusion solution, the same series the
-  engineering report plots as a 3D chart, and
+  detailed report plots as a 3D chart, and
 * the **raw GNSS fixes** — what the receiver reported, unfiltered.
 
 Showing one alone would be a claim. Showing both is a measurement. On the sample
@@ -373,7 +373,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     if pad is None:
         result.warnings.append(
             "No usable GNSS fix on the pad, so there is no way to say where on "
-            "Earth this flight happened. The 3D path is still in the engineering "
+            "Earth this flight happened. The 3D path is still in the detailed "
             "report, plotted in meters from the pad."
         )
         return result
@@ -394,13 +394,13 @@ def analyze(flight: Flight) -> AnalysisResult:
     except CesiumUnavailable as e:
         result.warnings.append(
             f"The 3D view was left out: the CesiumJS bundle could not be read ({e}). "
-            "The flight path is still plotted in the engineering report."
+            "The flight path is still plotted in the detailed report."
         )
         return result
     except CesiumPatchError as e:
         result.warnings.append(
             f"The 3D view was left out: {e} The flight path is still plotted in "
-            "the engineering report."
+            "the detailed report."
         )
         return result
 

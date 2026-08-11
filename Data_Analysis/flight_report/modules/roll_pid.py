@@ -355,7 +355,7 @@ def _baro_eject_time(flight, t0, launch_t, burnout_t, apogee_t):
 def tuning(K_plant: float, kp_flight: float | None) -> dict:
     """Loop stability with the gains that flew, and the gains to fly next time.
 
-    Shared by the engineering roll-PID section and the flight-level roll section
+    Shared by the detailed report's roll-PID section and the flight-level roll section
     so the two cannot recommend different numbers for the same flight. Phase
     margin is the first-order servo lag plus the loop delay subtracted from the
     90° a pure integrator would give; the recommendation places the crossover at
@@ -391,7 +391,7 @@ def tuning(K_plant: float, kp_flight: float | None) -> dict:
 def roll_series(flight: Flight) -> dict:
     """Every series and flag the roll analysis needs, computed once.
 
-    Shared by the engineering `roll_pid` section and the flight-level `roll`
+    Shared by the detailed report's `roll_pid` section and the flight-level `roll`
     section so both agree on what the flight was. In particular
     `has_angle_profile` — "did roll *angle* control actually fly?" — is not the
     sidecar's word for it: a mislabelled export is cross-checked against the

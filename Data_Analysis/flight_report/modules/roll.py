@@ -16,10 +16,10 @@ Which of the two is not read off the sidecar. A sidecar can claim
 2026-07-05 labeled any flight with a *stored* profile that way, even with
 `use_angle_control` off — so `roll_series` cross-checks the claim against the
 servo command with an R² fit and can overrule it. This module asks that shared
-function rather than deciding for itself, so the flight and engineering reports
+function rather than deciding for itself, so the flight and detailed reports
 can never disagree about what the flight was.
 
-The engineering report keeps the same four panels as static figures, plus the
+The detailed report keeps the same four panels as static figures, plus the
 plant-gain estimate, the FFT and the tuning recommendation. This is the readable
 subset, made interactive.
 """
@@ -43,7 +43,7 @@ from ..flight import Flight
 from ..registry import AnalysisResult
 from .roll_pid import roll_series
 
-# Matching the engineering figures, so the two reports read as the same picture.
+# Matching the detailed report's figures, so the two reports read as the same picture.
 C_TARGET = "#ff7f0e"    # commanded
 C_ACTUAL = "#2ca02c"    # achieved
 C_ERROR = "#d62728"
@@ -54,7 +54,7 @@ def _null_rate_segments(tw: np.ndarray, is_ang: np.ndarray) -> list[tuple[float,
     """Contiguous spans where NO angle was being commanded.
 
     The inverse of the angle segments, matching `roll_pid._shade_segments`: the
-    engineering figures tint the *rate-null* stretches, leaving the angle-tracking
+    detailed report's figures tint the *rate-null* stretches, leaving the angle-tracking
     ones on white, because those are the parts a reader is being asked to judge.
     Shading the other way round reads as "this is the interesting bit" pointed at
     exactly the wrong half.
@@ -75,7 +75,7 @@ def _null_rate_segments(tw: np.ndarray, is_ang: np.ndarray) -> list[tuple[float,
 
 
 def _shade(spec: dict, spans: list[tuple[float, float]]) -> None:
-    """Tint the rate-null spans, the way the engineering figures do.
+    """Tint the rate-null spans, the way the detailed report's figures do.
 
     `yref: "paper"` rather than data coordinates on purpose: the metric/imperial
     toggle rescales trace data and the y-axis range but leaves shape coordinates
@@ -205,7 +205,7 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
     `chart()` cannot make subplots, so this is as close to a shared x axis as the
     spec allows — the ranges match because every panel covers the same window.
 
-    Lines *and* markers. The engineering figure draws these with `ax.plot`, and
+    Lines *and* markers. The detailed report's figure draws these with `ax.plot`, and
     the shape between samples is what a control signal is read for — but the
     individual samples matter too, so both are drawn. The template scales marker
     size and opacity to how many are on screen, so they stay out of the way at
@@ -236,7 +236,7 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
         + _segmented(tw, s["track_act"], "EKF Roll", C_ACTUAL, 1.6),
         x_title=NO_X, y_title="Roll angle", y_unit="°",
         events=events, height=H,
-        # Fixed to a full turn with ticks on the quarters, as the engineering
+        # Fixed to a full turn with ticks on the quarters, as the detailed
         # figure has it: autoscaling a wrapped angle hides how close a trace is
         # to the ±180 seam, which is exactly where tracking looks worst.
         y_ticks=([-180, -90, 0, 90, 180], ["−180", "−90", "0", "90", "180"]),
@@ -286,12 +286,12 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
     )
     cap = s.get("rate_cap_cfg")
     if rate_spec:
-        # Scale the axis the way the engineering figure does, rather than with the
+        # Scale the axis the way the detailed report's figure does, rather than with the
         # generic spike clipper: anchor on the rate cap, which is the natural size
         # of controlled roll, and exclude the last second before ejection so a
         # tumble starting early cannot inflate it. Without this the ~620°/s
         # off-the-rail spike flattens the entire controlled portion into a line.
-        # win_end, not eject_t — the engineering helper is passed the end of the
+        # win_end, not eject_t — the detailed report's helper is passed the end of the
         # plotting window, and using apogee instead would admit a second of
         # tumble into the percentile and quietly widen the axis.
         lim, peak = _rate_limit(t_imu[win], g[win], win_end, cap)
@@ -322,7 +322,7 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
             limit = float(limit) if limit is not None else None
         except (TypeError, ValueError):
             limit = None
-        # Zoomed to the command's own range plus 5°, as the engineering panel is.
+        # Zoomed to the command's own range plus 5°, as the detailed report's panel is.
         # The fin command lives in a few degrees while its limit is ±20; scaling
         # to the limit would flatten every detail of what the controller did.
         cw = cmd[win_c]
@@ -353,11 +353,11 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
     # Shared window and a 1 s tick grid with 0.5 s minors, so a transition time
     # can be read off the bottom panel and traced straight up. Only that bottom
     # panel draws tick labels and a title for the axis — the same thing the
-    # engineering figure does with `sharex` plus
+    # detailed report's figure does with `sharex` plus
     # `setp(ax.get_xticklabels(), visible=False)`.
     #
     # Only the first panel carries event *labels*; the rest keep the marker lines
-    # but drop the annotations, which is both what the engineering figure does
+    # but drop the annotations, which is both what the detailed report's figure does
     # (`_mark_events(ax)` without `annotate`) and what lets the top margin
     # collapse. Between them, the label suppression and the margin trim are what
     # actually close the gaps — CSS alone would leave four boxes of white space.
@@ -379,7 +379,7 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
         }
         if not first:
             sp["layout"]["title"] = {"text": "", "font": {"size": 14}}
-        # Legend inside the axes, as the engineering figure has it. The report's
+        # Legend inside the axes, as the detailed report's figure has it. The report's
         # default is a horizontal strip below the plot, which in a stack is a band
         # of text sitting between two panels — the exact thing the stack is meant
         # not to have. Top-left on the first panel, top-right on the rest, so it
@@ -489,7 +489,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         # One note, under the whole group, so nothing lands between the panels.
         # No metrics table: the flight report's roll section is a picture, and
         # the numbers behind it (plant gain, phase margin, suggested gains, the
-        # steady-state spectrum) are tuning work that belongs in the engineering
+        # steady-state spectrum) are tuning work that belongs in the detailed
         # report, where they already are.
         result.charts[-1]["note"] = _stack_note(s, facts)
         return result

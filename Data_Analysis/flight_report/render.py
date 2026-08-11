@@ -143,7 +143,7 @@ def render_report(
 ) -> str:
     """Render one report as an HTML string.
 
-    `level` is `registry.LEVEL_FLIGHT` or `LEVEL_ENGINEERING` and only labels the
+    `level` is `registry.LEVEL_FLIGHT` or `LEVEL_DETAILED` and only labels the
     output — pass the results you want in it. None renders an untitled report
     containing everything given.
 
@@ -207,7 +207,7 @@ def render_report(
         sections=sections,
         level=level,
         counterpart=counterpart,
-        # The flight report leads with the headline numbers; the engineering
+        # The flight report leads with the headline numbers; the detailed
         # report leads with parser/settings detail and doesn't repeat them.
         summary=compute_summary(flight) if is_flight else [],
         show_raw_detail=not is_flight,

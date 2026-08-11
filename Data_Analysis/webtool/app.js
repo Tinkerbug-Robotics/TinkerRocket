@@ -242,7 +242,7 @@ function runFiles(fileEntries, rocketName) {
   // generated locally without colliding or looking like a different artifact.
   currentBinStem =
     binEntry.name.replace(/\.bin$/i, "") +
-    (level === "engineering" ? "_report_engineering" : "_report");
+    (level === "detailed" ? "_report_detailed" : "_report");
   beginRun(binEntry.name);
   const payload = fileEntries.map((f) => ({ name: f.name, buffer: f.buffer }));
   // Blank fields are omitted rather than sent as empty strings, so the Python

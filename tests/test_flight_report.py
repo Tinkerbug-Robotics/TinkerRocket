@@ -24,7 +24,7 @@ GOLDEN_BIN = REPO_ROOT / "tests" / "test_data" / "flight_20260615_170318.bin"
 if str(REPO_ROOT / "Data_Analysis") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "Data_Analysis"))
 
-ENGINEERING_SECTIONS = [
+DETAILED_SECTIONS = [
     'id="kinematics"',
     'id="gaps"',
     'id="timestamps"',
@@ -69,7 +69,7 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
 
     out = {
         "flight": tmp_path / f"{GOLDEN_BIN.stem}_report.html",
-        "engineering": tmp_path / f"{GOLDEN_BIN.stem}_report_engineering.html",
+        "detailed": tmp_path / f"{GOLDEN_BIN.stem}_report_detailed.html",
     }
     for level, path in out.items():
         assert path.exists(), f"{level} report not written to {path}"
@@ -83,9 +83,9 @@ def report_html(reports: dict[str, Path]) -> Path:
     return reports["flight"]
 
 
-def test_engineering_report_renders_all_sections(reports: dict[str, Path]) -> None:
-    html = reports["engineering"].read_text(encoding="utf-8")
-    missing = [s for s in ENGINEERING_SECTIONS if s not in html]
+def test_detailed_report_renders_all_sections(reports: dict[str, Path]) -> None:
+    html = reports["detailed"].read_text(encoding="utf-8")
+    missing = [s for s in DETAILED_SECTIONS if s not in html]
     assert not missing, f"Missing sections: {missing}"
 
 
@@ -98,12 +98,12 @@ def test_flight_report_is_the_headline_read(reports: dict[str, Path]) -> None:
     assert 'class="card"' in html, "Flight report is missing the summary card"
 
     leaked = [s for s in ('id="parser"', 'id="settings"', 'id="log_buffer"') if s in html]
-    assert not leaked, f"Engineering-only sections leaked into the flight report: {leaked}"
+    assert not leaked, f"Detailed-only sections leaked into the flight report: {leaked}"
 
 
 def test_report_has_inline_figures(reports: dict[str, Path]) -> None:
-    """Static figures live in the engineering report; the flight report has none."""
-    eng = reports["engineering"].read_text(encoding="utf-8")
+    """Static figures live in the detailed report; the flight report has none."""
+    eng = reports["detailed"].read_text(encoding="utf-8")
     fig_count = eng.count('<img src="data:image/png;base64,')
     assert fig_count >= 25, f"Expected ≥25 inline figures, got {fig_count}"
 
@@ -335,14 +335,14 @@ def test_cesium_inlined_once_and_patched(report_html: Path) -> None:
     )
 
 
-def test_plotly_trajectory_lives_in_engineering(reports: dict[str, Path]) -> None:
-    """The 3D Plotly path moved to engineering when the globe took over the flight report.
+def test_plotly_trajectory_lives_in_detailed(reports: dict[str, Path]) -> None:
+    """The 3D Plotly path moved to the detailed report when the globe took over the flight report.
 
     It is kept there rather than deleted because it survives what the globe does
     not: a report opened with no network, and a flight with no GNSS fix at all.
     """
     flight = dict(_chart_specs(reports["flight"].read_text(encoding="utf-8")))
-    eng = dict(_chart_specs(reports["engineering"].read_text(encoding="utf-8")))
+    eng = dict(_chart_specs(reports["detailed"].read_text(encoding="utf-8")))
     assert "chart-trajectory" not in flight, (
         "the flight report shows both a Cesium globe and a Plotly 3D path of the "
         "same trajectory"

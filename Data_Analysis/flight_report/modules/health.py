@@ -1,6 +1,6 @@
 """Vehicle health — one verdict per subsystem, so the detail stays optional.
 
-The engineering report already dissects battery, GNSS, logging and radio at
+The detailed report already dissects battery, GNSS, logging and radio at
 length. A flyer needs only to know whether anything needs attention before the
 next flight, so each subsystem reduces to OK / CHECK / PROBLEM with the number
 that decided it. Anything worse than OK also raises a warning, which surfaces in
