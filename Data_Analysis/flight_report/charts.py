@@ -30,9 +30,14 @@ COLORS = [
     "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
 ]
 
+# Chronological, which is the order they are drawn and listed in. Ejection sits
+# between burnout and apogee because that is where it usually falls — but not
+# always: a rocket can deploy before it stops climbing, and the sample flight
+# does, which is exactly why the event is worth marking.
 _EVENT_STYLE = {
     "launch": ("#2ca02c", "Launch"),
     "burnout": ("#ff7f0e", "Burnout"),
+    "ejection": ("#9467bd", "Ejection"),
     "apogee": ("#d62728", "Apogee"),
     "landed": ("#7f7f7f", "Landed"),
 }

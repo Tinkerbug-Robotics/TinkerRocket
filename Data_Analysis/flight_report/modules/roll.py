@@ -39,6 +39,7 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array  # noqa: E402
 
 from ..charts import COLORS, chart, trace
+from ..events import markers
 from ..flight import Flight
 from ..registry import AnalysisResult
 from .roll_pid import roll_series
@@ -179,25 +180,38 @@ def _rate_limit(t, g, eject_t, cap) -> tuple[float, float]:
     return lim, float(np.max(np.abs(g)))
 
 
-def _events_since_launch(s: dict, lo: float, hi: float) -> dict[str, float]:
-    """Burnout and ejection, on the launch-relative axis these charts use.
+def _events_since_launch(flight, lo: float, hi: float) -> dict[str, float]:
+    """The measured events, on the launch-relative axis these charts use.
 
     Filtered to the plotted window, as `roll_pid._event_list` is. Ejection is
     often after the window ends — the window stops just before the charge fires —
     and an event marker outside the range is not merely invisible: `chart()` gives
     it a data-referenced shape, which drags every panel's autorange out to reach
     it and leaves a second of dead space on the right of all four.
+
+    Two things used to be wrong here. The times came from the roll-PID replay's
+    own flag-derived values rather than the measured ones, so this section marked
+    a burnout 71 ms away from the burnout line on every other chart in the report.
+    And the ejection was drawn under the key "apogee" — the charge, labelled as
+    the top of the flight, which on the sample flight is a second later and in
+    the other direction.
     """
+    ev = markers(flight)
+    launch = ev.get("launch")
+    if launch is None:
+        return {}
     out: dict[str, float] = {}
-    for key, value in (("burnout", s.get("burnout_t")), ("apogee", s.get("eject_t"))):
+    for key in ("burnout", "ejection", "apogee"):
+        value = ev.get(key)
         if value is None or not np.isfinite(value):
             continue
-        if lo <= float(value) <= hi:
-            out[key] = round(float(value), 3)
+        rel = float(value) - launch
+        if lo <= rel <= hi:
+            out[key] = round(rel, 3)
     return out
 
 
-def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
+def _control_charts(flight, s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
     """The four-panel roll-control story, launch to ejection.
 
     Drawn as four charts of equal height with the time axis labeled only on the
@@ -221,7 +235,7 @@ def _control_charts(s: dict, facts: dict[str, Any]) -> list[dict[str, Any]]:
     x_pad = 0.05 * (x_hi - x_lo)
     x_range = [x_lo - x_pad, x_hi + x_pad]
 
-    events = _events_since_launch(s, x_lo, x_hi)
+    events = _events_since_launch(flight, x_lo, x_hi)
     spans = _null_rate_segments(tw, s.get("track_is_ang"))
     specs: list[Optional[dict[str, Any]]] = []
     H = 260                      # one panel height, uniform across the stack
@@ -416,14 +430,10 @@ def _rate_only_chart(flight: Flight) -> Optional[dict[str, Any]]:
     t = (get_array(imu, "time_us") - t0) / 1e6
     g = get_array(imu, "gyro_x")
 
-    ns = recs.get("NonSensor") or []
-    events: dict[str, float] = {}
-    for label, flag in (("launch", "launch"), ("burnout", "burnout"),
-                        ("apogee", "alt_apogee"), ("landed", "alt_landed")):
-        for r in ns:
-            if r.get(flag):
-                events[label] = round((r["time_us"] - t0) / 1e6, 3)
-                break
+    # Measured, not the flags. The roll-control branch reads the same source
+    # (see _events_since_launch), so the two branches of this module no longer
+    # mark different instants depending on which one ran.
+    events = {k: round(v, 3) for k, v in markers(flight).items() if v is not None}
 
     start, end = events.get("launch"), events.get("landed") or events.get("apogee")
     window = (t >= start) & (t <= end) if start is not None and end is not None \
@@ -481,7 +491,7 @@ def analyze(flight: Flight) -> AnalysisResult:
     if controlled:
         result.title = "Roll Control"
         facts: dict[str, Any] = {}
-        result.charts = _control_charts(s, facts)
+        result.charts = _control_charts(flight, s, facts)
         if not result.charts:
             result.warnings.append("Roll control ran, but produced no plottable series.")
             return result
