@@ -9,8 +9,6 @@ const dropzone = el("dropzone");
 const fileInput = el("file-input");
 const rocketNameInput = el("rocket-name");
 const levelSelect = el("level");
-const massInput = el("mass");
-const motorInput = el("motor");
 const sampleBtn = el("sample-btn");
 const runPanel = el("run-panel");
 const moduleList = el("module-list");
@@ -216,8 +214,6 @@ function updateControls() {
   sampleBtn.disabled = !enabled;
   fileInput.disabled = !enabled;
   levelSelect.disabled = !enabled;
-  massInput.disabled = !enabled;
-  motorInput.disabled = !enabled;
   dropzone.classList.toggle("disabled", !enabled);
 }
 
@@ -245,15 +241,8 @@ function runFiles(fileEntries, rocketName) {
     (level === "detailed" ? "_report_detailed" : "_report");
   beginRun(binEntry.name);
   const payload = fileEntries.map((f) => ({ name: f.name, buffer: f.buffer }));
-  // Blank fields are omitted rather than sent as empty strings, so the Python
-  // side sees "absent" and not "supplied but unparseable".
-  const metadata = {};
-  const mass = parseFloat(massInput.value);
-  if (isFinite(mass) && mass > 0) metadata.mass_kg = mass;
-  if (motorInput.value.trim()) metadata.motor = motorInput.value.trim();
-
   worker.postMessage(
-    { type: "run", files: payload, rocketName, binName: binEntry.name, level, metadata },
+    { type: "run", files: payload, rocketName, binName: binEntry.name, level },
     payload.map((f) => f.buffer)
   );
 }

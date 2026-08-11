@@ -33,10 +33,11 @@ class Flight:
     csv_path: Optional[Path] = None
     json_path: Optional[Path] = None
 
-    # Facts the log cannot know — liftoff mass, motor designation. Supplied by
-    # the web tool's entry form; empty from the CLI, which has nowhere to ask.
-    # Modules must degrade rather than fail when a key is absent: a missing mass
-    # should cost you the impulse figure, not the report.
+    # Facts the log cannot know, keyed by name. Nothing reads it today — its one
+    # consumer, the Motor Performance section, was removed along with the entry
+    # form that fed it (#750). Kept because it is the whole cost of bringing that
+    # section back: the web tool's worker still populates it, so a module that
+    # wants a mass has somewhere to look for one.
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # Cached parse results (populated by .load())

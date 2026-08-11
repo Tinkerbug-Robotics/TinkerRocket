@@ -209,7 +209,7 @@ rocket is recovered. Binary is not necessary here since data is at 2 Hz.
 ### Flight reports
 
 [`Data_Analysis/flight_report/`](Data_Analysis/flight_report/) turns a `.bin` into a
-self-contained **HTML report**. It reads the binary directly and runs twelve analysis
+self-contained **HTML report**. It reads the binary directly and runs 21 analysis
 modules over it — launch detection, kinematics, apogee and pyro timing, sensor noise,
 timestamp gaps, GNSS staleness, LoRa link quality, roll PID, guidance — then renders the
 plots and findings into one page.

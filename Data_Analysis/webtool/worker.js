@@ -7,7 +7,8 @@
  *   {type:"done", html}                     finished report HTML
  *   {type:"error", message}                 startup or run failure
  * (main -> worker):
- *   {type:"run", files:[{name, buffer}], rocketName, binName}
+ *   {type:"run", files:[{name, buffer}], rocketName, binName, level}
+ * `metadata` is accepted but no longer sent — see the note on Flight.metadata.
  */
 
 importScripts("https://cdn.jsdelivr.net/pyodide/v0.29.1/full/pyodide.js");

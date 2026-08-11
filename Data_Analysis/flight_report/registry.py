@@ -50,7 +50,6 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         apogee,
         sample_rates,
         stability,
-        motor,
         health,
         kinematics,
         gaps,
@@ -77,11 +76,10 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         ("roll",              roll.analyze,              LEVEL_FLIGHT),
         ("apogee",            apogee.analyze,            LEVEL_FLIGHT),
         ("stability",         stability.analyze,         LEVEL_FLIGHT),
-        # Above Motor Performance: a sensor that logged short makes every
-        # number below it thinner than it looks. Still in the detailed report
-        # too, alongside the gap analysis it comes from.
+        # Late, but on the flight report rather than only in the detailed one:
+        # a sensor that logged short makes every number above it thinner than
+        # it looks, so it belongs where the numbers are read.
         ("sample_rates",      sample_rates.analyze,      LEVEL_FLIGHT),
-        ("motor",             motor.analyze,             LEVEL_FLIGHT),
         ("health",            health.analyze,            LEVEL_FLIGHT),
         ("sensor_charts",     overview.analyze_sensors,  LEVEL_DETAILED),
         ("kinematics",        kinematics.analyze,        LEVEL_DETAILED),
