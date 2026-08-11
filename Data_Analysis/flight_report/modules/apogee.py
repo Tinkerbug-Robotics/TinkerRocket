@@ -36,7 +36,7 @@ from .kinematic_checks import (
 )
 
 # The detector labels this report uses. kinematic_checks calls them "Vel" and
-# "GPS"; renamed locally rather than in the shared constant, so the engineering
+# "GPS"; renamed locally rather than in the shared constant, so the detailed
 # figures keep their wording while this report stays consistent with the Data
 # Sources table ("GNSS", never "GPS").
 _DET_LABEL = {"vel": "Velocity", "baro": "Baro", "gps": "GNSS", "pitch": "Pitch"}
@@ -48,10 +48,41 @@ _DET_LABEL = {"vel": "Velocity", "baro": "Baro", "gps": "GNSS", "pitch": "Pitch"
 # below: near-black for the truth, red for the flag that fired the charge.
 _TRUE_APOGEE = "True Apogee"
 _MASTER_APOGEE = "Master Apogee"
+_LANDED = "Landed"
 _EVENT_EMPHASIS = {
     _TRUE_APOGEE: "#1a1a1a",
     _MASTER_APOGEE: "#c62828",
+    _LANDED: "#6b4c3b",
+    "Pyro 1": "#000000", "Pyro 2": "#444444",
+    "Pyro 3": "#666666", "Pyro 4": "#888888",
 }
+
+
+def _log_events(recs) -> dict[str, float]:
+    """Pyro fires and the landing declaration, on the replay's time base.
+
+    The replay measures from the first IMU sample rather than `Flight.t0_us`, so
+    these are read against the same origin — a few milliseconds either way would
+    put the ejection charge on the wrong side of the apogee call.
+
+    Pyro channels are almost always disabled on a motor-ejection flight, in which
+    case nothing is drawn. The lines exist for the flights that do fire one.
+    """
+    ns = recs.get("NonSensor") or []
+    imu = recs.get("ISM6HG256") or []
+    if not ns or not imu:
+        return {}
+    t0_us = imu[0]["time_us"]
+
+    out: dict[str, float] = {}
+    for label, key in (("Landed", "alt_landed"),
+                       ("Pyro 1", "pyro1_fired"), ("Pyro 2", "pyro2_fired"),
+                       ("Pyro 3", "pyro3_fired"), ("Pyro 4", "pyro4_fired")):
+        for r in ns:
+            if r.get(key):
+                out[label] = round((r["time_us"] - t0_us) / 1e6, 3)
+                break
+    return out
 
 
 # Matplotlib's tab: names mean nothing to Plotly.
@@ -63,8 +94,8 @@ _TAB = {"tab:blue": "#1f77b4", "tab:green": "#2ca02c",
 _BEFORE, _AFTER = 8.0, 5.0
 
 
-def _emphasize_events(spec: dict) -> None:
-    """Darken and enlarge the two apogee reference lines and their labels."""
+def _emphasize_events(spec: dict, lo=None, hi=None) -> None:
+    """Darken and enlarge the reference lines and their labels."""
     if not spec:
         return
     layout = spec["layout"]
@@ -81,8 +112,13 @@ def _emphasize_events(spec: dict) -> None:
         ann["font"] = {"size": 12, "color": color}
         ann["y"] = 0.97 - 0.09 * row
         ann["yanchor"] = "top"
-        ann["xanchor"] = "left"
-        ann["xshift"] = 4
+        # Labels sit to the right of their line, except near the right edge,
+        # where that runs them off the plot — the landing declaration is at the
+        # far end of this window by construction.
+        near_right = (lo is not None and hi is not None
+                      and float(ann["x"]) > lo + 0.82 * (hi - lo))
+        ann["xanchor"] = "right" if near_right else "left"
+        ann["xshift"] = -4 if near_right else 4
         ann["bgcolor"] = "rgba(255,255,255,0.82)"
         ann["borderpad"] = 2
     for shape in layout.get("shapes", []):
@@ -91,12 +127,23 @@ def _emphasize_events(spec: dict) -> None:
             shape["line"] = {"color": color, "width": 1.6, "dash": "dash"}
 
 
-def _window(res) -> tuple[Optional[float], Optional[float]]:
+def _window(res, marks: Optional[dict[str, float]] = None) -> tuple[Optional[float], Optional[float]]:
+    """The plotted span: around the apogee call, extended to reach any mark.
+
+    Landing is tens of seconds after apogee, so including it stretches the
+    chart well beyond the turnover it was cropped to. That is the trade the
+    marks are worth: the section then covers the whole recovery sequence, and
+    the apogee detail is a zoom away rather than a separate chart.
+    """
     t_master = res["sim_fires"].get("apogee_flag")
     t_raw, _ = res["raw_palt"]
     if t_master is None or not t_raw:
         return None, None
-    return max(0.0, t_master - _BEFORE), min(t_master + _AFTER, t_raw[-1])
+    lo = max(0.0, t_master - _BEFORE)
+    hi = t_master + _AFTER
+    if marks:
+        hi = max(hi, max(marks.values()) + 2.0)
+    return lo, min(hi, t_raw[-1])
 
 
 def _crop(ts, vs, lo, hi):
@@ -106,11 +153,11 @@ def _crop(ts, vs, lo, hi):
     return [p[0] for p in pairs], [p[1] for p in pairs]
 
 
-def _altitude_chart(res) -> Optional[dict[str, Any]]:
+def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     t_sim, v_sim = res["sim_alt"]
     if not t_sim:
         return None
-    lo, hi = _window(res)
+    lo, hi = _window(res, marks)
     t_raw, v_raw = res["raw_palt"]
 
     traces = []
@@ -155,15 +202,18 @@ def _altitude_chart(res) -> Optional[dict[str, Any]]:
     t_master = res["sim_fires"].get("apogee_flag")
     if t_master is not None:
         events[_MASTER_APOGEE] = round(float(t_master), 3)
+    events.update(marks)
 
     spec = chart("chart-apogee-vote", "Apogee detection — which detector fired when",
                  traces, y_title="Altitude", y_unit="m", events=events, height=400)
     if spec and lo is not None:
         spec["layout"]["xaxis"]["range"] = [lo, hi]
-    _emphasize_events(spec)
+    _emphasize_events(spec, lo, hi)
     if spec:
         note = ("Each marker is one detector calling apogee; the master flag, which fires "
-                "the charge, latches from their votes.")
+                "the charge, latches from their votes. The window runs to the landing "
+                "declaration, so the detectors sit close together — zoom into the "
+                "turnover to separate them.")
         if res.get("baro_reject_t"):
             note += (f" Baro was rejected {len(res['baro_reject_t'])} times here, by "
                      "design, while the vehicle was too fast for pressure to be reliable.")
@@ -171,9 +221,9 @@ def _altitude_chart(res) -> Optional[dict[str, Any]]:
     return spec
 
 
-def _lane_chart(res) -> Optional[dict[str, Any]]:
+def _lane_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     """One row per detector, showing every span where its condition held."""
-    lo, hi = _window(res)
+    lo, hi = _window(res, marks)
     rows = [("vel", res["vel_periods"]), ("baro", res["baro_periods"]),
             ("gps", res["gps_periods"]), ("pitch", res["pitch_periods"])]
 
@@ -247,12 +297,13 @@ def analyze(flight: Flight) -> AnalysisResult:
         result.warnings.append("The apogee-detector replay produced no data.")
         return result
 
-    charts = [c for c in (_altitude_chart(res), _lane_chart(res)) if c]
+    marks = _log_events(recs)
+    charts = [c for c in (_altitude_chart(res, marks), _lane_chart(res, marks)) if c]
     if not charts:
         result.warnings.append("The replay ran but produced no altitude series to plot.")
         return result
 
-    # Stack them as one figure, as the engineering version does with a shared-x
+    # Stack them as one figure, as the detailed report's version does with a shared-x
     # GridSpec: the lanes only mean anything read against the altitude above
     # them, and a gap plus a caption between the two breaks that reading.
     if len(charts) == 2:
@@ -263,10 +314,10 @@ def analyze(flight: Flight) -> AnalysisResult:
         top["layout"]["margin"] = {"l": 70, "r": 20, "t": 40, "b": 6}
         bottom["layout"]["margin"] = {"l": 70, "r": 20, "t": 8, "b": 42}
         bottom["layout"]["title"] = {"text": "", "font": {"size": 14}}
-        # Top-left: the altitude curve climbs from the bottom-left corner and
-        # the rejection marks run along the floor, so those are the two places
-        # a legend cannot go.
-        top["layout"]["legend"] = {"x": 0.008, "xanchor": "left", "y": 0.98,
+        # Top-right. The detector marks cluster at the apogee turnover on the
+        # left of this window and the rejection marks run along the floor, so
+        # the upper right is the only corner that is reliably empty.
+        top["layout"]["legend"] = {"x": 0.992, "xanchor": "right", "y": 0.98,
                                    "yanchor": "top", "font": {"size": 10},
                                    "bgcolor": "rgba(255,255,255,0.72)"}
         # One caption, under the pair.

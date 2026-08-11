@@ -25,6 +25,8 @@ if str(_PARENT) not in sys.path:
 
 from plot_flight_data_mini import get_array, gnss_to_enu, pressure_to_altitude  # noqa: E402
 
+from markupsafe import Markup
+
 from .imu import accel_magnitude
 from .units import q
 
@@ -89,7 +91,11 @@ def compute_summary(flight) -> list[dict[str, Any]]:
         baro_apogee = float(np.max(alt))
         hint = "barometric, above the pad"
         if gnss_apogee is not None:
-            hint += f" · GNSS says {gnss_apogee:,.0f} m"
+            # A Quantity, not a formatted string: the hint is the one place a
+            # number was baked into prose, so it stayed in metres while the value
+            # above it switched to feet. Markup + Quantity works because Jinja's
+            # escape() honours __html__, so the span survives autoescaping.
+            hint = Markup(hint + " · GNSS says ") + q(gnss_apogee, "m", 0)
         cells.append(_cell("Apogee", baro_apogee, "m", 1, hint))
     elif gnss_apogee is not None:
         cells.append(_cell("Apogee", gnss_apogee, "m", 1, "GNSS (no barometer data)"))
@@ -103,7 +109,7 @@ def compute_summary(flight) -> list[dict[str, Any]]:
                     + get_array(ns, "n_vel") ** 2
                     + get_array(ns, "u_vel") ** 2)
         if v.size:
-            speed, hint = float(np.max(v)), "navigation filter"
+            speed, hint = float(np.max(v)), "EKF"
     if speed is None and gnss and all(k in gnss[0] for k in ("vel_e", "vel_n", "vel_u")):
         v = np.sqrt(get_array(gnss, "vel_e") ** 2
                     + get_array(gnss, "vel_n") ** 2

@@ -105,7 +105,7 @@
   <div class="topbar-left">
     {% if counterpart %}
     <a class="pill" href="{{ counterpart }}">
-      {% if level == "engineering" %}&larr; Flight report{% else %}Engineering detail &rarr;{% endif %}
+      {% if level == "detailed" %}&larr; Flight report{% else %}Detailed data &rarr;{% endif %}
     </a>
     {% endif %}
   </div>
@@ -120,10 +120,10 @@
   {% if show_raw_detail %}<code>{{ flight.bin_path }}</code><br>{% endif %}
   Flight: {{ date_str }}
   {#- Log duration is how long the recorder ran, usually minutes of pad time. It
-      belongs with the engineering detail; the card's "Flight time" is the number
+      belongs with the detailed data review; the card's "Flight time" is the number
       a flyer means, and showing both side by side just reads as a contradiction. -#}
   {% if show_raw_detail and duration_s %} &middot; Log duration: {{ "%.1f"|format(duration_s) }} s{% endif %}
-  {% if level == "engineering" %} &middot; engineering detail{% endif %}
+  {% if level == "detailed" %} &middot; detailed data review{% endif %}
 </div>
 
 {% if summary %}
@@ -569,7 +569,7 @@
             fullscreenButton: true
           });
         } catch (e) {
-          say("The 3D view could not start: " + e.message + ". The flight path is also plotted in the engineering report.", true);
+          say("The 3D view could not start: " + e.message + ". The flight path is also plotted in the detailed report.", true);
           return;
         }
 

@@ -46,7 +46,7 @@ browser afterwards).
 | Engine start, warm cache | ~12 s |
 | Flight report, in browser | ~21 s |
 | Flight report size | ~9.0 MB (5.7 MB of it CesiumJS, for the 3D globe) |
-| Engineering report size | ~9.4 MB |
+| Detailed report size | ~9.4 MB |
 | Source payload zip | 2.5 MB (was 715 KB before Cesium was vendored) |
 
 The first analysis on a machine pays a one-off WebAssembly/matplotlib warm-up
@@ -55,7 +55,7 @@ CLI exactly.
 
 ## Two report levels
 
-`flight_report` writes two reports, chosen with `--level flight|engineering|both`
+`flight_report` writes two reports, chosen with `--level flight|detailed|both`
 (default `both`); the web tool has a matching **Report** selector.
 
 - **Flight** (`<stem>_report.html`) — the headline read. Summary card (apogee,
@@ -63,7 +63,7 @@ CLI exactly.
   distance and bearing), interactive altitude, velocity, ground-track and state
   charts, and a **Deployment & Recovery** section. No static figures, no raw JSON
   dump, no parser stats.
-- **Engineering** (`<stem>_report_engineering.html`) — everything else: the 26
+- **Detailed data review** (`<stem>_report_detailed.html`) — everything else: the 26
   kinematics figures, full-rate interactive accelerometer and gyro charts, frame
   gaps, timestamps, sensor noise, GNSS health, kinematic-checks replay, roll PID,
   guidance, LoRa, MRAM log buffer, settings snapshot and parser stats.
@@ -111,7 +111,7 @@ any metadata entry:
 
 ### Moving between the two
 
-Each report links to the other from a pill in the top-left — "Engineering detail →"
+Each report links to the other from a pill in the top-left — "Detailed data →"
 and "← Flight report". The link is only emitted when both files are actually
 written (i.e. `--level both`), since a link to a report that was never generated
 is worse than no link. In the web tool, the **Report** selector picks which one
@@ -206,20 +206,20 @@ worldwide satellite becomes a requirement, that is a paid-tile decision to make
 deliberately.
 - Leaflet's default marker uses PNGs from a relative `images/` path that does not
   exist in a standalone file, so the map uses `circleMarker` (pure SVG) instead.
-  The ENU ground-track chart moved to the engineering report, where exact metres
+  The ENU ground-track chart moved to the detailed report, where exact metres
   off the pad matter more than which field to search.
 
 ### Settings snapshot
 
-Engineering-only, and shows **configuration only** — the sidecar's measured
+Detailed-report-only, and shows **configuration only** — the sidecar's measured
 results (`max_altitude_m` and friends) belong to the summary card, and printing
 them in both places invites the two to disagree. Rendered as grouped tables with
 dotted keys (`pyro.ch1.trigger_mode`) rather than a wall of JSON, so it can be
 scanned and diffed against another flight.
 
-Raw 1 kHz inertial data lives in the engineering report on purpose: it is several
+Raw 1 kHz inertial data lives in the detailed report on purpose: it is several
 hundred thousand samples, most of them the rocket sitting on the pad. Keeping it
-out is what makes the flight report ~2 MB against the engineering report's ~9 MB
+out is what makes the flight report ~2 MB against the detailed report's ~9 MB
 on a 154k-frame flight — and it makes the browser tool roughly 3x faster for the
 common case, since the flight report renders no matplotlib figures at all.
 

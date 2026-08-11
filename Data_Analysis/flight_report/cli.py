@@ -14,11 +14,11 @@ plt.rcParams["figure.max_open_warning"] = 0  # we batch ~30 figures intentionall
 
 from .discover import DEFAULT_DISCOVERY_ROOT, discover, filter_flights
 from .flight import Flight
-from .registry import LEVEL_ENGINEERING, LEVEL_FLIGHT, modules_for, run_module
+from .registry import LEVEL_DETAILED, LEVEL_FLIGHT, modules_for, run_module
 from .render import write_report
 
 
-_LEVEL_SUFFIX = {LEVEL_FLIGHT: "_report.html", LEVEL_ENGINEERING: "_report_engineering.html"}
+_LEVEL_SUFFIX = {LEVEL_FLIGHT: "_report.html", LEVEL_DETAILED: "_report_detailed.html"}
 
 
 def _out_path_for(flight: Flight, out: Path | None, level: str) -> Path:
@@ -30,7 +30,7 @@ def _out_path_for(flight: Flight, out: Path | None, level: str) -> Path:
     # An explicit filename names the first report; the other gets a sibling.
     if level == LEVEL_FLIGHT:
         return out
-    return out.with_name(f"{out.stem}_engineering{out.suffix or '.html'}")
+    return out.with_name(f"{out.stem}_detailed{out.suffix or '.html'}")
 
 
 def _process_one(flight: Flight, out: Path | None, levels: list[str]) -> list[Path]:
@@ -92,11 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_run.add_argument(
         "--level",
-        choices=[LEVEL_FLIGHT, LEVEL_ENGINEERING, "both"],
+        choices=[LEVEL_FLIGHT, LEVEL_DETAILED, "both"],
         default="both",
         help=(
             "Which report(s) to write. 'flight' is the headline read — summary "
-            "card and interactive charts; 'engineering' is the full diagnostic "
+            "card and interactive charts; 'detailed' is the full diagnostic "
             "set. Default: both."
         ),
     )
@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.limit:
         flights = flights[: args.limit]
 
-    levels = [LEVEL_FLIGHT, LEVEL_ENGINEERING] if args.level == "both" else [args.level]
+    levels = [LEVEL_FLIGHT, LEVEL_DETAILED] if args.level == "both" else [args.level]
 
     print(f"Processing {len(flights)} flight(s)...")
     failed = 0
