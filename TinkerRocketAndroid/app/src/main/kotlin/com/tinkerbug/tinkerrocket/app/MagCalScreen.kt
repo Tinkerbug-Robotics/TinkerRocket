@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,11 +18,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,14 +100,50 @@ fun MagCalScreen(
     }
 
     fun bare(cmd: Int) = session.sendBareCommand(cmd)
-    fun abortAndBack() {
-        bare(BleCommandId.MAG_CAL_ABORT_OC)
-        onBack()
-    }
 
     val subType = status?.subType ?: MagCalSubType.IDLE
-    val midCal = subType == MagCalSubType.SAMPLING || subType == MagCalSubType.REVIEW ||
-        subType == MagCalSubType.VERIFYING
+    val midCal = subType.needsAbortOnLeave
+
+    // The abort is owned by teardown, not by the Cancel button, because Cancel
+    // was never the only way out.  The screen also disappears when the top bar
+    // switches tab, when the chevron disconnects, when the system back gesture
+    // pops it, and when a rotation recreates the Activity -- and every one of
+    // those left the FC sitting in MAG_CALIBRATION with the magnetometer
+    // offsets zeroed, invisible from wherever the operator ended up.
+    //
+    // Gated on midCal so it is inert when nothing is running: the FC rests in
+    // APPLIED whenever a calibration exists, and blanket-aborting that on every
+    // visit to the screen would be its own bug.  `latestMidCal` because the
+    // onDispose closure would otherwise capture the value from the composition
+    // that installed it, which is IDLE on entry -- exactly when it must not be.
+    //
+    // The gate is widened past midCal by ranCalThisSession because midCal comes
+    // from live 5 Hz FC telemetry: a null or stale magCalStatus at teardown
+    // would silently degrade it to "send nothing" at exactly the moment it must
+    // not. `subType != APPLIED` is the part that actually protects anything --
+    // everything else in the FC's abort handler is individually guarded and it
+    // never writes NVS, so APPLIED is the only state a stray abort can damage.
+    val needsAbort = midCal || (ranCalThisSession && subType != MagCalSubType.APPLIED)
+    val latestNeedsAbort by rememberUpdatedState(needsAbort)
+    var abortSent by remember { mutableStateOf(false) }
+    fun abortOnce() {
+        if (!abortSent) {
+            abortSent = true
+            bare(BleCommandId.MAG_CAL_ABORT_OC)
+        }
+    }
+    DisposableEffect(session) {
+        onDispose { if (latestNeedsAbort) abortOnce() }
+    }
+    fun abortAndBack() {
+        abortOnce()
+        onBack()
+    }
+    // System back popped to the launcher instead of here, because the app has
+    // no BackHandler and back fell through to the Activity default.  Routing it
+    // to the same path as Cancel keeps the process alive long enough for the
+    // abort to actually reach the rocket.
+    BackHandler { if (midCal) abortAndBack() else onBack() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
