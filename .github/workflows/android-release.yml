@@ -7,11 +7,26 @@ name: Android Release
 # see docs/android-release-signing.md for minting, custody, and secret setup.
 #
 # Runs the full JVM suite first — a release must never outrun the tests.
+#
+# Also runnable by hand as a dry run: same tests, same signed build, same
+# verification, but it stops before creating the release.  Use it to prove a
+# commit is releasable before the tag exists — a tag push is otherwise the
+# only way this workflow ever runs, which would make every change to it
+# untested until the one moment it must not fail.
 
 on:
   push:
     tags:
       - 'android-v*'
+  workflow_dispatch:
+    inputs:
+      simulated_tag:
+        description: >-
+          Tag to verify against, e.g. android-v1.0.4.  Blank derives
+          android-v<versionName> from build.gradle.kts, which makes the
+          name check self-consistent — name a tag to test a mismatch.
+        required: false
+        default: ''
 
 jobs:
   release:
@@ -61,10 +76,39 @@ jobs:
         working-directory: TinkerRocketAndroid
 
       - name: Verify the APK — release-signed, version matches the tag, versionCode advanced
+        env:
+          # Via env, not ${{ }} inlined into the script: a dispatch input is
+          # free text and would otherwise be pasted straight into bash.
+          SIMULATED_TAG: ${{ inputs.simulated_tag }}
         run: |
           APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
           GRADLE=TinkerRocketAndroid/app/build.gradle.kts
           ls -la "$APK"
+
+          # On a tag push the tag is the ref; on a manual dry run there is no
+          # tag yet, so check against the one this commit is heading for.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            # How the failures below tell you to finish the job.  On a dry run
+            # there is no tag to move yet — telling you to move one is noise.
+            THEN="re-run this dry run"
+            TAG="$SIMULATED_TAG"
+            if [ -z "$TAG" ]; then
+              TAG="android-v$(sed -n 's/.*versionName *= *"\([^"]*\)".*/\1/p' "$GRADLE" | head -1)"
+              echo "::notice::dry run against $TAG, derived from $GRADLE — the versionName check below can only agree with itself. Re-run with an explicit tag to test a mismatch."
+            else
+              echo "::notice::dry run against $TAG — no release will be created"
+            fi
+          else
+            THEN="move the tag onto that commit"
+            TAG="$GITHUB_REF_NAME"
+          fi
+          case "$TAG" in
+            android-v?*) ;;
+            *)
+              echo "::error::'$TAG' is not a release tag — expected android-v<versionName>, e.g. android-v1.0.4"
+              exit 1 ;;
+          esac
+
           # Runners ship several build-tools versions — a bare glob expands to
           # multiple paths and the first binary eats the second as an argument.
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
@@ -100,19 +144,19 @@ jobs:
           #    release strictly ahead of it stays offered, persisted across
           #    restarts.  A 1.0.3 release against a 1.0.2-reporting install
           #    never clears — no later release can fix an APK already out.
-          EXPECTED_NAME="${GITHUB_REF_NAME#android-v}"
+          EXPECTED_NAME="${TAG#android-v}"
           if [ "$APK_NAME" != "$EXPECTED_NAME" ]; then
-            echo "::error::version mismatch: tag $GITHUB_REF_NAME expects versionName '$EXPECTED_NAME' but the APK reports '$APK_NAME' (versionCode $APK_CODE). Set versionName = \"$EXPECTED_NAME\" in $GRADLE, commit it, then move the tag onto that commit — the bump was probably never committed."
+            echo "::error::version mismatch: tag $TAG expects versionName '$EXPECTED_NAME' but the APK reports '$APK_NAME' (versionCode $APK_CODE). Set versionName = \"$EXPECTED_NAME\" in $GRADLE, commit it, then $THEN — the bump was probably never committed."
             exit 1
           fi
-          echo "versionName '$APK_NAME' matches tag $GITHUB_REF_NAME"
+          echo "versionName '$APK_NAME' matches tag $TAG"
 
           # 2. versionCode must strictly increase, or sideload/Play refuse the
           #    install as a downgrade.  Compare against the previous android-v*
           #    tag in version order (needs the fetch-depth: 0 checkout above).
-          PREV_TAG=$(git tag -l 'android-v*' | sort -V | awk -v cur="$GITHUB_REF_NAME" '$0 == cur { exit } { prev = $0 } END { print prev }')
+          PREV_TAG=$(git tag -l 'android-v*' | sort -V | awk -v cur="$TAG" '$0 == cur { exit } { prev = $0 } END { print prev }')
           if [ -z "$PREV_TAG" ]; then
-            echo "::notice::$GITHUB_REF_NAME is the earliest android-v* tag — no previous versionCode to compare against"
+            echo "::notice::$TAG is the earliest android-v* tag — no previous versionCode to compare against"
           else
             # `grep versionCode` alone matches the explanatory comment above the
             # field first and parses to nothing; anchor on the assignment.
@@ -122,13 +166,16 @@ jobs:
               exit 1
             fi
             if [ "$APK_CODE" -le "$PREV_CODE" ]; then
-              echo "::error::versionCode did not advance: $GITHUB_REF_NAME builds versionCode $APK_CODE but $PREV_TAG already shipped $PREV_CODE. Set versionCode = $((PREV_CODE + 1)) (or higher) in $GRADLE, commit it, then move the tag onto that commit. Installs of $PREV_TAG will reject this APK as a downgrade."
+              echo "::error::versionCode did not advance: $TAG builds versionCode $APK_CODE but $PREV_TAG already shipped $PREV_CODE. Set versionCode = $((PREV_CODE + 1)) (or higher) in $GRADLE, commit it, then $THEN. Installs of $PREV_TAG will reject this APK as a downgrade."
               exit 1
             fi
             echo "versionCode $APK_CODE advances on $PREV_TAG's $PREV_CODE"
           fi
 
+      # Everything above is the dry run.  This is the one step a manual run
+      # must never reach — a dispatch verifies, it does not publish.
       - name: Attach APK to the GitHub release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
