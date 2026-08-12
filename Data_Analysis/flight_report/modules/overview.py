@@ -228,8 +228,49 @@ def _gyro_chart(recs, t0, events):
         for i, ax in enumerate(("x", "y", "z"))
         if f"gyro_{ax}" in imu[0]
     ]
-    return chart("chart-gyro", "Angular rate", traces,
-                 y_title="Rate (deg/s)", events=events)
+    spec = chart("chart-gyro", "Angular rate", traces,
+                 y_title="Angular rate", y_unit="°/s", events=events,
+                 clip_spikes=True)
+    if spec:
+        # Clipped, like altitude and velocity: the ejection charge spins the
+        # airframe far harder than the flight does, and autoranging to that
+        # squashes the part worth reading into a band a few pixels tall.
+        spec["note"] = (
+            "Rotation about each body axis. X is roll, the axis the fins control; "
+            "Y and Z are pitch and yaw, which say how much the airframe was "
+            "coning. Rates past the ejection are the airframe swinging under the "
+            "canopy, not flight."
+        )
+    return spec
+
+
+# Two magnetometers appear across board revisions and never both on one board.
+# They parse to identical field names and units, so the chart takes whichever is
+# populated rather than naming a part.
+_MAG_SOURCES = ("IIS2MDC", "MMC5983MA")
+
+
+def _mag_chart(recs, t0, events):
+    """Magnetometer, three axes. Uncalibrated, so shape only — see the note."""
+    name, mag = next(((n, recs[n]) for n in _MAG_SOURCES if recs.get(n)), (None, None))
+    if not mag:
+        return None
+    t = _t(mag, t0)
+    traces = [
+        trace(t, get_array(mag, f"mag_{ax}"), f"Mag {ax.upper()}", COLORS[i])
+        for i, ax in enumerate(("x", "y", "z"))
+        if f"mag_{ax}" in mag[0]
+    ]
+    spec = chart("chart-mag", "Magnetometer", traces,
+                 y_title="Field", y_unit="µT", events=events, height=320)
+    if spec:
+        spec["note"] = (
+            "The field in the rocket's own frame, so the traces swing as the "
+            "airframe turns — it reads rotation, not heading. The sensor is not "
+            "calibrated in flight and the motor casing pulls it off true, so read "
+            "the shape and not the absolute values."
+        )
+    return spec
 
 
 def _ground_track_chart(recs):
@@ -318,11 +359,11 @@ def _build(result: AnalysisResult, builders) -> AnalysisResult:
 def analyze(flight: Flight) -> AnalysisResult:
     """Flight-level charts: the trajectory, as a flyer thinks about it.
 
-    Deliberately excludes the raw IMU series. Accelerometer and gyro log at ~1 kHz
-    for the whole session — several hundred thousand samples, most of them the
-    rocket sitting on the pad — and carrying them at full resolution would make
-    the flight report several times heavier than the detailed one. They live
-    in `analyze_sensors` instead, where detail costs nothing.
+    Carries the gyro and the magnetometer but not the raw accelerometer. The
+    accelerometer's own charts above are already built from it, windowed and
+    clipped; the raw series adds ~200k more points and says nothing the derived
+    views do not. The gyro earns its place because no other flight-level chart
+    shows pitch and yaw rate — only roll, in the roll section.
     """
     result = AnalysisResult(name="overview", title="Flight Overview")
     result.metrics = dict(DATA_SOURCES)
@@ -347,6 +388,12 @@ def analyze(flight: Flight) -> AnalysisResult:
         lambda: _velocity_chart(recs, t0, events),
         lambda: _accel_chart_flight(recs, t0, events),
         lambda: _accel_chart_boost(recs, t0, events),
+        # Rotation follows translation: having seen where it went and how hard it
+        # was pushed, angular rate says which way it was pointing while that
+        # happened, and the magnetometer corroborates the turning independently
+        # of the gyro's drift.
+        lambda: _gyro_chart(recs, t0, events),
+        lambda: _mag_chart(recs, t0, events),
     ])
 
 

@@ -39,11 +39,22 @@ DETAILED_SECTIONS = [
     'id="roll_pid"',
     'id="lora"',
     'id="log_buffer"',
-    'id="settings"',
-    'id="parser"',
 ]
 
-FLIGHT_SECTIONS = ['id="overview"', 'id="globe"']
+# The consolidation is moving the report towards a single page, so sections keep
+# arriving here from the detailed side. Settings, the log contents and the
+# deployment write-up moved first; the detailed report keeps only what has not
+# been rebuilt as interactive charts yet.
+FLIGHT_SECTIONS = [
+    'id="overview"',
+    'id="globe"',
+    'id="rocket_state"',
+    'id="deployment"',
+    'id="barometer"',
+    'id="parser_stats"',
+    'id="timing"',
+    'id="settings"',
+]
 
 
 @pytest.fixture(scope="module")
@@ -100,19 +111,39 @@ def test_flight_report_is_the_headline_read(reports: dict[str, Path]) -> None:
     assert not missing, f"Missing sections: {missing}"
     assert 'class="card"' in html, "Flight report is missing the summary card"
 
-    leaked = [s for s in ('id="parser"', 'id="settings"', 'id="log_buffer"') if s in html]
+    # Still board bring-up rather than flying, so still not here.
+    leaked = [s for s in ('id="log_buffer"', 'id="kinematic_checks"',
+                          'id="sensor_noise"') if s in html]
     assert not leaked, f"Detailed-only sections leaked into the flight report: {leaked}"
+
+    # Settings is reference material and belongs at the very bottom, below every
+    # section that is actually about the flight.
+    assert html.index('id="settings"') > html.index('id="deployment"'), (
+        "Settings snapshot should sit below Deployment & Recovery"
+    )
+    assert html.index('id="timing"') > html.index('id="parser_stats"'), (
+        "Per-sensor timing should follow the message counts it explains"
+    )
 
 
 def test_report_has_inline_figures(reports: dict[str, Path]) -> None:
-    """Static figures live in the detailed report; the flight report has none."""
+    """Static figures are the detailed report's idiom; the flight report has one.
+
+    The per-sensor timing histogram is the exception, and a deliberate one: it is
+    a distribution rather than a series, nothing zooms into it, and rebuilding it
+    as a Plotly figure would cost more than it returns. Every other flight-level
+    visual is an interactive chart, so the count is pinned rather than merely
+    bounded — a second PNG appearing here should be a decision, not a drift.
+    """
     eng = reports["detailed"].read_text(encoding="utf-8")
     fig_count = eng.count('<img src="data:image/png;base64,')
     assert fig_count >= 25, f"Expected ≥25 inline figures, got {fig_count}"
 
     flight = reports["flight"].read_text(encoding="utf-8")
-    assert '<img src="data:image/png;base64,' not in flight, (
-        "Flight report should carry interactive charts only, no static PNGs"
+    flight_figs = flight.count('<img src="data:image/png;base64,')
+    assert flight_figs == 1, (
+        f"Flight report should carry exactly one static PNG (per-sensor timing), "
+        f"got {flight_figs}"
     )
 
 
