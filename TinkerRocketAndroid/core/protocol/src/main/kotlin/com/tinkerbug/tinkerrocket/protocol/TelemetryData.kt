@@ -162,6 +162,12 @@ public data class TelemetryData(
      * running off USB shows on every line.  Em dash for absent, as elsewhere
      * on this dashboard (iOS says "N/A" here).
      */
+    /** The base station's own pack, same formatting rules as [socDisplay]. */
+    public val bsSocDisplay: String
+        get() = bsSoc?.let {
+            String.format(java.util.Locale.ROOT, "%.1f%%", it.coerceIn(0f, 100f) + 0f)
+        } ?: "—"
+
     public val socDisplay: String
         get() = soc?.let {
             // The `+ 0f` is what actually kills "-0.0%", and it is not
