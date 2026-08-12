@@ -431,6 +431,22 @@ target_include_directories(test_bs_download_policy PRIVATE
 target_link_libraries(test_bs_download_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_download_policy)
 
+# ---------- test_bs_storage_policy ----------
+# Host-side test for the NAND bring-up retry policy (#761): mountExternalFlashFat
+# was single-shot, so one transient error demoted the whole boot from a 512 MB
+# NAND to a ~1.9 MB SPIFFS partition and truncated the flight. Two of these
+# decisions are destructive if off by one (formatting on the wrong attempt wipes
+# every stored flight), so they are pinned here. bs_storage_policy.h is pure;
+# the test also pulls in config.h, which needs RocketComputerTypes on the path.
+add_executable(test_bs_storage_policy test_bs_storage_policy.cpp)
+target_include_directories(test_bs_storage_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_storage_policy GTest::gtest_main)
+gtest_discover_tests(test_bs_storage_policy)
+
 # ---------- test_burnout_detector (#197/#256) ----------
 # Detector logic is shared with the firmware via
 # components/TR_KinematicChecks/BurnoutDetector.h — the test exercises the
