@@ -32,7 +32,7 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Every step below is pure stdlib (re, argparse, pathlib); ubuntu-latest
       # ships python3, so there is nothing to install.

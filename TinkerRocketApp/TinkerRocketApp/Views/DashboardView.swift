@@ -93,7 +93,7 @@ struct DashboardView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(TRColor.savedFlights)
+                            .background(.blue)
                             .foregroundColor(.white)
                             .cornerRadius(TRShape.radiusButton)
                         }
@@ -108,7 +108,7 @@ struct DashboardView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(TRColor.myDevices)
+                            .background(.indigo)
                             .foregroundColor(.white)
                             .cornerRadius(TRShape.radiusButton)
                         }
@@ -122,7 +122,7 @@ struct DashboardView: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(TRColor.driftCast)
+                            .background(.red)
                             .foregroundColor(.white)
                             .cornerRadius(TRShape.radiusButton)
                         }
@@ -139,7 +139,7 @@ struct DashboardView: View {
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 20)
                                     .padding(.vertical, 12)
-                                    .background(fleet.isScanning ? TRColor.scanActive : TRColor.scan)
+                                    .background(fleet.isScanning ? .red : .green)
                                     .foregroundColor(.white)
                                     .cornerRadius(TRShape.radiusButton)
                             }

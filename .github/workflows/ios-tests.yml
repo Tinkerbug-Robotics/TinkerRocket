@@ -23,7 +23,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Select Xcode
         # The project is developed on the Xcode 26.x toolchain (deployment
