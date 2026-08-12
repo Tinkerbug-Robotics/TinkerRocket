@@ -116,6 +116,14 @@ details.explore > summary:hover { background: #f2f4f7; }
 .explore-actions label { display: block; margin-top: 10px; font-weight: 400; }
 .explore-hint { color: #666; font-size: 12px; line-height: 1.45; margin: 10px 0 0; }
 .explore-status { color: #666; font-size: 13px; padding: 6px 0; }
+.explore-mode { border: 0; padding: 0; margin: 0 0 10px; }
+.explore-mode legend { padding: 0; font-weight: 600; font-size: 13px; }
+.explore-mode label { display: inline-block; margin: 4px 14px 0 0; font-weight: 400; }
+.explore-xaxis { display: block; margin-bottom: 10px; font-weight: 600; font-size: 13px; }
+.explore-xaxis select { display: block; margin-top: 4px; min-width: 300px;
+                        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                        font-size: 12px; }
+.explore-error { color: #a33; font-size: 13px; line-height: 1.5; margin: 10px 0 0; }
 .explore-plot { margin-top: 12px; }
 .explore-notes { font-size: 12px; color: #555; line-height: 1.5; }
 .explore-notes .warn { color: #a33; }
@@ -125,13 +133,7 @@ details.explore > summary:hover { background: #f2f4f7; }
 <body>
 
 <div class="topbar">
-  <div class="topbar-left">
-    {% if counterpart %}
-    <a class="pill" href="{{ counterpart }}">
-      {% if level == "detailed" %}&larr; Flight report{% else %}Detailed data &rarr;{% endif %}
-    </a>
-    {% endif %}
-  </div>
+  <div class="topbar-left"></div>
   <div class="units" role="group" aria-label="Units">
     <button type="button" data-units="metric" class="active">Metric</button><button
             type="button" data-units="imperial">Imperial</button>
@@ -140,12 +142,10 @@ details.explore > summary:hover { background: #f2f4f7; }
 
 <h1>{{ flight.rocket_name }}</h1>
 <div class="meta">
-  {% if show_raw_detail %}<code>{{ flight.bin_path }}</code><br>{% endif %}
   Flight: {{ date_str }}
   {#- Log duration is how long the recorder ran, usually minutes of pad time. It
       belongs with the detailed data review; the card's "Flight time" is the number
       a flyer means, and showing both side by side just reads as a contradiction. -#}
-  {% if show_raw_detail and duration_s %} &middot; Log duration: {{ "%.1f"|format(duration_s) }} s{% endif %}
   {% if level == "detailed" %} &middot; detailed data review{% endif %}
 </div>
 
@@ -167,70 +167,27 @@ details.explore > summary:hover { background: #f2f4f7; }
 </div>
 {% endif %}
 
-{% if show_raw_detail %}
-{# As recorded by the flight computer itself, from the .json sidecar — not the
-   flight report's recomputation from the log. Keeping both is the point of a
-   detailed review, but the labels have to say which is which: "Apogee" on the
-   summary card is an altitude, and these two are times. #}
-<div class="summary-grid">
-  {% if sidecar.get('apogee_time_s') is not none %}
-  <div class="cell">
-    <div class="label">Time to apogee</div>
-    <div class="value">{{ "%.2f"|format(sidecar['apogee_time_s']) }} s</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('burnout_time_s') is not none %}
-  <div class="cell">
-    <div class="label">Time to burnout</div>
-    <div class="value">{{ "%.2f"|format(sidecar['burnout_time_s']) }} s</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('max_altitude_m') is not none %}
-  <div class="cell">
-    <div class="label">Max Altitude</div>
-    <div class="value">{{ "%.1f"|format(sidecar['max_altitude_m']) }} m</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('max_speed_mps') is not none %}
-  <div class="cell">
-    <div class="label">Max Speed</div>
-    <div class="value">{{ "%.1f"|format(sidecar['max_speed_mps']) }} m/s</div>
-  </div>
-  {% endif %}
-  {% if stats.get('total_frames') is not none %}
-  <div class="cell">
-    <div class="label">Frames</div>
-    <div class="value">{{ "{:,}".format(stats['total_frames']) }}</div>
-  </div>
-  {% endif %}
-  {% if stats.get('total_frames') and stats['total_frames'] > 0 %}
-  <div class="cell">
-    <div class="label">CRC Pass</div>
-    <div class="value">{{ "%.1f"|format(100.0 * stats['good_crc'] / stats['total_frames']) }}%</div>
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
 <div class="toc">
   <strong>Sections</strong>
   <ul>
-    {% if show_raw_detail %}
-    <li><a href="#settings">Settings snapshot</a></li>
-    {% endif %}
     {% for s in sections %}
+    {% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
+          or s.globes or s.datasets or s.text %}
     <li><a href="#{{ s.name }}">{{ s.title }}</a>
         {%- if s.warnings %} <span style="color:#f9a825">({{ s.warnings|length }} warning{{ "s" if s.warnings|length != 1 else "" }})</span>{% endif %}
         {%- if s.error %} <span style="color:#c62828">(error)</span>{% endif %}
     </li>
-    {% endfor %}
-    {% if show_raw_detail %}
-    <li><a href="#parser">Parser stats</a></li>
     {% endif %}
+    {% endfor %}
   </ul>
 </div>
 
 {% for s in sections %}
+{# A module with nothing to say prints nothing. Radio Link on a flight flown
+   without a ground station is the common case: it is not a fault and not a
+   warning, so it should leave no trace rather than a bare heading. #}
+{% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
+      or s.globes or s.datasets or s.text %}
 <h2 id="{{ s.name }}">{{ s.title }}</h2>
 
 {% if s.error %}
@@ -305,36 +262,56 @@ details.explore > summary:hover { background: #f2f4f7; }
 {% endif %}
 
 {% for d in s.datasets %}
-<details class="explore" id="explore-panel" open>
-  <summary>Plot any channel &mdash; pick one or more, then Draw</summary>
+<details class="explore" id="explore-panel-{{ d.panel }}"{% if d.panel == "time" %} open{% endif %} data-panel="{{ d.panel }}" data-source="{{ d.id }}">
+  <summary>
+    {% if d.panel == "xy" %}Pick an X and a Y channel, then Draw
+    {% else %}Pick one or more channels, then Draw{% endif %}
+  </summary>
   <div class="explore-body">
     <div class="explore-status" role="status">Loading channel data&hellip;</div>
     <div class="explore-controls" hidden>
       <label class="explore-pick">
-        Channels
+        {% if d.panel == "xy" %}Y axis{% else %}Channels{% endif %}
         <select multiple size="14"></select>
       </label>
       <div class="explore-actions">
+        {% if d.panel == "xy" %}
+        <label class="explore-xaxis">
+          X axis
+          <select></select>
+        </label>
+        {% endif %}
         <button type="button" class="explore-draw">Draw</button>
-        <label><input type="checkbox" class="explore-norm"> Normalise each series to 0&ndash;1</label>
+        {% if d.panel == "xy" %}
+        <label class="explore-colort"><input type="checkbox"> Color by time</label>
+        <p class="explore-hint">
+          Both axes must come from the same stream, so each point is one logged
+          frame rather than an interpolated pair. Zoom redraws from the full data.
+        </p>
+        {% else %}
+        <label><input type="checkbox" class="explore-norm"> Normalize each series to 0&ndash;1</label>
         <p class="explore-hint">
           Ctrl/&#8984;-click for several. Each series is drawn on its own stream's
           timestamps &mdash; nothing is resampled onto a shared clock, so two sensors
           disagreeing stays visible rather than being interpolated away.
         </p>
+        {% endif %}
       </div>
     </div>
     <div class="explore-plot"></div>
     <div class="explore-notes"></div>
   </div>
 </details>
-<script type="application/json" class="dataset-spec" data-target="explore-panel"{% if d.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ d.payload }}</script>
+{% if not d.ref %}
+<script type="application/json" class="dataset-spec" data-target="{{ d.id }}"{% if d.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ d.payload }}</script>
+{% endif %}
 {% endfor %}
 
 {% for fig in s.figures %}
 <div class="figure"><img src="{{ fig }}" /></div>
 {% endfor %}
 
+{% endif %}
 {% endif %}
 {% endfor %}
 
@@ -785,7 +762,7 @@ details.explore > summary:hover { background: #f2f4f7; }
 <script>{{ explore_js }}</script>
 {% endif %}
 
-{% if has_charts %}
+{% if has_charts or has_datasets %}
 <script>{{ plotly_js }}</script>
 <script>
 (function () {
@@ -932,17 +909,25 @@ details.explore > summary:hover { background: #f2f4f7; }
     }
   }
 
-  function unitFactor(unit) {
-    var c = imperial ? CONV[unit] : null;
+  /* `conv` names a different imperial target than the SI unit implies — a
+     vertical rate is metres per second but reads in ft/s, not mph. It takes
+     precedence when present, matching what convertSpans does for the metric
+     cells, so an axis and a table cell describing the same quantity agree. */
+  function pick(unit, conv) {
+    if (!imperial) return null;
+    return CONV[conv] || CONV[unit] || null;
+  }
+  function unitFactor(unit, conv) {
+    var c = pick(unit, conv);
     return c ? c.f : 1;
   }
-  function unitLabel(unit) {
-    var c = imperial ? CONV[unit] : null;
+  function unitLabel(unit, conv) {
+    var c = pick(unit, conv);
     return c ? c.label : unit;
   }
-  function axisTitle(base, unit) {
+  function axisTitle(base, unit, conv) {
     if (!base) return "";
-    return unit ? base + " (" + unitLabel(unit) + ")" : base;
+    return unit ? base + " (" + unitLabel(unit, conv) + ")" : base;
   }
   /* The 3D scene carries its unit in the chart title rather than on the axes —
      see charts.trajectory_3d on why rotated axis titles clip there. */
@@ -968,6 +953,18 @@ details.explore > summary:hover { background: #f2f4f7; }
         if (c.spec.sceneUnit) {
           Plotly.relayout(c.gd, {"title.text": sceneTitle3d(c.spec)});
         }
+        continue;
+      }
+
+      /* An X–Y panel plot. It cannot go through draw(): that reduces via
+         lowerBound, which assumes the x array increases, and here x is a
+         channel. Its own redraw filters on both axes and rescales as it goes. */
+      if (c.is2d) {
+        c.redraw(c);
+        var upd2 = {};
+        if (c.spec.xUnit) upd2["xaxis.title.text"] = axisTitle(c.spec.xTitleBase, c.spec.xUnit, c.spec.xConv);
+        if (c.spec.yUnit) upd2["yaxis.title.text"] = axisTitle(c.spec.yTitleBase, c.spec.yUnit, c.spec.yConv);
+        if (Object.keys(upd2).length) Plotly.relayout(c.gd, upd2);
         continue;
       }
 
@@ -1015,22 +1012,45 @@ details.explore > summary:hover { background: #f2f4f7; }
      The data is inflated on first open, not at load. It is the largest payload
      in the document and a reader who never opens the panel should not pay to
      parse it. */
-  var dsets = document.querySelectorAll("script.dataset-spec");
-  for (var di = 0; di < dsets.length; di++) {
-    (function (el) {
-      var panel = document.getElementById(el.dataset.target);
-      if (!panel) return;
+  /* Two Explore panels — one against time, one channel against channel —
+     sharing a single embedded payload. `data-source` names the <script> that
+     carries it; whichever panel is opened first inflates it and the other
+     awaits the same promise, so the ~4 MB is parsed once at most and not at
+     all if neither is opened. */
+  var datasetLoads = {};
+  function loadDataset(id) {
+    if (datasetLoads[id]) return datasetLoads[id];
+    var el = document.querySelector('script.dataset-spec[data-target="' + id + '"]');
+    if (!el) {
+      datasetLoads[id] = Promise.reject(new Error("no embedded data for " + id));
+    } else {
+      datasetLoads[id] = readSpec(el);
+    }
+    return datasetLoads[id];
+  }
+
+  var panels = document.querySelectorAll("details.explore");
+  for (var pi = 0; pi < panels.length; pi++) {
+    (function (panel) {
+      var kind = panel.dataset.panel || "time";
       var statusEl = panel.querySelector(".explore-status");
       var controls = panel.querySelector(".explore-controls");
       var pick = panel.querySelector(".explore-pick select");
       var drawBtn = panel.querySelector(".explore-draw");
       var normBox = panel.querySelector(".explore-norm");
+      var xWrap = panel.querySelector(".explore-xaxis");
+      var xSel = xWrap ? xWrap.querySelector("select") : null;
+      var colorBox = panel.querySelector(".explore-colort input");
       var plotEl = panel.querySelector(".explore-plot");
       var notesEl = panel.querySelector(".explore-notes");
       var data = null, entry = null, loading = false;
 
       function label(key, ch) {
-        var bits = [key];
+        /* ch.label is the human name from the channel catalog ("Vertical
+           velocity"); key is the internal dotted path. Show the name and keep
+           the path alongside it, because the path is what the notes and the
+           legend cite. */
+        var bits = [ch.label ? ch.label + "  [" + key + "]" : key];
         if (ch.unit) bits.push("(" + ch.unit + ")");
         if (ch.const !== undefined) bits.push("— constant");
         else if (!ch.shown.length) bits.push("— not plotted elsewhere");
@@ -1055,6 +1075,7 @@ details.explore > summary:hover { background: #f2f4f7; }
             group.appendChild(opt);
           });
           pick.appendChild(group);
+          if (xSel) xSel.appendChild(group.cloneNode(true));
         });
       }
 
@@ -1065,20 +1086,115 @@ details.explore > summary:hover { background: #f2f4f7; }
         notesEl.appendChild(p);
       }
 
-      function render() {
-        var keys = Array.prototype.slice.call(pick.selectedOptions).map(function (o) {
-          return o.value;
+      function unregister() {
+        if (!entry) return;
+        var at = charts.indexOf(entry);
+        if (at >= 0) charts.splice(at, 1);
+        entry = null;
+      }
+
+      /* X–Y redraw. Deliberately not the time-axis path: `viewFor` calls
+         `lowerBound`, which binary-searches assuming x increases — false the
+         moment x is a channel rather than a clock. It would return a wrong
+         slice silently. This filters on both axes instead, and carries the
+         colour array through the same filter. */
+      function drawScatter(e) {
+        var xf = e.spec.xUnit ? unitFactor(e.spec.xUnit, e.spec.xConv) : 1;
+        var yf = e.spec.yUnit ? unitFactor(e.spec.yUnit, e.spec.yConv) : 1;
+        var xs = [], ys = [], colors = [], anyColor = false;
+        for (var i = 0; i < e.full.length; i++) {
+          var v = TRExplore.scatterView(
+            e.full[i],
+            e.xrange ? [e.xrange[0] / xf, e.xrange[1] / xf] : null,
+            e.yrange ? [e.yrange[0] / yf, e.yrange[1] / yf] : null
+          );
+          xs.push(xf === 1 ? v.x : v.x.map(function (n) { return n * xf; }));
+          ys.push(yf === 1 ? v.y : v.y.map(function (n) { return n * yf; }));
+          if (e.colorByTime && v.t) { colors.push(v.t); anyColor = true; }
+          else { colors.push(undefined); }
+        }
+        var upd = {x: xs, y: ys};
+        if (anyColor) upd["marker.color"] = colors;
+        return Plotly.restyle(e.gd, upd);
+      }
+
+      function renderScatter(yKeys) {
+        var out = TRExplore.buildScatter(data, xSel.value, yKeys, {
+          colorByTime: colorBox && colorBox.checked
         });
-        notesEl.innerHTML = "";
-        if (!keys.length) {
-          notesEl.textContent = "Select one or more channels, then press Draw.";
+        if (out.error) {
+          // Clear the previous plot as well as showing the message. Leaving the
+          // last chart up next to an error reads as though it were the answer to
+          // the selection that just failed.
+          unregister();
+          Plotly.purge(plotEl);
+          note(out.error, "explore-error");
           return;
         }
 
+        var spec = {
+          xUnit: out.xUnit, xConv: out.xConv,
+          yUnit: out.yUnit, yConv: out.yConv,
+          xTitleBase: out.xBase, yTitleBase: out.yBase,
+          layout: {yaxis: {}, xaxis: {}}
+        };
+        var layout = {
+          height: 520,
+          margin: {l: 70, r: 20, t: 30, b: 55},
+          xaxis: {title: {text: axisTitle(out.xBase, out.xUnit, out.xConv)},
+                  gridcolor: "#eee", zeroline: false},
+          yaxis: {title: {text: axisTitle(out.yBase, out.yUnit, out.yConv)},
+                  gridcolor: "#eee", zeroline: false},
+          hovermode: "closest",
+          showlegend: out.traces.length > 1,
+          legend: {orientation: "h", y: -0.16, font: {size: 11}},
+          plot_bgcolor: "#fff", paper_bgcolor: "#fff"
+        };
+
+        unregister();
+        Plotly.newPlot(plotEl, out.traces, layout, config).then(function (gd) {
+          entry = {gd: gd, full: out.full, spec: spec, is2d: true,
+                   colorByTime: colorBox && colorBox.checked,
+                   xrange: null, yrange: null, redraw: drawScatter};
+          charts.push(entry);
+          var pending = null;
+          gd.on("plotly_relayout", function (ev) {
+            /* Two spellings, both real: a drag emits "xaxis.range[0]" and
+               "xaxis.range[1]", while a programmatic relayout emits
+               "xaxis.range" as one array. Handling only the first works when a
+               person zooms and silently does nothing otherwise. */
+            var touched = false;
+            if (ev["xaxis.range[0]"] !== undefined) {
+              entry.xrange = [ev["xaxis.range[0]"], ev["xaxis.range[1]"]]; touched = true;
+            } else if (ev["xaxis.range"]) {
+              entry.xrange = ev["xaxis.range"].slice(); touched = true;
+            }
+            if (ev["yaxis.range[0]"] !== undefined) {
+              entry.yrange = [ev["yaxis.range[0]"], ev["yaxis.range[1]"]]; touched = true;
+            } else if (ev["yaxis.range"]) {
+              entry.yrange = ev["yaxis.range"].slice(); touched = true;
+            }
+            if ("xaxis.autorange" in ev || "yaxis.autorange" in ev) {
+              entry.xrange = null; entry.yrange = null; touched = true;
+            }
+            if (!touched) return;
+            if (pending) clearTimeout(pending);
+            pending = setTimeout(function () {
+              pending = null;
+              drawScatter(entry);
+            }, 60);
+          });
+        });
+
+        out.notes.forEach(function (n) { note(n); });
+        out.cautions.forEach(function (c) { note("⚠ " + c, "warn"); });
+      }
+
+      function renderTime(keys) {
         /* What to draw is decided in static/explore.js, which is covered by
            tests/js/ — the DOM wiring stays here because it is not. */
         var out = TRExplore.build(data, keys, {
-          normalised: normBox.checked,
+          normalised: normBox && normBox.checked,
           convertible: Object.keys(CONV)
         });
 
@@ -1090,7 +1206,7 @@ details.explore > summary:hover { background: #f2f4f7; }
         }
 
         var spec = {
-          yUnit: out.yUnit, xUnit: null,
+          yUnit: out.yUnit, yConv: out.yConv, xUnit: null,
           yTitleBase: out.yBase, xTitleBase: "Time (s)",
           layout: {yaxis: {}, xaxis: {}}
         };
@@ -1098,7 +1214,7 @@ details.explore > summary:hover { background: #f2f4f7; }
           height: 460,
           margin: {l: 70, r: 20, t: 30, b: 50},
           xaxis: {title: {text: "Time (s)"}, gridcolor: "#eee", zeroline: false},
-          yaxis: {title: {text: axisTitle(out.yBase, out.yUnit)},
+          yaxis: {title: {text: axisTitle(out.yBase, out.yUnit, out.yConv)},
                   gridcolor: "#eee", zeroline: false},
           hovermode: "closest",
           showlegend: true,
@@ -1115,14 +1231,7 @@ details.explore > summary:hover { background: #f2f4f7; }
           return copy;
         });
 
-        // Unregister the previous panel plot, or the unit toggle keeps
-        // converting a chart that is no longer on screen.
-        if (entry) {
-          var at = charts.indexOf(entry);
-          if (at >= 0) charts.splice(at, 1);
-          entry = null;
-        }
-
+        unregister();
         Plotly.newPlot(plotEl, initial, layout, config).then(function (gd) {
           entry = {gd: gd, full: out.full, spec: spec, range: null};
           charts.push(entry);
@@ -1149,18 +1258,32 @@ details.explore > summary:hover { background: #f2f4f7; }
         out.cautions.forEach(function (c) { note("⚠ " + c, "warn"); });
       }
 
+      function render() {
+        var keys = Array.prototype.slice.call(pick.selectedOptions).map(function (o) {
+          return o.value;
+        });
+        notesEl.innerHTML = "";
+        if (!keys.length) {
+          notesEl.textContent = kind === "xy"
+            ? "Select one or more Y channels, then press Draw."
+            : "Select one or more channels, then press Draw.";
+          return;
+        }
+        if (kind === "xy") renderScatter(keys); else renderTime(keys);
+      }
+
       function load() {
         if (data || loading) return;
         loading = true;
-        readSpec(el).then(function (spec) {
+        loadDataset(panel.dataset.source).then(function (spec) {
           data = spec;
           populate();
           statusEl.hidden = true;
           controls.hidden = false;
-          /* Open on something rather than on an empty frame. The picker is only
-             obviously a picker once it has drawn a plot, and a reader who wanted
-             a different channel is one selection away either method. */
-          var want = data.default || [];
+          /* Open on something rather than on an empty frame. Only the time
+             panel does this: an X-Y plot has no obvious default pair, and
+             guessing one would assert a relationship nobody asked about. */
+          var want = (kind === "xy") ? [] : (data.default || []);
           var drew = false;
           for (var oi = 0; oi < pick.options.length; oi++) {
             if (want.indexOf(pick.options[oi].value) >= 0) {
@@ -1174,19 +1297,19 @@ details.explore > summary:hover { background: #f2f4f7; }
         });
       }
 
-      /* The payload is the largest thing in the document, so it is inflated when
-         the panel is first shown rather than at load. The panel ships open, so
-         that is usually immediately — but a reader who collapses it before the
-         idle callback runs, or opens a report with it closed, still pays only
-         when they ask. */
+      /* The payload is the largest thing in the document, so it is inflated on
+         first open rather than at load. The time panel ships open, so that is
+         usually immediately; the X-Y panel ships closed and costs nothing until
+         asked, and by then the time panel has already put the data in cache. */
       panel.addEventListener("toggle", function () { if (panel.open) load(); });
       if (panel.open) {
         if (window.requestIdleCallback) requestIdleCallback(load, {timeout: 2000});
         else setTimeout(load, 0);
       }
       drawBtn.addEventListener("click", render);
-    })(dsets[di]);
+    })(panels[pi]);
   }
+
 
 
   var specs = document.querySelectorAll("script.chart-spec");

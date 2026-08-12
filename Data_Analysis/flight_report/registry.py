@@ -35,13 +35,16 @@ class AnalysisResult:
 
 AnalyzeFn = Callable[["Flight"], AnalysisResult]
 
-# Report levels. FLIGHT answers "how did my rocket fly?" and is what a flyer
-# reads; DETAILED is board bring-up and firmware validation. A module belongs
-# to exactly one — anything a flyer needs from an detailed-level module should be
-# rolled up into a FLIGHT-level module rather than shown twice.
+# One report. There used to be a second, "detailed" level for board bring-up and
+# firmware validation, and the two drifted: the same word meant different
+# instants in each, and a number a flyer read on one contradicted the other. The
+# sections worth keeping were folded into this one and the split was removed.
+#
+# The level is still carried because the renderer and the CLI name it, and
+# because a second document may come back for a different audience — but nothing
+# should read it as "which of two reports is this".
 LEVEL_FLIGHT = "flight"
-LEVEL_DETAILED = "detailed"
-LEVELS = (LEVEL_FLIGHT, LEVEL_DETAILED)
+LEVELS = (LEVEL_FLIGHT,)
 
 
 def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
@@ -84,7 +87,11 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # Directly under the 3D path: that view answers "where did it go", and
         # this answers "show me anything else", before the curated sections
         # start answering questions somebody else chose.
-        ("explore",           explore.analyze,           LEVEL_FLIGHT),
+        ("explore_time",      explore.analyze_time,      LEVEL_FLIGHT),
+        # Against another channel rather than the clock. A separate section, not
+        # a mode toggle: it needs an X picker and is confined to one stream, and
+        # putting that behind a radio made the common case carry it too.
+        ("explore_xy",        explore.analyze_xy,        LEVEL_FLIGHT),
         ("overview",          overview.analyze,          LEVEL_FLIGHT),
         # Directly below the kinematic charts: roll is the one axis those three
         # say nothing about, and on a roll-control flight it is the whole story.
@@ -108,24 +115,11 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         ("parser_stats",      parser_stats.analyze,      LEVEL_FLIGHT),
         ("timing",            timing.analyze,            LEVEL_FLIGHT),
         ("settings",          settings.analyze,          LEVEL_FLIGHT),
-        ("sensor_charts",     overview.analyze_sensors,  LEVEL_DETAILED),
-        ("kinematics",        kinematics.analyze,        LEVEL_DETAILED),
-        ("gaps",              gaps.analyze,              LEVEL_DETAILED),
-        ("timestamps",        timestamps.analyze,        LEVEL_DETAILED),
-        ("launch_detection",  launch_detection.analyze,  LEVEL_DETAILED),
         # Deployment & recovery — descent profile, the flat ground-track map and
         # the KML links. Detailed-level by decision: the flat map is the one that
         # still draws with no network (it degrades to graph paper with the track
         # on it), so it lives with the rest of the diagnostic set rather than
         # duplicating the globe in the flight report.
-        ("pyro_apogee",       pyro_apogee.analyze,       LEVEL_DETAILED),
-        ("sensor_noise",      sensor_noise.analyze,      LEVEL_DETAILED),
-        ("gnss_staleness",    gnss_staleness.analyze,    LEVEL_DETAILED),
-        ("kinematic_checks",  kinematic_checks.analyze,  LEVEL_DETAILED),
-        ("roll_pid",          roll_pid.analyze,          LEVEL_DETAILED),
-        ("guidance",          guidance.analyze,          LEVEL_DETAILED),
-        ("lora",              lora.analyze,              LEVEL_DETAILED),
-        ("log_buffer",        log_buffer.analyze,        LEVEL_DETAILED),
     ]
 
 

@@ -35,9 +35,18 @@ from ..catalog import KIND_BOOL, KIND_COUNTER, KIND_ENUM, build
 from ..flight import Flight
 from ..registry import AnalysisResult
 
+import re
+
 _DISCRETE = (KIND_BOOL, KIND_ENUM, KIND_COUNTER)
 
-# In preference order; the first one this log actually carries is preselected.
+# "(#112)" and ", #514" and bare "#514" — the reference, not the sentence.
+_ISSUE_REF = re.compile(r"\s*[(\[]?,?\s*#\d+\s*[)\]]?")
+_SPACES = re.compile(r"\s{2,}")
+
+# What the time panel opens showing, in preference order; the first one this log
+# actually carries wins. A blank plot asks the reader to go and find something
+# before the panel has shown it can plot anything at all, and GNSS altitude is
+# the channel every flight has and everyone recognises.
 _DEFAULT_CHANNELS = ("GNSS.alt_m", "NonSensor.u_pos", "BMP585.pressure_pa")
 
 
@@ -47,11 +56,31 @@ def _first_present(channels: dict, wanted: tuple[str, ...]) -> list[str]:
             return [key]
     return []
 
+# Both Explore sections read one embedded payload. It is the largest thing in
+# the document, so the second section references this id rather than carrying
+# its own copy — see `analyze_xy`.
+DATASET_ID = "explore-data"
+
 # Time to 1 ms and samples to 4 decimals, both well below sensor resolution and
 # matching what `charts._clean` ships. Digits that survive rounding are digits
 # in every copy of the report.
 _T_DP = 3
 _V_DP = 4
+
+
+def _public(text: Optional[str]) -> Optional[str]:
+    """A caution with its issue references removed.
+
+    The channel catalog is written for whoever is debugging the firmware, and
+    its cautions cite the issues that established each quirk. The substance is
+    exactly what a reader plotting that channel needs; the issue numbers mean
+    nothing outside the repository and read as leaked internals in a report a
+    customer opens.
+    """
+    if not text:
+        return text
+    out = _ISSUE_REF.sub("", text)
+    return _SPACES.sub(" ", out).replace(" ,", ",").replace(" .", ".").strip()
 
 
 def _values(rows: list[dict], field: str, kind: str) -> list:
@@ -109,10 +138,16 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
             "stream": c.stream,
             "label": c.meta.label,
             "unit": c.meta.unit,
+            # Which CONVERSIONS row drives the imperial toggle, when it differs
+            # from the display unit. Vertical rates are "m/s" on screen but
+            # convert to ft/s, not mph — units.py keeps a separate row for that
+            # and says quoting a sink rate in mph "reads as an error to anyone
+            # in the hobby". Omitted when it adds nothing, to save the bytes.
+            "conv": c.meta.conv if c.meta.conv and c.meta.conv != c.meta.unit else "",
             "kind": c.meta.kind,
             # Carried so the picker can warn in place rather than making the
             # reader go and find the inventory section.
-            "caution": c.meta.caution,
+            "caution": _public(c.meta.caution),
             "shown": list(c.meta.shown_in),
         }
         if len(set(vals)) == 1:
@@ -124,12 +159,7 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
         channels[c.key] = entry
 
     return {
-        "id": "explore-data",
-        # What the panel opens showing. A blank plot asks the reader to go and
-        # find something before it has demonstrated it can plot anything at all;
-        # GNSS altitude is the one channel every flight has and everyone
-        # recognises, so it stands as the worked example. First match wins.
-        "default": _first_present(channels, _DEFAULT_CHANNELS),
+        "id": DATASET_ID,
         "streams": streams,
         "channels": channels,
         # Step-drawn kinds, so the panel does not have to re-derive the rule.
@@ -137,12 +167,17 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
     }
 
 
-def analyze(flight: Flight) -> AnalysisResult:
-    result = AnalysisResult(name="explore", title="Plot Data Channels")
+def analyze_time(flight: Flight) -> AnalysisResult:
+    """Section one: any channel against time.
+
+    The common case by a wide margin, so it leads and carries no controls it
+    does not need — no X picker, because the X axis is the clock.
+    """
+    result = AnalysisResult(name="explore_time", title="Plot Data Channels")
 
     data = _dataset(flight)
     if data is None:
-        result.warnings.append("No channels parsed from this log — nothing to explore.")
+        result.warnings.append("No channels parsed from this log — nothing to plot.")
         return result
 
     n_const = sum(1 for c in data["channels"].values() if "const" in c)
@@ -150,5 +185,34 @@ def analyze(flight: Flight) -> AnalysisResult:
     result.metrics["Held one value all flight"] = f"{n_const:,}"
     result.metrics["Streams"] = ", ".join(data["streams"])
 
+    data["panel"] = "time"
+    data["default"] = _first_present(data["channels"], _DEFAULT_CHANNELS)
     result.datasets = [data]
+    return result
+
+
+def analyze_xy(flight: Flight) -> AnalysisResult:
+    """Section two: one channel against another.
+
+    References the payload the time section embedded instead of building its
+    own. The dataset is ~3.9 MB gzipped on a real flight and duplicating it
+    would double the document to save one dictionary lookup in the browser.
+
+    Kept a separate section rather than a mode toggle because the two answer
+    different questions and want different controls: this one needs an X axis
+    and is confined to a single stream, and putting that behind a radio button
+    made the common case carry the rarer one's machinery.
+    """
+    result = AnalysisResult(name="explore_xy", title="Plot One Channel Against Another")
+
+    if flight.t0_us is None or not flight.records:
+        result.warnings.append("No channels parsed from this log — nothing to plot.")
+        return result
+
+    result.metrics["Pairing"] = (
+        "Both axes must come from the same stream, so each point is one logged "
+        "frame rather than an interpolated pair."
+    )
+    # A reference, not a payload: render.py emits no script tag for these.
+    result.datasets = [{"id": DATASET_ID, "panel": "xy", "ref": True}]
     return result

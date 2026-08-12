@@ -211,7 +211,7 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
         note = ("Each marker is one detector calling apogee; the master flag, which fires "
                 "the charge, latches from their votes.")
         if res.get("baro_reject_t"):
-            note += (f" Baro was rejected {len(res['baro_reject_t'])} times here, by "
+            note += (f" Baro was rejected {len(rejects)} times in this window, by "
                      "design, while the vehicle was too fast for pressure to be reliable.")
         spec["note"] = note
     return spec

@@ -42,6 +42,7 @@ if str(_PARENT) not in sys.path:
 
 from ..charts import COLORS, chart, trace
 from ..flight import Flight
+from ..units import q
 from ..registry import AnalysisResult
 
 # Below this the path grazes terrain and the ground reflection starts to matter.
@@ -162,7 +163,8 @@ def _track_chart(d, lat0, lon0, alt0) -> Optional[dict[str, Any]]:
     t["line"] = {"width": 1, "color": "#bbbbbb"}
     t["hovertemplate"] = "%{x:.0f} m E, %{y:.0f} m N<br>%{marker.color:.0f} m up<extra></extra>"
     spec = chart("chart-lora-track", "Ground track, as received", [t],
-                 x_title="East of the pad (m)", y_title="Distance north", y_unit="m",
+                 x_title="East of the pad", x_unit="m",
+                 y_title="Distance north", y_unit="m",
                  height=460, equal_aspect=True)
     if not spec:
         return None
@@ -186,7 +188,7 @@ def _track_chart(d, lat0, lon0, alt0) -> Optional[dict[str, Any]]:
     spec["layout"]["showlegend"] = False
     dist = float(math.hypot(east[-1], north[-1]))
     spec["note"] = (
-        f"The flight only, coloured by height above the pad. Built from packets "
+        f"The flight only, colored by height above the pad. Built from packets "
         f"that arrived, so a long straight run between two points is a stretch "
         f"where the link dropped rather than a straight piece of flying. The last "
         f"fix received is {dist:,.0f} m from the pad — that is where the search "
@@ -233,7 +235,7 @@ def _rssi_chart(d, lat0, lon0, alt0) -> tuple[Optional[dict[str, Any]], dict[str
             traces.append(t)
 
     spec = chart("chart-lora-rssi", "Signal strength against distance", traces,
-                 x_title="Slant range from the pad (m)",
+                 x_title="Slant range from the pad", x_unit="m",
                  y_title="Received strength", y_unit="dBm", height=380)
     if not spec:
         return None, facts
@@ -274,7 +276,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         result.charts.append(rssi_spec)
         if facts.get("n"):
             result.metrics["Packets in flight"] = f"{facts['n']:,}"
-            result.metrics["Longest range"] = f"{facts['max_range']:,.0f} m"
+            result.metrics["Longest range"] = q(facts["max_range"], "m", 0)
             if facts["low"]:
                 result.metrics["Below 10° elevation"] = (
                     f"{facts['low']} packets ({100.0 * facts['low'] / facts['n']:.0f}%)"

@@ -47,6 +47,15 @@ def _series(recs, t0) -> tuple[Optional[np.ndarray], Optional[np.ndarray], Optio
     return t, p, temp
 
 
+def _smooth_hpa(v, k: int = 25):
+    """Median filter, so the apogee reading is the flight and not the charge."""
+    if v.size <= k:
+        return v
+    pad = k // 2
+    padded = np.concatenate([np.full(pad, v[0]), v, np.full(pad, v[-1])])
+    return np.array([np.median(padded[i:i + k]) for i in range(v.size)])
+
+
 def _pressure_chart(t, p, events) -> Optional[dict[str, Any]]:
     hpa = p / _PA_PER_HPA
     spec = chart("chart-pressure", "Barometric pressure", [
@@ -54,10 +63,14 @@ def _pressure_chart(t, p, events) -> Optional[dict[str, Any]]:
     ], y_title="Pressure", y_unit="hPa", events=events, height=320, clip_spikes=True)
     if not spec:
         return None
-    lo, hi = float(np.min(hpa)), float(np.max(hpa))
+    # Pad to apogee, not min-to-max: the ejection charge is the deepest point on
+    # this trace and it is a pressure event, not a height. Quoting it here would
+    # measure the very spike the next sentence tells the reader to discount.
+    pad = float(np.median(hpa[: min(200, hpa.size)]))
+    apogee_p = float(np.min(_smooth_hpa(hpa)))
     spec["note"] = (
         f"The raw signal every altitude in this report is derived from. It falls "
-        f"{hi - lo:.1f} hPa from the pad to the top of the flight. The ejection "
+        f"{pad - apogee_p:.1f} hPa from the pad to the top of the flight. The ejection "
         f"charge drives it hard for a few samples — that spike is the charge "
         f"venting, not the vehicle changing height."
     )

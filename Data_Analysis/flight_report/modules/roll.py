@@ -462,7 +462,7 @@ def _stack_note(s: dict, facts: dict) -> str:
     lim_v = facts.get("fin_limit")
     if cap_v and lim_v:
         parts.append(f"Dotted lines mark the controller's ±{cap_v:g}°/s rate cap and the "
-                     f"±{lim_v:g}° fin travel limit.")
+                     f"±{lim_v:g}° commanded fin limit.")
     elif cap_v:
         parts.append(f"The dotted lines mark the controller's ±{cap_v:g}°/s rate cap.")
     clipped = facts.get("rate_clipped")
