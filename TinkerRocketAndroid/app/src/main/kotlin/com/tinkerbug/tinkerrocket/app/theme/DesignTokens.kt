@@ -25,12 +25,19 @@ class TrColors(
     val simulate: Color,
     val servoTest: Color,
     val freqScan: Color,
+    val mapControl: Color,
     val statusConnected: Color,
     val statusScanning: Color,
     val statusIdle: Color,
     val voiceReady: Color,
     val voiceWarn: Color,
     val voiceError: Color,
+    val orientWarn: Color,
+    val signalBest: Color,
+    val signalGood: Color,
+    val signalFair: Color,
+    val signalWeak: Color,
+    val signalBad: Color,
     val background: Color,
     val card: Color,
     val cardSecondary: Color,
@@ -47,12 +54,19 @@ val TrColorsLight = TrColors(
     simulate = Color(0xFFFF9500),  // orange
     servoTest = Color(0xFF30B0C7),  // teal
     freqScan = Color(0xFFAF52DE),  // purple
+    mapControl = Color(0xFF007AFF),  // blue
     statusConnected = Color(0xFF34C759),  // green
     statusScanning = Color(0xFFFF9500),  // orange
     statusIdle = Color(0xFF8E8E93),  // gray
     voiceReady = Color(0xFF34C759),  // green
     voiceWarn = Color(0xFFFF9500),  // orange
     voiceError = Color(0xFFFF3B30),  // red
+    orientWarn = Color(0xFFFF9500),  // orange
+    signalBest = Color(0xFF007AFF),  // blue
+    signalGood = Color(0xFF34C759),  // green
+    signalFair = Color(0xFFFFCC00),  // yellow
+    signalWeak = Color(0xFFFF9500),  // orange
+    signalBad = Color(0xFFFF3B30),  // red
     background = Color(0xFFFFFFFF),
     card = Color(0xFFF2F2F7),
     cardSecondary = Color(0xFFE5E5EA),
@@ -69,12 +83,19 @@ val TrColorsDark = TrColors(
     simulate = Color(0xFFFF9F0A),  // orange
     servoTest = Color(0xFF40C8E0),  // teal
     freqScan = Color(0xFFBF5AF2),  // purple
+    mapControl = Color(0xFF0A84FF),  // blue
     statusConnected = Color(0xFF30D158),  // green
     statusScanning = Color(0xFFFF9F0A),  // orange
     statusIdle = Color(0xFF8E8E93),  // gray
     voiceReady = Color(0xFF30D158),  // green
     voiceWarn = Color(0xFFFF9F0A),  // orange
     voiceError = Color(0xFFFF453A),  // red
+    orientWarn = Color(0xFFFF9F0A),  // orange
+    signalBest = Color(0xFF0A84FF),  // blue
+    signalGood = Color(0xFF30D158),  // green
+    signalFair = Color(0xFFFFD60A),  // yellow
+    signalWeak = Color(0xFFFF9F0A),  // orange
+    signalBad = Color(0xFFFF453A),  // red
     background = Color(0xFF000000),
     card = Color(0xFF1C1C1E),
     cardSecondary = Color(0xFF2C2C2E),

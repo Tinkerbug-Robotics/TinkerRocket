@@ -43,11 +43,21 @@ which are Compose renderings of the shapes the iOS app is built from.
 | Flight-event flag chips | LAUNCH · BURNOUT · APOGEE · LANDED as chips that **illuminate green** as each event latches (born on Android 2026-07-27; on both platforms since 2026-07-30, same lit green #2E7D32). NO LOG chip on either platform since 2026-07-30 — the Status card owns logging on both |
 | State banner | one big colored label; #382 mapping (READY renders as PRELAUNCH); the COLOR alone carries acquiring-vs-ready (orange/green). No text badge under the label (removed 2026-07-31 — "EKF Ready" beside an amber EKF dot read as a contradiction; the sensor dots are the authority on live quality) |
 | Staleness | worsen-only overlay; red banner wording "STALE DATA — link degraded"; never silently show stale values as live |
-| Pyro tiles | green **only** on continuity AND live data; gray = open/stale; dark gray = fired; "ARMED" in the section title when armed |
+| Pyro tiles | iOS tile form on both platforms (2026-08-09): systemGray5 tile, "CH n" + badge ladder — FIRED beats CONT/NO CONT, which renders only while armed or for 5 s after that tile's Test Continuity tap (single-reveal state), with a TESTING spinner during the 2.5 s cmd-35 round trip; continuity trusted **only** from a LIVE frame (#297 — stale fails safe to NO CONT); per-channel trigger text ("%.1fs after apogee" / "%.0f‹unit› on descent") or "Disabled" from the cmd-20 readback; Test Continuity hidden while armed/fired/INFLIGHT. Android keeps "ARMED" in the section title (deliberate addition atop the iOS form); iOS keeps tap-tile-to-configure (Android edits pyro in Settings) |
 | Sensor health | one dot per subsystem, green/amber/red/gray = OK/DEGRADED/BAD/NA, horizontal row |
 | Power section | power state text + single action button; **hidden behind the #377 gate** until telemetry confirms state |
 | Color semantics | green = good/latched, amber = degraded, red = bad/stale-alert, purple = focused/selected, gray = inactive/unknown |
 | Focused rocket | purple-filled chip labeled "focused"; unfocused chips show their live state text |
+
+## Map conventions (settled 2026-08-10)
+
+| Element | Rule |
+|---|---|
+| Floating controls | **Nothing renders directly on tile imagery.** Every badge, button, and label over a map sits on a plate — iOS `.ultraThinMaterial`, Android the systemGray6 token fill (`TrMapPlate`; Compose has no live-blur, and opaque is the stronger choice over imagery anyway). Contrast over imagery is a coin flip you lose: a blue-on-imagery source chip was unreadable over pale desert satellite while the plated attribution bar two corners away was perfect (Pixel 8, 2026-08-10) |
+| Basemap selection | A **menu** listing every source, the active one checked, one glyph per source — never a cycling button. A control that reveals one of five options per tap is how a shipped basemap reads as missing |
+| Offline distinction | `TileSource.pickerLabel` on both platforms: "(online)" appended to any source a saved offline area cannot cover (provider terms). Shown on every source row AND on the active-source plate — it is what "will this still draw at the launch site" depends on. "Manage offline maps…" is the last item of the same menu, where it reads as the answer to those markers |
+| Active basemap | Named on the **bottom-leading attribution plate** (source name bold, provider attribution under it), not on the control that changes it — which is a bare 44pt/44dp glyph |
+| Control column | Top-trailing, source picker above recenter, 44pt/44dp square plates, 12pt/dp gutter. Divergence: Android hides recenter while follow is live (it would be a no-op); iOS always shows it |
 
 ## Terminology (both platforms)
 

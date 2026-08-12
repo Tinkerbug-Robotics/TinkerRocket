@@ -1,6 +1,7 @@
 package com.tinkerbug.tinkerrocket.app
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -77,9 +78,21 @@ fun ServoTestScreen(session: DeviceSession, profiles: RocketProfileStore?, onBac
     fun send() = session.sendCommandFrame(Commands.servoTestAngles(angles))
 
     LaunchedEffect(Unit) { send() } // initial zeros
-    DisposableEffect(Unit) {
+    // Keyed on session, not Unit, so the hook re-arms if the session identity
+    // changes underneath the screen (OfflineMapsScreen keys the same way).
+    // No state gate: SERVO_TEST_STOP has no state or session precondition in
+    // firmware -- it clears the flag, stows, and arms the pad wake -- so
+    // sending it when nothing is running is inert.
+    DisposableEffect(session) {
         onDispose { session.sendBareCommand(BleCommandId.SERVO_TEST_STOP) }
     }
+    // Without this, the system back gesture fell through to the Activity
+    // default and finished the app, racing the teardown above against process
+    // death -- with the FC left in servo_test_active, its state machine and
+    // pyro servicing suspended, and no UI anywhere to stop it.  Routing back
+    // through onBack disposes this screen while the app stays alive, so the
+    // stop is an ordinary write on a live link.
+    BackHandler(onBack = onBack)
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),

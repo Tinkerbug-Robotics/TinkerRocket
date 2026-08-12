@@ -27,9 +27,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Authority is DERIVED, not literal, so it tracks applicationId:
+             FlightCache asks for "${context.packageName}.files" at runtime,
+             which carries any applicationIdSuffix, so a literal here would
+             disagree with the only caller.  A suffixed variant (side-by-side
+             bench install) then can't install at all
+             (INSTALL_FAILED_CONFLICTING_PROVIDER — two packages may not claim
+             one authority), and would throw from getUriForFile if it could.
+             Expands to the identical string for the shipped build. -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.tinkerbug.tinkerrocket.files"
+            android:authorities="${applicationId}.files"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

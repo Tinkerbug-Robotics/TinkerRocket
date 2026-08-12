@@ -19,12 +19,19 @@ enum TRColor {
     static let simulate = dynamic(0xFF9500, 0xFF9F0A)  // orange
     static let servoTest = dynamic(0x30B0C7, 0x40C8E0)  // teal
     static let freqScan = dynamic(0xAF52DE, 0xBF5AF2)  // purple
+    static let mapControl = dynamic(0x007AFF, 0x0A84FF)  // blue
     static let statusConnected = dynamic(0x34C759, 0x30D158)  // green
     static let statusScanning = dynamic(0xFF9500, 0xFF9F0A)  // orange
     static let statusIdle = dynamic(0x8E8E93, 0x8E8E93)  // gray
     static let voiceReady = dynamic(0x34C759, 0x30D158)  // green
     static let voiceWarn = dynamic(0xFF9500, 0xFF9F0A)  // orange
     static let voiceError = dynamic(0xFF3B30, 0xFF453A)  // red
+    static let orientWarn = dynamic(0xFF9500, 0xFF9F0A)  // orange
+    static let signalBest = dynamic(0x007AFF, 0x0A84FF)  // blue
+    static let signalGood = dynamic(0x34C759, 0x30D158)  // green
+    static let signalFair = dynamic(0xFFCC00, 0xFFD60A)  // yellow
+    static let signalWeak = dynamic(0xFF9500, 0xFF9F0A)  // orange
+    static let signalBad = dynamic(0xFF3B30, 0xFF453A)  // red
 
     static let background = dynamic(0xFFFFFF, 0x000000)
     static let card = dynamic(0xF2F2F7, 0x1C1C1E)

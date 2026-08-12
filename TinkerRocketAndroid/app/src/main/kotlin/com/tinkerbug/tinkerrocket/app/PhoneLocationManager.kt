@@ -1,5 +1,8 @@
 package com.tinkerbug.tinkerrocket.app
 
+import com.tinkerbug.tinkerrocket.protocol.Commands
+import com.tinkerbug.tinkerrocket.session.DeviceSession
+import com.tinkerbug.tinkerrocket.session.DriftCast
 import com.tinkerbug.tinkerrocket.session.HeadingMath
 import android.Manifest
 import android.app.Application
@@ -39,7 +42,17 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 class PhoneLocationManager(private val app: Application) {
 
-    data class PhoneFix(val lat: Double, val lon: Double, val altMslM: Double?)
+    /**
+     * @param hAccM horizontal accuracy in metres, null when the platform
+     *   doesn't report one — it rides the phone-fix push so the BS log can
+     *   say how good the position it recorded actually was.
+     */
+    data class PhoneFix(
+        val lat: Double,
+        val lon: Double,
+        val altMslM: Double?,
+        val hAccM: Double? = null,
+    )
 
     private val _location = MutableStateFlow<PhoneFix?>(null)
     val location: StateFlow<PhoneFix?> = _location.asStateFlow()
@@ -53,6 +66,11 @@ class PhoneLocationManager(private val app: Application) {
     private var refCount = 0
     private var declinationDeg = 0.0
 
+    // Throttle state for reportFix().  Lives here rather than at the call
+    // site so every caller shares one budget (iOS does the same).
+    private var lastFixSentAtMs: Long? = null
+    private var lastFixSentFrom: PhoneFix? = null
+
     fun hasPermission(): Boolean =
         ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
@@ -65,7 +83,10 @@ class PhoneLocationManager(private val app: Application) {
                 loc.hasAltitude() -> loc.altitude // ellipsoid (geoid caveat)
                 else -> null
             }
-            _location.value = PhoneFix(loc.latitude, loc.longitude, msl)
+            _location.value = PhoneFix(
+                loc.latitude, loc.longitude, msl,
+                hAccM = if (loc.hasAccuracy()) loc.accuracy.toDouble() else null,
+            )
             declinationDeg = GeomagneticField(
                 loc.latitude.toFloat(), loc.longitude.toFloat(),
                 (msl ?: 0.0).toFloat(), loc.time,
@@ -113,6 +134,42 @@ class PhoneLocationManager(private val app: Application) {
         sensors.unregisterListener(headingListener)
     }
 
+    /**
+     * Push the current fix to [session] as cmd 47, throttled.  Port of iOS
+     * `LocationManager.reportFix(to:)`.
+     *
+     * The base station is wherever the phone is, and the BS has no GNSS of
+     * its own, so this is the only way the range between the two ends ever
+     * reaches a log file.  The BS writes the row only while a logging
+     * session is open, so calling this off-session costs one BLE write and
+     * nothing else — safe to call on every location update.
+     */
+    fun reportFix(session: DeviceSession) {
+        val fix = _location.value ?: return
+        val now = System.currentTimeMillis()
+        val sentAt = lastFixSentAtMs
+        val from = lastFixSentFrom
+        if (sentAt != null && from != null) {
+            val moved = DriftCast.haversineM(from.lat, from.lon, fix.lat, fix.lon)
+            if (now - sentAt < FIX_MIN_INTERVAL_MS && moved < FIX_FORCE_DISTANCE_M) return
+        }
+        lastFixSentAtMs = now
+        lastFixSentFrom = fix
+        session.sendCommandFrame(
+            Commands.setPhoneFix(fix.lat, fix.lon, fix.altMslM, fix.hAccM),
+        )
+    }
+
+    /**
+     * Drop the throttle so the next fix is pushed immediately.  Called on
+     * (re)connect: the fix at the START of a log is the one that matters,
+     * and a timestamp left over from the previous session could suppress it.
+     */
+    fun resetFixThrottle() {
+        lastFixSentAtMs = null
+        lastFixSentFrom = null
+    }
+
     /** Re-arm after the user grants permission mid-session. */
     fun restartIfHeld() {
         if (refCount > 0 && hasPermission()) {
@@ -121,5 +178,13 @@ class PhoneLocationManager(private val app: Application) {
             start() // arms the providers
             refCount = held
         }
+    }
+
+    companion object {
+        /** iOS `fixMinInterval` — 30 s between pushes when standing still. */
+        const val FIX_MIN_INTERVAL_MS: Long = 30_000
+
+        /** iOS `fixForceDistance` — a move this far pushes regardless. */
+        const val FIX_FORCE_DISTANCE_M: Double = 25.0
     }
 }

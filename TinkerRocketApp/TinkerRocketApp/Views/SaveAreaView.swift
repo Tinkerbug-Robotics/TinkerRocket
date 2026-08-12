@@ -88,9 +88,14 @@ struct SaveAreaView: View {
             span: MKCoordinateSpan(latitudeDelta: 0.15, longitudeDelta: 0.15)))
     }
 
+    /// Never deeper than the source actually serves: those bands are all
+    /// 404s, which the downloader counts as done with 0 bytes, so they would
+    /// pad the estimate with tiles that can never arrive.
+    private var effectiveMaxZoom: Int { min(Int(maxZoom), source.maxZoom) }
+
     private var spec: RegionSpec {
         RegionSpec(center: region.center, radiusMeters: radiusKm * 1000,
-                   minZoom: 10, maxZoom: Int(maxZoom))
+                   minZoom: 10, maxZoom: effectiveMaxZoom)
     }
     private var tileCount: Int { TileMath.tileCount(for: spec) }
     private var estMB: Double { Double(Int64(tileCount) * kEstimatedTileBytes) / 1_048_576 }
@@ -119,7 +124,8 @@ struct SaveAreaView: View {
                         sliderRow(title: "Radius", value: String(format: "%.1f km", radiusKm),
                                   binding: $radiusKm, range: 1...20, step: 0.5)
                         sliderRow(title: "Detail (max zoom)", value: "z\(Int(maxZoom))",
-                                  binding: $maxZoom, range: 13...18, step: 1)
+                                  binding: $maxZoom,
+                                  range: 13...Double(source.maxZoom), step: 1)
                         HStack {
                             Text("Estimate").foregroundColor(.secondary)
                             Spacer()
@@ -140,17 +146,45 @@ struct SaveAreaView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 ProgressView(value: downloader.total > 0
                                              ? Double(downloader.done) / Double(downloader.total) : 0)
+                                // The failed count is visible AS IT HAPPENS:
+                                // the sheet closes on success, so this is the
+                                // only place a partly-covered area can admit
+                                // it.
                                 Text("\(downloader.done) / \(downloader.total) tiles · "
-                                     + String(format: "%.0f MB", Double(downloader.bytes) / 1_048_576))
+                                     + String(format: "%.0f MB", Double(downloader.bytes) / 1_048_576)
+                                     + (downloader.failed > 0 ? " · \(downloader.failed) failed" : ""))
                                     .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(downloader.failed > 0 ? .orange : .secondary)
                                 Button(role: .cancel) { downloader.cancel() } label: {
                                     Text("Cancel").frame(maxWidth: .infinity)
                                 }
                             }
                         } else {
+                            // A run that reached nothing used to end silently
+                            // on a saved 0 MB area — the failure only showed
+                            // up at the field.
+                            if downloader.phase == .failed {
+                                Text("Download failed — no tiles could be fetched. "
+                                     + "Check your connection and try again.")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
                             Button {
-                                downloader.start(region: spec, source: source)
+                                // The downloader records the region, not this
+                                // sheet: it outlives us, and a dismissal
+                                // mid-run used to finish the download with
+                                // nobody left to write the manifest.
+                                let regionName = name.isEmpty ? defaultName : name
+                                let center = region.center
+                                downloader.start(region: spec, source: source) { tiles, byteCount in
+                                    store.add(OfflineRegion(
+                                        name: regionName,
+                                        lat: center.latitude, lon: center.longitude,
+                                        radiusMeters: radiusKm * 1000,
+                                        minZoom: 10, maxZoom: effectiveMaxZoom,
+                                        source: source.rawValue, tileCount: tiles,
+                                        bytes: byteCount, savedAt: Date()))
+                                }
                             } label: {
                                 Label("Download \(tileCount) tiles", systemImage: "arrow.down.circle.fill")
                                     .fontWeight(.semibold)
@@ -169,12 +203,6 @@ struct SaveAreaView: View {
             }
             .onChange(of: downloader.phase) { phase in
                 guard phase == .finished else { return }
-                store.add(OfflineRegion(
-                    name: name.isEmpty ? defaultName : name,
-                    lat: region.center.latitude, lon: region.center.longitude,
-                    radiusMeters: radiusKm * 1000, minZoom: 10, maxZoom: Int(maxZoom),
-                    source: source.rawValue, tileCount: downloader.total,
-                    bytes: downloader.bytes, savedAt: Date()))
                 dismiss()
             }
         }

@@ -50,15 +50,31 @@ fun ConnectedTopBar(
     onDisconnect: () -> Unit,
     unitStore: UnitStore,
     container: AppContainer,
+    toolOpen: Boolean = false,
+    onCloseTool: () -> Unit = {},
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { if (tab != 0) onTab(0) else onDisconnect() }) {
+        // A tool sub-screen leaves `tab` at 0, so this chevron used to take its
+        // disconnect branch while looking and reading like back -- and a
+        // disconnect tears the GATT down before the tool screen's teardown hook
+        // runs, so the servo-test stop or mag-cal abort never reached the
+        // rocket. From a tool it now closes the tool, which is what it looks
+        // like it does and what iOS does from a pushed screen.
+        IconButton(
+            onClick = {
+                when {
+                    toolOpen -> onCloseTool()
+                    tab != 0 -> onTab(0)
+                    else -> onDisconnect()
+                }
+            },
+        ) {
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                contentDescription = if (tab != 0) "Back to dashboard" else "Disconnect",
+                contentDescription = if (toolOpen || tab != 0) "Back to dashboard" else "Disconnect",
                 tint = TrTheme.colors.savedFlights,
             )
         }

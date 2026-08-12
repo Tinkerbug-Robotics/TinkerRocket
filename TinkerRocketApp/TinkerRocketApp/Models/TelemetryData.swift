@@ -385,9 +385,18 @@ struct TelemetryData: Codable {
     init() {}
 
     // Computed properties for display
+    /// Clamped to 0...100 for display only — the stored value and the CSV keep
+    /// whatever came off the wire. SOC is packed as an i16 spanning -25...125%
+    /// for headroom, so an exact 0% round-trips to -0.00077 and "%.1f%%" prints
+    /// it as "-0.0%", which is what a rocket on USB shows on every line.
     var socDisplay: String {
         if let soc = soc {
-            return String(format: "%.1f%%", soc)
+            // The `+ 0` is what actually kills "-0.0%", and it is not
+            // redundant with the clamp: the OC prints SOC to one decimal, so
+            // an exact 0% arrives as the literal -0.0, and -0.0 == 0 means
+            // max(0, soc) hands it straight back. Adding positive zero is the
+            // IEEE way to drop the sign.
+            return String(format: "%.1f%%", min(100, max(0, soc)) + 0)
         }
         return "N/A"
     }
@@ -509,9 +518,12 @@ struct TelemetryData: Codable {
     }
 
     // Base station battery display helpers
+    /// Same clamp and negative-zero guard as `socDisplay` — the base station's
+    /// pack reaches 0 the same way the rocket's does, and would print the same
+    /// "-0.0%".
     var bsSocDisplay: String {
         if let soc = bs_soc {
-            return String(format: "%.1f%%", soc)
+            return String(format: "%.1f%%", min(100, max(0, soc)) + 0)
         }
         return "N/A"
     }

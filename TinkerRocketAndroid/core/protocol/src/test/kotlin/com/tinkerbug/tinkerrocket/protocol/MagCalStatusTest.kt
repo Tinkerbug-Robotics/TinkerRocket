@@ -6,6 +6,7 @@ import kotlinx.serialization.json.long
 import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -144,5 +145,32 @@ class MagCalStatusTest {
     fun `unknown enum raws fall back like iOS nil-coalescing`() {
         assertEquals(MagCalSubType.IDLE, MagCalSubType.fromRaw(99))
         assertEquals(MagCalRejectCode.OK, MagCalRejectCode.fromRaw(99))
+    }
+
+    @Test
+    fun `needsAbortOnLeave covers the states a calibration can be stranded in`() {
+        // Leaving during any of these strands the FC in MAG_CALIBRATION with the
+        // magnetometer offsets zeroed, and that state has no launch-detect
+        // failsafe -- kinematicChecks is skipped in MAG_CALIBRATION, so nothing
+        // clears it on its own.
+        assertTrue(MagCalSubType.SAMPLING.needsAbortOnLeave)
+        assertTrue(MagCalSubType.REVIEW.needsAbortOnLeave)
+        // The sharpest one: a 60 s firmware timeout runs evaluateVerify()
+        // whether or not the app is watching, so walking away here can commit a
+        // permanent NVS calibration nobody reviewed.
+        assertTrue(MagCalSubType.VERIFYING.needsAbortOnLeave)
+    }
+
+    @Test
+    fun `needsAbortOnLeave excludes APPLIED so a saved calibration survives the exit`() {
+        // The FC RESTS in APPLIED whenever a calibration exists, and
+        // MagCalibrator::abort() forces ABORTED from ANY state including this
+        // one. An abort on the way out of a successful save would throw the
+        // calibration away -- this is the case the state gate exists for.
+        assertFalse(MagCalSubType.APPLIED.needsAbortOnLeave)
+
+        // Nothing running: an abort would be pointless noise on the link.
+        assertFalse(MagCalSubType.IDLE.needsAbortOnLeave)
+        assertFalse(MagCalSubType.ABORTED.needsAbortOnLeave)
     }
 }

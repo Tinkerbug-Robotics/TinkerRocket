@@ -28,6 +28,18 @@ class TileMathTest {
     }
 
     @Test
+    fun cacheableSourcesDeclareTheDepthTheyActuallyServe() {
+        // The save-area slider clamps to this.  USGS ArcGIS stops at 16:
+        // z17/z18 404 every tile, and the downloader counts a 404 as done
+        // with 0 bytes — so an over-deep range silently padded the estimate
+        // with tiles that could never arrive.  If a source ever gains depth,
+        // update it here and the slider follows.
+        TileSource.entries.filter { it.cacheable }.forEach { s ->
+            assertEquals(16, s.maxZoom, "${s.key} max zoom")
+        }
+    }
+
+    @Test
     fun regionTiles_countMatchesGolden_andListMatchesCount() {
         val region = RegionSpec(
             centerLat = 39.97154, centerLon = -74.93655,
