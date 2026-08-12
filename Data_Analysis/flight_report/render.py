@@ -67,6 +67,22 @@ def _chart_payload(chart: dict) -> tuple[Markup, bool]:
     return Markup(packed), True
 
 
+def _dataset_entry(d: dict) -> dict:
+    """Panel descriptor for the template: payload for an owner, id for a ref.
+
+    The X-Y panel points at the payload the time panel already embedded. It is
+    ~3.9 MB gzipped on a real flight, and shipping it twice would double the
+    document to save one dictionary lookup in the browser.
+    """
+    entry = {"id": d["id"], "panel": d.get("panel", "time"), "ref": bool(d.get("ref"))}
+    if entry["ref"]:
+        return entry
+    payload, gz = _chart_payload({k: v for k, v in d.items() if k != "panel"})
+    entry["payload"] = payload
+    entry["gzipped"] = gz
+    return entry
+
+
 def _flatten_settings(node, prefix: str = "") -> list[tuple[str, str]]:
     """Nested settings dict -> flat (dotted key, display value) pairs, sorted.
 
@@ -191,11 +207,7 @@ def render_report(
                 for g in r.globes
                 for payload, gz in [_chart_payload(g)]
             ],
-            "datasets": [
-                {"id": d["id"], "payload": payload, "gzipped": gz}
-                for d in r.datasets
-                for payload, gz in [_chart_payload(d)]
-            ],
+            "datasets": [_dataset_entry(d) for d in r.datasets],
             "warnings": r.warnings,
             "text": r.text,
             "error": r.error,

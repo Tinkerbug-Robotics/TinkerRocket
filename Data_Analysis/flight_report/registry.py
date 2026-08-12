@@ -84,7 +84,11 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # Directly under the 3D path: that view answers "where did it go", and
         # this answers "show me anything else", before the curated sections
         # start answering questions somebody else chose.
-        ("explore",           explore.analyze,           LEVEL_FLIGHT),
+        ("explore_time",      explore.analyze_time,      LEVEL_FLIGHT),
+        # Against another channel rather than the clock. A separate section, not
+        # a mode toggle: it needs an X picker and is confined to one stream, and
+        # putting that behind a radio made the common case carry it too.
+        ("explore_xy",        explore.analyze_xy,        LEVEL_FLIGHT),
         ("overview",          overview.analyze,          LEVEL_FLIGHT),
         # Directly below the kinematic charts: roll is the one axis those three
         # say nothing about, and on a roll-control flight it is the whole story.
