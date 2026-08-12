@@ -961,6 +961,17 @@ internal fun StorageCard(
     val usedColor = tr.logging
     val reservedColor = tr.statusIdle
     val freeColor = tr.scan
+    // backend 0 = the internal SPIFFS partition.  On a base station that is a
+    // FALLBACK, not a configuration: the board carries a 512 MB NAND, and the
+    // firmware demotes to internal flash for the whole boot if any step of the
+    // NAND bring-up fails -- then keeps logging, into ~2 MB instead of 512.
+    //
+    // Rendered as a plain backend name it read as a statement of fact, and the
+    // only other clue was a small number ("Free 0.4 MB") that looks like a
+    // full disk rather than the wrong disk.  Seen on the bench 2026-08-11 and
+    // reported from the field.  A reboot usually clears it, which is worth
+    // saying out loud because the alternative is deciding not to fly.
+    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.backend == 0
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -968,7 +979,17 @@ internal fun StorageCard(
                 Text(
                     subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (bsOnFallbackFlash) tr.orientWarn
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (bsOnFallbackFlash) {
+                Text(
+                    "External NAND not mounted — logging to internal flash. " +
+                        "Capacity is ~2 MB instead of 512 MB. Power-cycle the base " +
+                        "station before flying.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tr.orientWarn,
                 )
             }
             // Segment bar: used | reserved | free, weighted by bytes — the
