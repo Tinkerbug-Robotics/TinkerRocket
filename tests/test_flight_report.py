@@ -59,7 +59,13 @@ FLIGHT_SECTIONS = [
 
 @pytest.fixture(scope="module")
 def reports(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
-    """Run the suite once against the golden flight; yield both report levels."""
+    """Run the suite once against the golden flight; yield the report.
+
+    There used to be two levels and this returned both. The detailed report is
+    gone — its sections were folded into this one — so the mapping has a single
+    entry rather than being flattened away, because the tests read it by name
+    and a dict keeps that readable if a second document ever returns.
+    """
     if not GOLDEN_BIN.exists():
         pytest.skip(f"Golden flight missing: {GOLDEN_BIN}")
 
@@ -81,10 +87,9 @@ def reports(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
         print(result.stderr, file=sys.stderr)
     assert result.returncode == 0, f"flight_report exited {result.returncode}"
 
-    out = {
-        "flight": tmp_path / f"{GOLDEN_BIN.stem}_report.html",
-        "detailed": tmp_path / f"{GOLDEN_BIN.stem}_report_detailed.html",
-    }
+    out = {"flight": tmp_path / f"{GOLDEN_BIN.stem}_report.html"}
+    stray = list(tmp_path.glob("*_report_detailed.html"))
+    assert not stray, f"a detailed report was still written: {stray}"
     for level, path in out.items():
         assert path.exists(), f"{level} report not written to {path}"
         assert path.stat().st_size > 100_000, f"{level} report suspiciously small"
@@ -97,10 +102,15 @@ def report_html(reports: dict[str, Path]) -> Path:
     return reports["flight"]
 
 
-def test_detailed_report_renders_all_sections(reports: dict[str, Path]) -> None:
-    html = reports["detailed"].read_text(encoding="utf-8")
-    missing = [s for s in DETAILED_SECTIONS if s not in html]
-    assert not missing, f"Missing sections: {missing}"
+def test_detailed_report_is_gone(reports: dict[str, Path]) -> None:
+    """One report. The bring-up sections went with the second document.
+
+    They are listed rather than merely absent so that promoting one back is a
+    deliberate edit here, not something that quietly reappears.
+    """
+    html = reports["flight"].read_text(encoding="utf-8")
+    present = [s for s in DETAILED_SECTIONS if s in html]
+    assert not present, f"detailed-only sections are still rendering: {present}"
 
 
 def test_flight_report_is_the_headline_read(reports: dict[str, Path]) -> None:
@@ -127,7 +137,7 @@ def test_flight_report_is_the_headline_read(reports: dict[str, Path]) -> None:
 
 
 def test_report_has_inline_figures(reports: dict[str, Path]) -> None:
-    """Static figures are the detailed report's idiom; the flight report has one.
+    """The report carries exactly one static PNG.
 
     The per-sensor timing histogram is the exception, and a deliberate one: it is
     a distribution rather than a series, nothing zooms into it, and rebuilding it
@@ -135,10 +145,6 @@ def test_report_has_inline_figures(reports: dict[str, Path]) -> None:
     visual is an interactive chart, so the count is pinned rather than merely
     bounded — a second PNG appearing here should be a decision, not a drift.
     """
-    eng = reports["detailed"].read_text(encoding="utf-8")
-    fig_count = eng.count('<img src="data:image/png;base64,')
-    assert fig_count >= 25, f"Expected ≥25 inline figures, got {fig_count}"
-
     flight = reports["flight"].read_text(encoding="utf-8")
     flight_figs = flight.count('<img src="data:image/png;base64,')
     assert flight_figs == 1, (
@@ -367,21 +373,6 @@ def test_cesium_inlined_once_and_patched(report_html: Path) -> None:
         "the unpatched Cesium worker bootstrap is still present — the globe will "
         "render blank when the report is opened from file://"
     )
-
-
-def test_plotly_trajectory_lives_in_detailed(reports: dict[str, Path]) -> None:
-    """The 3D Plotly path moved to the detailed report when the globe took over the flight report.
-
-    It is kept there rather than deleted because it survives what the globe does
-    not: a report opened with no network, and a flight with no GNSS fix at all.
-    """
-    flight = dict(_chart_specs(reports["flight"].read_text(encoding="utf-8")))
-    eng = dict(_chart_specs(reports["detailed"].read_text(encoding="utf-8")))
-    assert "chart-trajectory" not in flight, (
-        "the flight report shows both a Cesium globe and a Plotly 3D path of the "
-        "same trajectory"
-    )
-    assert "chart-trajectory" in eng, "the 3D trajectory chart vanished instead of moving"
 
 
 def test_measured_events_beat_the_flags() -> None:

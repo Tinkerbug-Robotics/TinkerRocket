@@ -166,17 +166,13 @@ def render_report(
     flight: "Flight",
     results: list["AnalysisResult"],
     level: str | None = None,
-    counterpart: str | None = None,
 ) -> str:
     """Render one report as an HTML string.
 
-    `level` is `registry.LEVEL_FLIGHT` or `LEVEL_DETAILED` and only labels the
+    `level` is `registry.LEVEL_FLIGHT` and only labels the
     output — pass the results you want in it. None renders an untitled report
     containing everything given.
 
-    `counterpart` is the *filename* of the other level's report, used to link the
-    two. Pass it only when that file is actually being written alongside this
-    one, or the link will 404.
     """
     from .cesium_bundle import cesium_css, cesium_source
     from .registry import LEVEL_FLIGHT
@@ -235,11 +231,9 @@ def render_report(
         config=flight.config,
         sections=sections,
         level=level,
-        counterpart=counterpart,
         # The flight report leads with the headline numbers; the detailed
         # report leads with parser/settings detail and doesn't repeat them.
         summary=compute_summary(flight) if is_flight else [],
-        show_raw_detail=not is_flight,
         has_charts=has_charts,
         plotly_js=Markup(_plotly_source()) if has_charts else "",
         has_datasets=has_datasets,
@@ -262,10 +256,9 @@ def write_report(
     results: list["AnalysisResult"],
     out_path: Path,
     level: str | None = None,
-    counterpart: str | None = None,
 ) -> Path:
     """Render and write to disk. Returns the written path."""
-    html = render_report(flight, results, level=level, counterpart=counterpart)
+    html = render_report(flight, results, level=level)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")

@@ -14,11 +14,11 @@ plt.rcParams["figure.max_open_warning"] = 0  # we batch ~30 figures intentionall
 
 from .discover import DEFAULT_DISCOVERY_ROOT, discover, filter_flights
 from .flight import Flight
-from .registry import LEVEL_DETAILED, LEVEL_FLIGHT, modules_for, run_module
+from .registry import LEVEL_FLIGHT, modules_for, run_module
 from .render import write_report
 
 
-_LEVEL_SUFFIX = {LEVEL_FLIGHT: "_report.html", LEVEL_DETAILED: "_report_detailed.html"}
+_LEVEL_SUFFIX = {LEVEL_FLIGHT: "_report.html"}
 
 
 def _out_path_for(flight: Flight, out: Path | None, level: str) -> Path:
@@ -34,7 +34,7 @@ def _out_path_for(flight: Flight, out: Path | None, level: str) -> Path:
 
 
 def _process_one(flight: Flight, out: Path | None, levels: list[str]) -> list[Path]:
-    """Run the requested levels against one flight. Returns the report paths."""
+    """Run one flight. `levels` is a list for historical reasons — there is one."""
     print(f"  Parsing: {flight.bin_path}")
     t0 = time.time()
     flight.load()
@@ -56,11 +56,7 @@ def _process_one(flight: Flight, out: Path | None, levels: list[str]) -> list[Pa
             results.append(result)
 
         out_path = _out_path_for(flight, out, level)
-        # Cross-link the two reports, but only when both are being written —
-        # a link to a file that was never generated is worse than no link.
-        other = next((lv for lv in levels if lv != level), None)
-        counterpart = _out_path_for(flight, out, other).name if other else None
-        write_report(flight, results, out_path, level=level, counterpart=counterpart)
+        write_report(flight, results, out_path, level=level)
         print(f"      -> {out_path}")
         written.append(out_path)
 
@@ -90,17 +86,6 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Stop after N flights (useful for testing).",
     )
-    p_run.add_argument(
-        "--level",
-        choices=[LEVEL_FLIGHT, LEVEL_DETAILED, "both"],
-        default="both",
-        help=(
-            "Which report(s) to write. 'flight' is the headline read — summary "
-            "card and interactive charts; 'detailed' is the full diagnostic "
-            "set. Default: both."
-        ),
-    )
-
     p_list = sub.add_parser("list", help="Discover flights without running analysis.")
     p_list.add_argument("path", nargs="?", default=None)
 
@@ -122,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.limit:
         flights = flights[: args.limit]
 
-    levels = [LEVEL_FLIGHT, LEVEL_DETAILED] if args.level == "both" else [args.level]
+    levels = [LEVEL_FLIGHT]
 
     print(f"Processing {len(flights)} flight(s)...")
     failed = 0

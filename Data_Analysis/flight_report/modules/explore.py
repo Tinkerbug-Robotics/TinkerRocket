@@ -35,7 +35,13 @@ from ..catalog import KIND_BOOL, KIND_COUNTER, KIND_ENUM, build
 from ..flight import Flight
 from ..registry import AnalysisResult
 
+import re
+
 _DISCRETE = (KIND_BOOL, KIND_ENUM, KIND_COUNTER)
+
+# "(#112)" and ", #514" and bare "#514" — the reference, not the sentence.
+_ISSUE_REF = re.compile(r"\s*[(\[]?,?\s*#\d+\s*[)\]]?")
+_SPACES = re.compile(r"\s{2,}")
 
 # What the time panel opens showing, in preference order; the first one this log
 # actually carries wins. A blank plot asks the reader to go and find something
@@ -60,6 +66,21 @@ DATASET_ID = "explore-data"
 # in every copy of the report.
 _T_DP = 3
 _V_DP = 4
+
+
+def _public(text: Optional[str]) -> Optional[str]:
+    """A caution with its issue references removed.
+
+    The channel catalog is written for whoever is debugging the firmware, and
+    its cautions cite the issues that established each quirk. The substance is
+    exactly what a reader plotting that channel needs; the issue numbers mean
+    nothing outside the repository and read as leaked internals in a report a
+    customer opens.
+    """
+    if not text:
+        return text
+    out = _ISSUE_REF.sub("", text)
+    return _SPACES.sub(" ", out).replace(" ,", ",").replace(" .", ".").strip()
 
 
 def _values(rows: list[dict], field: str, kind: str) -> list:
@@ -126,7 +147,7 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
             "kind": c.meta.kind,
             # Carried so the picker can warn in place rather than making the
             # reader go and find the inventory section.
-            "caution": c.meta.caution,
+            "caution": _public(c.meta.caution),
             "shown": list(c.meta.shown_in),
         }
         if len(set(vals)) == 1:

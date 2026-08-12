@@ -133,13 +133,7 @@ details.explore > summary:hover { background: #f2f4f7; }
 <body>
 
 <div class="topbar">
-  <div class="topbar-left">
-    {% if counterpart %}
-    <a class="pill" href="{{ counterpart }}">
-      {% if level == "detailed" %}&larr; Flight report{% else %}Detailed data &rarr;{% endif %}
-    </a>
-    {% endif %}
-  </div>
+  <div class="topbar-left"></div>
   <div class="units" role="group" aria-label="Units">
     <button type="button" data-units="metric" class="active">Metric</button><button
             type="button" data-units="imperial">Imperial</button>
@@ -148,12 +142,10 @@ details.explore > summary:hover { background: #f2f4f7; }
 
 <h1>{{ flight.rocket_name }}</h1>
 <div class="meta">
-  {% if show_raw_detail %}<code>{{ flight.bin_path }}</code><br>{% endif %}
   Flight: {{ date_str }}
   {#- Log duration is how long the recorder ran, usually minutes of pad time. It
       belongs with the detailed data review; the card's "Flight time" is the number
       a flyer means, and showing both side by side just reads as a contradiction. -#}
-  {% if show_raw_detail and duration_s %} &middot; Log duration: {{ "%.1f"|format(duration_s) }} s{% endif %}
   {% if level == "detailed" %} &middot; detailed data review{% endif %}
 </div>
 
@@ -175,70 +167,27 @@ details.explore > summary:hover { background: #f2f4f7; }
 </div>
 {% endif %}
 
-{% if show_raw_detail %}
-{# As recorded by the flight computer itself, from the .json sidecar — not the
-   flight report's recomputation from the log. Keeping both is the point of a
-   detailed review, but the labels have to say which is which: "Apogee" on the
-   summary card is an altitude, and these two are times. #}
-<div class="summary-grid">
-  {% if sidecar.get('apogee_time_s') is not none %}
-  <div class="cell">
-    <div class="label">Time to apogee</div>
-    <div class="value">{{ "%.2f"|format(sidecar['apogee_time_s']) }} s</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('burnout_time_s') is not none %}
-  <div class="cell">
-    <div class="label">Time to burnout</div>
-    <div class="value">{{ "%.2f"|format(sidecar['burnout_time_s']) }} s</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('max_altitude_m') is not none %}
-  <div class="cell">
-    <div class="label">Max Altitude</div>
-    <div class="value">{{ "%.1f"|format(sidecar['max_altitude_m']) }} m</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('max_speed_mps') is not none %}
-  <div class="cell">
-    <div class="label">Max Speed</div>
-    <div class="value">{{ "%.1f"|format(sidecar['max_speed_mps']) }} m/s</div>
-  </div>
-  {% endif %}
-  {% if stats.get('total_frames') is not none %}
-  <div class="cell">
-    <div class="label">Frames</div>
-    <div class="value">{{ "{:,}".format(stats['total_frames']) }}</div>
-  </div>
-  {% endif %}
-  {% if stats.get('total_frames') and stats['total_frames'] > 0 %}
-  <div class="cell">
-    <div class="label">CRC Pass</div>
-    <div class="value">{{ "%.1f"|format(100.0 * stats['good_crc'] / stats['total_frames']) }}%</div>
-  </div>
-  {% endif %}
-</div>
-{% endif %}
-
 <div class="toc">
   <strong>Sections</strong>
   <ul>
-    {% if show_raw_detail %}
-    <li><a href="#settings">Settings snapshot</a></li>
-    {% endif %}
     {% for s in sections %}
+    {% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
+          or s.globes or s.datasets or s.text %}
     <li><a href="#{{ s.name }}">{{ s.title }}</a>
         {%- if s.warnings %} <span style="color:#f9a825">({{ s.warnings|length }} warning{{ "s" if s.warnings|length != 1 else "" }})</span>{% endif %}
         {%- if s.error %} <span style="color:#c62828">(error)</span>{% endif %}
     </li>
-    {% endfor %}
-    {% if show_raw_detail %}
-    <li><a href="#parser">Parser stats</a></li>
     {% endif %}
+    {% endfor %}
   </ul>
 </div>
 
 {% for s in sections %}
+{# A module with nothing to say prints nothing. Radio Link on a flight flown
+   without a ground station is the common case: it is not a fault and not a
+   warning, so it should leave no trace rather than a bare heading. #}
+{% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
+      or s.globes or s.datasets or s.text %}
 <h2 id="{{ s.name }}">{{ s.title }}</h2>
 
 {% if s.error %}
@@ -334,13 +283,13 @@ details.explore > summary:hover { background: #f2f4f7; }
         {% endif %}
         <button type="button" class="explore-draw">Draw</button>
         {% if d.panel == "xy" %}
-        <label class="explore-colort"><input type="checkbox"> Colour by time</label>
+        <label class="explore-colort"><input type="checkbox"> Color by time</label>
         <p class="explore-hint">
           Both axes must come from the same stream, so each point is one logged
           frame rather than an interpolated pair. Zoom redraws from the full data.
         </p>
         {% else %}
-        <label><input type="checkbox" class="explore-norm"> Normalise each series to 0&ndash;1</label>
+        <label><input type="checkbox" class="explore-norm"> Normalize each series to 0&ndash;1</label>
         <p class="explore-hint">
           Ctrl/&#8984;-click for several. Each series is drawn on its own stream's
           timestamps &mdash; nothing is resampled onto a shared clock, so two sensors
@@ -362,6 +311,7 @@ details.explore > summary:hover { background: #f2f4f7; }
 <div class="figure"><img src="{{ fig }}" /></div>
 {% endfor %}
 
+{% endif %}
 {% endif %}
 {% endfor %}
 
@@ -812,7 +762,7 @@ details.explore > summary:hover { background: #f2f4f7; }
 <script>{{ explore_js }}</script>
 {% endif %}
 
-{% if has_charts %}
+{% if has_charts or has_datasets %}
 <script>{{ plotly_js }}</script>
 <script>
 (function () {
@@ -959,17 +909,25 @@ details.explore > summary:hover { background: #f2f4f7; }
     }
   }
 
-  function unitFactor(unit) {
-    var c = imperial ? CONV[unit] : null;
+  /* `conv` names a different imperial target than the SI unit implies — a
+     vertical rate is metres per second but reads in ft/s, not mph. It takes
+     precedence when present, matching what convertSpans does for the metric
+     cells, so an axis and a table cell describing the same quantity agree. */
+  function pick(unit, conv) {
+    if (!imperial) return null;
+    return CONV[conv] || CONV[unit] || null;
+  }
+  function unitFactor(unit, conv) {
+    var c = pick(unit, conv);
     return c ? c.f : 1;
   }
-  function unitLabel(unit) {
-    var c = imperial ? CONV[unit] : null;
+  function unitLabel(unit, conv) {
+    var c = pick(unit, conv);
     return c ? c.label : unit;
   }
-  function axisTitle(base, unit) {
+  function axisTitle(base, unit, conv) {
     if (!base) return "";
-    return unit ? base + " (" + unitLabel(unit) + ")" : base;
+    return unit ? base + " (" + unitLabel(unit, conv) + ")" : base;
   }
   /* The 3D scene carries its unit in the chart title rather than on the axes —
      see charts.trajectory_3d on why rotated axis titles clip there. */
@@ -1088,7 +1046,11 @@ details.explore > summary:hover { background: #f2f4f7; }
       var data = null, entry = null, loading = false;
 
       function label(key, ch) {
-        var bits = [key];
+        /* ch.label is the human name from the channel catalog ("Vertical
+           velocity"); key is the internal dotted path. Show the name and keep
+           the path alongside it, because the path is what the notes and the
+           legend cite. */
+        var bits = [ch.label ? ch.label + "  [" + key + "]" : key];
         if (ch.unit) bits.push("(" + ch.unit + ")");
         if (ch.const !== undefined) bits.push("— constant");
         else if (!ch.shown.length) bits.push("— not plotted elsewhere");
@@ -1137,8 +1099,8 @@ details.explore > summary:hover { background: #f2f4f7; }
          slice silently. This filters on both axes instead, and carries the
          colour array through the same filter. */
       function drawScatter(e) {
-        var xf = e.spec.xUnit ? unitFactor(e.spec.xUnit) : 1;
-        var yf = e.spec.yUnit ? unitFactor(e.spec.yUnit) : 1;
+        var xf = e.spec.xUnit ? unitFactor(e.spec.xUnit, e.spec.xConv) : 1;
+        var yf = e.spec.yUnit ? unitFactor(e.spec.yUnit, e.spec.yConv) : 1;
         var xs = [], ys = [], colors = [], anyColor = false;
         for (var i = 0; i < e.full.length; i++) {
           var v = TRExplore.scatterView(

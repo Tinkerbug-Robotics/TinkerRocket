@@ -29,6 +29,7 @@ if str(_PARENT) not in sys.path:
 from plot_flight_data_mini import get_array, pressure_to_altitude  # noqa: E402
 
 from ..charts import COLORS, chart, trace
+from ..events import markers
 from ..flight import Flight
 from ..maps import track_map
 from ..registry import AnalysisResult
@@ -43,16 +44,28 @@ APOGEE_LAG_WARN_S = 1.0
 MAIN_TRANSITION_RATIO = 0.6
 
 
-def _events(ns, t0_us) -> dict[str, Optional[float]]:
-    out: dict[str, Optional[float]] = {}
-    for label, flag in (("launch", "launch"), ("burnout", "burnout"),
-                        ("apogee", "alt_apogee"), ("landed", "alt_landed")):
-        out[label] = None
-        for r in ns:
-            if r.get(flag):
-                out[label] = (r["time_us"] - t0_us) / 1e6
-                break
-    return out
+def _smooth(alt, k: int = 25):
+    """Median-filtered altitude. The ejection charge is a pressure event, not a
+    height, and an unfiltered argmax or interpolation will happily return it."""
+    if alt is None or alt.size <= k:
+        return alt
+    pad = k // 2
+    padded = np.concatenate([np.full(pad, alt[0]), alt, np.full(pad, alt[-1])])
+    return np.array([np.median(padded[i:i + k]) for i in range(alt.size)])
+
+
+def _flag_apogee(ns, t0_us) -> Optional[float]:
+    """When the barometric detector voted, which is what section 1 is about.
+
+    Everything else here uses the measured events. This section's first question
+    is "did the flight computer call it at the right moment", and that question
+    needs the declaration on one side of the comparison — but only that question:
+    the descent numbers and the chart are about the flight, not about the vote.
+    """
+    for r in ns:
+        if r.get("alt_apogee"):
+            return (r["time_us"] - t0_us) / 1e6
+    return None
 
 
 def _baro_profile(recs, t0_us):
@@ -148,16 +161,17 @@ def analyze(flight: Flight) -> AnalysisResult:
         return result
 
     ns = recs.get("NonSensor") or []
-    ev = _events(ns, t0)
+    ev = markers(flight)
+    flag_apogee = _flag_apogee(ns, t0)
     t, alt = _baro_profile(recs, t0)
 
     metrics: dict[str, object] = {}
 
     # --- 1. Was apogee called on time? --------------------------------------
-    if t is not None and ev["apogee"] is not None:
-        peak_i = int(np.argmax(alt))
+    if t is not None and flag_apogee is not None:
+        peak_i = int(np.argmax(_smooth(alt)))
         peak_t, peak_alt = float(t[peak_i]), float(alt[peak_i])
-        lag = ev["apogee"] - peak_t
+        lag = flag_apogee - peak_t
         # Named for the sensor, not "True apogee": the Apogee Detection section
         # already uses that phrase for the GNSS Doppler velocity crossing, which
         # is a different instant (7.66 s vs 8.34 s on the sample flight, because
@@ -170,7 +184,11 @@ def analyze(flight: Flight) -> AnalysisResult:
         # both directions: still climbing if the call was early, already falling
         # if it was late. (Not "altitude lost" — that would be wrong by sign for
         # an early call, which is the safer and more common tuning.)
-        at_flag = float(np.interp(ev["apogee"], t, alt))
+        # Interpolate the SMOOTHED trace: the charge drives the raw pressure to
+        # absurd values for a few samples, and on a short flight the vote lands
+        # on that spike — reading it raw once reported 651 m below the peak of a
+        # 74 m flight.
+        at_flag = float(np.interp(flag_apogee, t, _smooth(alt)))
         below = peak_alt - at_flag
         when = "early" if lag < 0 else "late"
         still = "still climbing" if lag < 0 else "already descending"
@@ -243,7 +261,8 @@ def analyze(flight: Flight) -> AnalysisResult:
                 "chart-descent", "Descent profile",
                 [trace(t[m], alt[m], "Barometric altitude", COLORS[0])],
                 y_title="Altitude AGL", y_unit="m",
-                events={k: v for k, v in ev.items() if k in ("apogee", "landed")},
+                events={k: v for k, v in ev.items()
+                        if k in ("apogee", "ejection", "landed") and v is not None},
                 clip_spikes=True,  # the ejection charge throws the barometer hard
             )
             if spec:

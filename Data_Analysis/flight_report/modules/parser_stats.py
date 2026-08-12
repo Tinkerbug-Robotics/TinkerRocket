@@ -39,8 +39,12 @@ def analyze(flight: Flight) -> AnalysisResult:
     if total is not None:
         bits.append(f"{total:,} frames")
     if bad is not None and total:
+        # Say it one way or the other. Rounding 99.998% to "100.00%" and then
+        # appending "(3 did not)" reads as a contradiction; below the rounding
+        # threshold the count is the honest form.
         pct = 100.0 * (good or 0) / total
-        bits.append(f"{pct:.2f}% passed CRC" + (f" ({bad:,} did not)" if bad else ""))
+        bits.append(f"{bad:,} of {total:,} frames failed CRC" if bad
+                    else f"all {total:,} frames passed CRC")
     result.text = " · ".join(bits)
 
     # A handful of bad frames is ordinary on a full flash and not worth a warning
