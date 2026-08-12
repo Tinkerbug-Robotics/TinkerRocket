@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -186,6 +187,17 @@ fun DashboardScreen(
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
+        //
+        // Direct links only, as on iOS ("rocket only, confirmed by telemetry",
+        // DashboardView.swift:574, which gates the same branch on
+        // deviceType == .rocket).  The power pin is an OC-local signal that the
+        // LoRa relay does not carry: on a base-station link fs bit 0x10 is
+        // always clear, so this card read a confident "OFF" with a Power on
+        // button directly above a live banner from a rocket that was plainly
+        // powered and reporting READY (bench 2026-08-11, fs=128 = bsLogging
+        // only). Offering to power on a running rocket is worse than showing
+        // nothing.
+        if (!session.isBaseStation) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Rocket power", style = MaterialTheme.typography.titleMedium)
@@ -209,6 +221,7 @@ fun DashboardScreen(
                 }
             }
         }
+        }
 
         // iOS section order (screenshots 2026-07-31): the summary sits right
         // after the banners on BS links but after Signal/Battery/IMU on
@@ -216,7 +229,7 @@ fun DashboardScreen(
         if (session.isBaseStation) FlightSummaryCard(telemetry)
 
         SignalCard(telemetry, rssi, session.isBaseStation)
-        BatteryCard(telemetry)
+        BatteryCard(telemetry, session.isBaseStation)
         // Orientation source is picked strictly by link type (iOS
         // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
         // imu_orient config readback.  No cross-fallback on either platform.
@@ -961,14 +974,48 @@ internal fun StorageCard(
     val usedColor = tr.logging
     val reservedColor = tr.statusIdle
     val freeColor = tr.scan
+    // backend 0 = the internal SPIFFS partition.  On a base station that is a
+    // FALLBACK, not a configuration: the board carries a 512 MB NAND, and the
+    // firmware demotes to internal flash for the whole boot if any step of the
+    // NAND bring-up fails -- then keeps logging, into ~2 MB instead of 512.
+    //
+    // Rendered as a plain backend name it read as a statement of fact, and the
+    // only other clue was a small number ("Free 0.4 MB") that looks like a
+    // full disk rather than the wrong disk.  Seen on the bench 2026-08-11 and
+    // reported from the field.  A reboot usually clears it, which is worth
+    // saying out loud because the alternative is deciding not to fly.
+    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.backend == 0
+    // The BS sets flags bit 0 when its filesystem query succeeded.  It has been
+    // decoded since the frame was added and never once read, so an unmounted
+    // volume drew a normal-looking bar out of whatever total/used happened to be
+    // in the frame -- numbers that mean nothing.  Nothing will be logged in this
+    // state, which is worth more than a silent zero.
+    val bsUnmounted = isBaseStation && bs != null && !bs.mounted
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    subtitle,
+                    if (bsUnmounted) "Not mounted" else subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (bsOnFallbackFlash || bsUnmounted) tr.orientWarn
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (bsUnmounted) {
+                Text(
+                    "Base station storage is not mounted — nothing will be logged. " +
+                        "Power-cycle the base station.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tr.orientWarn,
+                )
+            } else if (bsOnFallbackFlash) {
+                Text(
+                    "External NAND not mounted — logging to internal flash. " +
+                        "Capacity is ~2 MB instead of 512 MB. Power-cycle the base " +
+                        "station before flying.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tr.orientWarn,
                 )
             }
             // Segment bar: used | reserved | free, weighted by bytes — the
@@ -1169,8 +1216,12 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
 
 /**
  * iOS SignalStrengthView twin: vertical bars for LoRa (BS links), GNSS
- * satellites, and BLE RSSI, value labels underneath.  Fill fraction uses the
- * same rough scaling ideas as iOS (RSSI −100..−30 dBm, sats 0..12).
+ * satellites, and BLE RSSI, value labels underneath.
+ *
+ * Fill fraction AND colour both come from [SignalQuality], which holds iOS's
+ * exact bands.  Both were wrong here: the bars used invented scales ("rough
+ * scaling ideas", per the comment this replaces) and a single hardcoded amber,
+ * so the green/yellow/orange/red grading iOS shows was missing entirely.
  */
 @Composable
 private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: Boolean) {
@@ -1185,18 +1236,21 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                 if (isBaseStation) {
                     val lora = telemetry.rssi
                     SignalBar(
-                        fraction = lora?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                        fraction = SignalQuality.loraFill(lora),
+                        quality = SignalQuality.forLoraRssi(lora),
                         value = lora?.let { String.format(Locale.ROOT, "%.0f", it) } ?: "——",
                         label = "LoRa",
                     )
                 }
                 SignalBar(
-                    fraction = (telemetry.numSats / 12f).coerceIn(0f, 1f),
+                    fraction = SignalQuality.satFill(telemetry.numSats),
+                    quality = SignalQuality.forSatCount(telemetry.numSats),
                     value = "${telemetry.numSats}",
                     label = "GNSS",
                 )
                 SignalBar(
-                    fraction = bleRssi?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                    fraction = SignalQuality.bleFill(bleRssi),
+                    quality = SignalQuality.forBleRssi(bleRssi),
                     value = bleRssi?.let { "$it" } ?: "——",
                     label = "BLE",
                 )
@@ -1206,8 +1260,22 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
 }
 
 @Composable
-private fun SignalBar(fraction: Float, value: String, label: String) {
+private fun SignalBar(
+    fraction: Float,
+    quality: SignalQuality,
+    value: String,
+    label: String,
+) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val fill = when (quality) {
+        SignalQuality.BEST -> tr.signalBest
+        SignalQuality.GOOD -> tr.signalGood
+        SignalQuality.FAIR -> tr.signalFair
+        SignalQuality.WEAK -> tr.signalWeak
+        SignalQuality.BAD -> tr.signalBad
+        // iOS returns .gray for a missing reading; statusIdle is that same gray.
+        SignalQuality.UNKNOWN -> tr.statusIdle
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1225,7 +1293,7 @@ private fun SignalBar(fraction: Float, value: String, label: String) {
                         .padding(bottom = 6.dp)
                         .width(24.dp)
                         .height((10 + 100 * fraction).dp)
-                        .background(tr.logging, RoundedCornerShape(12.dp)),
+                        .background(fill, RoundedCornerShape(12.dp)),
                 )
             }
         }
@@ -1237,11 +1305,36 @@ private fun SignalBar(fraction: Float, value: String, label: String) {
     }
 }
 
-/** iOS BatteryView twin: Charge / Voltage / Current row for the rocket. */
+/**
+ * iOS BatteryView twin: Charge / Voltage / Current, one row per pack.
+ *
+ * The base-station row is not decoration.  On a BS link the operator is
+ * holding the base station, and its own pack is the one that ends the session
+ * when it dies — the rocket's is relayed from something on the pad.  The BS
+ * sends bsoc/bvol/bcur in every telemetry frame and the decoder has always
+ * parsed them; only the row was missing, so the numbers arrived and were
+ * dropped on the floor (bench 2026-08-11: the console read
+ * "[BATT] 4.18 V | 98% SoC | 456 mA" while the card showed one Rocket row).
+ */
 @Composable
-private fun BatteryCard(telemetry: TelemetryData) {
+private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
     val caption = MaterialTheme.typography.bodySmall
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+
+    @Composable
+    fun row(label: String, charge: String, voltage: String, current: String) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(label, style = caption, modifier = Modifier.width(70.dp))
+            listOf(charge, voltage, current).forEach {
+                Text(
+                    it, style = caption.copy(fontFamily = mono),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Battery", style = MaterialTheme.typography.titleMedium)
@@ -1256,19 +1349,20 @@ private fun BatteryCard(telemetry: TelemetryData) {
                     )
                 }
             }
-            Row(Modifier.fillMaxWidth()) {
-                Text("Rocket", style = caption, modifier = Modifier.width(70.dp))
-                listOf(
-                    telemetry.socDisplay,
-                    telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
-                    telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
-                ).forEach {
-                    Text(
-                        it, style = caption.copy(fontFamily = mono),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            row(
+                "Rocket",
+                telemetry.socDisplay,
+                telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+            )
+            // iOS DashboardView.swift:1294 gates the same row the same way.
+            if (isBaseStation) {
+                row(
+                    "Base Stn",
+                    telemetry.bsSocDisplay,
+                    telemetry.bsVoltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                    telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+                )
             }
         }
     }
