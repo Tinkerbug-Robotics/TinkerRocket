@@ -88,7 +88,14 @@ def _baro_stats(records, pad_start_us, pad_end_us):
 
 
 def _mag_stats(records, pad_start_us, pad_end_us):
-    mag = records.get("MMC5983MA") or []
+    """Pad-phase magnetometer noise.
+
+    Read the magnetometer this board actually has. This looked only for the
+    MMC5983MA, which is the previous PCB revision's part and is absent from every
+    current log — so these statistics were silently missing from every real
+    flight rather than reported as zero or unavailable.
+    """
+    mag = records.get("IIS2MDC") or []
     if not mag:
         return {}
     mt = get_array(mag, "time_us")

@@ -67,6 +67,13 @@ DATASET_ID = "explore-data"
 _T_DP = 3
 _V_DP = 4
 
+# Except where a unit is enormous. A degree of latitude is 111 km, so the default
+# four decimals quantises a position to 11 m: on the sample flight that collapsed
+# 1,397 GNSS fixes into 21 distinct points, and plotting lat against lon drew a
+# staircase rather than a track. Seven decimals is 1.1 cm, comfortably finer than
+# any receiver, and costs about 40 kB on that flight.
+_V_DP_BY_KEY = {"GNSS.lat": 7, "GNSS.lon": 7}
+
 
 def _public(text: Optional[str]) -> Optional[str]:
     """A caution with its issue references removed.
@@ -83,7 +90,7 @@ def _public(text: Optional[str]) -> Optional[str]:
     return _SPACES.sub(" ", out).replace(" ,", ",").replace(" .", ".").strip()
 
 
-def _values(rows: list[dict], field: str, kind: str) -> list:
+def _values(rows: list[dict], field: str, kind: str, decimals: int = _V_DP) -> list:
     """One channel as int / float / None, ready to serialize.
 
     Kept as Python objects rather than a numpy array on purpose: run detection
@@ -102,7 +109,7 @@ def _values(rows: list[dict], field: str, kind: str) -> list:
             # Non-finite is not valid JSON and render.py serializes with
             # allow_nan=False, outside any error containment — one of these
             # would take down the whole document rather than one channel.
-            out.append(round(f, _V_DP) if f == f and abs(f) != float("inf") else None)
+            out.append(round(f, decimals) if f == f and abs(f) != float("inf") else None)
     return out
 
 
@@ -133,7 +140,8 @@ def _dataset(flight: Flight) -> Optional[dict[str, Any]]:
 
     channels: dict[str, Any] = {}
     for c in cat.channels:
-        vals = _values(recs[c.stream], c.field, c.meta.kind)
+        vals = _values(recs[c.stream], c.field, c.meta.kind,
+                       _V_DP_BY_KEY.get(c.key, _V_DP))
         entry: dict[str, Any] = {
             "stream": c.stream,
             "label": c.meta.label,
