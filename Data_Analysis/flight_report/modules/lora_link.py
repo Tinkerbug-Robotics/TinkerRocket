@@ -5,12 +5,12 @@ Three questions a flyer asks about telemetry, in order:
 1. Did the numbers arrive? The altitude the ground station saw, against the
    altitude the flight computer recorded. They are the same measurement taking
    two different routes, so where they diverge, packets were lost.
-2. Where did it go? The track as the ground station knew it — which is the track
-   you would have used to walk it down, gaps and all.
-3. Why did the link fade? Received strength against how far away the rocket was,
+2. Why did the link fade? Received strength against how far away the rocket was,
    with the low passes marked.
 
-That last one is the point of the section. Free-space loss alone predicts a
+The second is the point of the section. There is no ground track here: the 3D
+view at the top of the report already draws where the rocket went, from the same
+fixes and against imagery, and a flat repeat of it added nothing. Free-space loss alone predicts a
 smooth curve against range, and the measured points do not lie on one: the ones
 that fall short are the ones taken at a low look-angle, where the path grazes the
 ground and the direct ray arrives with a reflection on top of it. So the chart
@@ -133,70 +133,6 @@ def _altitude_chart(df) -> Optional[dict[str, Any]]:
     return spec
 
 
-def _track_chart(d, lat0, lon0, alt0) -> Optional[dict[str, Any]]:
-    """Ground track from telemetry, coloured by height, pad and landing called out.
-
-    Restricted to the flight. Before launch the rocket sits on the pad for
-    minutes and the receiver logs every wander of the fix, which draws a scribble
-    around the origin and a tail wherever the GNSS lost and regained lock — none
-    of it flight, all of it louder than the track itself.
-    """
-    fl = d[d["state"] == _IN_FLIGHT] if "state" in d.columns else d
-    if len(fl) < 2:
-        fl = d
-    east, north, up = _enu(fl, lat0, lon0, alt0)
-    if east.size < 2:
-        return None
-
-    # Height as colour: on a flat track it is the only way to tell the climb from
-    # the descent, and it shows at a glance how much of the ground distance was
-    # covered under the canopy.
-    t = trace(east, north, "Telemetered Track", COLORS[0], mode="lines+markers", size=6)
-    if not t:
-        return None
-    t["marker"] = {
-        "size": 6, "color": [round(float(v), 1) for v in up],
-        "colorscale": "Viridis", "showscale": True,
-        "colorbar": {"title": {"text": "Height (m)", "side": "right"},
-                     "thickness": 12, "len": 0.7},
-    }
-    t["line"] = {"width": 1, "color": "#bbbbbb"}
-    t["hovertemplate"] = "%{x:.0f} m E, %{y:.0f} m N<br>%{marker.color:.0f} m up<extra></extra>"
-    spec = chart("chart-lora-track", "Ground track, as received", [t],
-                 x_title="East of the pad", x_unit="m",
-                 y_title="Distance north", y_unit="m",
-                 height=460, equal_aspect=True)
-    if not spec:
-        return None
-
-    # The pad is the origin by construction; the landing is the last fix that
-    # arrived, which is the point a flyer actually walks to.
-    spec["layout"].setdefault("annotations", []).extend([
-        {"x": 0.0, "y": 0.0, "text": "Pad", "showarrow": True, "arrowhead": 0,
-         "ax": 0, "ay": -28, "font": {"size": 11, "color": "#2ca02c"}},
-        {"x": float(east[-1]), "y": float(north[-1]), "text": "Last fix received",
-         "showarrow": True, "arrowhead": 0, "ax": 0, "ay": -28,
-         "font": {"size": 11, "color": "#d62728"}},
-    ])
-    spec["layout"].setdefault("shapes", []).extend([
-        {"type": "circle", "x0": -4, "x1": 4, "y0": -4, "y1": 4,
-         "line": {"color": "#2ca02c", "width": 2}, "layer": "above"},
-        {"type": "circle", "x0": float(east[-1]) - 4, "x1": float(east[-1]) + 4,
-         "y0": float(north[-1]) - 4, "y1": float(north[-1]) + 4,
-         "line": {"color": "#d62728", "width": 2}, "layer": "above"},
-    ])
-    spec["layout"]["showlegend"] = False
-    dist = float(math.hypot(east[-1], north[-1]))
-    spec["note"] = (
-        f"The flight only, colored by height above the pad. Built from packets "
-        f"that arrived, so a long straight run between two points is a stretch "
-        f"where the link dropped rather than a straight piece of flying. The last "
-        f"fix received is {dist:,.0f} m from the pad — that is where the search "
-        f"starts if the rocket is not in sight."
-    )
-    return spec
-
-
 def _rssi_chart(d, lat0, lon0, alt0) -> tuple[Optional[dict[str, Any]], dict[str, Any]]:
     """Received strength against slant range, low look-angles picked out."""
     facts: dict[str, Any] = {}
@@ -271,7 +207,6 @@ def analyze(flight: Flight) -> AnalysisResult:
     d = _fixes(df)
     if d is not None:
         lat0, lon0, alt0 = _pad(d)
-        result.charts.append(_track_chart(d, lat0, lon0, alt0))
         rssi_spec, facts = _rssi_chart(d, lat0, lon0, alt0)
         result.charts.append(rssi_spec)
         if facts.get("n"):
