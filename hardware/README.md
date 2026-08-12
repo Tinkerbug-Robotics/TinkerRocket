@@ -17,6 +17,7 @@ complete sources must be available under the same licence.
 |---|---|---|
 | [`rocket-computer/`](rocket-computer/) | Flight computer + out computer, one board | `tinkerrocket-idf/projects/flight_computer` (ESP32-P4) and `.../out_computer` (ESP32-S3) |
 | [`base-station/`](base-station/) | Ground station | `tinkerrocket-idf/projects/base_station` |
+| [`base-station-mini/`](base-station-mini/) | Ground station, second design — forked from `base-station`, no ongoing link | — (none yet) |
 | [`lora-daughterboard/`](lora-daughterboard/) | Swappable UART radio module | `tinkerrocket-idf/projects/radio_board` |
 | [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | GNSS carrier, PX1105R, external antenna | — (module carrier) |
 | [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier, SAM-M10Q, high-voltage variant | — (module carrier) |
@@ -110,7 +111,7 @@ resolves them without depending on anyone's local KiCad setup:
 - [`symbols/Custom.kicad_sym`](symbols/Custom.kicad_sym) — 58 symbols
 - [`footprints/Footprints.pretty/`](footprints/Footprints.pretty/) — 60 footprints
 
-These are **only the parts these six boards use.** The shared libraries they
+These are **only the parts these seven boards use.** The shared libraries they
 came from hold 240 symbols and 288 footprints accumulated across every past
 design; carrying the unused ~75% into the repo would mean every future board
 inherits a junk drawer.
