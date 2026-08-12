@@ -173,7 +173,7 @@ _P(
     caution=
         "Firmware rejects any reading outside 3.0-9.0 V and re-logs the previous good sample, so a "
         "brownout shows up as a flat trace and then a gap, never as a low voltage.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "POWER.current", "Battery current",
@@ -185,7 +185,7 @@ _P(
         "Sign is inverted in firmware, so discharge reads negative and an all-negative trace is "
         "normal draw. The encoder clamps at +/-10000 mA, so a pyro firing above 10 A saturates flat "
         "instead of spiking.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "POWER.soc", "State of charge",
@@ -197,7 +197,7 @@ _P(
         "This is a piecewise-linear lookup of the same bus voltage against a 2S LiPo curve, not "
         "coulomb counting, so it sags and recovers with load. On any other supply it clamps: 5 V "
         "bench runs report a flat 0%.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 
 # The old-PCB magnetometer (message 0xA4, roughly 100 Hz), mutually exclusive with the new-PCB
@@ -212,7 +212,7 @@ _P(
     caution=
         "The standalone plotting script disables this figure marked \"X axis broken\", so treat X as "
         "suspect. It is also uncalibrated — no hard- or soft-iron correction is applied.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "MMC5983MA.mag_y", "Mag Y (rocket)",
@@ -223,7 +223,7 @@ _P(
     caution=
         "Uncalibrated: no hard-iron or soft-iron bias is removed, so the field magnitude will not "
         "match the local Earth field and any heading computed from it inherits that bias.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "MMC5983MA.mag_z", "Mag Z (rocket)",
@@ -235,7 +235,7 @@ _P(
     caution=
         "Uncalibrated like the other two axes — no bias or scale correction anywhere in the parser — "
         "so read it as a relative field trace, not an absolute measurement.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 
 # The OutComputer's own log-ring snapshot, emitted into the flight log about once a second
@@ -250,7 +250,7 @@ _P(
     caution=
         "This is the ring's runtime capacity, not the memory chip's size (130048 B on a 131072 B "
         "part), so a \"percent of chip used\" derived from it double-counts the reserved header.",
-    shown_in=("log_buffer",)
+    shown_in=()
 )
 _P(
     "LogBufferStats.ring_fill", "Ring fill",
@@ -260,7 +260,7 @@ _P(
     caution=
         "The flat plateau before launch is the pre-launch rolling window sitting at its firmware cap, "
         "not a stalled flush; activation releases the cap and fill drains to a few hundred bytes.",
-    shown_in=("log_buffer",)
+    shown_in=()
 )
 _P(
     "LogBufferStats.ring_highwater", "Ring high-water",
@@ -271,7 +271,7 @@ _P(
     caution=
         "Peak since the OutComputer booted, not since this flight — on a second flight of one power- "
         "up it arrives already elevated and may never move, so check it actually rose during the log.",
-    shown_in=("log_buffer",)
+    shown_in=()
 )
 _P(
     "LogBufferStats.ring_overruns", "Ring overruns",
@@ -320,7 +320,7 @@ _P(
         "Hard-iron calibration is applied inside the chip's offset registers before anything is "
         "logged, so a calibrated and an uncalibrated board produce records that look identical and "
         "nothing in the log says which you have.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "IIS2MDC.mag_y", "Mag Y (rocket)",
@@ -332,7 +332,7 @@ _P(
     caution=
         "Same hidden calibration state as mag_x: any hard-iron correction happened in the chip before "
         "logging, and the log carries no flag saying whether it did.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "IIS2MDC.mag_z", "Mag Z (rocket)",
@@ -343,7 +343,7 @@ _P(
     caution=
         "Any hard-iron calibration was applied in the chip's offset registers before logging, so the "
         "record cannot tell you whether the board was calibrated.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 
 # Bosch BMP585 barometer logging static pressure and die temperature at a measured ~495 Hz —
@@ -359,7 +359,7 @@ _P(
         "Firmware itself rejects barometer samples through the transonic window (a Mach lockout "
         "against EKF speed), so raw pressure there is data the flight computer refused to use. The "
         "ejection charge also puts a large transient on it.",
-    shown_in=("kinematics", "overview", "deployment", "launch_detection", "pyro_apogee", "kinematic_checks"),
+    shown_in=("overview", "deployment", "kinematic_checks"),
 )
 _P(
     "BMP585.temperature", "Barometer die temperature",
@@ -371,7 +371,7 @@ _P(
         "Not ambient air temperature — the die sits sealed in the airframe beside powered electronics "
         "and reads far above outside air (44-46 C on the pad). Do not use it for a density-altitude "
         "or lapse-rate correction.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 
 # Six-axis IMU (low-G accel, high-G accel, gyro) logged as raw counts at ~960 Hz and converted
@@ -386,7 +386,7 @@ _P(
     caution=
         "Rails at ±16 g; the −45° chip rotation smears the clipped value up to ~222 m/s² rather than "
         "a flat top, so read true peaks off high_acc_x.",
-    shown_in=("overview", "sensor_charts", "kinematics", "globe", "launch_detection"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "ISM6HG256.low_acc_y", "Low-G Accel Y (body)",
@@ -396,7 +396,7 @@ _P(
     caution=
         "Same ±16 g rail as X, and the −45° chip rotation gives a saturated stretch a ragged top "
         "rather than a flat one.",
-    shown_in=("overview", "sensor_charts", "kinematics", "globe", "launch_detection"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "ISM6HG256.low_acc_z", "Low-G Accel Z (body)",
@@ -407,7 +407,7 @@ _P(
     caution=
         "Rails at exactly ±16 g (±156.9 m/s²) — a trace sitting flat on that value is saturated, not "
         "measured.",
-    shown_in=("overview", "sensor_charts", "kinematics", "globe", "launch_detection"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "ISM6HG256.high_acc_x", "High-G Accel X (body)",
@@ -418,7 +418,7 @@ _P(
     caution=
         "16× coarser than low-G, so small accelerations here are mostly quantization. It is the only "
         "channel that reads correctly above ~16 g.",
-    shown_in=("overview", "kinematics", "globe", "launch_detection"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "ISM6HG256.high_acc_y", "High-G Accel Y (body)",
@@ -428,7 +428,7 @@ _P(
         "chain as the X axis.",
     caution=
         "About 0.077 m/s² per count — a quiet stretch here is quantization noise, not vehicle motion.",
-    shown_in=("overview", "kinematics", "globe", "launch_detection"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "ISM6HG256.high_acc_z", "High-G Accel Z (body)",
@@ -438,7 +438,7 @@ _P(
         "chain as the other high-G axes.",
     caution=
         "About 0.077 m/s² per count — a quiet stretch here is quantization noise, not vehicle motion.",
-    shown_in=("overview", "kinematics", "globe", "launch_detection"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "ISM6HG256.gyro_x", "Gyro X (roll rate)",
@@ -449,7 +449,7 @@ _P(
     caution=
         "A roll RATE, not the roll ANGLE in NonSensor.roll (a ZYX-Euler angle, #514) — never overlay "
         "or difference the two. Rails at ±4000 dps on a fast spin.",
-    shown_in=("sensor_charts", "kinematics", "roll", "roll_pid"),
+    shown_in=("roll", "roll_pid"),
 )
 _P(
     "ISM6HG256.gyro_y", "Gyro Y (body)",
@@ -460,7 +460,7 @@ _P(
     caution=
         "A rate in °/s, not the NonSensor pitch angle — the two are not comparable. Saturates at the "
         "same ±4000 dps full scale as the other gyro axes.",
-    shown_in=("sensor_charts", "kinematics"),
+    shown_in=(),
 )
 _P(
     "ISM6HG256.gyro_z", "Gyro Z (body)",
@@ -471,7 +471,7 @@ _P(
     caution=
         "A rate in °/s, not the NonSensor yaw/azimuth angle — do not plot them together. Saturates at "
         "the same ±4000 dps full scale as the other gyro axes.",
-    shown_in=("sensor_charts", "kinematics"),
+    shown_in=(),
 )
 
 # u-blox NAV-PVT solutions read over serial at roughly 18 Hz and timestamped with the flight
@@ -529,7 +529,7 @@ _P(
         "A 0 is not only \"no satellites\" — the driver zeroes it whenever the receiver flags the fix "
         "invalid, which is also how u-blox signals a COCOM speed/altitude violation (#562). Sat count "
         "can stay high there.",
-    shown_in=("gnss_staleness",)
+    shown_in=()
 )
 _P(
     "GNSS.num_sats", "Satellites used",
@@ -538,7 +538,7 @@ _P(
     caution=
         "A healthy count can sit on top of a rejected fix: fix_mode can be forced to 0 while the sat "
         "count stays in the teens, so read the two together.",
-    shown_in=("gnss_staleness", "globe", "kinematics"),
+    shown_in=("globe"),
 )
 _P(
     "GNSS.pdop", "PDOP",
@@ -557,7 +557,7 @@ _P(
     caution=
         "Before the first fix the receiver reports 0/0. Mask on latitude and longitude both being "
         "zero, or the track is dragged to the Gulf of Guinea.",
-    shown_in=("globe", "deployment", "kinematics", "sensor_charts"),
+    shown_in=("globe", "deployment"),
 )
 _P(
     "GNSS.lon", "Longitude",
@@ -566,7 +566,7 @@ _P(
     caution=
         "Same 0/0 pre-fix sentinel as latitude; test both coordinates together so a genuine equator "
         "or prime-meridian fix is not thrown away.",
-    shown_in=("globe", "deployment", "kinematics", "sensor_charts"),
+    shown_in=("globe", "deployment"),
 )
 _P(
     "GNSS.alt_m", "Altitude (MSL)",
@@ -575,7 +575,7 @@ _P(
     caution=
         "MSL, not above-ground and not ellipsoidal: it sits at field elevation and will not line up "
         "with the barometric trace until you subtract a pad reference.",
-    shown_in=("overview", "globe", "deployment", "kinematics"),
+    shown_in=("overview", "globe", "deployment"),
 )
 _P(
     "GNSS.vel_e", "Velocity East",
@@ -586,7 +586,7 @@ _P(
     caution=
         "This is the receiver's own Doppler solution, independent of the EKF's e_vel; the two share "
         "an axis in the velocity charts but are not interchangeable.",
-    shown_in=("overview", "kinematics"),
+    shown_in=("overview"),
 )
 _P(
     "GNSS.vel_n", "Velocity North",
@@ -597,7 +597,7 @@ _P(
     caution=
         "Comes from the receiver's Doppler solution, not the nav filter — agreement with the EKF's "
         "n_vel is a cross-check, not a given, and one cannot stand in for the other.",
-    shown_in=("overview", "kinematics"),
+    shown_in=("overview"),
 )
 _P(
     "GNSS.vel_u", "Velocity Up",
@@ -608,7 +608,7 @@ _P(
     caution=
         "Receiver Doppler, not the EKF's u_vel, and not a substitute for it. Trusted over the "
         "barometric apogee peak, which lags it by 0.3-1.3 s (#112) — do not correct one to the other.",
-    shown_in=("overview", "kinematics", "apogee"),
+    shown_in=("overview", "apogee"),
 )
 _P(
     "GNSS.h_acc_m", "GNSS horizontal accuracy",
@@ -629,7 +629,7 @@ _P(
     caution=
         "It is 0 for entire flights on some logs, which collapses the band onto the altitude line — "
         "an apparently tight band can mean no estimate was recorded at all.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 
 # Flight-computer proportional-navigation telemetry (GUIDANCE_TELEM_MSG 0xCA), emitted only
@@ -766,7 +766,7 @@ _P(
         "Not the iOS app CSV's \"Roll\" column (that is body-Z azimuth) and not what the roll "
         "controller regulates — roll/roll_pid rebuild their own \"EKF Roll\" from the quaternion "
         "(#514). Never mix the two.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "NonSensor.pitch", "Euler pitch (ZYX)",
@@ -775,7 +775,7 @@ _P(
     caution=
         "A near-vertical rocket sits at |pitch| near 90 deg, exactly the ZYX gimbal-lock singularity: "
         "roll and yaw go ill-conditioned and can jump 180 deg during boost.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "NonSensor.yaw", "Euler yaw (ZYX)",
@@ -784,7 +784,7 @@ _P(
     caution=
         "A nav-frame heading out of the EKF, not a magnetic heading, and it shares pitch's boost- "
         "phase gimbal-lock problem.",
-    shown_in=("kinematics",)
+    shown_in=()
 )
 _P(
     "NonSensor.roll_cmd", "Roll fin command",
@@ -795,7 +795,7 @@ _P(
     caution=
         "A fin deflection, not a commanded roll angle — the target angle exists only in the .json "
         "sidecar. Identically 0.0 when roll control is inactive.",
-    shown_in=("roll", "roll_pid", "guidance", "kinematics"),
+    shown_in=("roll", "roll_pid", "guidance"),
 )
 _P(
     "NonSensor.e_pos", "EKF position East",
@@ -804,7 +804,7 @@ _P(
     caution=
         "The ENU origin is NOT in the log — globe re-derives it from the GNSS pad fixes and publishes "
         "originResidualM. Any lat/lon computed from e/n is only as good as that reconstruction.",
-    shown_in=("globe", "sensor_charts", "kinematics", "guidance"),
+    shown_in=("globe", "guidance"),
 )
 _P(
     "NonSensor.n_pos", "EKF position North",
@@ -815,7 +815,7 @@ _P(
         "The frame's origin is absent from the log; globe reconstructs it from the pad fixes and "
         "reports the fit as originResidualM, so northings are relative to an estimate, not a surveyed "
         "point.",
-    shown_in=("globe", "sensor_charts", "kinematics", "guidance"),
+    shown_in=("globe", "guidance"),
 )
 _P(
     "NonSensor.u_pos", "EKF altitude (Up)",
@@ -826,19 +826,19 @@ _P(
     caution=
         "AGL against the EKF's own pad reference, not the barometric AGL behind the summary, apogee "
         "and deployment numbers. In #741 the two sit ~81 m apart at landing.",
-    shown_in=("overview", "globe", "sensor_charts", "kinematics"),
+    shown_in=("overview", "globe"),
 )
 _P(
     "NonSensor.e_vel", "EKF velocity East",
     unit="m/s",
     note="EKF East velocity; logged in cm/s and scaled to m/s.",
-    shown_in=("overview", "kinematics", "roll_pid"),
+    shown_in=("overview", "roll_pid"),
 )
 _P(
     "NonSensor.n_vel", "EKF velocity North",
     unit="m/s",
     note="EKF North velocity; logged in cm/s and scaled to m/s.",
-    shown_in=("overview", "kinematics", "roll_pid"),
+    shown_in=("overview", "roll_pid"),
 )
 _P(
     "NonSensor.u_vel", "EKF velocity Up",
@@ -848,7 +848,7 @@ _P(
         "summary card's max speed.",
     caution=
         "Not baro_alt_rate, which is the barometer-only filtered rate the apogee detector votes on.",
-    shown_in=("overview", "kinematics", "roll_pid"),
+    shown_in=("overview", "roll_pid"),
 )
 _P(
     "NonSensor.flags", "Flight flag byte",
@@ -857,7 +857,7 @@ _P(
     caution=
         "Bit 7 (simulated-flight active) is decoded into no field, so a hardware-in-the-loop sim run "
         "is indistinguishable from a real flight unless you mask flags & 0x80 yourself.",
-    derived_in=("launch_detection", "pyro_apogee",),
+    derived_in=(),
 )
 _P(
     "NonSensor.rocket_state", "Rocket state",
@@ -866,7 +866,7 @@ _P(
     caution=
         "An integer code, not a measurement — interpolating or averaging it is a category error. "
         "Several repo logs never leave PRELAUNCH, so a flat line can be a real result.",
-    shown_in=("sensor_charts", "kinematics"),
+    shown_in=(),
 )
 _P(
     "NonSensor.baro_alt_rate", "Barometric climb rate",
@@ -875,9 +875,9 @@ _P(
         "The flight computer's KF-filtered barometric climb rate; logged in decimetres/s and scaled "
         "to m/s.",
     caution=
-        "Not u_vel and not a derivative of u_pos. launch_detection's \"baro alt rate\" panel is a "
-        "different series, re-derived by differencing BMP585 pressure altitude.",
-    shown_in=("kinematics",)
+        "Not u_vel, and not a derivative of u_pos: this is the flight computer's own filtered "
+        "climb rate, so it will not match a rate you difference out of the barometric altitude.",
+    shown_in=()
 )
 _P(
     "NonSensor.alt_landed", "Landing declared",
@@ -888,7 +888,7 @@ _P(
     caution=
         "The firmware's declaration, not the true touchdown instant — deployment's descent-rate "
         "window ends here, so a late declaration stretches it.",
-    shown_in=("overview", "sensor_charts", "roll", "deployment", "apogee", "kinematics", "pyro_apogee", "globe"),
+    shown_in=("overview", "roll", "deployment", "apogee", "globe"),
 )
 _P(
     "NonSensor.alt_apogee", "Apogee vote (baro)",
@@ -899,7 +899,7 @@ _P(
     caution=
         "One detector's vote, not the master call that fires the charge — that is apogee_flag, and "
         "baro usually votes first. Pyro delays measured against this are overstated.",
-    shown_in=("overview", "sensor_charts", "roll", "stability", "deployment", "kinematics", "pyro_apogee", "globe"),
+    shown_in=("overview", "roll", "stability", "deployment", "globe"),
 )
 _P(
     "NonSensor.vel_apogee", "Apogee vote (velocity)",
@@ -908,7 +908,7 @@ _P(
     caution=
         "Only one detector's opinion. The call that actually arms the ejection charge is apogee_flag, "
         "so timing a pyro against this vote overstates the delay.",
-    shown_in=("pyro_apogee",)
+    shown_in=()
 )
 _P(
     "NonSensor.launch", "Launch detected",
@@ -917,15 +917,17 @@ _P(
         "Set when the firmware detects launch; its first true is the t=0 for nearly every window in "
         "the report.",
     caution=
-        "If it never fires, every launch-relative window silently falls back to the whole log — "
-        "launch_detection exists to catch that and warns when the accelerometer disagrees.",
-    shown_in=("overview", "sensor_charts", "roll", "stability", "gaps", "kinematics", "pyro_apogee", "globe"),
+        "The declaration, not the moment of first motion — it latches once the detector is "
+        "confident, which on the sample flight is 0.20 s after the motor lit. Every time the "
+        "report quotes is measured off the accelerometer instead; this flag only bounds chart "
+        "windows, and where it never fires those windows open to the whole log.",
+    shown_in=("overview", "roll", "stability", "gaps", "globe"),
 )
 _P(
     "NonSensor.burnout", "Burnout detected",
     kind=KIND_BOOL,
     note="Set at motor burnout; bounds motor's burn-time and tilt-at-burnout metrics.",
-    shown_in=("overview", "sensor_charts", "roll", "stability"),
+    shown_in=("overview", "roll", "stability"),
 )
 _P(
     "NonSensor.guidance", "Guidance active",
@@ -961,7 +963,7 @@ _P(
     caution=
         "Timestamped at the channel's state-to-Done transition, roughly 510 ms after the master "
         "apogee call, not the command instant. Forced False on 42-byte logs.",
-    shown_in=("apogee", "pyro_apogee"),
+    shown_in=("apogee"),
 )
 _P(
     "NonSensor.pyro2_cont", "Pyro 2 continuity",
@@ -979,7 +981,7 @@ _P(
     caution=
         "Marks the state-to-Done transition about half a second after the master apogee call, not the "
         "fire command. Reads False on 42-byte logs, where nothing was recorded.",
-    shown_in=("apogee", "pyro_apogee"),
+    shown_in=("apogee"),
 )
 _P(
     "NonSensor.pyro3_cont", "Pyro 3 continuity",
@@ -1053,7 +1055,7 @@ _P(
     caution=
         "One detector's vote, not the master call that fires the charge (apogee_flag). Meaningless "
         "unless has_apogee_flags is true.",
-    shown_in=("pyro_apogee",)
+    shown_in=()
 )
 _P(
     "NonSensor.pitch_apogee", "Apogee vote (pitch)",
@@ -1070,7 +1072,7 @@ _P(
     caution=
         "Nothing in the report plots it: apogee's \"Master apogee\" line comes from the replay's "
         "simulated fires. Do not confuse it with alt_apogee, which is only the baro detector's vote.",
-    shown_in=("roll_pid", "roll", "apogee", "pyro_apogee"),
+    shown_in=("roll_pid", "roll", "apogee"),
 )
 _P(
     "NonSensor.reboot_recovery", "Reboot recovery",

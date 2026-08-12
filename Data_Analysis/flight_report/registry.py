@@ -48,7 +48,14 @@ LEVELS = (LEVEL_FLIGHT,)
 
 
 def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
-    """Import each module and collect its `analyze` function. Order = report order."""
+    """Import each module and collect its `analyze` function. Order = report order.
+
+    Only modules that appear in the table below are imported. `modules/` also
+    holds `guidance.py`, which is not: no committed log carries a guidance frame,
+    so at flight level it would print "not a guidance flight" on every report. It
+    is kept as an offline tool because it derives engage and cutoff conditions
+    that its standalone script does not — import it by hand to use it.
+    """
     from .modules import (
         overview,
         deployment,
@@ -65,17 +72,9 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         parser_stats,
         timing,
         settings,
-        kinematics,
         gaps,
-        launch_detection,
-        pyro_apogee,
-        sensor_noise,
-        gnss_staleness,
         kinematic_checks,
         roll_pid,
-        guidance,
-        lora,
-        log_buffer,
         timestamps,
     )
 
