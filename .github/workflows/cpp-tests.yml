@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # TR_GuidancePN is marked `update = none` in .gitmodules so recursive
       # clones (Xcode Cloud, casual `--recurse-submodules`) skip the private
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # See the cpp-tests job above — same private-submodule handling (#255).
       - name: Check out private TR_GuidancePN (trusted branches only)
@@ -76,7 +76,7 @@ jobs:
           git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
             submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 

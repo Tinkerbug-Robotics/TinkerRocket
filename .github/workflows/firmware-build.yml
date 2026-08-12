@@ -30,7 +30,7 @@ jobs:
           - radio_board
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # TR_GuidancePN is a private submodule marked `update = none` in
       # .gitmodules so recursive clones (Xcode Cloud, casual

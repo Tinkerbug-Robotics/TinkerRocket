@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # TR_GuidancePN is a private submodule marked `update = none` in
       # .gitmodules so recursive clones (Xcode Cloud, casual
@@ -48,7 +48,7 @@ jobs:
           git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
             submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
 
