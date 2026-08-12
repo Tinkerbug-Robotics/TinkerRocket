@@ -974,17 +974,29 @@ internal fun StorageCard(
     val usedColor = tr.logging
     val reservedColor = tr.statusIdle
     val freeColor = tr.scan
-    // backend 0 = the internal SPIFFS partition.  On a base station that is a
-    // FALLBACK, not a configuration: the board carries a 512 MB NAND, and the
-    // firmware demotes to internal flash for the whole boot if any step of the
-    // NAND bring-up fails -- then keeps logging, into ~2 MB instead of 512.
+    // The base station demotes to the ~2 MB internal SPIFFS partition for the
+    // whole boot if any step of its NAND bring-up fails -- then keeps logging,
+    // into 2 MB instead of 512.  Rendered as a plain backend name that read as
+    // a statement of fact, and the only other clue was a small number
+    // ("Free 0.4 MB") that looks like a full disk rather than the wrong disk.
+    // Seen on the bench 2026-08-11 and reported from the field.  A reboot
+    // usually clears it, which is worth saying out loud because the alternative
+    // is deciding not to fly.
     //
-    // Rendered as a plain backend name it read as a statement of fact, and the
-    // only other clue was a small number ("Free 0.4 MB") that looks like a
-    // full disk rather than the wrong disk.  Seen on the bench 2026-08-11 and
-    // reported from the field.  A reboot usually clears it, which is worth
-    // saying out loud because the alternative is deciding not to fly.
-    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.backend == 0
+    // #761: take this from the firmware's BSS_FLAG_FALLBACK bit rather than
+    // inferring it from `backend == 0`.  The backend field says where logging
+    // ended up; only the firmware knows whether somewhere better was expected
+    // and lost, which is the thing worth warning about.
+    //
+    // The `backend == 0` arm is retained purely for base stations running
+    // firmware older than #761, which never sets the bit -- the app updates
+    // independently of firmware, so dropping it would silently retire the
+    // warning on exactly the units most likely to need it.  It is sound for
+    // every board that exists today (V1 has an SD slot, V2/V3 a NAND, so
+    // SPIFFS is never the intended backend); delete it once a board ships
+    // where internal flash IS the design, and the bit alone is correct.
+    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 &&
+        (bs.fallback || bs.backend == 0)
     // The BS sets flags bit 0 when its filesystem query succeeded.  It has been
     // decoded since the frame was added and never once read, so an unmounted
     // volume drew a normal-looking bar out of whatever total/used happened to be
