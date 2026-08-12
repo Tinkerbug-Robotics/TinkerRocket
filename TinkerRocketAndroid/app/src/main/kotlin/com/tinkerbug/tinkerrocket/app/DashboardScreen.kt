@@ -984,18 +984,31 @@ internal fun StorageCard(
     // reported from the field.  A reboot usually clears it, which is worth
     // saying out loud because the alternative is deciding not to fly.
     val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.backend == 0
+    // The BS sets flags bit 0 when its filesystem query succeeded.  It has been
+    // decoded since the frame was added and never once read, so an unmounted
+    // volume drew a normal-looking bar out of whatever total/used happened to be
+    // in the frame -- numbers that mean nothing.  Nothing will be logged in this
+    // state, which is worth more than a silent zero.
+    val bsUnmounted = isBaseStation && bs != null && !bs.mounted
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    subtitle,
+                    if (bsUnmounted) "Not mounted" else subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (bsOnFallbackFlash) tr.orientWarn
+                    color = if (bsOnFallbackFlash || bsUnmounted) tr.orientWarn
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (bsOnFallbackFlash) {
+            if (bsUnmounted) {
+                Text(
+                    "Base station storage is not mounted — nothing will be logged. " +
+                        "Power-cycle the base station.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tr.orientWarn,
+                )
+            } else if (bsOnFallbackFlash) {
                 Text(
                     "External NAND not mounted — logging to internal flash. " +
                         "Capacity is ~2 MB instead of 512 MB. Power-cycle the base " +
