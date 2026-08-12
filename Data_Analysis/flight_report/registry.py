@@ -51,6 +51,12 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         sample_rates,
         stability,
         health,
+        rocket_state,
+        barometer,
+        lora_link,
+        parser_stats,
+        timing,
+        settings,
         kinematics,
         gaps,
         launch_detection,
@@ -75,12 +81,24 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # say nothing about, and on a roll-control flight it is the whole story.
         ("roll",              roll.analyze,              LEVEL_FLIGHT),
         ("apogee",            apogee.analyze,            LEVEL_FLIGHT),
+        # Straight after the detectors: this is where their votes land, and the
+        # step out of coast is the master flag latching.
+        ("rocket_state",      rocket_state.analyze,      LEVEL_FLIGHT),
         ("stability",         stability.analyze,         LEVEL_FLIGHT),
         # Late, but on the flight report rather than only in the detailed one:
         # a sensor that logged short makes every number above it thinner than
         # it looks, so it belongs where the numbers are read.
         ("sample_rates",      sample_rates.analyze,      LEVEL_FLIGHT),
         ("health",            health.analyze,            LEVEL_FLIGHT),
+        # The tail of the report: what happened after the charge fired, then the
+        # raw signal behind every altitude, then the radio, then the record of
+        # the record itself. Reference rather than reading, in that order.
+        ("deployment",        deployment.analyze,        LEVEL_FLIGHT),
+        ("barometer",         barometer.analyze,         LEVEL_FLIGHT),
+        ("lora_link",         lora_link.analyze,         LEVEL_FLIGHT),
+        ("parser_stats",      parser_stats.analyze,      LEVEL_FLIGHT),
+        ("timing",            timing.analyze,            LEVEL_FLIGHT),
+        ("settings",          settings.analyze,          LEVEL_FLIGHT),
         ("sensor_charts",     overview.analyze_sensors,  LEVEL_DETAILED),
         ("kinematics",        kinematics.analyze,        LEVEL_DETAILED),
         ("gaps",              gaps.analyze,              LEVEL_DETAILED),
@@ -91,7 +109,6 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # still draws with no network (it degrades to graph paper with the track
         # on it), so it lives with the rest of the diagnostic set rather than
         # duplicating the globe in the flight report.
-        ("deployment",        deployment.analyze,        LEVEL_DETAILED),
         ("pyro_apogee",       pyro_apogee.analyze,       LEVEL_DETAILED),
         ("sensor_noise",      sensor_noise.analyze,      LEVEL_DETAILED),
         ("gnss_staleness",    gnss_staleness.analyze,    LEVEL_DETAILED),

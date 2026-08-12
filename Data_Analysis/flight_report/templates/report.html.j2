@@ -207,34 +207,6 @@
   </ul>
 </div>
 
-{% if show_raw_detail %}
-<h2 id="settings">Settings snapshot</h2>
-{% if settings_groups %}
-<p class="settings-note">
-  How the flight computer was configured for this flight. Measured results are in
-  the flight report, not here.
-</p>
-<div class="settings">
-  {% for g in settings_groups %}
-  <div class="settings-group">
-    <h3>{{ g.name.replace("_", " ") }}</h3>
-    <table class="metrics">
-      <tbody>
-      {% for k, v in g.rows %}
-        <tr><td>{{ k }}</td><td class="num">{{ v }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endfor %}
-</div>
-{% elif sidecar %}
-<p>The .json sidecar has no <code>settings</code> block.</p>
-{% else %}
-<p>No .json sidecar found.</p>
-{% endif %}
-{% endif %}
-
 {% for s in sections %}
 <h2 id="{{ s.name }}">{{ s.title }}</h2>
 
@@ -315,30 +287,6 @@
 {% endif %}
 {% endfor %}
 
-{% if show_raw_detail %}
-<h2 id="parser">Parser stats</h2>
-<table class="metrics">
-  <thead><tr><th>Field</th><th>Value</th></tr></thead>
-  <tbody>
-    <tr><td>File size</td><td class="num">{{ "{:,}".format(stats.get('file_size', 0)) }} bytes</td></tr>
-    <tr><td>Total frames</td><td class="num">{{ "{:,}".format(stats.get('total_frames', 0)) }}</td></tr>
-    <tr><td>Good CRC</td><td class="num">{{ "{:,}".format(stats.get('good_crc', 0)) }}</td></tr>
-    <tr><td>Bad CRC</td><td class="num">{{ "{:,}".format(stats.get('bad_crc', 0)) }}</td></tr>
-  </tbody>
-</table>
-
-<h3>Message counts</h3>
-<table class="metrics">
-  <tbody>
-  {% for name, count in stats.get('type_counts', {}).items() | sort(attribute=1, reverse=True) %}
-    <tr><td>{{ name }}</td><td class="num">{{ "{:,}".format(count) }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-
-<h3>Sensor configuration</h3>
-<pre>{{ config | tojson(indent=2) }}</pre>
-{% endif %}
 
 {% if has_maps %}
 <style>
@@ -893,10 +841,16 @@
      Values render in SI and are converted in place, so one file serves both
      systems and switching costs no regeneration. */
   var CONV = {
-    "m":     {f: 3.280839895, label: "ft",    places: 0},
-    "km":    {f: 0.621371192, label: "mi",    places: 2},
-    "m/s":   {f: 2.236936292, label: "mph",   places: 1},
-    "m/s²": {f: 3.280839895, label: "ft/s²", places: 1}
+    "m":       {f: 3.280839895, label: "ft",    places: 0},
+    "km":      {f: 0.621371192, label: "mi",    places: 2},
+    "m/s":     {f: 2.236936292, label: "mph",   places: 1},
+    /* Vertical rates read in ft/s, not mph — a descent rate is compared against
+       a canopy's rated sink rate, which every chart and table quotes in ft/s.
+       Quantity emits data-conv="m/s:fps" alongside data-unit="m/s" to ask for
+       this; without the entry below the lookup fell through to "m/s" and the
+       report showed a descent rate in mph. */
+    "m/s:fps": {f: 3.280839895, label: "ft/s",  places: 1},
+    "m/s²":   {f: 3.280839895, label: "ft/s²", places: 1}
   };
   var imperial = false;
   var charts = [];   // {gd, spec, range} registered as each one is plotted
@@ -913,7 +867,10 @@
       var unit = el.dataset.unit;
       var places = parseInt(el.dataset.places, 10) || 0;
       var suffix = el.dataset.suffix || "";
-      var c = imperial ? CONV[unit] : null;
+      /* data-conv overrides data-unit when a value wants a different imperial
+         target than its SI unit implies. The metric branch still prints
+         data-unit, so the SI label stays "m/s" rather than the lookup key. */
+      var c = imperial ? (CONV[el.dataset.conv] || CONV[unit]) : null;
       el.textContent = c
         ? fmt(si * c.f, c.places) + " " + c.label + suffix
         : fmt(si, places) + " " + unit + suffix;
