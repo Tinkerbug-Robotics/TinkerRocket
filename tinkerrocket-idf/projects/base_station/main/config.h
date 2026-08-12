@@ -104,6 +104,29 @@ struct config : board_pins
     // flags (HAS_EXT_NAND / HAS_SDMMC) are in the board headers. Both mount as
     // FAT behind SD_MOUNT_POINT, so the logging code is backend-agnostic.
 
+    // NAND bring-up (#761).  A single failed probe used to demote the whole
+    // boot to the ~1.9 MB internal SPIFFS partition — 512 MB of flight log
+    // traded for 1.9 MB on one transient error, and a flight logged there
+    // truncates.  Retry the full bring-up (bus -> device -> reset -> probe ->
+    // FAT) a bounded number of times before giving up.  Kept short on purpose:
+    // the worst case adds well under half a second to boot.
+    static constexpr uint8_t  NAND_MOUNT_ATTEMPTS       = 3;
+    static constexpr uint32_t NAND_MOUNT_RETRY_DELAY_MS = 25;
+    // Settle time before the first command of an attempt.  Covers tPOR on a
+    // genuinely cold rail; on a warm boot it is just cheap insurance.
+    static constexpr uint32_t NAND_SETTLE_MS            = 5;
+    // Ceiling on the post-RESET ready poll.  Worst-case tRST on this class of
+    // part (RESET issued during a block erase) is sub-millisecond, so this is
+    // ~100x margin — sized so an absent chip holding MISO high fails fast
+    // instead of stalling the boot.
+    static constexpr uint32_t NAND_READY_TIMEOUT_MS     = 50;
+    // Bring-up SPI clock. 20 MHz is already deliberately conservative for a
+    // part rated 166 MHz. The last attempt drops to half that: if a unit only
+    // ever comes up on the fallback clock, the answer is signal integrity, not
+    // timing — and half-speed NAND still beats a 1.9 MB partition.
+    static constexpr uint32_t NAND_CLOCK_HZ             = 20 * 1000 * 1000;
+    static constexpr uint32_t NAND_CLOCK_FALLBACK_HZ    = 10 * 1000 * 1000;
+
     // --- LoRa CSV Logging ---
     // Close the log after 5 min of no rocket packets.  Long enough to ride
     // through the worst-case altitude RX dropout on an Estes-class flight

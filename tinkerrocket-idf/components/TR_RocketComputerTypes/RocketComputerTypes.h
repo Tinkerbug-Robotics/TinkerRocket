@@ -1166,10 +1166,27 @@ typedef struct __attribute__((packed))
     uint64_t used_bytes;
     uint64_t free_bytes;
     uint8_t  backend;   // 0 = SPIFFS, 1 = SD/FAT, 2 = ext-NAND/FAT
-    uint8_t  flags;     // bit0 = filesystem mounted
+    uint8_t  flags;     // see BSS_FLAG_* below
 } BaseStationStorageStatsData;
 static_assert(sizeof(BaseStationStorageStatsData) == 26,
               "BaseStationStorageStatsData must be 26 bytes");
+
+// BaseStationStorageStatsData.flags bits.  Wire-compatible in the same way as
+// RSS_FLAG_*: the app ignores unknown bits, so new flags don't bump the format.
+static constexpr uint8_t BSS_FLAG_MOUNTED = (1u << 0);  // filesystem mounted
+// #761: this board is fitted with primary storage (SPI NAND or an SD slot) but
+// its bring-up failed at boot, so the whole session is logging to the ~1.9 MB
+// internal SPIFFS partition instead of 512 MB.  `backend` alone can't say this
+// — it reports where we ended up, not that somewhere better was expected and
+// lost — and on a V1 board SPIFFS is a legitimate resting place.  A flight
+// logged under this bit truncates; the app must say so, not show a neutral
+// backend name next to a nearly-full bar.
+static constexpr uint8_t BSS_FLAG_FALLBACK = (1u << 1);
+// #761: primary storage IS up, but only after one or more bring-up attempts
+// failed and were retried.  Healthy for this boot and not worth alarming over,
+// but a unit that sets this every boot is on its way to setting
+// BSS_FLAG_FALLBACK, so it is worth surfacing somewhere quiet.
+static constexpr uint8_t BSS_FLAG_RETRIED  = (1u << 2);
 
 // MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
 // int32_t in the same 18-bit signed centered-counts space as
