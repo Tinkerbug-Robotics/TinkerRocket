@@ -1315,9 +1315,18 @@ struct StorageBarView: View {
         Group {
             if device.isBaseStation {
                 if let s = device.bsStorage, s.totalBytes > 0 {
-                    card(title: "Base Station Storage", subtitle: s.backendName,
+                    // #761 / #760 (Android): the base station demotes to the
+                    // ~2 MB internal SPIFFS partition for the whole boot if any
+                    // step of its NAND bring-up fails — then keeps logging, into
+                    // 2 MB instead of 512. Rendered as a plain backend name that
+                    // read as a statement of fact, and the only other clue was a
+                    // small number ("Free 0.4 MB") that looks like a full disk
+                    // rather than the wrong disk.
+                    card(title: "Base Station Storage",
+                         subtitle: s.mounted ? s.backendName : "Not mounted",
                          used: s.usedBytes, reserved: s.reservedBytes, free: s.freeBytes,
-                         total: s.totalBytes)
+                         total: s.totalBytes,
+                         fallback: s.fallback, unmounted: !s.mounted)
                 }
             } else if let s = device.rocketStorage, s.initialized {
                 card(title: "Rocket Storage",
@@ -1331,12 +1340,29 @@ struct StorageBarView: View {
 
     private func card(title: String, subtitle: String,
                       used: Int, reserved: Int, free: Int, total: Int,
-                      autoEvicted: Bool = false) -> some View {
+                      autoEvicted: Bool = false,
+                      fallback: Bool = false, unmounted: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title).font(.headline)
                 Spacer()
-                Text(subtitle).font(.caption).foregroundColor(.secondary)
+                Text(subtitle).font(.caption)
+                    .foregroundColor(fallback || unmounted ? .orange : .secondary)
+            }
+            // The base station sets flags bit0 when its filesystem query
+            // succeeded. It had been decoded and never once read, so an
+            // unmounted volume drew a normal-looking bar out of whatever
+            // total/used happened to be in the frame — numbers that mean
+            // nothing. Nothing is being logged in this state.
+            if unmounted {
+                warning("Base station storage is not mounted — nothing will be "
+                        + "logged. Power-cycle the base station.")
+            } else if fallback {
+                // A reboot usually clears it, which is worth saying out loud
+                // because the alternative is deciding not to fly.
+                warning("External NAND not mounted — logging to internal flash. "
+                        + "Capacity is ~2 MB instead of 512 MB. Power-cycle the "
+                        + "base station before flying.")
             }
             StorageSegmentBar(used: used, reserved: reserved, free: free, total: total)
             HStack(spacing: 14) {
@@ -1361,6 +1387,13 @@ struct StorageBarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemGray6))
         .cornerRadius(10)
+    }
+
+    private func warning(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundColor(.orange)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func legend(_ color: Color, _ label: String, _ bytes: Int) -> some View {
