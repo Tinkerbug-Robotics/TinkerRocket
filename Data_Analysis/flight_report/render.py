@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 _VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Charts smaller than this stay as plain JSON; see _chart_payload.
 _GZIP_THRESHOLD_BYTES = 64 * 1024
@@ -130,6 +131,16 @@ def _read_vendor(name: str) -> str:
         return ""
 
 
+@lru_cache(maxsize=8)
+def _read_static(name: str) -> str:
+    """Our own browser-side source, inlined so the report stays one file.
+
+    Separate from `vendor/` because this is code we maintain and test — see
+    tests/js/. Vendored bundles are third-party and are never edited.
+    """
+    return (_STATIC_DIR / name).read_text(encoding="utf-8")
+
+
 def _plotly_source() -> str:
     """The vendored plotly.js, or '' if it isn't present (charts then degrade)."""
     return _read_vendor("plotly-gl3d.min.js")
@@ -180,12 +191,18 @@ def render_report(
                 for g in r.globes
                 for payload, gz in [_chart_payload(g)]
             ],
+            "datasets": [
+                {"id": d["id"], "payload": payload, "gzipped": gz}
+                for d in r.datasets
+                for payload, gz in [_chart_payload(d)]
+            ],
             "warnings": r.warnings,
             "text": r.text,
             "error": r.error,
         })
 
     has_charts = any(s["charts"] for s in sections)
+    has_datasets = any(s["datasets"] for s in sections)
     has_maps = any(s["maps"] for s in sections)
     has_globe = any(s["globes"] for s in sections)
     is_flight = level == LEVEL_FLIGHT
@@ -213,6 +230,8 @@ def render_report(
         show_raw_detail=not is_flight,
         has_charts=has_charts,
         plotly_js=Markup(_plotly_source()) if has_charts else "",
+        has_datasets=has_datasets,
+        explore_js=Markup(_read_static("explore.js")) if has_datasets else "",
         has_maps=has_maps,
         leaflet_js=Markup(_read_vendor("leaflet.js")) if has_maps else "",
         leaflet_css=Markup(_read_vendor("leaflet.css")) if has_maps else "",
