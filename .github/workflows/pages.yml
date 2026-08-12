@@ -1,0 +1,96 @@
+# Publish the post-flight analysis tool to GitHub Pages.
+#
+# The site is Data_Analysis/webtool/ — plain HTML, one worker, and a payload
+# that is BUILT rather than committed: payload/ is gitignored, because it is a
+# zip of the Python package plus a copy of the sample flight, and a checked-in
+# copy of both would drift from the source it was built against within a week.
+#
+# So the deploy builds it. That also makes the published tool provably
+# consistent with the commit it came from, which is the property that matters:
+# the browser unpacks that zip and runs the report generator out of it, so a
+# stale payload would mean the hosted tool quietly analysing flights with old
+# code while the repository says otherwise.
+#
+# Nothing is compiled and nothing is served: Pyodide comes from a CDN at run
+# time and every flight is parsed in the reader's own browser, so this is a
+# static upload and the logs never leave the machine that opened the page.
+
+name: Pages (flight report tool)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Data_Analysis/**'
+      - 'examples/flights/**'
+      - '.github/workflows/pages.yml'
+  # So the site can be republished without a code change — useful after
+  # enabling Pages for the first time, when no qualifying push has happened yet.
+  workflow_dispatch:
+
+# Read the repo, write the Pages deployment, and mint the id-token the deploy
+# action exchanges for its upload credential.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One live site, so a run in flight should finish rather than be cancelled and
+# leave the deployment half-done — but only one may publish at a time.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # build.py prefers a full field capture from the author's machine and
+      # falls back to examples/flights/, which is what a runner has. The
+      # fallback carries the .bin, its .json sidecar and the ground-station
+      # LoRa log, so the hosted sample exercises the whole report including
+      # the radio section.
+      - name: Build the payload
+        run: python3 Data_Analysis/webtool/build.py
+
+      - name: Check the payload is complete
+        run: |
+          set -euo pipefail
+          cd Data_Analysis/webtool
+          test -s payload/flight_report_src.zip
+          test -s payload/sample/manifest.json
+          # The zip is what the browser imports; if flight_report/ is missing
+          # from it the page loads and then fails at "starting engine", which
+          # is a much worse failure than this one.
+          python3 - <<'PY'
+          import zipfile
+          names = zipfile.ZipFile("payload/flight_report_src.zip").namelist()
+          assert any(n.startswith("flight_report/") for n in names), "no flight_report/ in the zip"
+          assert "plot_flight_data_mini.py" in names, "top-level modules missing from the zip"
+          print(f"zip carries {len(names)} entries")
+          PY
+          du -sh payload
+
+      - uses: actions/configure-pages@v5
+
+      # The site root is the webtool directory: index.html, app.js, worker.js
+      # and the payload built above. Nothing else in the repository ships.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: Data_Analysis/webtool
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
