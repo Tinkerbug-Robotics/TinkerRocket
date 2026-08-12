@@ -229,12 +229,19 @@ def main():
             print(f"  {len(runs)} loss bursts, longest {worst[1] - worst[0] + 1} "
                   f"consecutive frames (seq {worst[0]}..{worst[1]})")
     elif rx:
-        heard = sorted(r['seq'] for r in rx)
-        span = heard[-1] - heard[0] + 1
+        # A set, not a list: the receiver logs a retransmitted or duplicated
+        # sequence number more than once, and counting those as separate slots
+        # hides real losses. On the sample session 1,606 rows carry only 1,594
+        # distinct seq, so the list form reported 20 missing (1.2%) where the
+        # truth is 32 (2.0%).
+        seqs = sorted({r['seq'] for r in rx})
+        span = seqs[-1] - seqs[0] + 1
+        missing = span - len(seqs)
+        dupes = len(rx) - len(seqs)
         print("Ground-side inference only (no 0xF1 records to compare against)")
-        print(f"  seq run {heard[0]}..{heard[-1]} = {span} slots, "
-              f"{len(heard)} decoded, {span - len(heard)} missing "
-              f"({pct(span - len(heard), span)})")
+        print(f"  seq run {seqs[0]}..{seqs[-1]} = {span} slots, "
+              f"{len(seqs)} decoded, {missing} missing ({pct(missing, span)})"
+              + (f", {dupes} duplicate row(s)" if dupes else ""))
         print("  Assumes the rocket transmitted every slot. Fly firmware that "
               "logs 0xF1 to replace this with a measurement.")
     elif tx:
