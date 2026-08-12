@@ -81,7 +81,10 @@ jobs:
 
       # The site root is the webtool directory: index.html, app.js, worker.js
       # and the payload built above. Nothing else in the repository ships.
-      - uses: actions/upload-pages-artifact@v4
+      # v5 rather than v4: v4 still pins a Node 20 copy of upload-artifact
+      # internally, which is the one deprecation warning the rest of the
+      # bump did not silence. Nothing here uses upload-artifact directly.
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: Data_Analysis/webtool
 
