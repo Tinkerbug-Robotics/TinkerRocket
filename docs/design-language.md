@@ -19,8 +19,23 @@ values the iOS app has always rendered, lifted into semantic roles
 (systemGray6 cards), the TinkerRocket radius (10), and the spacing scale.
 `tools/gen_design_tokens.py` generates `DesignTokens.swift` and
 `DesignTokens.kt`; CI (`docs` job) fails if the generated files drift from
-the JSON.  Screens reach for roles — never raw palette colors — and Android
-composes the shared component vocabulary in `app/theme/DesignSystem.kt`
+the JSON.  **Android screens reach for roles — never raw palette colors.**
+
+**iOS does the opposite, on purpose (decision 2026-08-12).**  It keeps calling
+SwiftUI's `.green`/`.red`/… directly and never reads a color token.  Those
+literals ARE the system colors, so iOS tracks Apple's retunes and Increase
+Contrast for free; a frozen hex tracks neither.  The tokens are a
+*transcription of iOS for Android's benefit*, not an independent brand
+palette — so pointing iOS at them would make the reference implementation
+read back its own copy, and a stale one.  It does go stale: iOS 26 retuned
+seven of the nine entries (purple `#AF52DE` → `#CB30E0`).  Re-run
+`tools/capture_ios_palette.swift` after each major iOS release.
+
+The split is by *kind*, not by file: colors have a live system value, so iOS
+takes them from the OS; shapes and spacing do not, so iOS shares those
+(`TRShape.radiusButton`) and only Android's colors come from the JSON.
+
+Android composes the shared component vocabulary in `app/theme/DesignSystem.kt`
 (TrActionButton, TrCompactButton, TrStatusPill, TrCard, TrSignalBars),
 which are Compose renderings of the shapes the iOS app is built from.
 
