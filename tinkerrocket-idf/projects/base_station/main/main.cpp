@@ -10,6 +10,7 @@
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
+#include <esp_rom_sys.h>          // esp_rom_delay_us — sub-tick NAND reset settle (#761)
 #include <esp_vfs_fat.h>
 #include <esp_spiffs.h>
 #include <nvs_flash.h>            // nvs_flash_init — must run before any Preferences use (#500)
@@ -37,6 +38,7 @@
 #include "bs_uplink_txwin.h"      // TX-in-the-RX-gap window policy (#506)
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
+#include "bs_storage_policy.h"    // NAND bring-up retry / demotion policy (#761)
 
 #include <TR_LoRa_Comms.h>
 #include <LoRaDirectBackend.h>
@@ -215,21 +217,157 @@ static const char* SD_MOUNT_POINT = "/sdcard";
 static sdmmc_card_t* sd_card = nullptr;
 static bool using_internal_flash = false;
 static bool using_external_flash = false;   // V2/V3: FAT on the external SPI flash
+// #761: true when this board HAS primary storage and we are on SPIFFS anyway.
+// Distinct from using_internal_flash, which on a hypothetical board with no
+// primary storage would be the intended backend rather than a failure.
+static bool storage_demoted      = false;
 static spi_device_handle_t      s_ext_spi = nullptr;
 static spi_nand_flash_device_t *s_nand    = nullptr;
 
 // ==========================================================================
 // SECTION: External flash and FAT mount
 // ==========================================================================
-// Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
-// flash used for logging on the V2/V3 PCBs (M_* pins on SPI3_HOST; LoRa owns
-// SPI2_HOST on V2). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
-// the vendored+patched spi_nand_flash component (components/spi_nand_flash/src/
-// devices/nand_foresee.c). On success repoints SD_MOUNT_POINT and sets
-// using_external_flash; otherwise returns the error so the caller falls back to
-// internal SPIFFS.
-static esp_err_t mountExternalFlashFat()
+// NAND bring-up diagnostics, latched at boot (#761).  Before these existed, a
+// demotion to internal SPIFFS was only inferable from the storage frame's
+// `backend` field, which says where we ended up and not why — so a field report
+// of "it logged to internal flash again" carried no information about which of
+// the five bring-up steps failed, and the boot log had usually scrolled away.
+enum : uint8_t
 {
+    NAND_STEP_NONE      = 0,
+    NAND_STEP_BUS_INIT  = 1,   // spi_bus_initialize
+    NAND_STEP_ADD_DEV   = 2,   // spi_bus_add_device
+    NAND_STEP_READY     = 3,   // RESET + ready poll (below; not in the driver)
+    NAND_STEP_NAND_INIT = 4,   // spi_nand_flash_init_device (probe + FTL attach)
+    NAND_STEP_FAT_MOUNT = 5,   // esp_vfs_fat_nand_mount
+};
+static uint8_t   nand_fail_step = NAND_STEP_NONE;  // step that failed on the LAST attempt
+static esp_err_t nand_fail_err  = ESP_OK;          // its error code
+static uint8_t   nand_attempts  = 0;               // attempts actually made
+static uint8_t   nand_mfr_id    = 0x00;            // raw byte from the 9Fh pre-probe
+
+static const char* nandStepName(uint8_t step)
+{
+    switch (step)
+    {
+        case NAND_STEP_BUS_INIT:  return "spi_bus_initialize";
+        case NAND_STEP_ADD_DEV:   return "spi_bus_add_device";
+        case NAND_STEP_READY:     return "NAND reset/ready poll";
+        case NAND_STEP_NAND_INIT: return "spi_nand_flash_init_device";
+        case NAND_STEP_FAT_MOUNT: return "esp_vfs_fat_nand_mount";
+        default:                  return "none";
+    }
+}
+
+// Opcodes we have to issue ourselves, before the driver is up.
+//
+// The vendored spi_nand_flash component sends READ ID as the literal first
+// transaction on the bus: nand_init_device() -> detect_chip() ->
+// spi_nand_read_manufacturer_id().  There is no RESET and no ready poll
+// anywhere in the component — grep it, opcode 0xFF does not appear — and no
+// post-power-on settle.  That is harmless on a chip sitting idle and wrong in
+// exactly the case the field reports: the reset that follows a flash leaves the
+// NAND powered and possibly still running the PROGRAM or ERASE that was in
+// flight when the flasher took the MCU.  Commands issued while OIP is set are
+// unreliable, and a SET FEATURE is simply ignored — so unprotect_chip()'s write
+// clearing REG_PROTECT can silently do nothing, leaving the block-protect bits
+// armed.  That failure does NOT surface as a detect error; it surfaces two
+// steps later when the FTL cannot erase and the FAT mount fails.
+static constexpr uint8_t NAND_CMD_RESET       = 0xFF;
+static constexpr uint8_t NAND_CMD_GET_FEATURE = 0x0F;
+static constexpr uint8_t NAND_CMD_READ_ID     = 0x9F;
+static constexpr uint8_t NAND_REG_STATUS      = 0xC0;
+static constexpr uint8_t NAND_STAT_OIP        = 0x01;   // operation in progress
+
+// One raw half-duplex command on the not-yet-driver-owned NAND.  Mirrors the
+// component's own transaction shape (variable cmd/addr/dummy, 8-bit command),
+// so anything that works here works once the driver takes over.  rx_len <= 4:
+// SPI_TRANS_USE_RXDATA lands the reply in the transaction's inline buffer.
+static esp_err_t nandRawCmd(uint8_t cmd, uint8_t addr, uint8_t addr_bytes,
+                            uint8_t* rx, uint8_t rx_len)
+{
+    spi_transaction_ext_t t = {};
+    t.base.flags    = SPI_TRANS_VARIABLE_CMD | SPI_TRANS_VARIABLE_ADDR | SPI_TRANS_VARIABLE_DUMMY;
+    t.base.cmd      = cmd;
+    t.base.addr     = addr;
+    t.base.length   = 0;              // half-duplex: nothing beyond cmd + addr
+    t.base.rxlength = rx_len * 8;
+    t.command_bits  = 8;
+    t.address_bits  = addr_bytes * 8;
+    t.dummy_bits    = 0;
+    if (rx_len) t.base.flags |= SPI_TRANS_USE_RXDATA;
+
+    esp_err_t e = spi_device_transmit(s_ext_spi, &t.base);
+    if (e == ESP_OK && rx_len) memcpy(rx, t.base.rx_data, rx_len);
+    return e;
+}
+
+// Put the NAND in a known state and wait for it to report ready, so the
+// driver's first command lands on an idle chip.  See the opcode block above for
+// why the driver not doing this is the leading suspect for the demotions.
+static esp_err_t nandResetAndWaitReady()
+{
+    esp_err_t e = nandRawCmd(NAND_CMD_RESET, 0, 0, nullptr, 0);
+    if (e != ESP_OK) return e;
+
+    // Let OIP actually assert before the first poll. Without this the poll can
+    // win the race and read a stale not-busy, which would quietly give up the
+    // one thing this function exists to do — wait out an operation that was
+    // still running when the MCU reset.
+    esp_rom_delay_us(200);
+
+    // tRST depends on what the chip was doing when RESET arrived (idle is a few
+    // microseconds, mid-erase is the worst case) — poll rather than guess.
+    const uint32_t deadline = millis() + config::NAND_READY_TIMEOUT_MS;
+    for (;;)
+    {
+        uint8_t status = 0xFF;
+        e = nandRawCmd(NAND_CMD_GET_FEATURE, NAND_REG_STATUS, 1, &status, 1);
+        if (e != ESP_OK) return e;
+        if ((status & NAND_STAT_OIP) == 0) return ESP_OK;
+        if ((int32_t)(millis() - deadline) >= 0) return ESP_ERR_TIMEOUT;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+// Undo whatever this attempt managed to set up, so the next one starts from a
+// cold bus rather than a half-initialised one.
+//
+// s_nand is nulled WITHOUT deinit when the probe itself failed: on that path
+// nand_init_device() has already freed the handle but leaves the caller's
+// pointer pointing at it, so s_nand is dangling and must not be passed back in.
+// (The only other way spi_nand_flash_init_device can fail is a NULL ops table,
+// which is a compile-time-constant struct — unreachable — so nulling is safe
+// rather than a leak.)
+static void tearDownExtFlash(bool bus_up, bool nand_handle_valid)
+{
+    if (s_nand)
+    {
+        if (nand_handle_valid) spi_nand_flash_deinit_device(s_nand);
+        s_nand = nullptr;
+    }
+    if (s_ext_spi)
+    {
+        spi_bus_remove_device(s_ext_spi);
+        s_ext_spi = nullptr;
+    }
+    if (bus_up) spi_bus_free(SPI3_HOST);
+}
+
+// One bring-up attempt.  On success repoints SD_MOUNT_POINT and sets
+// using_external_flash; on failure records (nand_fail_step, nand_fail_err),
+// tears everything back down and returns the error.
+//
+// allow_format gates esp_vfs_fat_nand_mount's format_if_mount_failed.  Only the
+// LAST attempt may format: a transient FTL or mount error that a retry would
+// have fixed must not reach f_mkfs, because that trades a recoverable boot for
+// every flight log on the chip.  A genuinely blank NAND still gets formatted,
+// just one attempt later.
+static esp_err_t mountExternalFlashFatAttempt(uint8_t attempt, uint32_t clock_hz, bool allow_format)
+{
+    const uint8_t attempts = config::NAND_MOUNT_ATTEMPTS;
+    bool bus_up = false;
+
     spi_bus_config_t buscfg = {};
     buscfg.mosi_io_num     = config::FLASH_MOSI;
     buscfg.miso_io_num     = config::FLASH_MISO;
@@ -238,44 +376,147 @@ static esp_err_t mountExternalFlashFat()
     buscfg.quadhd_io_num   = -1;
     buscfg.max_transfer_sz = 4096 + 256;     // page + spare
     esp_err_t e = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash SPI bus init failed (0x%x)", (int)e); return e; }
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-flash [%u/%u] SPI bus init failed (0x%x)", attempt, attempts, (int)e);
+        nand_fail_step = NAND_STEP_BUS_INIT; nand_fail_err = e;
+        // INVALID_STATE means the host is still claimed — a teardown that did
+        // not complete, which every later attempt would trip over identically.
+        // Release it so the retry has something to retry into; without this the
+        // "bounded retry" would be three copies of the same failure.
+        if (e == ESP_ERR_INVALID_STATE) spi_bus_free(SPI3_HOST);
+        return e;
+    }
+    bus_up = true;
 
     const uint32_t spi_flags = SPI_DEVICE_HALFDUPLEX;
     spi_device_interface_config_t devcfg = {};
-    devcfg.clock_speed_hz = 20 * 1000 * 1000;   // conservative for bring-up (chip rated 166 MHz)
+    devcfg.clock_speed_hz = clock_hz;
     devcfg.mode           = 0;
     devcfg.spics_io_num   = config::FLASH_CS;
     devcfg.queue_size     = 10;
     devcfg.flags          = spi_flags;
     e = spi_bus_add_device(SPI3_HOST, &devcfg, &s_ext_spi);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash add SPI device failed (0x%x)", (int)e); return e; }
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-flash [%u/%u] add SPI device failed (0x%x)", attempt, attempts, (int)e);
+        nand_fail_step = NAND_STEP_ADD_DEV; nand_fail_err = e;
+        tearDownExtFlash(bus_up, false);
+        return e;
+    }
+
+    // Let the rail settle, then reset the chip and wait for ready before the
+    // driver's first command.
+    vTaskDelay(pdMS_TO_TICKS(config::NAND_SETTLE_MS));
+    e = nandResetAndWaitReady();
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-flash [%u/%u] NAND reset/ready poll failed (0x%x)%s",
+                 attempt, attempts, (int)e,
+                 e == ESP_ERR_TIMEOUT ? " -- chip never cleared OIP (absent, unpowered or wedged)" : "");
+        nand_fail_step = NAND_STEP_READY; nand_fail_err = e;
+        tearDownExtFlash(bus_up, false);
+        return e;
+    }
+
+    // Read the manufacturer byte ourselves purely so it reaches the log. The
+    // driver checks the same byte but reports only "unsupported chip or
+    // wiring"; the raw value separates the cases that need different fixes —
+    // 0xCD is the FORESEE part, 0x00 / 0xFF is a floating MISO (chip absent,
+    // unpowered, or CS/MISO not connected — cf. #714, where board_v4 dropped
+    // the NAND entirely), and anything else is a genuinely different chip.
+    nandRawCmd(NAND_CMD_READ_ID, 0, 1, &nand_mfr_id, 1);
 
     spi_nand_flash_config_t nand_cfg = {};
     nand_cfg.device_handle = s_ext_spi;
     nand_cfg.io_mode       = SPI_NAND_IO_MODE_SIO;
     nand_cfg.flags         = spi_flags;
     e = spi_nand_flash_init_device(&nand_cfg, &s_nand);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "SPI NAND init failed (0x%x) -- unsupported chip or wiring", (int)e); return e; }
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-flash [%u/%u] SPI NAND init failed (0x%x) -- unsupported chip or wiring "
+                      "(mfr id read back as 0x%02x, expected 0xcd)",
+                 attempt, attempts, (int)e, nand_mfr_id);
+        nand_fail_step = NAND_STEP_NAND_INIT; nand_fail_err = e;
+        tearDownExtFlash(bus_up, false);   // handle already freed by the driver
+        return e;
+    }
 
     uint32_t blocks = 0, block_sz = 0, page_sz = 0;
     spi_nand_flash_get_block_num(s_nand, &blocks);
     spi_nand_flash_get_block_size(s_nand, &block_sz);
     spi_nand_flash_get_page_size(s_nand, &page_sz);
-    ESP_LOGI(TAG, "SPI NAND up: %lu blocks x %lu B (page %lu B) = %llu MB",
+    ESP_LOGI(TAG, "SPI NAND up [%u/%u]: mfr 0x%02x, %lu blocks x %lu B (page %lu B) = %llu MB @ %lu MHz",
+             attempt, attempts, nand_mfr_id,
              (unsigned long)blocks, (unsigned long)block_sz, (unsigned long)page_sz,
-             (unsigned long long)((uint64_t)blocks * block_sz / (1024 * 1024)));
+             (unsigned long long)((uint64_t)blocks * block_sz / (1024 * 1024)),
+             (unsigned long)(clock_hz / 1000000));
 
     esp_vfs_fat_mount_config_t mcfg = {};
-    mcfg.format_if_mount_failed = true;
+    mcfg.format_if_mount_failed = allow_format;
     mcfg.max_files              = 5;
     mcfg.allocation_unit_size   = 0;   // FATFS default cluster size
     e = esp_vfs_fat_nand_mount("/extflash", s_nand, &mcfg);
-    if (e != ESP_OK) { ESP_LOGW(TAG, "ext-flash FAT mount failed (0x%x)", (int)e); return e; }
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-flash [%u/%u] FAT mount failed (0x%x)%s", attempt, attempts, (int)e,
+                 allow_format ? "" : " -- format withheld until the final attempt");
+        nand_fail_step = NAND_STEP_FAT_MOUNT; nand_fail_err = e;
+        tearDownExtFlash(bus_up, true);
+        return e;
+    }
 
     SD_MOUNT_POINT = "/extflash";
     using_external_flash = true;
+    // nand_fail_step/_err are deliberately NOT cleared here: after a recovered
+    // boot they are the record of what the retry had to work around, which is
+    // the whole point of collecting them.
     ESP_LOGI(TAG, "External-flash FAT mounted at %s", SD_MOUNT_POINT);
     return ESP_OK;
+}
+
+// Mount a FAT filesystem (Dhara wear-leveling FTL) on the external SPI NAND
+// flash used for logging on the V2/V3 PCBs (M_* pins on SPI3_HOST; LoRa owns
+// SPI2_HOST on V2). The chip is a FORESEE F35SQB004G (mfr 0xCD, 512 MB), supported via
+// the vendored+patched spi_nand_flash component (components/spi_nand_flash/src/
+// devices/nand_foresee.c). On success repoints SD_MOUNT_POINT and sets
+// using_external_flash; otherwise returns the error so the caller falls back to
+// internal SPIFFS.
+//
+// #761: this used to be single-shot — any one of the four steps returned
+// straight to the caller, which then mounted the ~1.9 MB internal SPIFFS
+// partition and logged there for the rest of the boot, so one transient error
+// cost 512 MB of flight log and truncated the flight. Now each attempt tears
+// itself back down and the next one starts from a cold bus, and the last
+// attempt also halves the SPI clock.
+static esp_err_t mountExternalFlashFat()
+{
+    esp_err_t e = ESP_FAIL;
+    for (uint8_t attempt = 1; attempt <= config::NAND_MOUNT_ATTEMPTS; ++attempt)
+    {
+        const auto plan = bs_storage_policy::planAttempt(
+            attempt, config::NAND_MOUNT_ATTEMPTS,
+            config::NAND_CLOCK_HZ, config::NAND_CLOCK_FALLBACK_HZ);
+
+        nand_attempts = attempt;
+        e = mountExternalFlashFatAttempt(attempt, plan.clock_hz, plan.allow_format);
+        if (e == ESP_OK)
+        {
+            if (attempt > 1)
+            {
+                ESP_LOGW(TAG, "SPI NAND came up on attempt %u/%u (last failure: %s, 0x%x)%s",
+                         attempt, config::NAND_MOUNT_ATTEMPTS,
+                         nandStepName(nand_fail_step), (int)nand_fail_err,
+                         plan.clock_hz != config::NAND_CLOCK_HZ ? " -- on the reduced bring-up clock" : "");
+            }
+            return ESP_OK;
+        }
+        if (!plan.is_last) vTaskDelay(pdMS_TO_TICKS(config::NAND_MOUNT_RETRY_DELAY_MS));
+    }
+
+    ESP_LOGE(TAG, "SPI NAND bring-up failed on all %u attempts; last failing step: %s (0x%x)",
+             config::NAND_MOUNT_ATTEMPTS, nandStepName(nand_fail_step), (int)nand_fail_err);
+    return e;
 }
 static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
@@ -1161,15 +1402,18 @@ static bool bsQueryStorage(uint64_t& total, uint64_t& used)
         total = t; used = u;
         return true;
     }
-    FATFS* fs = nullptr;
-    DWORD free_clust = 0;
-    if (f_getfree("0:", &free_clust, &fs) != FR_OK || fs == nullptr) return false;
-    // Use the real sector size (fs->ssize), NOT a hardcoded 512: the external
-    // NAND mounts FAT with 4096-byte sectors (CONFIG_FATFS_SECTOR_4096), so a
-    // hardcoded 512 under-reported total/free/used by 8x (512 MB read as ~57 MB).
-    total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
-    const uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
-    used = (total > free_bytes) ? (total - free_bytes) : 0;
+    // Ask by MOUNT POINT, not by FAT drive number. This used to be
+    // f_getfree("0:"), which is only correct as long as our volume happens to
+    // land on pdrv 0 — esp_vfs_fat_nand_mount() takes whatever ff_diskio_get_drive()
+    // hands it, so nothing guarantees that, and a second FAT volume would make
+    // this silently report the WRONG volume's free space. esp_vfs_fat_info()
+    // resolves base_path -> drive itself, which also drops the manual
+    // cluster/sector arithmetic (the external NAND mounts 4096-byte sectors, so
+    // the old hardcoded-512 version of this under-reported by 8x).
+    uint64_t total_b = 0, free_b = 0;
+    if (esp_vfs_fat_info(SD_MOUNT_POINT, &total_b, &free_b) != ESP_OK) return false;
+    total = total_b;
+    used  = (total_b > free_b) ? (total_b - free_b) : 0;
     return true;
 }
 
@@ -3503,13 +3747,11 @@ static void setup_bs()
             {
                 sdmmc_card_print_info(stdout, sd_card);
 
-                FATFS* fs;
-                DWORD free_clust;
-                if (f_getfree("0:", &free_clust, &fs) == FR_OK)
+                // By mount point, not FAT drive "0:" — see bsQueryStorage().
+                uint64_t total = 0, free_bytes = 0;
+                if (esp_vfs_fat_info(SD_MOUNT_POINT, &total, &free_bytes) == ESP_OK)
                 {
-                    uint64_t total = (uint64_t)(fs->n_fatent - 2) * fs->csize * fs->ssize;
-                    uint64_t free_bytes = (uint64_t)free_clust * fs->csize * fs->ssize;
-                    uint64_t used = total - free_bytes;
+                    const uint64_t used = (total > free_bytes) ? (total - free_bytes) : 0;
                     ESP_LOGI(TAG, "SD card mounted: %llu MB total, %llu MB used, %llu MB free",
                              (unsigned long long)(total / (1024 * 1024)),
                              (unsigned long long)(used / (1024 * 1024)),
@@ -3550,6 +3792,28 @@ static void setup_bs()
                              (unsigned)((total - used) / 1024));
                 }
             }
+        }
+
+        // #761: on a board fitted with primary storage, landing on SPIFFS is a
+        // demotion, not a configuration — this boot logs into ~1.9 MB instead
+        // of 512 MB and a flight will truncate. Latch it so the storage frame
+        // can say so (BSS_FLAG_FALLBACK) rather than leaving the operator to
+        // infer it from a backend label, and say it once, loudly, in the boot
+        // log with the step that actually failed.
+        storage_demoted = bs_storage_policy::demoted(
+            config::HAS_EXT_NAND || config::HAS_SDMMC, using_internal_flash);
+        if (storage_demoted)
+        {
+            ESP_LOGE(TAG, "**** STORAGE DEMOTED: logging to internal flash (~1.9 MB), NOT the "
+                          "%s ****", config::HAS_EXT_NAND ? "512 MB NAND" : "SD card");
+            if (config::HAS_EXT_NAND)
+            {
+                ESP_LOGE(TAG, "**** last failing step: %s (0x%x) after %u attempt(s); "
+                              "NAND mfr id read back 0x%02x (expect 0xcd) ****",
+                         nandStepName(nand_fail_step), (int)nand_fail_err,
+                         nand_attempts, nand_mfr_id);
+            }
+            ESP_LOGE(TAG, "**** a flight logged in this state truncates at the partition size ****");
         }
 
         // Write test covers both backends
@@ -4687,7 +4951,10 @@ static void loop_bs()
                 bss.used_bytes  = used;
                 bss.free_bytes  = (total > used) ? (total - used) : 0;
                 bss.backend = using_internal_flash ? 0 : (using_external_flash ? 2 : 1);
-                bss.flags   = mounted ? 0x01 : 0x00;
+                bss.flags   = (mounted         ? BSS_FLAG_MOUNTED  : 0)
+                            | (storage_demoted ? BSS_FLAG_FALLBACK : 0)
+                            | (bs_storage_policy::recovered(storage_demoted, nand_attempts)
+                                               ? BSS_FLAG_RETRIED  : 0);
                 ble_app.sendStorageStats(0xCD, reinterpret_cast<const uint8_t*>(&bss), sizeof(bss));
             }
         }

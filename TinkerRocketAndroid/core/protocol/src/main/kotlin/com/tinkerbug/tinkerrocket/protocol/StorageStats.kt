@@ -74,7 +74,13 @@ public data class RocketStorageStats(
 /**
  * Base-station filesystem usage, in bytes (wire = 26 bytes, LE packed):
  *   [0..7] u64 total  [8..15] u64 used  [16..23] u64 free
- *   [24] u8 backend(0=SPIFFS, 1=SD, 2=ext-NAND)  [25] u8 flags(bit0=mounted)
+ *   [24] u8 backend(0=SPIFFS, 1=SD, 2=ext-NAND)
+ *   [25] u8 flags(bit0=mounted, bit1=fallback, bit2=retried)
+ *
+ * bit2 (BSS_FLAG_RETRIED — primary storage came up, but only after a failed
+ * bring-up attempt) is defined on the wire and deliberately not decoded here
+ * yet: nothing renders it, and a decoded-but-unread field is exactly the trap
+ * `mounted` fell into for two releases.  Add it together with its consumer.
  */
 public data class BaseStationStorageStats(
     val totalBytes: Long,   // u64 (read as signed 64-bit, same as iOS Int(truncatingIfNeeded:))
@@ -82,6 +88,15 @@ public data class BaseStationStorageStats(
     val freeBytes: Long,
     val backend: Int,       // u8
     val mounted: Boolean,
+    /**
+     * #761: BSS_FLAG_FALLBACK — the board is fitted with primary storage (512 MB
+     * NAND, or an SD slot) and its bring-up failed, so the whole session is
+     * logging to the ~2 MB internal SPIFFS partition.  This is the firmware
+     * saying so, rather than the app inferring it from `backend == 0`: the
+     * backend field reports where logging ended up, not that somewhere better
+     * was expected and lost, and only the firmware knows which board it is on.
+     */
+    val fallback: Boolean,
 ) {
     /** FS overhead the data accounting doesn't attribute to used or free. */
     public val reservedBytes: Long get() = maxOf(0L, totalBytes - usedBytes - freeBytes)
@@ -104,6 +119,7 @@ public data class BaseStationStorageStats(
                 freeBytes = free,
                 backend = backend,
                 mounted = (flags and 0x01) != 0,
+                fallback = (flags and 0x02) != 0,
             )
         }
     }

@@ -56,13 +56,30 @@ struct RocketStorageStats: Equatable {
 
 /// Base-station filesystem usage, in bytes (wire = 26 bytes, LE packed):
 ///   [0..7] u64 total  [8..15] u64 used  [16..23] u64 free
-///   [24] u8 backend(0=SPIFFS,1=SD,2=ext-NAND)  [25] u8 flags(bit0=mounted)
+///   [24] u8 backend(0=SPIFFS,1=SD,2=ext-NAND)
+///   [25] u8 flags(bit0=mounted, bit1=fallback, bit2=retried)
+///
+/// bit2 (BSS_FLAG_RETRIED — primary storage came up, but only after a failed
+/// bring-up attempt) is defined on the wire and deliberately not decoded yet:
+/// nothing renders it, and a decoded-but-unread field is exactly the trap
+/// `mounted` sat in for two releases. Add it together with its consumer.
 struct BaseStationStorageStats: Equatable {
     let totalBytes: Int
     let usedBytes: Int
     let freeBytes: Int
     let backend: Int
     let mounted: Bool
+    /// #761: BSS_FLAG_FALLBACK — the board is fitted with primary storage (512 MB
+    /// NAND, or an SD slot) and its bring-up failed, so the whole session is
+    /// logging to the ~2 MB internal SPIFFS partition. This is the firmware
+    /// saying so, rather than the app inferring it from `backend == 0`: the
+    /// backend field reports where logging ended up, not that somewhere better
+    /// was expected and lost, and only the firmware knows which board it is on.
+    ///
+    /// A base station on firmware older than #761 never sets this, so it shows
+    /// no warning even while demoted. Deliberate — the fix is updating the base
+    /// station, not guessing at firmware state from the app.
+    let fallback: Bool
 
     /// FS overhead the data accounting doesn't attribute to used or free.
     var reservedBytes: Int { max(0, totalBytes - usedBytes - freeBytes) }
@@ -84,6 +101,7 @@ struct BaseStationStorageStats: Equatable {
         }
         return BaseStationStorageStats(
             totalBytes: u64(0), usedBytes: u64(8), freeBytes: u64(16),
-            backend: Int(bytes[24]), mounted: (bytes[25] & 0x01) != 0)
+            backend: Int(bytes[24]), mounted: (bytes[25] & 0x01) != 0,
+            fallback: (bytes[25] & 0x02) != 0)
     }
 }

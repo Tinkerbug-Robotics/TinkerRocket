@@ -128,6 +128,7 @@ class FileOpsGoldenTest {
         assertEquals(side["free_bytes"]!!.jsonPrimitive.long, s.freeBytes)
         assertEquals(side["backend"]!!.jsonPrimitive.int, s.backend)
         assertEquals((side["flags"]!!.jsonPrimitive.int and 0x01) != 0, s.mounted)
+        assertEquals((side["flags"]!!.jsonPrimitive.int and 0x02) != 0, s.fallback)
         assertEquals(maxOf(0L, s.totalBytes - s.usedBytes - s.freeBytes), s.reservedBytes)
     }
 
@@ -135,5 +136,40 @@ class FileOpsGoldenTest {
     fun `bs storage accepts exactly 26 bytes and rejects 25`() {
         assertNotNull(BaseStationStorageStats.decode(ByteArray(26)))
         assertNull(BaseStationStorageStats.decode(ByteArray(25)))
+    }
+
+    // #761: the dashboard's fallback warning now keys on BSS_FLAG_FALLBACK
+    // rather than inferring the demotion from `backend == 0`, so the bit has to
+    // decode independently of the mounted bit sharing the same byte.
+    @Test
+    fun `bs storage flag bits decode independently`() {
+        fun decodeWithFlags(flags: Int): BaseStationStorageStats {
+            val raw = ByteArray(26)
+            raw[24] = 2            // backend = ext-NAND
+            raw[25] = flags.toByte()
+            return BaseStationStorageStats.decode(raw)!!
+        }
+
+        // Healthy: mounted, on the NAND, no demotion.
+        decodeWithFlags(0x01).let {
+            assertEquals(true, it.mounted)
+            assertEquals(false, it.fallback)
+        }
+        // The reported failure: mounted, but demoted to internal flash.
+        decodeWithFlags(0x03).let {
+            assertEquals(true, it.mounted)
+            assertEquals(true, it.fallback)
+        }
+        // bit1 must not be read off the back of bit0.
+        decodeWithFlags(0x02).let {
+            assertEquals(false, it.mounted)
+            assertEquals(true, it.fallback)
+        }
+        // BSS_FLAG_RETRIED (bit2) is on the wire but not surfaced yet; it must
+        // not bleed into either flag above.
+        decodeWithFlags(0x05).let {
+            assertEquals(true, it.mounted)
+            assertEquals(false, it.fallback)
+        }
     }
 }

@@ -996,17 +996,26 @@ internal fun StorageCard(
     val usedColor = tr.logging
     val reservedColor = tr.statusIdle
     val freeColor = tr.scan
-    // backend 0 = the internal SPIFFS partition.  On a base station that is a
-    // FALLBACK, not a configuration: the board carries a 512 MB NAND, and the
-    // firmware demotes to internal flash for the whole boot if any step of the
-    // NAND bring-up fails -- then keeps logging, into ~2 MB instead of 512.
+    // The base station demotes to the ~2 MB internal SPIFFS partition for the
+    // whole boot if any step of its NAND bring-up fails -- then keeps logging,
+    // into 2 MB instead of 512.  Rendered as a plain backend name that read as
+    // a statement of fact, and the only other clue was a small number
+    // ("Free 0.4 MB") that looks like a full disk rather than the wrong disk.
+    // Seen on the bench 2026-08-11 and reported from the field.  A reboot
+    // usually clears it, which is worth saying out loud because the alternative
+    // is deciding not to fly.
     //
-    // Rendered as a plain backend name it read as a statement of fact, and the
-    // only other clue was a small number ("Free 0.4 MB") that looks like a
-    // full disk rather than the wrong disk.  Seen on the bench 2026-08-11 and
-    // reported from the field.  A reboot usually clears it, which is worth
-    // saying out loud because the alternative is deciding not to fly.
-    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.backend == 0
+    // #761: this is the firmware's BSS_FLAG_FALLBACK bit, and ONLY that bit.
+    // `backend` says where logging ended up; only the firmware knows whether
+    // somewhere better was expected and lost, and that is the thing worth
+    // warning about.  Inferring it from `backend == 0` guesses at firmware
+    // state from the app, and guesses wrong the moment a board ships where
+    // internal flash is the intended backend.
+    //
+    // Consequence, deliberate: a base station on firmware older than #761 never
+    // sets the bit, so it shows no warning even while demoted.  Update the base
+    // station -- the app is not the place to paper over old firmware.
+    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.fallback
     // The BS sets flags bit 0 when its filesystem query succeeded.  It has been
     // decoded since the frame was added and never once read, so an unmounted
     // volume drew a normal-looking bar out of whatever total/used happened to be
