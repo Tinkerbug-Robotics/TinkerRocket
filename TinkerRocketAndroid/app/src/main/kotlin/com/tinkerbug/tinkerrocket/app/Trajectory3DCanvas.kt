@@ -254,7 +254,7 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
     val extra = lm?.let {
         listOf(SceneLine(
             it.apogee, V3(it.apogee.e, it.apogee.n, groundU),
-            Color(0xFF64B5F6).copy(alpha = 0.35f),
+            Color(0xFF4DABF7).copy(alpha = 0.25f),
         ))
     } ?: emptyList()
 

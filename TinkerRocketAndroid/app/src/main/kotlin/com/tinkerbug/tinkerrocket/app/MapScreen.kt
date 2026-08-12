@@ -90,6 +90,7 @@ fun MapScreen(
     /** Opens the offline-areas manager from the basemap menu (iOS parity). */
     onManageOffline: (() -> Unit)? = null,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     // Phone dot runs with the map (ref-counted manager).
     if (phoneLocation != null) {
         androidx.compose.runtime.DisposableEffect(Unit) {
@@ -234,10 +235,10 @@ fun MapScreen(
             }
             val ageS = max(0L, (nowMs - p.sampleAtMs) / 1000)
             val color = when {
-                p.snapshotSource == LandingSnapshotSource.LATCHED -> Color(0xFFFFA000)
-                ageS < 5 -> Color(0xFF43A047)
-                ageS < 30 -> Color(0xFFFBC02D)
-                else -> Color(0xFFE53935)
+                p.snapshotSource == LandingSnapshotSource.LATCHED -> tr.statusWarn
+                ageS < 5 -> tr.statusOk
+                ageS < 30 -> tr.statusMarginal
+                else -> tr.statusBad
             }
             TrMapPlate(Modifier.align(Alignment.TopStart).padding(TrSpacing.rowSpacing)) {
                 Text(

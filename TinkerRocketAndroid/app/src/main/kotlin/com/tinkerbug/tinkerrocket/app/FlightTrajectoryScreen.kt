@@ -29,6 +29,7 @@ import kotlin.math.pow
  */
 @Composable
 fun TrajectoryCanvas(data: FlightCsvData) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     // Clean finite (E, N, U) triples — shared with the 3D view.
     val track = remember(data) { ekfTrack(data) }
 
@@ -84,12 +85,18 @@ fun TrajectoryCanvas(data: FlightCsvData) {
             )
         }
 
-        // Launch (red) + landing (green) markers — iOS palette; the 2D and
-        // 3D views and both platforms now agree (was green/red here, the
-        // opposite of iOS: a field-confusion hazard with two phones out).
-        drawCircle(Color(0xFFFF6B6B), 6.dp.toPx(), px(track.first().first, track.first().second))
+        // Launch (red) + landing (green) markers, matching iOS's 2D map pins
+        // (.systemRed / .systemGreen, FlightTrajectoryView.swift:189/:195) via
+        // tokens.  Was green/red here, the opposite of iOS: a field-confusion
+        // hazard with two phones out.
+        //
+        // The 2D/3D split is deliberate and easy to undo by accident: iOS's 3D
+        // SceneKit views use hand-tuned literals against a near-black backdrop,
+        // its 2D views use system colors.  This is 2D, so it takes roles; the
+        // scene literals in Trajectory3DCanvas stay hardcoded.
+        drawCircle(tr.launchSite, 6.dp.toPx(), px(track.first().first, track.first().second))
         drawCircle(
-            Color(0xFF52CF66), 6.dp.toPx(),
+            tr.landingSite, 6.dp.toPx(),
             px(track.last().first, track.last().second),
         )
 

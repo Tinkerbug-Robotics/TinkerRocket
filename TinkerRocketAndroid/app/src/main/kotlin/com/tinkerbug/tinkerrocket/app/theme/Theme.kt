@@ -43,12 +43,12 @@ fun TinkerRocketTheme(content: @Composable () -> Unit) {
     val tr = if (dark) TrColorsDark else TrColorsLight
     val scheme = if (dark) {
         darkColorScheme(
-            primary = tr.savedFlights,
+            primary = tr.accent,
             onPrimary = Color.White,
             secondary = tr.myDevices,
             onSecondary = Color.White,
             tertiary = tr.servoTest,
-            error = tr.voiceError,
+            error = tr.statusBad,
             background = tr.background,
             onBackground = Color.White,
             surface = tr.background,
@@ -64,12 +64,12 @@ fun TinkerRocketTheme(content: @Composable () -> Unit) {
         )
     } else {
         lightColorScheme(
-            primary = tr.savedFlights,
+            primary = tr.accent,
             onPrimary = Color.White,
             secondary = tr.myDevices,
             onSecondary = Color.White,
             tertiary = tr.servoTest,
-            error = tr.voiceError,
+            error = tr.statusBad,
             background = tr.background,
             onBackground = Color.Black,
             surface = tr.background,

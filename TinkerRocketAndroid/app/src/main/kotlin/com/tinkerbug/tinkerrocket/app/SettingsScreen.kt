@@ -625,20 +625,21 @@ fun SettingsScreen(
 
 @Composable
 private fun SyncBadge(state: SyncState) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (label, color) = when (state) {
         SyncState.Idle -> return
-        SyncState.AwaitingSync -> "awaiting sync" to Color(0xFF9E9E9E)
-        SyncState.NoProfile -> "no profile" to Color(0xFFFFA000)
-        SyncState.Syncing -> "syncing…" to Color(0xFF1E88E5)
-        SyncState.Synced -> "synced" to Color(0xFF43A047)
-        is SyncState.Failed -> "sync failed" to Color(0xFFE53935)
+        SyncState.AwaitingSync -> "awaiting sync" to tr.statusWarn
+        SyncState.NoProfile -> "no profile" to tr.statusIdle
+        SyncState.Syncing -> "syncing…" to tr.statusIdle
+        SyncState.Synced -> "synced" to tr.statusOk
+        is SyncState.Failed -> "sync failed" to tr.statusBad
     }
     Text(
         label,
         style = MaterialTheme.typography.labelMedium,
-        color = Color.White,
+        color = color,
         modifier = Modifier
-            .background(color, RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }
@@ -829,6 +830,7 @@ private fun PyroChannelSection(
  */
 @Composable
 private fun PyroTestControls(session: DeviceSession, channel: Int) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     if (session.isBaseStation) return
     val connected by session.isConnected.collectAsState()
     if (!connected) return
@@ -898,7 +900,7 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    val c = if (cont) Color(0xFF2E7D32) else Color(0xFFB00020)
+                    val c = if (cont) tr.statusOk else tr.statusBad
                     Box(Modifier.size(8.dp).background(c, CircleShape))
                     Text(
                         if (cont) "CONT" else "NO CONT",

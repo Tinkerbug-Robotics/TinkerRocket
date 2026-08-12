@@ -38,6 +38,18 @@ class TrColors(
     val signalFair: Color,
     val signalWeak: Color,
     val signalBad: Color,
+    val accent: Color,
+    val statusOk: Color,
+    val statusMarginal: Color,
+    val statusWarn: Color,
+    val statusBad: Color,
+    val statusPending: Color,
+    val statusActive: Color,
+    val pyroFired: Color,
+    val deviceRocket: Color,
+    val deviceBaseStation: Color,
+    val launchSite: Color,
+    val landingSite: Color,
     val background: Color,
     val card: Color,
     val cardSecondary: Color,
@@ -67,6 +79,18 @@ val TrColorsLight = TrColors(
     signalFair = Color(0xFFFFCC00),  // yellow
     signalWeak = Color(0xFFFF8D28),  // orange
     signalBad = Color(0xFFFF383C),  // red
+    accent = Color(0xFF0088FF),  // blue
+    statusOk = Color(0xFF34C759),  // green
+    statusMarginal = Color(0xFFFFCC00),  // yellow
+    statusWarn = Color(0xFFFF8D28),  // orange
+    statusBad = Color(0xFFFF383C),  // red
+    statusPending = Color(0xFF0088FF),  // blue
+    statusActive = Color(0xFF34C759),  // green
+    pyroFired = Color(0xFFFF8D28),  // orange
+    deviceRocket = Color(0xFF0088FF),  // blue
+    deviceBaseStation = Color(0xFFFF8D28),  // orange
+    launchSite = Color(0xFFFF383C),  // red
+    landingSite = Color(0xFF34C759),  // green
     background = Color(0xFFFFFFFF),
     card = Color(0xFFF2F2F7),
     cardSecondary = Color(0xFFE5E5EA),
@@ -96,6 +120,18 @@ val TrColorsDark = TrColors(
     signalFair = Color(0xFFFFD600),  // yellow
     signalWeak = Color(0xFFFF9230),  // orange
     signalBad = Color(0xFFFF4245),  // red
+    accent = Color(0xFF0091FF),  // blue
+    statusOk = Color(0xFF30D158),  // green
+    statusMarginal = Color(0xFFFFD600),  // yellow
+    statusWarn = Color(0xFFFF9230),  // orange
+    statusBad = Color(0xFFFF4245),  // red
+    statusPending = Color(0xFF0091FF),  // blue
+    statusActive = Color(0xFF30D158),  // green
+    pyroFired = Color(0xFFFF9230),  // orange
+    deviceRocket = Color(0xFF0091FF),  // blue
+    deviceBaseStation = Color(0xFFFF9230),  // orange
+    launchSite = Color(0xFFFF4245),  // red
+    landingSite = Color(0xFF30D158),  // green
     background = Color(0xFF000000),
     card = Color(0xFF1C1C1E),
     cardSecondary = Color(0xFF2C2C2E),

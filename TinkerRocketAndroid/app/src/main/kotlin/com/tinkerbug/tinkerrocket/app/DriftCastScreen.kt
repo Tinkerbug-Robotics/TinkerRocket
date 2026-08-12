@@ -74,6 +74,7 @@ import org.maplibre.geojson.Point
  */
 @Composable
 fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("driftcast", Context.MODE_PRIVATE) }
     remember {
@@ -358,10 +359,10 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
                         Text(
                             if (r.feasible) "FEASIBLE" else "NOT FEASIBLE",
                             style = MaterialTheme.typography.titleMedium,
-                            color = if (r.feasible) Color(0xFF43A047) else Color(0xFFFFA000),
+                            color = if (r.feasible) tr.statusOk else tr.statusBad,
                         )
                         r.infeasibleReason?.let {
-                            Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFFFA000))
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = tr.statusBad)
                         }
                         MetricRow("Steering", "%.1f° @ %.0f°".format(r.steeringAngleDeg, r.steeringBearingDeg))
                         MetricRow("Guidance point", "%.5f, %.5f".format(r.guidanceLat, r.guidanceLon))
