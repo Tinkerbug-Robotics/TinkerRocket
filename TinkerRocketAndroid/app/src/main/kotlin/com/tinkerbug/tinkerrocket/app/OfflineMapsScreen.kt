@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -206,6 +207,7 @@ private fun formatMb(bytes: Long): String {
 
 @Composable
 fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () -> Unit) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val context = androidx.compose.ui.platform.LocalContext.current
     remember {
         org.maplibre.android.MapLibre.getInstance(context)
@@ -271,7 +273,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     }
 
     // Style (re)install on source change — circle layers re-added each time.
-    LaunchedEffect(mapRef, source) {
+    LaunchedEffect(mapRef, source, tr) {
         val map = mapRef ?: return@LaunchedEffect
         map.setStyle(Style.Builder().fromJson(saveAreaStyleJson(container, source))) { style ->
             val src = GeoJsonSource(CIRCLE_SOURCE)
@@ -279,11 +281,11 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
             style.addSource(src)
             style.addLayer(
                 FillLayer(CIRCLE_FILL, CIRCLE_SOURCE)
-                    .withProperties(fillColor("#1E88E5"), fillOpacity(0.15f)),
+                    .withProperties(fillColor(tr.mapControl.toArgb()), fillOpacity(0.15f)),
             )
             style.addLayer(
                 LineLayer(CIRCLE_LINE, CIRCLE_SOURCE)
-                    .withProperties(lineColor("#1E88E5"), lineWidth(2f)),
+                    .withProperties(lineColor(tr.mapControl.toArgb()), lineWidth(2f)),
             )
         }
     }
@@ -320,7 +322,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
             Text(
                 "⌖",
                 style = MaterialTheme.typography.headlineLarge,
-                color = Color(0xFF1E88E5),
+                color = tr.mapControl,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -337,14 +339,14 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                 Text(
                     "~$tileCount tiles · ~%.0f MB".format(estMb),
                     fontFamily = FontFamily.Monospace,
-                    color = if (tooBig) Color(0xFFFFA000) else MaterialTheme.colorScheme.onSurface,
+                    color = if (tooBig) tr.statusWarn else MaterialTheme.colorScheme.onSurface,
                 )
             }
             if (tooBig) {
                 Text(
                     "Large download — consider a smaller radius or lower max zoom.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFFFA000),
+                    color = tr.statusWarn,
                 )
             }
 
@@ -380,7 +382,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
                         if (failed > 0) " · $failed failed" else "",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    color = if (failed > 0) Color(0xFFFFA000)
+                    color = if (failed > 0) tr.statusWarn
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedButton(

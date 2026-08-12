@@ -20,11 +20,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.tinkerbug.tinkerrocket.app.theme.TrColors
 import com.tinkerbug.tinkerrocket.app.theme.TrMapIconButton
 import com.tinkerbug.tinkerrocket.app.theme.TrMapPlate
 import com.tinkerbug.tinkerrocket.app.theme.TrSpacing
@@ -90,6 +92,7 @@ fun MapScreen(
     /** Opens the offline-areas manager from the basemap menu (iOS parity). */
     onManageOffline: (() -> Unit)? = null,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     // Phone dot runs with the map (ref-counted manager).
     if (phoneLocation != null) {
         androidx.compose.runtime.DisposableEffect(Unit) {
@@ -161,7 +164,7 @@ fun MapScreen(
 
     // Style install/swap: a swap is a FULL reload — overlays are re-added in
     // the callback every time (the layer-reinstall pattern the spike proves).
-    LaunchedEffect(mapRef, basemap) {
+    LaunchedEffect(mapRef, basemap, tr) {
         val map = mapRef ?: return@LaunchedEffect
         val raster = basemap.tileSource
         val builder = if (raster == null) {
@@ -179,9 +182,9 @@ fun MapScreen(
                 // app-wide in AppContainer; this is defense in depth.
                 style.getSource("usgs")?.isVolatile = true
             }
-            installPredictionLayers(style, prediction)
-            installPhoneDot(style, phoneFix)
-            installRocketMarker(style, fix?.latitude, fix?.longitude)
+            installPredictionLayers(style, prediction, tr)
+            installPhoneDot(style, phoneFix, tr)
+            installRocketMarker(style, fix?.latitude, fix?.longitude, tr)
         }
     }
 
@@ -234,10 +237,10 @@ fun MapScreen(
             }
             val ageS = max(0L, (nowMs - p.sampleAtMs) / 1000)
             val color = when {
-                p.snapshotSource == LandingSnapshotSource.LATCHED -> Color(0xFFFFA000)
-                ageS < 5 -> Color(0xFF43A047)
-                ageS < 30 -> Color(0xFFFBC02D)
-                else -> Color(0xFFE53935)
+                p.snapshotSource == LandingSnapshotSource.LATCHED -> tr.statusWarn
+                ageS < 5 -> tr.statusOk
+                ageS < 30 -> tr.statusMarginal
+                else -> tr.statusBad
             }
             TrMapPlate(Modifier.align(Alignment.TopStart).padding(TrSpacing.rowSpacing)) {
                 Text(
@@ -363,6 +366,16 @@ private const val ROCKET_SOURCE = "rocket-src"
 private const val ROCKET_LAYER = "rocket-layer"
 
 /** Raster style over the proxy; background matches the hatch placeholder. */
+/**
+ * #ededed in the background layer is NOT an unconverted Material value: it is
+ * iOS's placeholder substrate, UIColor(white: 0.93) at
+ * Maps/Offline/CachingTileOverlay.swift:27, and 0.93 * 255 = 237 = 0xED.
+ *
+ * It must not become a surface token.  All three surfaces invert in dark mode,
+ * while iOS renders this same grey in both appearances -- tokenising it would
+ * paint the map void pure black wherever tiles are missing.  The same literal
+ * appears in DriftCastScreen and OfflineMapsScreen for the same reason.
+ */
 private fun rasterStyleJson(proxy: TileProxyServer, source: TileSource): String = """
 {
   "version": 8,
@@ -394,17 +407,17 @@ private const val PRED_UNCERT_LAYER = "pred-uncert-layer"
  * uncertainty disc.  Order: disc under track under pin; the rocket marker
  * is installed after these so it stays on top.
  */
-private fun installPredictionLayers(style: Style, prediction: LandingPrediction?) {
+private fun installPredictionLayers(style: Style, prediction: LandingPrediction?, c: TrColors) {
     style.addSource(GeoJsonSource(PRED_UNCERT_SOURCE))
     style.addSource(GeoJsonSource(PRED_TRACK_SOURCE))
     style.addSource(GeoJsonSource(PRED_PIN_SOURCE))
     style.addLayer(
         FillLayer(PRED_UNCERT_LAYER, PRED_UNCERT_SOURCE)
-            .withProperties(fillColor("#43A047"), fillOpacity(0.12f)),
+            .withProperties(fillColor(c.landingSite.toArgb()), fillOpacity(0.12f)),
     )
     style.addLayer(
         LineLayer(PRED_TRACK_LAYER, PRED_TRACK_SOURCE).withProperties(
-            lineColor("#43A047"),
+            lineColor(c.landingSite.toArgb()),
             lineWidth(2.5f),
             lineDasharray(arrayOf(2f, 2f)),
         ),
@@ -412,8 +425,14 @@ private fun installPredictionLayers(style: Style, prediction: LandingPrediction?
     style.addLayer(
         CircleLayer(PRED_PIN_LAYER, PRED_PIN_SOURCE).withProperties(
             circleRadius(8f),
-            circleColor("#43A047"),
+            circleColor(c.landingSite.toArgb()),
             circleStrokeWidth(2.5f),
+            // The white ring stays literal on every marker in this file: it is
+            // chrome for contrast against aerial imagery, which does not theme.
+            // iOS never sets it either -- MKMarkerAnnotationView draws its own
+            // white balloon outline and the app assigns only markerTintColor
+            // (MapView.swift:157-161).  A surface token would go black in dark
+            // mode and erase the markers over dark terrain.
             circleStrokeColor("#FFFFFF"),
         ),
     )
@@ -453,21 +472,21 @@ private const val PHONE_SOURCE = "phone-src"
 private const val PHONE_LAYER = "phone-layer"
 
 /** Blue phone-position dot (the operator), under the rocket marker. */
-private fun installPhoneDot(style: Style, fix: PhoneLocationManager.PhoneFix?) {
+private fun installPhoneDot(style: Style, fix: PhoneLocationManager.PhoneFix?, c: TrColors) {
     val src = GeoJsonSource(PHONE_SOURCE)
     fix?.let { src.setGeoJson(Feature.fromGeometry(Point.fromLngLat(it.lon, it.lat))) }
     style.addSource(src)
     style.addLayer(
         CircleLayer(PHONE_LAYER, PHONE_SOURCE).withProperties(
             circleRadius(7f),
-            circleColor("#1E88E5"),
+            circleColor(c.userLocation.toArgb()),
             circleStrokeWidth(2.5f),
             circleStrokeColor("#FFFFFF"),
         ),
     )
 }
 
-private fun installRocketMarker(style: Style, lat: Double?, lon: Double?) {
+private fun installRocketMarker(style: Style, lat: Double?, lon: Double?, c: TrColors) {
     val feature = if (lat != null && lon != null) {
         Feature.fromGeometry(Point.fromLngLat(lon, lat))
     } else {
@@ -479,7 +498,7 @@ private fun installRocketMarker(style: Style, lat: Double?, lon: Double?) {
     style.addLayer(
         CircleLayer(ROCKET_LAYER, ROCKET_SOURCE).withProperties(
             circleRadius(9f),
-            circleColor("#D32F2F"),
+            circleColor(c.rocketMarker.toArgb()),
             circleStrokeWidth(2.5f),
             circleStrokeColor("#FFFFFF"),
         ),

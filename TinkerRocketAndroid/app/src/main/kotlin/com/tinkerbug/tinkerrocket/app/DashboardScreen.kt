@@ -68,6 +68,7 @@ fun DashboardScreen(
     onTool: (String?) -> Unit = {},
 ) {
     val session = device.session
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
 
     // Tools sub-routes (iOS: sheets from the dashboard).  The route state is
     // owned by MainActivity, not here, so the top bar drawn above this screen
@@ -170,13 +171,18 @@ fun DashboardScreen(
 
         // Staleness banner (#390 worsen-only overlay)
         if (dataStatus != TelemetryData.DataStatus.LIVE) {
+            val syncing = dataStatus == TelemetryData.DataStatus.SYNCING
             Banner(
                 text = when (dataStatus) {
                     TelemetryData.DataStatus.SYNCING -> "Syncing…"
                     TelemetryData.DataStatus.STALE -> "STALE DATA — link degraded"
                     else -> "NO DATA"
                 },
-                color = Color(0xFFB00020),
+                // Startup sync is not a fault; it rendered in the same red as a
+                // dead link, so all three states read identically.  STALE keeps
+                // red rather than iOS's orange -- design-language.md:63 settles
+                // that deliberately, a launch-safety signal that should shout.
+                color = if (syncing) tr.statusPending else tr.statusBad,
             )
         }
 
@@ -271,7 +277,7 @@ fun DashboardScreen(
                             Column(
                                 Modifier
                                     .background(
-                                        if (focused) Color(0xFF4527A0) else Color(0x33777777),
+                                        if (focused) tr.accent else tr.cardSecondary,
                                         RoundedCornerShape(8.dp),
                                     )
                                     .clickable { session.setFocusRocket(remote.rocketId) }
@@ -280,12 +286,13 @@ fun DashboardScreen(
                             ) {
                                 Text(
                                     remote.unitName.ifEmpty { "Rocket ${remote.rocketId}" },
-                                    color = if (focused) Color.White else Color(0xFFBBBBBB),
+                                    color = if (focused) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                                 Text(
                                     if (focused) "focused" else remote.telemetry.state,
-                                    color = if (focused) Color(0xFFB39DDB) else Color(0xFF888888),
+                                    color = if (focused) Color.White
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -440,7 +447,6 @@ fun DashboardScreen(
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Tools", style = MaterialTheme.typography.titleMedium)
-                val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!session.isBaseStation) {
                         // iOS canStartGroundTest (DashboardView.swift:2437) gates this
@@ -492,6 +498,7 @@ private fun DirectionToRocketCard(
     fix: com.tinkerbug.tinkerrocket.session.LastValidRocketFix?,
     rocketAltM: Double?,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val phoneFix by phoneLocation.location.collectAsState()
     val heading by phoneLocation.headingDeg.collectAsState()
     var permission by androidx.compose.runtime.remember {
@@ -546,7 +553,7 @@ private fun DirectionToRocketCard(
                     Text(
                         "➤",
                         style = MaterialTheme.typography.displayMedium,
-                        color = Color(0xFF1E88E5),
+                        color = tr.accent,
                         // Glyph points east (90°); rotate −90 to make it north-up.
                         modifier = Modifier.rotate(arrowAngle - 90f),
                     )
@@ -574,31 +581,41 @@ private fun DirectionToRocketCard(
 
 @Composable
 private fun SyncStateLine(state: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (label, color) = when (state) {
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Idle -> return
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.AwaitingSync ->
-            "profile: awaiting sync" to Color(0xFF9E9E9E)
+            "profile: awaiting sync" to tr.statusWarn
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.NoProfile ->
-            "profile: none active" to Color(0xFFFFA000)
+            "profile: none active" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Syncing ->
-            "profile: syncing…" to Color(0xFF1E88E5)
+            "profile: syncing…" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Synced ->
-            "profile: synced" to Color(0xFF43A047)
+            "profile: synced" to tr.statusOk
         is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Failed ->
-            "profile: sync failed" to Color(0xFFE53935)
+            "profile: sync failed" to tr.statusBad
     }
     Text(label, style = MaterialTheme.typography.bodySmall, color = color)
 }
 
+/**
+ * The one deliberately shared literal, not a token: iOS hardcodes this exact
+ * hex as `litGreen` (DashboardView.swift:1688) so both dashboards' lit flag
+ * chips read alike, and docs/design-language.md:58 settles it.  Retiring it is
+ * a paired iOS+Android change, never a unilateral Android one.
+ */
+private val LIT_GREEN = Color(0xFF2E7D32)
+
 @Composable
 private fun FlagChip(label: String, on: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Text(
         label,
-        color = if (on) Color.White else Color(0xFF757575),
+        color = if (on) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
         style = MaterialTheme.typography.labelMedium,
         modifier = Modifier
             .background(
-                if (on) Color(0xFF2E7D32) else Color(0x33777777),
+                if (on) LIT_GREEN else tr.statusIdle.copy(alpha = 0.2f),
                 RoundedCornerShape(6.dp),
             )
             .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -607,11 +624,12 @@ private fun FlagChip(label: String, on: Boolean) {
 
 @Composable
 private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val color = when (state) {
-        TelemetryData.SensorHealth.OK -> Color(0xFF2E7D32)
-        TelemetryData.SensorHealth.DEGRADED -> Color(0xFFF9A825)
-        TelemetryData.SensorHealth.BAD -> Color(0xFFB00020)
-        else -> Color(0xFF616161)
+        TelemetryData.SensorHealth.OK -> tr.statusOk
+        TelemetryData.SensorHealth.DEGRADED -> tr.statusWarn
+        TelemetryData.SensorHealth.BAD -> tr.statusBad
+        else -> tr.statusIdle
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -627,11 +645,11 @@ private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
 private fun Banner(text: String, color: Color) {
     Text(
         text,
-        color = Color.White,
+        color = color,
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier
             .fillMaxWidth()
-            .background(color, RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
 }
@@ -676,6 +694,7 @@ private fun PyroTile(
     onTestContinuity: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Column(
         modifier
@@ -698,7 +717,7 @@ private fun PyroTile(
                     color = Color.White,
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
                     modifier = Modifier
-                        .background(Color(0xFFF57C00), RoundedCornerShape(4.dp))
+                        .background(tr.pyroFired, RoundedCornerShape(4.dp))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 )
                 revealed && testing -> Row(
@@ -716,7 +735,7 @@ private fun PyroTile(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    val c = if (continuity) Color(0xFF2E7D32) else Color(0xFFB00020)
+                    val c = if (continuity) tr.statusOk else tr.statusBad
                     Box(Modifier.size(8.dp).background(c, CircleShape))
                     Text(
                         if (continuity) "CONT" else "NO CONT",
@@ -730,7 +749,7 @@ private fun PyroTile(
         if (showTestButton) {
             Text(
                 "Test Continuity",
-                color = Color(0xFF1E88E5),
+                color = tr.accent,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.clickable(onClick = onTestContinuity),
             )
@@ -750,10 +769,11 @@ private fun PyroTile(
 /** iOS StatusBadge: label + filled/hollow state dot. */
 @Composable
 private fun StatusBadge(label: String, active: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             "●",
-            color = if (active) Color(0xFF2E7D32) else Color(0x55777777),
+            color = if (active) tr.statusActive else tr.statusIdle,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -775,6 +795,7 @@ private fun StatusBadge(label: String, active: Boolean) {
  */
 @Composable
 private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Status", style = MaterialTheme.typography.titleMedium)
@@ -798,9 +819,9 @@ private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
             val remaining = telemetry.bsLogSilenceRemainingS
             if (isBaseStation && telemetry.bsLoggingActive && remaining != null) {
                 val color = when {
-                    remaining > 60 -> Color(0xFF2E7D32)
-                    remaining > 10 -> Color(0xFFF9A825)
-                    else -> Color(0xFFB00020)
+                    remaining > 60 -> tr.statusOk
+                    remaining > 10 -> tr.statusWarn
+                    else -> tr.statusBad
                 }
                 Text(
                     "Auto-close in %d:%02d".format(remaining / 60, remaining % 60),
@@ -815,11 +836,12 @@ private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
 /** iOS HealthCardView go/no-go banner: tinted row carrying the rollup verdict. */
 @Composable
 private fun ReadinessBanner(readiness: TelemetryData.FlightReadiness) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val color = when (readiness) {
-        TelemetryData.FlightReadiness.READY -> Color(0xFF2E7D32)
-        TelemetryData.FlightReadiness.CAUTION -> Color(0xFFF9A825)
-        TelemetryData.FlightReadiness.NOT_READY -> Color(0xFFB00020)
-        TelemetryData.FlightReadiness.UNKNOWN -> Color(0xFF616161)
+        TelemetryData.FlightReadiness.READY -> tr.statusOk
+        TelemetryData.FlightReadiness.CAUTION -> tr.statusWarn
+        TelemetryData.FlightReadiness.NOT_READY -> tr.statusBad
+        TelemetryData.FlightReadiness.UNKNOWN -> tr.statusIdle
     }
     val glyph = when (readiness) {
         TelemetryData.FlightReadiness.READY -> "✓"

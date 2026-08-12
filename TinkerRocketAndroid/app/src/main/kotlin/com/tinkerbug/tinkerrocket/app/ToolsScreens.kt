@@ -444,7 +444,7 @@ fun FreqScanScreen(session: DeviceSession, onBack: () -> Unit) {
                         "a channel mask — noisy channels are skipped and the link " +
                         "keeps hopping. No frequency move is needed.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF43A047),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
                 Text(
@@ -465,6 +465,7 @@ private const val QUIET_MARGIN_DB = 70
 /** Noise-margin bar chart: green = comfortable (≥70 dB), orange = noisy. */
 @Composable
 private fun ScanChart(points: List<Pair<Double, Int>>) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val textMeasurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     Canvas(Modifier.fillMaxWidth().height(220.dp)) {
@@ -483,7 +484,7 @@ private fun ScanChart(points: List<Pair<Double, Int>>) {
             val x = ((freq - lo) / span * size.width).toFloat()
             val h = (margin.coerceIn(0, 100) / 100f) * plotH
             drawRect(
-                color = if (margin >= QUIET_MARGIN_DB) Color(0xFF43A047) else Color(0xFFFB8C00),
+                color = if (margin >= QUIET_MARGIN_DB) tr.statusOk else tr.statusWarn,
                 topLeft = Offset(x - barW / 2, plotH - h),
                 size = Size(barW, h),
             )

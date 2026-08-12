@@ -32,6 +32,23 @@ enum TRColor {
     static let signalFair = dynamic(0xFFCC00, 0xFFD600)  // yellow
     static let signalWeak = dynamic(0xFF8D28, 0xFF9230)  // orange
     static let signalBad = dynamic(0xFF383C, 0xFF4245)  // red
+    static let accent = dynamic(0x0088FF, 0x0091FF)  // blue
+    static let statusOk = dynamic(0x34C759, 0x30D158)  // green
+    static let statusMarginal = dynamic(0xFFCC00, 0xFFD600)  // yellow
+    static let statusWarn = dynamic(0xFF8D28, 0xFF9230)  // orange
+    static let statusBad = dynamic(0xFF383C, 0xFF4245)  // red
+    static let statusPending = dynamic(0x0088FF, 0x0091FF)  // blue
+    static let statusActive = dynamic(0x34C759, 0x30D158)  // green
+    static let pyroFired = dynamic(0xFF8D28, 0xFF9230)  // orange
+    static let deviceRocket = dynamic(0x0088FF, 0x0091FF)  // blue
+    static let deviceBaseStation = dynamic(0xFF8D28, 0xFF9230)  // orange
+    static let launchSite = dynamic(0xFF383C, 0xFF4245)  // red
+    static let landingSite = dynamic(0x34C759, 0x30D158)  // green
+    static let rocketMarker = dynamic(0xFF383C, 0xFF4245)  // red
+    static let userLocation = dynamic(0x0088FF, 0x0091FF)  // blue
+    static let guidancePoint = dynamic(0x0088FF, 0x0091FF)  // blue
+    static let driftCastBoost = dynamic(0x0088FF, 0x0091FF)  // blue
+    static let driftCastDescent = dynamic(0xCB30E0, 0xDB34F2)  // purple
 
     static let background = dynamic(0xFFFFFF, 0x000000)
     static let card = dynamic(0xF2F2F7, 0x1C1C1E)
