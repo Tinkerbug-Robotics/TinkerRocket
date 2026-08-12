@@ -61,13 +61,68 @@ _LOW_COLOR = "#d62728"
 _HIGH_COLOR = "#1f77b4"
 
 
+# How far the telemetered peak may sit from the flight's own before the session
+# is judged to belong to a different flight. Generous, because telemetry is
+# lossy and may simply miss the top: the failure being prevented is a session
+# from another flight entirely, which is off by hundreds of metres, not tens.
+_ALTITUDE_MATCH_FRACTION = 0.35
+_ALTITUDE_MATCH_FLOOR_M = 30.0
+
+
+def _belongs_to(path, flight, own_peak_m) -> bool:
+    """Whether this ground-station log is a recording of THIS flight.
+
+    The receiver names its file for the session it booted, not for the flight,
+    and a field box ends the day with several flights and several sessions in
+    one directory. Matching on the directory alone meant every flight in
+    examples/flights/ reported the same 150 packets from the one session sitting
+    beside them — three of those four flights were shown another flight's radio
+    link, with no indication anything was wrong.
+
+    Filenames cannot settle it: the receiver's clock and the flight computer's
+    are independent, and on the sample day every flight shares a date. So the
+    telemetry is asked instead. A session that carries this flight's altitude
+    profile is this flight's session; one that peaked at 356 m is not a recording
+    of a flight that reached 108 m.
+    """
+    if own_peak_m is None:
+        return True
+    try:
+        import pandas as pd
+        df = pd.read_csv(path, usecols=["pressure_alt"])
+    except Exception:
+        return True                      # unreadable or older format: don't judge
+    heard = df["pressure_alt"].to_numpy(dtype=float)
+    if not heard.size:
+        return True
+    heard_peak = float(heard.max())
+    tolerance = max(_ALTITUDE_MATCH_FLOOR_M, _ALTITUDE_MATCH_FRACTION * own_peak_m)
+    return abs(heard_peak - own_peak_m) <= tolerance
+
+
+def _own_peak_m(flight):
+    """The flight's own barometric peak above the pad, for the match above."""
+    import numpy as np
+    baro = flight.records.get("BMP585") or []
+    if not baro:
+        return None
+    from plot_flight_data_mini import get_array, pressure_to_altitude
+    p = get_array(baro, "pressure_pa")
+    if not p.size:
+        return None
+    ground = float(np.mean(p[: min(200, p.size)]))
+    return float(max(pressure_to_altitude(float(v), ground) for v in p))
+
+
 def _read(flight: Flight):
     """The ground-station packet log as a DataFrame, or None if there isn't one."""
     try:
         import pandas as pd
     except ImportError:                                    # pragma: no cover
         return None
-    paths = sorted(p for p in flight.bin_path.parent.glob("lora_*.csv") if p.is_file())
+    own_peak = _own_peak_m(flight)
+    paths = sorted(p for p in flight.bin_path.parent.glob("lora_*.csv")
+                   if p.is_file() and _belongs_to(p, flight, own_peak))
     if not paths:
         return None
     frames = []
@@ -80,6 +135,34 @@ def _read(flight: Flight):
         return None
     df = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
     return df if len(df) else None
+
+
+def _one_rocket(df, result):
+    """Keep the dominant rocket's rows when a session carries several (#381).
+
+    A ground station logs whatever it hears, and at a launch that includes the
+    rocket still transmitting from the field while the next one is on the pad.
+    Blending two trajectories into one track and one RSSI-vs-range plot produces
+    a picture of neither, so analyze the dominant rocket and say what was left
+    out rather than quietly averaging them.
+    """
+    import pandas as pd
+
+    if "rocket_id" not in df.columns:
+        return df
+    rid = pd.to_numeric(df["rocket_id"], errors="coerce")
+    ids = rid.dropna().unique()
+    if len(ids) <= 1:
+        return df
+    dominant = int(rid.value_counts().idxmax())
+    kept = df[rid == dominant].reset_index(drop=True)
+    others = sorted(int(i) for i in ids if int(i) != dominant)
+    result.warnings.append(
+        f"The ground station heard {len(ids)} rockets in this session. Showing "
+        f"rocket {dominant} ({len(kept)} of {len(df)} packets); rocket(s) "
+        f"{others} are in the log but not in these charts."
+    )
+    return kept
 
 
 def _fixes(df):
@@ -203,6 +286,7 @@ def analyze(flight: Flight) -> AnalysisResult:
         # missing telemetry log is not a fault in the flight.
         return result
 
+    df = _one_rocket(df, result)
     result.charts.append(_altitude_chart(df))
     d = _fixes(df)
     if d is not None:

@@ -13,7 +13,17 @@ import sys
 import numpy as np
 from pathlib import Path
 
-BINARY_FILE = Path("/Users/christianpedersen/Downloads/flight_20260310_171206.bin")
+# Take the log on the command line. This was a hardcoded path into one
+# machine's Downloads folder, so the script raised FileNotFoundError for
+# everyone else — which is why nothing had run it since it was written.
+def _binary_file() -> Path:
+    if len(sys.argv) > 1:
+        return Path(sys.argv[1])
+    here = Path(__file__).resolve().parent.parent
+    default = here / "examples" / "flights" / "flight_20260705_174532.bin"
+    if default.exists():
+        return default
+    raise SystemExit(f"usage: {Path(sys.argv[0]).name} <flight_YYYYMMDD_HHMMSS.bin>")
 
 # Sync pattern
 SYNC = b'\xAA\x55\xAA\x55'
@@ -94,8 +104,9 @@ def parse_gnss(payload):
     }
 
 def main():
-    data = BINARY_FILE.read_bytes()
-    print(f"File: {BINARY_FILE.name}  ({len(data):,} bytes)")
+    binary_file = _binary_file()
+    data = binary_file.read_bytes()
+    print(f"File: {binary_file.name}  ({len(data):,} bytes)")
 
     frames = parse_frames(data)
     gnss_frames = [f for f in frames if f['type'] == MSG_GNSS and f['crc_ok']]

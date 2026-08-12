@@ -93,7 +93,9 @@ def _logging(recs, stats) -> Optional[dict[str, Any]]:
     # prelaunch window dropping its oldest frame on every push while the ring
     # sits at the pad cap — by design, not data loss. Only the delta after
     # logging activation means live flight frames were discarded, so measure
-    # from the second sample onwards, exactly as the log_buffer module does.
+    # from the second sample onwards. This is the only place that reads the ring
+    # counters now; the module that also did has gone, because its headline
+    # "peak fill" restated a firmware constant rather than measuring anything.
     lb = recs.get("LogBufferStats") or []
     inflight_overruns = 0
     if len(lb) > 1 and "ring_overruns" in lb[0]:

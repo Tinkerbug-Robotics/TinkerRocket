@@ -27,24 +27,17 @@ SAMPLE_BIN = REPO_ROOT / "examples" / "flights" / "flight_20260705_174532.bin"
 if str(REPO_ROOT / "Data_Analysis") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "Data_Analysis"))
 
+# Sections that must not appear. Most of the second report's modules were
+# deleted outright; these two remain on disk and must stay out of the report —
+# guidance because no real flight carries a guidance frame, sensor_charts
+# because overview now draws those series itself.
 DETAILED_SECTIONS = [
-    'id="kinematics"',
-    'id="gaps"',
-    'id="timestamps"',
-    'id="launch_detection"',
-    'id="pyro_apogee"',
-    'id="sensor_noise"',
-    'id="gnss_staleness"',
-    'id="kinematic_checks"',
-    'id="roll_pid"',
-    'id="lora"',
-    'id="log_buffer"',
+    'id="guidance"',
+    'id="sensor_charts"',
 ]
 
-# The consolidation is moving the report towards a single page, so sections keep
-# arriving here from the detailed side. Settings, the log contents and the
-# deployment write-up moved first; the detailed report keeps only what has not
-# been rebuilt as interactive charts yet.
+# The whole report, in one page. The second level is gone and most of its
+# modules with it; what survived was folded in here.
 FLIGHT_SECTIONS = [
     'id="overview"',
     'id="globe"',

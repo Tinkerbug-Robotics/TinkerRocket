@@ -53,21 +53,19 @@ The first analysis on a machine pays a one-off WebAssembly/matplotlib warm-up
 that the browser then caches, including across reloads. Module results match the
 CLI exactly.
 
-## Two report levels
+## The report
 
-`flight_report` writes two reports, chosen with `--level flight|detailed|both`
-(default `both`); the web tool has a matching **Report** selector.
+`flight_report` writes one file, `<stem>_report.html`. There used to be a second
+"detailed" level and a selector to choose between them; the sections worth
+keeping were folded into this one and the split was removed, because the two
+drifted — the same word meant different instants in each.
 
-- **Flight** (`<stem>_report.html`) — the headline read. Summary card (apogee,
+It is the headline read. Summary card (apogee,
   max speed, peak boost acceleration, time to apogee, flight time, landing
   distance and bearing), a 3D flight path on satellite imagery, then interactive
   charts running position -> velocity -> acceleration, roll control, apogee
   detection, stability, per-sensor sample rates and log health. No static
   figures, no raw JSON dump, no parser stats.
-- **Detailed data review** (`<stem>_report_detailed.html`) — everything else: the 26
-  kinematics figures, full-rate interactive accelerometer and gyro charts, frame
-  gaps, timestamps, sensor noise, GNSS health, kinematic-checks replay, roll PID,
-  guidance, LoRa, MRAM log buffer, settings snapshot and parser stats.
 
 ### Flight metadata
 
