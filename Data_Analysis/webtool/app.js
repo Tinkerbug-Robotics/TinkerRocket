@@ -8,8 +8,11 @@ const startupList = el("startup-list");
 const dropzone = el("dropzone");
 const fileInput = el("file-input");
 const rocketNameInput = el("rocket-name");
-const levelSelect = el("level");
 const sampleBtn = el("sample-btn");
+const generateBtn = el("generate-btn");
+const stagedBox = el("staged");
+const stagedSummary = el("staged-summary");
+const clearBtn = el("clear-btn");
 const runPanel = el("run-panel");
 const moduleList = el("module-list");
 const runStatus = el("run-status");
@@ -119,6 +122,11 @@ function finishModuleRow(info) {
   li.querySelector(".mod-detail").textContent = `${figs} · ${info.seconds}s`;
 }
 
+function clearError() {
+  errorBox.hidden = true;
+  errorBox.textContent = "";
+}
+
 function showError(message) {
   errorBox.hidden = false;
   errorBox.textContent = message;
@@ -209,11 +217,31 @@ function showReport(html) {
 
 // ---------- file intake ----------
 
+// Files wait here until the reader presses Generate. Dropping used to start the
+// run on the spot, which meant the rocket name — the one thing only they can
+// supply, and which titles the report — could only be set by knowing to type it
+// before dragging anything in.
+let staged = [];
+
+function describeStaged() {
+  const bin = staged.find((f) => f.name.toLowerCase().endsWith(".bin"));
+  const others = staged.length - (bin ? 1 : 0);
+  const name = bin ? bin.name : `${staged.length} file(s)`;
+  return others ? `${name} + ${others} more` : name;
+}
+
+function setStaged(entries) {
+  staged = entries;
+  stagedBox.hidden = !staged.length;
+  if (staged.length) stagedSummary.textContent = describeStaged();
+  updateControls();
+}
+
 function updateControls() {
   const enabled = engineReady && !running && !pending;
   sampleBtn.disabled = !enabled;
   fileInput.disabled = !enabled;
-  levelSelect.disabled = !enabled;
+  generateBtn.disabled = !enabled || !staged.length;
   dropzone.classList.toggle("disabled", !enabled);
 }
 
@@ -233,12 +261,10 @@ function runFiles(fileEntries, rocketName) {
     return;
   }
   const binEntry = bins[0];
-  const level = levelSelect.value;
-  // Same filenames the CLI writes, so a downloaded report sits alongside one
-  // generated locally without colliding or looking like a different artifact.
-  currentBinStem =
-    binEntry.name.replace(/\.bin$/i, "") +
-    (level === "detailed" ? "_report_detailed" : "_report");
+  // One report level, so nothing to choose. Same filename the CLI writes, so a
+  // downloaded report sits alongside one generated locally without colliding.
+  const level = "flight";
+  currentBinStem = binEntry.name.replace(/\.bin$/i, "") + "_report";
   beginRun(binEntry.name);
   const payload = fileEntries.map((f) => ({ name: f.name, buffer: f.buffer }));
   worker.postMessage(
@@ -275,9 +301,24 @@ function intakeFileList(fileList) {
       );
       return;
     }
-    runFiles(entries, rocketNameInput.value);
+    setStaged(entries);
+    clearError();
   });
 }
+
+generateBtn.addEventListener("click", () => {
+  if (!staged.length) return;
+  // The buffers are transferred to the worker, so this is a one-shot: keep the
+  // summary on screen for context but drop our claim on the memory.
+  const entries = staged;
+  setStaged([]);
+  runFiles(entries, rocketNameInput.value);
+});
+
+clearBtn.addEventListener("click", () => {
+  setStaged([]);
+  clearError();
+});
 
 fileInput.addEventListener("change", () => {
   intakeFileList(fileInput.files);
