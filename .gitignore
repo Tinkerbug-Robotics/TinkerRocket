@@ -23,6 +23,12 @@ build/
 # HTML report larger still; both regenerate, so committing them is pure bloat.
 examples/flights/*.csv
 examples/flights/*_report.html
+# The ground-station LoRa log is the exception, because it is not derived from
+# anything here: it is a separate capture, written by the receiver on the ground
+# rather than by the rocket, and nothing can regenerate it from the .bin. It is
+# also what makes the sample flight exercise the report's radio section, which
+# the hosted tool would otherwise never show. ~280 KB.
+!examples/flights/lora_*.csv
 
 # Python
 __pycache__/
