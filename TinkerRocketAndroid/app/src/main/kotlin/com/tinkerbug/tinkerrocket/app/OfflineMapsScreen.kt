@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -272,7 +273,7 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
     }
 
     // Style (re)install on source change — circle layers re-added each time.
-    LaunchedEffect(mapRef, source) {
+    LaunchedEffect(mapRef, source, tr) {
         val map = mapRef ?: return@LaunchedEffect
         map.setStyle(Style.Builder().fromJson(saveAreaStyleJson(container, source))) { style ->
             val src = GeoJsonSource(CIRCLE_SOURCE)
@@ -280,11 +281,11 @@ fun SaveAreaScreen(container: AppContainer, initialCenter: LatLng, onDone: () ->
             style.addSource(src)
             style.addLayer(
                 FillLayer(CIRCLE_FILL, CIRCLE_SOURCE)
-                    .withProperties(fillColor("#1E88E5"), fillOpacity(0.15f)),
+                    .withProperties(fillColor(tr.mapControl.toArgb()), fillOpacity(0.15f)),
             )
             style.addLayer(
                 LineLayer(CIRCLE_LINE, CIRCLE_SOURCE)
-                    .withProperties(lineColor("#1E88E5"), lineWidth(2f)),
+                    .withProperties(lineColor(tr.mapControl.toArgb()), lineWidth(2f)),
             )
         }
     }

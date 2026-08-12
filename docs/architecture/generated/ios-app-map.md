@@ -3,16 +3,16 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 26,757 lines across 70 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 26,762 lines across 70 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
 
-## `(root)/` — 2 files, 109 lines
+## `(root)/` — 2 files, 114 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 79 | `TRColor`, `TRShape`, `TRSpacing` |
+| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 84 | `TRColor`, `TRShape`, `TRSpacing` |
 | [TinkerRocketAppApp.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/TinkerRocketAppApp.swift) | 30 | `TinkerRocketAppApp` |
 
 
@@ -122,4 +122,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 70 files, 26,757 lines.
+Total: 70 files, 26,762 lines.

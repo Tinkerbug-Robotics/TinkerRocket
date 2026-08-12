@@ -50,6 +50,11 @@ class TrColors(
     val deviceBaseStation: Color,
     val launchSite: Color,
     val landingSite: Color,
+    val rocketMarker: Color,
+    val userLocation: Color,
+    val guidancePoint: Color,
+    val driftCastBoost: Color,
+    val driftCastDescent: Color,
     val background: Color,
     val card: Color,
     val cardSecondary: Color,
@@ -91,6 +96,11 @@ val TrColorsLight = TrColors(
     deviceBaseStation = Color(0xFFFF8D28),  // orange
     launchSite = Color(0xFFFF383C),  // red
     landingSite = Color(0xFF34C759),  // green
+    rocketMarker = Color(0xFFFF383C),  // red
+    userLocation = Color(0xFF0088FF),  // blue
+    guidancePoint = Color(0xFF0088FF),  // blue
+    driftCastBoost = Color(0xFF0088FF),  // blue
+    driftCastDescent = Color(0xFFCB30E0),  // purple
     background = Color(0xFFFFFFFF),
     card = Color(0xFFF2F2F7),
     cardSecondary = Color(0xFFE5E5EA),
@@ -132,6 +142,11 @@ val TrColorsDark = TrColors(
     deviceBaseStation = Color(0xFFFF9230),  // orange
     launchSite = Color(0xFFFF4245),  // red
     landingSite = Color(0xFF30D158),  // green
+    rocketMarker = Color(0xFFFF4245),  // red
+    userLocation = Color(0xFF0091FF),  // blue
+    guidancePoint = Color(0xFF0091FF),  // blue
+    driftCastBoost = Color(0xFF0091FF),  // blue
+    driftCastDescent = Color(0xFFDB34F2),  // purple
     background = Color(0xFF000000),
     card = Color(0xFF1C1C1E),
     cardSecondary = Color(0xFF2C2C2E),

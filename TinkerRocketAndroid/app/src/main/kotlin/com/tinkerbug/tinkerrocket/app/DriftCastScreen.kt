@@ -31,10 +31,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.tinkerbug.tinkerrocket.app.theme.TrColors
 import com.tinkerbug.tinkerrocket.maps.TileSource
 import com.tinkerbug.tinkerrocket.session.GuidanceResult
 import com.tinkerbug.tinkerrocket.session.computeGuidancePoint
@@ -55,6 +57,7 @@ import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineDasharray
+import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
@@ -221,16 +224,25 @@ fun DriftCastScreen(container: AppContainer, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(mapRef) {
+    // Style install: keyed on `tr` so a light/dark flip repaints the overlay
+    // tokens.  Without it the layers keep the theme they were installed with.
+    LaunchedEffect(mapRef, tr) {
         val map = mapRef ?: return@LaunchedEffect
         map.setStyle(
             Style.Builder().fromJson(
                 driftCastStyleJson(container, TileSource.USGS_IMAGERY_TOPO),
             ),
         ) { style ->
-            installDriftCastLayers(style)
+            installDriftCastLayers(style, tr)
             refreshOverlays()
         }
+    }
+
+    // Tap-to-place, registered once per map.  Deliberately NOT keyed on `tr`:
+    // MapLibre cannot unregister a click listener, so a theme flip would stack
+    // a second one and every tap would fire twice.
+    LaunchedEffect(mapRef) {
+        val map = mapRef ?: return@LaunchedEffect
         map.addOnMapClickListener { latLng ->
             if (tapModeLaunch) {
                 launchLat = "%.5f".format(latLng.latitude)
@@ -426,27 +438,39 @@ private const val DC_GUIDANCE_SRC = "dc-guidance-src"
 private const val DC_TRACK_SRC = "dc-track-src"
 private const val DC_BOOST_SRC = "dc-boost-src"
 
-/** Launch blue · landing red · guidance purple · boost solid · descent dashed. */
-private fun installDriftCastLayers(style: Style) {
+/**
+ * Launch red · landing green · guidance blue · boost dashed blue · descent
+ * solid purple — matching iOS (DriftCastView.swift:147/150/153 for the pins,
+ * :169-174 for the lines).
+ *
+ * Every element was rotated before 2026-08-12: launch drew blue, landing drew
+ * RED (iOS's launch-pad colour), guidance purple, and the two lines had each
+ * other's dash pattern.  With two phones out at a launch that is a recovery
+ * hazard, not a style nit — the same one FlightTrajectoryScreen records fixing.
+ */
+private fun installDriftCastLayers(style: Style, c: TrColors) {
     listOf(DC_BOOST_SRC, DC_TRACK_SRC, DC_LAUNCH_SRC, DC_LANDING_SRC, DC_GUIDANCE_SRC)
         .forEach { style.addSource(GeoJsonSource(it)) }
     style.addLayer(
         LineLayer("dc-boost", DC_BOOST_SRC)
-            .withProperties(lineColor("#7B1FA2"), lineWidth(2.5f)),
+            .withProperties(
+                lineColor(c.driftCastBoost.toArgb()), lineWidth(2f),
+                lineOpacity(0.5f), lineDasharray(arrayOf(8f, 6f)),
+            ),
     )
     style.addLayer(
         LineLayer("dc-track", DC_TRACK_SRC)
-            .withProperties(lineColor("#43A047"), lineWidth(2.5f), lineDasharray(arrayOf(2f, 2f))),
+            .withProperties(lineColor(c.driftCastDescent.toArgb()), lineWidth(3f)),
     )
-    fun pin(id: String, src: String, color: String) = style.addLayer(
+    fun pin(id: String, src: String, color: Int) = style.addLayer(
         CircleLayer(id, src).withProperties(
             circleRadius(8f), circleColor(color),
             circleStrokeWidth(2.5f), circleStrokeColor("#FFFFFF"),
         ),
     )
-    pin("dc-launch", DC_LAUNCH_SRC, "#1E88E5")
-    pin("dc-landing", DC_LANDING_SRC, "#D32F2F")
-    pin("dc-guidance", DC_GUIDANCE_SRC, "#7B1FA2")
+    pin("dc-launch", DC_LAUNCH_SRC, c.launchSite.toArgb())
+    pin("dc-landing", DC_LANDING_SRC, c.landingSite.toArgb())
+    pin("dc-guidance", DC_GUIDANCE_SRC, c.guidancePoint.toArgb())
 }
 
 private fun driftCastStyleJson(container: AppContainer, source: TileSource): String = """
