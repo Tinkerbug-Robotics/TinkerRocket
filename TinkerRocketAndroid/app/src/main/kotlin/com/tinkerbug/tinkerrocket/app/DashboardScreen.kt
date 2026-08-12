@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -1215,8 +1216,12 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
 
 /**
  * iOS SignalStrengthView twin: vertical bars for LoRa (BS links), GNSS
- * satellites, and BLE RSSI, value labels underneath.  Fill fraction uses the
- * same rough scaling ideas as iOS (RSSI −100..−30 dBm, sats 0..12).
+ * satellites, and BLE RSSI, value labels underneath.
+ *
+ * Fill fraction AND colour both come from [SignalQuality], which holds iOS's
+ * exact bands.  Both were wrong here: the bars used invented scales ("rough
+ * scaling ideas", per the comment this replaces) and a single hardcoded amber,
+ * so the green/yellow/orange/red grading iOS shows was missing entirely.
  */
 @Composable
 private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: Boolean) {
@@ -1231,18 +1236,21 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                 if (isBaseStation) {
                     val lora = telemetry.rssi
                     SignalBar(
-                        fraction = lora?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                        fraction = SignalQuality.loraFill(lora),
+                        quality = SignalQuality.forLoraRssi(lora),
                         value = lora?.let { String.format(Locale.ROOT, "%.0f", it) } ?: "——",
                         label = "LoRa",
                     )
                 }
                 SignalBar(
-                    fraction = (telemetry.numSats / 12f).coerceIn(0f, 1f),
+                    fraction = SignalQuality.satFill(telemetry.numSats),
+                    quality = SignalQuality.forSatCount(telemetry.numSats),
                     value = "${telemetry.numSats}",
                     label = "GNSS",
                 )
                 SignalBar(
-                    fraction = bleRssi?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                    fraction = SignalQuality.bleFill(bleRssi),
+                    quality = SignalQuality.forBleRssi(bleRssi),
                     value = bleRssi?.let { "$it" } ?: "——",
                     label = "BLE",
                 )
@@ -1252,8 +1260,22 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
 }
 
 @Composable
-private fun SignalBar(fraction: Float, value: String, label: String) {
+private fun SignalBar(
+    fraction: Float,
+    quality: SignalQuality,
+    value: String,
+    label: String,
+) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val fill = when (quality) {
+        SignalQuality.BEST -> tr.signalBest
+        SignalQuality.GOOD -> tr.signalGood
+        SignalQuality.FAIR -> tr.signalFair
+        SignalQuality.WEAK -> tr.signalWeak
+        SignalQuality.BAD -> tr.signalBad
+        // iOS returns .gray for a missing reading; statusIdle is that same gray.
+        SignalQuality.UNKNOWN -> tr.statusIdle
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1271,7 +1293,7 @@ private fun SignalBar(fraction: Float, value: String, label: String) {
                         .padding(bottom = 6.dp)
                         .width(24.dp)
                         .height((10 + 100 * fraction).dp)
-                        .background(tr.logging, RoundedCornerShape(12.dp)),
+                        .background(fill, RoundedCornerShape(12.dp)),
                 )
             }
         }
