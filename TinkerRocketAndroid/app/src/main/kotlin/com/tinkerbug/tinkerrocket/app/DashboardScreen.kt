@@ -983,20 +983,17 @@ internal fun StorageCard(
     // usually clears it, which is worth saying out loud because the alternative
     // is deciding not to fly.
     //
-    // #761: take this from the firmware's BSS_FLAG_FALLBACK bit rather than
-    // inferring it from `backend == 0`.  The backend field says where logging
-    // ended up; only the firmware knows whether somewhere better was expected
-    // and lost, which is the thing worth warning about.
+    // #761: this is the firmware's BSS_FLAG_FALLBACK bit, and ONLY that bit.
+    // `backend` says where logging ended up; only the firmware knows whether
+    // somewhere better was expected and lost, and that is the thing worth
+    // warning about.  Inferring it from `backend == 0` guesses at firmware
+    // state from the app, and guesses wrong the moment a board ships where
+    // internal flash is the intended backend.
     //
-    // The `backend == 0` arm is retained purely for base stations running
-    // firmware older than #761, which never sets the bit -- the app updates
-    // independently of firmware, so dropping it would silently retire the
-    // warning on exactly the units most likely to need it.  It is sound for
-    // every board that exists today (V1 has an SD slot, V2/V3 a NAND, so
-    // SPIFFS is never the intended backend); delete it once a board ships
-    // where internal flash IS the design, and the bit alone is correct.
-    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 &&
-        (bs.fallback || bs.backend == 0)
+    // Consequence, deliberate: a base station on firmware older than #761 never
+    // sets the bit, so it shows no warning even while demoted.  Update the base
+    // station -- the app is not the place to paper over old firmware.
+    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.fallback
     // The BS sets flags bit 0 when its filesystem query succeeded.  It has been
     // decoded since the frame was added and never once read, so an unmounted
     // volume drew a normal-looking bar out of whatever total/used happened to be
