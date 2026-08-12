@@ -34,6 +34,30 @@ The base station fits easily in your hand or pocket and can run for hours on a s
 
 Finally, manage the flight data intuitively by uploading from the flight computer to an iOS device and then sharing that data using email, text, air drop, or any other iOS supported sharing means.
 
+## Data Analysis
+
+**[Analyze a flight in your browser →](https://tinkerbug-robotics.github.io/TinkerRocket/)**
+
+Drop a flight log in and get a report back: the trajectory in 3D on satellite
+imagery, then altitude, velocity and acceleration, roll control, how apogee was
+detected and by which sensor, stability, deployment and descent rates, the radio
+link, and a panel that will plot any of the ~84 logged channels against time or
+against each other.
+
+The log never leaves your machine. The page runs this repository's own
+`flight_report` Python package in the browser through
+[Pyodide](https://pyodide.org) — the same code the CLI runs, so a report
+generated on the site and one generated locally are the same report. There is a
+sample flight on the page if you want to see the output before you fly.
+
+For the command line, and for what each section is measuring:
+**[Data_Analysis/](Data_Analysis/)** and
+**[Data_Analysis/webtool/](Data_Analysis/webtool/README.md)**.
+
+```bash
+python3 -m Data_Analysis.flight_report run path/to/flight_20260705_174532.bin
+```
+
 ## Architecture
 
 ```mermaid

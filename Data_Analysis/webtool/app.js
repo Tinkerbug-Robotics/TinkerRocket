@@ -8,8 +8,11 @@ const startupList = el("startup-list");
 const dropzone = el("dropzone");
 const fileInput = el("file-input");
 const rocketNameInput = el("rocket-name");
-const levelSelect = el("level");
 const sampleBtn = el("sample-btn");
+const generateBtn = el("generate-btn");
+const stagedBox = el("staged");
+const stagedSummary = el("staged-summary");
+const clearBtn = el("clear-btn");
 const runPanel = el("run-panel");
 const moduleList = el("module-list");
 const runStatus = el("run-status");
@@ -17,6 +20,7 @@ const resultPanel = el("result-panel");
 const reportFrame = el("report-frame");
 const downloadBtn = el("download-btn");
 const openBtn = el("open-btn");
+const globeNote = el("globe-note");
 const errorBox = el("error-box");
 
 let engineReady = false;
@@ -119,6 +123,11 @@ function finishModuleRow(info) {
   li.querySelector(".mod-detail").textContent = `${figs} · ${info.seconds}s`;
 }
 
+function clearError() {
+  errorBox.hidden = true;
+  errorBox.textContent = "";
+}
+
 function showError(message) {
   errorBox.hidden = false;
   errorBox.textContent = message;
@@ -193,27 +202,101 @@ function handleProgress(msg) {
 
 // ---------- report display ----------
 
-function showReport(html) {
+// Registered once, best-effort. Everything still works without it except the 3D
+// globe — see sw.js for why a blob: URL cannot render one.
+let swReady = null;
+if ("serviceWorker" in navigator) {
+  swReady = navigator.serviceWorker
+    .register("sw.js")
+    .then(() => navigator.serviceWorker.ready)
+    .catch(() => null);
+}
+
+// Whether the worker is actually in front of our requests. Deliberately checked
+// when a report is ready rather than at registration: on a first visit the
+// worker installs, activates and calls clients.claim() over several ticks, and
+// sampling `controller` before that lands reads false for a worker that is about
+// to control the page — which then serves the report from a blob and loses the
+// globe for no reason.
+async function swControlling() {
+  if (!swReady || !(await swReady)) return false;
+  if (navigator.serviceWorker.controller) return true;
+  await new Promise((resolve) => {
+    const done = setTimeout(resolve, 3000);
+    navigator.serviceWorker.addEventListener(
+      "controllerchange",
+      () => { clearTimeout(done); resolve(); },
+      { once: true }
+    );
+  });
+  return !!navigator.serviceWorker.controller;
+}
+
+// A real same-origin URL for the generated report, or null if the worker is not
+// available (private windows and older browsers both land here). CesiumJS builds
+// a viewer on a blob: document, fetches its imagery, and then renders a black
+// canvas forever; served from a normal path the identical bytes render.
+async function reportUrl(html) {
+  try {
+    if (!(await swControlling())) return null;
+    const url = new URL(`report/${Date.now()}/${currentBinStem}.html`, location.href).toString();
+    const cache = await caches.open("tinkerrocket-reports");
+    await cache.put(
+      url,
+      new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } })
+    );
+    return url;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function showReport(html) {
   resultPanel.hidden = false;
 
-  // Load via blob URL, not srcdoc — a multi-MB srcdoc attribute stalls the renderer.
+  // The download always comes from a blob: the file is being handed to the user,
+  // not rendered, so its origin is irrelevant and a blob needs no cache entry.
   // Old URLs are intentionally never revoked mid-session: an "Open full page" tab
   // may still resolve one on reload. All report URLs die with this page.
   reportBlobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  reportFrame.src = reportBlobUrl;
   downloadBtn.href = reportBlobUrl;
   downloadBtn.download = `${currentBinStem}.html`;
-  openBtn.href = reportBlobUrl;
   resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const served = await reportUrl(html);
+  reportFrame.src = served || reportBlobUrl;
+  openBtn.href = served || reportBlobUrl;
+  // Say so rather than letting the reader wonder why one section is black.
+  globeNote.hidden = !!served;
 }
 
 // ---------- file intake ----------
+
+// Files wait here until the reader presses Generate. Dropping used to start the
+// run on the spot, which meant the rocket name — the one thing only they can
+// supply, and which titles the report — could only be set by knowing to type it
+// before dragging anything in.
+let staged = [];
+
+function describeStaged() {
+  const bin = staged.find((f) => f.name.toLowerCase().endsWith(".bin"));
+  const others = staged.length - (bin ? 1 : 0);
+  const name = bin ? bin.name : `${staged.length} file(s)`;
+  return others ? `${name} + ${others} more` : name;
+}
+
+function setStaged(entries) {
+  staged = entries;
+  stagedBox.hidden = !staged.length;
+  if (staged.length) stagedSummary.textContent = describeStaged();
+  updateControls();
+}
 
 function updateControls() {
   const enabled = engineReady && !running && !pending;
   sampleBtn.disabled = !enabled;
   fileInput.disabled = !enabled;
-  levelSelect.disabled = !enabled;
+  generateBtn.disabled = !enabled || !staged.length;
   dropzone.classList.toggle("disabled", !enabled);
 }
 
@@ -233,12 +316,10 @@ function runFiles(fileEntries, rocketName) {
     return;
   }
   const binEntry = bins[0];
-  const level = levelSelect.value;
-  // Same filenames the CLI writes, so a downloaded report sits alongside one
-  // generated locally without colliding or looking like a different artifact.
-  currentBinStem =
-    binEntry.name.replace(/\.bin$/i, "") +
-    (level === "detailed" ? "_report_detailed" : "_report");
+  // One report level, so nothing to choose. Same filename the CLI writes, so a
+  // downloaded report sits alongside one generated locally without colliding.
+  const level = "flight";
+  currentBinStem = binEntry.name.replace(/\.bin$/i, "") + "_report";
   beginRun(binEntry.name);
   const payload = fileEntries.map((f) => ({ name: f.name, buffer: f.buffer }));
   worker.postMessage(
@@ -275,9 +356,24 @@ function intakeFileList(fileList) {
       );
       return;
     }
-    runFiles(entries, rocketNameInput.value);
+    setStaged(entries);
+    clearError();
   });
 }
+
+generateBtn.addEventListener("click", () => {
+  if (!staged.length) return;
+  // The buffers are transferred to the worker, so this is a one-shot: keep the
+  // summary on screen for context but drop our claim on the memory.
+  const entries = staged;
+  setStaged([]);
+  runFiles(entries, rocketNameInput.value);
+});
+
+clearBtn.addEventListener("click", () => {
+  setStaged([]);
+  clearError();
+});
 
 fileInput.addEventListener("change", () => {
   intakeFileList(fileInput.files);
