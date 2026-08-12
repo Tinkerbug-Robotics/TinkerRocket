@@ -24,6 +24,8 @@
 #include "esp_nand_blockdev.h"
 #endif
 
+static const char *TAG = "nand_dhara";
+
 typedef struct {
     struct dhara_nand dhara_nand;
     struct dhara_map dhara_map;
@@ -52,8 +54,26 @@ static esp_err_t dhara_init(spi_nand_flash_device_t *handle, void *bdl_handle)
     dhara_priv_data->dhara_nand.num_blocks = handle->chip.num_blocks;
 
     dhara_map_init(&dhara_priv_data->dhara_map, &dhara_priv_data->dhara_nand, handle->work_buffer, handle->config.gc_factor);
-    dhara_error_t ignored;
-    dhara_map_resume(&dhara_priv_data->dhara_map, &ignored);
+    // Upstream discards this into a variable named `ignored`, which makes the
+    // worst outcome on this device completely silent.  dhara_map_resume rebuilds
+    // the translation map from metadata already on the NAND; when it fails the
+    // map comes up EMPTY, the chip then looks blank to FATFS, f_mount fails, and
+    // the caller's format_if_mount_failed reformats -- taking every flight log
+    // with it.  Nothing above here ever learns: the mount "succeeds", the
+    // backend still reports external NAND, and the app shows a healthy volume
+    // with plenty of free space.
+    //
+    // Deliberately still not fatal.  A blank or freshly-erased NAND fails resume
+    // for a perfectly good reason and MUST go on to be formatted; telling that
+    // apart from "there was a map and we could not read it" needs more than this
+    // return value.  So this reports rather than decides -- enough that a field
+    // log distinguishes the two instead of leaving it to guesswork.
+    dhara_error_t resume_err = DHARA_E_NONE;
+    if (dhara_map_resume(&dhara_priv_data->dhara_map, &resume_err) < 0) {
+        ESP_LOGW(TAG, "dhara_map_resume failed (dhara err %d) -- treating the NAND as "
+                 "blank; if it was not, FATFS is about to reformat it and existing "
+                 "logs are gone", (int)resume_err);
+    }
 
     return ESP_OK;
 }
