@@ -244,6 +244,35 @@ def _gyro_chart(recs, t0, events):
     return spec
 
 
+def _attitude_chart(recs, t0, events):
+    """Roll, pitch and yaw from the navigation filter.
+
+    The integral of the chart above it: the gyro says how fast the airframe was
+    turning, this says where that turning had got it to. Roll wraps at ±180°, so
+    a fast roll draws vertical strokes where the angle crosses the seam — those
+    are the wrap, not the vehicle snapping round.
+    """
+    ns = recs.get("NonSensor") or []
+    if not ns or not all(k in ns[0] for k in ("roll", "pitch", "yaw")):
+        return None
+    t = _t(ns, t0)
+    traces = [
+        trace(t, get_array(ns, name), label, COLORS[i])
+        for i, (name, label) in enumerate((("roll", "Roll"), ("pitch", "Pitch"), ("yaw", "Yaw")))
+    ]
+    spec = chart("chart-attitude", "Attitude", traces,
+                 y_title="Angle", y_unit="°", events=events, height=340)
+    if spec:
+        spec["note"] = (
+            "Where the airframe was pointing, as the filter solved it. Pitch and "
+            "yaw away from zero are the vehicle leaning off the rail's heading; "
+            "roll is free to run and on a roll-controlled flight is what the fins "
+            "are holding. Attitude after the ejection describes the airframe "
+            "swinging under the canopy."
+        )
+    return spec
+
+
 # Two magnetometers appear across board revisions and never both on one board.
 # They parse to identical field names and units, so the chart takes whichever is
 # populated rather than naming a part.
@@ -393,6 +422,8 @@ def analyze(flight: Flight) -> AnalysisResult:
         # happened, and the magnetometer corroborates the turning independently
         # of the gyro's drift.
         lambda: _gyro_chart(recs, t0, events),
+        # Rate, then the angle that rate integrates to.
+        lambda: _attitude_chart(recs, t0, events),
         lambda: _mag_chart(recs, t0, events),
     ])
 

@@ -24,6 +24,10 @@ class AnalysisResult:
     charts: list[dict[str, Any]] = field(default_factory=list)  # Plotly specs, see charts.py
     maps: list[dict[str, Any]] = field(default_factory=list)    # Leaflet specs, see maps.py
     globes: list[dict[str, Any]] = field(default_factory=list)  # Cesium specs, see modules/globe.py
+    # Raw channel data for the Explore panel to plot on demand. Shipped through
+    # the same gzip transport as charts, but it is not a chart: it has no traces
+    # and nothing draws until the reader asks for something.
+    datasets: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     text: str = ""                         # optional pre-formatted block (monospace)
     error: str | None = None               # if module crashed, captured here
@@ -46,6 +50,7 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         overview,
         deployment,
         globe,
+        explore,
         roll,
         apogee,
         sample_rates,
@@ -76,6 +81,10 @@ def _build_module_list() -> list[tuple[str, AnalyzeFn, str]]:
         # once, and it is what a flyer wants to see first. The charts that follow
         # then run position -> velocity -> acceleration.
         ("globe",             globe.analyze,             LEVEL_FLIGHT),
+        # Directly under the 3D path: that view answers "where did it go", and
+        # this answers "show me anything else", before the curated sections
+        # start answering questions somebody else chose.
+        ("explore",           explore.analyze,           LEVEL_FLIGHT),
         ("overview",          overview.analyze,          LEVEL_FLIGHT),
         # Directly below the kinematic charts: roll is the one axis those three
         # say nothing about, and on a roll-control flight it is the whole story.

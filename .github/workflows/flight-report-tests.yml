@@ -5,12 +5,14 @@ on:
     paths:
       - 'Data_Analysis/**'
       - 'tests/test_flight_report.py'
+      - 'tests/js/**'
       - 'tests/test_data/flight_*.bin'
       - '.github/workflows/flight-report-tests.yml'
   pull_request:
     paths:
       - 'Data_Analysis/**'
       - 'tests/test_flight_report.py'
+      - 'tests/js/**'
       - 'tests/test_data/flight_*.bin'
       - '.github/workflows/flight-report-tests.yml'
 
@@ -30,3 +32,19 @@ jobs:
 
       - name: Run flight_report smoke test
         run: python -m pytest tests/test_flight_report.py -v --tb=short
+
+  # The Explore panel decides what to draw in JavaScript, so that logic is tested
+  # in JavaScript. Node's own runner, no package.json and no dependencies — the
+  # module under test is plain ESM that the report inlines verbatim.
+  explore-js:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Explore panel tests
+        run: node --test tests/js/explore.test.mjs
