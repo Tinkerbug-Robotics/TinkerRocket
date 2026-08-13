@@ -3,9 +3,10 @@
 **Purpose.** Establish whether the single MCU can carry the reduced board by
 itself, now that the telemetry radio is on-board rather than on a daughterboard.
 
-**Answer: not as currently drawn.** The demand is 33 pins against 16 that are
-unconditionally free, or 27 if every strapping, debug and console pin is spent.
-The board is short by **at least 6 pins** even in the most aggressive case.
+**Answer: yes, with two pads to spare.** It did not fit as first drawn — 33 pins
+against 27 usable pads — but sharing the memory bus with the radio and dropping
+signals firmware never used brings the demand to **25**, all of it now wired.
+Two pads remain free, and the serial console survives.
 
 **Status.** Counted from a netlist export of the working tree, including the
 on-board radio. Pin *classification* (which pads are safe to use) is from part
@@ -48,12 +49,13 @@ pins. Treat the 27 as a theoretical maximum, not a plan.
 | Inertial + baro | shared SPI (3), two chip selects, two interrupts | 7 |
 | Magnetometer | **shares the power-monitor I²C bus** — no new pins | 0 |
 | GNSS | **UART pair only** — no second RX, no branch enable | 2 |
-| Telemetry radio | SPI (4), BUSY, RST, DIO1 | 7 |
+| Telemetry radio | chip select, BUSY, RST, DIO1 — **bus shared with memory** | 4 |
 | Pyro | four fire, four continuity, arm | 9 |
 | Housekeeping | rail power-good, power switch sense | 2 |
-| **Core total** | | **27** |
+| Peripheral power | single enable for receiver and radio | 1 |
+| **Core total** | | **25** |
 | Legacy radio connector | UART pair + branch enable, now redundant | 3 |
-| **As currently drawn** | | **30** |
+| **Still drawn, pending removal** | | **28** |
 
 **The GNSS branch enable is gone with that decision.** Two pins buys the data
 interface and nothing else, which means the receiver is permanently powered
@@ -102,45 +104,68 @@ Three savings are already reflected in the 27 above and are decided: the
 magnetometer moving onto the power-monitor I²C bus, the radio's two non-pin
 signals, and the GNSS reducing to its UART pair. What remains:
 
-| Change | Saves | Note |
+### Sharing an SPI bus beats adding an expander
+
+The board runs three general-purpose SPI buses where it needs two. Putting the
+radio on the memory bus frees three pins for **no new parts** — SPI is a bus, and
+the two devices keep their own chip selects.
+
+That is what was done. It also makes room for continuity to go straight onto
+processor pins, so the I²C expander this document previously recommended is not
+needed at all.
+
+**Which pair to combine is a latency question, not a bandwidth one.** There is
+enormous bandwidth margin either way; what matters is head-of-line blocking:
+
+| Device | Traffic shape | Bus demand |
 |---|---|---|
-| Remove the legacy radio connector and its branch enable | 3 | Pure redundancy — the on-board module replaces it |
-| Pyro continuity onto an I²C expander | **4** | Zero GPIO — see below |
+| Memory | page-sized bursts at 40 MHz — a single page blocks the bus for hundreds of µs | long transactions |
+| Sensors | read per-sample on data-ready, not batched through a FIFO | high rate, latency-critical |
+| Radio | one small packet twice a second | negligible |
 
-**Continuity belongs on the I²C bus, not a multiplexer.** A four-to-one
-multiplexer needs two select lines plus a data line — three pins to replace
-four, saving one. An expander on the bus the magnetometer is already joining
-costs **no processor pins at all** and saves all four.
+So **memory + radio share, sensors stay alone.** Pairing the sensors with memory
+would put the most latency-sensitive device behind the longest transactions, and
+that delay lands directly as jitter on the sample timebase — which matters,
+because those samples get integrated. The radio is three orders of magnitude
+below either and does not care if a packet waits half a millisecond.
 
-Continuity is a digital read, not an analogue one — firmware reads it as a GPIO
-level, and nothing on this board needs an ADC channel. That matters, because it
-means the ADC2-versus-radio restriction does not constrain this design at all.
-Bus latency is irrelevant here: continuity is a status check, not a control
-path.
+This does mean sensors and memory no longer share a host, which is how the V7
+firmware had them. That costs nothing: this board has no firmware map yet, so
+the host assignment is being written from scratch regardless.
 
-| Configuration | Pins | Fits 16 free? | Fits 27 ceiling? |
-|---|---|---|---|
-| As drawn, legacy connector removed | **27** | no | exactly, zero margin |
-| Also: continuity on the I²C expander | **23** | no | yes — 4 spare |
+Continuity is a digital read — firmware reads it as a GPIO level, and nothing on
+this board needs an ADC channel, so the ADC2-versus-radio restriction does not
+constrain the design at all.
 
-**27 fits only on paper.** It consumes every strapping pin, the serial console,
-JTAG and the three flash-adjacent pads at once, leaving nothing for a pin that
-turns out to be unusable or a bodge during bring-up. **23 is the number that
-makes the board buildable**, and it is reached with one small part.
+| Configuration | Pins | Spare |
+|---|---|---|
+| As drawn, legacy connector removed | 27 | 0 |
+| **Radio on the memory bus, continuity direct** | **25** | **2** |
 
-**Caution on the pyro lines.** Continuity sensing is a fine candidate for the
-expander; the four *fire* lines are not. Putting a shift register or expander
+**Caution on the pyro lines.** All eight pyro signals ended up on direct
+processor pins, which is the right outcome. Had pin pressure forced an expander,
+it should have carried *sensing* only — putting a shift register or expander
 between the processor and a pyro gate adds a failure mode that can assert an
-output without the processor commanding it, and adds latency to the one path
-where latency is least acceptable. Sensing goes on the bus; firing stays direct
-on dedicated pins.
+output without the processor commanding it, on the one path where latency and
+determinism matter most.
+
+**Why continuity avoids GPIO45.** The fourth channel sits on GPIO44, spending the
+console's receive line, rather than on the spare GPIO45. GPIO45 is sampled at
+reset to set the flash rail voltage, and a continuity input's level at boot
+depends on whether an igniter happens to be connected — which is not something
+the design controls. An armed channel could hold that pad high and stop the board
+booting. GPIO43 is kept free so the boot ROM can still print, which preserves
+bring-up diagnostics even without console input.
 
 ## Assignment — as built
 
-**This is wired in the schematic.** All 24 signals below are connected to the
+**This is wired in the schematic.** All 25 signals below are connected to the
 processor by global label at the pin, and the netlist confirms every one reaches
-it. The count is 24 rather than 23 because a single peripheral power enable was
-added, `PERIPH_EN` on GPIO3 — one pin powering both the receiver and the radio.
+it. Two pads remain free: **GPIO43** and **GPIO45**.
+
+The radio's clock, data-in and data-out are absent from the table because they
+are no longer dedicated — the radio shares the memory bus and keeps only its own
+chip select. Those three freed pins went to continuity sensing.
 
 Wired here, but **not yet wired at the far end**: `PERIPH_EN` reaches the
 processor and nothing else. The peripheral switch it should drive does not exist
@@ -165,10 +190,10 @@ The allocation is driven by three rules, in order:
 | PYRO3_FIRE | GPIO6 | free | safety-critical output |
 | PYRO4_FIRE | GPIO7 | free | safety-critical output |
 | PYRO_ARM | GPIO8 | free | safety-critical output |
-| L_SCK | GPIO10 | free | radio bus |
-| L_MOSI | GPIO11 | free | radio bus |
-| L_MISO | GPIO12 | free | radio bus |
-| L_CS | GPIO13 | free | radio bus |
+| PYRO1_CONT | GPIO10 | free | continuity sense |
+| PYRO2_CONT | GPIO11 | free | continuity sense |
+| PYRO3_CONT | GPIO12 | free | continuity sense |
+| L_CS | GPIO13 | free | radio chip select (bus shared with memory) |
 | L_BUSY | GPIO14 | free | radio input |
 | L_DIO1 | GPIO17 | free | radio interrupt |
 | L_RST | GPIO18 | free | radio output |
@@ -183,6 +208,7 @@ The allocation is driven by three rules, in order:
 | GNSS_RX | GPIO40 | JTAG | UART, tolerant |
 | PG_RAIL | GPIO41 | JTAG | passive input |
 | POWER_SWITCH | GPIO42 | JTAG | passive input |
+| PYRO4_CONT | GPIO44 | console RX | continuity sense — see the note below |
 
 ### The switched rail problem
 

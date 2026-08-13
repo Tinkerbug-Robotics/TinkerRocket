@@ -5354,7 +5354,7 @@
 			)
 		)
 	)
-	(global_label "L_SCK"
+	(global_label "M_SCK"
 		(shape input)
 		(at 182.88 113.665 0)
 		(fields_autoplaced yes)
@@ -5665,7 +5665,7 @@
 			)
 		)
 	)
-	(global_label "L_MOSI"
+	(global_label "M_MOSI"
 		(shape input)
 		(at 182.88 108.585 0)
 		(fields_autoplaced yes)
@@ -5881,7 +5881,7 @@
 			)
 		)
 	)
-	(global_label "L_MISO"
+	(global_label "M_MISO"
 		(shape input)
 		(at 182.88 106.045 0)
 		(fields_autoplaced yes)

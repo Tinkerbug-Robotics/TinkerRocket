@@ -6889,7 +6889,7 @@
 			)
 		)
 	)
-	(global_label "L_SCK"
+	(global_label "PYRO1_CONT"
 		(shape input)
 		(at 212.725 76.2 0)
 		(fields_autoplaced yes)
@@ -6913,7 +6913,7 @@
 			)
 		)
 	)
-	(global_label "L_MOSI"
+	(global_label "PYRO2_CONT"
 		(shape input)
 		(at 212.725 78.74000000000001 0)
 		(fields_autoplaced yes)
@@ -6937,7 +6937,7 @@
 			)
 		)
 	)
-	(global_label "L_MISO"
+	(global_label "PYRO3_CONT"
 		(shape input)
 		(at 212.725 81.28 0)
 		(fields_autoplaced yes)
@@ -7246,6 +7246,30 @@
 					(size 1.27 1.27)
 				)
 				(justify right)
+			)
+		)
+	)
+	(global_label "PYRO4_CONT"
+		(shape input)
+		(at 161.92499999999998 86.36 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "268b5584-1134-43e9-af60-843b2cb6f32b")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 173.4373 86.36 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 	)
