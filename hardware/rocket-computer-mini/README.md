@@ -53,15 +53,37 @@ violations came along with it** — 1012 ERC at `--severity-all` and 26 DRC, plu
 11 schematic-parity items, 0 unconnected. None were introduced by the copy, and
 none have been fixed here.
 
-Two inherited items are wrong for this board rather than merely unreviewed, and
-should be fixed early:
+One inherited item is still wrong for this board rather than merely unreviewed:
+`bom.csv` is V9's full bill of materials, and will be wrong the moment anything
+is removed.
 
-- The PCB title block still reads `(rev "V9")`, and the front silkscreen renders
-  `Tinker\nRocket\n${REVISION}` from it — so the board currently silkscreens the
-  revision of a *different* design's fab release. This board has no revision
-  history of its own yet.
-- `bom.csv` is V9's full bill of materials and will be wrong the moment anything
-  is removed.
+### The revision, and what changing it cost
+
+The title block arrived reading `(rev "V9")` — the revision of a *different*
+design's fab release — and the front silkscreen renders
+`Tinker\nRocket\n${REVISION}` from it. It now reads **`rev1`**, this board's own
+first revision.
+
+That is the only edit made since the fork, and it is not free. `rev1` is two
+characters wider than `V9`, so the silkscreen block grew and now touches R1:
+
+| | at fork | after `rev1` |
+|---|---|---|
+| DRC (`--severity-all`) | 26 | **28** |
+
+The two new items are `silk_overlap` (the text against R1's silkscreen segment)
+and `silk_over_copper` (the text against R1's pad 1), both at
+`@(72.64 mm, 159.51 mm)`, both severity *warning*. They are cosmetic and in the
+same class as the 26 already inherited — but they are **new, not inherited**,
+and they are a layout problem, not a naming one.
+
+Deliberately not fixed by nudging the text: this board exists to have most of
+its content removed, and that silkscreen will have to be repositioned anyway
+once the layout is cut down. Fixing it now would be laying out a board that is
+about to stop existing. Whoever does the reduction should clear it then — or
+shorten the string, since a two-character revision (`V1`, matching the `V9` /
+`V5` convention on the other boards) reoccupies the original footprint exactly
+and drops both warnings.
 
 ## Status
 
