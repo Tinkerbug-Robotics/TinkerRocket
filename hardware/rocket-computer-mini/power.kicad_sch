@@ -5881,7 +5881,7 @@
 		)
 		(uuid "96b68b04-df05-4061-b9b1-166c0d0f02d9")
 	)
-	(text "ESP32-OUT acts as a BLE power switch on boot. Switching\non V_MCU_SWITCH enables Flight Computer."
+	(text "ESP32-S3 acts as a BLE power switch on boot. Switching\non V_MCU_SWITCH enables the sensor and peripheral rail."
 		(exclude_from_sim no)
 		(at 206.375 160.655 0)
 		(effects

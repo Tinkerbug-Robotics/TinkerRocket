@@ -16308,7 +16308,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "EKYC160ELL103MM25S"
+		(property "Value" "2200uF 16V"
 			(at 128.905 44.6531 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16319,7 +16319,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Footprints:EKYC160ELL103MM25S"
+		(property "Footprint" "Footprints:CP_Radial_D12.5mm_L20.0mm_P5.00mm_Horizontal_Strap"
 			(at 125.73 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -16352,7 +16352,7 @@
 				)
 			)
 		)
-		(property "MPN" "EKYC160ELL103MM25S"
+		(property "MPN" "16ZLH2200MEFC12.5X20"
 			(at 125.73 43.815 0)
 			(hide yes)
 			(show_name no)
@@ -16363,7 +16363,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Nichicon"
+		(property "Mfr" "Rubycon"
 			(at 125.73 43.815 0)
 			(hide yes)
 			(show_name no)

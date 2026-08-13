@@ -13,17 +13,59 @@ one is never expected to propagate to the other. The starting geometry and
 schematic were simply a convenient place to begin.
 
 Treat anything inherited as a first draft to be justified on its own terms, not
-as a decision already made. That applies with force here: the fork currently
-carries the **full** V9 design — both processors, all five sheets, 255
-components — and the entire point of the board is that most of it goes away.
-Nothing has been removed yet.
+as a decision already made.
+
+## The ESP32-S3 is the only processor
+
+The board arrived from the fork carrying both of `rocket-computer`'s processors.
+The ESP32-P4 has been removed entirely, leaving the ESP32-S3 as the sole
+processor — and since it is no longer one of two, it is no longer called *OUT*.
+
+| | at fork | now |
+|---|---|---|
+| Parts | 255 | **190** |
+| Nets | 234 | **191** |
+| Sheets | 5 | **4** |
+
+**Removed — the whole `Central Processing - ESP32-P4` sheet, 65 parts:** `U17`
+(ESP32-P4), `U16` its SPI flash, `U20` its dedicated TLV62569 buck, `Y3`/`Y4`
+its crystals, `SW2`, LEDs `D7`/`D8`, and 57 passives.
+
+**Renamed — the S3 sheet is now `MCU - ESP32-S3`** in
+[`esp32s3_mcu.kicad_sch`](esp32s3_mcu.kicad_sch), and its nine `OUT_*` nets are
+now `MCU_*` (`MCU_SPI_CLK`, `MCU_D+`, …). Pin names that merely contain "OUT"
+(`VOUT`, `OUT_17`, `Net-(U28-OUT)`) were deliberately left alone. The note on
+the power sheet claiming *"ESP32-OUT … enables Flight Computer"* described the
+S3 gating the P4 and is now wrong; it has been reworded to the switched sensor
+and peripheral rail, but **the topology itself has not been rethought** — the S3
+still gates a rail whose original purpose was powering a processor that no
+longer exists.
+
+### What the P4 took with it
+
+The P4 owned nearly every subsystem. Removing it left **34 named signals with a
+single remaining endpoint** and several more that kept a pull-up but lost their
+driver. Nothing has been rewired to the S3 yet:
+
+| Orphaned | Signals |
+|---|---|
+| Sensors | IMU / mag / baro SPI + I2C + interrupts, GNSS UART |
+| Pyro | all four `PYRO*_FIRE` / `PYRO*_CONT`, `PYRO_ARM` |
+| Expansion | all twelve `EXP_01`–`EXP_12` |
+| Other | camera UART, `PIEZZO`, `SERVO_ACT`, the six `ESP_*` link lines |
+| Power | `P4_EN_HOLD`, now a single node on `D9` |
+
+**This board cannot fly as it stands.** Re-attaching these to the S3 is the next
+design decision, and it is a real one — the S3 has far fewer usable pins than
+the P4 did, so some of the above will not survive the move.
 
 ## What was and wasn't carried over
 
 Copied and rewritten for the new project name: the root schematic, the five
 sub-sheets (`in_sensors`, `power`, `central_processing_p4`, `esp32s3_outputs`,
 `external_connections`), the PCB, the project file, the library tables, and
-`bom.csv`.
+`bom.csv`. Of those, `central_processing_p4` has since been deleted and
+`esp32s3_outputs` renamed, as above.
 
 Deliberately **not** copied — `rocket-computer`'s seven design documents. All of
 them are records of *that* board, and each would be actively misleading here:
@@ -53,9 +95,40 @@ violations came along with it** — 1012 ERC at `--severity-all` and 26 DRC, plu
 11 schematic-parity items, 0 unconnected. None were introduced by the copy, and
 none have been fixed here.
 
-One inherited item is still wrong for this board rather than merely unreviewed:
-`bom.csv` is V9's full bill of materials, and will be wrong the moment anything
-is removed.
+### Where the numbers stand now
+
+| | at fork | after `rev1` | after P4 removal |
+|---|---|---|---|
+| ERC (`--severity-all`) | 1012 | 1012 | **823** |
+| DRC (`--severity-all`) | 26 | 28 | **88** |
+| Schematic parity | 11 | 11 | **8** |
+| Unconnected | 0 | 0 | **0** |
+
+Every pre-existing DRC category went *down* with the parts count. The rise to 88
+is one thing: **66 `track_dangling` + 2 `via_dangling`** — stubs that used to run
+to a P4 pad on nets that still have pads elsewhere, so they survived the
+dead-net sweep.
+
+**Left in place deliberately.** These signals are about to be rewired to the S3
+and the affected region re-laid-out, so trimming the stubs now would be work
+thrown away by the next pass. They are warnings, not errors, and `unconnected`
+is still 0.
+
+Three stale items are worth knowing about, none fixed:
+
+- **`C12`'s footprint disagrees between schematic and board.** The pyro energy
+  store was changed from the Nichicon `EKYC160ELL103MM25S` to a Rubycon 2200 µF
+  16 V (`16ZLH2200MEFC12.5X20`) in a horizontal lay-down can with a hold-down
+  strap — which is what the inherited fab notes' "can floating 4 mm above the
+  board" warning was about. **The schematic carries the change; the PCB still
+  has the old vertical footprint.** Swapping it on the board means re-placing
+  C12 and re-routing it, which is layout work for the next pass.
+- **`bom.csv` is still V9's full bill of materials** — 255 parts, including the
+  65 that no longer exist. The C12 row is the one line that is current.
+- **The on-board fabrication-note text still cites `QFN-104 (U17)`** as the
+  reason ENIG is required. `U17` was the P4 and is gone. ENIG is still justified
+  by `U15` (0.4 mm QFN-56) and `U21` (0.4 mm X2QFN), but the citation is dead and
+  the note also still calls the board "ROCKET COMPUTER" at V9's dimensions.
 
 ### The revision, and what changing it cost
 
@@ -87,9 +160,14 @@ and drops both warnings.
 
 ## Status
 
-Fresh fork, nothing reduced yet. Not reviewed, not fabbed, no tag, no firmware
-project of its own — the inherited schematic still targets both the ESP32-P4
-flight computer and the ESP32-S3 out computer.
+**Mid-reduction, not buildable.** The P4 is gone and the S3 is the sole
+processor, but nothing has been rewired to it yet — the sensors, all four pyro
+channels and the expansion header currently connect to nothing.
+
+Not reviewed, not fabbed, no tag, no firmware project of its own. Further
+reduction is expected, which is why the dangling stubs, the V9 BOM, the stale
+on-board fab note and the `rev1` silkscreen overlap are all recorded here rather
+than fixed — each one sits in a region that the next pass is going to rework.
 
 Before it goes to fab it needs its own pre-manufacturing review — see *Sending a
 board to fab* in [`../README.md`](../README.md).

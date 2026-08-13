@@ -5497,7 +5497,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_CS0"
+	(global_label "MCU_SPI_CS0"
 		(shape input)
 		(at 127.635 103.505 0)
 		(fields_autoplaced yes)
@@ -5617,7 +5617,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_WP"
+	(global_label "MCU_SPI_WP"
 		(shape input)
 		(at 161.925 104.14 180)
 		(fields_autoplaced yes)
@@ -5713,7 +5713,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_Q"
+	(global_label "MCU_SPI_Q"
 		(shape input)
 		(at 161.925 114.3 180)
 		(fields_autoplaced yes)
@@ -5737,7 +5737,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_HD"
+	(global_label "MCU_SPI_HD"
 		(shape input)
 		(at 161.925 101.6 180)
 		(fields_autoplaced yes)
@@ -5761,7 +5761,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_CLK"
+	(global_label "MCU_SPI_CLK"
 		(shape input)
 		(at 127.635 106.045 0)
 		(fields_autoplaced yes)
@@ -5809,7 +5809,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_WP"
+	(global_label "MCU_SPI_WP"
 		(shape input)
 		(at 127.635 113.665 0)
 		(fields_autoplaced yes)
@@ -5833,7 +5833,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_Q"
+	(global_label "MCU_SPI_Q"
 		(shape input)
 		(at 127.635 111.125 0)
 		(fields_autoplaced yes)
@@ -5857,7 +5857,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_D"
+	(global_label "MCU_SPI_D"
 		(shape input)
 		(at 127.635 108.585 0)
 		(fields_autoplaced yes)
@@ -5905,7 +5905,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_CS0"
+	(global_label "MCU_SPI_CS0"
 		(shape input)
 		(at 161.925 106.68 180)
 		(fields_autoplaced yes)
@@ -5929,7 +5929,7 @@
 			)
 		)
 	)
-	(global_label "OUT_D+"
+	(global_label "MCU_D+"
 		(shape input)
 		(at 227.965 96.52 0)
 		(fields_autoplaced yes)
@@ -5953,7 +5953,7 @@
 			)
 		)
 	)
-	(global_label "OUT_D-"
+	(global_label "MCU_D-"
 		(shape input)
 		(at 236.855 93.98 0)
 		(fields_autoplaced yes)
@@ -6025,7 +6025,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_D"
+	(global_label "MCU_SPI_D"
 		(shape input)
 		(at 161.925 116.84 180)
 		(fields_autoplaced yes)
@@ -6096,7 +6096,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_HD"
+	(global_label "MCU_SPI_HD"
 		(shape input)
 		(at 127.635 116.205 0)
 		(fields_autoplaced yes)
@@ -6240,7 +6240,7 @@
 			)
 		)
 	)
-	(global_label "OUT_VDD_SPI"
+	(global_label "MCU_VDD_SPI"
 		(shape input)
 		(at 224.79 27.305 90)
 		(fields_autoplaced yes)
@@ -6264,7 +6264,7 @@
 			)
 		)
 	)
-	(global_label "OUT_SPI_CLK"
+	(global_label "MCU_SPI_CLK"
 		(shape input)
 		(at 161.925 111.76 180)
 		(fields_autoplaced yes)

@@ -723,15 +723,11 @@
     ],
     [
       "eab70588-b031-4461-adac-e038e88381cb",
-      "OUT - ESP32-S3 Outputs"
+      "MCU - ESP32-S3"
     ],
     [
       "4387b4db-c729-4e1d-84b2-dffd80f2e21f",
       "Power"
-    ],
-    [
-      "9eb477c0-6194-4c07-b62b-97e172b64d07",
-      "Central Processing - ESP32-P4"
     ]
   ],
   "text_variables": {},
