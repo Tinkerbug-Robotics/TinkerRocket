@@ -57,7 +57,20 @@ driver. Nothing has been rewired to the S3 yet:
 
 **This board cannot fly as it stands.** Re-attaching these to the S3 is the next
 design decision, and it is a real one — the S3 has far fewer usable pins than
-the P4 did, so some of the above will not survive the move.
+the P4 did, so some of the above did not survive the move. Several are already
+gone: the expansion header, the camera, the servo output and the piezo have
+since been removed rather than rehomed, and the radio has moved on-board. See
+[`pin-budget.md`](pin-budget.md) for what the survivors cost and where they land.
+
+## Design docs
+
+- [`power-budget.md`](power-budget.md) — the 3V3 rail after the reduction, with
+  a GNSS module and the telemetry radio added. Concludes the inherited buck
+  stays, and explains why the ground station's buck-boost must not be copied
+  here.
+- [`pin-budget.md`](pin-budget.md) — whether the single processor can carry the
+  board alone. 23 signals into 27 usable pads, with a proposed assignment that
+  keeps the serial console and spends JTAG.
 
 ## What was and wasn't carried over
 
