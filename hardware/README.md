@@ -17,7 +17,7 @@ complete sources must be available under the same licence.
 |---|---|---|
 | [`rocket-computer/`](rocket-computer/) | Flight computer + out computer, one board | `tinkerrocket-idf/projects/flight_computer` (ESP32-P4) and `.../out_computer` (ESP32-S3) |
 | [`base-station/`](base-station/) | Ground station | `tinkerrocket-idf/projects/base_station` |
-| [`base-station-mini/`](base-station-mini/) | Ground station, second design — forked from `base-station`, no ongoing link | — (none yet) |
+| [`base-station-mini/`](base-station-mini/) | Ground station, reduced feature set — on-board LoRa, no external charger. Forked from `base-station`, no ongoing link | — (none yet) |
 | [`lora-daughterboard/`](lora-daughterboard/) | Swappable UART radio module | `tinkerrocket-idf/projects/radio_board` |
 | [`gnss-px1105r-18mm-highpower-ext-ant/`](gnss-px1105r-18mm-highpower-ext-ant/) | GNSS carrier, PX1105R, external antenna | — (module carrier) |
 | [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier, SAM-M10Q, high-voltage variant | — (module carrier) |
