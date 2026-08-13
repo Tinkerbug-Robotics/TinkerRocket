@@ -1,0 +1,222 @@
+(footprint "CP_Radial_D12.5mm_L20.0mm_P5.00mm_Horizontal_Strap"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Polarised aluminium electrolytic, radial can mounted HORIZONTALLY (leads bent 90 deg). Body Dia 12.5 mm x 20.0 mm long, 5.00 mm lead pitch. Can axis parallel to board, leads side-by-side, can resting on board. Two plated mechanical holes at mid-body for a hold-down wire strap over the can. Pad 1 = positive. Fits any Dia 12.5 x 20 mm / 5.00 mm pitch radial can.")
+	(tags "capacitor electrolytic radial horizontal lay-down strap tie-down polarised")
+	(property "Reference" "REF**"
+		(at 6.5 -7.6 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "2ccd86d8-072c-4832-803e-85958bafac11")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "CP_Radial_D12.5mm_L20.0mm_P5.00mm_Horizontal_Strap"
+		(at 13.5 10.5 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "3cecf01f-14cf-43f3-952c-3ebc5dd1228e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ede6547c-1e2a-48c9-9a92-c6c89b640c31")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "Aluminium electrolytic, Dia 12.5 x 20 mm radial can, horizontal mount with wire strap"
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "94065421-4e88-49fc-ad5b-1deac966cd2c")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+
+	(fp_rect
+		(start 3.5 -6.25)
+		(end 23.5 6.25)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "c2b2c46c-07b3-4ea4-87fa-39fd078e9548")
+	)
+	(fp_line
+		(start -0.6 -4.8)
+		(end 0.6 -4.8)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "3e964dcc-1338-4e60-96e0-a51df851cfca")
+	)
+	(fp_line
+		(start 0 -5.4)
+		(end 0 -4.2)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "839a2197-3f8f-427c-a91f-4cd23935992f")
+	)
+	(fp_line
+		(start 4.5 6.9)
+		(end 9.5 6.9)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "2d58f0ab-d5e3-4f9b-ade4-fd203f2dc5fe")
+	)
+	(fp_line
+		(start 4.5 7.3)
+		(end 9.5 7.3)
+		(stroke
+			(width 0.12)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "cdacaa2a-12e3-4662-908b-2625915884ee")
+	)
+
+	(fp_rect
+		(start 3.5 -6.25)
+		(end 23.5 6.25)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "6446afa2-359f-441c-a9e0-db38f2516023")
+	)
+	(fp_line
+		(start 0 -2.5)
+		(end 3.5 -2.5)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "74830e81-8c88-4070-afcd-a9396a06cb4a")
+	)
+	(fp_line
+		(start 0 2.5)
+		(end 3.5 2.5)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "3b503e07-200c-4ce5-a276-b212969c8d58")
+	)
+	(fp_line
+		(start 13.5 -8)
+		(end 13.5 8)
+		(stroke
+			(width 0.1)
+			(type dash)
+		)
+		(layer "F.Fab")
+		(uuid "da5be1dd-83ac-4f20-92e7-e0d675c9f195")
+	)
+	(fp_line
+		(start 3.5 4.75)
+		(end 23.5 4.75)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "F.Fab")
+		(uuid "3800344c-463b-4d94-b557-a199ec75330e")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 13.5 -3 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "1a85e602-8fe2-4a5a-8aa3-35e566e4ac6a")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+
+	(fp_rect
+		(start -1.3 -9.35)
+		(end 23.8 9.35)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "9136bedb-bde8-4aaa-b0b5-e77628293696")
+	)
+
+	(pad "1" thru_hole rect
+		(at 0 -2.5)
+		(size 2 2)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "9c2495d6-5ca0-4a49-8578-3b3dc6cabe3c")
+	)
+	(pad "2" thru_hole circle
+		(at 0 2.5)
+		(size 2 2)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "aeb7b572-aad0-47d8-8f8c-f58dcb301f79")
+	)
+	(pad "" thru_hole circle
+		(at 13.5 -8)
+		(size 2.2 2.2)
+		(drill 1.3)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "5a92c23a-684c-4b99-9eac-9ec56411de1d")
+	)
+	(pad "" thru_hole circle
+		(at 13.5 8)
+		(size 2.2 2.2)
+		(drill 1.3)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "0fab3997-8b89-4d89-9dad-03690bbfa31e")
+	)
+	(embedded_fonts no)
+)

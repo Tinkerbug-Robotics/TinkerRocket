@@ -114,10 +114,17 @@ and the affected region re-laid-out, so trimming the stubs now would be work
 thrown away by the next pass. They are warnings, not errors, and `unconnected`
 is still 0.
 
-Two stale items are worth knowing about, neither fixed:
+Three stale items are worth knowing about, none fixed:
 
+- **`C12`'s footprint disagrees between schematic and board.** The pyro energy
+  store was changed from the Nichicon `EKYC160ELL103MM25S` to a Rubycon 2200 µF
+  16 V (`16ZLH2200MEFC12.5X20`) in a horizontal lay-down can with a hold-down
+  strap — which is what the inherited fab notes' "can floating 4 mm above the
+  board" warning was about. **The schematic carries the change; the PCB still
+  has the old vertical footprint.** Swapping it on the board means re-placing
+  C12 and re-routing it, which is layout work for the next pass.
 - **`bom.csv` is still V9's full bill of materials** — 255 parts, including the
-  65 that no longer exist.
+  65 that no longer exist. The C12 row is the one line that is current.
 - **The on-board fabrication-note text still cites `QFN-104 (U17)`** as the
   reason ENIG is required. `U17` was the P4 and is gone. ENIG is still justified
   by `U15` (0.4 mm QFN-56) and `U21` (0.4 mm X2QFN), but the citation is dead and
