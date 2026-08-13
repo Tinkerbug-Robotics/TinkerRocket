@@ -135,9 +135,18 @@ output without the processor commanding it, and adds latency to the one path
 where latency is least acceptable. Sensing goes on the bus; firing stays direct
 on dedicated pins.
 
-## Proposed assignment
+## Assignment — as built
 
-23 signals into 27 pads. The allocation is driven by three rules, in order:
+**This is wired in the schematic.** All 24 signals below are connected to the
+processor by global label at the pin, and the netlist confirms every one reaches
+it. The count is 24 rather than 23 because a single peripheral power enable was
+added, `PERIPH_EN` on GPIO3 — one pin powering both the receiver and the radio.
+
+Wired here, but **not yet wired at the far end**: `PERIPH_EN` reaches the
+processor and nothing else. The peripheral switch it should drive does not exist
+in a usable form yet — see *The switched rail problem* below.
+
+The allocation is driven by three rules, in order:
 
 1. **Pyro firing gets the safest pins available** — unrestricted GPIO only,
    never a strapping pin, never a pin the boot ROM drives. The console transmit
@@ -150,6 +159,7 @@ on dedicated pins.
 
 | Signal | Pin | Tier | Why here |
 |---|---|---|---|
+| PERIPH_EN | GPIO3 | strapping | enable idles low, which is what this pad wants at reset |
 | PYRO1_FIRE | GPIO4 | free | safety-critical output |
 | PYRO2_FIRE | GPIO5 | free | safety-critical output |
 | PYRO3_FIRE | GPIO6 | free | safety-critical output |
@@ -173,6 +183,40 @@ on dedicated pins.
 | GNSS_RX | GPIO40 | JTAG | UART, tolerant |
 | PG_RAIL | GPIO41 | JTAG | passive input |
 | POWER_SWITCH | GPIO42 | JTAG | passive input |
+
+### The switched rail problem
+
+`PERIPH_EN` is meant to power the receiver and the radio from one pin. **No
+switch on this board can currently do that.** Both existing load switches take
+their input from the battery rail, not 3.3 V — they were switching power to
+daughterboards that carried their own regulators:
+
+| Switch | Input | Output goes to |
+|---|---|---|
+| `U27` | VBATT (6.4–8.4 V) | `FL1` → `J1`, the external GNSS connector |
+| `U29` | VBATT (6.4–8.4 V) | `FL2` → `J5`, the external radio connector |
+
+The bare modules are 3.3 V parts — the receiver is rated 2.55–3.6 V. **Connecting
+either module to either switch output as currently wired would destroy it.**
+
+The decided fix, not yet implemented: repoint one switch's input to +3V3 and
+feed both modules from it, with `PERIPH_EN` as its enable; the other switch and
+both legacy connectors come out. Until that is done the radio remains on
+unswitched +3V3 and the receiver's supply pin is unconnected.
+
+### Still unwired
+
+Seven named nets still have a single endpoint, each for a known reason:
+
+| Net | Why |
+|---|---|
+| `PERIPH_EN` | reaches the processor; awaits the switched rail above |
+| `IIS2MDCTR_SCL` / `_SDA` | magnetometer moves onto the power-monitor I²C bus |
+| `GNSS_RXD2` | dropped by decision — the receiver keeps its UART pair only |
+| `L_RXEN` | radio receive-enable, floating and absent from firmware |
+| `LoRa_RX` / `LoRa_TX` | legacy connector `J5`, redundant with the on-board radio |
+
+The receiver's own pins — supply, ground, UART, reset — are also not yet wired.
 
 **What this costs and keeps:**
 
