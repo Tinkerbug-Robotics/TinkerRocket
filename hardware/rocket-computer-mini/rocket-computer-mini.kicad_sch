@@ -1808,7 +1808,7 @@
 			)
 		)
 	)
-	(global_label "OUT_D-"
+	(global_label "MCU_D-"
 		(shape input)
 		(at 57.15 62.865 0)
 		(fields_autoplaced yes)
@@ -1856,7 +1856,7 @@
 			)
 		)
 	)
-	(global_label "OUT_D+"
+	(global_label "MCU_D+"
 		(shape input)
 		(at 57.15 52.705 0)
 		(fields_autoplaced yes)
@@ -4182,54 +4182,6 @@
 		)
 	)
 	(sheet
-		(at 188.595 83.185)
-		(size 88.265 21.59)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(stroke
-			(width 0.1524)
-			(type solid)
-		)
-		(fill
-			(color 0 0 0 0)
-		)
-		(uuid "9eb477c0-6194-4c07-b62b-97e172b64d07")
-		(property "Sheetname" "Central Processing - ESP32-P4"
-			(at 188.595 81.8584 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 2.5 2.5)
-					(thickness 0.5)
-					(bold yes)
-				)
-				(justify left bottom)
-			)
-		)
-		(property "Sheetfile" "central_processing_p4.kicad_sch"
-			(at 188.595 105.3596 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left top)
-			)
-		)
-		(instances
-			(project "rocket-computer-mini"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
-					(page "6")
-				)
-			)
-		)
-	)
-	(sheet
 		(at 188.595 141.605)
 		(size 88.265 21.59)
 		(exclude_from_sim no)
@@ -4245,7 +4197,7 @@
 			(color 0 0 0 0)
 		)
 		(uuid "eab70588-b031-4461-adac-e038e88381cb")
-		(property "Sheetname" "OUT - ESP32-S3 Outputs"
+		(property "Sheetname" "MCU - ESP32-S3"
 			(at 188.595 140.2784 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4258,7 +4210,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "esp32s3_outputs.kicad_sch"
+		(property "Sheetfile" "esp32s3_mcu.kicad_sch"
 			(at 188.595 163.7796 0)
 			(show_name no)
 			(do_not_autoplace no)

@@ -16,7 +16,7 @@ complete sources must be available under the same licence.
 | Folder | Board | Firmware target |
 |---|---|---|
 | [`rocket-computer/`](rocket-computer/) | Flight computer + out computer, one board | `tinkerrocket-idf/projects/flight_computer` (ESP32-P4) and `.../out_computer` (ESP32-S3) |
-| [`rocket-computer-mini/`](rocket-computer-mini/) | Flight computer, reduced capability — forked from `rocket-computer`, no ongoing link | — (none yet) |
+| [`rocket-computer-mini/`](rocket-computer-mini/) | Flight computer, reduced capability — single ESP32-S3, no P4. Forked from `rocket-computer`, no ongoing link | — (none yet) |
 | [`base-station/`](base-station/) | Ground station | `tinkerrocket-idf/projects/base_station` |
 | [`base-station-mini/`](base-station-mini/) | Ground station, reduced feature set — on-board LoRa, no external charger. Forked from `base-station`, no ongoing link | — (none yet) |
 | [`lora-daughterboard/`](lora-daughterboard/) | Swappable UART radio module | `tinkerrocket-idf/projects/radio_board` |
