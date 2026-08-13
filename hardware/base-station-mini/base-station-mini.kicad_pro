@@ -589,6 +589,10 @@
       },
       {
         "netclass": "RF",
+        "pattern": "Net-(U16-ANT)"
+      },
+      {
+        "netclass": "RF",
         "pattern": "Net-(U3-LNA_IN)"
       }
     ]
@@ -740,10 +744,6 @@
     [
       "d2421514-d142-4c71-ac69-48d30c1a771f",
       "base-station-mini"
-    ],
-    [
-      "dd2872d5-4eb8-4b19-9e46-72fd20e930ec",
-      "External Charger"
     ],
     [
       "6cfb856e-ef45-4f36-bd7e-e27b13a29501",
