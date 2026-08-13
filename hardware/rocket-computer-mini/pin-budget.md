@@ -33,10 +33,22 @@ The 27 unconnected pads are **not** 27 usable GPIO:
 | Flash/PSRAM adjacent | 3 | GPIO26, 47, 48 | free **only** if the package has no in-package PSRAM |
 | **Total** | **27** | | |
 
-**On the PSRAM three.** The design already uses four of the octal-PSRAM pin
-group as ordinary GPIO, which implies the part is not an octal-PSRAM variant and
-that these three are genuinely free. That inference is consistent but it is an
-inference — confirm it against the ordered part before counting on them.
+**Resolved against the datasheet (v2.2, Table 1-1).** The part is
+**ESP32-S3RH2: 2 MB Quad SPI PSRAM, no in-package flash, VDD_SPI 3.3 V**, and it
+is the replacement for the end-of-life ESP32-S3R2. That settles the group
+individually rather than collectively:
+
+- **GPIO26 (SPICS1) is the in-package PSRAM chip select and is NOT available.**
+  The earlier "no PSRAM" reasoning only ruled out *octal*; this part has *quad*,
+  which uses exactly this pin. It is now unused.
+- **GPIO47 and GPIO48 (SPICLK_N/P) are available.** They serve octal PSRAM only.
+  Datasheet note 4 confirms they are GPIO47/GPIO48 and that their rail follows
+  VDD_SPI — 3.3 V on this part, so they behave like ordinary GPIO here.
+- **GPIO33–37 are available** for the same reason: SPIIO4–7 and SPIDQS are octal
+  functions.
+- **Pins 30–35 are shared deliberately.** The in-package PSRAM and the external
+  boot flash sit on one bus: SPICS0 selects the flash, SPICS1 the PSRAM. Using
+  those six for the external flash is the intended arrangement, not a conflict.
 
 **The realistic ceiling is 16.** A flight computer that cannot be debugged over
 JTAG or watched over a serial console during bring-up is a poor trade for four
@@ -168,7 +180,7 @@ flash/PSRAM, because the design's proof only covers one of them.
 | Quad flash bus | GPIO27–32 | flash clock, data, hold, write-protect, CS0 | **In use as intended** — they carry the external boot flash. Not repurposed, no risk. |
 | Octal PSRAM data | GPIO33–37 | SPIIO4–7, SPIDQS | **Proven safe.** The V7 board used GPIO34–38 for its memory bus on hardware that was built and flown — a part with octal PSRAM could not have done that. |
 | Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_N / SPICLK_P | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
-| **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Not covered by that proof.** Octal is ruled out; *quad* PSRAM is not, and it uses exactly this pin. **Left unused.** |
+| **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Confirmed unavailable** — datasheet Table 1-1 gives this part 2 MB quad PSRAM, whose chip select is this pin. **Left unused.** |
 | JTAG | GPIO39–42 | debug | Safe as GPIO; cost is losing hardware debug. |
 | Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both left free.** |
 | Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | GPIO3 is safe here — it drives a switch enable and its pulldown holds it low at reset. **GPIO45 left free**: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
@@ -309,3 +321,30 @@ Pad-by-pad membership, net names and existing connections were read from a
 57 pads accounted for — none inferred, none omitted. Demand was counted from
 nets that require a processor pin and currently have none, excluding supply
 rails and connector-side nets.
+
+
+## Power-up glitches — the safety check that matters
+
+Datasheet Table 2-2 lists pins that glitch during power-up, before firmware
+runs. For a board with four pyro channels this is the single most important
+property of the assignment, and it holds:
+
+| Pins | Glitch at power-up | What sits there |
+|---|---|---|
+| GPIO1–14, GPIO17 | **low-level**, ~60 µs | all four pyro fire lines, arm, three continuity, radio bus |
+| GPIO18 | low **and high-level**, ~60 µs | radio reset (active-low) |
+| GPIO19, GPIO20 | high-level / pull-down | USB pair, pre-existing |
+
+**Every pyro output is on a low-glitch pin.** `PYRO1_FIRE`–`PYRO4_FIRE` (GPIO4–7)
+and `PYRO_ARM` (GPIO8) sit in the GPIO1–14 group, which glitches *low* only —
+they cannot be driven high by the chip before firmware takes control. That is
+the property the design needs and it is satisfied by construction.
+
+**GPIO18 is the one pin that glitches high**, and it carries the radio's
+active-low reset. A high glitch releases reset early rather than asserting
+anything, so it is harmless — but nothing that must not assert should ever be
+moved onto GPIO18.
+
+**GPIO45 defaults safe.** Table 2-1 gives it a weak pull-**down** at reset, so
+VDD_SPI selects 3.3 V by default. That is precisely why it must stay free: an
+external pull-up would select 1.8 V and the board would not boot.
