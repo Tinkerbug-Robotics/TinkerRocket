@@ -15,8 +15,13 @@ cross-checked against the fabbed-and-working `rocket-computer` and `lora-daughte
 
 **Board:** 30.27 × 90.50 mm, 4-layer, 1.6 mm. 118 placements, 104 nets, 622 track segments,
 222 vias, 20 zones.
-**Stackup as declared:** F.Cu / **0.1 mm prepreg** / In1.Cu / **1.24 mm core** / In2.Cu /
-**0.1 mm prepreg** / B.Cu. `In1.Cu` and `B.Cu` and `F.Cu` are one GND pour; `In2.Cu` is a +3V3 plane.
+**Stackup as declared *at the time of review*:** F.Cu / **0.1 mm prepreg** / In1.Cu /
+**1.24 mm core** / In2.Cu / **0.1 mm prepreg** / B.Cu — which was KiCad's untouched 4-layer
+default, not an ordered stack. **Superseded by S7:** the board now carries JLCPCB
+**JLC04161H-7628** (0.035 / **0.2104** / 0.0152 / **1.065** / 0.0152 / **0.2104** / 0.035 mm,
+1 oz outer / 0.5 oz inner, ENIG). Quote the JLC figures, not the ones on this line — every
+impedance number in S7 depends on it. `In1.Cu` and `B.Cu` and `F.Cu` are one GND pour;
+`In2.Cu` is a +3V3 plane.
 
 ---
 
