@@ -157,6 +157,35 @@ the design controls. An armed channel could hold that pad high and stop the boar
 booting. GPIO43 is kept free so the boot ROM can still print, which preserves
 bring-up diagnostics even without console input.
 
+## Special-function pins — verdict per group
+
+The processor's pins carry secondary functions in three groups, and their safety
+is not uniform. The distinction that matters is **octal** versus **quad**
+flash/PSRAM, because the design's proof only covers one of them.
+
+| Group | Pins | Secondary function | Verdict |
+|---|---|---|---|
+| Quad flash bus | GPIO27–32 | flash clock, data, hold, write-protect, CS0 | **In use as intended** — they carry the external boot flash. Not repurposed, no risk. |
+| Octal PSRAM data | GPIO33–37 | SPIIO4–7, SPIDQS | **Proven safe.** The V7 board used GPIO34–38 for its memory bus on hardware that was built and flown — a part with octal PSRAM could not have done that. |
+| Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_N / SPICLK_P | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
+| **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Not covered by that proof.** Octal is ruled out; *quad* PSRAM is not, and it uses exactly this pin. **Left unused.** |
+| JTAG | GPIO39–42 | debug | Safe as GPIO; cost is losing hardware debug. |
+| Console | GPIO43, GPIO44 | UART0 | Safe as GPIO; cost is the serial console. **Both left free.** |
+| Strapping | GPIO0, 3, 45, 46 | boot mode, JTAG select, flash rail voltage, ROM log | GPIO3 is safe here — it drives a switch enable and its pulldown holds it low at reset. **GPIO45 left free**: it sets the flash rail voltage, and anything whose boot level the design does not control can stop the board booting. |
+
+**Two signals were moved to reduce risk**, using pads freed by dropping the
+power-good and peripheral-enable signals:
+
+| Signal | From | To | Why |
+|---|---|---|---|
+| `BMP585_INT` | GPIO26 (SPICS1) | GPIO41 (JTAG) | removes the only quad-PSRAM exposure |
+| `PYRO4_CONT` | GPIO44 (U0RXD) | GPIO42 (JTAG) | returns the full serial console |
+
+After the move, **four pads are free — GPIO26, GPIO43, GPIO44, GPIO45** — and the
+two genuinely hazardous ones are among them. The cost is JTAG, which is now fully
+spent. That is the right trade: a console works from first power-on with no
+adapter, and the two risky pads are removed from the design rather than managed.
+
 ## Assignment — as built
 
 **This is wired in the schematic.** All 25 signals below are connected to the
