@@ -4295,30 +4295,6 @@
 			)
 		)
 	)
-	(global_label "IIS2MDCTR_SDA"
-		(shape input)
-		(at 46.355 49.53 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "a21ba6a1-8511-4bef-8465-cfd8ebda5922")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 28.9765 49.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
 	(global_label "BMP585_CS"
 		(shape input)
 		(at 49.53 102.235 180)
@@ -4367,6 +4343,30 @@
 			)
 		)
 	)
+	(global_label "SEN_SCL"
+		(shape input)
+		(at 46.355 52.07 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "bc717287-f14d-4d42-92d5-4c050db3d8ff")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 35.2056 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "GNSS_RX"
 		(shape input)
 		(at 252.095 40.64 0)
@@ -4388,6 +4388,30 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+			)
+		)
+	)
+	(global_label "SEN_SDA"
+		(shape input)
+		(at 46.355 49.53 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "d9481559-9d35-4e49-be75-8ed55f670717")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 35.1451 49.53 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 	)
@@ -4436,30 +4460,6 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
-			)
-		)
-	)
-	(global_label "IIS2MDCTR_SCL"
-		(shape input)
-		(at 46.355 52.07 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "dd3b2d55-cbad-420b-81c0-12c5767ee2fd")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 29.037 52.07 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
 			)
 		)
 	)
@@ -5071,7 +5071,7 @@
 				)
 			)
 		)
-		(property "Value" "Green"
+		(property "Value" "Blue"
 			(at 269.24 58.7375 0)
 			(show_name no)
 			(do_not_autoplace no)
