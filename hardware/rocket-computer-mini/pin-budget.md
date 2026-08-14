@@ -280,7 +280,7 @@ Seven named nets still have a single endpoint, each for a known reason:
 | `PERIPH_EN` | reaches the processor; awaits the switched rail above |
 | `IIS2MDCTR_SCL` / `_SDA` | magnetometer moves onto the power-monitor I²C bus |
 | `GNSS_RXD2` | dropped by decision — the receiver keeps its UART pair only |
-| `L_RXEN` | radio receive-enable, floating and absent from firmware |
+| ~~`L_RXEN`~~ | **resolved** — now on GPIO44, matching the other two radio boards |
 | `LoRa_RX` / `LoRa_TX` | legacy connector `J5`, redundant with the on-board radio |
 
 The receiver's own pins — supply, ground, UART, reset — are also not yet wired.
@@ -348,3 +348,33 @@ moved onto GPIO18.
 **GPIO45 defaults safe.** Table 2-1 gives it a weak pull-**down** at reset, so
 VDD_SPI selects 3.3 V by default. That is precisely why it must stay free: an
 external pull-up would select 1.8 V and the board would not boot.
+
+
+## The radio's RF switch — matching the other boards
+
+The E220 module's transmit/receive switch is split the way the vendor prescribes,
+and both existing radio boards implement it identically:
+
+| | `lora-daughterboard` | `base-station-mini` | here |
+|---|---|---|---|
+| DIO2 → TXEN | shorted on-board | shorted on-board | shorted on-board |
+| RXEN | GPIO35 | GPIO35 | **GPIO44** |
+| DIO3 | floating | — | floating |
+
+Only the **RX half** reaches a processor pin. The transmit half is driven by the
+radio itself once DIO2 is configured as RF-switch control, which is why TXEN
+needs no pin. An inverter is *not* the house pattern and would not match either
+existing board.
+
+DIO3 is left floating deliberately: the module carries its own passive 32 MHz
+crystal, so the radio must never be configured for a DIO3-powered TCXO. Ours is
+floating, matching the daughterboard.
+
+**Firmware already supports this** — `TR_LoRa_Comms::Config` carries `rxen_pin`,
+and both `radio_board` and `base_station` set it. **But the out-computer firmware
+defines no `LORA_RXEN_PIN`**, so the pin will do nothing until the board map for
+this board declares it. That map has to be written from scratch anyway.
+
+Worth knowing: the base-station firmware records this exact defect having bitten
+before — *"was defined but never driven — RXEN floated in RX"*. A floating
+receive-enable is a known failure on this hardware, not a theoretical one.
