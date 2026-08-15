@@ -8,7 +8,7 @@
 	)
 	(paper "A4")
 	(title_block
-		(rev "rev1")
+		(rev "V1")
 	)
 	(layers
 		(0 "F.Cu" signal)
@@ -4480,11 +4480,11 @@
 			)
 		)
 	)
-	(footprint "Footprints:SOIC-8_W25Q128JVSIQ"
+	(footprint "Footprints:SOIC127P790X216-8N"
 		(layer "F.Cu")
 		(uuid "476e0ac4-ef07-4866-b536-a680c388f018")
 		(at 89.19 147.73)
-		(descr "Winbond W25Q128JVSIQ 128Mbit (16MB) SPI NOR flash, SOIC-8 208mil (SOIC127P790X216-8N). Replaces W25Q64JVXGIQ (DFN/WSON) - LARGER footprint, needs re-placement. LCSC C97521.")
+		(descr "8-lead SOIC, 208mil body, 1.27 mm pitch (SOIC127P790X216-8N). Generic package land - deliberately not named for a part number, so a change of fitted device needs no rename; the device is carried by the symbol's MPN field. Larger than the DFN/WSON land it replaced.")
 		(property "Reference" "U13"
 			(at -1.485 -3.702 0)
 			(layer "F.SilkS")
@@ -4497,7 +4497,7 @@
 				)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 6.77 3.702 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -4531,7 +4531,7 @@
 				)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -4544,7 +4544,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -4780,7 +4780,7 @@
 			(uuid "2d184b6a-9665-4323-90a4-312b4a9c7866")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/W25Q128JVSIQ.step"
+		(model "${KIPRJMOD}/../3dmodels/SOIC127P790X216-8N.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -11692,7 +11692,7 @@
 				)
 			)
 		)
-		(property "Value" "GD5F2GQ5UEYIGR"
+		(property "Value" "GD5F1GQ5UEYIGR"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -11705,7 +11705,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "MX35UF4G24AD-Z4I8"
+		(property "Datasheet" "GD5F1GQ5UEYIGR"
 			(at 0 0 0)
 			(layer "F.Fab")
 			(hide yes)
@@ -11729,7 +11729,7 @@
 				)
 			)
 		)
-		(property "MPN" "GD5F2GQ5UEYIGR"
+		(property "MPN" "GD5F1GQ5UEYIGR"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
