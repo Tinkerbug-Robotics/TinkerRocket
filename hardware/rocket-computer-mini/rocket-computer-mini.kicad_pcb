@@ -1680,6 +1680,17 @@
 			)
 		)
 		(embedded_fonts no)
+			(model "${KIPRJMOD}/../3dmodels/LC86GLAMD.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(footprint "Capacitor_SMD:C_0402_1005Metric"
 		(layer "F.Cu")
@@ -21951,6 +21962,17 @@
 			(uuid "fb77e704-4fe7-48af-bf35-46d6a42fe953")
 		)
 		(embedded_fonts no)
+			(model "${KIPRJMOD}/../3dmodels/CP_Radial_D12.5mm_L20.0mm_P5.00mm_Horizontal.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(footprint "Footprints:SON65P200X200X80-7N"
 		(layer "B.Cu")
