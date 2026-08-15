@@ -5388,6 +5388,30 @@
 			)
 		)
 	)
+	(global_label "L_RXEN"
+		(shape input)
+		(at 161.925 86.36 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "a1a172e3-b749-462a-8fef-8ac98e652251")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 150.4127 86.36 180)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "L_BUSY"
 		(shape input)
 		(at 212.725 86.36 0)
@@ -5793,30 +5817,6 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
-			)
-		)
-	)
-	(global_label "L_RXEN"
-		(shape input)
-		(at 161.92499999999998 86.36 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "a1a172e3-b749-462a-8fef-8ac98e652251")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 150.4127 86.36 180)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
 			)
 		)
 	)

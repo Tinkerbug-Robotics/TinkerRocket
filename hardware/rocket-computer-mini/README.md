@@ -77,8 +77,10 @@ since been removed rather than rehomed, and the radio has moved on-board. See
 Copied and rewritten for the new project name: the root schematic, the five
 sub-sheets (`in_sensors`, `power`, `central_processing_p4`, `esp32s3_outputs`,
 `external_connections`), the PCB, the project file, the library tables, and
-`bom.csv`. Of those, `central_processing_p4` has since been deleted and
-`esp32s3_outputs` renamed, as above.
+`bom.csv`. Of those, `central_processing_p4` has since been deleted,
+`esp32s3_outputs` renamed to `esp32s3_mcu`, and `external_connections` renamed to
+`pyro` — the sheet now carries only the four pyro channels, the expansion header,
+camera, servo and piezo having been removed.
 
 Deliberately **not** copied — `rocket-computer`'s seven design documents. All of
 them are records of *that* board, and each would be actively misleading here:

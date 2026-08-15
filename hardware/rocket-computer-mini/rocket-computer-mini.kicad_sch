@@ -982,7 +982,7 @@
 			(color 0 0 0 0)
 		)
 		(uuid "ee020e52-8fb6-47c9-8c1d-1763f5da7dda")
-		(property "Sheetname" "External Connections"
+		(property "Sheetname" "Pyro"
 			(at 14.605 83.1284 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -995,7 +995,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "external_connections.kicad_sch"
+		(property "Sheetfile" "pyro.kicad_sch"
 			(at 14.605 105.3596 0)
 			(show_name no)
 			(do_not_autoplace no)
