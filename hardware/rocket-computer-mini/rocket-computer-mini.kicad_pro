@@ -705,7 +705,7 @@
         "uuid": "ae61c2c4-72e9-4776-93ae-2e716b9dc70f"
       }
     ],
-    "used_designators": "",
+    "used_designators": "#PWR125,#PWR127,C47-49",
     "variants": []
   },
   "sheets": [
@@ -719,7 +719,7 @@
     ],
     [
       "ee020e52-8fb6-47c9-8c1d-1763f5da7dda",
-      "External Connections"
+      "Pyro"
     ],
     [
       "eab70588-b031-4461-adac-e038e88381cb",
