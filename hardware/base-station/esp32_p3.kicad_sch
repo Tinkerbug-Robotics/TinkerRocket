@@ -2801,7 +2801,7 @@
 					)
 				)
 			)
-			(property "Footprint" "Footprints:SOIC-8_W25Q128JVSIQ"
+			(property "Footprint" "Footprints:SOIC127P790X216-8N"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -10189,7 +10189,7 @@
 				)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 65.405 106.045 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10199,7 +10199,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:SOIC-8_W25Q128JVSIQ"
+		(property "Footprint" "Footprints:SOIC127P790X216-8N"
 			(at 21.59 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -10234,7 +10234,7 @@
 				)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 21.59 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -10245,7 +10245,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 21.59 115.57 0)
 			(hide yes)
 			(show_name no)

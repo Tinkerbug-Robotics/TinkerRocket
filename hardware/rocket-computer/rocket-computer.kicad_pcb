@@ -8,7 +8,7 @@
 	)
 	(paper "A4")
 	(title_block
-		(rev "V9")
+		(rev "V10")
 	)
 	(layers
 		(0 "F.Cu" signal)
@@ -41065,11 +41065,11 @@
 			)
 		)
 	)
-	(footprint "Footprints:SOIC-8_W25Q128JVSIQ"
+	(footprint "Footprints:SOIC127P790X216-8N"
 		(layer "F.Cu")
 		(uuid "eff00d44-7893-4a07-9cbf-36c0e2daab73")
 		(at 80.29 127.625 90)
-		(descr "Winbond W25Q128JVSIQ 128Mbit (16MB) SPI NOR flash, SOIC-8 208mil (SOIC127P790X216-8N). Replaces W25Q64JVXGIQ (DFN/WSON) - LARGER footprint, needs re-placement. LCSC C97521.")
+		(descr "8-lead SOIC, 208mil body, 1.27 mm pitch (SOIC127P790X216-8N). Generic package land - deliberately not named for a part number, so a change of fitted device needs no rename; the device is carried by the symbol's MPN field. Larger than the DFN/WSON land it replaced.")
 		(property "Reference" "U16"
 			(at -1.485 -3.702 90)
 			(layer "F.SilkS")
@@ -41082,7 +41082,7 @@
 				)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 6.77 3.702 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -41116,7 +41116,7 @@
 				)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -41129,7 +41129,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -41365,7 +41365,7 @@
 			(uuid "cb1d8875-e48b-4435-85c5-a5b0cbd128d1")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/W25Q128JVSIQ.step"
+		(model "${KIPRJMOD}/../3dmodels/SOIC127P790X216-8N.step"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -47474,11 +47474,11 @@
 			)
 		)
 	)
-	(footprint "Footprints:SOIC-8_W25Q128JVSIQ"
+	(footprint "Footprints:SOIC127P790X216-8N"
 		(layer "B.Cu")
 		(uuid "476e0ac4-ef07-4866-b536-a680c388f018")
 		(at 91.705 145.485 90)
-		(descr "Winbond W25Q128JVSIQ 128Mbit (16MB) SPI NOR flash, SOIC-8 208mil (SOIC127P790X216-8N). Replaces W25Q64JVXGIQ (DFN/WSON) - LARGER footprint, needs re-placement. LCSC C97521.")
+		(descr "8-lead SOIC, 208mil body, 1.27 mm pitch (SOIC127P790X216-8N). Generic package land - deliberately not named for a part number, so a change of fitted device needs no rename; the device is carried by the symbol's MPN field. Larger than the DFN/WSON land it replaced.")
 		(property "Reference" "U13"
 			(at -1.485 3.702 90)
 			(layer "B.SilkS")
@@ -47492,7 +47492,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 6.77 -3.702 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -47529,7 +47529,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -47543,7 +47543,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -47780,7 +47780,7 @@
 			(uuid "2d184b6a-9665-4323-90a4-312b4a9c7866")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/W25Q128JVSIQ.step"
+		(model "${KIPRJMOD}/../3dmodels/SOIC127P790X216-8N.step"
 			(offset
 				(xyz 0 0 0)
 			)

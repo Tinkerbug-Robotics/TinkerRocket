@@ -16665,6 +16665,28 @@
 				)
 			)
 		)
+		(property "MPN" "B2B-PH-SM4-TB"
+			(at 161.925 164.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "JST"
+			(at 161.925 164.465 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
 		(pin "1"
 			(uuid "494a3a0c-448a-4579-804b-3db49f1c4cc8")
 		)
