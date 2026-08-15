@@ -7626,7 +7626,7 @@
 				)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 106.68 100.33 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7671,7 +7671,7 @@
 				)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 62.865 109.855 0)
 			(hide yes)
 			(show_name no)
@@ -7682,7 +7682,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 62.865 109.855 0)
 			(hide yes)
 			(show_name no)
@@ -11477,7 +11477,7 @@
 				)
 			)
 		)
-		(property "Value" "GD5F2GQ5UEYIGR"
+		(property "Value" "GD5F1GQ5UEYIGR"
 			(at 46.99 64.135 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11499,7 +11499,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "MX35UF4G24AD-Z4I8"
+		(property "Datasheet" "GD5F1GQ5UEYIGR"
 			(at 35.052 55.753 0)
 			(hide yes)
 			(show_name no)
@@ -11522,7 +11522,7 @@
 				)
 			)
 		)
-		(property "MPN" "GD5F2GQ5UEYIGR"
+		(property "MPN" "GD5F1GQ5UEYIGR"
 			(at 26.67 70.485 0)
 			(hide yes)
 			(show_name no)

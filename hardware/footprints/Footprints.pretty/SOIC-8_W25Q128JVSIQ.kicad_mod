@@ -237,7 +237,7 @@
 		(uuid "60c4c679-6cbc-41e3-9e1a-a51ef16f9daa")
 	)
 	(embedded_fonts no)
-	(model "${KIPRJMOD}/../3dmodels/W25Q128JVSIQ.step"
+	(model "${KIPRJMOD}/../3dmodels/GD25Q128ESIG.step"
 		(offset
 			(xyz 0 0 0)
 		)

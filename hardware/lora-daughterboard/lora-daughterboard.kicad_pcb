@@ -8,7 +8,7 @@
 	)
 	(paper "A4")
 	(title_block
-		(rev "V3")
+		(rev "V4")
 	)
 	(layers
 		(0 "F.Cu" signal)
@@ -14292,7 +14292,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 6.77 -3.702 180)
 			(layer "B.Fab")
 			(hide yes)
@@ -14329,7 +14329,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -14343,7 +14343,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -14580,7 +14580,7 @@
 			(uuid "74dbc63c-6f6b-41f1-87e2-66ec852e9897")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/W25Q128JVSIQ.step"
+		(model "${KIPRJMOD}/../3dmodels/GD25Q128ESIG.step"
 			(offset
 				(xyz 0 0 0)
 			)

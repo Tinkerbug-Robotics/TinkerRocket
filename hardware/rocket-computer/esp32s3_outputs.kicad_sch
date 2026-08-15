@@ -8578,7 +8578,7 @@
 				)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 106.68 100.33 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8623,7 +8623,7 @@
 				)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 62.865 109.855 0)
 			(hide yes)
 			(show_name no)
@@ -8634,7 +8634,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 62.865 109.855 0)
 			(hide yes)
 			(show_name no)

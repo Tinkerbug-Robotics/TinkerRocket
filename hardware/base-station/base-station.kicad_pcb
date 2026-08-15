@@ -11890,7 +11890,7 @@
 				)
 			)
 		)
-		(property "Value" "W25Q128JVSIQ"
+		(property "Value" "GD25Q128ESIG"
 			(at 6.77 3.702 90)
 			(layer "F.Fab")
 			(hide yes)
@@ -11924,7 +11924,7 @@
 				)
 			)
 		)
-		(property "MPN" "W25Q128JVSIQ"
+		(property "MPN" "GD25Q128ESIG"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -11937,7 +11937,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Winbond"
+		(property "Mfr" "GigaDevice"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -12173,7 +12173,7 @@
 			(uuid "7bc6319b-d023-4974-b691-7f3bacfeeb93")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/W25Q128JVSIQ.step"
+		(model "${KIPRJMOD}/../3dmodels/GD25Q128ESIG.step"
 			(offset
 				(xyz 0 0 0)
 			)
