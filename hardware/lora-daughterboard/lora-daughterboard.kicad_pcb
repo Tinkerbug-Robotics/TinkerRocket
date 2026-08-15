@@ -14274,11 +14274,11 @@
 			)
 		)
 	)
-	(footprint "Footprints:SOIC-8_W25Q128JVSIQ"
+	(footprint "Footprints:SOIC127P790X216-8N"
 		(layer "B.Cu")
 		(uuid "560dca64-e83a-4212-8d6d-8ecad116f6fe")
 		(at 87 112.14)
-		(descr "Winbond W25Q128JVSIQ 128Mbit (16MB) SPI NOR flash, SOIC-8 208mil (SOIC127P790X216-8N). Replaces W25Q64JVXGIQ (DFN/WSON) - LARGER footprint, needs re-placement. LCSC C97521.")
+		(descr "8-lead SOIC, 208mil body, 1.27 mm pitch (SOIC127P790X216-8N). Generic package land - deliberately not named for a part number, so a change of fitted device needs no rename; the device is carried by the symbol's MPN field. Larger than the DFN/WSON land it replaced.")
 		(property "Reference" "U22"
 			(at -1.485 3.702 180)
 			(layer "B.SilkS")
@@ -14580,7 +14580,7 @@
 			(uuid "74dbc63c-6f6b-41f1-87e2-66ec852e9897")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/../3dmodels/GD25Q128ESIG.step"
+		(model "${KIPRJMOD}/../3dmodels/SOIC127P790X216-8N.step"
 			(offset
 				(xyz 0 0 0)
 			)

@@ -5798,7 +5798,7 @@
 					)
 				)
 			)
-			(property "Footprint" "Footprints:SOIC-8_W25Q128JVSIQ"
+			(property "Footprint" "Footprints:SOIC127P790X216-8N"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -15632,7 +15632,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:SOIC-8_W25Q128JVSIQ"
+		(property "Footprint" "Footprints:SOIC127P790X216-8N"
 			(at 63.5 112.395 0)
 			(hide yes)
 			(show_name no)
