@@ -156,3 +156,104 @@ Topology, rail membership and the load-switch chain were read from a
 removal, not from the schematic drawing or from prior documents. The 0.5–0.8 A
 historical figure is quoted from the parent board's power ECO, which derived it
 independently and against a board that no longer exists here.
+
+
+---
+
+# C56 — replacing the bulk polymer with ceramics already on the board
+
+**Decision.** Delete `C56` (330 µF polymer tantalum, 16 V, ~50 mΩ ESR, 7.3 × 4.3 mm)
+and fit **three 22 µF 16 V X5R 0805** in its place — the part already used at `C8`,
+`C43` and seven other positions, so no new BOM line and no new footprint.
+
+**Why this is not just a value change.** `C56` is the only polymer tantalum on the
+board and the only part in its case size. Removing it deletes a line item, a large
+footprint on a 22 mm-wide board, and the most expensive passive in the power path.
+
+## The original justification no longer applies
+
+`C56` was sized to ride out a specific event: *"when servos/camera sag the raw VBATT
+node, the mux reverse-blocks IN1 and this cap holds VCC up"*
+([`../rocket-computer/power-eco.md`](../rocket-computer/power-eco.md)). **Both
+aggressors are gone from this board** — the servo branch and the camera branch were
+removed during the reduction, along with their activation and current-monitor
+signals. The transient it was sized against cannot occur here.
+
+That document had already retracted its own 52 ms figure on 2026-08-08, moving the
+job upstream to the EN/UVLO deglitch. It also records that the part was chosen partly
+for *"BOM consolidation — same part as the servo cap"*. With the servo branch gone,
+that rationale inverts: the shared part became a singleton.
+
+## What actually constrains the value
+
+**The mux imposes no minimum.** Verified three ways in the mux datasheet (TI
+SLVSEA3F rev F): Recommended Operating Conditions has no capacitance row, Electrical
+Characteristics has no C_OUT or ESR row, and the design procedure has three steps,
+none of which is output-capacitor selection. Output capacitance appears only as a
+user-supplied application input. The same document recommends *"low ESR ceramic
+capacitors with X5R or X7R dielectric"* — ceramic is the preferred construction, not
+a compromise.
+
+**Inrush improves.** Soft-start slew is set by the SS capacitor alone, so inrush
+scales with output capacitance: roughly 29 mA today, under 1 mA after. The existing
+soft-start network gets gentler, not more stressed.
+
+**The polymer was never the damping element.** `L5`'s DC resistance is 74 mΩ,
+*larger* than `C56`'s 50 mΩ ESR, so the inductor already dominated damping of the
+`L5`/`C43` input filter. Removing the polymer leaves filter Q essentially unchanged.
+Checking the Middlebrook criterion: converter input impedance is 77 Ω at a full pack
+and **20 Ω at the 6.4 V cutoff — the binding case** — against a filter peak output
+impedance of 1–3.5 Ω. That is 16–27 dB of margin, and it is no worse after the change.
+
+## Ceramic capacitance is not nameplate capacitance
+
+**At 8.4 V these parts retain about 18% of their rating** — roughly 4 µF each, not
+22 µF. Three give **~12 µF effective**, not 66 µF. Size against the effective figure;
+any calculation starting from nameplate will be wrong by more than 5×.
+
+*(This retention figure is single-sourced from the manufacturer's simulator. The
+magnitude is consistent with published guidance for this class of part, but it was
+not reproduced from a second document — treat it as good but not independently
+confirmed.)*
+
+## The margin, computed at the corner that binds
+
+The event to survive is a USB removal while the pack is connected. **Switchover does
+not begin at 5 V.** It triggers when the priority divider crosses the comparison
+divider, at `V_trip = 0.498 × V_pack` — 4.19 V at a full pack, 3.19 V at cutoff. The
+rail coasts down to that point *before* the 5 µs fast switchover starts, so the
+budget is measured from the trip point, not from 5 V.
+
+| Corner | Headroom to buck dropout | Dip at ~12 µF | Margin |
+|---|---|---|---|
+| Full pack, 8.4 V | 0.75 V | ~100 mV | ~7× |
+| **Cutoff, 6.4 V** | **0.39 V** | ~100 mV | **~4×** |
+
+Fast switchover is confirmed armed by the board's own dividers — the comparison
+node sits at 2.09 V at a full pack and 1.59 V at cutoff, both above the 1.06 V
+reference — so the 5 µs figure applies, not the 100 µs standard path. That is a
+property of the fitted resistors, not an assumption.
+
+Two caps would give ~8 µF and ~3× margin at the binding corner. **Three is specified
+because the third costs nothing** — same line item, same footprint — and buys back
+the margin lost to DC-bias derating.
+
+## A pre-existing finding, not caused by this change
+
+At the 6.4 V pack cutoff the switchover trip point (3.19 V) is **already below the
+buck's dropout floor** (~3.44 V at worst-case load). Unplugging USB on a nearly-flat
+pack therefore drops the buck into 100%-duty dropout **regardless of what is fitted
+at `C56`** — the 330 µF does not prevent it either. Below the trip point the
+remaining budget is to the converter's undervoltage lockout, about 0.39 V.
+
+This is a property of the priority-divider ratio, and it is worth revisiting on its
+own terms. It is recorded here because it was found while sizing `C56`, not because
+the change causes it.
+
+## What was not verified
+
+- The retention figure above is single-sourced (see note).
+- Worst-case switchover time is not published — the datasheet gives typical values
+  with the min/max columns blank. All margins above use the typical figure.
+- The output inductor's DC resistance was taken from distributor listings rather
+  than the manufacturer datasheet.
