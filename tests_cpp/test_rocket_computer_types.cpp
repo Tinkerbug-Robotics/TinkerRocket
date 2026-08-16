@@ -983,6 +983,48 @@ TEST(RocketComputerTypes, FlightSettingsData_Layout) {
     EXPECT_EQ(offsetof(FlightSettingsData, guid_tgt_src),      218u);
 }
 
+// --- Flight snapshot (crash recovery) ---
+// The snapshot is built and re-parsed at byte-exact offsets by the FC
+// (I2S→OC MRAM→I2C round trip) and the mini (NAND log stream tail-scan).
+// Lock the layout so a struct edit can't silently desync the two ends —
+// especially sim_flight (v4), the byte that keeps a mid-sim reboot from
+// restoring to LIVE INFLIGHT with bench igniters connected.
+TEST(RocketComputerTypes, FlightSnapshotData_Layout) {
+    // 224 = one I2S frame, one I2C TX response, and the OC MRAM slot bound.
+    EXPECT_EQ(sizeof(FlightSnapshotData), 224u);
+    EXPECT_EQ(sizeof(FlightSnapshotData), (size_t)MAX_PAYLOAD);
+    // v4: sim_flight reclaimed from the header pad.  Restore paths refuse
+    // any other version — a v3 frame can't prove it wasn't a sim flight.
+    EXPECT_EQ(FlightSnapshotData::VERSION, 4u);
+
+    EXPECT_EQ(offsetof(FlightSnapshotData, magic),               0u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, version),             4u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, rocket_state),        5u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, sim_flight),          6u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, flight_elapsed_ms),   8u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, apogee_elapsed_ms),  12u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, burnout_elapsed_ms), 16u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, pyro_apogee_detected), 20u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, pyro1_fired),        21u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, pyro4_fired),        24u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, b2r_code),           25u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, b2r_mode),           26u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ground_pressure_pa), 28u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ref_lat_rad),        32u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ref_alt_m),          48u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_initialized),    56u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_pos_rrm),        60u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_vel_ned_mps),    84u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_quat),           96u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_P_diag),        136u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_t_prev_us),     196u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, ekf_euler),         200u);
+    EXPECT_EQ(offsetof(FlightSnapshotData, b2r_q),             212u);
+    // CRC32 covers everything before it — both computeSnapshotCRC()
+    // implementations hash [0, offsetof(crc32)).
+    EXPECT_EQ(offsetof(FlightSnapshotData, crc32),             220u);
+}
+
 TEST(RocketComputerTypes, FlightSettings_FlagBits_NoOverlap) {
     uint8_t all = (uint8_t)((1u << FlightSettingsData::F_USE_ANGLE_CONTROL) |
                             (1u << FlightSettingsData::F_GAIN_SCHEDULE) |

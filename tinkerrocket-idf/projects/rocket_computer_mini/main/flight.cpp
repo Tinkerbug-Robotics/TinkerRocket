@@ -739,6 +739,10 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.magic        = FlightSnapshotData::MAGIC;
     snap.version      = FlightSnapshotData::VERSION;
     snap.rocket_state = (override_state != 0xFF) ? override_state : (uint8_t)rocket_state;
+    // v4: latch sim mode into the snapshot — isSimActive() is false after a
+    // reboot, so the restore path can only learn this from the snapshot
+    // itself (and refuses to restore when set).
+    snap.sim_flight   = sensor_collector.isSimActive() ? 1 : 0;
 
     snap.flight_elapsed_ms  = now_ms - launch_time_millis;
     snap.apogee_elapsed_ms  = pyro_apogee_detected
@@ -1927,7 +1931,9 @@ static void handleCommandFrame(const mini_link::CmdFrame& cmd, uint32_t now_ms)
 //   3. that entry is the NEWEST flight on the chip (highest flight_id) — an
 //      old never-deleted recovered file must not resurrect a stale flight,
 //   4. the last snapshot frame validates: magic, version, INFLIGHT, CRC32
-//      (the same four the FC required).
+//      (the same four the FC required),
+//   5. the snapshot is not from a SIMULATED flight (sim_flight, v4) — the
+//      dry-fire gate does not survive a reboot.
 extern tr_flightlog::TR_FlightLog flightlog;   // defined in main.cpp
 
 // One packed snapshot frame in the log stream: SOF(4) | type | len | 224 | CRC16.
@@ -2373,7 +2379,15 @@ void flight_setup()
                        snap.version == FlightSnapshotData::VERSION &&
                        snap.rocket_state == (uint8_t)INFLIGHT &&
                        snap.crc32 == computeSnapshotCRC(snap)) {
-                valid = true;
+                if (snap.sim_flight) {
+                    // The dry-fire gate lives in isSimActive(), which a reboot
+                    // resets — restoring here would fire real pyro outputs on
+                    // bench igniters mid-sim.  Falls through to the
+                    // evaluated-marker write below like any other decline.
+                    ESP_LOGW(TAG, "[RECOVERY] snapshot is from a SIMULATED flight — refusing restore");
+                } else {
+                    valid = true;
+                }
             } else {
                 ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
                          (unsigned long)snap.magic, snap.rocket_state,

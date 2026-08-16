@@ -594,6 +594,10 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.magic        = FlightSnapshotData::MAGIC;
     snap.version      = FlightSnapshotData::VERSION;
     snap.rocket_state = (override_state != 0xFF) ? override_state : (uint8_t)rocket_state;
+    // v4: latch sim mode into the snapshot — isSimActive() is false after a
+    // reboot, so the restore path can only learn this from the snapshot
+    // itself (and refuses to restore when set).
+    snap.sim_flight   = sensor_collector.isSimActive() ? 1 : 0;
 
     snap.flight_elapsed_ms  = now_ms - launch_time_millis;
     snap.apogee_elapsed_ms  = pyro_apogee_detected
@@ -3266,7 +3270,15 @@ static void setup_fc()
                                     snap.version == FlightSnapshotData::VERSION &&
                                     snap.rocket_state == (uint8_t)INFLIGHT &&
                                     snap.crc32 == computeSnapshotCRC(snap)) {
-                                    valid = true;
+                                    if (snap.sim_flight) {
+                                        // The dry-fire gate lives in isSimActive(),
+                                        // which a reboot resets — restoring here
+                                        // would fire real pyro outputs on bench
+                                        // igniters mid-sim.
+                                        ESP_LOGW(TAG, "[RECOVERY] Snapshot is from a SIMULATED flight — refusing restore");
+                                    } else {
+                                        valid = true;
+                                    }
                                 } else {
                                     ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
                                              (unsigned long)snap.magic, snap.rocket_state,
