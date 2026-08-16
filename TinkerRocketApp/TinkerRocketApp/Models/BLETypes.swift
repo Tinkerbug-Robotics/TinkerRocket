@@ -9,6 +9,18 @@
 import Foundation
 import CoreBluetooth
 
+/// Rail-off pyro-test refusal (0xCE on the file_ops characteristic): the OC
+/// refused to queue a pyro test because the FC power rail is off — a held
+/// cmd would deliver its fire/ARM pulse at the next power-on.
+struct PyroTestRefusal: Equatable {
+    let cmd: UInt8       // refused BLE cmd: 35 continuity / 36 fire
+    let channel: UInt8   // 1..4
+    let reason: UInt8    // 1 = FC power rail off
+    /// Arrival stamp so consecutive refusals of the same channel still
+    /// register as a change for SwiftUI onChange observers.
+    let at: Date
+}
+
 struct FileInfo: Identifiable, Codable, Equatable {
     let name: String
     let size: UInt32

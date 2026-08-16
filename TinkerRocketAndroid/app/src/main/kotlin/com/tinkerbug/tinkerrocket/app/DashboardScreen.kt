@@ -407,7 +407,11 @@ fun DashboardScreen(
                     continuity = cont && live,
                     revealed = armed || contTestChannel == ch,
                     testing = (contPendingUntil[ch] ?: 0L) > nowMs,
-                    showTestButton = !armed && !fired && !inflight,
+                    // Rail gate matches the iOS tile: the OC refuses cmd 35
+                    // rail-off (queued ARM pulse would deliver at power-on);
+                    // this compact tile hides the button until power-on and
+                    // the Settings twin carries the explanatory caption.
+                    showTestButton = !armed && !fired && !inflight && telemetry.pwrPinOn,
                     onTestContinuity = {
                         session.sendPyroContTest(ch)
                         contTestChannel = ch

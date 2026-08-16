@@ -913,10 +913,28 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
     }
     val blocked = armed || fired || inflight
     if (!blocked) {
-        TextButton(onClick = {
-            session.sendPyroContTest(channel)
-            contTestActive = true
-        }) { Text("Test Continuity") }
+        // Rail gate (iOS PyroChannelTestControls twin): with the FC powered
+        // off the OC refuses cmd 35 outright — a queued test would deliver
+        // its ARM pulse at the next power-on — so don't offer a button that
+        // can only be refused.  pwrPinOn reads false until the first
+        // telemetry frame, which fails safe to disabled (#377).
+        val railOn by remember(session) {
+            session.telemetry.map { it.pwrPinOn }.distinctUntilChanged()
+        }.collectAsState(initial = false)
+        TextButton(
+            enabled = railOn,
+            onClick = {
+                session.sendPyroContTest(channel)
+                contTestActive = true
+            },
+        ) { Text("Test Continuity") }
+        if (!railOn) {
+            Text(
+                "Power on the rocket to test.",
+                style = MaterialTheme.typography.bodySmall,
+                color = tr.statusWarn,
+            )
+        }
     }
 }
 

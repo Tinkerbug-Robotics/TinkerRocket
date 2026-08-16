@@ -136,6 +136,17 @@ struct PyroTestView: View {
                         ticker.stop()
                         return
                     }
+                    // Rail re-check at the fire instant: with the FC powered
+                    // off the OC refuses cmd 36 (a queued fire would deliver
+                    // at the next power-on), so sending could only be refused.
+                    // Abort through the SAFE path — it stops the camera and
+                    // any logging this test started — and land in .idle,
+                    // where errorMessage is displayed.
+                    guard device.telemetry.pwr_pin_on else {
+                        safeRocket()
+                        errorMessage = "Rocket power is off — no fire command sent"
+                        return
+                    }
                     device.sendPyroFire(channel: UInt8(channel))
                     state = .recording
                     recordSecondsRemaining = 5
@@ -153,6 +164,17 @@ struct PyroTestView: View {
             default:
                 ticker.stop()
             }
+        }
+        .onChange(of: device.pyroTestRefusal) { refusal in
+            // Authoritative backstop: the OC refused an actual fire command
+            // (rail off at dispatch). The gates above should make this
+            // unreachable, but if a refusal does arrive mid-flow, abort
+            // through the SAFE path and say why.
+            guard let refusal, refusal.cmd == 36,
+                  refusal.channel == UInt8(channel),
+                  state == .countdown || state == .recording else { return }
+            safeRocket()
+            errorMessage = "Rocket refused the fire — power is off"
         }
         .onAppear {
             camera.configure()
@@ -272,12 +294,24 @@ struct PyroTestView: View {
         VStack(spacing: 16) {
             switch state {
             case .idle, .done:
+                // Rail gate: the OC refuses cmd 36 while the FC rail is off (a
+                // queued fire would deliver at the next power-on), so a live
+                // FIRE button would only ever be refused. Mirrors the Settings
+                // entry buttons; also covers the rail dropping while this
+                // cover is already up.
+                let railOn = device.isConnected && device.telemetry.pwr_pin_on
                 Button(action: startCountdown) {
                     Text("FIRE")
                         .font(.title2.weight(.heavy))
                         .foregroundColor(.white)
                         .frame(width: 140, height: 140)
-                        .background(Circle().fill(Color.red))
+                        .background(Circle().fill(railOn ? Color.red : Color.gray))
+                }
+                .disabled(!railOn)
+                if !railOn {
+                    Label("Rocket power is off", systemImage: "bolt.slash")
+                        .font(.headline)
+                        .foregroundColor(.orange)
                 }
 
             case .countdown:

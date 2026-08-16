@@ -3986,6 +3986,14 @@ static void comms_loop()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (!mini_link::commandShutterOpen()) {
+                // Shutter closed (rail off / power transition): sendCommand
+                // would drop this silently — unlike the OC's queue the mini
+                // never HOLDS a pyro command, so there's no latent-fire
+                // hazard here, but the app deserves the same 0xCE refusal
+                // the OC sends instead of a dead button.
+                ble_app.sendPyroTestRefusal(35, ch, 1 /* rail off */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: shutter closed", ch);
             } else {
                 mini_link::sendCommand(PYRO_CONT_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
@@ -3999,6 +4007,12 @@ static void comms_loop()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (!mini_link::commandShutterOpen()) {
+                // Shutter closed: same 0xCE refusal as the continuity branch
+                // above (and as the OC) so the app's abort flow works
+                // identically against both boards.
+                ble_app.sendPyroTestRefusal(36, ch, 1 /* rail off */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: shutter closed", ch);
             } else {
                 mini_link::sendCommand(PYRO_FIRE_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro test fire CH%u", ch);

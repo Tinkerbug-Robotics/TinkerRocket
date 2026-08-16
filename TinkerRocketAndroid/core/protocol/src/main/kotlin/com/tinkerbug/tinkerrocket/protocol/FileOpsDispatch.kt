@@ -14,6 +14,7 @@ package com.tinkerbug.tinkerrocket.protocol
  *   0xCB → sensor-cal status       (gate: frame >= 20 → [SensorCalStatus.decode])
  *   0xCC → rocket storage stats    (gate: frame >= 15 → [RocketStorageStats.decode])
  *   0xCD → BS storage stats        (gate: frame >= 27 → [BaseStationStorageStats.decode])
+ *   0xCE → pyro-test refusal       (gate: frame >= 4, decoded inline)
  *   0x7B '{' → try ota_status JSON, else file-list parse (which fails on '{')
  *   anything else → file-list JSON array
  *
@@ -55,6 +56,14 @@ public object FileOpsDispatch {
                 BaseStationStorageStats.decode(frame.copyOfRange(1, frame.size))
                     ?.let { FileOpsMessage.BsStorage(it) }
             }
+            0xCE -> {
+                if (frame.size < 4) return null
+                FileOpsMessage.PyroRefusal(
+                    cmd = frame[1].toInt() and 0xFF,
+                    channel = frame[2].toInt() and 0xFF,
+                    reason = frame[3].toInt() and 0xFF,
+                )
+            }
             0x7B -> {   // '{' → JSON object
                 OtaStatusUpdate.parse(frame)?.let { return FileOpsMessage.Ota(it) }
                 fileList(frame)
@@ -91,6 +100,18 @@ public sealed interface FileOpsMessage {
 
     /** 0xCD — base-station filesystem storage stats. */
     public data class BsStorage(val stats: BaseStationStorageStats) : FileOpsMessage
+
+    /**
+     * 0xCE — rail-off pyro-test refusal: the OC refused to queue a pyro
+     * test ([cmd] 35 continuity / 36 fire, [channel] 1..4) because the FC
+     * power rail is off — a held pyro command would deliver its fire/ARM
+     * pulse at the next power-on.  [reason] 1 = FC rail off.
+     */
+    public data class PyroRefusal(
+        val cmd: Int,
+        val channel: Int,
+        val reason: Int,
+    ) : FileOpsMessage
 
     /** '{' JSON with `"type":"ota_status"` (#8 phase 2). */
     public data class Ota(val status: OtaStatusUpdate) : FileOpsMessage

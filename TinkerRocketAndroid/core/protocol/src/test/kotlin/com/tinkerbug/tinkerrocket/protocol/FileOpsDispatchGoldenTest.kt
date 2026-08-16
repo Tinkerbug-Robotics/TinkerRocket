@@ -146,6 +146,18 @@ class FileOpsDispatchGoldenTest {
     }
 
     @Test
+    fun `pyro refusal frame parses and truncated ones drop`() {
+        // [0xCE][refused cmd][channel][reason] — OC sendPyroTestRefusal.
+        val msg = FileOpsDispatch.parse(byteArrayOf(0xCE.toByte(), 36, 2, 1))
+        val m = assertIs<FileOpsMessage.PyroRefusal>(msg)
+        assertEquals(36, m.cmd)
+        assertEquals(2, m.channel)
+        assertEquals(1, m.reason)
+        // Below the 4-byte gate → dropped like the other malformed binaries.
+        assertNull(FileOpsDispatch.parse(byteArrayOf(0xCE.toByte(), 35, 1)))
+    }
+
+    @Test
     fun `magcal golden frame also dispatches through the demux`() {
         // The MagCalStatusTest suite covers decode() in depth; this pins the
         // demux path (discriminator stripped, ≥23 gate) end-to-end.
