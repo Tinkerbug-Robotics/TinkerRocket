@@ -1533,6 +1533,21 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
     }
 }
 
+void TR_BLE_To_APP::sendPyroTestRefusal(uint8_t refused_cmd, uint8_t channel, uint8_t reason)
+{
+    if (!device_connected_) return;
+    // 0xCE marker + refused cmd + channel + reason (sibling of 0xCA..0xCD).
+    uint8_t buf[4] = { 0xCE, refused_cmd, channel, reason };
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, sizeof(buf));
+    if (rc != 0)
+    {
+        // A refusal the app never hears about looks like a dead button, so
+        // log every failure (these are one-shot, not a periodic stream).
+        ESP_LOGW(BLE_TAG, "Pyro-refusal notify failed, rc=%d (cmd=%u ch=%u)",
+                 rc, (unsigned)refused_cmd, (unsigned)channel);
+    }
+}
+
 bool TR_BLE_To_APP::sendFileChunk(uint32_t offset, const uint8_t* data,
                                    size_t len, bool eof, bool abort)
 {

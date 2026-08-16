@@ -458,6 +458,13 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 //     reset edge even between back-to-back identical command ids
 // With the rail off the queue simply holds; powering on drains the whole
 // sync in order — connecting before power-on now works by design.
+// EXCEPTION: pyro test commands are never enqueued while the rail is off —
+// a held PYRO_FIRE_TEST (or PYRO_CONT_TEST's momentary ARM) would energize
+// the channel at the NEXT power-on, possibly while someone is handling the
+// rocket. Every entry point refuses instead: the BLE cmd 35/36 handlers
+// (with a 0xCE file-ops refusal frame back to the app) and the LoRa cmd
+// 35/36 branches in processUplinkCommand (log-only — the uplink has no
+// feedback channel, #285 blind fire-and-retry).
 struct QueuedCommand
 {
     uint8_t cmd;
@@ -3881,6 +3888,13 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         uint8_t ch = payload[0];
         if (ch < 1 || ch > 4) {
             ESP_LOGW("LORA", "UPLINK Pyro continuity test: invalid channel %u", ch);
+        } else if (!pwr_pin_on) {
+            // Rail-off refusal, same as the cmd 36 branch below: the #366
+            // queue would HOLD this and deliver the momentary ARM pulse at
+            // the next power-on. Like all LoRa refusals this can only log —
+            // there is no uplink feedback channel (#285 blind fire-and-retry).
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test CH%u refused: FC rail"
+                             " off (queued arm pulse would deliver at power-on)", ch);
         } else {
             setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
             ESP_LOGI("LORA", "UPLINK Pyro continuity test CH%u", ch);
@@ -7582,6 +7596,13 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (!pwr_pin_on) {
+                // Rail off: the FC queue would HOLD this and deliver the
+                // momentary ARM pulse at the next power-on (see the queue
+                // header's pyro exception). Refuse and tell the app.
+                ble_app.sendPyroTestRefusal(35, ch, 1 /* FC rail off */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: FC rail off"
+                                " (queued arm pulse would deliver at power-on)", ch);
             } else {
                 setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
@@ -7595,6 +7616,14 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (!pwr_pin_on) {
+                // Rail off: the FC queue would HOLD this and FIRE the channel
+                // at the next power-on — a latent fire delivered while someone
+                // may be handling the rocket (see the queue header's pyro
+                // exception). Refuse and tell the app.
+                ble_app.sendPyroTestRefusal(36, ch, 1 /* FC rail off */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: FC rail off"
+                                " (queued fire would deliver at power-on)", ch);
             } else {
                 setPendingCommandWithConfig(PYRO_FIRE_TEST, PYRO_FIRE_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro test fire CH%u", ch);

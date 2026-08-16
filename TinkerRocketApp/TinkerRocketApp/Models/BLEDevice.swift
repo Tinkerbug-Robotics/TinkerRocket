@@ -92,6 +92,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var rocketStorage: RocketStorageStats?
     @Published var bsStorage: BaseStationStorageStats?
 
+    /// Latest rail-off pyro-test refusal from the OC (0xCE on file_ops): the
+    /// firmware refused to queue a cmd-35/36 pyro test because the FC power
+    /// rail is off — a held pyro command would deliver its fire/ARM pulse at
+    /// the next power-on. PyroTestView observes this to abort the fire flow;
+    /// the cmd-35 TESTING window is closed at parse time. Reset on disconnect.
+    @Published private(set) var pyroTestRefusal: PyroTestRefusal?
+
     /// Set once per connected-session after the first-time-seen base station
     /// has auto-picked and pushed a quiet channel.  Gates the auto-pick so it
     /// only runs once per session; cleared on disconnect so that a BS reboot
@@ -311,6 +318,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // republishes IDLE on reconnect anyway.
         magCalStatus = nil
         sensorCalStatus = nil
+        pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
         // OC re-pushes it in the connect-time config readback, so a stale
         // copy must not bridge sessions (it could "confirm" a send made
@@ -1700,6 +1708,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 case 0xCB: parseSensorCalStatus(data)  // issue #132
                 case 0xCC: parseRocketStorageStats(data)
                 case 0xCD: parseBaseStationStorageStats(data)
+                case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
                 case 0x7B:                              // '{' → JSON object
                     if let s = OTAStatusUpdate.parse(data) {
                         otaStatus = s
@@ -2039,6 +2048,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         sensorCalStatus = status
+    }
+
+    /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).
+    /// Frame: [0]=0xCE [1]=refused BLE cmd (35 cont / 36 fire) [2]=channel
+    /// [3]=reason (1 = FC power rail off).
+    private func parsePyroTestRefusal(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 4, bytes[0] == 0xCE else {
+            print("[PYRO] malformed refusal frame (\(bytes.count) bytes)")
+            return
+        }
+        let refusal = PyroTestRefusal(cmd: bytes[1], channel: bytes[2],
+                                      reason: bytes[3], at: Date())
+        pyroTestRefusal = refusal
+        // A refused continuity test gets no reading back — close the TESTING
+        // window now instead of letting the spinner run out its 2.5 s
+        // implying a round trip happened.
+        if refusal.cmd == 35 {
+            contTestPendingUntil.removeValue(forKey: refusal.channel)
+        }
+        print("[PYRO] cmd \(refusal.cmd) CH\(refusal.channel) refused by OC (reason \(refusal.reason))")
     }
 
     private func parseRocketStorageStats(_ data: Data) {

@@ -1720,6 +1720,12 @@ private struct PyroChannelTestControls: View {
                 || device.telemetry.pyroFired(channel: channel)
                 || device.telemetry.state == "INFLIGHT"
             if !blocked {
+                // Rail gate: with the FC powered off the OC refuses cmd 35/36
+                // outright (a queued test would deliver its fire/ARM pulse at
+                // the next power-on), so don't offer buttons that can only be
+                // refused. #377: pwr_pin_on reads false until the first
+                // telemetry frame, which fails safe to disabled here.
+                let railOn = device.telemetry.pwr_pin_on
                 Button("Test Continuity") {
                     device.sendPyroContTest(channel: UInt8(channel))
                     contTestActive = true
@@ -1728,8 +1734,14 @@ private struct PyroChannelTestControls: View {
                         contTestActive = false
                     }
                 }
+                .disabled(!railOn)
                 Button("Test Pyro Channel") { onTestFire(channel) }
-                    .foregroundColor(.orange)
+                    .foregroundColor(railOn ? .orange : .secondary)
+                    .disabled(!railOn)
+                if !railOn {
+                    Label("Power on the rocket to test.", systemImage: "bolt.slash")
+                        .font(.caption).foregroundColor(.orange)
+                }
             }
         }
     }

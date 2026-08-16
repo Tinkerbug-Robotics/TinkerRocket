@@ -167,6 +167,19 @@ struct PyroTestView: View {
                         ticker.stop()
                         return
                     }
+                    // Rail re-check at the fire instant, DIRECT links only
+                    // (a BS link has no rail signal — see the FIRE button
+                    // gate): with the FC powered off the OC refuses cmd 36
+                    // (a queued fire would deliver at the next power-on), so
+                    // sending could only be refused. Abort through the SAFE
+                    // path — it stops the camera and any logging this test
+                    // started — and land in .idle, where errorMessage is
+                    // displayed.
+                    guard device.isBaseStation || device.telemetry.pwr_pin_on else {
+                        safeRocket()
+                        errorMessage = "Rocket power is off — no fire command sent"
+                        return
+                    }
                     device.sendPyroFire(channel: UInt8(channel))
                     firedThisTest = true
                     state = .recording
@@ -199,6 +212,17 @@ struct PyroTestView: View {
             default:
                 ticker.stop()
             }
+        }
+        .onChange(of: device.pyroTestRefusal) { refusal in
+            // Authoritative backstop: the OC refused an actual fire command
+            // (rail off at dispatch). The gates above should make this
+            // unreachable, but if a refusal does arrive mid-flow, abort
+            // through the SAFE path and say why.
+            guard let refusal, refusal.cmd == 36,
+                  refusal.channel == UInt8(channel),
+                  state == .countdown || state == .recording else { return }
+            safeRocket()
+            errorMessage = "Rocket refused the fire — power is off"
         }
         .onAppear {
             camera.configure()
@@ -401,12 +425,30 @@ struct PyroTestView: View {
         VStack(spacing: 16) {
             switch state {
             case .idle, .done:
+                // Rail gate, DIRECT links only: the OC refuses cmd 36 while
+                // the FC rail is off (a queued fire would deliver at the next
+                // power-on), so a live FIRE button would only ever be refused.
+                // Mirrors the Settings entry buttons; also covers the rail
+                // dropping while this cover is already up. A base-station
+                // link has no rail signal — the relay TelemetryData never
+                // sets pwr_pin_on (the LoRa packet doesn't carry it), so
+                // gating on it there would disable the stand-back test
+                // permanently; the rocket's own LoRa cmd-36 refusal and the
+                // pyroCommandPathReady freshness check guard that path.
+                let railOff = !device.isBaseStation && !device.telemetry.pwr_pin_on
+                let canFire = device.isConnected && !railOff
                 Button(action: startCountdown) {
                     Text("FIRE")
                         .font(.title2.weight(.heavy))
                         .foregroundColor(.white)
                         .frame(width: 140, height: 140)
-                        .background(Circle().fill(Color.red))
+                        .background(Circle().fill(canFire ? Color.red : Color.gray))
+                }
+                .disabled(!canFire)
+                if railOff {
+                    Label("Rocket power is off", systemImage: "bolt.slash")
+                        .font(.headline)
+                        .foregroundColor(.orange)
                 }
 
             case .countdown:

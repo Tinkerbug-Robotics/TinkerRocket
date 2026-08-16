@@ -2184,8 +2184,13 @@ struct PyroChannelsView: View {
             }
             .buttonStyle(.plain)
 
-            // Test continuity button (only when not in flight)
-            if !armed && !fired && device.telemetry.state != "INFLIGHT" {
+            // Test continuity button (only when not in flight, and only with
+            // the FC rail up — the OC refuses cmd 35 rail-off, since a queued
+            // test would deliver its ARM pulse at the next power-on. The
+            // Settings twin shows the disabled state with a caption; this
+            // compact tile just hides the button until power-on.)
+            if !armed && !fired && device.telemetry.state != "INFLIGHT"
+                && device.telemetry.pwr_pin_on {
                 Button {
                     device.sendPyroContTest(channel: UInt8(channel))
                     contTestChannel = channel
