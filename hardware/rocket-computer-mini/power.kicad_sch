@@ -9952,7 +9952,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 118.11 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -12560,7 +12560,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 173.99 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -13904,7 +13904,7 @@
 				)
 			)
 		)
-		(property "MPN" "CSSH0805FT2L00"
+		(property "MPN" "PA0805FRF870R002L"
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -13915,7 +13915,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Stackpole"
+		(property "Mfr" "YAGEO"
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -14007,7 +14007,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 212.725 130.81 0)
 			(hide yes)
 			(show_name no)
@@ -16542,7 +16542,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 51.435 100.33 0)
 			(hide yes)
 			(show_name no)
@@ -16953,7 +16953,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 180.975 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -17517,7 +17517,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 167.005 36.83 0)
 			(hide yes)
 			(show_name no)
