@@ -306,7 +306,8 @@ _P(
         "this one.",
 )
 
-# New-PCB magnetometer (msg 0xD1), read by a time-gated I2C poll at a nominal 100 Hz — so
+# I2C magnetometer (msg 0xD1 — IIS2MDC on the big board V8+, QMC5883P on the
+# rocket-computer-mini), read by a time-gated I2C poll at a nominal 100 Hz — so
 # cadence is poll-throttled rather than data-ready strobed — and timestamped on the same
 # flight-computer clock as the other sensor streams.
 _P(
@@ -314,8 +315,9 @@ _P(
     unit="µT",
     note=
         "Magnetic field along the rocket's X axis, in µT. Derived rather than logged: raw int16 "
-        "counts scaled at 0.15 µT/LSB, rotated about the chip's +Z axis, then mapped into the rocket "
-        "frame.",
+        "counts scaled per the board's chip (IIS2MDC 0.15 µT/LSB, mini QMC5883P 100/3750 µT/LSB — "
+        "picked from the settings snapshot's mag-type stamp; logs without one are assumed IIS2MDC), "
+        "rotated about the chip's +Z axis, then mapped into the rocket frame.",
     caution=
         "Hard-iron calibration is applied inside the chip's offset registers before anything is "
         "logged, so a calibrated and an uncalibrated board produce records that look identical and "
@@ -326,7 +328,7 @@ _P(
     "IIS2MDC.mag_y", "Mag Y (rocket)",
     unit="µT",
     note=
-        "Magnetic field along the rocket's Y axis in µT, same 0.15 µT/LSB scaling as X. The chip-Z "
+        "Magnetic field along the rocket's Y axis in µT, same per-board count scaling as X. The chip-Z "
         "rotation mixes the sensor's own X and Y, so neither axis maps one-to-one onto a physical "
         "sensor axis.",
     caution=
@@ -338,8 +340,9 @@ _P(
     "IIS2MDC.mag_z", "Mag Z (rocket)",
     unit="µT",
     note=
-        "Magnetic field along the rocket's Z axis in µT, from raw int16 counts at 0.15 µT/LSB. A "
-        "rotation about Z cannot change Z, so this axis is untouched by the chip-Z rotation.",
+        "Magnetic field along the rocket's Z axis in µT, from raw int16 counts at the same per-board "
+        "scale as X and Y. A rotation about Z cannot change Z, so this axis is untouched by the "
+        "chip-Z rotation.",
     caution=
         "Any hard-iron calibration was applied in the chip's offset registers before logging, so the "
         "record cannot tell you whether the board was calibrated.",

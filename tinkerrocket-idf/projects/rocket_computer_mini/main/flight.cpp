@@ -1022,6 +1022,54 @@ static void buildFlightSettings(FlightSettingsData& s)
     // guid_tgt_* tail stays zeroed; src 0 = overhead/none (no guidance stack).
 }
 
+// #386 clamp (FC parity): a raw lroundf cast wraps sign for |bias| > ~327 m/s².
+static inline int16_t encodeHgBiasCmss(float bias_mss)
+{
+    float v = bias_mss * 100.0f;
+    if (v >  32767.0f) v =  32767.0f;
+    if (v < -32768.0f) v = -32768.0f;
+    return (int16_t)lroundf(v);
+}
+
+// On the two-MCU boards the OC logs the FC's OUT_STATUS_QUERY frames as
+// received, so every log carries the sensor config (full scales, rotations,
+// HG bias, b2r, mag type) the analysis tooling keys its conversions off.
+// The mini has no query wire — build the same frame from the state actually
+// applied and log it alongside each FlightSettings snapshot, so mini logs
+// parse with this board's real config instead of the parser's big-board
+// defaults.
+static void logOutStatusQuery()
+{
+    OutStatusQueryData q = {};
+    q.ism6_low_g_fs_g  = config::ISM6_LOW_G_FS_G;
+    q.ism6_high_g_fs_g = config::ISM6_HIGH_G_FS_G;
+    q.ism6_gyro_fs_dps = config::ISM6_GYRO_FS_DPS;
+    q.ism6_rot_z_cdeg  = (int16_t)lroundf(config::ISM6HG256_ROT_Z_DEG * 100.0f);
+    q.mmc_rot_z_cdeg   = 0;   // no MMC5983MA fitted
+    q.format_version   = 6;
+    q.hg_bias_x_cmss = encodeHgBiasCmss(sensor_converter.highGBiasX());
+    q.hg_bias_y_cmss = encodeHgBiasCmss(sensor_converter.highGBiasY());
+    q.hg_bias_z_cmss = encodeHgBiasCmss(sensor_converter.highGBiasZ());
+    q.b2r_code = b2r_active_code;
+    q.b2r_mode = b2r_active_mode;
+    for (int i = 0; i < 4; ++i) {
+        q.b2r_q[i] = (int16_t)lroundf(b2r_active_quat[i] * ORIENT_QUAT_WIRE_SCALE);
+    }
+    // Read back from the converter rather than config:: so this stays right
+    // when the mag rotation constant is renamed/re-derived (#797 QMC seam).
+    q.iis2mdc_rot_z_cdeg =
+        (int16_t)lroundf(sensor_converter.iis2mdcRotationZDeg() * 100.0f);
+    // tgt_* stay zeroed: no guidance stack (GUID_TGT_NONE / GUID_RC_NONE = 0).
+#ifdef TR_MAG_DRIVER_QMC5883P
+    q.mag_type = MAG_TYPE_QMC5883P;   // #797 mag — counts at 100/3750 µT/LSB
+#else
+    q.mag_type = MAG_TYPE_IIS2MDC;    // counts at 0.15 µT/LSB
+#endif
+    (void)mini_link::logFrame(OUT_STATUS_QUERY,
+                              reinterpret_cast<const uint8_t*>(&q),
+                              (uint8_t)sizeof(q));
+}
+
 static void sendFlightSettings()
 {
     FlightSettingsData s;
@@ -1029,6 +1077,9 @@ static void sendFlightSettings()
     (void)mini_link::logFrame(FLIGHT_SETTINGS_MSG,
                               reinterpret_cast<const uint8_t*>(&s),
                               (uint8_t)sizeof(s));
+    // The sensor-config snapshot rides every settings emission (launch ×4,
+    // 5 s pre-flight cadence, on-demand) — same redundancy story as #418.
+    logOutStatusQuery();
 }
 
 // ==========================================================================

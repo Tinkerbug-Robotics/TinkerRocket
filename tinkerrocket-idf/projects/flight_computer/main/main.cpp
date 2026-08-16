@@ -385,9 +385,16 @@ static uint32_t camera_stop_due_ms = 0;
 // time and, on a miss, fell back to a record-less power toggle; we now POLL
 // GET_DEVICE_INFO and command START_RECORDING the moment the camera answers
 // (or blind at the deadline), then resend it for UART reliability.
-//   Idle → WaitingForBoot → Probing → ResendRecord → Idle.
+// The UART pins are parked high-Z whenever the camera is unpowered (battery
+// cold-start phantom-feed fix, see config.h) and attached at power-on.  A
+// probe window that ends with the camera never having answered gets a
+// park+power-cycle retry (RUNCAM_POWER_RETRIES / RUNCAM_RETRY_OFF_MS)
+// before the final blind fallback.
+//   Idle → WaitingForBoot → Probing → ResendRecord → Idle,
+//   with Probing → RetryOff → WaitingForBoot on a silent window.
 enum class CameraStartPhase : uint8_t {
     Idle,
+    RetryOff,        // gate off, pins parked, waiting to reapply power
     WaitingForBoot,  // min boot grace before the first probe
     Probing,         // polling GET_DEVICE_INFO until the camera answers
     ResendRecord,    // re-sending START_RECORDING for reliability
@@ -397,6 +404,7 @@ static uint32_t camera_start_due_ms = 0;
 static uint32_t camera_start_power_ms = 0;       // when RUNCAM_PWR_PIN went high
 static uint32_t camera_probe_deadline_ms = 0;    // stop polling, record blind
 static uint8_t  camera_record_resends_left = 0;  // remaining START_RECORDING resends
+static uint8_t  camera_power_retries_left = 0;   // remaining power-cycle attempts
 static uint8_t runtime_camera_type = config::CAMERA_TYPE;  // can be overridden via BLE
 static bool servo_enabled = false;
 static bool gain_sched_enabled = config::GAIN_SCHEDULE_ENABLED;
@@ -2127,6 +2135,9 @@ static bool runcam_uart_ready = false;
 static constexpr uint16_t RUNCAM_FEAT_START_RECORDING = 0x0040;
 static uint16_t runcam_features = 0;
 
+static void runcamUartPark();    // defined below with runcamUartAttach
+static void runcamUartAttach();
+
 static void initRunCam()
 {
     if (!config::USE_RUNCAM)
@@ -2158,7 +2169,10 @@ static void initRunCam()
     ESP_ERROR_CHECK(uart_driver_install(RUNCAM_UART_PORT, 256, 256, 0, NULL, 0));
 
     runcam_uart_ready = true;
-    ESP_LOGI(TAG, "RunCam UART on RX=%d TX=%d @ %lu baud",
+    // Camera is off at boot: park the pins immediately so the idle-high TX
+    // can't phantom-feed it (battery cold-start fix, see config.h).
+    runcamUartPark();
+    ESP_LOGI(TAG, "RunCam UART ready on RX=%d TX=%d @ %lu baud (pins parked, camera OFF)",
              (int)config::RUNCAM_RX_PIN, (int)config::RUNCAM_TX_PIN,
              (unsigned long)config::RUNCAM_BAUD);
 }
@@ -2245,6 +2259,40 @@ static void sendRunCamStartRecording()
     uart_write_bytes(RUNCAM_UART_PORT, rec, sizeof(rec));
 }
 
+// ── UART park/attach around camera power (battery cold-start fix) ──
+// V8 wires the UART pins straight to the connector (no series R — R30/R32
+// are V9) and switches the camera's RETURN, so an idle-high TX phantom-feeds
+// the "off" camera through its ESD diodes and its power-on-reset never sees
+// a clean rise (see config.h).  Park both pins high-impedance (input, no
+// pulls) whenever the camera is unpowered; attach the UART matrix only while
+// the gate is up.  Nothing ever drives an unpowered camera.
+static void runcamUartPark()
+{
+    if (!config::USE_RUNCAM || !runcam_uart_ready)
+        return;
+    gpio_reset_pin((gpio_num_t)config::RUNCAM_TX_PIN);
+    gpio_reset_pin((gpio_num_t)config::RUNCAM_RX_PIN);
+    gpio_set_direction((gpio_num_t)config::RUNCAM_TX_PIN, GPIO_MODE_INPUT);
+    gpio_set_direction((gpio_num_t)config::RUNCAM_RX_PIN, GPIO_MODE_INPUT);
+    // gpio_reset_pin leaves the pull-up enabled — remove it; even a weak
+    // pull is a phantom-feed path on a resistor-less line.
+    gpio_set_pull_mode((gpio_num_t)config::RUNCAM_TX_PIN, GPIO_FLOATING);
+    gpio_set_pull_mode((gpio_num_t)config::RUNCAM_RX_PIN, GPIO_FLOATING);
+}
+
+// Reattach the UART matrix (same routing as init; safe to call when already
+// attached — the stop path calls it unconditionally so an aborted start can
+// never leave the pins parked when a toggle needs to transmit).
+static void runcamUartAttach()
+{
+    if (!config::USE_RUNCAM || !runcam_uart_ready)
+        return;
+    uart_set_pin(RUNCAM_UART_PORT,
+                 (int)config::RUNCAM_TX_PIN,
+                 (int)config::RUNCAM_RX_PIN,
+                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+}
+
 // ── Generic camera start/stop (dispatches based on runtime_camera_type) ──
 static void cameraStart(uint32_t now_ms)
 {
@@ -2257,19 +2305,22 @@ static void cameraStart(uint32_t now_ms)
     }
     else if (runtime_camera_type == CAM_TYPE_RUNCAM)
     {
-        // Power on, then poll for UART readiness from serviceCameraStart so
-        // the flight task keeps feeding the watchdog (#146).  The camera boots
-        // to IDLE and does NOT auto-record (#234); serviceCameraStart commands
-        // START_RECORDING as soon as it answers GET_DEVICE_INFO.
+        // Attach the parked UART, power on, then poll for readiness from
+        // serviceCameraStart so the flight task keeps feeding the watchdog
+        // (#146).  The camera boots to IDLE and does NOT auto-record over
+        // UART (#234); serviceCameraStart commands START_RECORDING as soon
+        // as it answers GET_DEVICE_INFO.
+        runcamUartAttach();
         if (config::RUNCAM_PWR_PIN >= 0)
             gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 1);
         gopro_recording = true;
         runcam_features = 0;  // re-probe each power cycle; don't trust a stale cache
         camera_start_power_ms = now_ms;
+        camera_power_retries_left = config::RUNCAM_POWER_RETRIES;
         camera_start_phase = CameraStartPhase::WaitingForBoot;
         camera_start_due_ms = now_ms + config::RUNCAM_BOOT_MIN_MS;
         camera_probe_deadline_ms = now_ms + config::RUNCAM_BOOT_MAX_MS;
-        ESP_LOGI(TAG, "Camera START (RunCam) — power ON, polling for boot...");
+        ESP_LOGI(TAG, "Camera START (RunCam) — UART attached, power ON, polling for boot...");
     }
 }
 
@@ -2316,6 +2367,9 @@ static inline void serviceCameraStop(uint32_t now_ms)
         }
         else if (runtime_camera_type == CAM_TYPE_RUNCAM)
         {
+            // A stop can land mid-retry (pins parked); reattach the UART
+            // unconditionally so the toggle actually transmits.
+            runcamUartAttach();
             sendRunCamToggle();
             ESP_LOGI(TAG, "RunCam toggle sent — power-off in 500 ms");
             camera_stop_phase = CameraStopPhase::RunCamToggleSent;
@@ -2331,7 +2385,8 @@ static inline void serviceCameraStop(uint32_t now_ms)
     {
         if (config::RUNCAM_PWR_PIN >= 0)
             gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);
-        ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off");
+        runcamUartPark();  // unpowered camera: nothing may feed it (config.h)
+        ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off, pins parked");
         gopro_recording = false;
         camera_stop_phase = CameraStopPhase::Idle;
     }
@@ -2350,6 +2405,31 @@ static inline void serviceCameraStart(uint32_t now_ms)
 {
     if (camera_start_phase == CameraStartPhase::Idle) return;
     if ((int32_t)(now_ms - camera_start_due_ms) < 0) return;
+
+    if (camera_start_phase == CameraStartPhase::RetryOff)
+    {
+        // Off-time elapsed: reattach the UART and reapply power.  If launch
+        // happened during the off-time, same rule as the probe path — no
+        // blocking UART reads in boost, start blind immediately.
+        runcamUartAttach();
+        if (config::RUNCAM_PWR_PIN >= 0)
+            gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 1);
+        camera_start_power_ms = now_ms;
+        if (rocket_state == INFLIGHT)
+        {
+            ESP_LOGW(TAG, "RunCam: launch during power-cycle retry — starting blind NOW");
+            sendRunCamStartRecording();
+            camera_record_resends_left = config::RUNCAM_RECORD_RESENDS;
+            camera_start_phase = CameraStartPhase::ResendRecord;
+            camera_start_due_ms = now_ms + config::RUNCAM_RECORD_RESEND_MS;
+            return;
+        }
+        camera_start_phase = CameraStartPhase::WaitingForBoot;
+        camera_start_due_ms = now_ms + config::RUNCAM_BOOT_MIN_MS;
+        camera_probe_deadline_ms = now_ms + config::RUNCAM_BOOT_MAX_MS;
+        ESP_LOGI(TAG, "RunCam: power reapplied — polling for boot again");
+        return;
+    }
 
     if (camera_start_phase == CameraStartPhase::WaitingForBoot)
     {
@@ -2375,6 +2455,25 @@ static inline void serviceCameraStart(uint32_t now_ms)
         {
             camera_start_due_ms = now_ms + config::RUNCAM_PROBE_INTERVAL_MS;
             return;  // keep polling
+        }
+        // Whole window silent on the pad: park + power-cycle and retry
+        // before the blind fallback (battery cold-start phantom feed — see
+        // config.h).  Gate off AND pins parked, so nothing feeds the camera
+        // and its own load drains it during the off-time.
+        if (!alive && !in_flight && camera_power_retries_left > 0)
+        {
+            camera_power_retries_left--;
+            if (config::RUNCAM_PWR_PIN >= 0)
+                gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);
+            runcamUartPark();
+            camera_start_phase = CameraStartPhase::RetryOff;
+            camera_start_due_ms = now_ms + config::RUNCAM_RETRY_OFF_MS;
+            ESP_LOGW(TAG, "RunCam: no UART reply %lu ms after power-on — "
+                          "parked+power-cycling (%u retr%s left)",
+                     (unsigned long)(now_ms - camera_start_power_ms),
+                     (unsigned)camera_power_retries_left,
+                     camera_power_retries_left == 1 ? "y" : "ies");
+            return;
         }
         if (alive)
             ESP_LOGI(TAG, "RunCam ready %lu ms after power-on (feat 0x%04X%s)",
@@ -3061,7 +3160,14 @@ static void setup_fc()
     // applyBoardToRocketOrientation above and on any runtime change).
     // v4: adds per-chip iis2mdc_rot_z_cdeg (#204).
     // v5: adds the guidance-target echo (#435).
-    out_status_query_data.format_version = 5;
+    // v6: adds mag_type — which chip is behind the 0xD1 mag stream, so log
+    // analysis picks the right count scale per board.
+    out_status_query_data.format_version = 6;
+#ifdef TR_MAG_DRIVER_QMC5883P
+    out_status_query_data.mag_type = MAG_TYPE_QMC5883P;
+#else
+    out_status_query_data.mag_type = MAG_TYPE_IIS2MDC;
+#endif
     // Guidance-target echo boot state (#435): no cmd 28 processed yet; the
     // current target is whatever cmd 65 left in NVS (restored above).
     out_status_query_data.tgt_seq     = 0;

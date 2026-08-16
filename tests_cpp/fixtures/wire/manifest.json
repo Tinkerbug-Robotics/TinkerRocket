@@ -43,9 +43,13 @@
  "size": 50,
  "notes": "NonSensorData ladder, msg 0xA5; absent tail fields decode as absent, not 0"},
  {
+ "file": "logframes/statusquery_v6_42.bin",
+ "size": 42,
+ "notes": "OutStatusQueryData v6 (+mag_type), msg 0xA0"},
+ {
  "file": "logframes/statusquery_v5_41.bin",
  "size": 41,
- "notes": "OutStatusQueryData v5, msg 0xA0"},
+ "notes": "OutStatusQueryData truncated to v5 (guidance echo tail, no mag_type)"},
  {
  "file": "logframes/statusquery_v4_28.bin",
  "size": 28,
@@ -220,7 +224,7 @@
  "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"},
  {
  "file": "csv/tiny_flight.bin",
- "size": 29140,
+ "size": 29141,
  "notes": "synthetic mini-device flight for the bin→CSV golden; app-generated CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside wire/ — they are app output, not emitter output)"}
  ]
 }

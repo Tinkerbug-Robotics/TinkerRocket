@@ -34,6 +34,9 @@ public class SensorConverter {
     private var ism6RotZRad: Double = 0.0
     private var mmcRotZRad: Double = 0.0
     private var iis2mdcRotZRad: Double = 0.0
+    // Count→µT scale of the IIS2MDC-named stream; per-board since #797
+    // (big board IIS2MDC vs mini QMC5883P), keyed off the 0xA0 v6 mag_type.
+    private var magUtPerLsb: Double = OutStatusQueryData.IIS2MDC_UT_PER_LSB
 
     init {
         // Calculate sensitivity values. Mirror the firmware converter
@@ -72,6 +75,15 @@ public class SensorConverter {
         // logs (status query format_version < 4) don't carry it; fall back to
         // the MMC value to preserve prior behavior on those.
         iis2mdcRotZRad = (iisDeg ?: magDeg) * PI / 180.0
+    }
+
+    /**
+     * Configure the count→µT scale of the IIS2MDC-named mag stream from the
+     * status query's v6 mag_type ([OutStatusQueryData.magUtPerLsb]).  Left
+     * at the IIS2MDC default when the log predates v6.
+     */
+    public fun configureMagScale(utPerLsb: Double) {
+        magUtPerLsb = utPerLsb
     }
 
     /**
@@ -217,14 +229,15 @@ public class SensorConverter {
     // MARK: - IIS2MDC Conversion (new Mini PCB rev)
 
     /**
-     * Convert IIS2MDC raw counts to [Mmc5983MaDataSi] (µT) so CSV writer
-     * stays unified between MMC and IIS2MDC boards.  IIS2MDC sensitivity
-     * is 0.15 µT/LSB (datasheet 9.13).  Applies the IIS2MDC-specific
+     * Convert IIS2MDC-named raw counts to [Mmc5983MaDataSi] (µT) so CSV
+     * writer stays unified between MMC and I2C-mag boards.  Sensitivity is
+     * per-board ([configureMagScale]): IIS2MDC 0.15 µT/LSB (datasheet 9.13),
+     * mini QMC5883P 100/3750 µT/LSB (#797).  Applies the IIS2MDC-specific
      * sensor→board rotation (iis2mdcRotZRad, from status query
      * iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT the MMC's.
      */
     public fun convertIIS2MDC(raw: Iis2mdcData): Mmc5983MaDataSi {
-        val utPerLsb = 0.15
+        val utPerLsb = magUtPerLsb
 
         val mx = raw.magX.toDouble() * utPerLsb
         val my = raw.magY.toDouble() * utPerLsb

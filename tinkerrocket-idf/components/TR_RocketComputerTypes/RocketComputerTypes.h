@@ -755,6 +755,16 @@ static inline void loraSelectChannelSet(
     }
 }
 
+// Which magnetometer chip produced the IIS2MDC-named (0xD1) count stream,
+// carried in OutStatusQueryData v6+ so log readers can pick the count scale
+// per log instead of assuming the big board's chip:
+//   IIS2MDC  — 0.15 µT/LSB (ST datasheet 9.13), big board V8+
+//   QMC5883P — 100/3750 µT/LSB at ±8 G (QST Table 2), rocket-computer-mini
+//              via the TR_MAG_DRIVER_QMC5883P seam (#797)
+// Logs older than v6 carry no field; readers assume IIS2MDC.
+static constexpr uint8_t MAG_TYPE_IIS2MDC  = 0;
+static constexpr uint8_t MAG_TYPE_QMC5883P = 1;
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
@@ -769,6 +779,7 @@ typedef struct __attribute__((packed))
                                   //   3 = has board→rocket orientation
                                   //   4 = has IIS2MDC rotation
                                   //   5 = has guidance-target echo (#435)
+                                  //   6 = has mag_type
     int16_t  hg_bias_x_cmss;     // high-g bias X, centi-m/s² (0.01 m/s² units)
     int16_t  hg_bias_y_cmss;     // high-g bias Y, centi-m/s²
     int16_t  hg_bias_z_cmss;     // high-g bias Z, centi-m/s²
@@ -801,9 +812,15 @@ typedef struct __attribute__((packed))
                            // and on any cmd-65 apply that changes the echo
     uint8_t tgt_status;    // GUID_TGT_*
     uint8_t tgt_last_rc;   // GUID_RC_*
+
+    // Which chip is behind the IIS2MDC-named mag stream (format_version >= 6).
+    // MAG_TYPE_* above; keys the count→µT scale in log analysis, where the
+    // mini's QMC5883P counts (100/3750 µT/LSB) would otherwise be misread at
+    // the IIS2MDC's 0.15 µT/LSB.
+    uint8_t mag_type;
 } OutStatusQueryData;
-static_assert(sizeof(OutStatusQueryData) == 41,
-              "OutStatusQueryData must be 41 bytes");
+static_assert(sizeof(OutStatusQueryData) == 42,
+              "OutStatusQueryData must be 42 bytes");
 
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
@@ -2750,7 +2767,7 @@ static_assert(offsetof(NonSensorData, apogee_flags) == 43, "NonSensorData.apogee
 static_assert(offsetof(NonSensorData, sensor_health) == 44, "NonSensorData.sensor_health moved");
 static_assert(offsetof(NonSensorData, ekf_ticks) == 48, "NonSensorData.ekf_ticks moved");
 
-static_assert(sizeof(OutStatusQueryData) == 41, "OutStatusQueryData wire size");
+static_assert(sizeof(OutStatusQueryData) == 42, "OutStatusQueryData wire size");
 static_assert(offsetof(OutStatusQueryData, ism6_low_g_fs_g) == 0, "OutStatusQueryData.ism6_low_g_fs_g moved");
 static_assert(offsetof(OutStatusQueryData, ism6_high_g_fs_g) == 1, "OutStatusQueryData.ism6_high_g_fs_g moved");
 static_assert(offsetof(OutStatusQueryData, ism6_gyro_fs_dps) == 3, "OutStatusQueryData.ism6_gyro_fs_dps moved");
@@ -2771,6 +2788,8 @@ static_assert(offsetof(OutStatusQueryData, tgt_alt_m)   == 36, "OutStatusQueryDa
 static_assert(offsetof(OutStatusQueryData, tgt_seq)     == 38, "OutStatusQueryData.tgt_seq moved");
 static_assert(offsetof(OutStatusQueryData, tgt_status)  == 39, "OutStatusQueryData.tgt_status moved");
 static_assert(offsetof(OutStatusQueryData, tgt_last_rc) == 40, "OutStatusQueryData.tgt_last_rc moved");
+// v6 mag-type byte.
+static_assert(offsetof(OutStatusQueryData, mag_type) == 41, "OutStatusQueryData.mag_type moved");
 
 static_assert(sizeof(ServoConfigData) == 22, "ServoConfigData wire size");
 static_assert(offsetof(ServoConfigData, bias_us) == 0, "ServoConfigData.bias_us moved");

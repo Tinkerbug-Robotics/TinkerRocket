@@ -27,6 +27,9 @@ nonisolated class SensorConverter {
     private var ism6_rot_z_rad: Double = 0.0
     private var mmc_rot_z_rad: Double = 0.0
     private var iis2mdc_rot_z_rad: Double = 0.0
+    // Count→µT scale of the IIS2MDC-named stream; per-board since #797
+    // (big board IIS2MDC vs mini QMC5883P), keyed off the 0xA0 v6 mag_type.
+    private var mag_ut_per_lsb: Double = OutStatusQueryData.iis2mdcUtPerLsb
 
     init() {
         // Calculate sensitivity values. Mirror the firmware converter
@@ -63,6 +66,13 @@ nonisolated class SensorConverter {
         // logs (status query format_version < 4) don't carry it; fall back to
         // the MMC value to preserve prior behavior on those.
         iis2mdc_rot_z_rad = (iisDeg ?? magDeg) * .pi / 180.0
+    }
+
+    /// Configure the count→µT scale of the IIS2MDC-named mag stream from the
+    /// status query's v6 mag_type (`OutStatusQueryData.magUtPerLsb`).  Left
+    /// at the IIS2MDC default when the log predates v6.
+    func configureMagScale(utPerLsb: Double) {
+        mag_ut_per_lsb = utPerLsb
     }
 
     /// Configure Legacy sensor rotation.
@@ -204,13 +214,15 @@ nonisolated class SensorConverter {
 
     // MARK: - IIS2MDC Conversion (new Mini PCB rev)
 
-    /// Convert IIS2MDC raw counts to MMC5983MADataSI (µT) so CSV writer
-    /// stays unified between MMC and IIS2MDC boards.  IIS2MDC sensitivity
-    /// is 0.15 µT/LSB (datasheet 9.13).  Applies the IIS2MDC-specific
-    /// sensor→board rotation (iis2mdc_rot_z_rad, from status query
-    /// iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT the MMC's.
+    /// Convert IIS2MDC-named raw counts to MMC5983MADataSI (µT) so CSV
+    /// writer stays unified between MMC and I2C-mag boards.  Sensitivity is
+    /// per-board (`configureMagScale`): IIS2MDC 0.15 µT/LSB (datasheet
+    /// 9.13), mini QMC5883P 100/3750 µT/LSB (#797).  Applies the
+    /// IIS2MDC-specific sensor→board rotation (iis2mdc_rot_z_rad, from
+    /// status query iis2mdc_rot_z_cdeg, format_version >= 4 — #204), NOT
+    /// the MMC's.
     func convertIIS2MDC(_ raw: IIS2MDCData) -> MMC5983MADataSI {
-        let UT_PER_LSB = 0.15
+        let UT_PER_LSB = mag_ut_per_lsb
 
         let mx = Double(raw.mag_x) * UT_PER_LSB
         let my = Double(raw.mag_y) * UT_PER_LSB
