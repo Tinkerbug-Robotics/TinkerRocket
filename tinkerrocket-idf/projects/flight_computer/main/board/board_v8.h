@@ -54,10 +54,17 @@ struct board_pins
     static constexpr uint8_t IIS2MDC_INT = 46;    // IIS2MDCTR_INT
 
     // ### Camera (same nets as V7: Camera_TX=30, Camera_RX=31, CAM_ACT=32) ###
+    // The camera nets are named from the FC's perspective — Camera_TX is the
+    // line the FC transmits on, into the camera's RX pad — the OPPOSITE of
+    // the GNSS_TX/GNSS_RX convention above (named from the module's side).
+    // Netlist-verified 2026-08-16: GPIO30 = Camera_TX -> R32 (1k) -> J4.4,
+    // GPIO31 = Camera_RX -> R30 (1k) -> J4.3. The constants below are correct
+    // (two RunCam Split 4 units answered GET_DEVICE_INFO and recorded on this
+    // mapping) — don't "fix" them to a module-perspective reading of the nets.
     static constexpr int8_t CAM_PWR_PIN = 30;      // GoPro path, unused
     static constexpr int8_t CAM_SHUTTER_PIN = 31;  // GoPro path, unused
-    static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (Camera_TX)
-    static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (Camera_RX)
+    static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (net Camera_RX, camera's TX pad)
+    static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (net Camera_TX, camera's RX pad)
     static constexpr int8_t RUNCAM_PWR_PIN = 32;   // camera power gate (CAM_ACT)
 
     // ### Pyro channels — FULL REMAP vs V7 ###
