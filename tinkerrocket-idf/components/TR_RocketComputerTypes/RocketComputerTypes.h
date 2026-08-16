@@ -2587,14 +2587,22 @@ static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 3;           // v2: 4-channel pyro layout, no per-channel ARM
+    static constexpr uint8_t  VERSION = 4;           // v2: 4-channel pyro layout, no per-channel ARM
                                                      // v3: board→rocket orientation (b2r_*)
+                                                     // v4: sim_flight flag (reclaimed from pad)
 
     // --- Header ---
     uint32_t magic;
     uint8_t  version;
     uint8_t  rocket_state;
-    uint8_t  pad[2];
+    // 1 = snapshot was built during a SIMULATED flight (v4).  isSimActive()
+    // does not survive a reboot, so restore paths MUST refuse sim snapshots:
+    // restoring one would resume LIVE INFLIGHT with the pyro dry-fire gate
+    // off and bench igniters connected.  Restore paths also refuse v3
+    // snapshots outright (version check) — a v3 frame can't prove it wasn't
+    // a sim flight.
+    uint8_t  sim_flight;
+    uint8_t  pad[1];
 
     // --- Flight timestamps (relative to launch) ---
     uint32_t flight_elapsed_ms;
@@ -2795,7 +2803,7 @@ static constexpr size_t P5 = SIZE_OF_POWER_DATA;
 static constexpr size_t P6 = SIZE_OF_NON_SENSOR_DATA;
 static constexpr size_t P7 = SIZE_OF_LORA_DATA;
 static constexpr size_t P8 = sizeof(RollProfileData);
-static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (224 B as of snapshot v3)
+static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (224 B as of snapshot v4)
 
 static constexpr size_t M12   = (P1 > P2 ? P1 : P2);
 static constexpr size_t M34   = (P3 > P4 ? P3 : P4);

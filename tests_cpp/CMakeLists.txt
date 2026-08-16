@@ -597,6 +597,26 @@ target_include_directories(test_sim_sensor_model PRIVATE
 target_link_libraries(test_sim_sensor_model GTest::gtest_main)
 gtest_discover_tests(test_sim_sensor_model)
 
+# ---------- test_lc86_parser ----------
+# Host-side test for the Quectel LC86G NMEA/PQTM stream parser — the protocol
+# half of the mini's GNSS driver (TR_GNSSReceiverLC86_Serial). Lc86Parser.cpp
+# is deliberately IDF-free (bytes in, GNSSData out), so the checksum rules
+# (anchored on the protocol doc's published examples), the $PQTMPVT mapping
+# incl. the vel_u = -VelD sign the EKF hard-fuses, the Quality==0 fix-trust
+# gate, the $PQTMEPE accuracy merge, and junk/partial-line resilience are all
+# pinned on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
+# and is not compiled here.
+add_executable(test_lc86_parser test_lc86_parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+)
+target_include_directories(test_lc86_parser PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_lc86_parser GTest::gtest_main)
+gtest_discover_tests(test_lc86_parser)
+
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
 # writes tests_cpp/fixtures/wire/ (committed), test_wire_fixture_freshness

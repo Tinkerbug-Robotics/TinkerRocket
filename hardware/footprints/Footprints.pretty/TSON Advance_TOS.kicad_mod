@@ -3,7 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
-	(tags "TPN4R712MD ")
+	(tags "TPN4R712MD WSD20L50DN33 CSD16323Q3 AON7534")
 	(property "Reference" "REF**"
 		(at 0 0 0)
 		(unlocked yes)

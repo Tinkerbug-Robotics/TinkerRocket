@@ -28,6 +28,7 @@ jobs:
           - base_station
           - flight_computer
           - radio_board
+          - rocket_computer_mini
 
     steps:
       - uses: actions/checkout@v5

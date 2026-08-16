@@ -1,0 +1,121 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# === CPU ===
+# The IDF default for the S3 is 160 MHz. The mini runs the whole flight stack
+# (15-state EKF, orientation, detectors) on this one chip — the P4 it replaces
+# ran at 400 MHz — so the S3 gets no headroom to give away. exitLowPowerMode()
+# locks the CPU at CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ before flight; that lock is
+# only worth what this value says.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# === PSRAM: deliberately OFF — do not enable ===
+# The part is an ESP32-S3RH2 with 2 MB in-package QUAD PSRAM, but the board
+# feeds VDD_SPI through the same path as the boot flash; radio_board and the
+# base station both recorded that flash + PSRAM active together sag the rail
+# below the 2.7 V minimum. Additionally GPIO26 is the quad PSRAM chip select
+# (SPICS1) and is left unconnected on this board — see
+# hardware/rocket-computer-mini/pin-budget.md. Enabling CONFIG_SPIRAM here
+# produces a board that crashes under load, not extra memory.
+
+# === BLE / NimBLE === (carried from out_computer — the mini owns the app link)
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+
+# (#524) WARNING level — INFO logs one line per GATT notify on the NimBLE host
+# task, throttling the very file transfer it reports.
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# (#524) Deeper mbuf pools so several file-transfer notifications can ride each
+# connection event. ~13 KB of heap.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=48
+
+# === POWER MANAGEMENT === (carried from out_computer #519)
+# Compiled in but only engaged in the rail-off idle state. On the mini the
+# gated rail is V_MCU_SWTCH (sensors + GNSS + radio + NAND behind GPIO3), not a
+# second processor — but the shape is identical: idle on the pad case with BLE
+# advertising, full speed locked with light sleep off before anything flies.
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+
+# (#519) 3 ms naps overshoot their own ~1 ms wake overhead and trip
+# vTaskStepTick; only sleep when there is something to gain.
+CONFIG_FREERTOS_IDLE_TIME_BEFORE_SLEEP=10
+CONFIG_PM_LIGHTSLEEP_TICK_OVERFLOW_PROTECTION=y
+CONFIG_PM_LIGHTSLEEP_TICK_OVERFLOW_TOLERANCE=3
+CONFIG_PM_SLP_IRAM_OPT=y
+CONFIG_PM_RTOS_IDLE_OPT=y
+
+# BLE controller modem sleep — radio powers down between BLE events
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+
+# (#519) BT low-power clock from the board's 32.768 kHz crystal (Y1). Without
+# this the controller sets no_light_sleep and PM above can never engage while
+# BLE is on. Self-diagnosing: boot log says which clock was chosen, and a dead
+# crystal falls back to the main XTAL (today's behaviour) rather than breaking
+# BLE.
+CONFIG_RTC_CLK_SRC_EXT_CRYS=y
+CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL=y
+
+# (#519) Crystal watchdog: a tuning-fork crystal is exactly the part that can
+# quit under launch shock. Hardware-detect oscillation failure and switch to
+# the backup clock instead of leaving the BLE sleep clock dead.
+CONFIG_ESP_XT_WDT=y
+CONFIG_ESP_XT_WDT_BACKUP_CLK_ENABLE=y
+
+# (#519) USJ driver holds a no-light-sleep lock only while USB is actually
+# connected (SOF watch), so the bench console works and flight idle still
+# sleeps.
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+
+# PHY power down during sleep
+CONFIG_ESP_PHY_MAC_BB_PD=y
+
+# === Flash ===
+# GD25Q128E — 16 MB, twice the fleet's 8 MB. Partition table still ends at
+# 0x620000; the rest is headroom (see partitions.csv).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# === FreeRTOS ===
+CONFIG_FREERTOS_HZ=1000
+
+# Synchronous sensor bring-up runs deep call chains before the flight task
+# exists; the FC needed this over IDF's 3584 B default for the same code paths
+# (see flight_computer/sdkconfig.defaults).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Per-task CPU runtime profiling (#398 pattern). The two-MCU load split is now
+# one chip; this is how the merged budget gets measured on the bench rather
+# than guessed.
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+
+# Interrupt WDT
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=300
+
+# Core dump to flash — retrieve after crash with:
+#   espcoredump.py info_corefile -t raw -c 0x610000 build/rocket_computer_mini.elf
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# Partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# OTA rollback: new images boot as PENDING_VERIFY and auto-roll back to ota_0
+# unless the app calls esp_ota_mark_app_valid_cancel_rollback() after its first
+# successful telemetry round-trip. See docs/plans/08-ota-firmware-update.md §4.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Serial console: USB-Serial-JTAG only. UART0's pins are spent — GPIO43 is
+# unconnected and GPIO44 carries the radio's RXEN (pin-budget.md).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
