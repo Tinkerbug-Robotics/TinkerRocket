@@ -17,8 +17,20 @@ namespace mini_link {
 QueueHandle_t cmd_queue = nullptr;
 TelemState telem = {};
 portMUX_TYPE telem_mux = portMUX_INITIALIZER_UNLOCKED;
+bool active_restore_boot = false;
 
 static std::atomic<bool> log_sink_enabled{false};
+static std::atomic<bool> cmd_shutter_open{false};
+
+void setCommandShutter(bool open)
+{
+    cmd_shutter_open.store(open, std::memory_order_release);
+}
+
+bool commandShutterOpen()
+{
+    return cmd_shutter_open.load(std::memory_order_acquire);
+}
 
 void init()
 {
@@ -29,6 +41,11 @@ void init()
 bool sendCommand(uint8_t type, const uint8_t* payload, uint8_t len)
 {
     if (cmd_queue == nullptr || len > MAX_PAYLOAD) {
+        return false;
+    }
+    if (!commandShutterOpen()) {
+        ESP_LOGW(TAG, "cmd 0x%02X refused: flight side not accepting commands "
+                      "(rail off or power transition)", type);
         return false;
     }
     CmdFrame frame;

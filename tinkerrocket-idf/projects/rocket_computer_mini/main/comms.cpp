@@ -381,6 +381,12 @@ static RocketState latest_rocket_state = INITIALIZATION;
 // Rail-backed comms peripherals (NAND logger + radio) are live.  Equivalent
 // of the OC's peripherals_initialized (L582); set by comms_setup_active().
 static bool peripherals_initialized = false;
+// TR_LogToFlash::begin succeeded — gates EVERY logger touchpoint (a failed
+// begin leaves null mutexes/ring; even service() can reach an unmounted
+// LFS through a launch edge). flightlog guards itself via isInitialized().
+static bool logger_ok = false;
+
+bool commsLoggerOk() { return logger_ok; }
 
 // ==========================================================================
 // SECTION: LoRa frequency lock and channel hopping (OC L584-788, verbatim)
@@ -2663,19 +2669,27 @@ bool comms_setup_active()
     log_cfg.write_sink_ctx = &flightlog;
     log_cfg.flush_task_hook = flightlogFlushTaskHook;
 
-    if (!logger.begin(mem_spi, log_cfg))
+    // Review fix (f7b8811 review, integration/comms-fidelity x3): the OC's
+    // early-return on a dead NAND left peripherals_initialized false, which
+    // on the mini parked the comms loop in its transition branch FOREVER
+    // while the flight side — pyro state machine included — ran live, and
+    // BLE told the operator the board was OFF. A dead NAND must degrade
+    // (storage health BAD, no logging), never misreport a powered rocket as
+    // dark. logger_ok gates every logger touchpoint below; radio and NVS
+    // config proceed regardless.
+    logger_ok = logger.begin(mem_spi, log_cfg);
+    if (!logger_ok)
     {
-        // OC structure kept: a dead NAND aborts the rest of this init (radio
-        // included — they share SPI3, and the OC's early-return has field
-        // history).  BLE keeps running so the fault is reachable.
-        ESP_LOGE("PWR", "TR_LogToFlash begin failed");
-        return false;
+        ESP_LOGE("PWR", "TR_LogToFlash begin failed — flight logging DEAD "
+                        "this boot; storage health = BAD; continuing with "
+                        "radio + BLE");
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------
     // #398: bitmap persists to NAND metadata blocks [2]/[3] (2046/2047), not
     // NVS — NVS compaction disabled the flash cache and stalled core 1.
     flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
+    if (logger_ok)
     {
         tr_flightlog::TR_FlightLog::Config fl_cfg{};
         // #398/#492: pre-allocate ~20 MB up front so most flights never
@@ -2714,15 +2728,18 @@ bool comms_setup_active()
 
     // Start the NAND flush task on Core 0 — decouples NAND writes from this
     // loop so the RAM ring can buffer during stalls.
-    logger.startFlushTask(/* core */ 0, /* stackSize */ 8192, /* priority */ 1);
-
-    TR_LogToFlashRecoveryInfo recovery = {};
-    logger.getRecoveryInfo(recovery);
-    if (recovery.recovered)
+    if (logger_ok)
     {
-        ESP_LOGI("LOG", "Startup recovery wrote %lu bytes to %s",
-                      (unsigned long)recovery.recovered_bytes,
-                      recovery.filename);
+        logger.startFlushTask(/* core */ 0, /* stackSize */ 8192, /* priority */ 1);
+
+        TR_LogToFlashRecoveryInfo recovery = {};
+        logger.getRecoveryInfo(recovery);
+        if (recovery.recovered)
+        {
+            ESP_LOGI("LOG", "Startup recovery wrote %lu bytes to %s",
+                          (unsigned long)recovery.recovered_bytes,
+                          recovery.filename);
+        }
     }
 
     vTaskDelay(1);  // feed watchdog after NAND init
@@ -3211,7 +3228,7 @@ static void comms_loop()
             prev_rs_lockout = latest_rocket_state;
             const bool ns_launch = latest_non_sensor_valid &&
                                    nsFlagSet(latest_non_sensor.flags, NSF_LAUNCH);
-            if (ns_launch && !prev_ns_launch && !oc_landed_lockout)
+            if (ns_launch && !prev_ns_launch && !oc_landed_lockout && logger_ok)
             {
                 // Mirror the cmd 23 lifecycle; each call is a no-op when the
                 // matching state is already set.
@@ -3222,7 +3239,10 @@ static void comms_loop()
             }
             prev_ns_launch = ns_launch;
         }
-        LOOP_STALL_INSTR("logger.service", logger.service());
+        if (logger_ok)
+        {
+            LOOP_STALL_INSTR("logger.service", logger.service());
+        }
 
         // Read power data at ~100 Hz; log POWER_MSG only while logging.
         {
@@ -3411,7 +3431,12 @@ static void comms_loop()
         else if (ble_cmd == 23)
         {
             // Toggle logging (manual start/stop from app)
-            if (logger.isLoggingActive())
+            if (!logger_ok)
+            {
+                ESP_LOGE("OC_CMD", "Logging toggle refused: NAND logger dead "
+                                   "this boot (storage health BAD)");
+            }
+            else if (logger.isLoggingActive())
             {
                 logger.endLogging();
                 flightlogEndFlight();

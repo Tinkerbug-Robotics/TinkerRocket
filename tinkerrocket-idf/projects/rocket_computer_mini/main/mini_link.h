@@ -75,4 +75,22 @@ void enableLogSink(bool on);
 // Creates cmd_queue. Call once from app_main before either side starts.
 void init();
 
+// True on a boot whose power-on was triggered by the ACTIVE-restore policy
+// (main.cpp found the persisted ACTIVE flag set — the previous session ended
+// in an unexpected reset). Set by main.cpp BEFORE the automatic power-on
+// request; never set on a manual, user-commanded power-on. The flight side's
+// snapshot recovery keys on this: a mid-flight snapshot may only be restored
+// on the reboot that interrupted that flight, not on a later manual
+// power-up with a stale interrupted flight still on the chip.
+extern bool active_restore_boot;
+
+// Command shutter: sendCommand() refuses (returns false) while closed.
+// Closed at boot and during power-off (nothing should reach a flight side
+// that doesn't exist / is being torn down); opened by main.cpp once the
+// flight task is running. BLE/uplink handlers surface the refusal to the
+// operator instead of silently queueing commands for a later session —
+// a PYRO_FIRE_TEST tapped in IDLE must not fire at the next power-on.
+void setCommandShutter(bool open);
+bool commandShutterOpen();
+
 }  // namespace mini_link

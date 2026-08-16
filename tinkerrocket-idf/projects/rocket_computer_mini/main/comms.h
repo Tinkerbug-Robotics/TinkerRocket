@@ -17,6 +17,11 @@ void comms_setup_idle();
 // continue degraded.
 bool comms_setup_active();
 
+// True when the NAND logger came up this session. The flight→log path
+// (mini_link::enableLogSink) must stay closed when false — a failed
+// TR_LogToFlash::begin leaves null internals that enqueueFrame would walk.
+bool commsLoggerOk();
+
 // The comms task entry: core 0, prio 2, 12 KB stack. Services BLE commands,
 // LoRa TX/RX + hopping, INA230 polling, logging control, telemetry — the
 // oc_loop successor. Runs in both modes; rail-backed work is gated

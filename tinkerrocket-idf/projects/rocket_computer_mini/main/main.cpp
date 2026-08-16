@@ -436,6 +436,14 @@ static void pwrFlagWrite(const char* key, uint8_t v)
         p.putUChar(key, v);
         p.end();
     }
+    else
+    {
+        // The power machine's restore/cap decisions ride these flags; a
+        // write that silently fails degrades to either a dark rocket after
+        // a mid-flight reset (flag never set) or an un-clearable auto
+        // re-entry (flag never cleared). Loud, so the bench sees it.
+        ESP_LOGE(TAG, "FAILED to persist power flag '%s'=%u (NVS open failed)", key, v);
+    }
 }
 
 static uint8_t pwrFlagRead(const char* key)
@@ -475,6 +483,14 @@ static void powerOn()
     // ACTIVE-restore policy above).
     pwrFlagWrite(PWR_KEY_ACTIVE, 1);
 
+    // Open the command shutter for the whole ACTIVE session, including this
+    // transition — comms_setup_active() itself stages config to the flight
+    // side (NVS orientation), and BLE commands tapped during the long GNSS
+    // bring-up legitimately queue for the flight task's first drain. What
+    // the shutter exists to refuse is commands tapped in IDLE or during
+    // power-off, when no flight session is coming to consume them.
+    mini_link::setCommandShutter(true);
+
     // Exit low-power mode BEFORE powering peripherals — full CPU, no auto
     // light-sleep during init.  (OC L7057)
     exitLowPowerMode();
@@ -508,8 +524,9 @@ static void powerOn()
     // Open the flight→log path as soon as the logger exists so
     // flight_setup()'s own frames (snapshot recovery, cal restores) land.
     // Frames sent before a log session opens are dropped by enqueueFrame —
-    // that is the normal pad state, not a fault.
-    mini_link::enableLogSink(true);
+    // that is the normal pad state, not a fault. Stays CLOSED on a dead
+    // logger: enqueueFrame on a failed begin() walks null internals.
+    mini_link::enableLogSink(commsLoggerOk());
 
     // Flight half: synchronous sensor bring-up on THIS task's 16 KB stack
     // (GNSS probing takes tens of seconds worst case; comms task keeps BLE
@@ -530,12 +547,18 @@ static void powerOn()
 // never with unflushed log data (the NAND is ON this rail).
 static void powerOff()
 {
+    // Shutter first: from here no new command reaches the flight side —
+    // the finalization wait below can last up to 10 s, and a command
+    // accepted mid-teardown would execute into the rail drop.
+    mini_link::setCommandShutter(false);
+
     // Refuse while PRELAUNCH/INFLIGHT, pyro channels busy, or mag cal in
     // progress — the flight side owns that verdict.
     if (!flightSafeToPowerOff())
     {
         ESP_LOGW(TAG, "Power off REFUSED: flight side reports not safe "
                       "(state/pyro/cal) — leave the rail up");
+        mini_link::setCommandShutter(true);
         return;
     }
     // Finalize any open flight log and wait for the flush task to commit it.
@@ -543,8 +566,21 @@ static void powerOff()
     if (!comms_prepare_power_off())
     {
         ESP_LOGE(TAG, "Power off REFUSED: log finalization incomplete");
+        mini_link::setCommandShutter(true);
         return;
     }
+    // The finalization wait is long; re-ask the flight side before the
+    // irreversible part in case state changed underneath it (commands were
+    // shuttered, but the state machine itself keeps running).
+    if (!flightSafeToPowerOff())
+    {
+        ESP_LOGW(TAG, "Power off ABORTED: flight state changed during log "
+                      "finalization — leave the rail up");
+        mini_link::setCommandShutter(true);
+        return;
+    }
+    // Quiesce the flight→log path before the NAND loses power.
+    mini_link::enableLogSink(false);
 
     // Power off: drop the rail and reset.
     //
@@ -762,6 +798,10 @@ extern "C" void app_main(void)
             ESP_LOGW(TAG, "Unexpected reset while ACTIVE (reason %d) — "
                           "auto re-entering ACTIVE (attempt %u/%u)",
                      (int)esp_reset_reason(), attempts + 1, MAX_AUTO_RESTORES);
+            // Tells the flight side's snapshot recovery that THIS power-on
+            // is the automatic re-entry after an interrupted session — the
+            // only kind of boot allowed to restore a mid-flight snapshot.
+            mini_link::active_restore_boot = true;
             xTaskNotify(s_main_task, POWER_REQ_ON, eSetBits);
         }
     }

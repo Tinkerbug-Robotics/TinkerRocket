@@ -310,9 +310,14 @@ bool TR_GNSSReceiverLC86Serial::begin(uint8_t update_rate_hz_in,
             // module ignored the change, the next probe sweep finds it again
             // (all bounded by the begin deadline).
             vTaskDelay(pdMS_TO_TICKS(250));
-            uartBegin(kDefaultBaud, GNSS_RX, GNSS_TX);
             break;
         }
+        // Whatever the sweep found (or didn't), the next outer-loop listen
+        // must run at the power-on default — a slow-to-start healthy module
+        // would otherwise be listened for at the LAST probe baud for the
+        // rest of the deadline and never heard (kProbeBauds deliberately
+        // excludes 115200).
+        uartBegin(kDefaultBaud, GNSS_RX, GNSS_TX);
         if (nowUs() >= begin_deadline_us) break;
     }
 

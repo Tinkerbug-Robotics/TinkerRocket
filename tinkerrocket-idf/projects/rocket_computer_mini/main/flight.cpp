@@ -2006,6 +2006,23 @@ static bool snapshotTailScan(const char* filename, uint32_t final_bytes,
 // ==========================================================================
 void flight_setup()
 {
+    // FC main.cpp:2580-2587 port: park both sensor chip-selects HIGH before
+    // any bus activity reaches them. From rail-up until
+    // sensor_collector.begin() claims these pads (seconds away — pyro init
+    // and NVS run first) they would otherwise float next to a live SPI bus,
+    // and a sagging CS during another device's clocking is how a sensor ends
+    // up half-selected with a corrupted register file.
+    const int sensor_cs_pins[] = { (int)config::ISM6HG256_CS, (int)config::BMP585_CS };
+    for (int cs : sensor_cs_pins)
+    {
+        gpio_set_level((gpio_num_t)cs, 1);
+        gpio_config_t cs_cfg = {};
+        cs_cfg.pin_bit_mask = 1ULL << cs;
+        cs_cfg.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&cs_cfg);
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+
     // NVS should already be up (main.cpp app_main inits it first); this is
     // the FC's defensive init kept because it is idempotent and keeps this
     // file safe against a future ordering change.
@@ -2262,21 +2279,61 @@ void flight_setup()
         esp_reset_reason_t rst = esp_reset_reason();
         ESP_LOGI(TAG, "Reset reason: %s (%d)", resetReasonStr(rst), (int)rst);
 
-        bool unexpected_reset = (rst == ESP_RST_BROWNOUT ||
-                                 rst == ESP_RST_PANIC    ||
-                                 rst == ESP_RST_INT_WDT  ||
-                                 rst == ESP_RST_TASK_WDT ||
-                                 rst == ESP_RST_WDT);
+        const bool unexpected_reset = (rst == ESP_RST_BROWNOUT ||
+                                       rst == ESP_RST_PANIC    ||
+                                       rst == ESP_RST_INT_WDT  ||
+                                       rst == ESP_RST_TASK_WDT ||
+                                       rst == ESP_RST_WDT);
+
+        // Recovery may only run on the boot that interrupted the flight:
+        // this power-on must be the ACTIVE-restore policy's automatic
+        // re-entry (mini_link::active_restore_boot — main.cpp found the
+        // persisted ACTIVE flag) AND this chip reset must itself be
+        // unexpected. A manual power-on can carry a stale reset reason from
+        // a crash-in-IDLE hours earlier (a chip reset never precedes a
+        // commanded power-on), which is why the reason alone is not enough.
+        // A battery re-connect after a mid-flight brownout reads POWERON
+        // here and correctly declines — same semantics as the FC, where
+        // POWERON also skipped MRAM recovery.
+        const bool recovery_eligible = mini_link::active_restore_boot && unexpected_reset;
+
+        // The MRAM slot the FC invalidated on every clean boot does not
+        // exist here — the equivalent is an NVS marker holding the last
+        // recovered-flight id this code has already EVALUATED. Without it, a
+        // stale flight_recovered_* file (which nothing deletes, and which
+        // stays the newest flight on the chip until the next launch) could
+        // satisfy every gate on a later boot and resurrect last week's
+        // INFLIGHT snapshot with live igniters connected.
+        // done_id alone is not a safe key: flight ids are max-in-index + 1,
+        // so deleting files (the normal post-incident download workflow)
+        // lets a FUTURE flight reuse the marked id — and a genuine
+        // mid-flight reset of that flight would then be refused recovery.
+        // The final_bytes discriminator makes an accidental match
+        // implausible (same id AND same byte count).
+        uint32_t recovery_done_id = 0;
+        uint32_t recovery_done_bytes = 0;
+        {
+            Preferences p;
+            if (p.begin("recovery", true)) {
+                recovery_done_id = p.getUInt("done_id", 0);
+                recovery_done_bytes = p.getUInt("done_by", 0);
+                p.end();
+            }
+        }
 
         FlightSnapshotData snap = {};
         bool valid = false;
+        uint32_t recovered_id = 0;
+        uint32_t recovered_bytes = 0;
 
-        if (unexpected_reset && !flightlog.isInitialized()) {
-            ESP_LOGW(TAG, "[RECOVERY] flightlog not initialized — skipping snapshot recovery");
-        }
-        else if (unexpected_reset) {
-            // Gate 2+3: newest recovered entry, and it must be the newest
-            // flight on the chip at all.
+        if (!flightlog.isInitialized()) {
+            if (recovery_eligible) {
+                ESP_LOGW(TAG, "[RECOVERY] flightlog not initialized — skipping snapshot recovery");
+            }
+        } else {
+            // Locate the newest recovered entry regardless of eligibility —
+            // an ineligible boot still marks it evaluated (the FC's
+            // clear-stale-snapshot-on-clean-boot semantics).
             const tr_flightlog::FlightIndex& idx = flightlog.index();
             const tr_flightlog::FlightIndexEntry* recovered = nullptr;
             uint32_t max_flight_id = 0;
@@ -2288,8 +2345,24 @@ void flight_setup()
                     recovered = &e;
                 }
             }
+            if (recovered != nullptr) {
+                recovered_id = recovered->flight_id;
+                recovered_bytes = recovered->final_bytes;
+            }
             if (recovered == nullptr) {
-                ESP_LOGI(TAG, "[RECOVERY] no interrupted flight in the index — booting clean");
+                if (recovery_eligible) {
+                    ESP_LOGI(TAG, "[RECOVERY] no interrupted flight in the index — booting clean");
+                }
+            } else if (!recovery_eligible) {
+                ESP_LOGI(TAG, "[RECOVERY] interrupted flight %lu present but this boot is not "
+                              "an unexpected-reset re-entry (restore_boot=%d reason=%s) — booting clean",
+                         (unsigned long)recovered_id,
+                         (int)mini_link::active_restore_boot, resetReasonStr(rst));
+            } else if (recovered_id == recovery_done_id &&
+                       recovered_bytes == recovery_done_bytes) {
+                ESP_LOGW(TAG, "[RECOVERY] recovered flight %lu (%lu B) already evaluated on a "
+                              "previous boot — booting clean",
+                         (unsigned long)recovered_id, (unsigned long)recovered_bytes);
             } else if (recovered->flight_id != max_flight_id) {
                 ESP_LOGW(TAG, "[RECOVERY] recovered flight %lu is stale (newest id %lu) — booting clean",
                          (unsigned long)recovered->flight_id, (unsigned long)max_flight_id);
@@ -2305,6 +2378,28 @@ void flight_setup()
                 ESP_LOGW(TAG, "[RECOVERY] Snapshot invalid (magic=0x%08lX state=%u crc=%s)",
                          (unsigned long)snap.magic, snap.rocket_state,
                          (snap.crc32 == computeSnapshotCRC(snap)) ? "OK" : "FAIL");
+            }
+
+            // Mark the entry evaluated on every DECLINED outcome so it can
+            // never be re-evaluated by a later boot. Deliberately NOT
+            // written when valid — the restore path below writes it after
+            // the restore completes, so a crash mid-restore gets another
+            // attempt rather than a half-restored dead end.
+            if (recovered != nullptr && !valid &&
+                !(recovered_id == recovery_done_id && recovered_bytes == recovery_done_bytes)) {
+                Preferences p;
+                if (p.begin("recovery", false)) {
+                    p.putUInt("done_id", recovered_id);
+                    p.putUInt("done_by", recovered_bytes);
+                    p.end();
+                } else {
+                    // A failed write here re-opens the stale-restore window
+                    // on the NEXT unexpected reset — be loud about it.
+                    ESP_LOGE(TAG, "[RECOVERY] FAILED to persist evaluated-marker for "
+                                  "flight %lu — a stale snapshot could be re-evaluated "
+                                  "after a future unexpected reset",
+                             (unsigned long)recovered_id);
+                }
             }
         }
 
@@ -2418,10 +2513,33 @@ void flight_setup()
 
             // Mark launch flag so kinematic checks don't re-trigger launch detection
             kinematics.launch_flag = true;
+
+            // Restore complete: mark this recovered flight evaluated so a
+            // LATER unexpected reboot (after this recovered flight ends)
+            // cannot restore it a second time. The in-flight snapshot
+            // stream keeps writing fresh frames for THIS continuation, so
+            // a crash while still airborne recovers from the new file, not
+            // this marker's.
+            {
+                Preferences p;
+                if (p.begin("recovery", false)) {
+                    p.putUInt("done_id", recovered_id);
+                    p.putUInt("done_by", recovered_bytes);
+                    p.end();
+                } else {
+                    ESP_LOGE(TAG, "[RECOVERY] FAILED to persist evaluated-marker after "
+                                  "restore of flight %lu — a later unexpected reset could "
+                                  "restore it again", (unsigned long)recovered_id);
+                }
+            }
         }
 
-        // Clear stale snapshot on normal boot (prevents recovery on next
-        // power cycle once a logging session is active to carry the frame).
+        // The FC also enqueued a LANDED clear-frame on every normal boot.
+        // Here that frame dies in a closed log ring (no session is open at
+        // boot), so it is NOT the invalidation mechanism — the NVS done_id
+        // marker above is. The frame is still sent when a session IS open
+        // (in-flight LANDED path) purely to keep the log stream's contents
+        // identical to the fleet's.
         if (!reboot_recovery) {
             clearFlightSnapshot();
         }
@@ -2925,8 +3043,22 @@ static void loop_fc()
 
                 // Scale GNSS noise by h_acc — inflate R when receiver is
                 // uncertain.  Nominal R assumes h_acc ≈ 3 m.
+                //
+                // MINI: 255 is the LC86 driver's "accuracy unknown" sentinel
+                // (the $PQTMEPE stream never came up), not a real 255 m
+                // estimate. Feeding it through would square to a 7225x
+                // position de-weight and the EKF would effectively ignore a
+                // healthy fix all flight. Unknown accuracy on an accepted
+                // fix gets a modest fixed inflation instead.
                 const float h_acc = gnss_latest_si.horizontal_accuracy;
-                const float gnss_scale = (h_acc > 3.0f) ? (h_acc / 3.0f) : 1.0f;
+                float gnss_scale;
+                if (h_acc >= 255.0f) {
+                    gnss_scale = 3.0f;            // unknown: mild de-weight
+                } else if (h_acc > 3.0f) {
+                    gnss_scale = h_acc / 3.0f;
+                } else {
+                    gnss_scale = 1.0f;
+                }
                 ekf.setGpsNoiseScale(gnss_scale);
 
                 // Running average of GNSS fixes for launch-site reference.

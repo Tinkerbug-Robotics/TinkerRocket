@@ -299,8 +299,22 @@ Event Lc86Parser::parsePqtmEpe(const char* const* f, size_t n)
     }
     // Any MsgVer accepted: the fields are positional and begin() controls
     // which version was enabled (2 per the doc, 1 as its fallback).
-    epe_h_acc_m_ = satRoundU8(fieldDouble(f[5]));  // EPE_2D   → h_acc_m
-    epe_v_acc_m_ = satRoundU8(fieldDouble(f[4]));  // EPE_Down → v_acc_m
+    //
+    // Validity guard: a fixless module emits empty (or all-zero) numeric
+    // fields, and fieldDouble maps empty to 0.0 — caching that would
+    // advertise a perfect 0 m accuracy estimate with no fix at all. Only a
+    // strictly positive estimate updates the cache; anything else leaves
+    // the previous value (or the 255 "unknown" the cache starts at).
+    const double epe_2d   = fieldDouble(f[5]);
+    const double epe_down = fieldDouble(f[4]);
+    if (f[5][0] != '\0' && epe_2d > 0.0)
+    {
+        epe_h_acc_m_ = satRoundU8(epe_2d);    // EPE_2D   → h_acc_m
+    }
+    if (f[4][0] != '\0' && epe_down > 0.0)
+    {
+        epe_v_acc_m_ = satRoundU8(epe_down);  // EPE_Down → v_acc_m
+    }
     return Event::EPE;
 }
 
