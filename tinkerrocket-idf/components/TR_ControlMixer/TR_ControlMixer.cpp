@@ -130,11 +130,28 @@ void TR_ControlMixer::setFinLayout(const float azimuth_deg[4], uint8_t reverse_m
         float s = sinf(azimuth_deg[i] * DEG2RAD);
         if (fabsf(c) < 1e-6f) c = 0.0f;   // snap cardinal angles to exact 0 / ±1
         if (fabsf(s) < 1e-6f) s = 0.0f;
+        // Position→moment mapping.  A deflected fin's lift is tangential
+        // (perpendicular to its radial arm — that is what makes roll), and
+        // crossing that force with the CG→fin axial arm puts the resulting
+        // TRANSVERSE moment along the fin's own position direction p̂(az):
+        //   r⃗ × F⃗ = (−L·x̂ + r·p̂) × (F·(x̂ × p̂)) = r·F·x̂ + L·F·p̂
+        // (first term = roll, hence position-independent roll_mix).  So a
+        // top/bottom fin torques about the vertical axis — a rudder, i.e.
+        // yaw = cos(az) — and a side fin torques about the lateral axis — an
+        // elevator, i.e. pitch = sin(az).  The pre-fix cos/sin order assumed
+        // a fin's authority pointed along its own radius, which swapped the
+        // pitch/yaw pairs: tilt response came out reflected about the 45°
+        // diagonal, so no airframe rotation could cancel it (a reflection is
+        // not a rotation) and ground tests read as non-corrective.
+        // NOTE: this fixes the pair ASSIGNMENT.  The overall tilt sign still
+        // depends on linkage/servo-direction conventions and is carried by
+        // reverse_mask (flip all four bits to invert tilt globally) — confirm
+        // on the bench with the app's per-fin jog.
         // Tilt (pitch/yaw) and roll signs are independent — see FinConfigData.
         float tilt_sign = (reverse_mask      & (1u << i)) ? -1.0f : 1.0f;
         float roll_sign = (roll_reverse_mask & (1u << i)) ? -1.0f : 1.0f;
-        pitch_mix_[i] = tilt_sign * c;
-        yaw_mix_[i]   = tilt_sign * s;
+        pitch_mix_[i] = tilt_sign * s;
+        yaw_mix_[i]   = tilt_sign * c;
         roll_mix_[i]  = roll_sign;
     }
 }

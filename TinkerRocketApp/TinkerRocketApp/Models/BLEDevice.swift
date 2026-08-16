@@ -933,11 +933,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
     }
 
-    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's CONTROL
-    /// azimuth from the ring slot it occupies (slot azimuths {0,90,180,270} for "+"
-    /// or {45,135,225,315} for "×"), then sends 4 LE floats + a per-servo tilt-reverse
-    /// bitmask + an independent per-servo roll-reverse bitmask. The ring GUI's nose-down
-    /// view is a rendering choice and does not change these control-frame azimuths.
+    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's fin
+    /// RING-POSITION azimuth from the ring slot it occupies (slot azimuths
+    /// {0,90,180,270} for "+" or {45,135,225,315} for "×" — positions, not force
+    /// directions; the FC maps position→tangential force in
+    /// TR_ControlMixer::setFinLayout), then sends 4 LE floats + a per-servo
+    /// tilt-reverse bitmask + an independent per-servo roll-reverse bitmask. The ring
+    /// GUI's nose-down view is a rendering choice and does not change these azimuths.
     func sendFinConfig(ringMode: UInt8, servoAtSlot: [Int], reverse: [Bool], rollReverse: [Bool]) {
         guard servoAtSlot.count == 4, reverse.count == 4, rollReverse.count == 4 else { return }
         let slotAz: [Float] = ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]

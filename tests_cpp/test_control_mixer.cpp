@@ -40,32 +40,34 @@ TEST_F(ControlMixerTest, ZeroCommand_ZeroDeflections) {
 }
 
 TEST_F(ControlMixerTest, PurePitch_CorrectMixing) {
-    // Pitch error -> pitch rate cmd -> PID -> fin deflection
-    // PITCH_MIX = [+1, 0, -1, 0]
+    // Pitch error -> pitch rate cmd -> PID -> fin deflection.
+    // Pitch rides the RIGHT/LEFT (elevator) pair: PITCH_MIX = [0, +1, 0, -1]
+    // (a side fin's tangential lift is vertical; the top/bottom fins are
+    // rudders and must stay still for a pure pitch command).
     float d[4];
     // Init call
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 95.0f, d);
     // Second call with pitch error
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 95.0f, d);
 
-    // Top and bottom fins should have opposite signs
-    // Right and left fins should be near zero (yaw + roll both 0)
-    EXPECT_GT(std::abs(d[0]), 0.0f);  // top
-    EXPECT_NEAR(d[1], 0.0f, 0.01f);  // right (yaw only)
-    EXPECT_NEAR(d[0], -d[2], 0.01f); // top = -bottom
-    EXPECT_NEAR(d[3], 0.0f, 0.01f);  // left (yaw only)
+    // Right and left fins should have opposite signs
+    // Top and bottom fins should be near zero (yaw + roll both 0)
+    EXPECT_NEAR(d[0], 0.0f, 0.01f);  // top (yaw only)
+    EXPECT_GT(std::abs(d[1]), 0.0f);  // right
+    EXPECT_NEAR(d[1], -d[3], 0.01f); // right = -left
+    EXPECT_NEAR(d[2], 0.0f, 0.01f);  // bottom (yaw only)
 }
 
 TEST_F(ControlMixerTest, PureYaw_CorrectMixing) {
-    // YAW_MIX = [0, +1, 0, -1]
+    // Yaw rides the TOP/BOTTOM (rudder) pair: YAW_MIX = [+1, 0, -1, 0].
     float d[4];
     updateAndGet(0, 10.0f, 0, 0, 0, 0, 0, 95.0f, d);
     updateAndGet(0, 10.0f, 0, 0, 0, 0, 0, 95.0f, d);
 
-    EXPECT_NEAR(d[0], 0.0f, 0.01f);  // top (pitch only)
-    EXPECT_GT(std::abs(d[1]), 0.0f);  // right
-    EXPECT_NEAR(d[2], 0.0f, 0.01f);  // bottom (pitch only)
-    EXPECT_NEAR(d[1], -d[3], 0.01f); // right = -left
+    EXPECT_GT(std::abs(d[0]), 0.0f);  // top
+    EXPECT_NEAR(d[1], 0.0f, 0.01f);  // right (pitch only)
+    EXPECT_NEAR(d[0], -d[2], 0.01f); // top = -bottom
+    EXPECT_NEAR(d[3], 0.0f, 0.01f);  // left (pitch only)
 }
 
 TEST_F(ControlMixerTest, PureRoll_AllSameSign) {
@@ -106,7 +108,7 @@ TEST_F(ControlMixerTest, GainSchedule_HighSpeed) {
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 190.0f, d_fast);
 
     // Fast speed -> smaller deflection
-    EXPECT_LT(std::abs(d_fast[0]), std::abs(d_ref[0]));
+    EXPECT_LT(std::abs(d_fast[1]), std::abs(d_ref[1]));  // pitch rides fin 1 (right)
 }
 
 TEST_F(ControlMixerTest, GainSchedule_LowSpeed) {
@@ -124,7 +126,7 @@ TEST_F(ControlMixerTest, GainSchedule_LowSpeed) {
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 47.5f, d_slow);
 
     // Slow speed -> larger deflection
-    EXPECT_GT(std::abs(d_slow[0]), std::abs(d_ref[0]));
+    EXPECT_GT(std::abs(d_slow[1]), std::abs(d_ref[1]));  // pitch rides fin 1 (right)
 }
 
 TEST_F(ControlMixerTest, GainSchedule_BelowVmin) {
@@ -141,7 +143,7 @@ TEST_F(ControlMixerTest, GainSchedule_BelowVmin) {
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 0.0f, d_zero);
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 0.0f, d_zero);
 
-    EXPECT_NEAR(d_vmin[0], d_zero[0], 0.01f);
+    EXPECT_NEAR(d_vmin[1], d_zero[1], 0.01f);  // pitch rides fin 1 (right)
 }
 
 TEST_F(ControlMixerTest, DisableGainSchedule_RestoresBase) {
@@ -162,7 +164,7 @@ TEST_F(ControlMixerTest, DisableGainSchedule_RestoresBase) {
     updateAndGet(10.0f, 0, 0, 0, 0, 0, 0, 30.0f, d_base);
 
     // Base gains at 30 m/s = smaller deflection than boosted
-    EXPECT_LT(std::abs(d_base[0]), std::abs(d_boosted[0]));
+    EXPECT_LT(std::abs(d_base[1]), std::abs(d_boosted[1]));  // pitch rides fin 1 (right)
 }
 
 TEST_F(ControlMixerTest, Reset_ClearsAllState) {
@@ -184,61 +186,64 @@ TEST_F(ControlMixerTest, Reset_ClearsAllState) {
 
 // ─── Configurable fin layout (servo→azimuth + reverse) ───────────────────────
 
-// REGRESSION: with no setFinLayout call (default {0,90,180,270} + mask 0),
-// mixToFins must reproduce the legacy hardcoded "+" mix exactly:
-//   d0=+pitch+roll  d1=+yaw+roll  d2=-pitch+roll  d3=-yaw+roll
-TEST_F(ControlMixerTest, MixToFins_DefaultReproducesHardcodedPlus) {
+// With no setFinLayout call (default {0,90,180,270} + mask 0), mixToFins uses
+// the physical "+" mapping — pitch on the right/left elevator pair, yaw on the
+// top/bottom rudder pair:
+//   d0=+yaw+roll  d1=+pitch+roll  d2=-yaw+roll  d3=-pitch+roll
+// (Deliberate break from the pre-fix "hardcoded plus", which put pitch on
+// top/bottom — the position-as-force-azimuth bug.)
+TEST_F(ControlMixerTest, MixToFins_DefaultIsPhysicalPlus) {
     float d[4];
     mixer.mixToFins(0.0f, 2.0f, 0.0f, MAX_FIN, d);          // pure pitch
-    EXPECT_NEAR(d[0],  2.0f, 1e-4f);
-    EXPECT_NEAR(d[1],  0.0f, 1e-4f);
-    EXPECT_NEAR(d[2], -2.0f, 1e-4f);
-    EXPECT_NEAR(d[3],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[0],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  2.0f, 1e-4f);
+    EXPECT_NEAR(d[2],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[3], -2.0f, 1e-4f);
 
     mixer.mixToFins(0.0f, 0.0f, 3.0f, MAX_FIN, d);          // pure yaw
-    EXPECT_NEAR(d[0],  0.0f, 1e-4f);
-    EXPECT_NEAR(d[1],  3.0f, 1e-4f);
-    EXPECT_NEAR(d[2],  0.0f, 1e-4f);
-    EXPECT_NEAR(d[3], -3.0f, 1e-4f);
+    EXPECT_NEAR(d[0],  3.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  0.0f, 1e-4f);
+    EXPECT_NEAR(d[2], -3.0f, 1e-4f);
+    EXPECT_NEAR(d[3],  0.0f, 1e-4f);
 
     mixer.mixToFins(4.0f, 0.0f, 0.0f, MAX_FIN, d);          // pure roll → common
     for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 4.0f, 1e-4f);
 
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);          // combined
-    EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[1],  3.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  2.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);
 }
 
-TEST_F(ControlMixerTest, SetFinLayout_DefaultAzimuthsMatchHardcode) {
+TEST_F(ControlMixerTest, SetFinLayout_DefaultAzimuthsMatchDefaults) {
     const float az[4] = {0.0f, 90.0f, 180.0f, 270.0f};
     mixer.setFinLayout(az, 0, 0);
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[1],  3.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[1],  2.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);
 }
 
-// "×" layout: every fin shares pitch AND yaw at cos/sin(45°)=±0.707.
+// "×" layout: every fin shares pitch AND yaw at sin/cos(45°)=±0.707.
 TEST_F(ControlMixerTest, SetFinLayout_CrossSharesPitchAndYaw) {
     const float az[4] = {45.0f, 135.0f, 225.0f, 315.0f};
     mixer.setFinLayout(az, 0, 0);
     const float k = 0.70710678f;
     float d[4];
-    mixer.mixToFins(0.0f, 1.0f, 0.0f, MAX_FIN, d);          // pitch → cos(az)
-    EXPECT_NEAR(d[0],  k, 1e-4f);
-    EXPECT_NEAR(d[1], -k, 1e-4f);
-    EXPECT_NEAR(d[2], -k, 1e-4f);
-    EXPECT_NEAR(d[3],  k, 1e-4f);
-
-    mixer.mixToFins(0.0f, 0.0f, 1.0f, MAX_FIN, d);          // yaw → sin(az)
+    mixer.mixToFins(0.0f, 1.0f, 0.0f, MAX_FIN, d);          // pitch → sin(az)
     EXPECT_NEAR(d[0],  k, 1e-4f);
     EXPECT_NEAR(d[1],  k, 1e-4f);
     EXPECT_NEAR(d[2], -k, 1e-4f);
     EXPECT_NEAR(d[3], -k, 1e-4f);
+
+    mixer.mixToFins(0.0f, 0.0f, 1.0f, MAX_FIN, d);          // yaw → cos(az)
+    EXPECT_NEAR(d[0],  k, 1e-4f);
+    EXPECT_NEAR(d[1], -k, 1e-4f);
+    EXPECT_NEAR(d[2], -k, 1e-4f);
+    EXPECT_NEAR(d[3],  k, 1e-4f);
 
     mixer.mixToFins(2.0f, 0.0f, 0.0f, MAX_FIN, d);          // roll still common
     for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 2.0f, 1e-4f);
@@ -250,10 +255,10 @@ TEST_F(ControlMixerTest, SetFinLayout_ReverseNegatesTiltOnly) {
     mixer.setFinLayout(az, 0x02, 0);                         // tilt-reverse servo 1
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0],  2.0f + 1.0f, 1e-4f);                  // unchanged
-    EXPECT_NEAR(d[1], -3.0f + 1.0f, 1e-4f);                  // yaw negated, roll kept (+1)
-    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);                  // unchanged
-    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[1], -2.0f + 1.0f, 1e-4f);                  // pitch negated, roll kept (+1)
+    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_EQ(mixer.getFinReverseMask(), 0x02);
     EXPECT_NEAR(mixer.getFinAzimuthDeg(1), 90.0f, 1e-4f);
 }
@@ -265,10 +270,10 @@ TEST_F(ControlMixerTest, SetFinLayout_RollReverseNegatesRollOnly) {
     mixer.setFinLayout(az, 0, 0x02);                         // roll-reverse servo 1
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0], 2.0f + 1.0f, 1e-4f);                   // unchanged
-    EXPECT_NEAR(d[1], 3.0f - 1.0f, 1e-4f);                   // yaw kept, roll negated (−1)
-    EXPECT_NEAR(d[2], -2.0f + 1.0f, 1e-4f);                  // unchanged
-    EXPECT_NEAR(d[3], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[1],  2.0f - 1.0f, 1e-4f);                  // pitch kept, roll negated (−1)
+    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_EQ(mixer.getFinRollReverseMask(), 0x02);
 }
 

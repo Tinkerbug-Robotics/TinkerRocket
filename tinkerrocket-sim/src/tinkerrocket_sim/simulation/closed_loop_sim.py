@@ -891,8 +891,11 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             #   Body Y (right) = East
                             #   Body Z (down) = ~toward ground
                             # So:
-                            #   North accel → pitch (fins 0/2, top/bottom)
-                            #   East accel  → yaw  (fins 1/3, right/left)
+                            #   North accel → pitch (fins 1/3, right/left —
+                            #     the elevator pair; tangential lift is
+                            #     perpendicular to the fin's radial arm)
+                            #   East accel  → yaw  (fins 0/2, top/bottom —
+                            #     the rudder pair)
                             #
                             # Use full quaternion rotation for correctness:
                             # ENU → NED: [N, E, D] = [a_n, a_e, -a_u]
@@ -917,16 +920,20 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                                 config.roll_setpoint_dps, roll_rate_dps,
                                 imu_dt, airspeed=None)
 
-                            # Map to 4 fins directly:
-                            # Pitch: fins 0(top) and 2(bottom) differential
-                            # Yaw: fins 1(right) and 3(left) differential
+                            # Map to 4 fins directly (matches
+                            # TR_ControlMixer's position→force mapping:
+                            # pitch_mix = sin(az), yaw_mix = cos(az)):
+                            # Pitch: fins 1(right) and 3(left) differential
+                            #        (elevator pair)
+                            # Yaw: fins 0(top) and 2(bottom) differential
+                            #        (rudder pair)
                             # Roll: all fins same direction (common mode)
                             max_fin_deg = 20.0
                             fin_cmds = np.clip(np.array([
-                                +pitch_fin + roll_fin_cmd,    # fin 0 (top)
-                                +yaw_fin   + roll_fin_cmd,    # fin 1 (right)
-                                -pitch_fin + roll_fin_cmd,    # fin 2 (bottom)
-                                -yaw_fin   + roll_fin_cmd,    # fin 3 (left)
+                                +yaw_fin   + roll_fin_cmd,    # fin 0 (top)
+                                +pitch_fin + roll_fin_cmd,    # fin 1 (right)
+                                -yaw_fin   + roll_fin_cmd,    # fin 2 (bottom)
+                                -pitch_fin + roll_fin_cmd,    # fin 3 (left)
                             ]), -max_fin_deg, max_fin_deg)
                             guid_pitch_cmd = pitch_fin
                             guid_yaw_cmd = yaw_fin

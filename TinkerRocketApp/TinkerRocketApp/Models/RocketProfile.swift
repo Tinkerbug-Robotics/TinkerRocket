@@ -170,10 +170,11 @@ struct RocketProfile: Codable, Equatable, Identifiable {
 
     // MARK: Fin layout
     // Servo→fin mapping + ring orientation, sent as FinConfigData (cmd 66): each
-    // servo's CONTROL azimuth (deg) + a reverse bitmask. finServoAtSlot[s] is the
-    // servo (1-4) at ring slot s; slot control azimuths are {0,90,180,270} ("+")
-    // or {45,135,225,315} ("×"). Defaults reproduce the firmware "+" (servo 1 top/
-    // +pitch, 2 right/+yaw, 3 bottom, 4 left) so an unconfigured rocket is unchanged.
+    // servo's fin RING-POSITION azimuth (deg) + a reverse bitmask. finServoAtSlot[s]
+    // is the servo (1-4) at ring slot s; slot position azimuths are {0,90,180,270}
+    // ("+") or {45,135,225,315} ("×"). The FC maps position→tangential force itself
+    // (TR_ControlMixer::setFinLayout), so with the "+" defaults servo 1 (top) is a
+    // yaw rudder and servo 2 (right) a pitch elevator.
     var finRingMode: UInt8 = 0                              // 0 = "+" on-axis, 1 = "×" 45°
     var finServoAtSlot: [Int] = [1, 2, 3, 4]               // servo (1-4) at slot 0..3
     var finReverse: [Bool] = [false, false, false, false]  // per-servo (1-4) tilt (pitch/yaw) reverse

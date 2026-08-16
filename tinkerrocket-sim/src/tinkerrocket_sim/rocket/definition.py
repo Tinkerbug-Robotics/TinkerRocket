@@ -35,9 +35,12 @@ class CruciformFinConfig:
     Kt_roll: roll torque coefficient per degree of common-mode deflection
              across all 4 fins (N-m/deg at V_ref).  Sum of 4 fins.
     Kt_pitch: pitch torque coefficient per degree of differential deflection
-              between top and bottom fins (N-m/deg at V_ref).
+              between the right and left fins (N-m/deg at V_ref) — the
+              horizontal pair acts as the elevator (tangential lift is
+              perpendicular to the fin's radial arm).
     Kt_yaw: yaw torque coefficient per degree of differential deflection
-            between right and left fins (N-m/deg at V_ref).
+            between the top and bottom fins (N-m/deg at V_ref) — the
+            vertical pair acts as the rudder.
 
     The pitch/yaw coefficients encode Kf_normal * L_arm where Kf_normal is
     the fin normal force per degree and L_arm is the axial moment arm from
