@@ -131,6 +131,24 @@ struct config : board_pins
     static constexpr uint32_t RUNCAM_PROBE_READ_MS    = 60;    // per-probe RX wait
     static constexpr uint8_t  RUNCAM_RECORD_RESENDS   = 2;     // extra START sends
     static constexpr uint32_t RUNCAM_RECORD_RESEND_MS = 150;   // resend spacing
+    // Battery-only starts leave the camera dark (no LED, UART silent) even
+    // though the same rail runs it fine once booted (its own button boots it,
+    // recording included) — bench-observed 2026-08-16 on V8; USB/charger
+    // attached masks it.  Charged-pack test eliminated voltage level and
+    // source impedance.  Prime suspect: PHANTOM POWER.  V8 wires the UART
+    // pins straight to J6.3/4 with no series resistance (R30/R32 are a V9
+    // addition — netlist-verified against the archived V8 project), and V8
+    // switches the camera's RETURN (Q3 low-side; J6.2 is always-on VCC), so
+    // the FC's idle-high TX back-feeds the "off" camera through its ESD
+    // diodes and its power-on-reset never sees a clean rise.  Fix: the UART
+    // pins are PARKED high-impedance whenever the camera is unpowered and
+    // attached only while the gate is up.  A silent probe window gets a
+    // park+power-cycle retry (off long enough for the camera's own load to
+    // drain it) before the blind fallback.  NEVER drive these pins low to
+    // "discharge" the branch on V8 — with no series resistors that dumps the
+    // camera's stored charge straight into the P4 pads.
+    static constexpr uint8_t  RUNCAM_POWER_RETRIES    = 2;     // extra power-cycle attempts
+    static constexpr uint32_t RUNCAM_RETRY_OFF_MS     = 3000;  // parked+unpowered between attempts
 
     // ### Pyro timing (pins in board header) ###
     // One shared arming FET feeds all four squib drivers. ARM is raised
