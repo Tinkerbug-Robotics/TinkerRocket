@@ -7,7 +7,9 @@ Parses binary log files from the TinkerRocket Mini (OutComputer) flight computer
 and generates flight data plots.
 
 Sensors: ISM6HG256 (low-g + high-g accel + gyro), BMP585 (baro),
-         MMC5983MA / IIS2MDC (magnetometer, old / new PCB rev), GNSS, Power ADC
+         MMC5983MA / IIS2MDC / QMC5883P (magnetometer: old PCB / new PCB /
+         rocket-computer-mini — the latter two share the IIS2MDC-named
+         stream, scale auto-selected per log), GNSS, Power ADC
 
 Frame format: [0xAA][0x55][0xAA][0x55] + type(1) + length(1) + payload(N) + CRC16(2)
 CRC-16: poly=0x8001, init=0x0000, no reflection, big-endian CRC bytes
@@ -58,9 +60,19 @@ def ism6_scales(low_g_fs=ISM6_LOW_G_FS_G, high_g_fs=ISM6_HIGH_G_FS_G,
 # MMC5983MA: 18-bit centered, Gauss = centered * (8 / 131072), uT = Gauss * 100
 MMC_UT_PER_COUNT = (8.0 * 100.0) / 131072.0  # ≈ 0.006104
 
-# IIS2MDC (new-PCB magnetometer): signed 16-bit raw, 1.5 mgauss/LSB = 0.15 µT/LSB
-# (datasheet 9.13).  Matches TR_Sensor_Data_Converter::convertIIS2MDCData.
-IIS2MDC_UT_PER_LSB = 0.15
+# I2C-mag stream (log type IIS2MDC): signed 16-bit raw counts whose scale
+# depends on which board wrote the log.  OUT_STATUS_QUERY v6+ stamps the
+# chip (mag_type below) and the scale is auto-selected from it; logs older
+# than v6 carry no field and are assumed to be the big board's IIS2MDC.
+#   Big board V8 (IIS2MDC):                0.15 µT/LSB (ST datasheet 9.13)
+#   rocket-computer-mini (QMC5883P, #797): 100/3750 µT/LSB (±8 G, QST Table 2)
+IIS2MDC_UT_PER_LSB  = 0.15
+QMC5883P_UT_PER_LSB = 100.0 / 3750.0
+
+# OutStatusQueryData.mag_type values (MAG_TYPE_* in RocketComputerTypes.h).
+# An unknown value falls back to the IIS2MDC scale — same as a pre-v6 log.
+MAG_TYPE_NAMES = {0: "IIS2MDC", 1: "QMC5883P"}
+MAG_UT_PER_LSB_BY_TYPE = {0: IIS2MDC_UT_PER_LSB, 1: QMC5883P_UT_PER_LSB}
 
 # BMP585: temp in Q16 (degC * 65536), pressure in Q6 (Pa * 64)
 # ------------------------------------
@@ -101,7 +113,7 @@ MSG_NAMES = {
 # Expected payload sizes for validation.  A tuple lists every valid size
 # (wire structs grow by appending version-gated fields).
 MSG_EXPECTED_LEN = {
-    MSG_OUT_STATUS_QUERY:  (16, 26, 28, 41),  # OutStatusQueryData v2 / v3 (+b2r) / v4 (+iis2mdc rot) / v5 (+guid target echo, #435)
+    MSG_OUT_STATUS_QUERY:  (16, 26, 28, 41, 42),  # OutStatusQueryData v2 / v3 (+b2r) / v4 (+iis2mdc rot) / v5 (+guid target echo, #435) / v6 (+mag_type)
     MSG_GNSS:              42,
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
@@ -327,6 +339,10 @@ def parse_binary_file(filepath):
         "ism6_rot_z_deg": ISM6_ROT_Z_DEG,
         "mmc_rot_z_deg":  MMC_ROT_Z_DEG,
         "iis2mdc_rot_z_deg": IIS2MDC_ROT_Z_DEG,
+        # I2C-mag count scale.  None = pre-v6 log, which never says its chip;
+        # the big board's IIS2MDC is assumed (every pre-v6 log came from one).
+        "mag_type": None,
+        "mag_ut_per_lsb": IIS2MDC_UT_PER_LSB,
         "hg_bias": (0.0, 0.0, 0.0),
         # Board→rocket mounting orientation (OutStatusQueryData v3+).
         # None = identity (board +X toward the nose, pre-v3 logs).
@@ -420,6 +436,13 @@ def parse_binary_file(filepath):
                     if fmt_ver >= 4 and msg_len >= 28:
                         # v4 (#204): per-chip IIS2MDC sensor→board rotation
                         config["iis2mdc_rot_z_deg"] = struct.unpack("<h", payload[26:28])[0] / 100.0
+                    if fmt_ver >= 6 and msg_len >= 42:
+                        # v6: which chip is behind the IIS2MDC-named stream —
+                        # keys the count→µT scale (bytes 28..40 are the v5
+                        # guidance-target echo, not parsed here)
+                        config["mag_type"] = payload[41]
+                        config["mag_ut_per_lsb"] = MAG_UT_PER_LSB_BY_TYPE.get(
+                            payload[41], IIS2MDC_UT_PER_LSB)
                     config_seen = True
 
             elif msg_type == MSG_GNSS:
@@ -733,14 +756,16 @@ def parse_binary_file(filepath):
         rec["mag_y"] = mag[1]
         rec["mag_z"] = mag[2]
 
-    # --- Post-process IIS2MDC raw data: scale (0.15 µT/LSB), chip-Z rotate,
-    #     then board→rocket (matches SensorConverter::convertIIS2MDCData) ---
+    # --- Post-process I2C-mag raw data: scale (per-board, from the v6
+    #     mag_type stamp), chip-Z rotate, then board→rocket (matches
+    #     SensorConverter::convertIIS2MDCData) ---
     iis_rad = math.radians(config["iis2mdc_rot_z_deg"])
     c_iis, s_iis = math.cos(iis_rad), math.sin(iis_rad)
+    mag_ut_per_lsb = config["mag_ut_per_lsb"]
     for rec in records["IIS2MDC"]:
-        mx = rec.pop("raw_x") * IIS2MDC_UT_PER_LSB
-        my = rec.pop("raw_y") * IIS2MDC_UT_PER_LSB
-        mz = rec.pop("raw_z") * IIS2MDC_UT_PER_LSB
+        mx = rec.pop("raw_x") * mag_ut_per_lsb
+        my = rec.pop("raw_y") * mag_ut_per_lsb
+        mz = rec.pop("raw_z") * mag_ut_per_lsb
         mag = apply_b2r(mx * c_iis - my * s_iis,
                         mx * s_iis + my * c_iis,
                         mz)
@@ -1729,6 +1754,12 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
     mode_names = {0: "default", 1: "manual", 2: "auto-snap", 3: "auto-exact"}
     mode = mode_names.get(config["b2r_mode"], "pre-v3 log")
     print(f"    Board→rocket:  {b2r_code_name(config['b2r_code'])} ({mode})")
+    if config["mag_type"] is None:
+        mag_desc = "pre-v6 log — assuming IIS2MDC"
+    else:
+        mag_desc = MAG_TYPE_NAMES.get(config["mag_type"],
+                                      f"unknown ({config['mag_type']}) — assuming IIS2MDC")
+    print(f"    I2C mag:       {mag_desc} ({config['mag_ut_per_lsb']:.4f} µT/LSB)")
     print()
 
     # Determine global t0 (earliest timestamp)
