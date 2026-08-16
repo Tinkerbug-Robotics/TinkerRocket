@@ -133,6 +133,20 @@ board and the big one is the same act: merge, let CI build both images, and
 ship each board its own `.bin` over BLE per
 [`docs/plans/08-ota-firmware-update.md`](../../../docs/plans/08-ota-firmware-update.md).
 
+## Hardware moved under this port (PR #797)
+
+The cost-reduction sweep landed while this firmware was being written and
+swapped two sensors in place — **every MCU pin net is unchanged** (verified
+against a fresh netlist export), so the board map stands:
+
+- **BMP585 → BMP581**: no firmware change needed — the Bosch BMP5 driver
+  accepts both chip IDs (0x50/0x51), and the register map is shared.
+- **IIS2MDC → QMC5883P**: the magnetometer driver does NOT exist yet. Until
+  it does, the collector's IIS2MDC probe fails cleanly into the established
+  no-magnetometer path: the EKF flies on GNSS-course + accel-match heading,
+  and the scorecard shows SH_MAG absent. Mag calibration flows are inert.
+  The QMC5883P driver + collector seam is tracked as its own follow-up.
+
 ## Before first flight — bench items this port cannot settle
 
 - **Sensor rotation constants** (`ISM6HG256_ROT_Z_DEG`, `IIS2MDC_ROT_Z_DEG`)
