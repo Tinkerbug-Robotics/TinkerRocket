@@ -143,8 +143,8 @@ that changes size fails the build rather than corrupting a log silently.
 | `GuidanceConfigData` | 45 |
 | `GNSSData` | 42 |
 | `GNSSData` | 42 |
-| `OutStatusQueryData` | 41 |
-| `OutStatusQueryData` | 41 |
+| `OutStatusQueryData` | 42 |
+| `OutStatusQueryData` | 42 |
 | `MagCalStatusData` | 36 |
 | `LogBufferStatsData` | 28 |
 | `BaseStationStorageStatsData` | 26 |

@@ -368,7 +368,7 @@ struct MagCalView: View {
                             .foregroundColor(.secondary)
                             .font(.system(.body, design: .monospaced))
                     }
-                    Text("0.15 µT per LSB. The chip subtracts these from every sample once accepted.")
+                    Text("\(String(format: "%.4g", s.utPerLsb)) µT per LSB. The chip subtracts these from every sample once accepted.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

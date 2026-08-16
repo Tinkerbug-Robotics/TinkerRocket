@@ -42,7 +42,7 @@
 				(effects
 					(font
 						(size 1.27 1.27)
-							(italic yes)
+						(italic yes)
 					)
 				)
 			)
@@ -54,7 +54,7 @@
 				(effects
 					(font
 						(size 1.27 1.27)
-							(italic yes)
+						(italic yes)
 					)
 				)
 			)
@@ -92,6 +92,24 @@
 				)
 			)
 			(symbol "BMP581_0_1"
+				(pin power_in line
+					(at -16.51 5.08 0)
+					(length 7.62)
+					(name "VDDIO"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
 				(pin input line
 					(at -16.51 -7.62 0)
 					(length 7.62)
@@ -110,17 +128,17 @@
 						)
 					)
 				)
-				(pin bidirectional line
-					(at -16.51 -5.08 0)
+				(pin power_out line
+					(at 15.24 -7.62 180)
 					(length 7.62)
-					(name "SDO"
+					(name "VSS"
 						(effects
 							(font
 								(size 1.27 1.27)
 							)
 						)
 					)
-					(number "5"
+					(number "3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -146,6 +164,24 @@
 						)
 					)
 				)
+				(pin bidirectional line
+					(at -16.51 -5.08 0)
+					(length 7.62)
+					(name "SDO"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
 				(pin input line
 					(at -16.51 0 0)
 					(length 7.62)
@@ -164,42 +200,6 @@
 						)
 					)
 				)
-				(pin power_in line
-					(at -16.51 2.54 0)
-					(length 7.62)
-					(name "VDD"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "10"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at -16.51 5.08 0)
-					(length 7.62)
-					(name "VDDIO"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
 				(pin output line
 					(at 15.24 -2.54 180)
 					(length 7.62)
@@ -211,24 +211,6 @@
 						)
 					)
 					(number "7"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 15.24 -7.62 180)
-					(length 7.62)
-					(name "VSS"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -272,6 +254,24 @@
 						)
 					)
 				)
+				(pin power_in line
+					(at -16.51 2.54 0)
+					(length 7.62)
+					(name "VDD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
 			)
 			(symbol "BMP581_1_1"
 				(rectangle
@@ -281,9 +281,9 @@
 						(width 0)
 						(type solid)
 					)
-				(fill
-					(type background)
-				)
+					(fill
+						(type background)
+					)
 				)
 			)
 			(embedded_fonts no)
@@ -1414,397 +1414,6 @@
 							)
 						)
 					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "Custom:QMC5883P"
-			(pin_names
-				(offset 0.254)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "U"
-				(at 0.508 10.414 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.524 1.524)
-					)
-				)
-			)
-			(property "Value" "QMC5883P"
-				(at 0.508 7.874 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.524 1.524)
-					)
-				)
-			)
-			(property "Footprint" "Footprints:QMC5883P_LGA-16_3x3"
-				(at 14.478 14.224 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-							(italic yes)
-					)
-				)
-			)
-			(property "Datasheet" "QMC5883P"
-				(at 10.668 16.764 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-							(italic yes)
-					)
-				)
-			)
-			(property "Description" "3-axis magnetometer, I2C 0x2C, LGA-16 3x3, C1 pin needs 4.7uF low-ESR"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_keywords" "QMC5883P magnetometer QST"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_fp_filters" "QMC5883P_LGA-16_3x3"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "QMC5883P_0_1"
-				(pin bidirectional line
-					(at -19.05 -6.35 0)
-					(length 7.62)
-					(name "SCL"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at -19.05 -3.81 0)
-					(length 7.62)
-					(name "SDA"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "16"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at -19.05 3.81 0)
-					(length 7.62)
-					(name "VDD"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin unspecified line
-					(at 20.32 1.27 180)
-					(length 7.62)
-					(name "C1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "10"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 20.32 -6.35 180)
-					(length 7.62)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "9"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 20.32 -3.81 180)
-					(length 7.62)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "11"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "4"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "5"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "6"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "7"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "8"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "12"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "13"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "14"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 20.32 -1.27 180)
-					(length 7.62)
-					(name "NC"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "15"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(symbol "QMC5883P_1_1"
-				(rectangle
-					(start -11.43 6.35)
-					(end 12.7 -8.89)
-					(stroke
-						(width 0)
-						(type solid)
-					)
-				(fill
-					(type background)
-				)
 				)
 			)
 			(embedded_fonts no)
@@ -3281,6 +2890,397 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:QMC5883P"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 0.508 10.414 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Value" "QMC5883P"
+				(at 0.508 7.874 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Footprint" "Footprints:QMC5883P_LGA-16_3x3"
+				(at 14.478 14.224 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+				)
+			)
+			(property "Datasheet" "QMC5883P"
+				(at 10.668 16.764 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+				)
+			)
+			(property "Description" "3-axis magnetometer, I2C 0x2C, LGA-16 3x3, C1 pin needs 4.7uF low-ESR"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "QMC5883P magnetometer QST"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "QMC5883P_LGA-16_3x3"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "QMC5883P_0_1"
+				(pin bidirectional line
+					(at -19.05 -6.35 0)
+					(length 7.62)
+					(name "SCL"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -19.05 3.81 0)
+					(length 7.62)
+					(name "VDD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 20.32 -6.35 180)
+					(length 7.62)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin unspecified line
+					(at 20.32 1.27 180)
+					(length 7.62)
+					(name "C1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 20.32 -3.81 180)
+					(length 7.62)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "11"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "12"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "13"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "14"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "15"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -19.05 -3.81 0)
+					(length 7.62)
+					(name "SDA"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "16"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "QMC5883P_1_1"
+				(rectangle
+					(start -11.43 6.35)
+					(end 12.7 -8.89)
+					(stroke
+						(width 0)
+						(type solid)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:C"
 			(pin_numbers
 				(hide yes)
@@ -4014,28 +4014,22 @@
 		(uuid "2b3968bc-69fa-4aaa-9bb0-e16806abab90")
 	)
 	(junction
+		(at 24.765 41.275)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "2d5cec12-354f-40d3-a2e5-9c53f966b5bf")
+	)
+	(junction
 		(at 84.455 165.1)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "2e21d19e-4ad7-4114-a25d-e6ca96478799")
 	)
 	(junction
-		(at 46.355 41.91)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "33f1b581-7b37-4a49-b983-fa1cc1d54f0e")
-	)
-	(junction
 		(at 207.645 106.68)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "51f473b5-aab6-473c-a0d1-5188f6187300")
-	)
-	(junction
-		(at 23.495 41.275)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "538de49a-b5f5-423d-a58d-316930186889")
 	)
 	(junction
 		(at 82.55 177.8)
@@ -4050,12 +4044,6 @@
 		(uuid "61fa1b3e-b04c-44a6-923a-97c557389e15")
 	)
 	(junction
-		(at 46.355 44.45)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "62b67bd1-06a3-4f9b-8baf-d7007676ea2b")
-	)
-	(junction
 		(at 28.575 97.155)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -4068,7 +4056,7 @@
 		(uuid "7f4be041-8c00-4943-b608-402da2585a88")
 	)
 	(junction
-		(at 85.725 52.07)
+		(at 80.645 52.07)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "86f3fcc1-ad17-429f-8317-2c5708baa658")
@@ -4113,6 +4101,16 @@
 	)
 	(wire
 		(pts
+			(xy 24.765 41.275) (xy 37.465 41.275)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "03a67184-24f7-4a91-8a59-d5fe96db8b53")
+	)
+	(wire
+		(pts
 			(xy 82.55 175.26) (xy 82.55 177.8)
 		)
 		(stroke
@@ -4131,7 +4129,7 @@
 		)
 		(uuid "1c5b9aab-e966-454e-a4a4-12030600b618")
 	)
-		(wire
+	(wire
 		(pts
 			(xy 252.095 45.72) (xy 264.795 45.72)
 		)
@@ -4163,7 +4161,7 @@
 	)
 	(wire
 		(pts
-			(xy 85.725 44.45) (xy 94.615 44.45)
+			(xy 80.645 44.45) (xy 89.535 44.45)
 		)
 		(stroke
 			(width 0)
@@ -4211,9 +4209,9 @@
 		)
 		(uuid "725642d7-634d-4a52-8daf-e60bca452f4c")
 	)
-		(wire
+	(wire
 		(pts
-			(xy 85.725 49.53) (xy 85.725 52.07)
+			(xy 80.645 49.53) (xy 80.645 52.07)
 		)
 		(stroke
 			(width 0)
@@ -4263,16 +4261,6 @@
 	)
 	(wire
 		(pts
-			(xy 23.495 41.275) (xy 42.545 41.275)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a6f14622-fb78-463f-9dd7-82e6a107b23f")
-	)
-	(wire
-		(pts
 			(xy 216.535 38.1) (xy 216.535 40.64)
 		)
 		(stroke
@@ -4313,7 +4301,7 @@
 	)
 	(wire
 		(pts
-			(xy 42.545 41.275) (xy 42.545 41.91)
+			(xy 37.465 41.275) (xy 37.465 41.91)
 		)
 		(stroke
 			(width 0)
@@ -4343,7 +4331,7 @@
 	)
 	(wire
 		(pts
-			(xy 42.545 41.91) (xy 46.355 41.91)
+			(xy 37.465 41.91) (xy 41.275 41.91)
 		)
 		(stroke
 			(width 0)
@@ -4363,7 +4351,7 @@
 	)
 	(wire
 		(pts
-			(xy 16.51 41.275) (xy 23.495 41.275)
+			(xy 16.51 41.275) (xy 24.765 41.275)
 		)
 		(stroke
 			(width 0)
@@ -4999,7 +4987,7 @@
 	)
 	(global_label "SEN_SCL"
 		(shape input)
-		(at 46.355 52.07 180)
+		(at 41.275 52.07 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -5009,7 +4997,7 @@
 		)
 		(uuid "bc717287-f14d-4d42-92d5-4c050db3d8ff")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 35.2056 52.07 0)
+			(at 30.1256 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5047,7 +5035,7 @@
 	)
 	(global_label "SEN_SDA"
 		(shape input)
-		(at 46.355 49.53 180)
+		(at 41.275 49.53 180)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -5057,7 +5045,7 @@
 		)
 		(uuid "d9481559-9d35-4e49-be75-8ed55f670717")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 35.1451 49.53 0)
+			(at 30.0651 49.53 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5369,111 +5357,8 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:C")
-		(at 94.615 48.26 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "1628f208-9ab6-48ef-b384-ad11cc83e8af")
-		(property "Reference" "C6"
-			(at 94.615 45.72 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "4.7 uF"
-			(at 94.615 50.8 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
-			(at 95.5802 52.07 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 94.615 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Unpolarized capacitor"
-			(at 94.615 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL10A475KO8NNNC"
-			(at 94.615 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 94.615 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "8da36605-ac40-4e46-b093-4045269e3eca")
-		)
-		(pin "2"
-			(uuid "80645a27-8635-4d07-b129-3718a961dab0")
-		)
-		(instances
-			(project "rocket-computer-mini"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/1c983e58-9603-45bc-a3c3-aa797d38a10d"
-					(reference "C6")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:GND")
-		(at 85.725 52.07 0)
+		(at 80.645 52.07 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -5483,7 +5368,7 @@
 		(dnp no)
 		(uuid "18170808-a8f4-4813-b859-5d830f17652b")
 		(property "Reference" "#PWR013"
-			(at 85.725 58.42 0)
+			(at 80.645 58.42 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5494,7 +5379,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 85.725 55.88 0)
+			(at 80.645 55.88 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -5504,7 +5389,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 85.725 52.07 0)
+			(at 80.645 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5515,7 +5400,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 85.725 52.07 0)
+			(at 80.645 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5526,7 +5411,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 85.725 52.07 0)
+			(at 80.645 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5628,7 +5513,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 94.615 52.07 0)
+		(at 89.535 52.07 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -5638,7 +5523,7 @@
 		(dnp no)
 		(uuid "2325b2bd-2990-43e8-9c79-507a91a36269")
 		(property "Reference" "#PWR015"
-			(at 94.615 58.42 0)
+			(at 89.535 58.42 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5649,7 +5534,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 94.615 55.88 0)
+			(at 89.535 55.88 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -5659,7 +5544,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 94.615 52.07 0)
+			(at 89.535 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5670,7 +5555,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 94.615 52.07 0)
+			(at 89.535 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5681,7 +5566,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 94.615 52.07 0)
+			(at 89.535 52.07 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5999,7 +5884,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 23.495 48.895 0)
+		(at 24.765 48.895 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6009,7 +5894,7 @@
 		(dnp no)
 		(uuid "318c6be9-fa56-40a2-a880-b7008bb89d2b")
 		(property "Reference" "#PWR09"
-			(at 23.495 55.245 0)
+			(at 24.765 55.245 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6020,7 +5905,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 23.495 52.705 0)
+			(at 24.765 52.705 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6030,7 +5915,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 23.495 48.895 0)
+			(at 24.765 48.895 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6041,7 +5926,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 23.495 48.895 0)
+			(at 24.765 48.895 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6052,7 +5937,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 23.495 48.895 0)
+			(at 24.765 48.895 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6546,6 +6431,109 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:C")
+		(at 89.535 48.26 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5d187b20-69e9-4986-a15a-032879041f62")
+		(property "Reference" "C6"
+			(at 89.535 45.72 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "10 uF"
+			(at 89.535 50.8 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 90.5002 52.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 89.535 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 89.535 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05A106MQ5NUNC"
+			(at 89.535 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 89.535 48.26 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "d85f2c27-0e21-4c11-812a-743ecdd1df34")
+		)
+		(pin "2"
+			(uuid "ae85823f-8279-4e48-9ddc-f3f6225305a6")
+		)
+		(instances
+			(project "rocket-computer-mini"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/1c983e58-9603-45bc-a3c3-aa797d38a10d"
+					(reference "C6")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 234.315 66.04 0)
 		(unit 1)
@@ -6724,7 +6712,7 @@
 	)
 	(symbol
 		(lib_id "Custom:QMC5883P")
-		(at 65.405 45.72 0)
+		(at 60.325 45.72 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -6735,7 +6723,7 @@
 		(fields_autoplaced yes)
 		(uuid "6c1001a3-ec3e-434e-9e4d-ffdd613dcc73")
 		(property "Reference" "U3"
-			(at 66.04 34.29 0)
+			(at 60.96 34.29 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6745,7 +6733,7 @@
 			)
 		)
 		(property "Value" "QMC5883P"
-			(at 66.04 36.83 0)
+			(at 60.96 36.83 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -6755,7 +6743,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:QMC5883P_LGA-16_3x3"
-			(at 79.883 31.496 0)
+			(at 74.803 31.496 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6767,7 +6755,7 @@
 			)
 		)
 		(property "Datasheet" "QMC5883P"
-			(at 76.073 28.956 0)
+			(at 70.993 28.956 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6779,7 +6767,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 65.405 45.72 0)
+			(at 60.325 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6790,7 +6778,7 @@
 			)
 		)
 		(property "MPN" "QMC5883P"
-			(at 65.405 45.72 0)
+			(at 60.325 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6801,7 +6789,7 @@
 			)
 		)
 		(property "Mfr" "QST"
-			(at 65.405 45.72 0)
+			(at 60.325 45.72 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8735,7 +8723,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 23.495 45.085 0)
+		(at 24.765 45.085 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -8745,7 +8733,7 @@
 		(dnp no)
 		(uuid "f2e17433-5684-4439-97f8-bd8b131b5644")
 		(property "Reference" "C4"
-			(at 23.495 42.545 0)
+			(at 24.765 42.545 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8756,7 +8744,7 @@
 			)
 		)
 		(property "Value" "10 uF"
-			(at 23.495 47.625 0)
+			(at 24.765 47.625 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8767,7 +8755,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 24.4602 48.895 0)
+			(at 25.7302 48.895 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8778,7 +8766,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 23.495 45.085 0)
+			(at 24.765 45.085 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8789,7 +8777,7 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
-			(at 23.495 45.085 0)
+			(at 24.765 45.085 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8800,7 +8788,7 @@
 			)
 		)
 		(property "MPN" "CL05A106MQ5NUNC"
-			(at 23.495 45.085 0)
+			(at 24.765 45.085 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8811,7 +8799,7 @@
 			)
 		)
 		(property "Mfr" "Samsung"
-			(at 23.495 45.085 0)
+			(at 24.765 45.085 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)

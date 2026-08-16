@@ -1018,6 +1018,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // instead of a value it can't yet trust.
     @Published private(set) var contTestPendingUntil: [UInt8: Date] = [:]
     static let contTestPendingWindow: TimeInterval = 2.5
+    /// BS relay round trip is longer: BLE → uplink retry train (≤ ~1.5 s of
+    /// blind retries + TX-window defers) → FC test → 2 Hz LoRa downlink →
+    /// BS → BLE push.
+    static let contTestPendingWindowRelay: TimeInterval = 8.0
+
+    private var contTestWindow: TimeInterval {
+        isBaseStation ? Self.contTestPendingWindowRelay : Self.contTestPendingWindow
+    }
 
     /// True while a manual continuity test for `channel` is still round-
     /// tripping — the UI shows "TESTING" rather than the (stale) reading.
@@ -1026,12 +1034,57 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return Date() < until
     }
 
+    /// True when a pyro test command sent right now will actually go out.
+    /// Direct link: connected. BS link: connected AND a focused rocket whose
+    /// relayed stream is fresh — a BS that hasn't heard the rocket recently
+    /// would queue a blind uplink into silence (no ACK, #285) while the UI
+    /// advances as if the command were delivered. The fire-instant guard in
+    /// PyroTestView (#292) checks THIS, not just isConnected.
+    ///
+    /// Freshness is computed HERE from the focused rocket's lastSeen, not
+    /// read from `focusedRelayAgeMs` — that property only refreshes on the
+    /// 2 s RSSI tick, so at a fire instant it can be stale-true by up to a
+    /// full tick. A T-0 check deserves the real clock.
+    var pyroCommandPathReady: Bool {
+        guard isConnected else { return false }
+        guard isBaseStation else { return true }
+        guard let focus = focusRocketID,
+              let remote = remoteRockets.first(where: { $0.rocketID == focus })
+        else { return false }
+        let ageMs = UInt32(clamping: Int(Date().timeIntervalSince(remote.lastSeen) * 1000))
+        return ageMs <= Self.relayStaleThresholdMs
+    }
+
+    /// Path-aware live continuity for the pyro test UIs, #297 fail-safe
+    /// included (stale telemetry reads NO CONT, never a held-over green).
+    /// Direct link: the "ps" cont bit. BS relay: the 65-byte LoRa downlink
+    /// carries no pyro_status — per-channel continuity rides the
+    /// sensor-health scorecard instead (SH_OK = continuity present, #303),
+    /// which the FC fills for exactly this reason.
+    func pyroContinuityLive(channel: Int) -> Bool {
+        guard effectiveDataStatus == .live else { return false }
+        if isBaseStation {
+            return telemetry.pyroHealth(channel: channel) == .ok
+        }
+        return telemetry.pyroCont(channel: channel)
+    }
+
     func sendPyroContTest(channel: UInt8) {
-        sendRawCommand(35, payload: Data([channel]))
+        if isBaseStation {
+            // Stand-back pyro test: relay over LoRa to the focused rocket.
+            // Broadcast (0xFF) is deliberately never used here — a pyro
+            // command must name its rocket.
+            guard let rid = focusRocketID else { return }
+            sendRelayCommand(targetRocketID: rid, innerCommand: 35,
+                             innerPayload: Data([channel]))
+        } else {
+            sendRawCommand(35, payload: Data([channel]))
+        }
         // Open the "TESTING" window; clear it (a published mutation, so the
         // UI re-renders the reveal) once the reading has had time to return.
-        contTestPendingUntil[channel] = Date().addingTimeInterval(Self.contTestPendingWindow)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.contTestPendingWindow) { [weak self] in
+        let window = contTestWindow
+        contTestPendingUntil[channel] = Date().addingTimeInterval(window)
+        DispatchQueue.main.asyncAfter(deadline: .now() + window) { [weak self] in
             guard let self = self else { return }
             // Only clear if a newer tap on this channel hasn't pushed the
             // deadline out past now.
@@ -1042,7 +1095,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func sendPyroFire(channel: UInt8) {
-        sendRawCommand(36, payload: Data([channel]))
+        if isBaseStation {
+            // Stand-back pyro test: FIRE relayed over LoRa (BS cmd 50 wrap →
+            // uplink cmd 36) so the operator keeps LoRa distance from a live
+            // charge. Blind fire-and-retry (#285): the rocket dedups the
+            // retry train; delivery is confirmed by the operator's own eyes
+            // and the post-fire continuity re-test, not by any ACK.
+            guard let rid = focusRocketID else { return }
+            sendRelayCommand(targetRocketID: rid, innerCommand: 36,
+                             innerPayload: Data([channel]))
+        } else {
+            sendRawCommand(36, payload: Data([channel]))
+        }
     }
 
     // MARK: - Magnetometer hard-iron calibration (issue #96)
@@ -1128,6 +1192,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func sendToggleLogging() {
         sendCommand(23)
+    }
+
+    /// Rocket flash logging around a pyro test, path-aware. Direct link: the
+    /// legacy cmd-23 toggle (PyroTestView only calls this when the current
+    /// state differs from `on`, per the #385 guard). BS link: the BS's own
+    /// BLE cmd 23 is the wrong tool — its toggle authority is the BS CSV
+    /// logging state, so with BS logging on and rocket logging off it would
+    /// STOP the BS log mid-test and never start the rocket's. Relay uplink
+    /// cmd 23 with the desired-state payload instead: rocket-only, and
+    /// idempotent across the blind retry train.
+    func setRocketLoggingForTest(on: Bool) {
+        if isBaseStation {
+            guard let rid = focusRocketID else { return }
+            sendRelayCommand(targetRocketID: rid, innerCommand: 23,
+                             innerPayload: Data([on ? 1 : 0]))
+        } else {
+            sendCommand(23)
+        }
     }
 
     /// #435: Drift-Cast guidance aim point, BLE cmd 28 — handled end-to-end

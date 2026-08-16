@@ -1,0 +1,206 @@
+(footprint "ANT016008LCS2442_TDK"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "TDK ANT016008LCS2442MA2 2.4 GHz multilayer chip antenna, 1.6x0.8x0.4mm, land per LCSC/EasyEDA C209892. Pad 4 = FEED (marked by fab chamfer), pad 1 = radiator-pattern end, pads 2/3/5/6 dummy. REQUIRES: 6.0 x 2.5 mm keep-out with GND removed on ALL layers at a board corner/edge (TDK layout example), the printed antenna pattern extension per datasheet, Ft (freq tune, eval 2.0 nH 0603) + Mt (match, eval 3.0 nH 0603) slots, 0.2 mm ground stitching vias along the clearance boundary, 50 ohm feed. VNA tune on the real stackup mandatory.")
+	(tags "ANT016008 TDK antenna 2.4GHz chip")
+	(property "Reference" "REF**"
+		(at 0 -1.4 0)
+		(unlocked yes)
+		(layer "F.SilkS")
+		(uuid "f5481de7-19c3-47ba-9c51-1debb1c75e19")
+		(effects
+			(font
+				(size 0.7 0.7)
+				(thickness 0.11)
+			)
+		)
+	)
+	(property "Value" "ANT016008LCS2442_TDK"
+		(at 0 1.4 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(uuid "71e41109-68e0-4bc3-b078-4533d41789f2")
+		(effects
+			(font
+				(size 0.7 0.7)
+				(thickness 0.11)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 1.4 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "af0126a1-1aa4-4f02-b24e-b47d635de206")
+		(effects
+			(font
+				(size 0.7 0.7)
+				(thickness 0.11)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 1.4 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ab965572-587f-4a70-b26e-0d8a3fd4f766")
+		(effects
+			(font
+				(size 0.7 0.7)
+				(thickness 0.11)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -1.0 -0.55)
+		(end -1.0 0.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "fc592d19-5007-4261-8746-026cd1ccf9f3")
+	)
+	(fp_line
+		(start 1.0 -0.55)
+		(end 1.0 0.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "ff335cdf-4a18-4f2f-842d-28da54afb105")
+	)
+	(fp_line
+		(start -0.8 -0.4)
+		(end 0.8 -0.4)
+		(stroke
+			(width 0.0254)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "fcfb7930-012f-45e8-871e-d13eca687d73")
+	)
+	(fp_line
+		(start 0.8 -0.4)
+		(end 0.8 0.4)
+		(stroke
+			(width 0.0254)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "0401e67f-62c1-4e85-b86d-1908e5e74cba")
+	)
+	(fp_line
+		(start 0.8 0.4)
+		(end -0.8 0.4)
+		(stroke
+			(width 0.0254)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "af588fa8-0ffe-4e4a-8a14-a028dab5a0c4")
+	)
+	(fp_line
+		(start -0.8 0.4)
+		(end -0.8 -0.4)
+		(stroke
+			(width 0.0254)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "28ae918b-ef9a-4c87-ae68-70e108b1a346")
+	)
+	(fp_line
+		(start 0.55 -0.4)
+		(end 0.8 -0.15)
+		(stroke
+			(width 0.0254)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "31f34488-7408-4e8d-8be5-1d58a9e2900c")
+	)
+	(fp_line
+		(start -1.05 -0.65)
+		(end 1.05 -0.65)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "1ee900a5-3fe9-4155-a7ed-c40956df101a")
+	)
+	(fp_line
+		(start 1.05 -0.65)
+		(end 1.05 0.65)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "928e1d5d-4d7e-4138-85e0-dd78b3acb6d3")
+	)
+	(fp_line
+		(start 1.05 0.65)
+		(end -1.05 0.65)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "04569ab4-1208-4225-ab65-0456ab7b48fd")
+	)
+	(fp_line
+		(start -1.05 0.65)
+		(end -1.05 -0.65)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "83867330-80b0-4b90-b7c4-26f54dd2b65b")
+	)
+	(pad "1" smd rect
+		(at -0.6115 0)
+		(size 0.21 0.64)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "6031d175-3ffd-4b63-954a-b888efc28e91")
+	)
+	(pad "2" smd rect
+		(at -0.153 -0.204)
+		(size 0.2 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "d0252215-511d-451e-ba2a-2f5ae094f168")
+	)
+	(pad "3" smd rect
+		(at 0.153 -0.204)
+		(size 0.2 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "373a1d6f-a2e5-4b99-95e0-53315e6060f3")
+	)
+	(pad "4" smd rect
+		(at 0.6115 0)
+		(size 0.21 0.64)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "34330117-4cc1-469b-8259-b12169428702")
+	)
+	(pad "5" smd rect
+		(at 0.153 0.204)
+		(size 0.2 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "f73dd4c7-0e22-46d2-bd59-928b6ea5c9de")
+	)
+	(pad "6" smd rect
+		(at -0.153 0.204)
+		(size 0.2 0.3)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(uuid "f1311be5-7f30-4603-a154-555ef9a3ce20")
+	)
+	(embedded_fonts no)
+)

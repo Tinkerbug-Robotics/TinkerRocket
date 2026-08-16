@@ -48,6 +48,16 @@ nonisolated struct OutStatusQueryData {
     let mmc_rot_z_cdeg: Int16        // centi-degrees
     let format_version: UInt8
     let iis2mdc_rot_z_cdeg: Int16?   // centi-degrees; format_version >= 4 (#204)
+    let mag_type: UInt8?             // MAG_TYPE_*; format_version >= 6
+
+    /// MAG_TYPE_* wire values (RocketComputerTypes.h): which chip is behind
+    /// the IIS2MDC-named (0xD1) count stream.
+    static let magTypeIIS2MDC: UInt8 = 0
+    static let magTypeQMC5883P: UInt8 = 1
+    /// IIS2MDC sensitivity: 1.5 mgauss/LSB = 0.15 µT/LSB (datasheet 9.13).
+    static let iis2mdcUtPerLsb: Double = 0.15
+    /// QMC5883P at ±8 G, 3750 LSB/gauss (QST Table 2) — the mini's #797 mag.
+    static let qmc5883pUtPerLsb: Double = 100.0 / 3750.0
 
     init(from data: Data) throws {
         guard data.count >= 10 else {
@@ -70,6 +80,15 @@ nonisolated struct OutStatusQueryData {
         } else {
             iis2mdc_rot_z_cdeg = nil
         }
+
+        // v6: mag_type byte at fixed offset 41 (after the v5 guidance-target
+        // echo, undecoded here).  Same dual gate shape as the v4 field.
+        if format_version >= 6 && data.count >= 42 {
+            var magOffset = 41
+            mag_type = data.readUInt8(at: &magOffset)
+        } else {
+            mag_type = nil
+        }
     }
 
     /// IMU rotation in degrees
@@ -78,6 +97,12 @@ nonisolated struct OutStatusQueryData {
     var magRotationDeg: Double { Double(mmc_rot_z_cdeg) / 100.0 }
     /// IIS2MDC rotation in degrees (format_version >= 4); nil on older logs
     var iisRotationDeg: Double? { iis2mdc_rot_z_cdeg.map { Double($0) / 100.0 } }
+    /// Count→µT scale of the IIS2MDC-named mag stream, keyed off mag_type.
+    /// Pre-v6 logs (nil) and unknown values fall back to the big board's
+    /// IIS2MDC — every pre-v6 log came from one.
+    var magUtPerLsb: Double {
+        mag_type == Self.magTypeQMC5883P ? Self.qmc5883pUtPerLsb : Self.iis2mdcUtPerLsb
+    }
 }
 
 // MARK: - Flight Settings Snapshot (176 bytes) — runtime config at launch (#165)
@@ -504,7 +529,8 @@ nonisolated struct MMC5983MAData {
 }
 
 // IIS2MDC Magnetometer Data (10 bytes) — new Mini PCB rev, replaces MMC5983MA.
-// Raw int16 per axis at 0.15 µT/LSB (datasheet 9.13).
+// Raw int16 per axis; scale is per-board (IIS2MDC 0.15 µT/LSB, mini QMC5883P
+// 100/3750 µT/LSB #797 — keyed off the status query's v6 mag_type).
 nonisolated struct IIS2MDCData {
     let time_us: UInt32
     let mag_x: Int16  // Raw counts (signed)
