@@ -7253,7 +7253,7 @@
 	)
 	(wire
 		(pts
-			(xy 136.525 93.98) (xy 153.035 93.98)
+			(xy 136.525 93.98) (xy 149.225 93.98)
 		)
 		(stroke
 			(width 0)
@@ -10422,7 +10422,7 @@
 	)
 	(symbol
 		(lib_id "Device:R_US")
-		(at 153.035 97.79 0)
+		(at 149.225 97.79 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10433,7 +10433,7 @@
 		(fields_autoplaced yes)
 		(uuid "58fae248-232f-4247-906f-da54a7d71b70")
 		(property "Reference" "R65"
-			(at 159.385 97.79 90)
+			(at 155.575 97.79 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10443,7 +10443,7 @@
 			)
 		)
 		(property "Value" "10 k"
-			(at 156.845 97.79 90)
+			(at 153.035 97.79 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10453,7 +10453,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 154.051 98.044 90)
+			(at 150.241 98.044 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10464,7 +10464,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 153.035 97.79 0)
+			(at 149.225 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10475,7 +10475,7 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
-			(at 153.035 97.79 0)
+			(at 149.225 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10486,7 +10486,7 @@
 			)
 		)
 		(property "MPN" "RC0402FR-0710KL"
-			(at 153.035 97.79 0)
+			(at 149.225 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10497,7 +10497,7 @@
 			)
 		)
 		(property "Mfr" "Yageo"
-			(at 153.035 97.79 0)
+			(at 149.225 97.79 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15273,7 +15273,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 153.035 109.22 0)
+		(at 149.225 109.22 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -15284,7 +15284,7 @@
 		(fields_autoplaced yes)
 		(uuid "cf9d79e4-e917-4bcc-897d-4f0d8d1aa344")
 		(property "Reference" "#PWR0119"
-			(at 153.035 115.57 0)
+			(at 149.225 115.57 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15295,7 +15295,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 153.035 114.3 0)
+			(at 149.225 114.3 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -15305,7 +15305,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 153.035 109.22 0)
+			(at 149.225 109.22 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15316,7 +15316,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 153.035 109.22 0)
+			(at 149.225 109.22 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15327,7 +15327,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 153.035 109.22 0)
+			(at 149.225 109.22 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15351,7 +15351,7 @@
 	)
 	(symbol
 		(lib_id "Device:LED")
-		(at 153.035 105.41 90)
+		(at 149.225 105.41 90)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -15362,7 +15362,7 @@
 		(fields_autoplaced yes)
 		(uuid "d2548f13-72ed-47e1-b663-371f91755328")
 		(property "Reference" "D6"
-			(at 160.02 106.9975 0)
+			(at 156.21 106.9975 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -15372,7 +15372,7 @@
 			)
 		)
 		(property "Value" "Green"
-			(at 157.48 106.9975 0)
+			(at 153.67 106.9975 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -15382,7 +15382,7 @@
 			)
 		)
 		(property "Footprint" "LED_SMD:LED_0402_1005Metric"
-			(at 153.035 105.41 0)
+			(at 149.225 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15393,7 +15393,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 153.035 105.41 0)
+			(at 149.225 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15404,7 +15404,7 @@
 			)
 		)
 		(property "Description" "Light emitting diode"
-			(at 153.035 105.41 0)
+			(at 149.225 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15415,7 +15415,7 @@
 			)
 		)
 		(property "Sim.Pins" "1=K 2=A"
-			(at 153.035 105.41 0)
+			(at 149.225 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15426,7 +15426,7 @@
 			)
 		)
 		(property "MPN" "XL-1005UGC"
-			(at 153.035 105.41 0)
+			(at 149.225 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -15437,7 +15437,7 @@
 			)
 		)
 		(property "Mfr" "Xinglight"
-			(at 153.035 105.41 0)
+			(at 149.225 105.41 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
