@@ -15184,7 +15184,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
 			(at 56.8452 167.64 0)
 			(hide yes)
 			(show_name no)
@@ -15217,7 +15217,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL10A106KP8NNNC"
+		(property "MPN" "CL05A106MQ5NUNC"
 			(at 55.88 163.83 0)
 			(hide yes)
 			(show_name no)
