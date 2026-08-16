@@ -249,11 +249,11 @@ private fun mixDescription(
     val tilt = if (reverse.getOrElse(servo - 1) { false }) -1.0 else 1.0
     val rollS = if (rollReverse.getOrElse(servo - 1) { false }) -1.0 else 1.0
     // Position→force: a fin's tangential lift is perpendicular to its radial
-    // arm, so pitch = sin(az), yaw = cos(az) — matches
+    // arm, so pitch = sin(az), yaw = -cos(az) — matches
     // TR_ControlMixer::setFinLayout (top/bottom fins are yaw rudders, side
     // fins are pitch elevators).
     val p = sin(th) * tilt
-    val y = cos(th) * tilt
+    val y = -cos(th) * tilt
     val parts = mutableListOf<String>()
     if (abs(p) > 0.05) parts += "pitch ${if (p > 0) "+" else "−"}"
     if (abs(y) > 0.05) parts += "yaw ${if (y > 0) "+" else "−"}"

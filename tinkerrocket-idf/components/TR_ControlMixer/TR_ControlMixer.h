@@ -114,12 +114,13 @@ private:
     // 180 = bottom, 270 = left).  A fin's tangential lift is perpendicular to
     // its radial arm — the top/bottom pair are yaw rudders, the right/left
     // pair pitch elevators — so setFinLayout() maps position → force:
-    //   pitch_mix_[i]=tilt·sin(az_i), yaw_mix_[i]=tilt·cos(az_i) (tilt=-1 if
+    //   pitch_mix_[i]=tilt·sin(az_i), yaw_mix_[i]=-tilt·cos(az_i) (tilt=-1 if
     // servo i tilt-reversed), roll_mix_[i]=roll (roll=-1 if servo i
     // roll-reversed) — tilt and roll signs are independent.  Default "+"
-    // {0,90,180,270}: right/left carry pitch, top/bottom carry yaw.
+    // {0,90,180,270}: right/left carry pitch, top/bottom carry yaw.  The yaw
+    // minus is bench-established (2026-08-16) — see setFinLayout().
     float   pitch_mix_[4] = {  0.0f, +1.0f,  0.0f, -1.0f };
-    float   yaw_mix_[4]   = { +1.0f,  0.0f, -1.0f,  0.0f };
+    float   yaw_mix_[4]   = { -1.0f,  0.0f, +1.0f,  0.0f };
     float   roll_mix_[4]  = { +1.0f, +1.0f, +1.0f, +1.0f };
     float   fin_azimuth_deg_[4] = { 0.0f, 90.0f, 180.0f, 270.0f };
     uint8_t fin_reverse_mask_ = 0;

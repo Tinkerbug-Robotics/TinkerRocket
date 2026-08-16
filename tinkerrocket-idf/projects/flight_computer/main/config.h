@@ -359,7 +359,7 @@ struct config : board_pins
     // FIN_AZIMUTH_n_DEG = ring-POSITION azimuth of servo n's fin (0 = top slot,
     // 90 = right, … looking from the rear — what the app's ring GUI shows).
     // The mixer maps position→tangential force (a fin's lift is perpendicular
-    // to its radial arm): deflection_n = sign_n·(pitch·sin(az_n) +
+    // to its radial arm): deflection_n = sign_n·(pitch·sin(az_n) −
     // yaw·cos(az_n)) + roll — so with the "+" defaults the right/left pair
     // carries pitch (elevators) and the top/bottom pair carries yaw (rudders).
     // Bit n of FIN_REVERSE_MASK negates servo n's pitch/yaw (tilt) response;

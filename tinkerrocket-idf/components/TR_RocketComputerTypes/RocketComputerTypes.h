@@ -2302,7 +2302,7 @@ static_assert(sizeof(GuidancePointData) == 20, "GuidancePointData must be 20 byt
 // ring GUI shows).  A fin's tangential lift is perpendicular to its radial arm
 // (top/bottom fins are yaw rudders, right/left fins are pitch elevators), so the FC
 // maps position → force internally:
-//   deflection_i = tilt_i·(pitch·sin(az_i) + yaw·cos(az_i)) + roll_i·roll
+//   deflection_i = tilt_i·(pitch·sin(az_i) − yaw·cos(az_i)) + roll_i·roll
 // (Earlier firmware used cos/sin here — treating the position azimuth as the force
 // azimuth — which swapped the pitch/yaw fin pairs; see TR_ControlMixer::setFinLayout.)
 // tilt_i = -1 if bit i of reverse_mask is set (flips that fin's pitch/yaw response);

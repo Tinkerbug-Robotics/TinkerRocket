@@ -143,15 +143,18 @@ void TR_ControlMixer::setFinLayout(const float azimuth_deg[4], uint8_t reverse_m
         // pitch/yaw pairs: tilt response came out reflected about the 45°
         // diagonal, so no airframe rotation could cancel it (a reflection is
         // not a rotation) and ground tests read as non-corrective.
-        // NOTE: this fixes the pair ASSIGNMENT.  The overall tilt sign still
-        // depends on linkage/servo-direction conventions and is carried by
-        // reverse_mask (flip all four bits to invert tilt globally) — confirm
-        // on the bench with the app's per-fin jog.
+        // The yaw channel carries a leading minus: az is measured toward body
+        // +Y, so p̂(az)·ẑ_frd = −cos(az) (the "up" fin at az=0 torques toward
+        // −Z).  Determined on the bench 2026-08-16 — with +cos the Z axis came
+        // out corrective while the perpendicular axis was anti-corrective,
+        // which is a RELATIVE pitch/yaw sign error (a global linkage flip would
+        // have inverted both axes together, and that case is what reverse_mask
+        // exists for).
         // Tilt (pitch/yaw) and roll signs are independent — see FinConfigData.
         float tilt_sign = (reverse_mask      & (1u << i)) ? -1.0f : 1.0f;
         float roll_sign = (roll_reverse_mask & (1u << i)) ? -1.0f : 1.0f;
-        pitch_mix_[i] = tilt_sign * s;
-        yaw_mix_[i]   = tilt_sign * c;
+        pitch_mix_[i] =  tilt_sign * s;
+        yaw_mix_[i]   = -tilt_sign * c;
         roll_mix_[i]  = roll_sign;
     }
 }

@@ -229,10 +229,10 @@ struct FinLayoutView: View {
         let tilt = (reverse.indices.contains(servo - 1) && reverse[servo - 1]) ? -1.0 : 1.0
         let rollS = (rollReverse.indices.contains(servo - 1) && rollReverse[servo - 1]) ? -1.0 : 1.0
         // Position→force: a fin's tangential lift is perpendicular to its
-        // radial arm, so pitch = sin(az), yaw = cos(az) — matches
+        // radial arm, so pitch = sin(az), yaw = -cos(az) — matches
         // TR_ControlMixer::setFinLayout (top/bottom fins are yaw rudders,
         // side fins are pitch elevators).
-        let p = sin(th) * tilt, y = cos(th) * tilt
+        let p = sin(th) * tilt, y = -cos(th) * tilt
         var parts: [String] = []
         if abs(p) > 0.05 { parts.append("pitch \(p > 0 ? "+" : "−")") }
         if abs(y) > 0.05 { parts.append("yaw \(y > 0 ? "+" : "−")") }

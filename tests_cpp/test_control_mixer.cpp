@@ -188,8 +188,8 @@ TEST_F(ControlMixerTest, Reset_ClearsAllState) {
 
 // With no setFinLayout call (default {0,90,180,270} + mask 0), mixToFins uses
 // the physical "+" mapping — pitch on the right/left elevator pair, yaw on the
-// top/bottom rudder pair:
-//   d0=+yaw+roll  d1=+pitch+roll  d2=-yaw+roll  d3=-pitch+roll
+// top/bottom rudder pair, the yaw channel negated (bench-established sign):
+//   d0=-yaw+roll  d1=+pitch+roll  d2=+yaw+roll  d3=-pitch+roll
 // (Deliberate break from the pre-fix "hardcoded plus", which put pitch on
 // top/bottom — the position-as-force-azimuth bug.)
 TEST_F(ControlMixerTest, MixToFins_DefaultIsPhysicalPlus) {
@@ -201,18 +201,18 @@ TEST_F(ControlMixerTest, MixToFins_DefaultIsPhysicalPlus) {
     EXPECT_NEAR(d[3], -2.0f, 1e-4f);
 
     mixer.mixToFins(0.0f, 0.0f, 3.0f, MAX_FIN, d);          // pure yaw
-    EXPECT_NEAR(d[0],  3.0f, 1e-4f);
+    EXPECT_NEAR(d[0], -3.0f, 1e-4f);
     EXPECT_NEAR(d[1],  0.0f, 1e-4f);
-    EXPECT_NEAR(d[2], -3.0f, 1e-4f);
+    EXPECT_NEAR(d[2],  3.0f, 1e-4f);
     EXPECT_NEAR(d[3],  0.0f, 1e-4f);
 
     mixer.mixToFins(4.0f, 0.0f, 0.0f, MAX_FIN, d);          // pure roll → common
     for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 4.0f, 1e-4f);
 
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);          // combined
-    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[0], -3.0f + 1.0f, 1e-4f);
     EXPECT_NEAR(d[1],  2.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[2],  3.0f + 1.0f, 1e-4f);
     EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);
 }
 
@@ -221,9 +221,9 @@ TEST_F(ControlMixerTest, SetFinLayout_DefaultAzimuthsMatchDefaults) {
     mixer.setFinLayout(az, 0, 0);
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[0], -3.0f + 1.0f, 1e-4f);
     EXPECT_NEAR(d[1],  2.0f + 1.0f, 1e-4f);
-    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);
+    EXPECT_NEAR(d[2],  3.0f + 1.0f, 1e-4f);
     EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);
 }
 
@@ -239,11 +239,11 @@ TEST_F(ControlMixerTest, SetFinLayout_CrossSharesPitchAndYaw) {
     EXPECT_NEAR(d[2], -k, 1e-4f);
     EXPECT_NEAR(d[3], -k, 1e-4f);
 
-    mixer.mixToFins(0.0f, 0.0f, 1.0f, MAX_FIN, d);          // yaw → cos(az)
-    EXPECT_NEAR(d[0],  k, 1e-4f);
-    EXPECT_NEAR(d[1], -k, 1e-4f);
-    EXPECT_NEAR(d[2], -k, 1e-4f);
-    EXPECT_NEAR(d[3],  k, 1e-4f);
+    mixer.mixToFins(0.0f, 0.0f, 1.0f, MAX_FIN, d);          // yaw → -cos(az)
+    EXPECT_NEAR(d[0], -k, 1e-4f);
+    EXPECT_NEAR(d[1],  k, 1e-4f);
+    EXPECT_NEAR(d[2],  k, 1e-4f);
+    EXPECT_NEAR(d[3], -k, 1e-4f);
 
     mixer.mixToFins(2.0f, 0.0f, 0.0f, MAX_FIN, d);          // roll still common
     for (int i = 0; i < 4; i++) EXPECT_NEAR(d[i], 2.0f, 1e-4f);
@@ -255,9 +255,9 @@ TEST_F(ControlMixerTest, SetFinLayout_ReverseNegatesTiltOnly) {
     mixer.setFinLayout(az, 0x02, 0);                         // tilt-reverse servo 1
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[0], -3.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_NEAR(d[1], -2.0f + 1.0f, 1e-4f);                  // pitch negated, roll kept (+1)
-    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[2],  3.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_EQ(mixer.getFinReverseMask(), 0x02);
     EXPECT_NEAR(mixer.getFinAzimuthDeg(1), 90.0f, 1e-4f);
@@ -270,9 +270,9 @@ TEST_F(ControlMixerTest, SetFinLayout_RollReverseNegatesRollOnly) {
     mixer.setFinLayout(az, 0, 0x02);                         // roll-reverse servo 1
     float d[4];
     mixer.mixToFins(1.0f, 2.0f, 3.0f, MAX_FIN, d);
-    EXPECT_NEAR(d[0],  3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[0], -3.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_NEAR(d[1],  2.0f - 1.0f, 1e-4f);                  // pitch kept, roll negated (−1)
-    EXPECT_NEAR(d[2], -3.0f + 1.0f, 1e-4f);                  // unchanged
+    EXPECT_NEAR(d[2],  3.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_NEAR(d[3], -2.0f + 1.0f, 1e-4f);                  // unchanged
     EXPECT_EQ(mixer.getFinRollReverseMask(), 0x02);
 }

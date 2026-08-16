@@ -903,11 +903,18 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
                             q_ekf = np.array(quat_ned)
                             R_b2ned = quat_to_dcm(q_ekf)
                             a_cmd_body = R_b2ned.T @ a_cmd_ned
-                            # FRD body: X=fwd, Y=right, Z=down
-                            # Positive pitch fin cmd pitches nose toward +Z (body down)
-                            # Positive yaw fin cmd yaws nose toward -Y (body left)
+                            # FRD body: X=fwd, Y=right, Z=down.  Both channels
+                            # take the body accel component directly, matching
+                            # the FC coast-guidance path verbatim
+                            # (pitch_accel = a_body_down, yaw_accel =
+                            # a_body_right).  The yaw term used to carry an
+                            # extra negation here, which silently cancelled the
+                            # swapped fin pairing below — together they made the
+                            # loop converge for the wrong reason.  With the
+                            # pairing corrected the negation has to go, and the
+                            # net closed-loop dynamics are unchanged.
                             pitch_accel = a_cmd_body[2]
-                            yaw_accel = -a_cmd_body[1]
+                            yaw_accel = a_cmd_body[1]
 
                             # Direct accel → fin deflection (bypass PID)
                             # Scale: deg of fin per m/s² of accel command
@@ -922,17 +929,20 @@ def run_closed_loop(rocket_def, config: SimConfig = None) -> SimResult:
 
                             # Map to 4 fins directly (matches
                             # TR_ControlMixer's position→force mapping:
-                            # pitch_mix = sin(az), yaw_mix = cos(az)):
+                            # pitch_mix = sin(az), yaw_mix = -cos(az)):
                             # Pitch: fins 1(right) and 3(left) differential
                             #        (elevator pair)
-                            # Yaw: fins 0(top) and 2(bottom) differential
-                            #        (rudder pair)
+                            # Yaw: fins 0(top) and 2(bottom) differential,
+                            #        negated (rudder pair) — the bench-
+                            #        established sign, which is also what makes
+                            #        a positive yaw_fin yaw the nose toward -Y
+                            #        as this block's header documents.
                             # Roll: all fins same direction (common mode)
                             max_fin_deg = 20.0
                             fin_cmds = np.clip(np.array([
-                                +yaw_fin   + roll_fin_cmd,    # fin 0 (top)
+                                -yaw_fin   + roll_fin_cmd,    # fin 0 (top)
                                 +pitch_fin + roll_fin_cmd,    # fin 1 (right)
-                                -yaw_fin   + roll_fin_cmd,    # fin 2 (bottom)
+                                +yaw_fin   + roll_fin_cmd,    # fin 2 (bottom)
                                 -pitch_fin + roll_fin_cmd,    # fin 3 (left)
                             ]), -max_fin_deg, max_fin_deg)
                             guid_pitch_cmd = pitch_fin
