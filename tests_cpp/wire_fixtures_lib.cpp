@@ -205,7 +205,7 @@ OutStatusQueryData canonicalStatusQuery() {
     OutStatusQueryData d{};
     d.ism6_low_g_fs_g = 16; d.ism6_high_g_fs_g = 256; d.ism6_gyro_fs_dps = 4000;
     d.ism6_rot_z_cdeg = 9000; d.mmc_rot_z_cdeg = -4500;
-    d.format_version = 5;
+    d.format_version = 6;
     d.hg_bias_x_cmss = -50; d.hg_bias_y_cmss = 75; d.hg_bias_z_cmss = -100;
     d.b2r_code = 4; d.b2r_mode = 2;
     d.b2r_q[0] = 9239; d.b2r_q[1] = 0; d.b2r_q[2] = -3827; d.b2r_q[3] = 0;
@@ -216,6 +216,9 @@ OutStatusQueryData canonicalStatusQuery() {
     // visible (semantically valid: status describes the still-active previous
     // target, last_rc the most recent — rejected — cmd 28).
     d.tgt_status = GUID_TGT_GEO_ACTIVE; d.tgt_last_rc = GUID_RC_REJ_RADIUS;
+    // v6: nonzero so the mag-type byte can't pass by being mistaken for the
+    // zeroed pad a truncation would leave.
+    d.mag_type = MAG_TYPE_QMC5883P;
     return d;
 }
 
@@ -387,6 +390,7 @@ std::string statusQuerySidecar(const OutStatusQueryData& d, size_t presentBytes,
             .i("tgt_alt_m", d.tgt_alt_m).u("tgt_seq", d.tgt_seq)
             .u("tgt_status", d.tgt_status).u("tgt_last_rc", d.tgt_last_rc);
     }
+    if (presentBytes >= 42) j.u("mag_type", d.mag_type);
     return j.done();
 }
 
@@ -495,12 +499,17 @@ void buildLogframes(Builder& b) {
     }
 
     // OutStatusQuery version ladder (format_version byte at offset 9):
-    // v3 = 26 B, v4 = 28 B (+iis2mdc rot), v5 = 41 B (+guidance echo tail).
+    // v3 = 26 B, v4 = 28 B (+iis2mdc rot), v5 = 41 B (+guidance echo tail),
+    // v6 = 42 B (+mag_type).
     const auto sq = canonicalStatusQuery();
     auto sqFull = bytesOf(sq);
-    b.add("logframes", "statusquery_v5_41.bin", sqFull,
-          statusQuerySidecar(sq, 41, sq.format_version),
-          "OutStatusQueryData v5, msg 0xA0");
+    b.add("logframes", "statusquery_v6_42.bin", sqFull,
+          statusQuerySidecar(sq, 42, sq.format_version),
+          "OutStatusQueryData v6 (+mag_type), msg 0xA0");
+    auto sqV5 = prefix(sqFull, 41); sqV5[9] = 5;
+    b.add("logframes", "statusquery_v5_41.bin", sqV5,
+          statusQuerySidecar(sq, 41, 5),
+          "OutStatusQueryData truncated to v5 (guidance echo tail, no mag_type)");
     auto sqV4 = prefix(sqFull, 28); sqV4[9] = 4;
     b.add("logframes", "statusquery_v4_28.bin", sqV4, statusQuerySidecar(sq, 28, 4),
           "OutStatusQueryData truncated to v4 (+IIS2MDC rotation, no guidance echo)");
@@ -922,7 +931,13 @@ void buildCommands(Builder& b) {
 // and the master-apogee max-speed gate.
 void buildCsvFlight(Builder& b) {
     std::vector<uint8_t> stream;
-    append(stream, frame(OUT_STATUS_QUERY, bytesOf(canonicalStatusQuery())));   // t=1.0 s (rotation config)
+    // The stream's mag counts were synthesized under IIS2MDC semantics, so
+    // its config frame must say IIS2MDC — the canonical's QMC5883P mag_type
+    // (kept nonzero for the standalone v6 fixture) would rescale the CSV mag
+    // columns and invalidate the committed app-generated goldens.
+    auto csvQuery = canonicalStatusQuery();
+    csvQuery.mag_type = MAG_TYPE_IIS2MDC;
+    append(stream, frame(OUT_STATUS_QUERY, bytesOf(csvQuery)));   // t=1.0 s (rotation config)
     append(stream, frame(FLIGHT_SETTINGS_MSG, bytesOf(canonicalFlightSettings())));
 
     int frames = 2;

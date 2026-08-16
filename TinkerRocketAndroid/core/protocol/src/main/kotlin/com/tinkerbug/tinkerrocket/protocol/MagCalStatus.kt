@@ -96,7 +96,7 @@ public data class MagCalStatus(
     val instantaneousFieldUt: Float,   // wire u16 ×10
 
     /**
-     * Fitted hard-iron offset in raw IIS2MDC LSB units (0.15 µT/LSB).
+     * Fitted hard-iron offset in raw I2C-mag LSB units ([utPerLsb] µT/LSB).
      * Zero in SAMPLING/IDLE/ABORTED, populated in REVIEW/APPLIED.
      */
     val offsetX: Int,           // i16
@@ -128,15 +128,23 @@ public data class MagCalStatus(
      * from [coverageMask].  0 on < 36-byte payloads.
      */
     val partialMask: Long,      // u32
+
+    /**
+     * Count→µT scale the offsets/live vector were decoded at.  Defaults to
+     * the IIS2MDC's [LSB_TO_UT]; pass the board's real scale to [decode]
+     * when it is known (the mini's QMC5883P is 100/3750 µT/LSB, #797 —
+     * OutStatusQueryData.QMC5883P_UT_PER_LSB).
+     */
+    val utPerLsb: Float = LSB_TO_UT,
 ) {
     /**
-     * Magnitude of the fitted hard-iron offset vector, in µT (#207).
-     * IIS2MDC: 0.15 µT/LSB, mirrors LSB_TO_UT in [decode].
+     * Magnitude of the fitted hard-iron offset vector, in µT (#207), at the
+     * decode-time [utPerLsb].
      */
     public val centerMagnitudeUt: Float
         get() {
             val x = offsetX.toFloat(); val y = offsetY.toFloat(); val z = offsetZ.toFloat()
-            return 0.15f * sqrt(x * x + y * y + z * z)
+            return utPerLsb * sqrt(x * x + y * y + z * z)
         }
 
     /**
@@ -167,7 +175,14 @@ public data class MagCalStatus(
         /** Original (oldest accepted) payload size. */
         public const val MIN_SIZE: Int = 22
 
-        /** IIS2MDC sensitivity, 0.15 µT/LSB (datasheet 9.13); mirrors firmware IIS2MDC_LSB_TO_uT. */
+        /**
+         * IIS2MDC sensitivity, 0.15 µT/LSB (datasheet 9.13); mirrors firmware
+         * IIS2MDC_LSB_TO_uT.  This is the DEFAULT decode scale — a QMC5883P
+         * board (the mini, #797) is 100/3750 µT/LSB
+         * (OutStatusQueryData.QMC5883P_UT_PER_LSB); pass it to [decode] when
+         * the session layer knows the board.  Cal offsets stay raw LSB on
+         * the wire either way — only µT presentation depends on this.
+         */
         public const val LSB_TO_UT: Float = 0.15f
 
         /**
@@ -177,7 +192,10 @@ public data class MagCalStatus(
          * default to 0.  Returns null if the buffer is too short to be even
          * the original 22-byte payload.
          */
-        public fun decode(payload: ByteArray): MagCalStatus? {
+        public fun decode(
+            payload: ByteArray,
+            utPerLsb: Float = LSB_TO_UT,
+        ): MagCalStatus? {
             if (payload.size < MIN_SIZE) return null
             val b = LeBuffer(payload)
 
@@ -214,10 +232,11 @@ public data class MagCalStatus(
                 residualUt = resUtX10 / 10.0f,
                 rejectCode = MagCalRejectCode.fromRaw(rejectRaw),
                 coverageMask = coverageMask,
-                liveXUt = liveXLsb * LSB_TO_UT,
-                liveYUt = liveYLsb * LSB_TO_UT,
-                liveZUt = liveZLsb * LSB_TO_UT,
+                liveXUt = liveXLsb * utPerLsb,
+                liveYUt = liveYLsb * utPerLsb,
+                liveZUt = liveZLsb * utPerLsb,
                 partialMask = partialMask,
+                utPerLsb = utPerLsb,
             )
         }
     }

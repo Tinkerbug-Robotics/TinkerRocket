@@ -56,6 +56,15 @@ public:
     // Subtracted from ISM6HG256 high-g output during conversion.
     void setHighGBias(float bx, float by, float bz);
 
+    // Read-back of applied settings, for boards that build their own
+    // OUT_STATUS_QUERY log snapshot (the mini has no FC→OC query wire, so
+    // it snapshots the converter state it actually flies with).
+    float highGBiasX() const { return hg_bias_x_; }
+    float highGBiasY() const { return hg_bias_y_; }
+    float highGBiasZ() const { return hg_bias_z_; }
+    float iis2mdcRotationZDeg() const
+        { return iis2mdc_rot_z_rad * (180.0f / (float)PI); }
+
     // Set MMC5983MA hard-iron offset in centered-counts (issue #96).
     // The MMC chip has no on-board offset register, so the offset is
     // applied here — subtracted from the post-centering counts before

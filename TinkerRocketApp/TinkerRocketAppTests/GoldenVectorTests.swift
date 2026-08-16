@@ -230,11 +230,12 @@ final class GoldenVectorTests: XCTestCase {
         }
     }
 
-    // MARK: - StatusQuery version ladder (v3/v4/v5)
+    // MARK: - StatusQuery version ladder (v3/v4/v5/v6 — the v6 rung's
+    // mag_type tail byte is undecoded; it pins tolerance of longer frames)
 
     func testStatusQueryLadder() throws {
         for rel in ["logframes/statusquery_v3_26.bin", "logframes/statusquery_v4_28.bin",
-                    "logframes/statusquery_v5_41.bin"] {
+                    "logframes/statusquery_v5_41.bin", "logframes/statusquery_v6_42.bin"] {
             let side = WireFixtures.sidecar(rel)
             let q = try OutStatusQueryData(from: WireFixtures.data(rel))
             XCTAssertEqual(Int(q.ism6_low_g_fs_g), side.int("ism6_low_g_fs_g"), rel)
@@ -251,7 +252,29 @@ final class GoldenVectorTests: XCTestCase {
                 XCTAssertNil(q.iis2mdc_rot_z_cdeg,
                              "iis rotation must be nil pre-v4 @ \(rel)")
             }
+            // v6 mag_type: present in the sidecar only on the 42-byte rung.
+            if side["mag_type"] != nil {
+                XCTAssertEqual(q.mag_type.map(Int.init), side.int("mag_type"), rel)
+            } else {
+                XCTAssertNil(q.mag_type, "mag_type must be nil pre-v6 @ \(rel)")
+            }
         }
+    }
+
+    func testStatusQueryMagTypeKeysScale() throws {
+        // The golden v6 fixture carries MAG_TYPE_QMC5883P (the mini's #797
+        // mag): 100/3750 µT/LSB.  A v6-claiming payload truncated to 41
+        // bytes fails the length side of the dual gate and falls back to
+        // the IIS2MDC scale.
+        let q = try OutStatusQueryData(from: WireFixtures.data("logframes/statusquery_v6_42.bin"))
+        XCTAssertEqual(q.mag_type, OutStatusQueryData.magTypeQMC5883P)
+        XCTAssertEqual(q.magUtPerLsb, OutStatusQueryData.qmc5883pUtPerLsb)
+
+        let truncated = try OutStatusQueryData(
+            from: WireFixtures.data("logframes/statusquery_v6_42.bin").prefix(41))
+        XCTAssertEqual(truncated.format_version, 6)
+        XCTAssertNil(truncated.mag_type)
+        XCTAssertEqual(truncated.magUtPerLsb, OutStatusQueryData.iis2mdcUtPerLsb)
     }
 
     // MARK: - FlightSettings version ladder (v1/v2/v3/v5/v6)

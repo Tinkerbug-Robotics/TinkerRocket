@@ -228,6 +228,20 @@ class SensorConverterTest {
         assertEquals(-15.0, si.magZ, 1e-6)
     }
 
+    @Test
+    fun `QMC5883P mag scale applies after configureMagScale`() {
+        // The mini's #797 mag runs ±8 G at 3750 LSB/gauss = 100/3750 µT/LSB
+        // — keyed off the status query's v6 mag_type.  raw 3750 = 1 gauss
+        // = 100 µT.
+        val c = SensorConverter()
+        c.configureMagScale(OutStatusQueryData.QMC5883P_UT_PER_LSB)
+        val si = c.convertIIS2MDC(makeIis2mdc(x = 3750, y = -3750, z = 375))
+
+        assertEquals(100.0, si.magX, 1e-6)
+        assertEquals(-100.0, si.magY, 1e-6)
+        assertEquals(10.0, si.magZ, 1e-6)
+    }
+
     // MARK: - NonSensor flag extraction (#196)
 
     @Test
