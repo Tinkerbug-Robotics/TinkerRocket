@@ -17,6 +17,13 @@
 // file still uses the Arduino-shim millis()/micros() heavily.  Pulled
 // in explicitly here until item #5 of issue #21 slims the sim too.
 #include <compat.h>
+// The `Serial` object this file prints through is the SparkFun shim in the
+// u-blox driver (sfe_bus.h). It used to arrive transitively through
+// SensorCollector.h; on boards where the collector selects the LC86 GNSS
+// driver instead (TR_GNSS_DRIVER_LC86) that path is gone, so include it
+// explicitly. The shim is compiled unconditionally, so this is
+// declaration-only on every board.
+#include <sfe_bus.h>
 
 // ============================================================================
 // Construction / Delegation

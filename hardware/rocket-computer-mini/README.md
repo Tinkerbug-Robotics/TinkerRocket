@@ -179,7 +179,11 @@ and drops both warnings.
 processor, but nothing has been rewired to it yet — the sensors, all four pyro
 channels and the expansion header currently connect to nothing.
 
-Not reviewed, not fabbed, no tag, no firmware project of its own. Further
+Not reviewed, not fabbed, no tag. Firmware now exists —
+[`tinkerrocket-idf/projects/rocket_computer_mini`](../../tinkerrocket-idf/projects/rocket_computer_mini/)
+carries the single-MCU merge, with a board map netlist-verified against this
+working tree (note its README's warning that `pin-budget.md`'s assignment
+table has drifted from the schematic). Further
 reduction is expected, which is why the dangling stubs, the V9 BOM, the stale
 on-board fab note and the `rev1` silkscreen overlap are all recorded here rather
 than fixed — each one sits in a region that the next pass is going to rework.
