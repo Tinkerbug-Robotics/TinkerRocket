@@ -18,6 +18,7 @@ is restored. "Parity at v1.0" is checkable ⇔ this file is honest.
 |---|---|---|
 | 2026-07-23 | `:core:protocol` COMPLETE — decoders, encoders, converter, telemetry, CSV pipeline all golden-pinned (bin→CSV byte-identical to iOS) | Phase 1 done |
 | 2026-07-23 | Everything above the protocol layer: `:core:session` device/fleet logic, `:core:ble`, all UI | Phases 2–9 of docs/plans/624-android-port.md |
+| 2026-08-16 | **Stand-back pyro test over LoRa** is iOS-only: on a base-station link, `sendPyroContTest`/`sendPyroFire` wrap in relay cmd 50 (inner 35/36 → new uplink handlers on OC + mini), gated on `pyroCommandPathReady` (focused rocket + relay ≤ 3 s fresh); continuity on the relay path reads the SH pyro scorecard (the LoRa downlink has no pyro_status byte); BS Settings gains a "Pyro Test (via LoRa)" section opening the slow-mo PyroTestView, which re-tests continuity post-fire for a stand-back fired/not-fired verdict. Android's `PyroTestControls` never ported the fire button at all (its own safety-sensitive pass, above) — port the LoRa path together with that pass, reusing the same uplink cmds and the SH-scorecard continuity read | iOS-first |
 
 ## Behavior divergences
 
