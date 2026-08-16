@@ -86,9 +86,13 @@ struct config
     // The modem comes up listening on these until the host pushes SET_CONFIG,
     // mirroring TR_LoRa_Comms defaults. The host owns the real config
     // (transparent-modem principle: no NVS on the modem).
+    // SF/BW must be a legal LLCC68 pair: the die supports SF5-9 at BW125,
+    // SF5-10 at BW250, SF5-11 at BW500. SF8/BW250 is the fleet operating
+    // point; the previous SF10/BW125 boot value was out of range for the
+    // E220-900MM22S's LLCC68 die (undefined behavior until SET_CONFIG).
     static constexpr float BOOT_FREQ_MHZ = 915.0f;
-    static constexpr uint8_t BOOT_SF = 10;
-    static constexpr float BOOT_BW_KHZ = 125.0f;
+    static constexpr uint8_t BOOT_SF = 8;
+    static constexpr float BOOT_BW_KHZ = 250.0f;
     static constexpr uint8_t BOOT_CR = 7;
     static constexpr int8_t BOOT_TX_POWER_DBM = 20;
 

@@ -32,8 +32,10 @@ public:
         int spi_mosi = -1;
         spi_host_device_t spi_host = SPI2_HOST;
         float freq_mhz = 915.0f;
-        uint8_t spreading_factor = 10;
-        float bandwidth_khz = 125.0f;
+        // Defaults are the fleet operating point, and a legal LLCC68 pair
+        // (SF10/BW125 is not: LLCC68 caps SF at 9 for BW125).
+        uint8_t spreading_factor = 8;
+        float bandwidth_khz = 250.0f;
         uint8_t coding_rate = 7;
         uint16_t preamble_len = 16;
         int8_t tx_power_dbm = 20;
@@ -190,8 +192,8 @@ private:
 
     // Last-known-good radio config (for rollback on reconfigure failure)
     float   cfg_freq_mhz_ = 915.0f;
-    uint8_t cfg_sf_ = 10;
-    float   cfg_bw_khz_ = 125.0f;
+    uint8_t cfg_sf_ = 8;
+    float   cfg_bw_khz_ = 250.0f;
     uint8_t cfg_cr_ = 7;
     int8_t  cfg_tx_power_ = 20;
 
