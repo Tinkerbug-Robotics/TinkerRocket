@@ -1096,12 +1096,16 @@ TEST(RocketComputerTypes, GuidancePointData_Layout) {
     EXPECT_EQ(offsetof(GuidancePointData, alt_m),   16u);
 }
 
-// OutStatusQueryData v5 guidance-target echo tail: the authoritative
-// sizeof/offsetof static_asserts live in RocketComputerTypes.h itself (this
-// test target recompiles the header, so they fire in CI); pin the version
-// semantics here so a format bump can't ship without a conscious edit.
-TEST(RocketComputerTypes, OutStatusQuery_GuidTargetEcho_V5) {
-    EXPECT_EQ(sizeof(OutStatusQueryData), 41u);  // v5: +13 guidance-target echo (#435)
+// OutStatusQueryData current tail: the authoritative sizeof/offsetof
+// static_asserts live in RocketComputerTypes.h itself (this test target
+// recompiles the header, so they fire in CI); pin the version semantics here
+// so a format bump can't ship without a conscious edit.
+TEST(RocketComputerTypes, OutStatusQuery_MagType_V6) {
+    EXPECT_EQ(sizeof(OutStatusQueryData), 42u);  // v6: +mag_type (v5 was 41: #435)
+    // The zeroed default must decode as the big board's chip — every pre-v6
+    // reader assumption and every zero-initialized builder then agree.
+    EXPECT_EQ(MAG_TYPE_IIS2MDC, 0);
+    EXPECT_EQ(MAG_TYPE_QMC5883P, 1);
 }
 
 // The FC's cmd-28 acceptance gate (GuidancePointGate.h) as a pure function —

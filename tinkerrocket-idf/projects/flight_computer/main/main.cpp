@@ -3061,7 +3061,14 @@ static void setup_fc()
     // applyBoardToRocketOrientation above and on any runtime change).
     // v4: adds per-chip iis2mdc_rot_z_cdeg (#204).
     // v5: adds the guidance-target echo (#435).
-    out_status_query_data.format_version = 5;
+    // v6: adds mag_type — which chip is behind the 0xD1 mag stream, so log
+    // analysis picks the right count scale per board.
+    out_status_query_data.format_version = 6;
+#ifdef TR_MAG_DRIVER_QMC5883P
+    out_status_query_data.mag_type = MAG_TYPE_QMC5883P;
+#else
+    out_status_query_data.mag_type = MAG_TYPE_IIS2MDC;
+#endif
     // Guidance-target echo boot state (#435): no cmd 28 processed yet; the
     // current target is whatever cmd 65 left in NVS (restored above).
     out_status_query_data.tgt_seq     = 0;

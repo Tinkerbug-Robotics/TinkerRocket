@@ -10,7 +10,13 @@ to the app, battery monitoring, OTA, power modes) into one process.
 
 **Everything external stays fleet-compatible.** The NAND log stream is
 byte-identical to the OC's (same `AA55AA55|type|len|payload|CRC16` frames), so
-the flight-report tooling and BLE download parse mini logs unchanged. The LoRa
+the flight-report tooling and BLE download parse mini logs unchanged. On the
+two-MCU board the OC logged the FC's `OUT_STATUS_QUERY` frames as received;
+the mini has no query wire, so it builds and logs the same sensor-config
+snapshot itself (`logOutStatusQuery()` alongside each FlightSettings emission)
+— v6 of that frame stamps `mag_type`, which is how the analysis tooling picks
+the mag count scale per log (IIS2MDC 0.15 µT/LSB vs the mini's QMC5883P
+100/3750 µT/LSB, #797). The LoRa
 air protocol is v4 — existing base stations work. The BLE service and
 characteristics are the OC's — the apps connect without modification (they
 will show servo/camera controls this board answers with "unsupported").
