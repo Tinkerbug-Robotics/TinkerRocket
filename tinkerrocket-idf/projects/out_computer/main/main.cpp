@@ -461,10 +461,10 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 // EXCEPTION: pyro test commands are never enqueued while the rail is off —
 // a held PYRO_FIRE_TEST (or PYRO_CONT_TEST's momentary ARM) would energize
 // the channel at the NEXT power-on, possibly while someone is handling the
-// rocket. Entry points refuse instead: the BLE cmd 35/36 handlers below
-// (with a 0xCE file-ops refusal frame back to the app), and the LoRa
-// stand-back pyro test's cmd 36 branch in processUplinkCommand (lands with
-// that feature; the LoRa path has no feedback channel, so it only logs).
+// rocket. Every entry point refuses instead: the BLE cmd 35/36 handlers
+// (with a 0xCE file-ops refusal frame back to the app) and the LoRa cmd
+// 35/36 branches in processUplinkCommand (log-only — the uplink has no
+// feedback channel, #285 blind fire-and-retry).
 struct QueuedCommand
 {
     uint8_t cmd;
@@ -3888,6 +3888,13 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         uint8_t ch = payload[0];
         if (ch < 1 || ch > 4) {
             ESP_LOGW("LORA", "UPLINK Pyro continuity test: invalid channel %u", ch);
+        } else if (!pwr_pin_on) {
+            // Rail-off refusal, same as the cmd 36 branch below: the #366
+            // queue would HOLD this and deliver the momentary ARM pulse at
+            // the next power-on. Like all LoRa refusals this can only log —
+            // there is no uplink feedback channel (#285 blind fire-and-retry).
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test CH%u refused: FC rail"
+                             " off (queued arm pulse would deliver at power-on)", ch);
         } else {
             setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
             ESP_LOGI("LORA", "UPLINK Pyro continuity test CH%u", ch);

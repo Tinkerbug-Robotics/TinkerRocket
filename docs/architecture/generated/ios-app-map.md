@@ -3,7 +3,7 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 27,238 lines across 70 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 27,246 lines across 70 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
@@ -78,7 +78,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 27 files, 14,104 lines
+## `Views/` — 27 files, 14,112 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
@@ -92,7 +92,7 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | States · Sampling Hero · Pieces · Direction Bars · Accel coverage tracker |
 | [FlightTrajectoryView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightTrajectoryView.swift) | 764 | `FlightMapView`, `FlightScene3DView`, `FlightTrajectoryView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Data Extraction · 2D Map View · 3D Scene View · Geo Conversion · ArcGIS Satellite Imagery · Scene Builder · Scene Helpers · Container View |
-| [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 667 | `PyroTestState`, `TickCounter`, `PyroTestView`, `SlowMoCameraManager`, `CameraPreviewView` |
+| [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 675 | `PyroTestState`, `TickCounter`, `PyroTestView`, `SlowMoCameraManager`, `CameraPreviewView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | State Machine · Tick Counter (ObservableObject so SwiftUI can observe it) · View · Top Bar · Center Display · Bottom Controls · Actions · Slow-Mo Camera Manager · Camera Preview (UIViewRepresentable) |
 | [FileManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FileManagerView.swift) | 626 | `FileManagerView`, `FilePageNavigator`, `FileRow`, `ShareHelper`, `FlightFileItemSource` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen) |
@@ -122,4 +122,4 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 70 files, 27,238 lines.
+Total: 70 files, 27,246 lines.
