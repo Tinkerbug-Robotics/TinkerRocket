@@ -493,6 +493,355 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:AONR21321"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at -12.7 16.24 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "AONR21321"
+				(at -12.7 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Footprint" "Footprints:TRANS_CSD25404Q3"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "MPN" "AONR21321"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Mfr" "Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "MF" "Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Description_1" "-20V, P ch NexFET MOSFET, single SON 3x3, 6.5mOhm 8-VSON-CLIP -55 to 150"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Package" "VSON-CLIP-8 Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Price" "None"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MP" "AONR21321"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Availability" "Warning"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Purchase-URL" "https://pricing.snapeda.com/search/part/CSD25404Q3/?ref=eda"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(symbol "AONR21321_0_0"
+				(rectangle
+					(start -12.7 15.24)
+					(end 6.985 2.54)
+					(stroke
+						(width 0.41)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -17.78 10.16 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 7.62 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -17.78 5.08 0)
+					(length 5.08)
+					(name "G"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 12.7 7.62 180)
+					(length 5.715)
+					(name "S"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				
+				(pin bidirectional line
+					(at 12.7 12.7 180)
+					(length 5.715)
+					(name "S"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 12.7 10.16 180)
+					(length 5.715)
+					(name "S"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "PAD"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:CUS10S30_H3F"
 			(body_styles demorgan)
 			(pin_names
@@ -5484,12 +5833,6 @@
 		(uuid "0ebe0e01-b2e8-480f-a624-890bd794ba78")
 	)
 	(junction
-		(at 215.265 110.49)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "0ecd5cea-cca7-4fa4-a787-864725bb7045")
-	)
-	(junction
 		(at 80.645 23.495)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -5734,12 +6077,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "d5b63e70-2171-4f4b-a474-b03327674cef")
-	)
-	(junction
-		(at 174.625 104.14)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "d5f5b7a0-9607-4610-8887-f98d7310464a")
 	)
 	(junction
 		(at 76.835 36.195)
@@ -6453,7 +6790,7 @@
 	)
 	(wire
 		(pts
-			(xy 215.265 105.41) (xy 215.265 113.03)
+			(xy 215.265 105.41) (xy 215.265 110.49)
 		)
 		(stroke
 			(width 0)
@@ -8711,109 +9048,9 @@
 			)
 		)
 	)
+
 	(symbol
-		(lib_id "Custom:CUS10S30_H3F")
-		(at 174.625 114.3 90)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "16c7af3c-93ec-4e45-8ee3-3a3ca43fb709")
-		(property "Reference" "CR2"
-			(at 177.8 109.22 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "CUS10S30_H3F"
-			(at 180.34 109.855 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Footprints:USC_TOS"
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "ESD clamp at the battery connector; K to VBAT_J8, upstream of Q11"
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CUS10S30,H3F"
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Toshiba"
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "69f92905-7479-40ee-bf6d-fd7956c7c4d5")
-		)
-		(pin "2"
-			(uuid "51dde331-8234-455d-9264-170e71ed17e8")
-		)
-		(instances
-			(project "rocket-computer-mini"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "CR2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Custom:CSD25404Q3")
+		(lib_id "Custom:AONR21321")
 		(at 202.565 118.11 0)
 		(unit 1)
 		(body_style 1)
@@ -8833,7 +9070,7 @@
 				)
 			)
 		)
-		(property "Value" "CSD25404Q3"
+		(property "Value" "AONR21321"
 			(at 195.58 101.6 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8843,7 +9080,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:TRANS_CSD25404Q3"
+		(property "Footprint" "Footprints:DFN-8-1EP_3x3mm_P0.65mm_EP1.55x2.4mm"
 			(at 202.565 118.11 0)
 			(hide yes)
 			(show_name no)
@@ -8854,7 +9091,7 @@
 				)
 			)
 		)
-		(property "Datasheet" ""
+		(property "Datasheet" "AONR21321"
 			(at 202.565 118.11 0)
 			(hide yes)
 			(show_name no)
@@ -8876,7 +9113,7 @@
 				)
 			)
 		)
-		(property "MPN" "CSD25404Q3"
+		(property "MPN" "AONR21321"
 			(at 202.565 118.11 0)
 			(hide yes)
 			(show_name no)
@@ -8887,7 +9124,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Texas Instruments"
+		(property "Mfr" "Alpha & Omega"
 			(at 202.565 118.11 0)
 			(hide yes)
 			(show_name no)
@@ -8899,28 +9136,31 @@
 			)
 		)
 		(pin "1"
-			(uuid "d7efe3ce-6ddc-4fc1-8c6c-b5164595f2a2")
+			(uuid "b4892d50-fb02-484b-8b5f-dbaeeec31b23")
 		)
 		(pin "2"
-			(uuid "3700f78a-1afc-44c5-b26d-ff73ce08378c")
+			(uuid "fc3f30ee-8aeb-4c23-82dd-fa0291970bf6")
 		)
 		(pin "3"
-			(uuid "f0ac620d-4cc2-422f-b637-32400adc29e8")
+			(uuid "fad6e2af-2684-46aa-bb13-58632ba3444f")
 		)
 		(pin "4"
-			(uuid "5d38ded9-8d19-4481-b364-eea7db8ccc79")
+			(uuid "682dd1fa-016f-403a-b3a8-f0af0835e4ec")
 		)
 		(pin "5"
-			(uuid "e6722ffc-9905-4899-aa70-07b02cbbc5b4")
+			(uuid "7f0d709c-1057-459e-a916-a480c8569482")
 		)
 		(pin "6"
-			(uuid "fea29422-4264-432b-8e84-795ba8327673")
+			(uuid "47dd06e6-be5d-426a-be12-73eeb24f94c1")
 		)
 		(pin "7"
-			(uuid "a0207078-01c5-477a-a2e1-f3c1298b61e6")
+			(uuid "55f15c39-f4f5-437a-aa7b-b5a1241cdf28")
 		)
 		(pin "8"
-			(uuid "1b4711cd-58cc-454b-a62b-6209aae03a74")
+			(uuid "0d711d68-8387-4ffa-ab22-f4b4da1c59a4")
+		)
+		(pin "9"
+			(uuid "dfe8cea8-b8b9-4f7f-8caf-b72205c0601e")
 		)
 		(instances
 			(project "rocket-computer-mini"
@@ -10161,84 +10401,7 @@
 			)
 		)
 	)
-	(symbol
-		(lib_id "power:GND")
-		(at 174.625 114.3 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "5146a657-b60a-414d-a5c6-b293658c448e")
-		(property "Reference" "#PWR0210"
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 175.895 118.11 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 174.625 114.3 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "98425462-afae-481a-80aa-349e1582db0e")
-		)
-		(instances
-			(project "rocket-computer-mini"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "#PWR0210")
-					(unit 1)
-				)
-			)
-		)
-	)
+
 	(symbol
 		(lib_id "power:GND")
 		(at 131.445 39.37 0)
