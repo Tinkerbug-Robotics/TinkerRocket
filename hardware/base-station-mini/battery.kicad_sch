@@ -5016,7 +5016,7 @@
 				)
 			)
 		)
-		(property "MPN" "WP710A10QBC/D"
+		(property "MPN" "XL-304UBC"
 			(at 153.67 71.755 0)
 			(hide yes)
 			(show_name no)
@@ -5027,7 +5027,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Kingbright"
+		(property "Mfr" "Xinglight"
 			(at 153.67 71.755 0)
 			(hide yes)
 			(show_name no)
@@ -5378,7 +5378,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Thermistor - 4316-103AT-2-ND"
+		(property "Value" "Thermistor 10k NTC B3435"
 			(at 93.345 76.1999 0)
 			(hide yes)
 			(show_name no)
@@ -5423,7 +5423,7 @@
 				)
 			)
 		)
-		(property "MPN" "103AT-2"
+		(property "MPN" "MF52B 103F3435-100"
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -5434,7 +5434,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Semitec"
+		(property "Mfr" "Nanjing Shiheng"
 			(at 90.17 74.93 0)
 			(hide yes)
 			(show_name no)
@@ -6119,7 +6119,7 @@
 				)
 			)
 		)
-		(property "Value" "USB4110GFA"
+		(property "Value" "TYPE-C-31-M-12"
 			(at 44.45 41.91 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6129,7 +6129,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:GCT_USB4110GFA"
+		(property "Footprint" "Footprints:USB_C_HRO_TYPE-C-31-M-12"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6163,7 +6163,7 @@
 				)
 			)
 		)
-		(property "MF" "GCT"
+		(property "MF" "Korean Hroparts"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6175,7 +6175,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Description_1" "USB-C (USB TYPE-C) USB 2.0 Receptacle Connector 24 (16+8 Dummy) Position Surface Mount, Right Angle; Through Hole"
+		(property "Description_1" "USB-C (USB TYPE-C) USB 2.0 Receptacle Connector, 16 Position, top-mount SMT signals + through-hole shell legs"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6211,7 +6211,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MP" "USB4110GFA"
+		(property "MP" "TYPE-C-31-M-12"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6235,7 +6235,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MPN" "USB4110-GF-A"
+		(property "MPN" "TYPE-C-31-M-12"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
@@ -6246,7 +6246,7 @@
 				)
 			)
 		)
-		(property "Mfr" "GCT"
+		(property "Mfr" "Korean Hroparts"
 			(at 44.45 54.61 0)
 			(hide yes)
 			(show_name no)
