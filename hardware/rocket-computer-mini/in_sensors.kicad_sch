@@ -5,6 +5,289 @@
 	(uuid "2d5f1879-3221-44ca-8371-80a893ecae6b")
 	(paper "A4")
 	(lib_symbols
+		(symbol "Custom:BMP581"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 0.508 10.414 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Value" "BMP581"
+				(at 0.508 7.874 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Footprint" "Footprints:BMP581_LGA-10_2x2"
+				(at 14.478 14.224 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+							(italic yes)
+					)
+				)
+			)
+			(property "Datasheet" "BMP581"
+				(at 10.668 16.764 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+							(italic yes)
+					)
+				)
+			)
+			(property "Description" "Barometric pressure sensor, SPI/I2C, LGA-10 2x2"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "BMP581 barometer Bosch"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "BMP581_LGA-10_2x2"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "BMP581_0_1"
+				(pin input line
+					(at -16.51 -7.62 0)
+					(length 7.62)
+					(name "SCK"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -16.51 -5.08 0)
+					(length 7.62)
+					(name "SDO"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -16.51 -2.54 0)
+					(length 7.62)
+					(name "SDI"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -16.51 0 0)
+					(length 7.62)
+					(name "CSB"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -16.51 2.54 0)
+					(length 7.62)
+					(name "VDD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -16.51 5.08 0)
+					(length 7.62)
+					(name "VDDIO"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output line
+					(at 15.24 -2.54 180)
+					(length 7.62)
+					(name "INT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 15.24 -7.62 180)
+					(length 7.62)
+					(name "VSS"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 15.24 -7.62 180)
+					(length 7.62)
+					(name "VSS"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 15.24 -7.62 180)
+					(length 7.62)
+					(name "VSS"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "BMP581_1_1"
+				(rectangle
+					(start -8.89 6.35)
+					(end 7.62 -8.89)
+					(stroke
+						(width 0)
+						(type solid)
+					)
+				(fill
+					(type background)
+				)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:BMP585"
 			(pin_names
 				(offset 0.254)
@@ -1131,6 +1414,397 @@
 							)
 						)
 					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Custom:QMC5883P"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 0.508 10.414 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Value" "QMC5883P"
+				(at 0.508 7.874 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.524 1.524)
+					)
+				)
+			)
+			(property "Footprint" "Footprints:QMC5883P_LGA-16_3x3"
+				(at 14.478 14.224 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+							(italic yes)
+					)
+				)
+			)
+			(property "Datasheet" "QMC5883P"
+				(at 10.668 16.764 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+							(italic yes)
+					)
+				)
+			)
+			(property "Description" "3-axis magnetometer, I2C 0x2C, LGA-16 3x3, C1 pin needs 4.7uF low-ESR"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "QMC5883P magnetometer QST"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_fp_filters" "QMC5883P_LGA-16_3x3"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "QMC5883P_0_1"
+				(pin bidirectional line
+					(at -19.05 -6.35 0)
+					(length 7.62)
+					(name "SCL"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -19.05 -3.81 0)
+					(length 7.62)
+					(name "SDA"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "16"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -19.05 3.81 0)
+					(length 7.62)
+					(name "VDD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin unspecified line
+					(at 20.32 1.27 180)
+					(length 7.62)
+					(name "C1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 20.32 -6.35 180)
+					(length 7.62)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 20.32 -3.81 180)
+					(length 7.62)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "11"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "12"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "13"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "14"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin no_connect line
+					(at 20.32 -1.27 180)
+					(length 7.62)
+					(name "NC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "15"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "QMC5883P_1_1"
+				(rectangle
+					(start -11.43 6.35)
+					(end 12.7 -8.89)
+					(stroke
+						(width 0)
+						(type solid)
+					)
+				(fill
+					(type background)
+				)
 				)
 			)
 			(embedded_fonts no)
@@ -3457,17 +4131,7 @@
 		)
 		(uuid "1c5b9aab-e966-454e-a4a4-12030600b618")
 	)
-	(wire
-		(pts
-			(xy 46.355 41.91) (xy 46.355 44.45)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2bb1d747-7705-4fa1-8d61-d459a91993f2")
-	)
-	(wire
+		(wire
 		(pts
 			(xy 252.095 45.72) (xy 264.795 45.72)
 		)
@@ -3547,17 +4211,7 @@
 		)
 		(uuid "725642d7-634d-4a52-8daf-e60bca452f4c")
 	)
-	(wire
-		(pts
-			(xy 46.355 44.45) (xy 46.355 46.99)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "7499e6a6-085a-47db-b070-0e23eeb6a031")
-	)
-	(wire
+		(wire
 		(pts
 			(xy 85.725 49.53) (xy 85.725 52.07)
 		)
@@ -4736,7 +5390,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "220 nF"
+		(property "Value" "4.7 uF"
 			(at 94.615 50.8 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -4747,7 +5401,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
 			(at 95.5802 52.07 0)
 			(hide yes)
 			(show_name no)
@@ -4780,7 +5434,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL05B224KO5NNNC"
+		(property "MPN" "CL10A475KO8NNNC"
 			(at 94.615 48.26 0)
 			(hide yes)
 			(show_name no)
@@ -6069,7 +6723,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:IIS2MDCTR")
+		(lib_id "Custom:QMC5883P")
 		(at 65.405 45.72 0)
 		(unit 1)
 		(body_style 1)
@@ -6090,7 +6744,7 @@
 				)
 			)
 		)
-		(property "Value" "IIS2MDCTR"
+		(property "Value" "QMC5883P"
 			(at 66.04 36.83 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -6100,7 +6754,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:LGA-12_2X2X0P7_STM"
+		(property "Footprint" "Footprints:QMC5883P_LGA-16_3x3"
 			(at 79.883 31.496 0)
 			(hide yes)
 			(show_name no)
@@ -6112,7 +6766,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.st.com/resource/en/datasheet/iis2mdc.pdf"
+		(property "Datasheet" "QMC5883P"
 			(at 76.073 28.956 0)
 			(hide yes)
 			(show_name no)
@@ -6135,7 +6789,7 @@
 				)
 			)
 		)
-		(property "MPN" "IIS2MDCTR"
+		(property "MPN" "QMC5883P"
 			(at 65.405 45.72 0)
 			(hide yes)
 			(show_name no)
@@ -6146,7 +6800,7 @@
 				)
 			)
 		)
-		(property "Mfr" "STMicro"
+		(property "Mfr" "QST"
 			(at 65.405 45.72 0)
 			(hide yes)
 			(show_name no)
@@ -6156,42 +6810,54 @@
 					(size 1.27 1.27)
 				)
 			)
-		)
-		(pin "2"
-			(uuid "157ab01d-e7b1-4cf2-9da6-627e2438fe0c")
-		)
-		(pin "5"
-			(uuid "9be9e837-21d8-4fe7-bb85-fc8c4df4f682")
-		)
-		(pin "11"
-			(uuid "54612ff7-5055-4dc2-a32b-593f6a83f340")
-		)
-		(pin "12"
-			(uuid "b1746c96-c6e4-4222-8b33-6f5c510d6fa4")
-		)
-		(pin "9"
-			(uuid "b8ce2559-a64c-4691-a4ef-c18cb7f991a3")
 		)
 		(pin "1"
-			(uuid "844ee167-48ee-4a40-ab54-c0cc5188ca54")
+			(uuid "d9e765ee-4e7d-4930-b9d2-680e24bc6182")
 		)
-		(pin "7"
-			(uuid "f074de7d-e24c-46d8-82f6-cf92120c0623")
+		(pin "16"
+			(uuid "5ebe270b-f36d-44fb-a37b-2e3223eea451")
 		)
-		(pin "6"
-			(uuid "5aa988a0-53ad-4ad3-91c6-f4a7c957a72f")
-		)
-		(pin "8"
-			(uuid "277f8e5e-0b53-4142-92b6-d15ca91c541d")
-		)
-		(pin "4"
-			(uuid "9b37d780-ac30-4a61-9aad-35c5156c2733")
-		)
-		(pin "3"
-			(uuid "f0753620-58fd-483a-858a-aa0099fac4f5")
+		(pin "2"
+			(uuid "d8a0a212-8473-4149-804e-2c9215a458b4")
 		)
 		(pin "10"
-			(uuid "b363cde5-3611-49bb-8cf7-05a4eae5fec7")
+			(uuid "9f4d9e28-85fb-4bf9-a588-e31bec9efcc4")
+		)
+		(pin "9"
+			(uuid "6546f041-8481-4f36-8e4f-be74f8746670")
+		)
+		(pin "11"
+			(uuid "d37e4aa6-32e2-45fa-8a60-4fe95c6cb9da")
+		)
+		(pin "3"
+			(uuid "c89bf4d2-bf52-4fc0-85d7-39b2068cf986")
+		)
+		(pin "4"
+			(uuid "68628a91-89ee-429b-a64f-d186f1779489")
+		)
+		(pin "5"
+			(uuid "8d5df16d-2bb1-42cb-bc58-402d14b3aa93")
+		)
+		(pin "6"
+			(uuid "c9729230-b2fa-462a-97d4-701c3d13c67f")
+		)
+		(pin "7"
+			(uuid "7ab35c1b-d981-438f-9bfe-c5653a705f65")
+		)
+		(pin "8"
+			(uuid "d4fec760-bafa-4c0e-af0c-52c6492ad8cb")
+		)
+		(pin "12"
+			(uuid "c271c6c7-b1ee-4b52-a5f5-258a18046082")
+		)
+		(pin "13"
+			(uuid "d6da283c-ea30-459e-9147-11b48bc9dd38")
+		)
+		(pin "14"
+			(uuid "85ea94d6-8fa8-413f-a651-5260344de4ce")
+		)
+		(pin "15"
+			(uuid "399c4bab-005c-40f8-a9d6-1187f85fea60")
 		)
 		(instances
 			(project "rocket-computer-mini"
@@ -6709,7 +7375,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 207.645 102.87 0)
 			(hide yes)
 			(show_name no)
@@ -7825,7 +8491,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:BMP585")
+		(lib_id "Custom:BMP581")
 		(at 66.04 102.235 0)
 		(unit 1)
 		(body_style 1)
@@ -7845,7 +8511,7 @@
 				)
 			)
 		)
-		(property "Value" "BMP585"
+		(property "Value" "BMP581"
 			(at 66.04 93.98 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7855,7 +8521,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Footprints:LGA9_BMP585_BOS"
+		(property "Footprint" "Footprints:BMP581_LGA-10_2x2"
 			(at 66.04 102.235 0)
 			(hide yes)
 			(show_name no)
@@ -7867,7 +8533,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "BMP585"
+		(property "Datasheet" "BMP581"
 			(at 66.04 102.235 0)
 			(hide yes)
 			(show_name no)
@@ -7890,7 +8556,7 @@
 				)
 			)
 		)
-		(property "MPN" "BMP585"
+		(property "MPN" "BMP581"
 			(at 66.04 102.235 0)
 			(hide yes)
 			(show_name no)
@@ -7912,32 +8578,35 @@
 				)
 			)
 		)
-		(pin "4"
-			(uuid "64351a29-bf9e-4d32-86e4-51cf78f1af51")
-		)
-		(pin "3"
-			(uuid "321cd775-60cc-492f-b1f0-73ec3fd1a08d")
-		)
-		(pin "6"
-			(uuid "ee23fec5-2518-4e27-96b0-43954dbe0a84")
+		(pin "2"
+			(uuid "034e189f-ec41-4a81-a95d-51a84d0481a3")
 		)
 		(pin "5"
-			(uuid "9a3f5ef9-4e61-4386-9dba-6ac7a1fe9645")
+			(uuid "3874d607-e5ef-4121-ac54-82f7784d35a8")
+		)
+		(pin "4"
+			(uuid "0d16814a-e4f0-4e9a-a8e7-9a7d7aeb5ce5")
+		)
+		(pin "6"
+			(uuid "a47a28c5-3c3b-4d86-8c37-45c827f614e7")
+		)
+		(pin "10"
+			(uuid "34f255cf-1911-402c-a5c1-11be53fb7637")
 		)
 		(pin "1"
-			(uuid "e090d005-5499-403e-8441-e5e47511cbe8")
-		)
-		(pin "2"
-			(uuid "8ad38b49-154d-4b8a-8da5-07689abb9d27")
-		)
-		(pin "9"
-			(uuid "9dfa2ab1-96bc-4a7b-b627-6c1e43e5253c")
-		)
-		(pin "8"
-			(uuid "4e66899e-3c30-4630-8d7c-c5f9e6aec12e")
+			(uuid "78ea9ab3-38aa-4541-a0bc-8dad52268b5c")
 		)
 		(pin "7"
-			(uuid "bd0a5463-c370-4add-a304-e6bc6f2259d1")
+			(uuid "d14933f8-e486-4c74-b26f-a3dd91575ace")
+		)
+		(pin "3"
+			(uuid "500d1194-8df6-4525-9863-4ee00926e9df")
+		)
+		(pin "8"
+			(uuid "7ab6277f-e899-4c62-b955-6760e95034be")
+		)
+		(pin "9"
+			(uuid "f5396435-f59e-449f-83db-ae56c609d07d")
 		)
 		(instances
 			(project "rocket-computer-mini"
@@ -8016,7 +8685,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 191.77 41.91 0)
 			(hide yes)
 			(show_name no)

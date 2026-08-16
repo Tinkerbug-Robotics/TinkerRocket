@@ -163,6 +163,354 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:AONR21321"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at -12.7 16.24 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Value" "AONR21321"
+				(at -12.7 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left bottom)
+				)
+			)
+			(property "Footprint" "Footprints:TRANS_CSD25404Q3"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "MPN" "AONR21321"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Mfr" "Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "MF" "Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Description_1" "-20V, P ch NexFET MOSFET, single SON 3x3, 6.5mOhm 8-VSON-CLIP -55 to 150"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Package" "VSON-CLIP-8 Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Price" "None"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "MP" "AONR21321"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Availability" "Warning"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(property "Purchase-URL" "https://pricing.snapeda.com/search/part/CSD25404Q3/?ref=eda"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify bottom)
+				)
+			)
+			(symbol "AONR21321_0_0"
+				(rectangle
+					(start -12.7 15.24)
+					(end 6.985 2.54)
+					(stroke
+						(width 0.41)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin bidirectional line
+					(at 12.7 12.7 180)
+					(length 5.715)
+					(name "S"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 12.7 10.16 180)
+					(length 5.715)
+					(name "S"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at 12.7 7.62 180)
+					(length 5.715)
+					(name "S"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin bidirectional line
+					(at -17.78 5.08 0)
+					(length 5.08)
+					(name "G"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 10.16 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 7.62 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "D"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "PAD"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:CSD25404Q3"
 			(pin_names
 				(offset 1.016)
@@ -483,355 +831,6 @@
 						)
 					)
 					(number "8"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "Custom:AONR21321"
-			(pin_names
-				(offset 1.016)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "U"
-				(at -12.7 16.24 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "Value" "AONR21321"
-				(at -12.7 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "Footprint" "Footprints:TRANS_CSD25404Q3"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" ""
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "MPN" "AONR21321"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Mfr" "Texas Instruments"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "MF" "Texas Instruments"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Description_1" "-20V, P ch NexFET MOSFET, single SON 3x3, 6.5mOhm 8-VSON-CLIP -55 to 150"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Package" "VSON-CLIP-8 Texas Instruments"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Price" "None"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "MP" "AONR21321"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Availability" "Warning"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(property "Purchase-URL" "https://pricing.snapeda.com/search/part/CSD25404Q3/?ref=eda"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify bottom)
-				)
-			)
-			(symbol "AONR21321_0_0"
-				(rectangle
-					(start -12.7 15.24)
-					(end 6.985 2.54)
-					(stroke
-						(width 0.41)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-				(pin input line
-					(at -17.78 10.16 0)
-					(length 5.08)
-					(name "D"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "6"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 12.7 0)
-					(length 5.08)
-					(name "D"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "5"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 7.62 0)
-					(length 5.08)
-					(name "D"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "7"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at -17.78 5.08 0)
-					(length 5.08)
-					(name "G"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "4"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at 12.7 7.62 180)
-					(length 5.715)
-					(name "S"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "3"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				
-				(pin bidirectional line
-					(at 12.7 12.7 180)
-					(length 5.715)
-					(name "S"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin bidirectional line
-					(at 12.7 10.16 180)
-					(length 5.715)
-					(name "S"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 12.7 0)
-					(length 5.08)
-					(name "D"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "8"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 12.7 0)
-					(length 5.08)
-					(name "PAD"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "9"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2504,6 +2503,258 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Custom:TPS259631DDAR"
+			(pin_names
+				(offset 0.254)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at 0 23 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "TPS259631DDAR"
+				(at 0 -13 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "Footprints:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm_ThermalVias"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" "TPS259631DDAR"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "eFuse 2.7-19V, adjustable ILIM/UVLO/OVLO, auto-retry, SO-8 PowerPAD. Guaranteed-positive UVLO hysteresis (+50mV pin). Pins: 1 GND, 2 dVdt, 3 EN/UVLO, 4 IN, 5 OUT, 6 nFLT, 7 ILM, 8 OVLO, 9 PAD(GND)."
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "TPS259631DDAR eFuse"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "TPS259631DDAR_0_1"
+				(rectangle
+					(start -12.7 -10.16)
+					(end 12.7 20.32)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(symbol "TPS259631DDAR_1_1"
+				(pin power_in line
+					(at 17.78 -7.62 180)
+					(length 5.08)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 17.78 2.54 180)
+					(length 5.08)
+					(name "dVdt"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 12.7 0)
+					(length 5.08)
+					(name "EN/UVLO"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -17.78 17.78 0)
+					(length 5.08)
+					(name "IN"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 17.78 17.78 180)
+					(length 5.08)
+					(name "OUT"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin open_collector line
+					(at 17.78 12.7 180)
+					(length 5.08)
+					(name "~{FLT}"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -17.78 -2.54 0)
+					(length 5.08)
+					(name "ILM"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 2.54 0)
+					(length 5.08)
+					(name "OVLO"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 17.78 -7.62 180)
+					(length 5.08)
+					(name "PAD"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Custom:TPS259824LNRGER"
 			(pin_names
 				(offset 1.016)
@@ -3210,257 +3461,6 @@
 				)
 			)
 			(embedded_fonts no)
-		)
-		(symbol "Custom:TPS259631DDAR"
-			(pin_names
-				(offset 0.254)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "U"
-				(at 0 23 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "TPS259631DDAR"
-				(at 0 -13 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" "Footprints:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.29x3mm_ThermalVias"
-				(at 0 0 0)
-				(hide yes)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Datasheet" "TPS259631DDAR"
-				(at 0 0 0)
-				(hide yes)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" "eFuse 2.7-19V, adjustable ILIM/UVLO/OVLO, auto-retry, SO-8 PowerPAD. Guaranteed-positive UVLO hysteresis (+50mV pin). Pins: 1 GND, 2 dVdt, 3 EN/UVLO, 4 IN, 5 OUT, 6 nFLT, 7 ILM, 8 OVLO, 9 PAD(GND)."
-				(at 0 0 0)
-				(hide yes)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "ki_keywords" "TPS259631DDAR eFuse"
-				(at 0 0 0)
-				(hide yes)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "TPS259631DDAR_0_1"
-				(rectangle
-					(start -12.7 -10.16)
-					(end 12.7 20.32)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-			)
-			(symbol "TPS259631DDAR_1_1"
-				(pin power_in line
-					(at -17.78 17.78 0)
-					(length 5.08)
-					(name "IN"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "4"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 12.7 0)
-					(length 5.08)
-					(name "EN/UVLO"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 2.54 0)
-					(length 5.08)
-					(name "OVLO"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "8"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at -17.78 -2.54 0)
-					(length 5.08)
-					(name "ILM"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "7"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 17.78 17.78 180)
-					(length 5.08)
-					(name "OUT"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "5"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin open_collector line
-					(at 17.78 12.7 180)
-					(length 5.08)
-					(name "~{FLT}"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "6"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 17.78 2.54 180)
-					(length 5.08)
-					(name "dVdt"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at 17.78 -7.62 180)
-					(length 5.08)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 17.78 -7.62 180)
-					(length 5.08)
-					(name "PAD"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "9"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
 		)
 		(symbol "Custom:TPS62152RGTR"
 			(pin_names
@@ -5980,7 +5980,7 @@
 		)
 		(uuid "d7af0b07-0e0d-41e0-bb35-b485f66a8afd")
 	)
-	(text "Battery Protection (Undervoltage and Short Circuit)"
+	(text "Battery Protection (Undervoltage and Overvoltage)"
 		(exclude_from_sim no)
 		(at 36.83 140.97 0)
 		(effects
@@ -6090,12 +6090,6 @@
 		(uuid "0f1ec92a-a002-4685-9a54-faf63bd3a91f")
 	)
 	(junction
-		(at 51.435 160.02)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "14134c07-e3b7-4150-a1e4-dcac0b461d13")
-	)
-	(junction
 		(at 102.87 128.905)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -6106,12 +6100,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "18147713-f1bf-45be-8703-e78acf2070b2")
-	)
-	(junction
-		(at 55.88 187.325)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "191bbc69-c6a8-4e0a-b9bf-0b168b22005a")
 	)
 	(junction
 		(at 67.31 97.155)
@@ -6144,10 +6132,22 @@
 		(uuid "308c34e0-ae17-445c-bc8a-054c4b5a11d0")
 	)
 	(junction
+		(at 51.435 173.99)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "35438f6c-2214-44e3-bce1-e42b7dc1ee5a")
+	)
+	(junction
 		(at 102.87 108.585)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "4e8dfc02-7028-4560-bad3-d054a8bf3190")
+	)
+	(junction
+		(at 51.435 160.02)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4e9cdce1-a53f-4174-b765-e14f1238c885")
 	)
 	(junction
 		(at 61.595 64.135)
@@ -6202,12 +6202,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "8662f1cb-0e52-411d-bfd7-480bf9c8aad1")
-	)
-	(junction
-		(at 51.435 187.325)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "88e8baf3-0e6d-4dc2-9204-63b0400edc18")
 	)
 	(junction
 		(at 58.42 96.52)
@@ -6318,6 +6312,12 @@
 		(uuid "ddaffdde-e0b3-47a8-bc20-af0ac3293b2c")
 	)
 	(junction
+		(at 51.435 187.325)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "dfa26c26-daa2-48fa-9362-0649ae1a6c7e")
+	)
+	(junction
 		(at 212.09 55.88)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -6371,16 +6371,6 @@
 	)
 	(wire
 		(pts
-			(xy 128.905 187.325) (xy 119.38 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "024a8299-9c29-4b1f-a6a9-5f1719275c4b")
-	)
-	(wire
-		(pts
 			(xy 231.775 58.42) (xy 219.075 58.42)
 		)
 		(stroke
@@ -6401,6 +6391,16 @@
 	)
 	(wire
 		(pts
+			(xy 51.435 175.26) (xy 51.435 173.99)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0636996d-e7d2-49e0-8361-6a635581d955")
+	)
+	(wire
+		(pts
 			(xy 189.865 33.02) (xy 189.865 31.115)
 		)
 		(stroke
@@ -6408,16 +6408,6 @@
 			(type default)
 		)
 		(uuid "0678b6fb-df4e-42a2-999e-782a0f53b4cd")
-	)
-	(wire
-		(pts
-			(xy 55.88 167.64) (xy 55.88 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "06e39ceb-7c23-46f1-9709-5d93f0c3490f")
 	)
 	(wire
 		(pts
@@ -6541,16 +6531,6 @@
 	)
 	(wire
 		(pts
-			(xy 55.88 187.325) (xy 63.5 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2781fc65-ff99-44f8-98ca-432a48e7f388")
-	)
-	(wire
-		(pts
 			(xy 98.425 53.34) (xy 76.835 53.34)
 		)
 		(stroke
@@ -6591,16 +6571,6 @@
 	)
 	(wire
 		(pts
-			(xy 68.58 187.325) (xy 74.93 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2de77e78-bd7f-40f0-a63c-ff662d81b98a")
-	)
-	(wire
-		(pts
 			(xy 253.365 142.24) (xy 248.92 142.24)
 		)
 		(stroke
@@ -6628,6 +6598,16 @@
 			(type default)
 		)
 		(uuid "358078f1-f916-4156-b5ba-bebf55dbecbf")
+	)
+	(wire
+		(pts
+			(xy 51.435 170.18) (xy 51.435 173.99)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "36d12fc8-c6a0-466d-ba1c-f118ff7f41d5")
 	)
 	(wire
 		(pts
@@ -6801,7 +6781,7 @@
 	)
 	(wire
 		(pts
-			(xy 51.435 187.325) (xy 55.88 187.325)
+			(xy 51.435 187.325) (xy 74.93 187.325)
 		)
 		(stroke
 			(width 0)
@@ -6941,7 +6921,7 @@
 	)
 	(wire
 		(pts
-			(xy 119.38 187.325) (xy 112.395 187.325)
+			(xy 112.395 187.325) (xy 128.905 187.325)
 		)
 		(stroke
 			(width 0)
@@ -7041,7 +7021,7 @@
 	)
 	(wire
 		(pts
-			(xy 128.905 187.325) (xy 137.16 187.325)
+			(xy 128.905 187.325) (xy 145.415 187.325)
 		)
 		(stroke
 			(width 0)
@@ -7088,16 +7068,6 @@
 			(type default)
 		)
 		(uuid "7ad74735-ffa0-4c11-bafa-e7fa480ff840")
-	)
-	(wire
-		(pts
-			(xy 63.5 187.325) (xy 68.58 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "7b989f1d-e5ce-4c26-87e0-b133cec38e10")
 	)
 	(wire
 		(pts
@@ -7191,16 +7161,6 @@
 	)
 	(wire
 		(pts
-			(xy 145.415 187.325) (xy 137.16 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "923521a1-19cd-480b-96d6-6648b90324fe")
-	)
-	(wire
-		(pts
 			(xy 163.195 33.02) (xy 167.005 33.02)
 		)
 		(stroke
@@ -7228,16 +7188,6 @@
 			(type default)
 		)
 		(uuid "9cc55c2d-49d9-43dc-bed0-c9d986f9d96e")
-	)
-	(wire
-		(pts
-			(xy 112.395 187.325) (xy 76.835 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a378c6f5-922d-4f04-ad48-a206213a8b42")
 	)
 	(wire
 		(pts
@@ -7371,6 +7321,16 @@
 	)
 	(wire
 		(pts
+			(xy 63.5 167.64) (xy 76.835 167.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b62b8207-91c8-4d76-b22a-96069a685576")
+	)
+	(wire
+		(pts
 			(xy 102.87 118.745) (xy 102.87 122.555)
 		)
 		(stroke
@@ -7431,16 +7391,6 @@
 	)
 	(wire
 		(pts
-			(xy 184.785 104.14) (xy 184.785 105.41)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "bfad6612-6a32-4dfa-a21d-3b0798832cec")
-	)
-	(wire
-		(pts
 			(xy 27.94 33.655) (xy 20.955 33.655)
 		)
 		(stroke
@@ -7451,7 +7401,7 @@
 	)
 	(wire
 		(pts
-			(xy 76.835 187.325) (xy 74.93 187.325)
+			(xy 74.93 187.325) (xy 112.395 187.325)
 		)
 		(stroke
 			(width 0)
@@ -7481,7 +7431,7 @@
 	)
 	(wire
 		(pts
-			(xy 174.625 103.505) (xy 174.625 104.14)
+			(xy 184.785 103.505) (xy 184.785 105.41)
 		)
 		(stroke
 			(width 0)
@@ -7508,6 +7458,16 @@
 			(type default)
 		)
 		(uuid "d43c146d-b60c-436a-b5f9-ecd32af93fb1")
+	)
+	(wire
+		(pts
+			(xy 51.435 182.88) (xy 51.435 187.325)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d6089221-27a3-4f91-afaf-157d7f96e453")
 	)
 	(wire
 		(pts
@@ -7591,16 +7551,6 @@
 	)
 	(wire
 		(pts
-			(xy 174.625 104.14) (xy 184.785 104.14)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e65298fa-40b2-4787-9828-adf510f824db")
-	)
-	(wire
-		(pts
 			(xy 137.795 59.69) (xy 133.985 59.69)
 		)
 		(stroke
@@ -7608,16 +7558,6 @@
 			(type default)
 		)
 		(uuid "e852d327-9be0-42b3-9dca-29575fc5a9f7")
-	)
-	(wire
-		(pts
-			(xy 51.435 160.02) (xy 51.435 162.56)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e9468a86-a110-4734-819a-9923c733d9f7")
 	)
 	(wire
 		(pts
@@ -7631,6 +7571,16 @@
 	)
 	(wire
 		(pts
+			(xy 51.435 173.99) (xy 63.5 173.99)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ef65da8e-17e3-4ad1-b1cd-abfbdc08f98a")
+	)
+	(wire
+		(pts
 			(xy 207.645 57.15) (xy 212.09 57.15)
 		)
 		(stroke
@@ -7638,6 +7588,16 @@
 			(type default)
 		)
 		(uuid "f1bc5ed8-ffd0-47d6-87cb-8a545cef7bd3")
+	)
+	(wire
+		(pts
+			(xy 63.5 173.99) (xy 63.5 167.64)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f22fdecf-b929-4c2b-8e5c-2848602a32e0")
 	)
 	(wire
 		(pts
@@ -7701,6 +7661,16 @@
 	)
 	(wire
 		(pts
+			(xy 51.435 160.02) (xy 51.435 162.56)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fb11cb14-8d2e-4d7d-8e0e-72d503cb3b7f")
+	)
+	(wire
+		(pts
 			(xy 144.145 66.675) (xy 137.795 66.675)
 		)
 		(stroke
@@ -7728,62 +7698,6 @@
 			(type default)
 		)
 		(uuid "ff934124-b9e9-4bad-bfa3-1cc40a07a67d")
-	)
-	(wire
-		(pts
-			(xy 51.435 170.18) (xy 51.435 172.72)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "576639d9-8f72-40a4-8367-19634cead164")
-	)
-	(wire
-		(pts
-			(xy 51.435 180.34) (xy 51.435 187.325)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d6089221-27a3-4f91-afaf-157d7f96e453")
-	)
-	(wire
-		(pts
-			(xy 51.435 170.18) (xy 63.5 170.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "53e32c99-61e2-4cb0-ac23-777ac64a751d")
-	)
-	(wire
-		(pts
-			(xy 63.5 170.18) (xy 63.5 167.64)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f22fdecf-b929-4c2b-8e5c-2848602a32e0")
-	)
-	(wire
-		(pts
-			(xy 63.5 167.64) (xy 76.835 167.64)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "b62b8207-91c8-4d76-b22a-96069a685576")
-	)
-	(junction
-		(at 51.435 170.18)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "bbbe4da4-a172-463b-9987-30db29dfb113")
 	)
 	(global_label "SEN_SDA"
 		(shape input)
@@ -8219,7 +8133,7 @@
 	)
 	(global_label "VBAT_J8"
 		(shape input)
-		(at 174.625 103.505 90)
+		(at 184.785 103.505 90)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -8229,7 +8143,7 @@
 		)
 		(uuid "e98c5496-306d-4bfd-a987-c951abcc308d")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 174.625 92.9603 90)
+			(at 184.785 92.9603 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9225,7 +9139,6 @@
 			)
 		)
 	)
-
 	(symbol
 		(lib_id "Custom:AONR21321")
 		(at 202.565 118.11 0)
@@ -9444,6 +9357,107 @@
 			(project "rocket-computer-mini"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "R51")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 51.435 179.07 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "23a335c0-a681-46ce-ac21-5e1f31b07e5d")
+		(property "Reference" "R85"
+			(at 46.99 179.07 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "13.7 k"
+			(at 48.895 179.07 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 50.419 178.816 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 51.435 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 51.435 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RT0402BRD0713K7L"
+			(at 51.435 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 51.435 179.07 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "60bda04d-3b12-4172-90be-690517d918ec")
+		)
+		(pin "2"
+			(uuid "3c18c0bf-b7e1-4ac8-b73a-476a2d20ee02")
+		)
+		(instances
+			(project "rocket-computer-mini"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "R85")
 					(unit 1)
 				)
 			)
@@ -9952,7 +9966,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 118.11 49.53 0)
 			(hide yes)
 			(show_name no)
@@ -10475,8 +10489,6 @@
 			)
 		)
 	)
-
-
 	(symbol
 		(lib_id "power:GND")
 		(at 131.445 39.37 0)
@@ -10555,7 +10567,6 @@
 			)
 		)
 	)
-
 	(symbol
 		(lib_id "Device:R_US")
 		(at 149.225 97.79 0)
@@ -11432,107 +11443,6 @@
 			(project "rocket-computer-mini"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
 					(reference "R45")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 51.435 176.53 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "23a335c0-a681-46ce-ac21-5e1f31b07e5d")
-		(property "Reference" "R85"
-			(at 46.99 166.37 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "13.7 k"
-			(at 48.895 166.37 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 50.419 176.276 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 51.435 176.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 51.435 176.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RT0402BRD0713K7L"
-			(at 51.435 176.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 51.435 176.53 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "60bda04d-3b12-4172-90be-690517d918ec")
-		)
-		(pin "2"
-			(uuid "3c18c0bf-b7e1-4ac8-b73a-476a2d20ee02")
-		)
-		(instances
-			(project "rocket-computer-mini"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
-					(reference "R85")
 					(unit 1)
 				)
 			)
@@ -12560,7 +12470,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 173.99 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -13837,7 +13747,6 @@
 			)
 		)
 	)
-
 	(symbol
 		(lib_id "Device:R_US")
 		(at 212.09 50.8 180)
@@ -13904,7 +13813,7 @@
 				)
 			)
 		)
-		(property "MPN" "CSSH0805FT2L00"
+		(property "MPN" "PA0805FRF870R002L"
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -13915,7 +13824,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Stackpole"
+		(property "Mfr" "YAGEO"
 			(at 212.09 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -14007,7 +13916,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 212.725 130.81 0)
 			(hide yes)
 			(show_name no)
@@ -16542,7 +16451,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 51.435 100.33 0)
 			(hide yes)
 			(show_name no)
@@ -16953,7 +16862,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 180.975 36.83 0)
 			(hide yes)
 			(show_name no)
@@ -17248,6 +17157,84 @@
 		)
 	)
 	(symbol
+		(lib_id "power:GND")
+		(at 55.88 167.64 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "f6b895f2-e2cb-4515-91fd-13df691195ac")
+		(property "Reference" "#PWR0103"
+			(at 55.88 173.99 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 57.785 172.085 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 55.88 167.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 55.88 167.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 55.88 167.64 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "edeb026f-5b1d-4340-a5b7-ceb9edd528c2")
+		)
+		(instances
+			(project "rocket-computer-mini"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR0103")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C")
 		(at 36.83 156.21 0)
 		(unit 1)
@@ -17517,7 +17504,7 @@
 				)
 			)
 		)
-		(property "MPN" "CL21A226MOQNNNE"
+		(property "MPN" "CL21A226KOQNNNE"
 			(at 167.005 36.83 0)
 			(hide yes)
 			(show_name no)

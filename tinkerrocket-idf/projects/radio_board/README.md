@@ -138,7 +138,8 @@ these constants and nothing else.
 
 ### Modem behavior
 
-- Boots listening on defaults (915 MHz / SF10 / BW125) so a bench modem is
+- Boots listening on defaults (915 MHz / SF8 / BW250, the fleet operating
+  point and a legal LLCC68 pair) so a bench modem is
   immediately visible; the host's `SET_CONFIG` replaces this. The host owns
   config — the modem has **no NVS**.
 - Half-duplex policy matches `TR_LoRa_Comms`: auto-return to RX after every
@@ -190,7 +191,7 @@ follows the pull means nothing is driving the pin.
 | `radio probe: BUSY is FLOATING` | Nothing drives U14 pad 11. Module unpowered, dead, or open joints. **Measure +3V3 at U14 pad 1 first.** This is the expected signature of reverse-polarity damage. |
 | `radio probe: BUSY driven but STUCK HIGH past 50 ms` | Powered and driving, but never finished its internal boot — damaged die, or a bad NRST/SPI joint. |
 | `radio init FAILED (RadioLib <code>)` | The RadioLib code narrows it further: `-2` is chip-not-found (SPI silent), the `-70x` family are SPI command failures. |
-| `radio up, listening at 915.0 MHz SF10` | Radio is good; move on. |
+| `radio up, listening at 915.0 MHz SF8` | Radio is good; move on. |
 
 Two LED blinks at boot say the S3 itself is running — the only such sign if
 the board is powered from J6 with no USB attached. (D6 is a hardwired power
