@@ -3949,6 +3949,13 @@ static void loop_fc()
                         : (cont_state[i] ? SH_OK : SH_BAD); // continuity present / none
                 }
                 sh = shSet(sh, SH_PYRO_SHIFT[i], pst);
+
+                // Measured continuity, NOT config-gated — the ground-test
+                // answer the gated bits above cannot give for a channel that
+                // isn't armed for this flight (OC twin has the same block).
+                sh = shSet(sh, SH_PYRO_MEAS_SHIFT[i],
+                           !cont_known[i] ? SH_NA
+                                          : (cont_state[i] ? SH_OK : SH_BAD));
             }
 
             // #557: GNSS-absent degraded-flight verdict (distinct from the

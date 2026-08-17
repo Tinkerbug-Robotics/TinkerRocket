@@ -1416,7 +1416,26 @@ static constexpr uint8_t SH_STORAGE_SHIFT = 20;
 // the existing sensor_health carrier to the app on BOTH the direct-BLE and
 // LoRa/BS-relay paths (BLE JSON key "h") — no new wire field needed.
 static constexpr uint8_t SH_GNSS_ABSENT_SHIFT = 22;
-// bits 24-31 reserved
+// Per pyro channel, MEASURED continuity — reported for EVERY channel whether or
+// not it is configured for flight.  Distinct from SH_PYRO_SHIFT above, which is
+// deliberately config-gated because it feeds the operator's go/no-go rollup.
+//
+// Why both exist (bench 2026-08-17): the direct-BLE pyro_status CONT bit has no
+// config gate, but the scorecard's did — so a ground test on an unconfigured
+// channel read CONT over Bluetooth and "no reading" over LoRa, and the LoRa
+// stand-back test (#803) could never confirm a charge on a channel that wasn't
+// already armed for flight.  The gate cannot simply be dropped: the app treats
+// ANY SH_BAD pyro as a hard "Do not fly" (TelemetryData.flightReadiness), so a
+// bench-tested empty channel would ground the rocket.  Hence a second field
+// that answers "what did the wire actually measure", leaving the first to
+// answer "is this flight's deployment train ready".
+//
+// SH_NA = never tested this session (no reading to report); SH_OK = continuity
+// present; SH_BAD = tested, open.  SH_DEGRADED is unused here — "untested" is
+// SH_NA, since an unconfigured channel has nothing to be degraded about.
+// All-NA across the four means the rocket predates this field: consumers fall
+// back to SH_PYRO_SHIFT.
+static constexpr uint8_t SH_PYRO_MEAS_SHIFT[4] = { 24, 26, 28, 30 };
 static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st) {
     return (field & ~(uint32_t)(0x3u << shift)) | ((uint32_t)st << shift);
 }
