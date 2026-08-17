@@ -95,7 +95,10 @@ struct board_pins
     static constexpr int I2S_DOUT_PIN  = 23;
     static constexpr int I2S_FSYNC_PIN = 17;
 
-    // ### Power gates (V8-only topology; -1 = rail not FC-switched) ###
+    // ### Power gates (V8+ topology; -1 = rail not FC-switched) ###
     static constexpr int GPS_ACT_PIN = -1;
     static constexpr int SERVO_ACT_PIN = -1;
+
+    // ### Power latch (V9+ only; -1 = the FC cannot hold its own rail) ###
+    static constexpr int PWR_HOLD_PIN = -1;
 };
