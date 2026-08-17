@@ -288,19 +288,29 @@ public object Commands {
         frame(BleCommandId.CAMERA_CONFIG) { u8(cameraType) }
 
     /**
-     * cmd 1 with an explicit desired-state byte — ONLY used as the inner
-     * frame of a BS relay (#390): the direct link sends bare cmd 1
-     * ([bare]).  desired 1 = start recording, 0 = stop.
+     * cmd 1 with an explicit desired-state byte — used both as the inner
+     * frame of a BS relay (#390) and on the direct link: a blind toggle
+     * inverts whenever the app and the OC disagree about the current state.
+     * desired 1 = start recording, 0 = stop.  Firmware treats a bare cmd 1
+     * as a legacy toggle.
      */
     public fun cameraToggleWithState(recordOn: Boolean): ByteArray =
         frame(BleCommandId.CAMERA_TOGGLE) { bool(recordOn) }
 
-    /**
-     * cmd 23 with an explicit desired-state byte — ONLY used as the inner
-     * frame of a BS relay (#390); the direct link sends bare cmd 23.
-     */
+    /** cmd 23 with an explicit desired-state byte — same rationale and
+     *  legacy fallback as [cameraToggleWithState]. */
     public fun toggleLoggingWithState(loggingOn: Boolean): ByteArray =
         frame(BleCommandId.TOGGLE_LOGGING) { bool(loggingOn) }
+
+    /**
+     * cmd 8 with an explicit desired-state byte — 1 = rail on, 0 = rail off.
+     * Same rationale as [cameraToggleWithState], and the stakes are higher:
+     * a blind toggle that inverts cuts the flight computer's rail when the
+     * operator asked to power it up.  Firmware treats a bare cmd 8 as a
+     * legacy toggle.
+     */
+    public fun powerState(railOn: Boolean): ByteArray =
+        frame(BleCommandId.POWER_TOGGLE) { bool(railOn) }
 
     /** cmd 64 — IMU mounting orientation: 0xFF = auto (pad-gravity detect),
      *  0..23 = manual board→rocket code. `[setting u8]`. */

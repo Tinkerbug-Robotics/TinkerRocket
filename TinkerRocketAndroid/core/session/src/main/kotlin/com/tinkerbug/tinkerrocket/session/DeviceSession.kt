@@ -881,15 +881,23 @@ public class DeviceSession(
         scope.launch { writeCommand(frame) }
     }
 
-    /** Blind cmd-8 toggle — UI must gate on [hasReceivedTelemetry] (#377). */
-    public fun sendPowerToggle(): Unit = sendBareCommand(BleCommandId.POWER_TOGGLE)
+    /**
+     * cmd 8 with the desired rail state.  Explicit rather than a blind
+     * toggle: a desync would otherwise cut the FC's rail when the operator
+     * asked to power it up.  The UI still gates on [hasReceivedTelemetry]
+     * (#377) so [railOn] is derived from a state we have actually seen.
+     */
+    public fun sendPowerState(railOn: Boolean): Unit =
+        sendCommandFrame(Commands.powerState(railOn))
 
     /**
      * #159 power-on press: lights the busy state and arms a 3 min watchdog
-     * before sending the toggle.  Cleared by the first pwr_pin_on telemetry
-     * frame, by the watchdog (a genuinely-dropped command), or by disconnect.
-     * 3 min because the OC can block its loop up to ~90 s flushing the
-     * flight log before acting on cmd 8 — the watchdog must outlast that.
+     * before commanding the rail ON.  Cleared by the first pwr_pin_on
+     * telemetry frame, by the watchdog (a genuinely-dropped command), or by
+     * disconnect.  3 min because the OC can block its loop up to ~90 s
+     * flushing the flight log before acting on cmd 8 — the watchdog must
+     * outlast that.  The command carries the desired state, so a repeat
+     * while busy is now idempotent rather than powering the rocket back off.
      */
     public fun beginPowerOn() {
         scope.launch {
@@ -899,7 +907,7 @@ public class DeviceSession(
                 delay(POWER_ON_WATCHDOG_MS)
                 clearPoweringOnNow()
             }
-            writeCommand(Commands.bare(BleCommandId.POWER_TOGGLE))
+            writeCommand(Commands.powerState(railOn = true))
         }
     }
 

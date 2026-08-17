@@ -698,7 +698,7 @@ struct ConnectedDashboardView: View {
 
             if !device.isBaseStation {
                 Button {
-                    device.sendPowerToggle()
+                    device.sendPowerState(railOn: false)
                 } label: {
                     HStack {
                         Image(systemName: "bolt.slash.fill")

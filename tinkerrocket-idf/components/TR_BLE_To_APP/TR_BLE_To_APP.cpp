@@ -750,8 +750,26 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     }
     else if (cmd == 8)
     {
-        // Command 8: Toggle power rail (PWR_PIN)
-        ESP_LOGI(BLE_TAG, "Power toggle");
+        // Command 8: power rail (PWR_PIN).  [desired u8] (1 = on, 0 = off);
+        // bare = legacy toggle.  This branch matches ANY length, so it has to
+        // capture the payload itself — it shadows the generic handler below,
+        // and without this the state byte was silently dropped and the rail
+        // stayed a blind toggle no matter what the app sent.
+        if (length > 1)
+        {
+            payload_len_local = length - 1;
+            if (payload_len_local > sizeof(payload_local))
+            {
+                payload_len_local = sizeof(payload_local);
+            }
+            memcpy(payload_local, data + 1, payload_len_local);
+            have_payload = true;
+            ESP_LOGI(BLE_TAG, "Power %s", data[1] ? "ON" : "OFF");
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "Power toggle (legacy, no state byte)");
+        }
     }
     else if (cmd == 9 && length >= 8)
     {

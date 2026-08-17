@@ -409,17 +409,22 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         print("Sent command: \(command)")
     }
 
-    func sendPowerToggle() {
-        sendCommand(8)
+    /// cmd 8 with the desired rail state.  Explicit rather than a blind
+    /// toggle: a desync would otherwise cut the FC's rail when the operator
+    /// asked to power it up.  The UI gates the button on having received
+    /// telemetry (#377), so the state passed here is one we have seen.
+    /// Firmware treats a bare cmd 8 as a legacy toggle.
+    func sendPowerState(railOn: Bool) {
+        sendRawCommand(8, payload: Data([railOn ? 1 : 0]))
     }
 
     /// Power-on press handler (#159).  Lights the button's busy state and
-    /// arms a watchdog before sending the toggle.  `poweringOn` clears on the
-    /// first `pwr_pin_on` telemetry frame (see telemetry decode) or on
+    /// arms a watchdog before commanding the rail ON.  `poweringOn` clears on
+    /// the first `pwr_pin_on` telemetry frame (see telemetry decode) or on
     /// disconnect; the watchdog is a backstop so a silently-dropped command
-    /// can't leave the button spinning forever.  Cmd 8 is a toggle, so the
-    /// button stays disabled while busy to prevent a double-press from
-    /// powering the rocket back off.
+    /// can't leave the button spinning forever.  The command now carries the
+    /// desired state, so a double-press is idempotent rather than powering
+    /// the rocket back off; the button still disables while busy.
     func beginPowerOn() {
         poweringOn = true
         poweringOnTimer?.invalidate()
@@ -431,7 +436,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         poweringOnTimer = Timer.scheduledTimer(withTimeInterval: 180.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.clearPoweringOn() }
         }
-        sendPowerToggle()
+        sendPowerState(railOn: true)
     }
 
     func clearPoweringOn() {

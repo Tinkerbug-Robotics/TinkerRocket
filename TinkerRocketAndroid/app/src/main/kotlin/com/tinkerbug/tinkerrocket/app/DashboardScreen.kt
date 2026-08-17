@@ -215,7 +215,7 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text("ON")
-                        Button(onClick = { session.sendPowerToggle() }) { Text("Power off") }
+                        Button(onClick = { session.sendPowerState(railOn = false) }) { Text("Power off") }
                     }
                     else -> Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
