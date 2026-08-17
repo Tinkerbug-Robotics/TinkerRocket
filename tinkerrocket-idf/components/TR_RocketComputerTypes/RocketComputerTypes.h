@@ -2297,19 +2297,24 @@ typedef struct __attribute__((packed)) {
 } GuidancePointData;
 static_assert(sizeof(GuidancePointData) == 20, "GuidancePointData must be 20 bytes");
 
-// App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
-// driven by servo i:
-//   deflection_i = tilt_i·(pitch·cos(az_i) + yaw·sin(az_i)) + roll_i·roll
+// App-configurable fin→servo mix.  azimuth_deg[i] is the RING-POSITION azimuth of
+// the fin driven by servo i (0 = top slot, 90, 180, 270 — exactly what the app's
+// ring GUI shows).  A fin's tangential lift is perpendicular to its radial arm
+// (top/bottom fins are yaw rudders, right/left fins are pitch elevators), so the FC
+// maps position → force internally:
+//   deflection_i = tilt_i·(pitch·sin(az_i) − yaw·cos(az_i)) + roll_i·roll
+// (Earlier firmware used cos/sin here — treating the position azimuth as the force
+// azimuth — which swapped the pitch/yaw fin pairs; see TR_ControlMixer::setFinLayout.)
 // tilt_i = -1 if bit i of reverse_mask is set (flips that fin's pitch/yaw response);
 // roll_i = -1 if bit i of roll_reverse_mask is set (flips its roll response).  The two
 // are INDEPENDENT: a fin's tilt and roll directions don't always share a sign in real
 // hardware (e.g. a linkage that mirrors pitch/yaw but not the roll moment), so one bit
-// can't express both.  Both masks 0 + azimuths {0,90,180,270} reproduce the legacy
-// hardcoded "+" mix (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The
-// app derives all of this from the ring GUI.
+// can't express both.  Both masks 0 + azimuths {0,90,180,270} give the "+" mix
+// (servo 0 = top/+yaw, 1 = right/+pitch, 2 = bottom, 3 = left).  The app derives all
+// of this from the ring GUI.
 typedef struct __attribute__((packed))
 {
-    float   azimuth_deg[4];     // per-servo fin control azimuth (deg)
+    float   azimuth_deg[4];     // per-servo fin ring-position azimuth (deg)
     uint8_t reverse_mask;       // bit i ⇒ negate servo i pitch/yaw (tilt) response
     uint8_t roll_reverse_mask;  // bit i ⇒ negate servo i roll response (independent)
 } FinConfigData;

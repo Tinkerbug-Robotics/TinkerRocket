@@ -31,8 +31,10 @@ struct FinLayoutView: View {
 
     @State private var selectedSlot: Int = 0
 
-    /// Control azimuth (deg) of each ring slot — the firmware convention
-    /// (θ=0 top/+pitch, 90 +yaw, …); the nose-down view is rendering only.
+    /// Fin-position azimuth (deg) of each ring slot in the firmware convention
+    /// (θ=0 = +Z/top slot, 90 = −Y slot, … — positions, NOT force directions:
+    /// the FC maps position→tangential force itself, sin/cos in
+    /// TR_ControlMixer::setFinLayout); the nose-down view is rendering only.
     private var slotAzimuths: [Double] {
         ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]
     }
@@ -226,10 +228,14 @@ struct FinLayoutView: View {
         let servo = servoAtSlot.indices.contains(slot) ? servoAtSlot[slot] : slot + 1
         let tilt = (reverse.indices.contains(servo - 1) && reverse[servo - 1]) ? -1.0 : 1.0
         let rollS = (rollReverse.indices.contains(servo - 1) && rollReverse[servo - 1]) ? -1.0 : 1.0
-        let c = cos(th) * tilt, s = sin(th) * tilt
+        // Position→force: a fin's tangential lift is perpendicular to its
+        // radial arm, so pitch = sin(az), yaw = -cos(az) — matches
+        // TR_ControlMixer::setFinLayout (top/bottom fins are yaw rudders,
+        // side fins are pitch elevators).
+        let p = sin(th) * tilt, y = -cos(th) * tilt
         var parts: [String] = []
-        if abs(c) > 0.05 { parts.append("pitch \(c > 0 ? "+" : "−")") }
-        if abs(s) > 0.05 { parts.append("yaw \(s > 0 ? "+" : "−")") }
+        if abs(p) > 0.05 { parts.append("pitch \(p > 0 ? "+" : "−")") }
+        if abs(y) > 0.05 { parts.append("yaw \(y > 0 ? "+" : "−")") }
         parts.append("roll \(rollS > 0 ? "+" : "−")")
         return parts.joined(separator: " · ")
     }

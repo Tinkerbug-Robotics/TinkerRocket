@@ -33,22 +33,23 @@ def test_pure_pitch_mixing(mixer):
     mixer.update(10.0, 0, 0, 0, 0, 0, 0, 95.0, 1.0, 1.0, DT)  # init
     mixer.update(10.0, 0, 0, 0, 0, 0, 0, 95.0, 1.0, 1.0, DT)
     d = mixer.get_fin_deflections()
-    # PITCH_MIX = [+1, 0, -1, 0]
-    assert abs(d[0]) > 0  # top
-    assert abs(d[1]) < 0.01  # right (yaw only)
-    assert abs(d[0] + d[2]) < 0.01  # top = -bottom
-    assert abs(d[3]) < 0.01  # left (yaw only)
+    # Pitch rides the right/left (elevator) pair: PITCH_MIX = [0, +1, 0, -1]
+    # (a side fin's tangential lift is vertical; top/bottom are rudders).
+    assert abs(d[0]) < 0.01  # top (yaw only)
+    assert abs(d[1]) > 0  # right
+    assert abs(d[1] + d[3]) < 0.01  # right = -left
+    assert abs(d[2]) < 0.01  # bottom (yaw only)
 
 
 def test_pure_yaw_mixing(mixer):
     mixer.update(0, 10.0, 0, 0, 0, 0, 0, 95.0, 1.0, 1.0, DT)
     mixer.update(0, 10.0, 0, 0, 0, 0, 0, 95.0, 1.0, 1.0, DT)
     d = mixer.get_fin_deflections()
-    # YAW_MIX = [0, +1, 0, -1]
-    assert abs(d[0]) < 0.01
-    assert abs(d[1]) > 0
-    assert abs(d[2]) < 0.01
-    assert abs(d[1] + d[3]) < 0.01
+    # Yaw rides the top/bottom (rudder) pair: YAW_MIX = [+1, 0, -1, 0]
+    assert abs(d[0]) > 0
+    assert abs(d[1]) < 0.01
+    assert abs(d[0] + d[2]) < 0.01
+    assert abs(d[3]) < 0.01
 
 
 def test_pure_roll_all_same_sign(mixer):
@@ -81,7 +82,7 @@ def test_gain_schedule_high_speed(mixer):
     mixer.update(10, 0, 0, 0, 0, 0, 0, 190.0, 1.0, 1.0, DT)
     d_fast = mixer.get_fin_deflections()
 
-    assert abs(d_fast[0]) < abs(d_ref[0])
+    assert abs(d_fast[1]) < abs(d_ref[1])  # pitch rides fin 1 (right)
 
 
 def test_gain_schedule_low_speed(mixer):
@@ -97,7 +98,7 @@ def test_gain_schedule_low_speed(mixer):
     mixer.update(10, 0, 0, 0, 0, 0, 0, 47.5, 1.0, 1.0, DT)
     d_slow = mixer.get_fin_deflections()
 
-    assert abs(d_slow[0]) > abs(d_ref[0])
+    assert abs(d_slow[1]) > abs(d_ref[1])  # pitch rides fin 1 (right)
 
 
 def test_reset_clears_all(mixer):

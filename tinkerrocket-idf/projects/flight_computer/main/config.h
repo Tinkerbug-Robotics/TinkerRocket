@@ -356,10 +356,13 @@ struct config : board_pins
     static constexpr float GUIDANCE_TILT_LIMIT_BOOST_DEG = 15.0f;
     static constexpr float GUIDANCE_TILT_LIMIT_COAST_DEG = 20.0f;
     // Fin→servo layout (cruciform mix shared by roll / ground-test / guidance).
-    // FIN_AZIMUTH_n_DEG = control azimuth of servo n: deflection_n = sign_n·(roll
-    // + pitch·cos(az_n) + yaw·sin(az_n)).  Defaults reproduce the legacy "+"
-    // (servo 0 top/+pitch, 1 right/+yaw, 2 bottom, 3 left).  Bit n of
-    // FIN_REVERSE_MASK bit n negates servo n's pitch/yaw (tilt) response;
+    // FIN_AZIMUTH_n_DEG = ring-POSITION azimuth of servo n's fin (0 = top slot,
+    // 90 = right, … looking from the rear — what the app's ring GUI shows).
+    // The mixer maps position→tangential force (a fin's lift is perpendicular
+    // to its radial arm): deflection_n = sign_n·(pitch·sin(az_n) −
+    // yaw·cos(az_n)) + roll — so with the "+" defaults the right/left pair
+    // carries pitch (elevators) and the top/bottom pair carries yaw (rudders).
+    // Bit n of FIN_REVERSE_MASK negates servo n's pitch/yaw (tilt) response;
     // FIN_ROLL_REVERSE_MASK bit n independently negates its roll response.
     static constexpr float   FIN_AZIMUTH_0_DEG = 0.0f;
     static constexpr float   FIN_AZIMUTH_1_DEG = 90.0f;
