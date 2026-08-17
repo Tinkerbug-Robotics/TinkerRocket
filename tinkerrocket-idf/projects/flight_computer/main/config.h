@@ -6,15 +6,40 @@
 // --- Board revision (#411, tracking #408) ---
 // Pins + part-presence flags live in the per-board headers; everything in
 // this file is board-independent policy and must not fork per revision.
-// Select the V8 map with: idf.py -B build_v8 -DTR_BOARD_V8=1 build
-// (default stays V7 until V8 bring-up completes).
+//
+// EXACTLY ONE of these must be set — there is no default. A wrong pyro pin
+// map is completely silent at runtime (the board boots, continuity reads
+// correctly, and the wrong channel fires or no channel fires at all), so the
+// flight computer refuses to build rather than guess:
+//
+//   V7 legacy board:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
+//   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
+//   V9/V10 boards:    idf.py -B build_v9 -DTR_BOARD_V9=1 build
+//
+// main/CMakeLists.txt enforces the same rule at configure time with a clearer
+// message; this check is the backstop for anything that includes config.h
+// without going through it.
+#ifndef TR_BOARD_V7
+#define TR_BOARD_V7 0
+#endif
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
-#if TR_BOARD_V8
+#ifndef TR_BOARD_V9
+#define TR_BOARD_V9 0
+#endif
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped) and a wrong map fires the wrong channel silently."
+#endif
+#if TR_BOARD_V9
+#include "board/board_v9.h"
+#define TR_BOARD_REV_STR "V9/V10"
+#elif TR_BOARD_V8
 #include "board/board_v8.h"
+#define TR_BOARD_REV_STR "V8"
 #else
 #include "board/board_v7.h"
+#define TR_BOARD_REV_STR "V7"
 #endif
 
 struct config : board_pins

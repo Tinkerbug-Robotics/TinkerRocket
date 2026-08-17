@@ -28,9 +28,13 @@ if(NOT TR_GIT_DIRTY_CODE EQUAL 0)
     set(TR_GIT_SHA "${TR_GIT_SHA}-dirty")
 endif()
 string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
-# Board revision marker (#411): V8 builds are identifiable from the app
+# Board revision marker (#411): V8/V9 builds are identifiable from the app
 # version string (BLE config_identity "fw" field, boot log, OTA metadata).
-if(TR_BOARD_V8)
+# The two select the same pin map on this MCU (see main/config.h) but are
+# stamped apart so an image can be traced back to the board it was built for.
+if(TR_BOARD_V9)
+    set(TR_BOARD_SUFFIX "-v9")
+elseif(TR_BOARD_V8)
     set(TR_BOARD_SUFFIX "-v8")
 else()
     set(TR_BOARD_SUFFIX "")

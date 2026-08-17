@@ -2673,8 +2673,19 @@ static void setup_fc()
     }
 
     ESP_LOGI(TAG, "Starting ....");
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (flash the other variant with/without -B build_v8 -DTR_BOARD_V8=1)",
-             TR_BOARD_V8 ? "V8" : "V7");
+    // Board revision + the pyro pins it implies. The pyro map is the one part
+    // of the pin map whose mismatch has no runtime symptom (V8 and V9 swap
+    // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
+    // numbers rather than just the revision — they can be checked against the
+    // connector with a meter before anything is armed.
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9=1; no default)",
+             TR_BOARD_REV_STR);
+    ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
+             (int)config::PYRO_ARM_PIN,
+             (int)config::PYRO1_FIRE_PIN, (int)config::PYRO2_FIRE_PIN,
+             (int)config::PYRO3_FIRE_PIN, (int)config::PYRO4_FIRE_PIN,
+             (int)config::PYRO1_CONT_PIN, (int)config::PYRO2_CONT_PIN,
+             (int)config::PYRO3_CONT_PIN, (int)config::PYRO4_CONT_PIN);
     gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
     gpio_set_direction((gpio_num_t)(config::BLUE_LED_PIN), GPIO_MODE_OUTPUT);

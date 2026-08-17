@@ -9,7 +9,14 @@
  * Pins are board-revision dependent (#411):
  *   V7 (default):            ARM=14, CONT/FIRE = 15/16 18/19 38/34 51/50
  *   V8 (-DTR_BOARD_V8=1):    ARM=5,  CONT/FIRE = 7/6 10/9 12/11 14/13
- * Build the V8 map with:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
+ *   V9/V10 (-DTR_BOARD_V9=1):ARM=16, CONT/FIRE = 7/6 10/11 12/9 14/13
+ * Build the V9 map with:  idf.py -B build_v9 -DTR_BOARD_V9=1 build
+ *
+ * V8 vs V9 is not cosmetic: ARM moves (5 -> 16) and channels 2 and 3 swap
+ * their FIRE pins while keeping their CONT pins, so the wrong build fires the
+ * wrong connector with continuity still reading correctly. hardware/
+ * rocket-computer/ is the V9/V10 board; the V8 boards are the older bench
+ * units. The selected map is printed at startup — read it before arming.
  *
  * V8 NOTE: the CONT sense path is powered through the arming FET (test-board
  * circuit) — use 'C' (momentary arm) or arm first; unarmed 'c'/'r' reads are
@@ -54,6 +61,20 @@ static const char* TAG = "PYRO_DBG";
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
+#ifndef TR_BOARD_V9
+#define TR_BOARD_V9 0
+#endif
+#if TR_BOARD_V8 && TR_BOARD_V9
+#error "Pick one board: -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1, not both."
+#endif
+
+#if TR_BOARD_V9
+#define TR_BOARD_REV_STR "V9/V10"
+#elif TR_BOARD_V8
+#define TR_BOARD_REV_STR "V8"
+#else
+#define TR_BOARD_REV_STR "V7"
+#endif
 
 struct PyroChannel {
     const char*  name;
@@ -61,7 +82,16 @@ struct PyroChannel {
     gpio_num_t   cont;
 };
 
-#if TR_BOARD_V8
+#if TR_BOARD_V9
+// V9/V10 rocket computer (P4): mirror of projects/flight_computer/main/board/board_v9.h
+static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_16;
+static PyroChannel ch[4] = {
+    { "PYRO1", GPIO_NUM_6,  GPIO_NUM_7  },
+    { "PYRO2", GPIO_NUM_11, GPIO_NUM_10 },
+    { "PYRO3", GPIO_NUM_9,  GPIO_NUM_12 },
+    { "PYRO4", GPIO_NUM_13, GPIO_NUM_14 },
+};
+#elif TR_BOARD_V8
 // V8 rocket computer (P4): mirror of projects/flight_computer/main/board/board_v8.h
 static constexpr gpio_num_t PYRO_ARM_PIN = GPIO_NUM_5;
 static PyroChannel ch[4] = {
@@ -89,6 +119,7 @@ static inline bool cont_from_raw(int raw) { return raw == 0; }
 
 #include <esp_private/gpio.h>      // gpio_func_sel
 #include <rom/gpio.h>              // esp_rom_gpio_connect_out_signal
+#include <soc/gpio_sig_map.h>      // SIG_GPIO_OUT_IDX (implicit before IDF v6)
 
 // Safe ARM/FIRE pad init — same recipe as the flight firmware's
 // safePyroOutputInit (see FC main.cpp / commit 421dd63): NEVER
@@ -149,7 +180,7 @@ static void disarm_all()
 static void print_help()
 {
     printf("\n=== Pyro Channel Debug (%s pin map, shared ARM) ===\n",
-           TR_BOARD_V8 ? "V8" : "V7");
+           TR_BOARD_REV_STR);
     printf("  ?   help\n");
     printf("  s   show state\n");
     for (int i = 0; i < 4; i++) {

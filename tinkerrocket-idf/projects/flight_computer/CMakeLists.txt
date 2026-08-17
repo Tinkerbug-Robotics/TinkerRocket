@@ -47,10 +47,16 @@ if(NOT TR_GIT_DIRTY_CODE EQUAL 0)
     set(TR_GIT_SHA "${TR_GIT_SHA}-dirty")
 endif()
 string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
-# Board revision marker (#411): V8 builds are identifiable from the app
-# version string (BLE config_identity "fw" field, boot log, OTA metadata).
-if(TR_BOARD_V8)
+# Board revision marker (#411): every build is identifiable from the app
+# version string (BLE config_identity "fw" field, boot log, OTA metadata), so
+# an image flashed onto the wrong revision can be spotted after the fact.
+# main/CMakeLists.txt is what validates the flag; this only labels the image.
+if(TR_BOARD_V9)
+    set(TR_BOARD_SUFFIX "-v9")
+elseif(TR_BOARD_V8)
     set(TR_BOARD_SUFFIX "-v8")
+elseif(TR_BOARD_V7)
+    set(TR_BOARD_SUFFIX "-v7")
 else()
     set(TR_BOARD_SUFFIX "")
 endif()

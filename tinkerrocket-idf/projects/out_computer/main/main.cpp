@@ -6042,7 +6042,10 @@ static void setup_oc()
     pwr_pin_on = false;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
-    ESP_LOGW("OC", "[BOARD] pin map: %s", TR_BOARD_V8 ? "V8" : "V7");
+    // V9 selects the same map as V8 on this MCU (see config.h) — reported
+    // separately so the boot log says which board the image was built for.
+    ESP_LOGW("OC", "[BOARD] pin map: %s",
+             TR_BOARD_V9 ? "V9/V10 (same pins as V8)" : (TR_BOARD_V8 ? "V8" : "V7"));
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
     // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
