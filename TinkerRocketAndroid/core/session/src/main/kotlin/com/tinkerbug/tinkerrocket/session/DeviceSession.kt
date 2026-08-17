@@ -592,6 +592,15 @@ public class DeviceSession(
             is FileOpsMessage.SensorCal -> _sensorCalStatus.value = msg.status
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
+            is FileOpsMessage.PyroRefusal -> {
+                // Rail-off refusal: no reading is coming back, so close the
+                // TESTING window instead of letting the spinner run out its
+                // 2.5 s implying a round trip happened.  (No test-fire UI on
+                // Android yet — cmd-36 refusals have nothing to clear.)
+                if (msg.cmd == 35) {
+                    _contTestPendingUntil.value = _contTestPendingUntil.value - msg.channel
+                }
+            }
             is FileOpsMessage.Ota -> _otaStatus.value = msg.status
             is FileOpsMessage.FileList -> {
                 _files.value = msg.page.files

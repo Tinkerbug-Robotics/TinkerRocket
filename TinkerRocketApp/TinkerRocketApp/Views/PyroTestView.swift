@@ -62,11 +62,25 @@ struct PyroTestView: View {
     @State private var startedLoggingForTest = false  // #385: only stop what we started
     @State private var videoSaved = false
     @State private var errorMessage: String?
+    // True once the fire command actually went out this test — the done-state
+    // continuity verdict must not render for a test that never fired (guard
+    // failure, video error before T-0).
+    @State private var firedThisTest = false
+    // BS path: the rocket this test was opened FOR, latched on appear. The
+    // #390 focus self-heal can re-pin a stale focus to a DIFFERENT rocket
+    // that is still on the air — without the latch, a fire tapped for rocket
+    // A could relay to rocket B mid-countdown, and the done-screen verdict
+    // could be computed from rocket B's telemetry. The fire guard and the
+    // verdict both require focus to still equal this.
+    @State private var latchedTargetRID: UInt8?
 
     @State private var camera = SlowMoCameraManager()
 
+    // Path-aware (#297 fail-safe included): direct link reads the "ps" cont
+    // bit; a base-station link reads the relayed sensor-health scorecard —
+    // the LoRa downlink carries no pyro_status byte.
     private var continuity: Bool {
-        device.telemetry.pyroCont(channel: channel)
+        device.pyroContinuityLive(channel: channel)
     }
 
     var body: some View {
@@ -107,8 +121,11 @@ struct PyroTestView: View {
                     // running (fire event not recorded), then restart it after.
                     // Only start if the rocket isn't logging, and only stop
                     // afterwards if we were the ones who started it.
+                    // setRocketLoggingForTest routes per path: BS links relay
+                    // a desired-state cmd 23 to the rocket, because the BS's
+                    // own toggle keys off its CSV state and can invert.
                     if !device.telemetry.rocketLoggingActive {
-                        device.sendToggleLogging()
+                        device.setRocketLoggingForTest(on: true)
                         startedLoggingForTest = true
                     }
                     camera.startRecording { url, error in
@@ -129,14 +146,42 @@ struct PyroTestView: View {
                     // #292: re-check the link at the fire instant. sendPyroFire
                     // silently no-ops when disconnected, so without this the UI
                     // would advance to recording and report success for a command
-                    // that was never sent.
-                    guard device.isConnected else {
-                        errorMessage = "Link lost before fire — no fire command sent"
+                    // that was never sent. On a base-station link the same check
+                    // covers the LoRa leg: a stale relay (or no focused rocket)
+                    // means the uplink would be queued blind into silence.
+                    guard device.pyroCommandPathReady else {
+                        errorMessage = device.isBaseStation
+                            ? "Rocket LoRa link not ready — no fire command sent"
+                            : "Link lost before fire — no fire command sent"
                         state = .done
                         ticker.stop()
                         return
                     }
+                    // BS path: the fire relays to whatever rocket is focused
+                    // NOW — abort if that is no longer the rocket this test
+                    // was opened for (the #390 self-heal can re-pin).
+                    if device.isBaseStation,
+                       device.focusRocketID != latchedTargetRID {
+                        errorMessage = "Focused rocket changed — no fire command sent"
+                        state = .done
+                        ticker.stop()
+                        return
+                    }
+                    // Rail re-check at the fire instant, DIRECT links only
+                    // (a BS link has no rail signal — see the FIRE button
+                    // gate): with the FC powered off the OC refuses cmd 36
+                    // (a queued fire would deliver at the next power-on), so
+                    // sending could only be refused. Abort through the SAFE
+                    // path — it stops the camera and any logging this test
+                    // started — and land in .idle, where errorMessage is
+                    // displayed.
+                    guard device.isBaseStation || device.telemetry.pwr_pin_on else {
+                        safeRocket()
+                        errorMessage = "Rocket power is off — no fire command sent"
+                        return
+                    }
                     device.sendPyroFire(channel: UInt8(channel))
+                    firedThisTest = true
                     state = .recording
                     recordSecondsRemaining = 5
                 }
@@ -145,17 +190,46 @@ struct PyroTestView: View {
                 if recordSecondsRemaining <= 0 {
                     ticker.stop()
                     if startedLoggingForTest {
-                        device.sendToggleLogging()
+                        device.setRocketLoggingForTest(on: false)
                         startedLoggingForTest = false
                     }
                     camera.stopRecording()
+                    // Stand-back confirmation on the LoRa path: the uplink is
+                    // blind (#285) and the downlink has no fired bit, so
+                    // re-test continuity — a fired charge burns the match
+                    // open (CONT → NO CONT). CONT still present is the one
+                    // answer that must reach the operator before anyone
+                    // approaches. The done screen renders the verdict.
+                    // Latch check: if focus re-pinned to a different rocket
+                    // since the fire, skip — the re-test would momentarily
+                    // ARM that other rocket, and the verdict already renders
+                    // could-not-confirm on a focus mismatch.
+                    if device.isBaseStation,
+                       device.focusRocketID == latchedTargetRID {
+                        device.sendPyroContTest(channel: UInt8(channel))
+                    }
                 }
             default:
                 ticker.stop()
             }
         }
+        .onChange(of: device.pyroTestRefusal) { refusal in
+            // Authoritative backstop: the OC refused an actual fire command
+            // (rail off at dispatch). The gates above should make this
+            // unreachable, but if a refusal does arrive mid-flow, abort
+            // through the SAFE path and say why.
+            guard let refusal, refusal.cmd == 36,
+                  refusal.channel == UInt8(channel),
+                  state == .countdown || state == .recording else { return }
+            safeRocket()
+            errorMessage = "Rocket refused the fire — power is off"
+        }
         .onAppear {
             camera.configure()
+            // Latch which rocket this test is FOR (BS path; nil on direct
+            // links) before anything is sent — the fire guard and the done
+            // verdict compare live focus against this.
+            latchedTargetRID = device.focusRocketID
             device.sendPyroContTest(channel: UInt8(channel))
         }
         .onDisappear {
@@ -174,6 +248,18 @@ struct PyroTestView: View {
                 Text("Pyro CH \(channel)")
                     .font(.headline.weight(.bold))
                     .foregroundColor(.white)
+
+                // Fire path indicator: this test goes BS → LoRa → rocket, so
+                // the operator knows BLE range to the rocket is NOT required.
+                if device.isBaseStation {
+                    Text("VIA LoRa")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.8))
+                        .cornerRadius(4)
+                }
 
                 HStack(spacing: 4) {
                     if device.contTestPending(channel: UInt8(channel)) {
@@ -262,6 +348,73 @@ struct PyroTestView: View {
                 Text(videoSaved ? "Video Saved" : "Video save failed")
                     .font(.title2.weight(.bold))
                     .foregroundColor(.white)
+
+                if let error = errorMessage {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                }
+
+                // Stand-back verdict from the post-fire continuity re-test
+                // (LoRa path only — direct-link operators are in BLE range
+                // and re-test from the settings row as before).
+                //
+                // The green "charge fired" line requires POSITIVE evidence:
+                // a live stream, the same focused rocket the test was opened
+                // for, and a measured no-continuity reading (SH_BAD). Absence
+                // of data must never read as success — a stale relay, an
+                // undelivered re-test (health still DEGRADED/NA), a dropped
+                // BLE link, or a swapped focus all collapse `continuity` to
+                // false, and rendering green from any of those is exactly
+                // the held-over-safe display #297 exists to prevent, in the
+                // one screen that gates walking up on a live charge.
+                if device.isBaseStation && firedThisTest {
+                    if device.contTestPending(channel: UInt8(channel)) {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small).tint(.white)
+                            Text("Re-testing continuity…")
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    } else {
+                        pyroFireVerdict
+                    }
+                }
+            }
+        }
+    }
+
+    /// Post-fire verdict, BS/LoRa path. Only a measured SH_BAD from a live
+    /// stream of the latched rocket earns green; every no-data state renders
+    /// the explicit treat-as-live warning instead.
+    @ViewBuilder
+    private var pyroFireVerdict: some View {
+        let liveAndSameRocket = device.isConnected
+            && device.effectiveDataStatus == .live
+            && device.focusRocketID == latchedTargetRID
+        if !liveAndSameRocket {
+            Text("COULD NOT CONFIRM — rocket link lost. Treat the charge as LIVE; do not approach.")
+                .font(.subheadline.weight(.bold))
+                .foregroundColor(.orange)
+                .multilineTextAlignment(.center)
+        } else {
+            switch device.telemetry.pyroHealth(channel: channel) {
+            case .bad:
+                Text("Continuity gone — charge fired")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.green)
+                    .multilineTextAlignment(.center)
+            case .ok:
+                Text("CONTINUITY STILL PRESENT — charge may not have fired. Treat it as LIVE.")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(.orange)
+                    .multilineTextAlignment(.center)
+            case .degraded, .na:
+                Text("COULD NOT CONFIRM — no fresh continuity reading. Treat the charge as LIVE; do not approach.")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(.orange)
+                    .multilineTextAlignment(.center)
             }
         }
     }
@@ -272,12 +425,30 @@ struct PyroTestView: View {
         VStack(spacing: 16) {
             switch state {
             case .idle, .done:
+                // Rail gate, DIRECT links only: the OC refuses cmd 36 while
+                // the FC rail is off (a queued fire would deliver at the next
+                // power-on), so a live FIRE button would only ever be refused.
+                // Mirrors the Settings entry buttons; also covers the rail
+                // dropping while this cover is already up. A base-station
+                // link has no rail signal — the relay TelemetryData never
+                // sets pwr_pin_on (the LoRa packet doesn't carry it), so
+                // gating on it there would disable the stand-back test
+                // permanently; the rocket's own LoRa cmd-36 refusal and the
+                // pyroCommandPathReady freshness check guard that path.
+                let railOff = !device.isBaseStation && !device.telemetry.pwr_pin_on
+                let canFire = device.isConnected && !railOff
                 Button(action: startCountdown) {
                     Text("FIRE")
                         .font(.title2.weight(.heavy))
                         .foregroundColor(.white)
                         .frame(width: 140, height: 140)
-                        .background(Circle().fill(Color.red))
+                        .background(Circle().fill(canFire ? Color.red : Color.gray))
+                }
+                .disabled(!canFire)
+                if railOff {
+                    Label("Rocket power is off", systemImage: "bolt.slash")
+                        .font(.headline)
+                        .foregroundColor(.orange)
                 }
 
             case .countdown:
@@ -302,6 +473,7 @@ struct PyroTestView: View {
 
     private func startCountdown() {
         errorMessage = nil
+        firedThisTest = false
         state = .countdown
         secondsRemaining = 10
         ticker.start()
@@ -315,7 +487,7 @@ struct PyroTestView: View {
             // (the #385 failure mode, which was fixed on the recording-complete
             // path but missed on the abort paths). Stop the camera regardless.
             if startedLoggingForTest {
-                device.sendToggleLogging()
+                device.setRocketLoggingForTest(on: false)
                 startedLoggingForTest = false
             }
             camera.stopRecording()
@@ -357,7 +529,7 @@ struct PyroTestView: View {
             // otherwise navigating away / dismissing mid-test toggles off an
             // operator's pre-existing log. Stop the camera regardless.
             if startedLoggingForTest {
-                device.sendToggleLogging()
+                device.setRocketLoggingForTest(on: false)
                 startedLoggingForTest = false
             }
             camera.stopRecording()

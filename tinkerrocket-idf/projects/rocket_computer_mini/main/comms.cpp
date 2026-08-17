@@ -1421,7 +1421,12 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // #383: refuse camera/logging/guidance-point while INFLIGHT (OC gate kept
     // even though 1 and 28 are unsupported below — the refusal-with-count is
     // the honest first answer either way).
-    if ((cmd == 1 || cmd == 23 || cmd == 28) && latest_rocket_state == INFLIGHT)
+    // cmds 35/36 (pyro cont test / TEST-FIRE via BS relay) join: queued
+    // mid-flight they would deliver at landing — a delayed FIRE pulse firing
+    // while the recovery crew walks up is the stale-command hazard this gate
+    // refuses. The flight side's lockout gate is the second layer.
+    if ((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+        latest_rocket_state == INFLIGHT)
     {
         uplink_inflight_refusals++;
         ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
@@ -1489,6 +1494,49 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         flightlogEndFlight();
         mini_link::sendCommand(SIM_STOP_CMD, nullptr, 0);
         ESP_LOGI("LORA", "UPLINK Sim stop queued for flight side (logging ended)");
+    }
+    else if (cmd == 35 && payload_len >= 1)
+    {
+        // Pyro continuity test via BS relay — same handling as BLE cmd 35.
+        // No duplicate suppression: the BS retry train just re-runs the
+        // momentary arm→read→disarm, which keeps the reading fresh.
+        uint8_t ch = payload[0];
+        if (ch < 1 || ch > 4) {
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test: invalid channel %u", ch);
+        } else {
+            mini_link::sendCommand(PYRO_CONT_TEST, &ch, 1);
+            ESP_LOGI("LORA", "UPLINK Pyro continuity test CH%u", ch);
+        }
+    }
+    else if (cmd == 36 && payload_len >= 1)
+    {
+        // Pyro TEST-FIRE via BS relay — the LoRa half of the stand-back pyro
+        // test (app → BS cmd 50 → here). The uplink is blind fire-and-retry
+        // with no sequence number, so one FIRE tap arrives as up to
+        // UPLINK_RETRIES identical packets; suppress same-channel repeats.
+        // Worst-case train span is ~11 s: 7 inter-retry gaps × (100 ms
+        // pacing + the TX-window gate's 1.5 s max_defer, re-armed per
+        // attempt). 13 s covers that with margin while staying under the
+        // fastest deliberate re-test of the same channel (5 s recording +
+        // 10 s countdown ≈ 15 s away at minimum). (OC has the same gate;
+        // no rail-off refusal here — the flight side is this same MCU and
+        // its command queue drains every flight tick, so nothing can hold a
+        // fire for later.)
+        static uint32_t last_fire_uplink_ms = 0;
+        static uint8_t  last_fire_uplink_ch = 0;
+        constexpr uint32_t kFireDedupWindowMs = 13000;
+        uint8_t ch = payload[0];
+        if (ch < 1 || ch > 4) {
+            ESP_LOGW("LORA", "UPLINK Pyro test fire: invalid channel %u", ch);
+        } else if (ch == last_fire_uplink_ch && last_fire_uplink_ms != 0 &&
+                   (millis() - last_fire_uplink_ms) < kFireDedupWindowMs) {
+            ESP_LOGI("LORA", "UPLINK Pyro test fire CH%u: duplicate retry ignored", ch);
+        } else {
+            last_fire_uplink_ch = ch;
+            last_fire_uplink_ms = millis();
+            mini_link::sendCommand(PYRO_FIRE_TEST, &ch, 1);
+            ESP_LOGI("LORA", "UPLINK Pyro test fire CH%u", ch);
+        }
     }
     else if (cmd == 10 && payload_len >= 11)
     {
@@ -3986,6 +4034,14 @@ static void comms_loop()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (!mini_link::commandShutterOpen()) {
+                // Shutter closed (rail off / power transition): sendCommand
+                // would drop this silently — unlike the OC's queue the mini
+                // never HOLDS a pyro command, so there's no latent-fire
+                // hazard here, but the app deserves the same 0xCE refusal
+                // the OC sends instead of a dead button.
+                ble_app.sendPyroTestRefusal(35, ch, 1 /* rail off */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: shutter closed", ch);
             } else {
                 mini_link::sendCommand(PYRO_CONT_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
@@ -3999,6 +4055,12 @@ static void comms_loop()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (!mini_link::commandShutterOpen()) {
+                // Shutter closed: same 0xCE refusal as the continuity branch
+                // above (and as the OC) so the app's abort flow works
+                // identically against both boards.
+                ble_app.sendPyroTestRefusal(36, ch, 1 /* rail off */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: shutter closed", ch);
             } else {
                 mini_link::sendCommand(PYRO_FIRE_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro test fire CH%u", ch);

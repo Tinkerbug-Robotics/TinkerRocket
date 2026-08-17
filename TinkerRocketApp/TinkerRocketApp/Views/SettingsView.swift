@@ -325,8 +325,76 @@ struct SettingsView: View {
             }
         }
 
+        pyroTestViaLoRaSection
+
         loRaSections
         networkSection
+    }
+
+    // Stand-back pyro test: the same countdown/slow-mo-video flow as a direct
+    // link (PyroTestView), with the fire command relayed BS → LoRa uplink →
+    // focused rocket (inner cmds 35/36 in a cmd-50 wrap) so the operator can
+    // film from LoRa distance instead of BLE distance. Continuity here rides
+    // the sensor-health scorecard (SH pyro bits) — the 65-byte LoRa downlink
+    // carries no pyro_status byte.
+    @ViewBuilder
+    private var pyroTestViaLoRaSection: some View {
+        Section(header: Text("Pyro Test (via LoRa)"),
+                footer: Text(pyroTestViaLoRaFooter)) {
+            ForEach(1..<5, id: \.self) { ch in
+                Button {
+                    pyroTestChannel = ch
+                } label: {
+                    HStack {
+                        Text("Channel \(ch)")
+                            .foregroundColor(.primary)
+                        Spacer()
+                        pyroHealthBadge(ch)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(Color(.tertiaryLabel))
+                    }
+                }
+                .disabled(!device.pyroCommandPathReady)
+            }
+        }
+    }
+
+    private var pyroTestViaLoRaFooter: String {
+        guard device.isConnected else {
+            return "Connect to the base station to test."
+        }
+        guard let rid = device.focusRocketID else {
+            return "No rocket heard yet — the test fires on the focused rocket."
+        }
+        let name = device.remoteRockets.first { $0.rocketID == rid }?.displayName
+            ?? "Rocket \(rid)"
+        if device.pyroCommandPathReady {
+            return "Fires on \(name) over the LoRa uplink — stand back and film from the phone."
+        }
+        return "\(name)'s LoRa link is stale — waiting for fresh telemetry before allowing a test."
+    }
+
+    /// Channel state at a glance, from the relayed health scorecard. #297
+    /// fail-safe: anything but a LIVE stream shows no reading at all — a
+    /// held-over green CONT is exactly the display this rule exists to
+    /// prevent.
+    @ViewBuilder
+    private func pyroHealthBadge(_ ch: Int) -> some View {
+        if device.effectiveDataStatus != .live {
+            Text("—").font(.caption).foregroundColor(.secondary)
+        } else {
+            switch device.telemetry.pyroHealth(channel: ch) {
+            case .ok:
+                Text("CONT").font(.caption.weight(.bold)).foregroundColor(.green)
+            case .bad:
+                Text("NO CONT").font(.caption.weight(.bold)).foregroundColor(.red)
+            case .degraded:
+                Text("NOT TESTED").font(.caption.weight(.bold)).foregroundColor(.secondary)
+            case .na:
+                Text("—").font(.caption).foregroundColor(.secondary)
+            }
+        }
     }
 
     // #150: Network (restored from #136, with the drift bug fixed).  The
@@ -1652,6 +1720,12 @@ private struct PyroChannelTestControls: View {
                 || device.telemetry.pyroFired(channel: channel)
                 || device.telemetry.state == "INFLIGHT"
             if !blocked {
+                // Rail gate: with the FC powered off the OC refuses cmd 35/36
+                // outright (a queued test would deliver its fire/ARM pulse at
+                // the next power-on), so don't offer buttons that can only be
+                // refused. #377: pwr_pin_on reads false until the first
+                // telemetry frame, which fails safe to disabled here.
+                let railOn = device.telemetry.pwr_pin_on
                 Button("Test Continuity") {
                     device.sendPyroContTest(channel: UInt8(channel))
                     contTestActive = true
@@ -1660,8 +1734,14 @@ private struct PyroChannelTestControls: View {
                         contTestActive = false
                     }
                 }
+                .disabled(!railOn)
                 Button("Test Pyro Channel") { onTestFire(channel) }
-                    .foregroundColor(.orange)
+                    .foregroundColor(railOn ? .orange : .secondary)
+                    .disabled(!railOn)
+                if !railOn {
+                    Label("Power on the rocket to test.", systemImage: "bolt.slash")
+                        .font(.caption).foregroundColor(.orange)
+                }
             }
         }
     }

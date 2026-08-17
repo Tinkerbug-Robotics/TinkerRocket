@@ -458,6 +458,13 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 //     reset edge even between back-to-back identical command ids
 // With the rail off the queue simply holds; powering on drains the whole
 // sync in order — connecting before power-on now works by design.
+// EXCEPTION: pyro test commands are never enqueued while the rail is off —
+// a held PYRO_FIRE_TEST (or PYRO_CONT_TEST's momentary ARM) would energize
+// the channel at the NEXT power-on, possibly while someone is handling the
+// rocket. Every entry point refuses instead: the BLE cmd 35/36 handlers
+// (with a 0xCE file-ops refusal frame back to the app) and the LoRa cmd
+// 35/36 branches in processUplinkCommand (log-only — the uplink has no
+// feedback channel, #285 blind fire-and-retry).
 struct QueuedCommand
 {
     uint8_t cmd;
@@ -3795,7 +3802,13 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // be delivered after landing and refused by the FC's state gate — but the
     // LoRa path has no echo (#285, blind fire-and-retry), so refusing here is
     // the only honest answer.
-    if ((cmd == 1 || cmd == 23 || cmd == 28) && latest_rocket_state == INFLIGHT)
+    // cmds 35/36 (pyro cont test / TEST-FIRE via BS relay) join too: queued
+    // mid-flight they would deliver at landing — a delayed FIRE pulse (or a
+    // cont test's momentary ARM) firing on the ground while the recovery crew
+    // walks up is exactly the stale-command hazard this gate refuses. The
+    // FC's own lockout gate is the second layer, not a reason to skip this.
+    if ((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+        latest_rocket_state == INFLIGHT)
     {
         uplink_inflight_refusals++;
         ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
@@ -3866,6 +3879,66 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Servo test stop
         setPendingCommand(SERVO_TEST_STOP);
         ESP_LOGI("LORA", "UPLINK Servo test stop");
+    }
+    else if (cmd == 35 && payload_len >= 1)
+    {
+        // Pyro continuity test via BS relay — same handling as BLE cmd 35.
+        // No duplicate suppression: the BS retry train just re-runs the
+        // momentary arm→read→disarm, which keeps the reading fresh.
+        uint8_t ch = payload[0];
+        if (ch < 1 || ch > 4) {
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test: invalid channel %u", ch);
+        } else if (!pwr_pin_on) {
+            // Rail-off refusal, same as the cmd 36 branch below: the #366
+            // queue would HOLD this and deliver the momentary ARM pulse at
+            // the next power-on. Like all LoRa refusals this can only log —
+            // there is no uplink feedback channel (#285 blind fire-and-retry).
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test CH%u refused: FC rail"
+                             " off (queued arm pulse would deliver at power-on)", ch);
+        } else {
+            setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
+            ESP_LOGI("LORA", "UPLINK Pyro continuity test CH%u", ch);
+        }
+    }
+    else if (cmd == 36 && payload_len >= 1)
+    {
+        // Pyro TEST-FIRE via BS relay — the LoRa half of the stand-back pyro
+        // test (app → BS cmd 50 → here), so the operator can keep LoRa
+        // distance from a live charge instead of BLE distance.
+        //
+        // Rail-off refusal: the FC command queue HOLDS while the rail is off
+        // and drains on power-up (#366) — a fire queued now would pulse the
+        // channel whenever someone next powers the FC, minutes or hours
+        // later, with no telemetry telling the LoRa operator the rail was
+        // even off. Same undeliverable-command philosophy as the #383
+        // INFLIGHT gate above: refuse honestly, don't queue a latent fire.
+        //
+        // Dedup: the uplink is blind fire-and-retry with no sequence number,
+        // so one FIRE tap arrives as up to UPLINK_RETRIES identical packets,
+        // and each would queue a full ARM→pulse→disarm. Worst-case train
+        // span is ~11 s: 7 inter-retry gaps × (100 ms pacing + the TX-window
+        // gate's 1.5 s max_defer, which re-arms per attempt — bs_uplink_
+        // txwin.h / serviceUplink). 13 s covers that with margin while
+        // staying under the fastest deliberate re-test of the same channel
+        // (5 s recording + 10 s countdown ≈ 15 s away at minimum).
+        static uint32_t last_fire_uplink_ms = 0;
+        static uint8_t  last_fire_uplink_ch = 0;
+        constexpr uint32_t kFireDedupWindowMs = 13000;
+        uint8_t ch = payload[0];
+        if (ch < 1 || ch > 4) {
+            ESP_LOGW("LORA", "UPLINK Pyro test fire: invalid channel %u", ch);
+        } else if (!pwr_pin_on) {
+            ESP_LOGW("LORA", "UPLINK Pyro test fire CH%u refused: FC rail off "
+                             "(queued fire would deliver at next power-on)", ch);
+        } else if (ch == last_fire_uplink_ch && last_fire_uplink_ms != 0 &&
+                   (millis() - last_fire_uplink_ms) < kFireDedupWindowMs) {
+            ESP_LOGI("LORA", "UPLINK Pyro test fire CH%u: duplicate retry ignored", ch);
+        } else {
+            last_fire_uplink_ch = ch;
+            last_fire_uplink_ms = millis();
+            setPendingCommandWithConfig(PYRO_FIRE_TEST, PYRO_FIRE_TEST, &ch, 1);
+            ESP_LOGI("LORA", "UPLINK Pyro test fire CH%u", ch);
+        }
     }
     else if (cmd == 28 && payload_len >= sizeof(GuidancePointData))
     {
@@ -7523,6 +7596,13 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (!pwr_pin_on) {
+                // Rail off: the FC queue would HOLD this and deliver the
+                // momentary ARM pulse at the next power-on (see the queue
+                // header's pyro exception). Refuse and tell the app.
+                ble_app.sendPyroTestRefusal(35, ch, 1 /* FC rail off */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: FC rail off"
+                                " (queued arm pulse would deliver at power-on)", ch);
             } else {
                 setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
@@ -7536,6 +7616,14 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (!pwr_pin_on) {
+                // Rail off: the FC queue would HOLD this and FIRE the channel
+                // at the next power-on — a latent fire delivered while someone
+                // may be handling the rocket (see the queue header's pyro
+                // exception). Refuse and tell the app.
+                ble_app.sendPyroTestRefusal(36, ch, 1 /* FC rail off */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: FC rail off"
+                                " (queued fire would deliver at power-on)", ch);
             } else {
                 setPendingCommandWithConfig(PYRO_FIRE_TEST, PYRO_FIRE_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro test fire CH%u", ch);
