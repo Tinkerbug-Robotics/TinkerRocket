@@ -203,6 +203,21 @@ struct TelemetryData: Codable {
         guard (1...4).contains(channel) else { return .na }
         return shState(12 + (channel - 1) * 2)
     }
+    /// MEASURED continuity (SH_PYRO_MEAS_SHIFT, bits 24-30), reported for every
+    /// channel whether or not it is configured for flight — unlike pyroHealth,
+    /// which is config-gated because it feeds the go/no-go rollup.  This is the
+    /// ground-test answer: .na = never tested this session, .ok = continuity
+    /// present, .bad = tested and open.  Never .degraded.
+    ///
+    /// Returns nil when the rocket predates this field (all four read NA), so
+    /// callers fall back to pyroHealth instead of showing "never tested"
+    /// forever against older firmware.
+    func pyroMeasuredContinuity(channel: Int) -> SensorHealth? {
+        guard (1...4).contains(channel) else { return nil }
+        let anyReported = (1...4).contains { shState(24 + ($0 - 1) * 2) != .na }
+        guard anyReported else { return nil }
+        return shState(24 + (channel - 1) * 2)
+    }
     var hasSensorHealth: Bool { sensor_health != 0 }
 
     // Rows for the pre-launch health card.  Core sensors always shown; a pyro
