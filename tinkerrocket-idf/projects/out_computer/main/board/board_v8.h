@@ -7,6 +7,26 @@
 //
 // Net names in comments are the V8 schematic nets. Values marked TODO are
 // still unconfirmed — replace as bring-up proceeds.
+//
+// ALSO THE V9/V10 MAP — this MCU did not move (verified 2026-08-17 by walking
+// U15's pad -> pinfunction -> net in hardware/rocket-computer.kicad_pcb at
+// every commit that ever touched it, and against a kicad-cli netlist export
+// of the V10 schematic). -DTR_BOARD_V9=1 selects this same header; see
+// main/config.h. That is the opposite of the FC, whose V9 map moved PYRO_ARM
+// and swapped two FIRE pins and therefore has its own board_v9.h.
+//
+// Two things changed around this map without changing it:
+//   * PWR_PIN's net was renamed Power_Switch -> P4_EN_S3 at the V9 pre-fab
+//     close-out. Same GPIO7, same job: it is the enable that powers the P4's
+//     rail (U30, a TPS22810). On V9+ the P4 also has its own hold line into
+//     the same enable (its GPIO5, net P4_EN_HOLD) which its firmware does not
+//     currently drive — so dropping PWR_PIN still powers the FC down, but
+//     check flight_computer/main/board/board_v9.h before assuming that.
+//   * MRAM_CS (GPIO34) is V8-only. There is no MRAM_CS net anywhere in the
+//     V9/V10 schematic; the pin is unconnected and the part is unfitted.
+//     Left at 34 because it is correct for V8 and harmless on V9/V10 (it
+//     drives a floating pad), but set it to -1 if an MRAM-present code path
+//     ever costs more than a probe.
 struct board_pins
 {
     // --- Power rail switch ---
