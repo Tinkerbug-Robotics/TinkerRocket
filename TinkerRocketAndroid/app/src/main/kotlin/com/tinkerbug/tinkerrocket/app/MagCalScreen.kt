@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,11 +18,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,14 +100,50 @@ fun MagCalScreen(
     }
 
     fun bare(cmd: Int) = session.sendBareCommand(cmd)
-    fun abortAndBack() {
-        bare(BleCommandId.MAG_CAL_ABORT_OC)
-        onBack()
-    }
 
     val subType = status?.subType ?: MagCalSubType.IDLE
-    val midCal = subType == MagCalSubType.SAMPLING || subType == MagCalSubType.REVIEW ||
-        subType == MagCalSubType.VERIFYING
+    val midCal = subType.needsAbortOnLeave
+
+    // The abort is owned by teardown, not by the Cancel button, because Cancel
+    // was never the only way out.  The screen also disappears when the top bar
+    // switches tab, when the chevron disconnects, when the system back gesture
+    // pops it, and when a rotation recreates the Activity -- and every one of
+    // those left the FC sitting in MAG_CALIBRATION with the magnetometer
+    // offsets zeroed, invisible from wherever the operator ended up.
+    //
+    // Gated on midCal so it is inert when nothing is running: the FC rests in
+    // APPLIED whenever a calibration exists, and blanket-aborting that on every
+    // visit to the screen would be its own bug.  `latestMidCal` because the
+    // onDispose closure would otherwise capture the value from the composition
+    // that installed it, which is IDLE on entry -- exactly when it must not be.
+    //
+    // The gate is widened past midCal by ranCalThisSession because midCal comes
+    // from live 5 Hz FC telemetry: a null or stale magCalStatus at teardown
+    // would silently degrade it to "send nothing" at exactly the moment it must
+    // not. `subType != APPLIED` is the part that actually protects anything --
+    // everything else in the FC's abort handler is individually guarded and it
+    // never writes NVS, so APPLIED is the only state a stray abort can damage.
+    val needsAbort = midCal || (ranCalThisSession && subType != MagCalSubType.APPLIED)
+    val latestNeedsAbort by rememberUpdatedState(needsAbort)
+    var abortSent by remember { mutableStateOf(false) }
+    fun abortOnce() {
+        if (!abortSent) {
+            abortSent = true
+            bare(BleCommandId.MAG_CAL_ABORT_OC)
+        }
+    }
+    DisposableEffect(session) {
+        onDispose { if (latestNeedsAbort) abortOnce() }
+    }
+    fun abortAndBack() {
+        abortOnce()
+        onBack()
+    }
+    // System back popped to the launcher instead of here, because the app has
+    // no BackHandler and back fell through to the Activity default.  Routing it
+    // to the same path as Cancel keeps the process alive long enough for the
+    // abort to actually reach the rocket.
+    BackHandler { if (midCal) abortAndBack() else onBack() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -208,7 +247,7 @@ private fun IntroSection(
             "✓ Already calibrated — Earth field %.1f µT, residual %.1f µT."
                 .format(status.fieldRUt, status.residualUt),
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF43A047),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
     // Start gate: connected + rocket + powered + not INFLIGHT (FC refuses).
@@ -273,6 +312,7 @@ private fun ReviewSection(
     onRetry: () -> Unit,
     onAbort: () -> Unit,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val s = status ?: return
     val ok = s.rejectCode == MagCalRejectCode.OK
     Card {
@@ -280,20 +320,23 @@ private fun ReviewSection(
             Text("Fit result", style = MaterialTheme.typography.titleMedium)
             Text(
                 rejectMessage(s.rejectCode),
-                color = if (ok) Color(0xFF43A047) else Color(0xFFFFA000),
+                color = if (ok) tr.statusOk else tr.statusWarn,
                 style = MaterialTheme.typography.bodyMedium,
             )
             MetricRowM("Earth field |R|", "%.1f µT".format(s.fieldRUt))
             MetricRowM("RMS residual", "%.1f µT".format(s.residualUt))
             MetricRowM("Coverage", "${s.coverageBins} / 32 wedges")
-            MetricRowM("Offset |c|", "%.1f µT".format(s.centerMagnitudeUt))
+            MetricRowM(
+                "Offset |c|", "%.1f µT".format(s.centerMagnitudeUt),
+                valueColor = if (s.centerWarning != MagCalStatus.CenterWarning.OK) tr.statusWarn else null,
+            )
             if (s.centerWarning != MagCalStatus.CenterWarning.OK) {
                 Text(
                     "Bias is approaching the chip's ±4915 µT OFFSET-register " +
                         "range — it may not fully subtract. Re-calibrate; if it " +
                         "persists the board may have unusual magnetics.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFFFA000),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             MetricRowM("Offset X/Y/Z (raw)", "${s.offsetX} / ${s.offsetY} / ${s.offsetZ}")
@@ -332,6 +375,7 @@ private fun VerifyingSection(
     onRerunCal: () -> Unit,
     onAbort: () -> Unit,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val s = status ?: return
     val spread = if (verifyMin != null && verifyMax != null) verifyMax - verifyMin else 0f
     val inBand = (verifyMin ?: 0f) >= MagCalConst.VERIFY_MIN_UT &&
@@ -346,7 +390,7 @@ private fun VerifyingSection(
             Text(
                 if (allGood) "🛡✓ Verifying calibration" else "🛡 Verifying calibration",
                 style = MaterialTheme.typography.titleMedium,
-                color = if (allGood) Color(0xFF43A047) else MaterialTheme.colorScheme.onSurface,
+                color = if (allGood) tr.statusOk else tr.statusPending,
             )
             Text(
                 "Slowly rotate the rocket through every orientation. Live |B| " +
@@ -355,11 +399,26 @@ private fun VerifyingSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             MetricRowM("Current |B|", "%.1f µT".format(s.instantaneousFieldUt))
-            GateRow("Min observed", verifyMin?.let { "%.1f µT".format(it) } ?: "—", verifyMin == null || (verifyMin >= MagCalConst.VERIFY_MIN_UT))
-            GateRow("Max observed", verifyMax?.let { "%.1f µT".format(it) } ?: "—", verifyMax == null || (verifyMax <= MagCalConst.VERIFY_MAX_UT))
-            GateRow("Spread", if (verifyMin == null) "—" else "%.1f µT".format(spread), verifyMin == null || tight)
-            GateRow("Rotation coverage", "${s.coverageBins} / 32 (need ≥ ${MagCalConst.VERIFY_MIN_COVERAGE_BINS})", coverageMet)
-            GateRow("Samples", "${s.sampleCount} / ${MagCalConst.VERIFY_MIN_SAMPLES}+", samplesMet)
+            GateRow(
+                "Min observed", verifyMin?.let { "%.1f µT".format(it) } ?: "—",
+                if (verifyMin == null) null else verifyMin >= MagCalConst.VERIFY_MIN_UT,
+            )
+            GateRow(
+                "Max observed", verifyMax?.let { "%.1f µT".format(it) } ?: "—",
+                if (verifyMax == null) null else verifyMax <= MagCalConst.VERIFY_MAX_UT,
+            )
+            GateRow(
+                "Spread", if (verifyMin == null) "—" else "%.1f µT".format(spread),
+                if (verifyMin == null) null else tight,
+            )
+            GateRow(
+                "Rotation coverage", "${s.coverageBins} / 32 (need ≥ ${MagCalConst.VERIFY_MIN_COVERAGE_BINS})",
+                if (coverageMet) true else null,
+            )
+            GateRow(
+                "Samples", "${s.sampleCount} / ${MagCalConst.VERIFY_MIN_SAMPLES}+",
+                if (samplesMet) true else null,
+            )
         }
     }
     Button(onClick = { onAcceptSave(allGood) }, modifier = Modifier.fillMaxWidth()) {
@@ -383,6 +442,7 @@ private fun VerifyingSection(
 
 @Composable
 private fun AppliedSection(status: MagCalStatus?) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val s = status ?: return
     Card {
         Column(
@@ -390,7 +450,7 @@ private fun AppliedSection(status: MagCalStatus?) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("✅ Saved", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF43A047))
+            Text("✅ Saved", style = MaterialTheme.typography.headlineSmall, color = tr.statusOk)
             Text(
                 "Calibration written to flight-computer memory.\n" +
                     "Earth field locked at %.1f µT, residual %.1f µT."
@@ -410,6 +470,7 @@ private fun AppliedSection(status: MagCalStatus?) {
  */
 @Composable
 private fun CoverageGrid(coverageMask: Long, partialMask: Long) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Canvas(Modifier.fillMaxWidth().height(120.dp)) {
         val cols = 8
         val rows = 4
@@ -422,9 +483,9 @@ private fun CoverageGrid(coverageMask: Long, partialMask: Long) {
             val covered = (coverageMask shr bit) and 1L == 1L
             val partial = (partialMask shr bit) and 1L == 1L
             val color = when {
-                covered -> Color(0xFF43A047)
-                partial -> Color(0xFFFBC02D)
-                else -> Color(0xFF757575).copy(alpha = 0.25f)
+                covered -> tr.statusOk
+                partial -> tr.statusMarginal
+                else -> tr.statusIdle.copy(alpha = 0.25f)
             }
             drawRect(
                 color,
@@ -465,21 +526,28 @@ private fun rejectMessage(code: MagCalRejectCode): String = when (code) {
 }
 
 @Composable
-private fun MetricRowM(label: String, value: String) {
+private fun MetricRowM(label: String, value: String, valueColor: Color? = null) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontFamily = FontFamily.Monospace)
+        Text(value, fontFamily = FontFamily.Monospace, color = valueColor ?: Color.Unspecified)
     }
 }
 
 @Composable
-private fun GateRow(label: String, value: String, pass: Boolean) {
+private fun GateRow(label: String, value: String, pass: Boolean?) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             value,
             fontFamily = FontFamily.Monospace,
-            color = if (pass) Color(0xFF43A047) else Color(0xFFE53935),
+            // null = no reading yet, or a counter still filling.  iOS renders
+            // both .secondary rather than red: they are not failures.
+            color = when (pass) {
+                true -> tr.statusOk
+                false -> tr.statusBad
+                null -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
         )
     }
 }

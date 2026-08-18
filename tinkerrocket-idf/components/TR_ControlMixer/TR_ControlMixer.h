@@ -53,10 +53,12 @@ public:
     float getPitchFinCmd() const { return pitch_fin_cmd_; }
     float getYawFinCmd()   const { return yaw_fin_cmd_; }
 
-    /// Configure the fin→servo mix from per-servo control azimuths (deg), a tilt
-    /// reverse bitmask (bit i ⇒ negate servo i pitch/yaw response) and a roll reverse
-    /// bitmask (bit i ⇒ negate its roll response, independently).  Recomputes the
-    /// pitch/yaw/roll mix coefficients used by both update() and mixToFins().  Defaults
+    /// Configure the fin→servo mix from per-servo fin-position azimuths (deg —
+    /// the ring slot each fin occupies, NOT its force direction; the mixer maps
+    /// position→tangential force internally), a tilt reverse bitmask (bit i ⇒
+    /// negate servo i pitch/yaw response) and a roll reverse bitmask (bit i ⇒
+    /// negate its roll response, independently).  Recomputes the pitch/yaw/roll
+    /// mix coefficients used by both update() and mixToFins().  Defaults
     /// {0,90,180,270} + masks 0 reproduce the cruciform "+".
     void setFinLayout(const float azimuth_deg[4], uint8_t reverse_mask,
                       uint8_t roll_reverse_mask);
@@ -105,15 +107,20 @@ private:
 
     void applyGainSchedule(float speed_mps);
 
-    // Cruciform mixing coefficients (control/FRD body frame, looking from rear):
+    // Cruciform mixing coefficients (control/FRD body frame, positions viewed
+    // from the rear):
     //   deflection_i = pitch_mix_[i]·pitch + yaw_mix_[i]·yaw + roll_mix_[i]·roll
-    // Default reproduces the legacy "+" (servo 0 top/+pitch, 1 right/+yaw, 2 bottom,
-    // 3 left).  Reconfigured at runtime by setFinLayout() from the rocket's fin
-    // azimuth + reverse config: pitch_mix_[i]=tilt·cos(az_i), yaw_mix_[i]=tilt·
-    // sin(az_i) (tilt=-1 if servo i tilt-reversed), roll_mix_[i]=roll (roll=-1 if
-    // servo i roll-reversed) — tilt and roll signs are independent.
-    float   pitch_mix_[4] = { +1.0f,  0.0f, -1.0f,  0.0f };
-    float   yaw_mix_[4]   = {  0.0f, +1.0f,  0.0f, -1.0f };
+    // az_i is servo i's fin RING-POSITION azimuth (0 = top, 90 = right,
+    // 180 = bottom, 270 = left).  A fin's tangential lift is perpendicular to
+    // its radial arm — the top/bottom pair are yaw rudders, the right/left
+    // pair pitch elevators — so setFinLayout() maps position → force:
+    //   pitch_mix_[i]=tilt·sin(az_i), yaw_mix_[i]=-tilt·cos(az_i) (tilt=-1 if
+    // servo i tilt-reversed), roll_mix_[i]=roll (roll=-1 if servo i
+    // roll-reversed) — tilt and roll signs are independent.  Default "+"
+    // {0,90,180,270}: right/left carry pitch, top/bottom carry yaw.  The yaw
+    // minus is bench-established (2026-08-16) — see setFinLayout().
+    float   pitch_mix_[4] = {  0.0f, +1.0f,  0.0f, -1.0f };
+    float   yaw_mix_[4]   = { -1.0f,  0.0f, +1.0f,  0.0f };
     float   roll_mix_[4]  = { +1.0f, +1.0f, +1.0f, +1.0f };
     float   fin_azimuth_deg_[4] = { 0.0f, 90.0f, 180.0f, 270.0f };
     uint8_t fin_reverse_mask_ = 0;

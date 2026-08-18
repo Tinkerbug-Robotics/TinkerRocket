@@ -3103,11 +3103,15 @@
 		(color 0 0 0 0)
 		(uuid "d640462b-61a1-4219-8e41-5da2f3ccc4d8")
 	)
-	(junction
-		(at 209.55 52.07)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "f1d6549b-6c16-46bc-90e7-d51868efef07")
+	(wire
+		(pts
+			(xy 209.55 44.45) (xy 209.55 52.07)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5ff1da16-a93a-4f7b-a7b8-49be1ecdaf82")
 	)
 	(wire
 		(pts
@@ -3348,16 +3352,6 @@
 			(type default)
 		)
 		(uuid "2f4c5a9f-3f50-4cc7-ba40-13bcced97a34")
-	)
-	(wire
-		(pts
-			(xy 209.55 52.07) (xy 209.55 52.705)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "30183fb6-07ce-486a-bbe1-7967ff1e9b52")
 	)
 	(wire
 		(pts
@@ -5524,7 +5518,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS63020DSJR"
+		(property "Value" "TPS63021DSJR"
 			(at 175.895 38.1 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5713,7 +5707,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MP" "TPS63020DSJR"
+		(property "MP" "TPS63021DSJR"
 			(at 175.895 58.42 0)
 			(hide yes)
 			(show_name no)
@@ -5761,7 +5755,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MPN" "TPS63020DSJR"
+		(property "MPN" "TPS63021DSJR"
 			(at 175.895 58.42 0)
 			(hide yes)
 			(show_name no)
@@ -7465,214 +7459,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:R_US")
-		(at 209.55 56.515 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "a61cb8d9-b5bf-4b61-93f6-a1dc6fc13749")
-		(property "Reference" "R16"
-			(at 212.09 55.2449 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "180 k"
-			(at 212.09 57.7849 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 208.534 56.261 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 209.55 56.515 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 209.55 56.515 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-07180KL"
-			(at 209.55 56.515 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 209.55 56.515 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "62ca89ba-c677-469a-aaed-7e7b4e833f0f")
-		)
-		(pin "2"
-			(uuid "00048118-7a3d-48d2-9192-9ba4cd86fcb1")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/a2c0dd5a-afba-424d-8751-54eedd450b6c"
-					(reference "R16")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 209.55 48.26 180)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "a6560263-c9f0-4dc8-9d40-ff08cb501359")
-		(property "Reference" "R13"
-			(at 212.09 46.9899 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Value" "1 M"
-			(at 212.09 49.5299 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 208.534 48.006 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 209.55 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 209.55 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-071ML"
-			(at 209.55 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 209.55 48.26 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "8d8ba692-7f9c-4f99-9034-99fb1ff6b8d2")
-		)
-		(pin "2"
-			(uuid "5a4bea2a-fa1d-4716-aa80-dd20ac1e3ce6")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/a2c0dd5a-afba-424d-8751-54eedd450b6c"
-					(reference "R13")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Custom:TPS22918DBVR")
 		(at 74.93 39.37 0)
 		(unit 1)
@@ -7808,7 +7594,7 @@
 				)
 			)
 		)
-		(property "Value" "18.7 k"
+		(property "Value" "100 k"
 			(at 69.215 130.81 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7851,7 +7637,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0718K7L"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 71.755 130.81 0)
 			(hide yes)
 			(show_name no)
@@ -8088,84 +7874,6 @@
 			(project "base-station"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/a2c0dd5a-afba-424d-8751-54eedd450b6c"
 					(reference "C42")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 209.55 60.325 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "b7618ef8-54ef-4dd3-a843-968adf80bb48")
-		(property "Reference" "#PWR052"
-			(at 209.55 66.675 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 211.455 64.135 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 209.55 60.325 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 209.55 60.325 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 209.55 60.325 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "4bcc961a-7b8c-4096-8051-716a09ae4bbd")
-		)
-		(instances
-			(project "base-station"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/a2c0dd5a-afba-424d-8751-54eedd450b6c"
-					(reference "#PWR052")
 					(unit 1)
 				)
 			)

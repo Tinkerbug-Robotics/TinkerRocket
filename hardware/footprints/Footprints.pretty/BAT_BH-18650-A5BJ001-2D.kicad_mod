@@ -1,14 +1,14 @@
 (footprint "BAT_BH-18650-A5BJ001-2D"
-	(version 20241229)
+	(version 20260206)
 	(generator "pcbnew")
-	(generator_version "9.0")
+	(generator_version "10.0")
 	(layer "F.Cu")
 	(descr "MYOUNG BH-18650-A5BJ001-2D single-cell 18650 holder, THM horizontal, DIP 90deg type. LCSC C19184083. Land pattern per MYOUNG drawing WD-CP-0336 rev A/0 (2023-09-08) 'PCB Layout Diagram': 2-dia2.5 terminal holes at 72.3 +/-0.8 mm pitch, 2-dia3.0 housing-boss holes at 55.5 +/-0.8 mm pitch, body 77.8 +/-0.8 x 20.8 +/-0.5 mm, housing height 21.5 +/-0.5 mm. Terminals are 0.3 mm steel, 1.53 mm wide, Ni-plated; housing is ABS (the Keystone 1043P it replaces was UL94V-0 PBT - this part carries no flame rating on the drawing). Dielectric 500 VAC 1 min, -10 to +100 C.\nREPLACES KEYSTONE 1043P. Terminal pitch 72.3 vs the Keystone's 72.22, so each terminal moves only 0.04 mm. POLARITY IS MIRRORED: this part marks POSITIVE at the pin-1 / -X end where the Keystone had P at +X, so BT2 is rotated 180 deg from the old orientation. It is also NOT polarized mechanically - unlike the 1043P's button-top dimple, nothing stops a reversed cell. It stands 21.5 mm off the board against the Keystone's 14.86 mm: CHECK ENCLOSURE CLEARANCE.\nTerminal pads drawn 3.4 mm (0.45 mm annular ring) rather than the vendor library's 3.1 mm (0.30 mm, right at JLCPCB's minimum), because a battery holder takes cell-insertion force. The two 3.0 mm boss holes are NPTH here; the vendor library wrongly made them plated pads with zero annular ring. Courtyard covers max material condition (78.6 x 21.3) plus 0.25 mm.")
 	(tags "battery holder 18650 THM through-hole MYOUNG BH-18650-A5BJ001-2D C19184083")
 	(property "Reference" "REF**"
 		(at 0 -12.8 0)
 		(layer "F.SilkS")
-		(uuid "5a7b1c20-0001-4000-8000-000000000001")
+		(uuid "35521257-8942-45b3-9128-6725b984f7ba")
 		(effects
 			(font
 				(size 1 1)
@@ -19,7 +19,7 @@
 	(property "Value" "BAT_BH-18650-A5BJ001-2D"
 		(at 0 12.8 0)
 		(layer "F.Fab")
-		(uuid "5a7b1c20-0002-4000-8000-000000000002")
+		(uuid "89b48baf-d199-4e14-8422-b4eb976e5231")
 		(effects
 			(font
 				(size 1 1)
@@ -31,7 +31,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5a7b1c20-0003-4000-8000-000000000003")
+		(uuid "0023f837-90d9-4207-bade-6f0ef117481f")
 		(effects
 			(font
 				(size 1 1)
@@ -43,7 +43,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5a7b1c20-0004-4000-8000-000000000004")
+		(uuid "b2276830-0025-40db-854e-529c00f89e7b")
 		(effects
 			(font
 				(size 1 1)
@@ -55,7 +55,7 @@
 		(at 0 0 0)
 		(layer "F.Fab")
 		(hide yes)
-		(uuid "5a7b1c20-0005-4000-8000-000000000005")
+		(uuid "03aca87f-9fda-43af-8768-ad7e2a7f4bd3")
 		(effects
 			(font
 				(size 1 1)
@@ -64,7 +64,7 @@
 		)
 	)
 	(attr through_hole)
-
+	(duplicate_pad_numbers_are_jumpers no)
 	(fp_line
 		(start -38.9 -10.4)
 		(end 38.9 -10.4)
@@ -73,27 +73,7 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
-		(uuid "5a7b1c20-0101-4000-8000-000000000101")
-	)
-	(fp_line
-		(start 38.9 -10.4)
-		(end 38.9 10.4)
-		(stroke
-			(width 0.12)
-			(type solid)
-		)
-		(layer "F.SilkS")
-		(uuid "5a7b1c20-0102-4000-8000-000000000102")
-	)
-	(fp_line
-		(start 38.9 10.4)
-		(end -38.9 10.4)
-		(stroke
-			(width 0.12)
-			(type solid)
-		)
-		(layer "F.SilkS")
-		(uuid "5a7b1c20-0103-4000-8000-000000000103")
+		(uuid "4d7a36c7-6bfb-40cc-8f31-1c43be384095")
 	)
 	(fp_line
 		(start -38.9 10.4)
@@ -103,47 +83,27 @@
 			(type solid)
 		)
 		(layer "F.SilkS")
-		(uuid "5a7b1c20-0104-4000-8000-000000000104")
-	)
-	(fp_line
-		(start -38.9 -10.4)
-		(end 38.9 -10.4)
-		(stroke
-			(width 0.1)
-			(type solid)
-		)
-		(layer "F.Fab")
-		(uuid "5a7b1c20-0111-4000-8000-000000000111")
+		(uuid "6404784e-049c-4737-8e82-6afe2ef6892e")
 	)
 	(fp_line
 		(start 38.9 -10.4)
 		(end 38.9 10.4)
 		(stroke
-			(width 0.1)
+			(width 0.12)
 			(type solid)
 		)
-		(layer "F.Fab")
-		(uuid "5a7b1c20-0112-4000-8000-000000000112")
+		(layer "F.SilkS")
+		(uuid "04d64796-6de6-4f5c-b211-77a78f83bb30")
 	)
 	(fp_line
 		(start 38.9 10.4)
 		(end -38.9 10.4)
 		(stroke
-			(width 0.1)
+			(width 0.12)
 			(type solid)
 		)
-		(layer "F.Fab")
-		(uuid "5a7b1c20-0113-4000-8000-000000000113")
-	)
-	(fp_line
-		(start -38.9 10.4)
-		(end -38.9 -10.4)
-		(stroke
-			(width 0.1)
-			(type solid)
-		)
-		(layer "F.Fab")
-		(uuid "5a7b1c20-0114-4000-8000-000000000114")
+		(layer "F.SilkS")
+		(uuid "cfba535b-513b-4177-9e17-43e3ea68448a")
 	)
 	(fp_line
 		(start -39.55 -10.9)
@@ -153,27 +113,7 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "5a7b1c20-0121-4000-8000-000000000121")
-	)
-	(fp_line
-		(start 39.55 -10.9)
-		(end 39.55 10.9)
-		(stroke
-			(width 0.05)
-			(type solid)
-		)
-		(layer "F.CrtYd")
-		(uuid "5a7b1c20-0122-4000-8000-000000000122")
-	)
-	(fp_line
-		(start 39.55 10.9)
-		(end -39.55 10.9)
-		(stroke
-			(width 0.05)
-			(type solid)
-		)
-		(layer "F.CrtYd")
-		(uuid "5a7b1c20-0123-4000-8000-000000000123")
+		(uuid "88bc48e1-7af3-4ced-a2f9-cb747c526fd9")
 	)
 	(fp_line
 		(start -39.55 10.9)
@@ -183,12 +123,72 @@
 			(type solid)
 		)
 		(layer "F.CrtYd")
-		(uuid "5a7b1c20-0124-4000-8000-000000000124")
+		(uuid "7197f11d-3c50-4040-8f4d-31e6d062f0db")
+	)
+	(fp_line
+		(start 39.55 -10.9)
+		(end 39.55 10.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "393f45af-7bc1-4101-ad3a-7ea381f0a78d")
+	)
+	(fp_line
+		(start 39.55 10.9)
+		(end -39.55 10.9)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "9fb5865e-84e3-4131-a305-4e372c6bf86a")
+	)
+	(fp_line
+		(start -38.9 -10.4)
+		(end 38.9 -10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "3a721b0d-5d17-4669-92db-f6b550737683")
+	)
+	(fp_line
+		(start -38.9 10.4)
+		(end -38.9 -10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "bdddd45b-2ecd-45a4-b611-3963813d07d9")
+	)
+	(fp_line
+		(start 38.9 -10.4)
+		(end 38.9 10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "a915f7c6-1371-4814-80ba-2d39e019da47")
+	)
+	(fp_line
+		(start 38.9 10.4)
+		(end -38.9 10.4)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "38eab167-e4e1-4d40-a7b7-05c3b897fc51")
 	)
 	(fp_text user "+"
 		(at -22.6 0 0)
 		(layer "F.SilkS")
-		(uuid "5a7b1c20-0131-4000-8000-000000000131")
+		(uuid "23a486e7-ae34-4a6e-a80d-fa3d44b4e907")
 		(effects
 			(font
 				(size 2 2)
@@ -199,7 +199,7 @@
 	(fp_text user "-"
 		(at 22.6 0 0)
 		(layer "F.SilkS")
-		(uuid "5a7b1c20-0132-4000-8000-000000000132")
+		(uuid "77c70fed-9261-4495-b2f3-85bfdfd76182")
 		(effects
 			(font
 				(size 2 2)
@@ -210,7 +210,7 @@
 	(fp_text user "+"
 		(at -22.6 0 0)
 		(layer "F.Fab")
-		(uuid "5a7b1c20-0133-4000-8000-000000000133")
+		(uuid "ff18fba7-c856-4e3c-bce4-d698dcd7ccff")
 		(effects
 			(font
 				(size 2 2)
@@ -218,40 +218,46 @@
 			)
 		)
 	)
-
-	(pad "P" thru_hole circle
-		(at -36.15 0 0)
-		(size 3.4 3.4)
-		(drill 2.5)
+	(pad "" np_thru_hole circle
+		(at -27.75 0)
+		(size 3 3)
+		(drill 3)
 		(layers "*.Cu" "*.Mask")
-		(uuid "c3f3af2e-e620-4087-9fb2-34b1d6642522")
+		(uuid "37b68408-bcd7-44d9-8b56-8170ffc35c97")
+	)
+	(pad "" np_thru_hole circle
+		(at 27.75 0)
+		(size 3 3)
+		(drill 3)
+		(layers "*.Cu" "*.Mask")
+		(uuid "68581d15-ccfe-4330-8c1f-625ef96979d8")
 	)
 	(pad "N" thru_hole circle
-		(at 36.15 0 0)
+		(at 36.15 0)
 		(size 3.4 3.4)
 		(drill 2.5)
 		(layers "*.Cu" "*.Mask")
-		(uuid "1ef29347-f918-4213-b97a-309b59f100e6")
+		(remove_unused_layers no)
+		(uuid "a0419384-4619-42e6-a918-1f58699afcce")
 	)
-	(pad "" np_thru_hole circle
-		(at -27.75 0 0)
-		(size 3 3)
-		(drill 3)
+	(pad "P" thru_hole circle
+		(at -36.15 0)
+		(size 3.4 3.4)
+		(drill 2.5)
 		(layers "*.Cu" "*.Mask")
-		(uuid "5a7b1c20-0200-4000-8000-000000000200")
-	)
-	(pad "" np_thru_hole circle
-		(at 27.75 0 0)
-		(size 3 3)
-		(drill 3)
-		(layers "*.Cu" "*.Mask")
-		(uuid "5a7b1c20-0201-4000-8000-000000000201")
-	)
-
-	(model "${KIPRJMOD}/../3dmodels/BH-18650-A5BJ001-2D.step"
-		(offset (xyz 0 0 0))
-		(scale (xyz 1 1 1))
-		(rotate (xyz 0 0 0))
+		(remove_unused_layers no)
+		(uuid "3a672c44-bce7-4f2a-8a8c-e888886b7cf9")
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/BH-18650-A5BJ001-2D.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )

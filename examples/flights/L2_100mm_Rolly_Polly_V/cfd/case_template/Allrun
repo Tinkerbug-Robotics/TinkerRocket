@@ -1,0 +1,69 @@
+#!/bin/bash
+# Run a single OpenFOAM case
+# Usage: ./Allrun [nProcs]
+# Runs INSIDE the Docker container with the case at /case
+
+cd /case 2>/dev/null || exit 0
+[ -f system/controlDict ] || exit 0
+
+nProcs=${1:-4}
+
+# Source OpenFOAM environment
+source /usr/lib/openfoam/openfoam2412/etc/bashrc 2>/dev/null || true
+
+echo "=== Surface Feature Extract ==="
+surfaceFeatureExtract > log.surfaceFeatureExtract 2>&1
+RC=$?; echo "  Exit code: $RC"; [ $RC -ne 0 ] && { tail -10 log.surfaceFeatureExtract; exit 1; }
+
+echo "=== Block Mesh ==="
+blockMesh > log.blockMesh 2>&1
+RC=$?; echo "  Exit code: $RC"; [ $RC -ne 0 ] && { tail -10 log.blockMesh; exit 1; }
+
+echo "=== Snappy Hex Mesh ==="
+snappyHexMesh -overwrite > log.snappyHexMesh 2>&1
+RC=$?
+echo "  Exit code: $RC"
+if [ $RC -ne 0 ]; then
+    echo "  ERROR: snappyHexMesh failed!"
+    tail -20 log.snappyHexMesh
+    exit 1
+fi
+if [ ! -f "constant/polyMesh/points" ]; then
+    echo "  ERROR: No mesh generated!"
+    tail -20 log.snappyHexMesh
+    exit 1
+fi
+echo "  Mesh written OK"
+
+# Count cells
+nCells=$(grep -c "^" constant/polyMesh/owner 2>/dev/null || echo "unknown")
+echo "  Cells: $nCells"
+
+echo "=== Potential Foam (initialization) ==="
+potentialFoam -writep > log.potentialFoam 2>&1
+RC=$?; echo "  Exit code: $RC"
+
+if [ "$nProcs" -gt 1 ]; then
+    sed -i "s/numberOfSubdomains  [0-9]*/numberOfSubdomains  $nProcs/" system/decomposeParDict
+
+    echo "=== Decompose ($nProcs procs) ==="
+    decomposePar > log.decomposePar 2>&1
+    RC=$?; echo "  Exit code: $RC"; [ $RC -ne 0 ] && { tail -10 log.decomposePar; exit 1; }
+
+    echo "=== Run simpleFoam (parallel, $nProcs procs) ==="
+    mpirun --allow-run-as-root -np "$nProcs" simpleFoam -parallel > log.simpleFoam 2>&1
+    RC=$?; echo "  Exit code: $RC"
+
+    echo "=== Reconstruct ==="
+    reconstructPar -latestTime > log.reconstructPar 2>&1
+else
+    echo "=== Run simpleFoam (serial) ==="
+    simpleFoam > log.simpleFoam 2>&1
+    RC=$?; echo "  Exit code: $RC"
+fi
+
+echo "=== Done ==="
+echo "  Total iterations:"
+grep -c "^Time = " log.simpleFoam 2>/dev/null || echo "0"
+echo "  Final Ux residual:"
+grep "Solving for Ux" log.simpleFoam 2>/dev/null | tail -1

@@ -92,6 +92,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var rocketStorage: RocketStorageStats?
     @Published var bsStorage: BaseStationStorageStats?
 
+    /// Latest rail-off pyro-test refusal from the OC (0xCE on file_ops): the
+    /// firmware refused to queue a cmd-35/36 pyro test because the FC power
+    /// rail is off — a held pyro command would deliver its fire/ARM pulse at
+    /// the next power-on. PyroTestView observes this to abort the fire flow;
+    /// the cmd-35 TESTING window is closed at parse time. Reset on disconnect.
+    @Published private(set) var pyroTestRefusal: PyroTestRefusal?
+
     /// Set once per connected-session after the first-time-seen base station
     /// has auto-picked and pushed a quiet channel.  Gates the auto-pick so it
     /// only runs once per session; cleared on disconnect so that a BS reboot
@@ -311,6 +318,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // republishes IDLE on reconnect anyway.
         magCalStatus = nil
         sensorCalStatus = nil
+        pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
         // OC re-pushes it in the connect-time config readback, so a stale
         // copy must not bridge sessions (it could "confirm" a send made
@@ -401,17 +409,22 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         print("Sent command: \(command)")
     }
 
-    func sendPowerToggle() {
-        sendCommand(8)
+    /// cmd 8 with the desired rail state.  Explicit rather than a blind
+    /// toggle: a desync would otherwise cut the FC's rail when the operator
+    /// asked to power it up.  The UI gates the button on having received
+    /// telemetry (#377), so the state passed here is one we have seen.
+    /// Firmware treats a bare cmd 8 as a legacy toggle.
+    func sendPowerState(railOn: Bool) {
+        sendRawCommand(8, payload: Data([railOn ? 1 : 0]))
     }
 
     /// Power-on press handler (#159).  Lights the button's busy state and
-    /// arms a watchdog before sending the toggle.  `poweringOn` clears on the
-    /// first `pwr_pin_on` telemetry frame (see telemetry decode) or on
+    /// arms a watchdog before commanding the rail ON.  `poweringOn` clears on
+    /// the first `pwr_pin_on` telemetry frame (see telemetry decode) or on
     /// disconnect; the watchdog is a backstop so a silently-dropped command
-    /// can't leave the button spinning forever.  Cmd 8 is a toggle, so the
-    /// button stays disabled while busy to prevent a double-press from
-    /// powering the rocket back off.
+    /// can't leave the button spinning forever.  The command now carries the
+    /// desired state, so a double-press is idempotent rather than powering
+    /// the rocket back off; the button still disables while busy.
     func beginPowerOn() {
         poweringOn = true
         poweringOnTimer?.invalidate()
@@ -423,7 +436,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         poweringOnTimer = Timer.scheduledTimer(withTimeInterval: 180.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async { self?.clearPoweringOn() }
         }
-        sendPowerToggle()
+        sendPowerState(railOn: true)
     }
 
     func clearPoweringOn() {
@@ -933,11 +946,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
     }
 
-    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's CONTROL
-    /// azimuth from the ring slot it occupies (slot azimuths {0,90,180,270} for "+"
-    /// or {45,135,225,315} for "×"), then sends 4 LE floats + a per-servo tilt-reverse
-    /// bitmask + an independent per-servo roll-reverse bitmask. The ring GUI's nose-down
-    /// view is a rendering choice and does not change these control-frame azimuths.
+    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's fin
+    /// RING-POSITION azimuth from the ring slot it occupies (slot azimuths
+    /// {0,90,180,270} for "+" or {45,135,225,315} for "×" — positions, not force
+    /// directions; the FC maps position→tangential force in
+    /// TR_ControlMixer::setFinLayout), then sends 4 LE floats + a per-servo
+    /// tilt-reverse bitmask + an independent per-servo roll-reverse bitmask. The ring
+    /// GUI's nose-down view is a rendering choice and does not change these azimuths.
     func sendFinConfig(ringMode: UInt8, servoAtSlot: [Int], reverse: [Bool], rollReverse: [Bool]) {
         guard servoAtSlot.count == 4, reverse.count == 4, rollReverse.count == 4 else { return }
         let slotAz: [Float] = ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]
@@ -1010,6 +1025,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // instead of a value it can't yet trust.
     @Published private(set) var contTestPendingUntil: [UInt8: Date] = [:]
     static let contTestPendingWindow: TimeInterval = 2.5
+    /// BS relay round trip is longer: BLE → uplink retry train (≤ ~1.5 s of
+    /// blind retries + TX-window defers) → FC test → 2 Hz LoRa downlink →
+    /// BS → BLE push.
+    static let contTestPendingWindowRelay: TimeInterval = 8.0
+
+    private var contTestWindow: TimeInterval {
+        isBaseStation ? Self.contTestPendingWindowRelay : Self.contTestPendingWindow
+    }
 
     /// True while a manual continuity test for `channel` is still round-
     /// tripping — the UI shows "TESTING" rather than the (stale) reading.
@@ -1018,12 +1041,102 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return Date() < until
     }
 
+    /// True when a pyro test command sent right now will actually go out.
+    /// Direct link: connected. BS link: connected AND a focused rocket whose
+    /// relayed stream is fresh — a BS that hasn't heard the rocket recently
+    /// would queue a blind uplink into silence (no ACK, #285) while the UI
+    /// advances as if the command were delivered. The fire-instant guard in
+    /// PyroTestView (#292) checks THIS, not just isConnected.
+    ///
+    /// Freshness is computed HERE from the focused rocket's lastSeen, not
+    /// read from `focusedRelayAgeMs` — that property only refreshes on the
+    /// 2 s RSSI tick, so at a fire instant it can be stale-true by up to a
+    /// full tick. A T-0 check deserves the real clock.
+    var pyroCommandPathReady: Bool {
+        guard isConnected else { return false }
+        guard isBaseStation else { return true }
+        guard let focus = focusRocketID,
+              let remote = remoteRockets.first(where: { $0.rocketID == focus })
+        else { return false }
+        let ageMs = UInt32(clamping: Int(Date().timeIntervalSince(remote.lastSeen) * 1000))
+        return ageMs <= Self.relayStaleThresholdMs
+    }
+
+    /// What the link can actually say about a pyro channel's continuity.
+    /// Distinguishing these four is the whole point: a red "NO CONT" must mean
+    /// "we measured an open circuit", never "we have no measurement". Folding
+    /// them into a Bool is what made a never-tested channel display a
+    /// confident red NO CONT on the LoRa path (bench 2026-08-17).
+    enum PyroContinuity: Equatable {
+        case present      // measured: continuity OK
+        case open         // measured: no continuity (fired, or nothing connected)
+        case untested     // link is good, but no reading has been taken yet
+        case noData       // stream stale / disconnected — nothing trustworthy
+    }
+
+    /// Path-aware continuity for the pyro UIs, #297 fail-safe included (a
+    /// non-live stream is .noData, never a held-over green).
+    ///
+    /// Direct link: the "ps" cont bit, which is ungated on the FC and so is a
+    /// real measurement whenever it is set. BS relay: the 65-byte LoRa
+    /// downlink carries no pyro_status, so continuity rides the sensor-health
+    /// scorecard — preferring the MEASURED bits (reported for every channel)
+    /// and falling back to the config-gated ones for pre-#803 rockets.
+    func pyroContinuity(channel: Int) -> PyroContinuity {
+        guard isConnected, effectiveDataStatus == .live else { return .noData }
+        if isBaseStation {
+            if let measured = telemetry.pyroMeasuredContinuity(channel: channel) {
+                switch measured {
+                case .ok:  return .present
+                case .bad: return .open
+                default:   return .untested      // .na here = not tested yet
+                }
+            }
+            // Older rocket firmware: only the config-gated bits exist. An
+            // unconfigured channel (.na) is unknowable on this path, and
+            // .degraded means configured-but-untested — both are "untested",
+            // NOT an open circuit.
+            switch telemetry.pyroHealth(channel: channel) {
+            case .ok:  return .present
+            case .bad: return .open
+            default:   return .untested
+            }
+        }
+        // Direct link: prefer the measured scorecard bits when present, since
+        // they distinguish untested from open; the raw cont bit cannot.
+        if let measured = telemetry.pyroMeasuredContinuity(channel: channel) {
+            switch measured {
+            case .ok:  return .present
+            case .bad: return .open
+            default:   return .untested
+            }
+        }
+        return telemetry.pyroCont(channel: channel) ? .present : .open
+    }
+
+    /// Fail-safe Bool for callers that must reduce to go/no-go: ONLY a
+    /// measured .present counts. Never use this to render a verdict — it
+    /// cannot distinguish "open" from "no reading".
+    func pyroContinuityLive(channel: Int) -> Bool {
+        pyroContinuity(channel: channel) == .present
+    }
+
     func sendPyroContTest(channel: UInt8) {
-        sendRawCommand(35, payload: Data([channel]))
+        if isBaseStation {
+            // Stand-back pyro test: relay over LoRa to the focused rocket.
+            // Broadcast (0xFF) is deliberately never used here — a pyro
+            // command must name its rocket.
+            guard let rid = focusRocketID else { return }
+            sendRelayCommand(targetRocketID: rid, innerCommand: 35,
+                             innerPayload: Data([channel]))
+        } else {
+            sendRawCommand(35, payload: Data([channel]))
+        }
         // Open the "TESTING" window; clear it (a published mutation, so the
         // UI re-renders the reveal) once the reading has had time to return.
-        contTestPendingUntil[channel] = Date().addingTimeInterval(Self.contTestPendingWindow)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.contTestPendingWindow) { [weak self] in
+        let window = contTestWindow
+        contTestPendingUntil[channel] = Date().addingTimeInterval(window)
+        DispatchQueue.main.asyncAfter(deadline: .now() + window) { [weak self] in
             guard let self = self else { return }
             // Only clear if a newer tap on this channel hasn't pushed the
             // deadline out past now.
@@ -1034,7 +1147,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func sendPyroFire(channel: UInt8) {
-        sendRawCommand(36, payload: Data([channel]))
+        if isBaseStation {
+            // Stand-back pyro test: FIRE relayed over LoRa (BS cmd 50 wrap →
+            // uplink cmd 36) so the operator keeps LoRa distance from a live
+            // charge. Blind fire-and-retry (#285): the rocket dedups the
+            // retry train; delivery is confirmed by the operator's own eyes
+            // and the post-fire continuity re-test, not by any ACK.
+            guard let rid = focusRocketID else { return }
+            sendRelayCommand(targetRocketID: rid, innerCommand: 36,
+                             innerPayload: Data([channel]))
+        } else {
+            sendRawCommand(36, payload: Data([channel]))
+        }
     }
 
     // MARK: - Magnetometer hard-iron calibration (issue #96)
@@ -1120,6 +1244,24 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     func sendToggleLogging() {
         sendCommand(23)
+    }
+
+    /// Rocket flash logging around a pyro test, path-aware. Direct link: the
+    /// legacy cmd-23 toggle (PyroTestView only calls this when the current
+    /// state differs from `on`, per the #385 guard). BS link: the BS's own
+    /// BLE cmd 23 is the wrong tool — its toggle authority is the BS CSV
+    /// logging state, so with BS logging on and rocket logging off it would
+    /// STOP the BS log mid-test and never start the rocket's. Relay uplink
+    /// cmd 23 with the desired-state payload instead: rocket-only, and
+    /// idempotent across the blind retry train.
+    func setRocketLoggingForTest(on: Bool) {
+        if isBaseStation {
+            guard let rid = focusRocketID else { return }
+            sendRelayCommand(targetRocketID: rid, innerCommand: 23,
+                             innerPayload: Data([on ? 1 : 0]))
+        } else {
+            sendCommand(23)
+        }
     }
 
     /// #435: Drift-Cast guidance aim point, BLE cmd 28 — handled end-to-end
@@ -1618,6 +1760,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 case 0xCB: parseSensorCalStatus(data)  // issue #132
                 case 0xCC: parseRocketStorageStats(data)
                 case 0xCD: parseBaseStationStorageStats(data)
+                case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
                 case 0x7B:                              // '{' → JSON object
                     if let s = OTAStatusUpdate.parse(data) {
                         otaStatus = s
@@ -1957,6 +2100,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         sensorCalStatus = status
+    }
+
+    /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).
+    /// Frame: [0]=0xCE [1]=refused BLE cmd (35 cont / 36 fire) [2]=channel
+    /// [3]=reason (1 = FC power rail off).
+    private func parsePyroTestRefusal(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 4, bytes[0] == 0xCE else {
+            print("[PYRO] malformed refusal frame (\(bytes.count) bytes)")
+            return
+        }
+        let refusal = PyroTestRefusal(cmd: bytes[1], channel: bytes[2],
+                                      reason: bytes[3], at: Date())
+        pyroTestRefusal = refusal
+        // A refused continuity test gets no reading back — close the TESTING
+        // window now instead of letting the spinner run out its 2.5 s
+        // implying a round trip happened.
+        if refusal.cmd == 35 {
+            contTestPendingUntil.removeValue(forKey: refusal.channel)
+        }
+        print("[PYRO] cmd \(refusal.cmd) CH\(refusal.channel) refused by OC (reason \(refusal.reason))")
     }
 
     private func parseRocketStorageStats(_ data: Data) {

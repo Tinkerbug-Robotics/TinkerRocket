@@ -201,6 +201,58 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertFalse(try decode(health: 0).gnssAbsentMode)
     }
 
+    // MARK: - Measured pyro continuity (SH_PYRO_MEAS_SHIFT, bits 24-30)
+
+    /// The measured bits are UNGATED by pyro config, unlike pyroHealth — that
+    /// asymmetry is the whole reason they exist (bench 2026-08-17: a ground
+    /// test on a channel not armed for flight read CONT over direct BLE and
+    /// "no reading" over LoRa, because only the LoRa carrier was config-gated).
+    func testPyroMeasuredContinuity_BitPositionsAndStates() throws {
+        // OK on ch1 (shift 24), BAD on ch4 (shift 30).
+        XCTAssertEqual(try decode(health: 1 << 24).pyroMeasuredContinuity(channel: 1), .ok)
+        XCTAssertEqual(try decode(health: 3 << 30).pyroMeasuredContinuity(channel: 4), .bad)
+        // Reporting one channel leaves the others "not tested" (.na), NOT open.
+        let onlyCh1 = try decode(health: 1 << 24)
+        XCTAssertEqual(onlyCh1.pyroMeasuredContinuity(channel: 2), .na)
+        // The measured field must not disturb the config-gated go/no-go bits:
+        // a measured-open channel is NOT a "Do not fly" on its own.
+        XCTAssertEqual(onlyCh1.pyroHealth(channel: 1), .na)
+        XCTAssertNotEqual(try decode(health: 3 << 30).flightReadiness, .notReady)
+    }
+
+    /// Channel 4's measured bits are 30-31, and the firmware emits "h" through
+    /// addInt — `snprintf("%d", (int)sensor_health)` — so a ch4 measured-open
+    /// sets bit 31 and the JSON carries a NEGATIVE number. Swift decodes that
+    /// into a negative Int and shifts it arithmetically; only the 2-bit mask
+    /// keeps every channel correct. Pin it, because the day this silently
+    /// breaks is the day a fired ch4 reports "not tested".
+    func testPyroMeasuredContinuity_Channel4_NegativeWireValue() throws {
+        // ch4 = BAD (0b11 << 30) = 0xC000_0000 -> int32 -1073741824
+        let ch4Open = try JSONDecoder().decode(
+            TelemetryData.self, from: #"{"h":-1073741824}"#.data(using: .utf8)!)
+        XCTAssertEqual(ch4Open.pyroMeasuredContinuity(channel: 4), .bad)
+        XCTAssertEqual(ch4Open.pyroMeasuredContinuity(channel: 1), .na)
+
+        // ch1 = OK (0b01 << 24) alongside ch4 = BAD -> 0xC100_0000 = -1056964608.
+        // The sign bit must not bleed into the lower channel's 2 bits.
+        let both = try JSONDecoder().decode(
+            TelemetryData.self, from: #"{"h":-1056964608}"#.data(using: .utf8)!)
+        XCTAssertEqual(both.pyroMeasuredContinuity(channel: 1), .ok)
+        XCTAssertEqual(both.pyroMeasuredContinuity(channel: 4), .bad)
+        XCTAssertEqual(both.baroHealth, .na)      // low items unaffected
+    }
+
+    /// All-four-NA means the rocket predates the field: callers must fall back
+    /// to pyroHealth rather than render "never tested" forever.
+    func testPyroMeasuredContinuity_AbsentOnOlderFirmware_ReturnsNil() throws {
+        // Config-gated pyro bits present, measured bits untouched.
+        let legacy = try decode(health: 1 << 12)
+        XCTAssertNil(legacy.pyroMeasuredContinuity(channel: 1))
+        XCTAssertEqual(legacy.pyroHealth(channel: 1), .ok)
+        // Out-of-range channels are nil even when the field is present.
+        XCTAssertNil(try decode(health: 1 << 24).pyroMeasuredContinuity(channel: 5))
+    }
+
     /// Missing "h" (older firmware / BS self-frame) → no scorecard, unknown.
     func testSensorHealth_MissingKey_Unknown() throws {
         let t = try JSONDecoder().decode(TelemetryData.self, from: "{}".data(using: .utf8)!)
@@ -343,5 +395,27 @@ final class TelemetryDataTests: XCTestCase {
         let zero = try decodeIMO(0)
         XCTAssertEqual(zero.relayedOrientationMode, .unknown)
         XCTAssertEqual(zero.relayedOrientationName, "")
+    }
+
+    func testSocDisplayNeverShowsANegativePercent() {
+        // A rocket on USB sits below the 2S curve, so the OC clamps SOC to 0
+        // before packing. The i16 spans -25...125% for headroom, so an exact
+        // 0% comes back as -0.00077 and printed as "-0.0%" on the dashboard.
+        func display(_ soc: Float?) -> String {
+            var t = TelemetryData()
+            t.soc = soc
+            return t.socDisplay
+        }
+
+        // The one that actually shipped: the OC prints SOC to one decimal,
+        // so an exact 0% arrives as the literal -0.0, which is == 0 and so
+        // survives any clamp untouched.
+        XCTAssertEqual(display(-0.0), "0.0%")
+        XCTAssertEqual(display(-0.00077), "0.0%")
+        XCTAssertEqual(display(-25), "0.0%")
+        XCTAssertEqual(display(125), "100.0%")
+        // In-range values are untouched, and absent stays absent.
+        XCTAssertEqual(display(42.5), "42.5%")
+        XCTAssertEqual(display(nil), "N/A")
     }
 }

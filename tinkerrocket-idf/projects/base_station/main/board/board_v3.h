@@ -73,4 +73,21 @@ struct board_pins
 
     // --- Flight-pack charger (MP2672GD-0000-Z, external 2S packs) ---
     static constexpr bool HAS_PACK_CHARGER = true;
+
+    // --- Flight-pack voltage sense (net PosADC, external_charger sheet) ---
+    // BatteryPos -> R40 -> PosADC -> R42 -> GND, with C55 100 nF at the pin
+    // as the sampling reservoir; read on GPIO8 (ADC1_CH7). Hardware PR #728
+    // (2026-08-09) re-ratioed the divider onto fleet resistor values:
+    // R40 300 k -> 1 M, R42 100 k -> 180 k. A full 2S pack (8.4 V) now puts
+    // 1.281 V at the pin (was 2.1 V); divider drain drops 21 uA -> 7 uA.
+    // Nothing reads this yet — constants staged so the first implementation
+    // cannot inherit the pre-#728 scale of 4.000.
+    static constexpr int   PACK_VSENSE_GPIO       = 8;    // PosADC, ADC1_CH7
+    static constexpr float PACK_VSENSE_DIVIDER    = 1180.0f / 180.0f;  // 6.5556 (pre-#728: 4.000)
+    // Attenuation chosen deliberately with the new scale: 6 dB. Its ~1.75 V
+    // calibrated range covers the 1.281 V full-pack reading with 27% headroom
+    // and roughly halves the LSB size vs 12 dB. The esp-idf cal curve is
+    // per-attenuation — create the adc_cali handle FOR THIS setting; changing
+    // one without the other silently mis-scales every read.
+    static constexpr int   PACK_VSENSE_ATTEN_DB   = 6;    // ADC_ATTEN_DB_6
 };

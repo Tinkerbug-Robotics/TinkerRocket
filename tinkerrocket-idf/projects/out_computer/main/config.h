@@ -9,10 +9,21 @@
 // everything else in this file is board-independent policy and must not
 // fork per revision. Select the V8 map with: idf.py -DTR_BOARD_V8=1 build
 // (default stays V7 until V8 bring-up completes).
+//
+// TR_BOARD_V9=1 selects the SAME board_v8.h. Unlike the FC — where V9 moved
+// three pyro pins and needed its own header — the S3's pin map is unchanged
+// from V8 through V10 (verified 2026-08-17 against every committed revision
+// of hardware/rocket-computer; see board_v8.h). The flag exists so a V9/V10
+// pair is built with one consistent revision flag on both MCUs, and so the
+// image is stamped "-v9". If a future revision does move an S3 pin, split
+// board_v9.h out here and switch this branch to it.
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
-#if TR_BOARD_V8
+#ifndef TR_BOARD_V9
+#define TR_BOARD_V9 0
+#endif
+#if TR_BOARD_V8 || TR_BOARD_V9
 #include "board/board_v8.h"
 #else
 #include "board/board_v7.h"

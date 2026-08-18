@@ -101,12 +101,21 @@ void TR_ServoControl::controlToSetpoint(float setpoint, float roll_rate) {
     roll_cmd_deg = pid.computePID(setpoint, roll_rate);
     roll_cmd_deg = constrain(roll_cmd_deg, min_cmd, max_cmd);
 
-    // Map the commanded fin angle (deg) to a servo pulse via the physical
-    // fin calibration (#267) — NOT the command-clamp span.
-    int base_pulse = usFromFinDeg(roll_cmd_deg);
-    base_pulse     = saturateCommand(base_pulse);
-    // drive all servos
-    setPulse(base_pulse);
+    // Pure roll: every fin takes the SAME commanded deflection (that is what
+    // makes a couple about the roll axis), negated on the servos whose
+    // roll-reverse bit is set.  Driving through setServoAngles() rather than a
+    // single broadcast pulse is what lets the per-servo sign exist at all, and
+    // it reuses the identical fin-calibration (#267) deg->us map and per-servo
+    // bias the broadcast applied, so with mask 0 the pulses are unchanged.
+    float angles[4];
+    for (int i = 0; i < 4; ++i) {
+        angles[i] = (roll_reverse_mask_ & (1u << i)) ? -roll_cmd_deg : roll_cmd_deg;
+    }
+    setServoAngles(angles);
+    // Keep the legacy servo-1 telemetry reading (getRollCmdUs); setServoAngles
+    // records every channel, the broadcast path this replaced recorded only
+    // channel 0.
+    roll_cmd_us = last_pulse_us_[0];
 }
 
 // #267: physical fin-angle (deg) -> servo pulse (us).  The line is defined by

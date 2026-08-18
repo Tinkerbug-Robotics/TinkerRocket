@@ -115,6 +115,14 @@ struct MagCalStatus: Equatable {
     /// UI then falls back to 2-state (untouched / captured).
     let partialMask: UInt32
 
+    /// Count→µT scale the offsets/live vector were decoded at.  Defaults to
+    /// the IIS2MDC's `lsbToUT`; pass the board's real scale to `decode` when
+    /// it is known (the mini's QMC5883P is 100/3750 µT/LSB, #797 —
+    /// `OutStatusQueryData.qmc5883pUtPerLsb`).  Cal offsets stay raw LSB on
+    /// the wire either way — only µT presentation depends on this.  (`var`
+    /// with a default so the memberwise init keeps its existing call sites.)
+    var utPerLsb: Float = MagCalStatus.lsbToUT
+
     /// Convenience: human-readable explanation for a non-zero rejectCode.
     /// Each verify-* sub-code names the specific gate that tripped so the
     /// user knows whether to re-tumble, re-rotate, or move away from
@@ -156,13 +164,19 @@ struct MagCalStatus: Equatable {
         return min(s, c)
     }
 
+    /// IIS2MDC sensitivity, 0.15 µT/LSB (datasheet 9.13); mirrors the
+    /// firmware-side IIS2MDC_LSB_TO_uT constant.  This is the DEFAULT decode
+    /// scale — pass the board's real scale to `decode` when the session
+    /// layer knows it (the mini's QMC5883P, #797).
+    static let lsbToUT: Float = 0.15
+
     /// Decode the wire payload (bytes *after* the 0xCA discriminator).
     /// Accepts the legacy 22-byte layout, the +coverage_mask layout, and the
     /// current 36-byte layout (coverage_mask + partial_mask trailers); missing
     /// trailers default to 0, so old firmware → coverageMask/partialMask = 0 and
     /// the UI falls back to a timer-only prompt cycle.  Returns nil if the
     /// buffer is too short to be even the original 22-byte payload.
-    static func decode(_ bytes: [UInt8]) -> MagCalStatus? {
+    static func decode(_ bytes: [UInt8], utPerLsb: Float = MagCalStatus.lsbToUT) -> MagCalStatus? {
         guard bytes.count >= 22 else { return nil }
 
         // Helpers — Data slicing is alignment-safe even at odd offsets.
@@ -203,10 +217,6 @@ struct MagCalStatus: Equatable {
         let liveZ_lsb: Int16 = (bytes.count >= 32) ? i16(30) : 0
         let partialMask: UInt32 = (bytes.count >= 36) ? u32(32) : 0
 
-        // IIS2MDC sensitivity is 0.15 µT/LSB (datasheet 9.13).  Mirrors
-        // the firmware-side IIS2MDC_LSB_TO_uT constant.
-        let LSB_TO_uT: Float = 0.15
-
         let sub    = MagCalSubType(rawValue: subTypeRaw) ?? .idle
         let reject = MagCalRejectCode(rawValue: rejectRaw) ?? .ok
 
@@ -222,10 +232,11 @@ struct MagCalStatus: Equatable {
             residualUT: Float(resUTx10) / 10.0,
             rejectCode: reject,
             coverageMask: coverageMask,
-            liveX_uT: Float(liveX_lsb) * LSB_TO_uT,
-            liveY_uT: Float(liveY_lsb) * LSB_TO_uT,
-            liveZ_uT: Float(liveZ_lsb) * LSB_TO_uT,
-            partialMask: partialMask
+            liveX_uT: Float(liveX_lsb) * utPerLsb,
+            liveY_uT: Float(liveY_lsb) * utPerLsb,
+            liveZ_uT: Float(liveZ_lsb) * utPerLsb,
+            partialMask: partialMask,
+            utPerLsb: utPerLsb
         )
     }
 }
@@ -342,8 +353,8 @@ extension MagCalStatus {
     /// origin (good) or absorbed an external interferer (bad).
     var centerMagnitudeUT: Float {
         let x = Float(offsetX), y = Float(offsetY), z = Float(offsetZ)
-        // IIS2MDC: 0.15 µT/LSB.  Mirrors LSB_TO_uT in decode().
-        return 0.15 * (x*x + y*y + z*z).squareRoot()
+        // Offsets are raw LSB; scale at the decode-time utPerLsb.
+        return utPerLsb * (x*x + y*y + z*z).squareRoot()
     }
 
     /// |c| / R as a fraction in [0, ∞).  Ratios approaching 1 mean the

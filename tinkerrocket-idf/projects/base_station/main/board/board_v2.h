@@ -55,4 +55,8 @@ struct board_pins
 
     // --- Flight-pack charger (MP2672): V3-only feature ---
     static constexpr bool HAS_PACK_CHARGER = false;
+    // --- Flight-pack voltage sense: not present on this board (see V3) ---
+    static constexpr int   PACK_VSENSE_GPIO     = -1;
+    static constexpr float PACK_VSENSE_DIVIDER  = 0.0f;
+    static constexpr int   PACK_VSENSE_ATTEN_DB = -1;
 };

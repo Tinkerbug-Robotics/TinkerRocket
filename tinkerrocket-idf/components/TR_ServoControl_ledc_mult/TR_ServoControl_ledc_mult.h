@@ -93,6 +93,20 @@ public:
     float getFinMinDeg() const { return fin_min_deg_; }
     float getFinMaxDeg() const { return fin_max_deg_; }
 
+    // Per-servo roll direction — the app's "Reverse roll" toggle, wire field
+    // FinConfigData::roll_reverse_mask.  Bit i negates servo i's roll-only
+    // deflection, exactly as TR_ControlMixer::roll_mix_ does for the mixed
+    // (guidance / ground-test) path.  Roll-only control drives all four fins
+    // from this class's single PID output, so the mask has to be applied HERE
+    // too: before this existed the toggle reached only the mixer, and a rocket
+    // whose roll came out backwards in roll-only flight could not be corrected
+    // from the app at all.  Set every bit to reverse roll globally (the usual
+    // case — a mirrored horn/fin convention flips all four together); set one
+    // bit for a single mis-linked servo.  Tilt (reverse_mask, held by the
+    // mixer) and roll signs stay independent — see FinConfigData.
+    void setRollReverseMask(uint8_t mask) { roll_reverse_mask_ = mask; }
+    uint8_t getRollReverseMask() const { return roll_reverse_mask_; }
+
     // Reset PID internal state (for replay / test sessions)
     void resetPID();
 
@@ -191,6 +205,11 @@ private:
     // setFinCalibration() is called with the real airframe values.
     float fin_min_deg_;
     float fin_max_deg_;
+
+    // Per-servo roll sign for the roll-only drive (see setRollReverseMask).
+    // 0 = every fin takes the roll command as-is, which is the pre-existing
+    // behaviour, so an unconfigured airframe is unaffected.
+    uint8_t roll_reverse_mask_ = 0;
 
     // Base PID gains (used as reference for gain scheduling)
     float kp_base;

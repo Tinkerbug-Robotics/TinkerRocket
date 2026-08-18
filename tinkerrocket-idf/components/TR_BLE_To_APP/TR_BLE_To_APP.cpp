@@ -750,8 +750,26 @@ void TR_BLE_To_APP::onCommandWrite(const uint8_t* data, size_t length)
     }
     else if (cmd == 8)
     {
-        // Command 8: Toggle power rail (PWR_PIN)
-        ESP_LOGI(BLE_TAG, "Power toggle");
+        // Command 8: power rail (PWR_PIN).  [desired u8] (1 = on, 0 = off);
+        // bare = legacy toggle.  This branch matches ANY length, so it has to
+        // capture the payload itself — it shadows the generic handler below,
+        // and without this the state byte was silently dropped and the rail
+        // stayed a blind toggle no matter what the app sent.
+        if (length > 1)
+        {
+            payload_len_local = length - 1;
+            if (payload_len_local > sizeof(payload_local))
+            {
+                payload_len_local = sizeof(payload_local);
+            }
+            memcpy(payload_local, data + 1, payload_len_local);
+            have_payload = true;
+            ESP_LOGI(BLE_TAG, "Power %s", data[1] ? "ON" : "OFF");
+        }
+        else
+        {
+            ESP_LOGI(BLE_TAG, "Power toggle (legacy, no state byte)");
+        }
     }
     else if (cmd == 9 && length >= 8)
     {
@@ -1530,6 +1548,21 @@ void TR_BLE_To_APP::sendStorageStats(uint8_t marker, const uint8_t* bytes, size_
             ESP_LOGW(BLE_TAG, "Storage-stats notify failed, rc=%d (count=%lu)",
                      rc, (unsigned long)fail_count);
         }
+    }
+}
+
+void TR_BLE_To_APP::sendPyroTestRefusal(uint8_t refused_cmd, uint8_t channel, uint8_t reason)
+{
+    if (!device_connected_) return;
+    // 0xCE marker + refused cmd + channel + reason (sibling of 0xCA..0xCD).
+    uint8_t buf[4] = { 0xCE, refused_cmd, channel, reason };
+    int rc = notify_data(conn_handle_, file_ops_val_handle_, buf, sizeof(buf));
+    if (rc != 0)
+    {
+        // A refusal the app never hears about looks like a dead button, so
+        // log every failure (these are one-shot, not a periodic stream).
+        ESP_LOGW(BLE_TAG, "Pyro-refusal notify failed, rc=%d (cmd=%u ch=%u)",
+                 rc, (unsigned)refused_cmd, (unsigned)channel);
     }
 }
 

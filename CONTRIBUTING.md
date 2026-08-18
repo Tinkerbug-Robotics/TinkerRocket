@@ -118,6 +118,29 @@ git will merge them happily and produce a corrupt or subtly wrong board. See
 [`hardware/README.md`](hardware/README.md), which covers this and three other
 hardware-specific rules in detail.
 
+### Building the flight computer
+
+There is no default board revision, and the build fails without one:
+
+```bash
+idf.py -B build_v9 -DTR_BOARD_V9=1 build
+```
+
+`TR_BOARD_V9=1` is the board in `hardware/rocket-computer/` (its title block reads V9, V10
+at HEAD). `TR_BOARD_V8=1` is the older bench boards, whose PCB was never committed;
+`TR_BOARD_V7=1` is the legacy board.
+
+The flag is mandatory here — and only here — because the failure mode is pyrotechnic and
+silent. V8 and V9 disagree on the ARM pin (5 vs 16) and swap the FIRE pins of channels 2
+and 3, while keeping all four continuity pins identical. A V9 board flashed with the V8
+map boots clean, reports the correct channel armed and continuous, then fires the *other*
+channel's connector — or, since ARM is never driven, fires nothing at all through a 1 kΩ
+bleed that still lights a test LED. The boot log prints the map it was built with
+(`[BOARD] pin map:` / `[BOARD] pyro:`); check it against the board before arming anything.
+
+The out computer takes `-DTR_BOARD_V9=1` too, though on that MCU it selects the same pins
+as V8 — pass it anyway so both halves of a pair are built with one flag.
+
 ### Building the base station
 
 The build flag does not match the board number. Current hardware is **V5**, built as

@@ -5,18 +5,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -24,6 +31,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +45,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
@@ -48,10 +57,13 @@ import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.ProfileRollWaypoint
 import com.tinkerbug.tinkerrocket.session.RocketProfile
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * Phase 5 settings — iOS SettingsView port.  Rules carried over:
@@ -89,6 +101,16 @@ fun SettingsScreen(
         session?.isConnected ?: kotlinx.coroutines.flow.MutableStateFlow(false)
         ).collectAsState()
     val canJog = session != null && connected && powerOn
+
+    // Inputs for the device-state gate below. Same distinct-until-changed
+    // discipline as powerOn — never subscribe this screen at telemetry rate.
+    val hasTelemetry by (
+        session?.hasReceivedTelemetry ?: kotlinx.coroutines.flow.MutableStateFlow(false)
+        ).collectAsState()
+    val initializing by remember(session) {
+        session?.telemetry?.map { it.state == "INITIALIZATION" }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(false)
+    }.collectAsState(initial = false)
 
     // Self-apply (#144): persist the edit, then push just its group.
     fun edit(group: ConfigGroup?, mutate: (RocketProfile) -> RocketProfile) {
@@ -176,6 +198,44 @@ fun SettingsScreen(
             return@Column
         }
 
+        // ── Device-state gate ────────────────────────────────────────────
+        // Everything below is FC configuration, and the FC answers none of it
+        // until it is running. This fails silently rather than loudly: the OC's
+        // #366 queue HOLDS commands while the rail is down and drains the batch
+        // at power-on, so edits made now land much later, out of order, or not
+        // at all. iOS SettingsView gates the same two states; Android had
+        // neither.
+        //
+        // Both scopes are load-bearing:
+        //  - !isBaseStation: the BS relay's TelemetryData never carries
+        //    pwrPinOn (the LoRa packet has no room for it), so over a
+        //    base-station link it reads false forever — an unscoped gate would
+        //    lock Settings on every BS connection.
+        //  - hasReceivedTelemetry (#377): before the first frame TelemetryData
+        //    is all-defaults, and a defaulted pwrPinOn is indistinguishable
+        //    from a genuinely-off rocket, so the notice would flash on every
+        //    connect — including for a rocket that is already powered on.
+        //
+        // Unlike iOS, firmware update is its own screen here rather than a row
+        // inside Settings, so nothing that still works with the rail off is
+        // lost behind this gate.
+        val directLink = session != null && connected && !session.isBaseStation
+        if (directLink && hasTelemetry && !powerOn) {
+            GateNotice(
+                "Rocket is off",
+                "The flight computer answers every setting on this screen, and it " +
+                    "isn't running yet. Power on the rocket to configure it.",
+            )
+            return@Column
+        }
+        if (directLink && initializing) {
+            GateNotice(
+                "Initializing…",
+                "Waiting for sensors to start up. Settings can be applied once ready.",
+            )
+            return@Column
+        }
+
         // ── Rocket ───────────────────────────────────────────────────────
         Section("Rocket") {
             ToggleRow("Sounds", active.soundsEnabled) { v -> edit(ConfigGroup.SOUNDS) { it.copy(soundsEnabled = v) } }
@@ -202,18 +262,87 @@ fun SettingsScreen(
                 NumField("Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f)) { s ->
                     s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
                 }
-                NumField("Camera type", active.cameraType.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.CAMERA) { it.copy(cameraType = v) } }
+            }
+        }
+
+        // ── IMU Mounting (iOS General-tab section; raw-int field replaced
+        //    by the iOS pickers on the 2026-08-09 design pass) ─────────────
+        Section("IMU Mounting") {
+            val auto = active.imuOrientSetting == 0xFF
+            // iOS: switching to auto stashes the manual code and restores it
+            // on the way back.
+            var savedOrientCode by remember { mutableStateOf<Int?>(null) }
+            SegmentedPicker(listOf("Manual", "Pad auto-detect"), if (auto) 1 else 0) { i ->
+                if (i == 1 && !auto) {
+                    savedOrientCode = active.imuOrientSetting
+                    edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = 0xFF) }
+                } else if (i == 0 && auto) {
+                    val restore = savedOrientCode ?: 0
+                    edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = restore) }
                 }
             }
-            FieldRow {
-                NumField("IMU orient", active.imuOrientSetting.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = v) } }
+            if (!auto) {
+                val code = active.imuOrientSetting.coerceIn(0, 23)
+                FieldRow {
+                    DropdownField(
+                        "Nose axis", listOf("+X", "-X", "+Y", "-Y", "+Z", "-Z"), code / 4,
+                        { a -> edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = a * 4 + code % 4) } },
+                        Modifier.weight(1f),
+                    )
+                    DropdownField(
+                        "Fin clocking", listOf("0°", "90°", "180°", "270°"), code % 4,
+                        { c -> edit(ConfigGroup.IMU) { it.copy(imuOrientSetting = (code / 4) * 4 + c) } },
+                        Modifier.weight(1f),
+                    )
                 }
-                NumField("IMU rate Hz", active.imuRateHz.toString(), Modifier.weight(1f)) { s ->
-                    s.toIntOrNull()?.let { v -> edit(ConfigGroup.IMU) { it.copy(imuRateHz = v) } }
-                }
+                Caption(
+                    "Which board axis points at the nose (up on the pad). Manual also fixes " +
+                        "the fin clocking (quarter-turns about the nose) — required for " +
+                        "roll-controlled or guided flight.",
+                )
+            } else {
+                Caption(
+                    "Detects the nose axis from gravity on the pad. It can’t observe fin " +
+                        "clocking, so this is fine only for non-controlled flights — not " +
+                        "roll or guidance.",
+                )
             }
+            session?.let { ActiveOrientRow(it) }
+        }
+
+        // ── IMU Logging Rate (iOS General-tab section) ───────────────────
+        Section("IMU Logging Rate") {
+            val rates = listOf(0, 960, 1920, 3840)   // Dynamic + ISM6HG256 ODR steps
+            val rateIdx = rates.indexOf(active.imuRateHz)
+            SegmentedPicker(listOf("Dynamic", "1k", "2k", "4k"), rateIdx) { i ->
+                edit(ConfigGroup.IMU) { it.copy(imuRateHz = rates[i]) }
+            }
+            Caption(
+                if (rateIdx == 0) {
+                    "Logs at 4k (3840 Hz) from the pad through boost and coast, then drops " +
+                        "to 1k (960 Hz) once the rocket detects its recovery deployment — " +
+                        "full shock and vibration detail where it matters, without filling " +
+                        "the log under canopy."
+                } else {
+                    "Samples logged per second from the IMU (actual: 960 / 1920 / 3840 Hz). " +
+                        "Higher rates capture faster shock and vibration detail; the control " +
+                        "loop is unaffected. Applies on the pad — never mid-flight."
+                },
+            )
+        }
+
+        // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
+        Section("Camera") {
+            SegmentedPicker(listOf("None", "GoPro", "RunCam"), active.cameraType.coerceIn(0, 2)) { i ->
+                edit(ConfigGroup.CAMERA) { it.copy(cameraType = i) }
+            }
+            Caption(
+                when (active.cameraType) {
+                    1 -> "GoPro: controlled via GPIO pulse on shutter pin."
+                    2 -> "RunCam: controlled via UART serial command."
+                    else -> "No camera connected."
+                },
+            )
         }
 
         // ── PID ──────────────────────────────────────────────────────────
@@ -395,39 +524,102 @@ fun SettingsScreen(
             }
         }
 
-        // ── Pyro (config only — ARMING stays an explicit dashboard action) ─
-        Section("Pyro") {
-            PyroChannelRow(1, active.pyro1Enabled, active.pyro1TriggerMode, active.pyro1TriggerValue,
-                onEnabled = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro1Enabled = v) } },
-                onMode = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro1TriggerMode = v) } },
-                onValue = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro1TriggerValue = v) } })
-            PyroChannelRow(2, active.pyro2Enabled, active.pyro2TriggerMode, active.pyro2TriggerValue,
-                onEnabled = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro2Enabled = v) } },
-                onMode = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro2TriggerMode = v) } },
-                onValue = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro2TriggerValue = v) } })
-            PyroChannelRow(3, active.pyro3Enabled, active.pyro3TriggerMode, active.pyro3TriggerValue,
-                onEnabled = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro3Enabled = v) } },
-                onMode = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro3TriggerMode = v) } },
-                onValue = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro3TriggerValue = v) } })
-            PyroChannelRow(4, active.pyro4Enabled, active.pyro4TriggerMode, active.pyro4TriggerValue,
-                onEnabled = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro4Enabled = v) } },
-                onMode = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro4TriggerMode = v) } },
-                onValue = { v -> edit(ConfigGroup.PYRO) { it.copy(pyro4TriggerValue = v) } })
-        }
+        // ── Pyro (config only — ARMING stays an explicit dashboard action).
+        //    iOS form: one section per channel, trigger picker + unit-aware
+        //    value + continuity test controls.  Every edit does the iOS
+        //    triple-write: profile → syncer cmd-34 push → rocketConfig
+        //    mirror, so the dashboard tiles update without a readback. ─────
+        PyroChannelSection(
+            1, active.pyro1Enabled, active.pyro1TriggerMode, active.pyro1TriggerValue, session,
+            onEnabled = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro1Enabled = v) }
+            },
+            onMode = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro1TriggerMode = v) }
+            },
+            onValue = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro1TriggerValue = v) }
+            },
+        )
+        PyroChannelSection(
+            2, active.pyro2Enabled, active.pyro2TriggerMode, active.pyro2TriggerValue, session,
+            onEnabled = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro2Enabled = v) }
+            },
+            onMode = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro2TriggerMode = v) }
+            },
+            onValue = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro2TriggerValue = v) }
+            },
+        )
+        PyroChannelSection(
+            3, active.pyro3Enabled, active.pyro3TriggerMode, active.pyro3TriggerValue, session,
+            onEnabled = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro3Enabled = v) }
+            },
+            onMode = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro3TriggerMode = v) }
+            },
+            onValue = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro3TriggerValue = v) }
+            },
+        )
+        PyroChannelSection(
+            4, active.pyro4Enabled, active.pyro4TriggerMode, active.pyro4TriggerValue, session,
+            onEnabled = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro4Enabled = v) }
+            },
+            onMode = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro4TriggerMode = v) }
+            },
+            onValue = { v ->
+                edit(ConfigGroup.PYRO) { it.copy(pyro4TriggerValue = v) }
+            },
+        )
+        Caption(
+            "Single shared arm FET arms momentarily for each fire pulse. Test continuity " +
+                "before flight; test-fire (Ground Test) is iOS-only for now.",
+        )
 
         // ── Recovery — app-side landing prediction, nothing on the wire ──
-        Section("Recovery (landing prediction)") {
+        Section("Recovery") {
+            // iOS applyRecoveryConfig validation: rates and the deploy
+            // altitude must be > 0 (a rate ≤ 0.1 fps degrades simulateDescent
+            // to "lands where it is"); drag k accepts 0 (gravity-only) but
+            // never a negative, which would turn the drag term into thrust
+            // and blow the ballistic prediction up.
             FieldRow {
                 NumField("Drogue ft/s", fmtD(active.drogueRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
+                    s.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
                 }
                 NumField("Main ft/s", fmtD(active.mainRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
+                    s.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
                 }
                 NumField("Main alt ft", fmtD(active.mainDeployAltAglFt), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
+                    s.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
                 }
             }
+            Caption(
+                "Descent profile for the live landing prediction and Drift Cast: drogue " +
+                    "rate above the main-deploy altitude (AGL), main rate below it. Stored " +
+                    "per rocket in the app — not sent to the flight computer.",
+            )
+            // iOS Drag k row — was missing on Android (accidental omission,
+            // the other three recovery fields were ported together).
+            FieldRow {
+                NumField("Drag k 1/m", fmtD(active.ballisticDragK), Modifier.weight(1f)) { s ->
+                    s.toDoubleOrNull()?.takeIf { it >= 0 }
+                        ?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
+                }
+            }
+            Caption(
+                "Quadratic drag coefficient for the coast-to-apogee ballistic prediction " +
+                    "(a = −k·|v|·v). ≈0.0005 for typical 54–65 mm airframes; 0 = gravity-only.",
+            )
         }
 
         Section("Notes") {
@@ -482,20 +674,21 @@ fun SettingsScreen(
 
 @Composable
 private fun SyncBadge(state: SyncState) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (label, color) = when (state) {
         SyncState.Idle -> return
-        SyncState.AwaitingSync -> "awaiting sync" to Color(0xFF9E9E9E)
-        SyncState.NoProfile -> "no profile" to Color(0xFFFFA000)
-        SyncState.Syncing -> "syncing…" to Color(0xFF1E88E5)
-        SyncState.Synced -> "synced" to Color(0xFF43A047)
-        is SyncState.Failed -> "sync failed" to Color(0xFFE53935)
+        SyncState.AwaitingSync -> "awaiting sync" to tr.statusWarn
+        SyncState.NoProfile -> "no profile" to tr.statusIdle
+        SyncState.Syncing -> "syncing…" to tr.statusIdle
+        SyncState.Synced -> "synced" to tr.statusOk
+        is SyncState.Failed -> "sync failed" to tr.statusBad
     }
     Text(
         label,
         style = MaterialTheme.typography.labelMedium,
-        color = Color.White,
+        color = color,
         modifier = Modifier
-            .background(color, RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }
@@ -546,6 +739,27 @@ private fun CalBanner(label: String, advisory: CalAdvisory, onImport: (() -> Uni
                     )
                 }
             }
+    }
+}
+
+/** Full-width notice shown in place of the config sections when the rocket
+ *  can't accept settings yet (rail off / initializing). */
+@Composable
+private fun GateNotice(title: String, body: String) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
@@ -616,25 +830,266 @@ private fun NumField(
     )
 }
 
+/**
+ * iOS Pyro-tab channel section: Enabled toggle; when enabled, the trigger
+ * picker + unit-aware value field (canonical storage: seconds for mode 0,
+ * METERS for mode 1 — entered/shown in the display unit, #160) + the iOS
+ * explainer caption; then the continuity test controls.
+ */
 @Composable
-private fun PyroChannelRow(
+private fun PyroChannelSection(
     channel: Int,
     enabled: Boolean,
     mode: Int,
     value: Float,
+    session: DeviceSession?,
     onEnabled: (Boolean) -> Unit,
     onMode: (Int) -> Unit,
     onValue: (Float) -> Unit,
 ) {
+    Section("Pyro Channel $channel") {
+        ToggleRow("Enabled", enabled, onEnabled)
+        if (enabled) {
+            val isTime = mode == 0
+            SegmentedPicker(
+                listOf("Time after apogee", "Altitude on descent"),
+                if (isTime) 0 else 1,
+            ) { onMode(it) }
+            val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
+            val display =
+                if (isTime) String.format(Locale.ROOT, "%.1f", value)
+                else String.format(
+                    Locale.ROOT, "%.0f",
+                    UnitFormatter.altitudeValue(value.toDouble(), units),
+                )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NumField(if (isTime) "Delay" else "Altitude", display, Modifier.weight(1f)) { s ->
+                    s.toFloatOrNull()?.let { v ->
+                        onValue(
+                            if (isTime) v
+                            else UnitFormatter.altitudeToMeters(v.toDouble(), units).toFloat(),
+                        )
+                    }
+                }
+                Text(
+                    if (isTime) "s after apogee"
+                    else "${UnitFormatter.altitudeUnit(units)} on descent",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Caption(
+                if (isTime) "Fires this many seconds after apogee is detected."
+                else "Fires when the rocket descends through this altitude (AGL).",
+            )
+        }
+        session?.let { PyroTestControls(it, channel) }
+    }
+}
+
+/**
+ * iOS PyroChannelTestControls twin — a CHILD composable so telemetry-rate
+ * recomposition stays contained (the #361 keyboard fix; the Settings screen
+ * itself reads no telemetry).  Direct connected rocket links only.  The
+ * "Test Pyro Channel" test-fire button is NOT ported — the Ground Test
+ * screen is its own safety-sensitive pass (ledger).
+ */
+@Composable
+private fun PyroTestControls(session: DeviceSession, channel: Int) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    if (session.isBaseStation) return
+    val connected by session.isConnected.collectAsState()
+    if (!connected) return
+
+    val armed by remember(session) {
+        session.telemetry.map { it.pyroArmed }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+    val fired by remember(session, channel) {
+        session.telemetry.map { it.pyroFired(channel) }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+    val contBit by remember(session, channel) {
+        session.telemetry.map { it.pyroCont(channel) }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+    val inflight by remember(session) {
+        session.telemetry.map { it.state == "INFLIGHT" }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+    val dataStatus by session.effectiveDataStatus.collectAsState()
+    val contPendingUntil by session.contTestPendingUntil.collectAsState()
+
+    // #297 fail-safe: continuity is trusted only from a LIVE frame.
+    val cont = contBit && dataStatus == com.tinkerbug.tinkerrocket.protocol.TelemetryData.DataStatus.LIVE
+
+    // iOS contTestActive: a 5 s reveal window after a manual test, so the
+    // readout is visible even while unarmed.
+    var contTestActive by remember { mutableStateOf(false) }
+    LaunchedEffect(contTestActive) {
+        if (contTestActive) {
+            delay(5_000)
+            contTestActive = false
+        }
+    }
+    // TESTING ends on a clock edge — tick until the window expires.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(contPendingUntil) {
+        // The state and the loop condition must read the SAME sample —
+        // sampling twice lets the deadline fall between them and strands the
+        // spinner on forever (nothing rewrites nowMs once the loop exits).
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            if ((contPendingUntil[channel] ?: 0L) <= nowMs) break
+            delay(150)
+        }
+    }
+    val testing = (contPendingUntil[channel] ?: 0L) > nowMs
+
+    if (armed || contTestActive) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Continuity", style = MaterialTheme.typography.bodyLarge)
+            if (testing) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                    Text(
+                        "TESTING",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val c = if (cont) tr.statusOk else tr.statusBad
+                    Box(Modifier.size(8.dp).background(c, CircleShape))
+                    Text(
+                        if (cont) "CONT" else "NO CONT",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = c,
+                    )
+                }
+            }
+        }
+    }
+    val blocked = armed || fired || inflight
+    if (!blocked) {
+        // Rail gate (iOS PyroChannelTestControls twin): with the FC powered
+        // off the OC refuses cmd 35 outright — a queued test would deliver
+        // its ARM pulse at the next power-on — so don't offer a button that
+        // can only be refused.  pwrPinOn reads false until the first
+        // telemetry frame, which fails safe to disabled (#377).
+        val railOn by remember(session) {
+            session.telemetry.map { it.pwrPinOn }.distinctUntilChanged()
+        }.collectAsState(initial = false)
+        TextButton(
+            enabled = railOn,
+            onClick = {
+                session.sendPyroContTest(channel)
+                contTestActive = true
+            },
+        ) { Text("Test Continuity") }
+        if (!railOn) {
+            Text(
+                "Power on the rocket to test.",
+                style = MaterialTheme.typography.bodySmall,
+                color = tr.statusWarn,
+            )
+        }
+    }
+}
+
+/**
+ * iOS segmented Picker analog: evenly-split single-select chips.  Labels
+ * stay on ONE line and shrink to fit instead of wrapping — an equal-weight
+ * four-up row is narrower than "Dynamic" at body size, and a chip reading
+ * "Dynami / c" is worse than a smaller one that reads.
+ */
+@Composable
+private fun SegmentedPicker(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEachIndexed { i, label ->
+            FilterChip(
+                selected = i == selected,
+                onClick = { if (i != selected) onSelect(i) },
+                label = {
+                    Text(
+                        label,
+                        maxLines = 1,
+                        style = MaterialTheme.typography.labelMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** iOS Form footer caption. */
+@Composable
+private fun Caption(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** iOS wheel/menu Picker analog: labeled dropdown. */
+@Composable
+private fun DropdownField(
+    label: String,
+    options: List<String>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("$label: ${options.getOrElse(selected) { "?" }}")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEachIndexed { i, o ->
+                DropdownMenuItem(text = { Text(o) }, onClick = { open = false; onSelect(i) })
+            }
+        }
+    }
+}
+
+/**
+ * iOS "Active on rocket" row: the device-reported ACTIVE mounting beside the
+ * profile SETTING (a v3-orientation FC reports it via imu_orient; hidden
+ * until then).  A child composable so the session flows don't recompose the
+ * whole Settings screen.
+ */
+@Composable
+private fun ActiveOrientRow(session: DeviceSession) {
+    val name by session.imuOrientationName.collectAsState()
+    val mode by session.imuOrientationMode.collectAsState()
+    if (name.isEmpty()) return
     Row(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Ch $channel", Modifier.padding(end = 4.dp), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = enabled, onCheckedChange = onEnabled)
-        NumField("Mode", mode.toString(), Modifier.weight(1f)) { s -> s.toIntOrNull()?.let(onMode) }
-        NumField("Value", fmt(value), Modifier.weight(1f)) { s -> s.toFloatOrNull()?.let(onValue) }
+        Text("Active on rocket", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "$name (${mode.label})",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -655,8 +1110,16 @@ private fun TextPromptDialog(
     )
 }
 
+// iOS formatInt / formatDecimal: whole values print as integers, everything
+// else via "%.6f" with trailing zeros stripped.  Kotlin's toString() would
+// render small magnitudes in scientific notation — a Drag k of 0.0005 showed
+// as "5.0E-4", which is both an iOS mismatch and a number nobody wants to
+// retype.
+private fun plainDecimal(v: Double): String =
+    String.format(Locale.ROOT, "%.6f", v).trimEnd('0').let { if (it.endsWith(".")) it + "0" else it }
+
 private fun fmt(f: Float): String =
-    if (f == f.toLong().toFloat()) f.toLong().toString() else f.toString()
+    if (f == f.toLong().toFloat()) f.toLong().toString() else plainDecimal(f.toDouble())
 
 private fun fmtD(d: Double): String =
-    if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+    if (d == d.toLong().toDouble()) d.toLong().toString() else plainDecimal(d)

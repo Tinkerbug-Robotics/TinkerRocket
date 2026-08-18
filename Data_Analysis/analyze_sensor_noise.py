@@ -13,13 +13,30 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from plot_flight_data_mini import parse_binary_file, get_array, pressure_to_altitude
 
-BINARY_FILE = Path(__file__).parent.parent.parent / \
-    "TestFlights/2026_03_08/Raw Downloads/Goblin Flight 2 F52/flight_20260308_190239.bin"
+# The magnetometer this board actually carries. IIS2MDC is the current PCB
+# revision's part; MMC5983MA is the previous one and is absent from every recent
+# log, so asking only for it printed "Pad mag samples: 0" on every real flight.
+# Both parse to identical field names, so whichever is present works.
+_MAG_SOURCES = ("IIS2MDC", "MMC5983MA")
+
+
+def _binary_file() -> Path:
+    """The log to analyse. Was a hardcoded path outside the repository, which
+    raised FileNotFoundError for anyone but its author — the reason this had not
+    been run since it was written."""
+    if len(sys.argv) > 1:
+        return Path(sys.argv[1])
+    default = Path(__file__).resolve().parent.parent / "examples" / "flights" / \
+        "flight_20260705_174532.bin"
+    if default.exists():
+        return default
+    raise SystemExit(f"usage: {Path(sys.argv[0]).name} <flight_YYYYMMDD_HHMMSS.bin>")
 
 
 def analyze():
-    print(f"Parsing: {BINARY_FILE}")
-    records, stats, config = parse_binary_file(str(BINARY_FILE))
+    binary_file = _binary_file()
+    print(f"Parsing: {binary_file}")
+    records, stats, config = parse_binary_file(str(binary_file))
 
     print(f"\nParsing stats:")
     print(f"  File size: {stats['file_size']:,} bytes")
@@ -237,10 +254,11 @@ def analyze():
     # MAGNETOMETER ANALYSIS
     # ============================================================
     print("\n" + "=" * 70)
-    print("Magnetometer (MMC5983MA) - Pad Noise Analysis")
+    mag_name = next((n for n in _MAG_SOURCES if records.get(n)), None)
+    print(f"Magnetometer ({mag_name or 'none present'}) - Pad Noise Analysis")
     print("=" * 70)
 
-    mag = records["MMC5983MA"]
+    mag = records.get(mag_name) or []
     mag_times = get_array(mag, "time_us")
     pad_mag_mask = (mag_times >= pad_start_us) & (mag_times <= pad_end_us)
     n_pad_mag = pad_mag_mask.sum()

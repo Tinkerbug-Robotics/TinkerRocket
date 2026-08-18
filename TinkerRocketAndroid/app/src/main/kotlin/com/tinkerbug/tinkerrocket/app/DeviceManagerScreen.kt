@@ -187,6 +187,7 @@ fun DeviceManagerScreen(
 
 @Composable
 private fun DeviceRow(rec: KnownDevice, connected: Boolean, mismatch: Boolean, onClick: () -> Unit) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -211,17 +212,17 @@ private fun DeviceRow(rec: KnownDevice, connected: Boolean, mismatch: Boolean, o
         }
         Column(horizontalAlignment = Alignment.End) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (connected) Box(Modifier.size(8.dp).background(Color(0xFF43A047), CircleShape))
-                if (mismatch) Text("⚠", color = Color(0xFFFFA000))
+                if (connected) Box(Modifier.size(8.dp).background(tr.statusConnected, CircleShape))
+                if (mismatch) Text("⚠", color = tr.statusWarn)
                 Text(
                     "ID ${rec.effectiveNetworkID}",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    color = if (mismatch) Color(0xFFFFA000) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (mismatch) tr.statusWarn else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (rec.hasPendingChanges) {
-                Text("queued", style = MaterialTheme.typography.labelSmall, color = Color(0xFF1E88E5))
+                Text("queued", style = MaterialTheme.typography.labelSmall, color = tr.statusPending)
             }
         }
     }
@@ -243,9 +244,10 @@ private fun deviceSubtitle(rec: KnownDevice): String {
 
 @Composable
 private fun DeviceTypeBadge(type: BleDeviceType) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (letter, color) = when (type) {
-        BleDeviceType.ROCKET -> "R" to MaterialTheme.colorScheme.primary
-        BleDeviceType.BASE_STATION -> "B" to Color(0xFF00838F)
+        BleDeviceType.ROCKET -> "R" to tr.deviceRocket
+        BleDeviceType.BASE_STATION -> "B" to tr.deviceBaseStation
         else -> "?" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Box(
@@ -294,6 +296,7 @@ private fun KnownDeviceDetail(
     pusher: (String) -> DeviceSession?,
     onBack: () -> Unit,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val devices by store.devices.collectAsState()
     val rec = devices.firstOrNull { it.unitID == unitID }
     var showRename by remember { mutableStateOf(false) }
@@ -326,7 +329,7 @@ private fun KnownDeviceDetail(
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 Modifier.size(8.dp).background(
-                                    if (connected) Color(0xFF43A047) else MaterialTheme.colorScheme.surfaceVariant,
+                                    if (connected) tr.statusConnected else MaterialTheme.colorScheme.surfaceVariant,
                                     CircleShape,
                                 ),
                             )
@@ -405,7 +408,7 @@ private fun KnownDeviceDetail(
                             "ID: ${rec.effectiveNetworkID}" +
                             if (rec.pendingNetworkID != null) "  (queued)" else "",
                         fontFamily = FontFamily.Monospace,
-                        color = if (mismatch) Color(0xFFFFA000) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (mismatch) tr.statusWarn else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (mismatch && networkId > 0) {

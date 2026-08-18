@@ -10,7 +10,17 @@
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
 #include <TR_IIS2MDC.h>
+// GNSS driver is a compile-time seam: the rocket-computer boards carry a
+// u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
+// identical begin/pollNewPVT/getGNSSData surface and produce the same
+// GNSSData, so the selection is the type alone. Projects opt in with
+// add_compile_definitions(TR_GNSS_DRIVER_LC86=1) at project level (same
+// pattern as TR_GUIDANCE_AVAILABLE); default is u-blox, unchanged.
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#include <TR_GNSSReceiverLC86_Serial.h>
+#else
 #include <TR_GNSSReceiverUBlox_Serial.h>
+#endif
 #include <RocketComputerTypes.h>
 
 typedef struct
@@ -103,7 +113,13 @@ public:
                     // truth.
                     uint8_t  ism6_low_g_fs_g   = 16,
                     uint16_t ism6_high_g_fs_g  = 256,
-                    uint16_t ism6_gyro_fs_dps  = 4000);
+                    uint16_t ism6_gyro_fs_dps  = 4000,
+                    // Mini seam: the mini's magnetometer shares one physical
+                    // I2C bus with the INA230, so the app creates the bus and
+                    // hands the same handle to both. nullptr (the default and
+                    // every existing caller) keeps the collector creating and
+                    // owning its own bus on I2C_NUM_1.
+                    i2c_master_bus_handle_t external_i2c_bus = nullptr);
 
     void begin(uint8_t imu_execution_core);
 
@@ -200,12 +216,19 @@ private:
     // the legacy MMC5983MA SPI path is skipped.
     bool iis2mdc_active = false;
     i2c_master_bus_handle_t iis2mdc_bus = nullptr;
+    // True when iis2mdc_bus was supplied by the app (shared with other
+    // devices) — the collector then must not create or delete it.
+    bool iis2mdc_bus_external = false;
 
     TR_ISM6HG256 ism6hg256;
     TR_BMP585 bmp585;
     TR_MMC5983MA mmc5983ma;
     TR_IIS2MDC iis2mdc;
+#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+    TR_GNSSReceiverLC86Serial gnss_receiver;
+#else
     TR_GNSSReceiverUBloxSerial gnss_receiver;
+#endif
     ISM6HG256Data ism6hg256_data;   // scratch for the poll task (queue is the handoff)
     BMP585Data bmp585_data;
     MMC5983MAData mmc5983ma_data;

@@ -1,35 +1,47 @@
 package com.tinkerbug.tinkerrocket.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
+import com.tinkerbug.tinkerrocket.protocol.SignalQuality
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.session.FleetDevice
 import com.tinkerbug.tinkerrocket.session.DeviceSession
@@ -52,23 +64,30 @@ fun DashboardScreen(
     phoneLocation: PhoneLocationManager? = null,
     profileStore: com.tinkerbug.tinkerrocket.session.RocketProfileStore? = null,
     container: AppContainer? = null,
+    tool: String? = null,
+    onTool: (String?) -> Unit = {},
 ) {
     val session = device.session
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
 
-    // Tools sub-routes (iOS: sheets from the dashboard).
-    var tool by androidx.compose.runtime.remember {
-        androidx.compose.runtime.mutableStateOf<String?>(null)
-    }
+    // Tools sub-routes (iOS: sheets from the dashboard).  The route state is
+    // owned by MainActivity, not here, so the top bar drawn above this screen
+    // can tell that a tool is open -- see ConnectedTopBar's chevron.
     when (tool) {
-        "servo" -> { ServoTestScreen(session, profileStore, onBack = { tool = null }); return }
-        "sim" -> { SimulationScreen(session, onBack = { tool = null }); return }
-        "scan" -> { FreqScanScreen(session, onBack = { tool = null }); return }
-        "magcal" -> { MagCalScreen(session, syncer, onBack = { tool = null }); return }
+        "servo" -> { ServoTestScreen(session, profileStore, onBack = { onTool(null) }); return }
+        "sim" -> { SimulationScreen(session, onBack = { onTool(null) }); return }
+        "scan" -> { FreqScanScreen(session, onBack = { onTool(null) }); return }
+        "magcal" -> { MagCalScreen(session, syncer, onBack = { onTool(null) }); return }
         "ota" -> {
+            // The return sits outside the null check so an unroutable state
+            // renders nothing rather than falling through into the dashboard
+            // body.  One screen per route state is the invariant the teardown
+            // hooks rest on: two screens composed at once would mean a tool's
+            // onDispose never runs while its route is still selected.
             if (container != null) {
-                FirmwareUpdateScreen(container, device.deviceId, session, onBack = { tool = null })
-                return
+                FirmwareUpdateScreen(container, device.deviceId, session, onBack = { onTool(null) })
             }
+            return
         }
     }
 
@@ -77,7 +96,24 @@ fun DashboardScreen(
     if (phoneLocation != null) {
         androidx.compose.runtime.DisposableEffect(Unit) {
             phoneLocation.start()
+            // The fix at the START of a logging session is the one worth
+            // having; a timestamp left from the previous session would
+            // otherwise suppress it (iOS resets on the same edge).
+            phoneLocation.resetFixThrottle()
             onDispose { phoneLocation.stop() }
+        }
+        // The phone IS the base station's position — the BS has no GNSS —
+        // so push it down and let the BS write it into its CSV.  Without
+        // this the range between the two ends is displayed once and then
+        // discarded, and a range test cannot be reconstructed from its own
+        // logs (the 2026-08-08 Kaua'i test only survived because the site
+        // was remembered).  Throttled inside reportFix; the BS ignores the
+        // write unless a logging session is open.
+        if (session.isBaseStation) {
+            val phoneFixForPush by phoneLocation.location.collectAsState()
+            LaunchedEffect(phoneFixForPush) {
+                if (phoneFixForPush != null) phoneLocation.reportFix(session)
+            }
         }
     }
     val telemetry by session.telemetry.collectAsState()
@@ -88,6 +124,12 @@ fun DashboardScreen(
     val poweringOn by session.poweringOn.collectAsState()
     val remoteRockets by session.remoteRockets.collectAsState()
     val focusRocketId by session.focusRocketId.collectAsState()
+    val imuOrientName by session.imuOrientationName.collectAsState()
+    val imuOrientMode by session.imuOrientationMode.collectAsState()
+    // iOS isOnPadState (DashboardView.swift:2422) — the two states in which a
+    // ground test is allowed to move control surfaces.
+    val simLaunched by session.simLaunched.collectAsState()
+    val onPad = telemetry.state == "READY" || telemetry.state == "PRELAUNCH"
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -129,13 +171,18 @@ fun DashboardScreen(
 
         // Staleness banner (#390 worsen-only overlay)
         if (dataStatus != TelemetryData.DataStatus.LIVE) {
+            val syncing = dataStatus == TelemetryData.DataStatus.SYNCING
             Banner(
                 text = when (dataStatus) {
                     TelemetryData.DataStatus.SYNCING -> "Syncing…"
                     TelemetryData.DataStatus.STALE -> "STALE DATA — link degraded"
                     else -> "NO DATA"
                 },
-                color = Color(0xFFB00020),
+                // Startup sync is not a fault; it rendered in the same red as a
+                // dead link, so all three states read identically.  STALE keeps
+                // red rather than iOS's orange -- design-language.md:63 settles
+                // that deliberately, a launch-safety signal that should shout.
+                color = if (syncing) tr.statusPending else tr.statusBad,
             )
         }
 
@@ -146,6 +193,17 @@ fun DashboardScreen(
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
+        //
+        // Direct links only, as on iOS ("rocket only, confirmed by telemetry",
+        // DashboardView.swift:574, which gates the same branch on
+        // deviceType == .rocket).  The power pin is an OC-local signal that the
+        // LoRa relay does not carry: on a base-station link fs bit 0x10 is
+        // always clear, so this card read a confident "OFF" with a Power on
+        // button directly above a live banner from a rocket that was plainly
+        // powered and reporting READY (bench 2026-08-11, fs=128 = bsLogging
+        // only). Offering to power on a running rocket is worse than showing
+        // nothing.
+        if (!session.isBaseStation) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Rocket power", style = MaterialTheme.typography.titleMedium)
@@ -157,7 +215,7 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text("ON")
-                        Button(onClick = { session.sendPowerToggle() }) { Text("Power off") }
+                        Button(onClick = { session.sendPowerState(railOn = false) }) { Text("Power off") }
                     }
                     else -> Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -169,6 +227,7 @@ fun DashboardScreen(
                 }
             }
         }
+        }
 
         // iOS section order (screenshots 2026-07-31): the summary sits right
         // after the banners on BS links but after Signal/Battery/IMU on
@@ -176,8 +235,15 @@ fun DashboardScreen(
         if (session.isBaseStation) FlightSummaryCard(telemetry)
 
         SignalCard(telemetry, rssi, session.isBaseStation)
-        BatteryCard(telemetry)
-        ImuCard(telemetry, session.isBaseStation)
+        BatteryCard(telemetry, session.isBaseStation)
+        // Orientation source is picked strictly by link type (iOS
+        // RocketTelemetryCards): BS = relayed flags2 "imo", direct = the
+        // imu_orient config readback.  No cross-fallback on either platform.
+        ImuCard(
+            telemetry, session.isBaseStation,
+            orientationName = if (session.isBaseStation) telemetry.relayedOrientationName else imuOrientName,
+            orientationMode = if (session.isBaseStation) telemetry.relayedOrientationMode else imuOrientMode,
+        )
 
         if (!session.isBaseStation) FlightSummaryCard(telemetry)
 
@@ -211,7 +277,7 @@ fun DashboardScreen(
                             Column(
                                 Modifier
                                     .background(
-                                        if (focused) Color(0xFF4527A0) else Color(0x33777777),
+                                        if (focused) tr.accent else tr.cardSecondary,
                                         RoundedCornerShape(8.dp),
                                     )
                                     .clickable { session.setFocusRocket(remote.rocketId) }
@@ -220,12 +286,13 @@ fun DashboardScreen(
                             ) {
                                 Text(
                                     remote.unitName.ifEmpty { "Rocket ${remote.rocketId}" },
-                                    color = if (focused) Color.White else Color(0xFFBBBBBB),
+                                    color = if (focused) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelLarge,
                                 )
                                 Text(
                                     if (focused) "focused" else remote.telemetry.state,
-                                    color = if (focused) Color(0xFFB39DDB) else Color(0xFF888888),
+                                    color = if (focused) Color.White
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             }
@@ -271,26 +338,101 @@ fun DashboardScreen(
             }
         }
 
-        // Pyro tiles: iOS card form (2x2 grid, direct rocket links only —
-        // iOS hides pyro on BS links).  Fail-safe rendering — a channel
-        // shows green ONLY on continuity AND live data.  Config-driven
-        // "Disabled"/trigger text + Test Continuity need the 0xB1 config
-        // readback Android doesn't parse yet (ledger follow-up).
+        // Pyro tiles: iOS PyroChannelsView twin (2x2 grid, direct rocket
+        // links only — iOS hides pyro on BS links).  Badge ladder per tile:
+        // FIRED beats everything; CONT/NO CONT shows while armed or for 5 s
+        // after that tile's manual test (single-reveal state — a second tap
+        // MOVES the reveal, the iOS quirk included); a TESTING spinner
+        // replaces the badge while cmd 35 round-trips BLE→OC→I2C→FC (#411).
+        // Continuity is trusted only from a LIVE frame (#297) — a stale
+        // frame fails safe to NO CONT.
         if (!session.isBaseStation) {
+            val config by session.rocketConfig.collectAsState()
+            val contPendingUntil by session.contTestPendingUntil.collectAsState()
+            var contTestChannel by remember { mutableStateOf(0) }
+            LaunchedEffect(contTestChannel) {
+                if (contTestChannel != 0) {
+                    delay(5_000)
+                    contTestChannel = 0
+                }
+            }
+            // TESTING ends on a clock edge, not a state change — tick until
+            // the newest window expires so the spinner swaps back to a badge.
+            var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(contPendingUntil) {
+                // The state and the loop condition must read the SAME sample —
+                // sampling twice lets a deadline fall between them and strands
+                // the spinner on forever (nothing rewrites nowMs after exit).
+                while (true) {
+                    nowMs = System.currentTimeMillis()
+                    if (contPendingUntil.values.none { it > nowMs }) break
+                    delay(150)
+                }
+            }
+            val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
+            val live = dataStatus == TelemetryData.DataStatus.LIVE
+            val armed = telemetry.pyroArmed
+            val inflight = telemetry.state == "INFLIGHT"
+
+            // iOS pyroChannelConfig(_:): no readback yet → (false, 0, 0),
+            // which renders "Disabled" until the cmd-20 burst lands (~1 s).
+            fun channelConfig(ch: Int): Triple<Boolean, Int, Float> {
+                val c = config ?: return Triple(false, 0, 0f)
+                return when (ch) {
+                    1 -> Triple(c.pyro1Enabled, c.pyro1TriggerMode, c.pyro1TriggerValue)
+                    2 -> Triple(c.pyro2Enabled, c.pyro2TriggerMode, c.pyro2TriggerValue)
+                    3 -> Triple(c.pyro3Enabled, c.pyro3TriggerMode, c.pyro3TriggerValue)
+                    else -> Triple(c.pyro4Enabled, c.pyro4TriggerMode, c.pyro4TriggerValue)
+                }
+            }
+
+            // iOS triggerDescription: mode 0 = seconds after apogee; else
+            // altitude, stored in meters, shown in the display unit with no
+            // space before the unit ("150m on descent" / "492ft on descent").
+            fun triggerText(mode: Int, value: Float): String =
+                if (mode == 0) String.format(Locale.ROOT, "%.1fs after apogee", value)
+                else String.format(
+                    Locale.ROOT, "%.0f%s on descent",
+                    UnitFormatter.altitudeValue(value.toDouble(), units),
+                    UnitFormatter.altitudeUnit(units),
+                )
+
+            @Composable
+            fun tile(ch: Int, cont: Boolean, fired: Boolean, modifier: Modifier) {
+                val (enabled, mode, value) = channelConfig(ch)
+                PyroTile(
+                    ch = ch,
+                    text = if (enabled) triggerText(mode, value) else "Disabled",
+                    fired = fired,
+                    continuity = cont && live,
+                    revealed = armed || contTestChannel == ch,
+                    testing = (contPendingUntil[ch] ?: 0L) > nowMs,
+                    // Rail gate matches the iOS tile: the OC refuses cmd 35
+                    // rail-off (queued ARM pulse would deliver at power-on);
+                    // this compact tile hides the button until power-on and
+                    // the Settings twin carries the explanatory caption.
+                    showTestButton = !armed && !fired && !inflight && telemetry.pwrPinOn,
+                    onTestContinuity = {
+                        session.sendPyroContTest(ch)
+                        contTestChannel = ch
+                    },
+                    modifier = modifier,
+                )
+            }
+
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Pyro Channels${if (telemetry.pyroArmed) " — ARMED" else ""}",
+                        "Pyro Channels${if (armed) " — ARMED" else ""}",
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    val live = dataStatus == TelemetryData.DataStatus.LIVE
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PyroTile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, live, Modifier.weight(1f))
-                        PyroTile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, live, Modifier.weight(1f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        tile(1, telemetry.pyro1Cont, telemetry.pyro1Fired, Modifier.weight(1f))
+                        tile(2, telemetry.pyro2Cont, telemetry.pyro2Fired, Modifier.weight(1f))
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PyroTile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, live, Modifier.weight(1f))
-                        PyroTile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, live, Modifier.weight(1f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        tile(3, telemetry.pyro3Cont, telemetry.pyro3Fired, Modifier.weight(1f))
+                        tile(4, telemetry.pyro4Cont, telemetry.pyro4Fired, Modifier.weight(1f))
                     }
                 }
             }
@@ -309,23 +451,36 @@ fun DashboardScreen(
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Tools", style = MaterialTheme.typography.titleMedium)
-                val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!session.isBaseStation) {
+                        // iOS canStartGroundTest (DashboardView.swift:2437) gates this
+                        // button, and Android had no gate at all -- opening the screen
+                        // sends cmd 24 immediately, and the FC only refuses it from
+                        // INFLIGHT or MAG_CALIBRATION, so a rocket in DESCENT or LANDED
+                        // would deflect its fins on a tap.  The FC's only failsafe for a
+                        // stranded servo test is launch detection: there is no idle or
+                        // link-loss timeout, and neither computer clears it on
+                        // disconnect.
+                        //
+                        // iOS's third term, !groundTestActive, has no Android equivalent
+                        // yet -- the Ground Test screen is not ported -- so it is
+                        // vacuously satisfied rather than omitted by oversight.
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Servo test", tr.servoTest, { tool = "servo" })
+                            "Servo test", tr.servoTest, { onTool("servo") },
+                            enabled = onPad && !simLaunched,
+                        )
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Mag cal", tr.myDevices, { tool = "magcal" })
+                            "Mag cal", tr.myDevices, { onTool("magcal") })
                     }
                     com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                        "Simulate", tr.simulate, { tool = "sim" })
+                        "Simulate", tr.simulate, { onTool("sim") })
                     if (session.isBaseStation) {
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Freq scan", tr.freqScan, { tool = "scan" })
+                            "Freq scan", tr.freqScan, { onTool("scan") })
                     }
                     if (container != null) {
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Firmware", tr.camera, { tool = "ota" })
+                            "Firmware", tr.camera, { onTool("ota") })
                     }
                 }
             }
@@ -347,6 +502,7 @@ private fun DirectionToRocketCard(
     fix: com.tinkerbug.tinkerrocket.session.LastValidRocketFix?,
     rocketAltM: Double?,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val phoneFix by phoneLocation.location.collectAsState()
     val heading by phoneLocation.headingDeg.collectAsState()
     var permission by androidx.compose.runtime.remember {
@@ -401,7 +557,7 @@ private fun DirectionToRocketCard(
                     Text(
                         "➤",
                         style = MaterialTheme.typography.displayMedium,
-                        color = Color(0xFF1E88E5),
+                        color = tr.accent,
                         // Glyph points east (90°); rotate −90 to make it north-up.
                         modifier = Modifier.rotate(arrowAngle - 90f),
                     )
@@ -429,31 +585,41 @@ private fun DirectionToRocketCard(
 
 @Composable
 private fun SyncStateLine(state: com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val (label, color) = when (state) {
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Idle -> return
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.AwaitingSync ->
-            "profile: awaiting sync" to Color(0xFF9E9E9E)
+            "profile: awaiting sync" to tr.statusWarn
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.NoProfile ->
-            "profile: none active" to Color(0xFFFFA000)
+            "profile: none active" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Syncing ->
-            "profile: syncing…" to Color(0xFF1E88E5)
+            "profile: syncing…" to MaterialTheme.colorScheme.onSurfaceVariant
         com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Synced ->
-            "profile: synced" to Color(0xFF43A047)
+            "profile: synced" to tr.statusOk
         is com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState.Failed ->
-            "profile: sync failed" to Color(0xFFE53935)
+            "profile: sync failed" to tr.statusBad
     }
     Text(label, style = MaterialTheme.typography.bodySmall, color = color)
 }
 
+/**
+ * The one deliberately shared literal, not a token: iOS hardcodes this exact
+ * hex as `litGreen` (DashboardView.swift:1688) so both dashboards' lit flag
+ * chips read alike, and docs/design-language.md:58 settles it.  Retiring it is
+ * a paired iOS+Android change, never a unilateral Android one.
+ */
+private val LIT_GREEN = Color(0xFF2E7D32)
+
 @Composable
 private fun FlagChip(label: String, on: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Text(
         label,
-        color = if (on) Color.White else Color(0xFF757575),
+        color = if (on) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
         style = MaterialTheme.typography.labelMedium,
         modifier = Modifier
             .background(
-                if (on) Color(0xFF2E7D32) else Color(0x33777777),
+                if (on) LIT_GREEN else tr.statusIdle.copy(alpha = 0.2f),
                 RoundedCornerShape(6.dp),
             )
             .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -462,11 +628,12 @@ private fun FlagChip(label: String, on: Boolean) {
 
 @Composable
 private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val color = when (state) {
-        TelemetryData.SensorHealth.OK -> Color(0xFF2E7D32)
-        TelemetryData.SensorHealth.DEGRADED -> Color(0xFFF9A825)
-        TelemetryData.SensorHealth.BAD -> Color(0xFFB00020)
-        else -> Color(0xFF616161)
+        TelemetryData.SensorHealth.OK -> tr.statusOk
+        TelemetryData.SensorHealth.DEGRADED -> tr.statusWarn
+        TelemetryData.SensorHealth.BAD -> tr.statusBad
+        else -> tr.statusIdle
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -482,11 +649,11 @@ private fun HealthDot(name: String, state: TelemetryData.SensorHealth) {
 private fun Banner(text: String, color: Color) {
     Text(
         text,
-        color = Color.White,
+        color = color,
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier
             .fillMaxWidth()
-            .background(color, RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
 }
@@ -510,29 +677,87 @@ private fun StatCard(
     }
 }
 
+/**
+ * iOS pyroTile twin.  Header: "CH n" + the badge ladder — FIRED beats the
+ * continuity badge; CONT/NO CONT renders only while [revealed] (armed, or
+ * the 5 s window after this tile's manual test); a TESTING spinner replaces
+ * it while the cmd-35 round trip is pending.  [continuity] must already be
+ * live-gated by the caller (#297).  Below the header: the trigger text or
+ * "Disabled".  Tap-to-configure stays iOS-only for now — Android edits pyro
+ * config on the Settings screen.
+ */
 @Composable
-private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean, modifier: Modifier = Modifier) {
-    val color = when {
-        fired -> Color(0xFF616161)
-        continuity && live -> Color(0xFF2E7D32)   // green requires cont AND live
-        else -> Color(0xFF9E9E9E)
-    }
+private fun PyroTile(
+    ch: Int,
+    text: String,
+    fired: Boolean,
+    continuity: Boolean,
+    revealed: Boolean,
+    testing: Boolean,
+    showTestButton: Boolean,
+    onTestContinuity: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val bold = androidx.compose.ui.text.font.FontWeight.Bold
     Column(
         modifier
-            .background(color, RoundedCornerShape(8.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .background(
+                com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.cardSecondary,
+                RoundedCornerShape(8.dp),
+            )
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text("CH $ch", color = Color.White, style = MaterialTheme.typography.labelMedium)
-        Text(
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "CH $ch",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = bold),
+                modifier = Modifier.weight(1f),
+            )
             when {
-                fired -> "fired"
-                continuity -> "cont"
-                else -> "open"
-            },
-            color = Color.White,
-            style = MaterialTheme.typography.bodySmall,
-        )
+                fired -> Text(
+                    "FIRED",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
+                    modifier = Modifier
+                        .background(tr.pyroFired, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+                revealed && testing -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    Text(
+                        "TESTING",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
+                    )
+                }
+                revealed -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    val c = if (continuity) tr.statusOk else tr.statusBad
+                    Box(Modifier.size(8.dp).background(c, CircleShape))
+                    Text(
+                        if (continuity) "CONT" else "NO CONT",
+                        color = c,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = bold),
+                    )
+                }
+            }
+        }
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (showTestButton) {
+            Text(
+                "Test Continuity",
+                color = tr.accent,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.clickable(onClick = onTestContinuity),
+            )
+        }
     }
 }
 
@@ -548,10 +773,11 @@ private fun PyroTile(ch: Int, continuity: Boolean, fired: Boolean, live: Boolean
 /** iOS StatusBadge: label + filled/hollow state dot. */
 @Composable
 private fun StatusBadge(label: String, active: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             "●",
-            color = if (active) Color(0xFF2E7D32) else Color(0x55777777),
+            color = if (active) tr.statusActive else tr.statusIdle,
             style = MaterialTheme.typography.bodyMedium,
         )
         Text(
@@ -573,6 +799,7 @@ private fun StatusBadge(label: String, active: Boolean) {
  */
 @Composable
 private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Status", style = MaterialTheme.typography.titleMedium)
@@ -596,9 +823,9 @@ private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
             val remaining = telemetry.bsLogSilenceRemainingS
             if (isBaseStation && telemetry.bsLoggingActive && remaining != null) {
                 val color = when {
-                    remaining > 60 -> Color(0xFF2E7D32)
-                    remaining > 10 -> Color(0xFFF9A825)
-                    else -> Color(0xFFB00020)
+                    remaining > 60 -> tr.statusOk
+                    remaining > 10 -> tr.statusWarn
+                    else -> tr.statusBad
                 }
                 Text(
                     "Auto-close in %d:%02d".format(remaining / 60, remaining % 60),
@@ -613,11 +840,12 @@ private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
 /** iOS HealthCardView go/no-go banner: tinted row carrying the rollup verdict. */
 @Composable
 private fun ReadinessBanner(readiness: TelemetryData.FlightReadiness) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val color = when (readiness) {
-        TelemetryData.FlightReadiness.READY -> Color(0xFF2E7D32)
-        TelemetryData.FlightReadiness.CAUTION -> Color(0xFFF9A825)
-        TelemetryData.FlightReadiness.NOT_READY -> Color(0xFFB00020)
-        TelemetryData.FlightReadiness.UNKNOWN -> Color(0xFF616161)
+        TelemetryData.FlightReadiness.READY -> tr.statusOk
+        TelemetryData.FlightReadiness.CAUTION -> tr.statusWarn
+        TelemetryData.FlightReadiness.NOT_READY -> tr.statusBad
+        TelemetryData.FlightReadiness.UNKNOWN -> tr.statusIdle
     }
     val glyph = when (readiness) {
         TelemetryData.FlightReadiness.READY -> "✓"
@@ -671,8 +899,13 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
                                 ),
                             )
                         } else {
-                            session.sendBareCommand(
-                                com.tinkerbug.tinkerrocket.protocol.BleCommandId.CAMERA_TOGGLE,
+                            // Explicit desired state on the direct link too:
+                            // a bare toggle inverts whenever the app and the
+                            // OC disagree about the current state (a "start"
+                            // tap stopping the camera — bench 2026-08-16).
+                            session.sendCommandFrame(
+                                com.tinkerbug.tinkerrocket.protocol.Commands
+                                    .cameraToggleWithState(!cam),
                             )
                         }
                     },
@@ -693,8 +926,11 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
                                 ),
                             )
                         } else {
-                            session.sendBareCommand(
-                                com.tinkerbug.tinkerrocket.protocol.BleCommandId.TOGGLE_LOGGING,
+                            // Explicit desired state — same reason as the
+                            // camera button above.
+                            session.sendCommandFrame(
+                                com.tinkerbug.tinkerrocket.protocol.Commands
+                                    .toggleLoggingWithState(!log),
                             )
                         }
                     },
@@ -720,10 +956,18 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
     }
 }
 
-/** Binary-unit byte formatting to match iOS ByteCountFormatter(.binary). */
-private fun fmtBytes(bytes: Long): String = when {
-    bytes >= 1L shl 30 -> String.format(Locale.ROOT, "%.1f GB", bytes / 1073741824.0)
-    else -> String.format(Locale.ROOT, "%.0f MB", bytes / 1048576.0)
+/**
+ * Binary-unit byte formatting to match iOS `ByteCountFormatter` with
+ * `countStyle = .binary` and `[.useMB, .useGB]`: MB to one fraction digit,
+ * GB to two, trailing zeros trimmed ("305.2 MB", "1.42 GB", "1 GB").
+ */
+private fun fmtBytes(bytes: Long): String {
+    val (value, unit, decimals) =
+        if (bytes >= 1L shl 30) Triple(bytes / 1073741824.0, "GB", 2)
+        else Triple(bytes / 1048576.0, "MB", 1)
+    val text = String.format(Locale.ROOT, "%.${decimals}f", value)
+        .trimEnd('0').trimEnd('.')
+    return "$text $unit"
 }
 
 /**
@@ -740,65 +984,135 @@ internal fun StorageCard(
 ) {
     val (title, subtitle, used, reserved, free, total, autoEvicted) = when {
         isBaseStation && bs != null && bs.totalBytes > 0 -> {
-            val backend = listOf("SPIFFS", "SD card", "NAND").getOrElse(bs.backend) { "?" }
-            StorageRow("Base station storage", backend, bs.usedBytes, bs.reservedBytes,
+            // iOS backendName: 0 = internal flash, 2 = external NAND,
+            // anything else = SD card.
+            val backend = when (bs.backend) {
+                0 -> "Internal flash"
+                2 -> "External NAND"
+                else -> "SD card"
+            }
+            StorageRow("Base Station Storage", backend, bs.usedBytes, bs.reservedBytes,
                 bs.freeBytes, bs.totalBytes, false)
         }
         !isBaseStation && rocket != null && rocket.initialized -> {
             val n = rocket.flightCount
-            StorageRow("Rocket storage", "$n flight${if (n == 1) "" else "s"}",
+            StorageRow("Rocket Storage", "$n flight${if (n == 1) "" else "s"}",
                 rocket.usedBytes, rocket.reservedBytes, rocket.freeBytes,
                 rocket.totalBytes, rocket.autoEvicted)
         }
         else -> return
     }
+    // iOS StorageSegmentBar palette (system orange/green + systemGray2) via
+    // the nearest-value token roles, so dark theme tracks iOS too.
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val usedColor = tr.logging
+    val reservedColor = tr.statusIdle
+    val freeColor = tr.scan
+    // The base station demotes to the ~2 MB internal SPIFFS partition for the
+    // whole boot if any step of its NAND bring-up fails -- then keeps logging,
+    // into 2 MB instead of 512.  Rendered as a plain backend name that read as
+    // a statement of fact, and the only other clue was a small number
+    // ("Free 0.4 MB") that looks like a full disk rather than the wrong disk.
+    // Seen on the bench 2026-08-11 and reported from the field.  A reboot
+    // usually clears it, which is worth saying out loud because the alternative
+    // is deciding not to fly.
+    //
+    // #761: this is the firmware's BSS_FLAG_FALLBACK bit, and ONLY that bit.
+    // `backend` says where logging ended up; only the firmware knows whether
+    // somewhere better was expected and lost, and that is the thing worth
+    // warning about.  Inferring it from `backend == 0` guesses at firmware
+    // state from the app, and guesses wrong the moment a board ships where
+    // internal flash is the intended backend.
+    //
+    // Consequence, deliberate: a base station on firmware older than #761 never
+    // sets the bit, so it shows no warning even while demoted.  Update the base
+    // station -- the app is not the place to paper over old firmware.
+    val bsOnFallbackFlash = isBaseStation && bs != null && bs.totalBytes > 0 && bs.fallback
+    // The BS sets flags bit 0 when its filesystem query succeeded.  It has been
+    // decoded since the frame was added and never once read, so an unmounted
+    // volume drew a normal-looking bar out of whatever total/used happened to be
+    // in the frame -- numbers that mean nothing.  Nothing will be logged in this
+    // state, which is worth more than a silent zero.
+    val bsUnmounted = isBaseStation && bs != null && !bs.mounted
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    subtitle,
+                    if (bsUnmounted) "Not mounted" else subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (bsOnFallbackFlash || bsUnmounted) tr.orientWarn
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            // Segment bar: used | reserved | free, weighted by bytes.
+            if (bsUnmounted) {
+                Text(
+                    "Base station storage is not mounted — nothing will be logged. " +
+                        "Power-cycle the base station.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tr.orientWarn,
+                )
+            } else if (bsOnFallbackFlash) {
+                Text(
+                    "External NAND not mounted — logging to internal flash. " +
+                        "Capacity is ~2 MB instead of 512 MB. Power-cycle the base " +
+                        "station before flying.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tr.orientWarn,
+                )
+            }
+            // Segment bar: used | reserved | free, weighted by bytes — the
+            // iOS capsule with a hairline outline.
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color(0x22777777), RoundedCornerShape(4.dp)),
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .border(0.5.dp, Color(0x66777777), RoundedCornerShape(7.dp)),
             ) {
                 val t = total.coerceAtLeast(1)
                 @Composable
                 fun seg(bytes: Long, color: Color) {
                     val w = bytes.toFloat() / t
                     if (w > 0f) {
-                        Text(
-                            "",
-                            modifier = Modifier
+                        Box(
+                            Modifier
                                 .weight(w.coerceAtLeast(0.001f))
-                                .background(color)
-                                .padding(vertical = 5.dp),
+                                .fillMaxHeight()
+                                .background(color),
                         )
                     }
                 }
-                seg(used, Color(0xFFF57C00))
-                seg(reserved, Color(0xFF9E9E9E))
-                seg(free, Color(0xFF2E7D32))
+                seg(used, usedColor)
+                seg(reserved, reservedColor)
+                seg(free, freeColor)
             }
+            // iOS legend: 10dp rounded swatch + "<label> <bytes>" caption.
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Used ${fmtBytes(used)}", style = MaterialTheme.typography.bodySmall)
-                if (reserved > 0) {
-                    Text("Reserved ${fmtBytes(reserved)}", style = MaterialTheme.typography.bodySmall)
+                @Composable
+                fun legend(color: Color, label: String, bytes: Long) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(Modifier.size(10.dp).background(color, RoundedCornerShape(2.dp)))
+                        Text(
+                            "$label ${fmtBytes(bytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-                Text("Free ${fmtBytes(free)}", style = MaterialTheme.typography.bodySmall)
+                legend(usedColor, "Used", used)
+                if (reserved > 0) legend(reservedColor, "Reserved", reserved)
+                legend(freeColor, "Free", free)
             }
             if (autoEvicted) {
                 // #315 rolling buffer: surface that data rolled off at arm
                 // time rather than being silently dropped.
                 Text(
                     "↻ Auto-reclaimed oldest flight(s) this session",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -945,8 +1259,12 @@ private fun FlightSummaryCard(telemetry: TelemetryData) {
 
 /**
  * iOS SignalStrengthView twin: vertical bars for LoRa (BS links), GNSS
- * satellites, and BLE RSSI, value labels underneath.  Fill fraction uses the
- * same rough scaling ideas as iOS (RSSI −100..−30 dBm, sats 0..12).
+ * satellites, and BLE RSSI, value labels underneath.
+ *
+ * Fill fraction AND colour both come from [SignalQuality], which holds iOS's
+ * exact bands.  Both were wrong here: the bars used invented scales ("rough
+ * scaling ideas", per the comment this replaces) and a single hardcoded amber,
+ * so the green/yellow/orange/red grading iOS shows was missing entirely.
  */
 @Composable
 private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: Boolean) {
@@ -961,18 +1279,21 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
                 if (isBaseStation) {
                     val lora = telemetry.rssi
                     SignalBar(
-                        fraction = lora?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                        fraction = SignalQuality.loraFill(lora),
+                        quality = SignalQuality.forLoraRssi(lora),
                         value = lora?.let { String.format(Locale.ROOT, "%.0f", it) } ?: "——",
                         label = "LoRa",
                     )
                 }
                 SignalBar(
-                    fraction = (telemetry.numSats / 12f).coerceIn(0f, 1f),
+                    fraction = SignalQuality.satFill(telemetry.numSats),
+                    quality = SignalQuality.forSatCount(telemetry.numSats),
                     value = "${telemetry.numSats}",
                     label = "GNSS",
                 )
                 SignalBar(
-                    fraction = bleRssi?.let { ((it + 100f) / 70f).coerceIn(0f, 1f) } ?: 0f,
+                    fraction = SignalQuality.bleFill(bleRssi),
+                    quality = SignalQuality.forBleRssi(bleRssi),
                     value = bleRssi?.let { "$it" } ?: "——",
                     label = "BLE",
                 )
@@ -982,8 +1303,22 @@ private fun SignalCard(telemetry: TelemetryData, bleRssi: Int?, isBaseStation: B
 }
 
 @Composable
-private fun SignalBar(fraction: Float, value: String, label: String) {
+private fun SignalBar(
+    fraction: Float,
+    quality: SignalQuality,
+    value: String,
+    label: String,
+) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val fill = when (quality) {
+        SignalQuality.BEST -> tr.signalBest
+        SignalQuality.GOOD -> tr.signalGood
+        SignalQuality.FAIR -> tr.signalFair
+        SignalQuality.WEAK -> tr.signalWeak
+        SignalQuality.BAD -> tr.signalBad
+        // iOS returns .gray for a missing reading; statusIdle is that same gray.
+        SignalQuality.UNKNOWN -> tr.statusIdle
+    }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1001,7 +1336,7 @@ private fun SignalBar(fraction: Float, value: String, label: String) {
                         .padding(bottom = 6.dp)
                         .width(24.dp)
                         .height((10 + 100 * fraction).dp)
-                        .background(tr.logging, RoundedCornerShape(12.dp)),
+                        .background(fill, RoundedCornerShape(12.dp)),
                 )
             }
         }
@@ -1013,11 +1348,36 @@ private fun SignalBar(fraction: Float, value: String, label: String) {
     }
 }
 
-/** iOS BatteryView twin: Charge / Voltage / Current row for the rocket. */
+/**
+ * iOS BatteryView twin: Charge / Voltage / Current, one row per pack.
+ *
+ * The base-station row is not decoration.  On a BS link the operator is
+ * holding the base station, and its own pack is the one that ends the session
+ * when it dies — the rocket's is relayed from something on the pad.  The BS
+ * sends bsoc/bvol/bcur in every telemetry frame and the decoder has always
+ * parsed them; only the row was missing, so the numbers arrived and were
+ * dropped on the floor (bench 2026-08-11: the console read
+ * "[BATT] 4.18 V | 98% SoC | 456 mA" while the card showed one Rocket row).
+ */
 @Composable
-private fun BatteryCard(telemetry: TelemetryData) {
+private fun BatteryCard(telemetry: TelemetryData, isBaseStation: Boolean) {
     val caption = MaterialTheme.typography.bodySmall
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+
+    @Composable
+    fun row(label: String, charge: String, voltage: String, current: String) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(label, style = caption, modifier = Modifier.width(70.dp))
+            listOf(charge, voltage, current).forEach {
+                Text(
+                    it, style = caption.copy(fontFamily = mono),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Battery", style = MaterialTheme.typography.titleMedium)
@@ -1032,44 +1392,64 @@ private fun BatteryCard(telemetry: TelemetryData) {
                     )
                 }
             }
-            Row(Modifier.fillMaxWidth()) {
-                Text("Rocket", style = caption, modifier = Modifier.width(70.dp))
-                listOf(
-                    telemetry.soc?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—",
-                    telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
-                    telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
-                ).forEach {
-                    Text(
-                        it, style = caption.copy(fontFamily = mono),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+            row(
+                "Rocket",
+                telemetry.socDisplay,
+                telemetry.voltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                telemetry.current?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+            )
+            // iOS DashboardView.swift:1294 gates the same row the same way.
+            if (isBaseStation) {
+                row(
+                    "Base Stn",
+                    telemetry.bsSocDisplay,
+                    telemetry.bsVoltage?.let { String.format(Locale.ROOT, "%.2f V", it) } ?: "—",
+                    telemetry.bsCurrent?.let { String.format(Locale.ROOT, "%.0f mA", it) } ?: "—",
+                )
             }
         }
     }
 }
 
 /**
- * iOS IMUView twin: Low-G / High-G / Gyro XYZ triplets.  The nose
- * orientation annotation shows on BS links (relayed flags2, #390); direct
- * links need the 0xB1 config readback Android doesn't parse yet (ledger).
+ * iOS IMUView twin: Low-G / High-G / Gyro XYZ triplets.  High-G rides the
+ * direct link only (not relayed over LoRa).  The nose annotation renders
+ * whichever orientation source the caller picked — orange when the pad
+ * auto-detect landed off-axis, the flyer's cue to check the mounting
+ * before arming.  Acceleration rows convert to g in Imperial (iOS IMURow).
  */
 @Composable
-private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+private fun ImuCard(
+    telemetry: TelemetryData,
+    isBaseStation: Boolean,
+    orientationName: String,
+    orientationMode: IMUOrientationMode,
+) {
     val caption = MaterialTheme.typography.bodySmall
     val mono = androidx.compose.ui.text.font.FontFamily.Monospace
+    val units = com.tinkerbug.tinkerrocket.app.theme.LocalUnitSystem.current
 
     @Composable
-    fun triplet(label: String, unit: String, x: Float?, y: Float?, z: Float?, decimals: Int) {
+    fun triplet(
+        label: String, unit: String, x: Float?, y: Float?, z: Float?, decimals: Int,
+        acceleration: Boolean = false,
+    ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.width(70.dp)) {
                 Text(label, style = caption)
-                Text(unit, style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    if (acceleration) UnitFormatter.accelerationUnit(units) else unit,
+                    style = caption, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             listOf(x, y, z).forEach { v ->
                 Text(
-                    v?.let { String.format(Locale.ROOT, "%.${decimals}f", it) } ?: "—",
+                    v?.let {
+                        val shown = if (acceleration) {
+                            UnitFormatter.accelerationValue(it.toDouble(), units)
+                        } else it.toDouble()
+                        String.format(Locale.ROOT, "%.${decimals}f", shown)
+                    } ?: "—",
                     style = caption.copy(fontFamily = mono),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     modifier = Modifier.weight(1f),
@@ -1082,12 +1462,13 @@ private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("IMU", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                val orient = if (isBaseStation) telemetry.relayedOrientationName else ""
-                if (orient.isNotEmpty()) {
+                if (orientationName.isNotEmpty()) {
                     Text(
-                        "nose: $orient",
+                        "nose: $orientationName (${orientationMode.label})",
                         style = caption,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (orientationMode == IMUOrientationMode.AUTO_EXACT) {
+                            com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.orientWarn
+                        } else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -1102,8 +1483,10 @@ private fun ImuCard(telemetry: TelemetryData, isBaseStation: Boolean) {
                     )
                 }
             }
-            triplet("Low-G", "m/s²", telemetry.lowGX, telemetry.lowGY, telemetry.lowGZ, 2)
-            triplet("High-G", "m/s²", telemetry.highGX, telemetry.highGY, telemetry.highGZ, 1)
+            triplet("Low-G", "m/s²", telemetry.lowGX, telemetry.lowGY, telemetry.lowGZ, 2, acceleration = true)
+            if (!isBaseStation) {
+                triplet("High-G", "m/s²", telemetry.highGX, telemetry.highGY, telemetry.highGZ, 1, acceleration = true)
+            }
             triplet("Gyro", "°/s", telemetry.gyroX, telemetry.gyroY, telemetry.gyroZ, 1)
         }
     }

@@ -54,7 +54,8 @@ SensorCollector::SensorCollector(
                            uint32_t spi_speed,
                            uint8_t  ism6_low_g_fs_g,
                            uint16_t ism6_high_g_fs_g,
-                           uint16_t ism6_gyro_fs_dps)
+                           uint16_t ism6_gyro_fs_dps,
+                           i2c_master_bus_handle_t external_i2c_bus)
     : ism6_low_g_fs_g_(ism6_low_g_fs_g),
       ism6_high_g_fs_g_(ism6_high_g_fs_g),
       ism6_gyro_fs_dps_(ism6_gyro_fs_dps),
@@ -87,7 +88,14 @@ SensorCollector::SensorCollector(
       mmc5983ma(SPI2_HOST, MMC5983MA_CS, 2000000),  // MMC5983MA supports Mode 0 and Mode 3; wrapper uses Mode 0
       iis2mdc(IIS2MDC_I2C_ADDR),
       ism6hg256(SPI2_HOST, ISM6HG256_CS, spi_speed),
-      gyro_cal_x(0), gyro_cal_y(0), gyro_cal_z(0) {}
+      gyro_cal_x(0), gyro_cal_y(0), gyro_cal_z(0)
+{
+    if (external_i2c_bus != nullptr)
+    {
+        iis2mdc_bus = external_i2c_bus;
+        iis2mdc_bus_external = true;
+    }
+}
 
 void SensorCollector::begin(uint8_t imu_execution_core) 
 {
@@ -275,15 +283,21 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         ESP_LOGI(SC_TAG, "Probing for IIS2MDC on I2C SDA=%d SCL=%d addr=0x%02X...",
                  (int)IIS2MDC_SDA, (int)IIS2MDC_SCL, (unsigned)IIS2MDC_I2C_ADDR);
 
-        i2c_master_bus_config_t bus_cfg = {};
-        bus_cfg.i2c_port = I2C_NUM_1;  // FC->OC bus already owns I2C_NUM_0
-        bus_cfg.sda_io_num = (gpio_num_t)IIS2MDC_SDA;
-        bus_cfg.scl_io_num = (gpio_num_t)IIS2MDC_SCL;
-        bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-        bus_cfg.glitch_ignore_cnt = 7;
-        bus_cfg.flags.enable_internal_pullup = true;
+        // Mini seam: an app-supplied bus (shared with the INA230) arrives via
+        // the ctor; only create our own when none was provided.
+        esp_err_t bus_err = ESP_OK;
+        if (!iis2mdc_bus_external)
+        {
+            i2c_master_bus_config_t bus_cfg = {};
+            bus_cfg.i2c_port = I2C_NUM_1;  // FC->OC bus already owns I2C_NUM_0
+            bus_cfg.sda_io_num = (gpio_num_t)IIS2MDC_SDA;
+            bus_cfg.scl_io_num = (gpio_num_t)IIS2MDC_SCL;
+            bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+            bus_cfg.glitch_ignore_cnt = 7;
+            bus_cfg.flags.enable_internal_pullup = true;
 
-        esp_err_t bus_err = i2c_new_master_bus(&bus_cfg, &iis2mdc_bus);
+            bus_err = i2c_new_master_bus(&bus_cfg, &iis2mdc_bus);
+        }
         if (bus_err != ESP_OK)
         {
             ESP_LOGW(SC_TAG, "IIS2MDC I2C bus init failed (%s) — falling back to MMC5983MA",
@@ -349,9 +363,13 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                                  "MMC5983MA fallback — NO MAGNETOMETER");
             }
             // Tear down the bus so the pins are released (on V7 this frees
-            // shared pin 13 for SPI CS use).
-            (void)i2c_del_master_bus(iis2mdc_bus);
-            iis2mdc_bus = nullptr;
+            // shared pin 13 for SPI CS use). Never tear down a shared,
+            // app-owned bus — other devices (mini: INA230) live on it.
+            if (!iis2mdc_bus_external)
+            {
+                (void)i2c_del_master_bus(iis2mdc_bus);
+                iis2mdc_bus = nullptr;
+            }
         }
     }
 

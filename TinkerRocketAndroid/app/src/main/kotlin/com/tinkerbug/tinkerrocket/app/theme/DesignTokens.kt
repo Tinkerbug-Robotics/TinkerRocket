@@ -25,56 +25,128 @@ class TrColors(
     val simulate: Color,
     val servoTest: Color,
     val freqScan: Color,
+    val mapControl: Color,
     val statusConnected: Color,
     val statusScanning: Color,
     val statusIdle: Color,
     val voiceReady: Color,
     val voiceWarn: Color,
     val voiceError: Color,
+    val orientWarn: Color,
+    val signalBest: Color,
+    val signalGood: Color,
+    val signalFair: Color,
+    val signalWeak: Color,
+    val signalBad: Color,
+    val accent: Color,
+    val statusOk: Color,
+    val statusMarginal: Color,
+    val statusWarn: Color,
+    val statusBad: Color,
+    val statusPending: Color,
+    val statusActive: Color,
+    val pyroFired: Color,
+    val deviceRocket: Color,
+    val deviceBaseStation: Color,
+    val launchSite: Color,
+    val landingSite: Color,
+    val rocketMarker: Color,
+    val userLocation: Color,
+    val guidancePoint: Color,
+    val driftCastBoost: Color,
+    val driftCastDescent: Color,
     val background: Color,
     val card: Color,
     val cardSecondary: Color,
 )
 
 val TrColorsLight = TrColors(
-    savedFlights = Color(0xFF007AFF),  // blue
-    myDevices = Color(0xFF5856D6),  // indigo
-    driftCast = Color(0xFFFF3B30),  // red
+    savedFlights = Color(0xFF0088FF),  // blue
+    myDevices = Color(0xFF6155F5),  // indigo
+    driftCast = Color(0xFFFF383C),  // red
     scan = Color(0xFF34C759),  // green
-    scanActive = Color(0xFFFF3B30),  // red
-    camera = Color(0xFF007AFF),  // blue
-    logging = Color(0xFFFF9500),  // orange
-    simulate = Color(0xFFFF9500),  // orange
-    servoTest = Color(0xFF30B0C7),  // teal
-    freqScan = Color(0xFFAF52DE),  // purple
+    scanActive = Color(0xFFFF383C),  // red
+    camera = Color(0xFF0088FF),  // blue
+    logging = Color(0xFFFF8D28),  // orange
+    simulate = Color(0xFFFF8D28),  // orange
+    servoTest = Color(0xFF00C3D0),  // teal
+    freqScan = Color(0xFFCB30E0),  // purple
+    mapControl = Color(0xFF0088FF),  // blue
     statusConnected = Color(0xFF34C759),  // green
-    statusScanning = Color(0xFFFF9500),  // orange
+    statusScanning = Color(0xFFFF8D28),  // orange
     statusIdle = Color(0xFF8E8E93),  // gray
     voiceReady = Color(0xFF34C759),  // green
-    voiceWarn = Color(0xFFFF9500),  // orange
-    voiceError = Color(0xFFFF3B30),  // red
+    voiceWarn = Color(0xFFFF8D28),  // orange
+    voiceError = Color(0xFFFF383C),  // red
+    orientWarn = Color(0xFFFF8D28),  // orange
+    signalBest = Color(0xFF0088FF),  // blue
+    signalGood = Color(0xFF34C759),  // green
+    signalFair = Color(0xFFFFCC00),  // yellow
+    signalWeak = Color(0xFFFF8D28),  // orange
+    signalBad = Color(0xFFFF383C),  // red
+    accent = Color(0xFF0088FF),  // blue
+    statusOk = Color(0xFF34C759),  // green
+    statusMarginal = Color(0xFFFFCC00),  // yellow
+    statusWarn = Color(0xFFFF8D28),  // orange
+    statusBad = Color(0xFFFF383C),  // red
+    statusPending = Color(0xFF0088FF),  // blue
+    statusActive = Color(0xFF34C759),  // green
+    pyroFired = Color(0xFFFF8D28),  // orange
+    deviceRocket = Color(0xFF0088FF),  // blue
+    deviceBaseStation = Color(0xFFFF8D28),  // orange
+    launchSite = Color(0xFFFF383C),  // red
+    landingSite = Color(0xFF34C759),  // green
+    rocketMarker = Color(0xFFFF383C),  // red
+    userLocation = Color(0xFF0088FF),  // blue
+    guidancePoint = Color(0xFF0088FF),  // blue
+    driftCastBoost = Color(0xFF0088FF),  // blue
+    driftCastDescent = Color(0xFFCB30E0),  // purple
     background = Color(0xFFFFFFFF),
     card = Color(0xFFF2F2F7),
     cardSecondary = Color(0xFFE5E5EA),
 )
 
 val TrColorsDark = TrColors(
-    savedFlights = Color(0xFF0A84FF),  // blue
-    myDevices = Color(0xFF5E5CE6),  // indigo
-    driftCast = Color(0xFFFF453A),  // red
+    savedFlights = Color(0xFF0091FF),  // blue
+    myDevices = Color(0xFF6D7CFF),  // indigo
+    driftCast = Color(0xFFFF4245),  // red
     scan = Color(0xFF30D158),  // green
-    scanActive = Color(0xFFFF453A),  // red
-    camera = Color(0xFF0A84FF),  // blue
-    logging = Color(0xFFFF9F0A),  // orange
-    simulate = Color(0xFFFF9F0A),  // orange
-    servoTest = Color(0xFF40C8E0),  // teal
-    freqScan = Color(0xFFBF5AF2),  // purple
+    scanActive = Color(0xFFFF4245),  // red
+    camera = Color(0xFF0091FF),  // blue
+    logging = Color(0xFFFF9230),  // orange
+    simulate = Color(0xFFFF9230),  // orange
+    servoTest = Color(0xFF00D2E0),  // teal
+    freqScan = Color(0xFFDB34F2),  // purple
+    mapControl = Color(0xFF0091FF),  // blue
     statusConnected = Color(0xFF30D158),  // green
-    statusScanning = Color(0xFFFF9F0A),  // orange
+    statusScanning = Color(0xFFFF9230),  // orange
     statusIdle = Color(0xFF8E8E93),  // gray
     voiceReady = Color(0xFF30D158),  // green
-    voiceWarn = Color(0xFFFF9F0A),  // orange
-    voiceError = Color(0xFFFF453A),  // red
+    voiceWarn = Color(0xFFFF9230),  // orange
+    voiceError = Color(0xFFFF4245),  // red
+    orientWarn = Color(0xFFFF9230),  // orange
+    signalBest = Color(0xFF0091FF),  // blue
+    signalGood = Color(0xFF30D158),  // green
+    signalFair = Color(0xFFFFD600),  // yellow
+    signalWeak = Color(0xFFFF9230),  // orange
+    signalBad = Color(0xFFFF4245),  // red
+    accent = Color(0xFF0091FF),  // blue
+    statusOk = Color(0xFF30D158),  // green
+    statusMarginal = Color(0xFFFFD600),  // yellow
+    statusWarn = Color(0xFFFF9230),  // orange
+    statusBad = Color(0xFFFF4245),  // red
+    statusPending = Color(0xFF0091FF),  // blue
+    statusActive = Color(0xFF30D158),  // green
+    pyroFired = Color(0xFFFF9230),  // orange
+    deviceRocket = Color(0xFF0091FF),  // blue
+    deviceBaseStation = Color(0xFFFF9230),  // orange
+    launchSite = Color(0xFFFF4245),  // red
+    landingSite = Color(0xFF30D158),  // green
+    rocketMarker = Color(0xFFFF4245),  // red
+    userLocation = Color(0xFF0091FF),  // blue
+    guidancePoint = Color(0xFF0091FF),  // blue
+    driftCastBoost = Color(0xFF0091FF),  // blue
+    driftCastDescent = Color(0xFFDB34F2),  // purple
     background = Color(0xFF000000),
     card = Color(0xFF1C1C1E),
     cardSecondary = Color(0xFF2C2C2E),

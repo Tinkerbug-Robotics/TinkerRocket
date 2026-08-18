@@ -169,6 +169,11 @@ public:
 private:
     i2s_chan_handle_t chan_handle_ = nullptr;
     int frame_sync_pin_ = -1;
+    // Pins this instance configured, so end() can release them. Needed because
+    // the OTA image pump reverses the link direction — see end().
+    int bclk_pin_ = -1;
+    int ws_pin_   = -1;
+    int data_pin_ = -1;
     bool is_tx_ = false;
 
     // Callback state

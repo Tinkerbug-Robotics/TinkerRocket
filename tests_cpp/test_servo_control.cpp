@@ -126,4 +126,63 @@ TEST_F(ServoControlTest, SetSetpointStillGovernsRateNull) {
     EXPECT_NEAR(servo.getRollCmdDeg(), 5.0f, 1e-4f);
 }
 
+// ---------- roll-reverse mask on the roll-only drive ----------
+//
+// "Reverse roll" (FinConfigData::roll_reverse_mask) used to reach only
+// TR_ControlMixer, which mixes the guided and ground-test paths.  Roll-only
+// control drives every fin from THIS class's single PID output, so the toggle
+// had no path to it and a rocket that rolled the wrong way in roll-only flight
+// could not be corrected from the app.  These lock the mask into that drive.
+
+// Pulse for a commanded fin angle under the fixture's calibration: fin cal
+// defaults to the command clamp (±60 deg) mapped onto 1000..2000 us, biases 0.
+static int expectedPulseUs(float fin_deg) {
+    return 1000 + static_cast<int>(((fin_deg + 60.0f) / 120.0f) * 1000.0f);
+}
+
+TEST_F(ServoControlTest, RollReverseMaskNegatesOnlyTheMaskedServos) {
+    servo.setRollReverseMask(0b1010);  // servos 2 and 4 linked the other way
+
+    tick();
+    servo.control(-20.0f);             // P-only: cmd = -(-20) = +20 deg
+    ASSERT_NEAR(servo.getRollCmdDeg(), 20.0f, 1e-4f);
+
+    EXPECT_EQ(servo.getServoPulseUs(0), expectedPulseUs( 20.0f));
+    EXPECT_EQ(servo.getServoPulseUs(1), expectedPulseUs(-20.0f));
+    EXPECT_EQ(servo.getServoPulseUs(2), expectedPulseUs( 20.0f));
+    EXPECT_EQ(servo.getServoPulseUs(3), expectedPulseUs(-20.0f));
+    EXPECT_EQ(servo.getRollReverseMask(), 0b1010);
+}
+
+TEST_F(ServoControlTest, RollReverseMaskAllBitsReversesRollGlobally) {
+    // The usual airframe case: a mirrored horn/fin convention flips all four
+    // together, so setting every bit is what reverses roll direction outright.
+    tick();
+    servo.control(-20.0f);
+    const int forward[4] = { servo.getServoPulseUs(0), servo.getServoPulseUs(1),
+                             servo.getServoPulseUs(2), servo.getServoPulseUs(3) };
+
+    servo.setRollReverseMask(0b1111);
+    tick();
+    servo.control(-20.0f);
+    for (int i = 0; i < 4; ++i) {
+        // Same magnitude of deflection, opposite side of centre.
+        EXPECT_EQ(servo.getServoPulseUs(i), expectedPulseUs(-20.0f));
+        EXPECT_NE(servo.getServoPulseUs(i), forward[i]);
+    }
+}
+
+TEST_F(ServoControlTest, RollReverseMaskZeroDrivesAllServosAlike) {
+    // Regression guard: the drive was a single broadcast pulse before the mask
+    // existed.  An unconfigured airframe (mask 0) must be bit-identical to it,
+    // including the legacy servo-1 telemetry reading.
+    tick();
+    servo.control(-20.0f);
+
+    const int expected = expectedPulseUs(20.0f);
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(servo.getServoPulseUs(i), expected);
+    EXPECT_EQ(servo.getRollCmdUs(), expected);
+    EXPECT_EQ(servo.getRollReverseMask(), 0);
+}
+
 }  // namespace

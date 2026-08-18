@@ -1,6 +1,7 @@
 package com.tinkerbug.tinkerrocket.app
 
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -77,9 +78,21 @@ fun ServoTestScreen(session: DeviceSession, profiles: RocketProfileStore?, onBac
     fun send() = session.sendCommandFrame(Commands.servoTestAngles(angles))
 
     LaunchedEffect(Unit) { send() } // initial zeros
-    DisposableEffect(Unit) {
+    // Keyed on session, not Unit, so the hook re-arms if the session identity
+    // changes underneath the screen (OfflineMapsScreen keys the same way).
+    // No state gate: SERVO_TEST_STOP has no state or session precondition in
+    // firmware -- it clears the flag, stows, and arms the pad wake -- so
+    // sending it when nothing is running is inert.
+    DisposableEffect(session) {
         onDispose { session.sendBareCommand(BleCommandId.SERVO_TEST_STOP) }
     }
+    // Without this, the system back gesture fell through to the Activity
+    // default and finished the app, racing the teardown above against process
+    // death -- with the FC left in servo_test_active, its state machine and
+    // pyro servicing suspended, and no UI anywhere to stop it.  Routing back
+    // through onBack disposes this screen while the app stays alive, so the
+    // stop is an ordinary write on a live link.
+    BackHandler(onBack = onBack)
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -431,7 +444,7 @@ fun FreqScanScreen(session: DeviceSession, onBack: () -> Unit) {
                         "a channel mask — noisy channels are skipped and the link " +
                         "keeps hopping. No frequency move is needed.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF43A047),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
                 Text(
@@ -452,6 +465,7 @@ private const val QUIET_MARGIN_DB = 70
 /** Noise-margin bar chart: green = comfortable (≥70 dB), orange = noisy. */
 @Composable
 private fun ScanChart(points: List<Pair<Double, Int>>) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val textMeasurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     Canvas(Modifier.fillMaxWidth().height(220.dp)) {
@@ -470,7 +484,7 @@ private fun ScanChart(points: List<Pair<Double, Int>>) {
             val x = ((freq - lo) / span * size.width).toFloat()
             val h = (margin.coerceIn(0, 100) / 100f) * plotH
             drawRect(
-                color = if (margin >= QUIET_MARGIN_DB) Color(0xFF43A047) else Color(0xFFFB8C00),
+                color = if (margin >= QUIET_MARGIN_DB) tr.statusOk else tr.statusWarn,
                 topLeft = Offset(x - barW / 2, plotH - h),
                 size = Size(barW, h),
             )

@@ -25,6 +25,12 @@ from plot_flight_data_mini import parse_binary_file  # noqa: E402
 _FLIGHT_STEM_RE = re.compile(r"^flight_(?:(\d{8})_(\d{6})|recovered_(\d+))$")
 
 
+# Streams timestamped against something other than the flight clock. They are
+# still parsed and still charted on their own axis; they just cannot take part
+# in "how long was the flight".
+_FOREIGN_CLOCKS = frozenset({"LogBufferStats"})
+
+
 @dataclass
 class Flight:
     """One flight's on-disk artifacts + parsed records (lazy)."""
@@ -32,6 +38,13 @@ class Flight:
     bin_path: Path
     csv_path: Optional[Path] = None
     json_path: Optional[Path] = None
+
+    # Facts the log cannot know, keyed by name. Nothing reads it today — its one
+    # consumer, the Motor Performance section, was removed along with the entry
+    # form that fed it (#750). Kept because it is the whole cost of bringing that
+    # section back: the web tool's worker still populates it, so a module that
+    # wants a mass has somewhere to look for one.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     # Cached parse results (populated by .load())
     _records: Optional[dict[str, list[dict[str, Any]]]] = field(default=None, repr=False)
@@ -137,8 +150,22 @@ class Flight:
 
     @property
     def duration_s(self) -> Optional[float]:
+        """How long the recording ran, from the sensor streams alone.
+
+        LogBufferStats is excluded because it is not on the same clock: the out
+        computer emits it against its own uptime, which on the sample flight
+        runs 809-886 s while every sensor sits inside 0-78 s. Taking max-minus-min
+        across all streams therefore reported 886 s for a 78-second flight — an
+        eleven-fold overstatement of the headline duration.
+        """
         recs = self.records
-        ts = [r["time_us"] for sensor in recs.values() for r in sensor if "time_us" in r]
+        ts = [
+            r["time_us"]
+            for name, sensor in recs.items()
+            if name not in _FOREIGN_CLOCKS
+            for r in sensor
+            if "time_us" in r
+        ]
         if not ts:
             return None
         return (max(ts) - min(ts)) / 1e6

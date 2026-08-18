@@ -1,0 +1,91 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+
+application     simpleFoam;
+
+startFrom       startTime;
+startTime       0;
+
+stopAt          endTime;
+endTime         1000;
+
+deltaT          1;
+
+writeControl    timeStep;
+writeInterval   500;
+
+purgeWrite      2;
+
+writeFormat     ascii;
+writePrecision  8;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable true;
+
+functions
+{
+    forces_finTab
+    {
+        type            forces;
+        libs            (forces);
+        writeControl    timeStep;
+        writeInterval   1;
+
+        patches         (finTab);
+
+        rho             rhoInf;
+        rhoInf          1.225;
+
+        CofR            (0 0 0);
+
+        log             true;
+    }
+
+    forces_all
+    {
+        type            forces;
+        libs            (forces);
+        writeControl    timeStep;
+        writeInterval   10;
+
+        patches         (fincan finTab);
+
+        rho             rhoInf;
+        rhoInf          1.225;
+
+        CofR            (0 0 0);
+
+        log             true;
+    }
+
+    fieldAverage
+    {
+        type            fieldAverage;
+        libs            (fieldFunctionObjects);
+        writeControl    writeTime;
+
+        fields
+        (
+            U
+            {
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }
+            p
+            {
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }
+        );
+    }
+}

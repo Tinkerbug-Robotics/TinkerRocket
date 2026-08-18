@@ -755,6 +755,16 @@ static inline void loraSelectChannelSet(
     }
 }
 
+// Which magnetometer chip produced the IIS2MDC-named (0xD1) count stream,
+// carried in OutStatusQueryData v6+ so log readers can pick the count scale
+// per log instead of assuming the big board's chip:
+//   IIS2MDC  — 0.15 µT/LSB (ST datasheet 9.13), big board V8+
+//   QMC5883P — 100/3750 µT/LSB at ±8 G (QST Table 2), rocket-computer-mini
+//              via the TR_MAG_DRIVER_QMC5883P seam (#797)
+// Logs older than v6 carry no field; readers assume IIS2MDC.
+static constexpr uint8_t MAG_TYPE_IIS2MDC  = 0;
+static constexpr uint8_t MAG_TYPE_QMC5883P = 1;
+
 // Payload sent with OUT_STATUS_QUERY so the OUT processor can configure
 // its SensorConverter consistently with the FlightComputer.
 typedef struct __attribute__((packed))
@@ -769,6 +779,7 @@ typedef struct __attribute__((packed))
                                   //   3 = has board→rocket orientation
                                   //   4 = has IIS2MDC rotation
                                   //   5 = has guidance-target echo (#435)
+                                  //   6 = has mag_type
     int16_t  hg_bias_x_cmss;     // high-g bias X, centi-m/s² (0.01 m/s² units)
     int16_t  hg_bias_y_cmss;     // high-g bias Y, centi-m/s²
     int16_t  hg_bias_z_cmss;     // high-g bias Z, centi-m/s²
@@ -801,9 +812,15 @@ typedef struct __attribute__((packed))
                            // and on any cmd-65 apply that changes the echo
     uint8_t tgt_status;    // GUID_TGT_*
     uint8_t tgt_last_rc;   // GUID_RC_*
+
+    // Which chip is behind the IIS2MDC-named mag stream (format_version >= 6).
+    // MAG_TYPE_* above; keys the count→µT scale in log analysis, where the
+    // mini's QMC5883P counts (100/3750 µT/LSB) would otherwise be misread at
+    // the IIS2MDC's 0.15 µT/LSB.
+    uint8_t mag_type;
 } OutStatusQueryData;
-static_assert(sizeof(OutStatusQueryData) == 41,
-              "OutStatusQueryData must be 41 bytes");
+static_assert(sizeof(OutStatusQueryData) == 42,
+              "OutStatusQueryData must be 42 bytes");
 
 // ### Data Structures ###
 // Packed and unpacked data structures for each type ---
@@ -1166,10 +1183,27 @@ typedef struct __attribute__((packed))
     uint64_t used_bytes;
     uint64_t free_bytes;
     uint8_t  backend;   // 0 = SPIFFS, 1 = SD/FAT, 2 = ext-NAND/FAT
-    uint8_t  flags;     // bit0 = filesystem mounted
+    uint8_t  flags;     // see BSS_FLAG_* below
 } BaseStationStorageStatsData;
 static_assert(sizeof(BaseStationStorageStatsData) == 26,
               "BaseStationStorageStatsData must be 26 bytes");
+
+// BaseStationStorageStatsData.flags bits.  Wire-compatible in the same way as
+// RSS_FLAG_*: the app ignores unknown bits, so new flags don't bump the format.
+static constexpr uint8_t BSS_FLAG_MOUNTED = (1u << 0);  // filesystem mounted
+// #761: this board is fitted with primary storage (SPI NAND or an SD slot) but
+// its bring-up failed at boot, so the whole session is logging to the ~1.9 MB
+// internal SPIFFS partition instead of 512 MB.  `backend` alone can't say this
+// — it reports where we ended up, not that somewhere better was expected and
+// lost — and on a V1 board SPIFFS is a legitimate resting place.  A flight
+// logged under this bit truncates; the app must say so, not show a neutral
+// backend name next to a nearly-full bar.
+static constexpr uint8_t BSS_FLAG_FALLBACK = (1u << 1);
+// #761: primary storage IS up, but only after one or more bring-up attempts
+// failed and were retried.  Healthy for this boot and not worth alarming over,
+// but a unit that sets this every boot is on its way to setting
+// BSS_FLAG_FALLBACK, so it is worth surfacing somewhere quiet.
+static constexpr uint8_t BSS_FLAG_RETRIED  = (1u << 2);
 
 // MMC5983MA centered-counts offset (legacy path).  Stored in NVS as
 // int32_t in the same 18-bit signed centered-counts space as
@@ -1382,7 +1416,26 @@ static constexpr uint8_t SH_STORAGE_SHIFT = 20;
 // the existing sensor_health carrier to the app on BOTH the direct-BLE and
 // LoRa/BS-relay paths (BLE JSON key "h") — no new wire field needed.
 static constexpr uint8_t SH_GNSS_ABSENT_SHIFT = 22;
-// bits 24-31 reserved
+// Per pyro channel, MEASURED continuity — reported for EVERY channel whether or
+// not it is configured for flight.  Distinct from SH_PYRO_SHIFT above, which is
+// deliberately config-gated because it feeds the operator's go/no-go rollup.
+//
+// Why both exist (bench 2026-08-17): the direct-BLE pyro_status CONT bit has no
+// config gate, but the scorecard's did — so a ground test on an unconfigured
+// channel read CONT over Bluetooth and "no reading" over LoRa, and the LoRa
+// stand-back test (#803) could never confirm a charge on a channel that wasn't
+// already armed for flight.  The gate cannot simply be dropped: the app treats
+// ANY SH_BAD pyro as a hard "Do not fly" (TelemetryData.flightReadiness), so a
+// bench-tested empty channel would ground the rocket.  Hence a second field
+// that answers "what did the wire actually measure", leaving the first to
+// answer "is this flight's deployment train ready".
+//
+// SH_NA = never tested this session (no reading to report); SH_OK = continuity
+// present; SH_BAD = tested, open.  SH_DEGRADED is unused here — "untested" is
+// SH_NA, since an unconfigured channel has nothing to be degraded about.
+// All-NA across the four means the rocket predates this field: consumers fall
+// back to SH_PYRO_SHIFT.
+static constexpr uint8_t SH_PYRO_MEAS_SHIFT[4] = { 24, 26, 28, 30 };
 static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st) {
     return (field & ~(uint32_t)(0x3u << shift)) | ((uint32_t)st << shift);
 }
@@ -2263,19 +2316,24 @@ typedef struct __attribute__((packed)) {
 } GuidancePointData;
 static_assert(sizeof(GuidancePointData) == 20, "GuidancePointData must be 20 bytes");
 
-// App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
-// driven by servo i:
-//   deflection_i = tilt_i·(pitch·cos(az_i) + yaw·sin(az_i)) + roll_i·roll
+// App-configurable fin→servo mix.  azimuth_deg[i] is the RING-POSITION azimuth of
+// the fin driven by servo i (0 = top slot, 90, 180, 270 — exactly what the app's
+// ring GUI shows).  A fin's tangential lift is perpendicular to its radial arm
+// (top/bottom fins are yaw rudders, right/left fins are pitch elevators), so the FC
+// maps position → force internally:
+//   deflection_i = tilt_i·(pitch·sin(az_i) − yaw·cos(az_i)) + roll_i·roll
+// (Earlier firmware used cos/sin here — treating the position azimuth as the force
+// azimuth — which swapped the pitch/yaw fin pairs; see TR_ControlMixer::setFinLayout.)
 // tilt_i = -1 if bit i of reverse_mask is set (flips that fin's pitch/yaw response);
 // roll_i = -1 if bit i of roll_reverse_mask is set (flips its roll response).  The two
 // are INDEPENDENT: a fin's tilt and roll directions don't always share a sign in real
 // hardware (e.g. a linkage that mirrors pitch/yaw but not the roll moment), so one bit
-// can't express both.  Both masks 0 + azimuths {0,90,180,270} reproduce the legacy
-// hardcoded "+" mix (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The
-// app derives all of this from the ring GUI.
+// can't express both.  Both masks 0 + azimuths {0,90,180,270} give the "+" mix
+// (servo 0 = top/+yaw, 1 = right/+pitch, 2 = bottom, 3 = left).  The app derives all
+// of this from the ring GUI.
 typedef struct __attribute__((packed))
 {
-    float   azimuth_deg[4];     // per-servo fin control azimuth (deg)
+    float   azimuth_deg[4];     // per-servo fin ring-position azimuth (deg)
     uint8_t reverse_mask;       // bit i ⇒ negate servo i pitch/yaw (tilt) response
     uint8_t roll_reverse_mask;  // bit i ⇒ negate servo i roll response (independent)
 } FinConfigData;
@@ -2570,14 +2628,22 @@ static_assert(sizeof(GuidanceTelemData) == 19, "GuidanceTelemData must be 19 byt
 struct __attribute__((packed)) FlightSnapshotData
 {
     static constexpr uint32_t MAGIC   = 0xF1A75A7E;  // distinct from old NVS magic (0xF1A7C0DE)
-    static constexpr uint8_t  VERSION = 3;           // v2: 4-channel pyro layout, no per-channel ARM
+    static constexpr uint8_t  VERSION = 4;           // v2: 4-channel pyro layout, no per-channel ARM
                                                      // v3: board→rocket orientation (b2r_*)
+                                                     // v4: sim_flight flag (reclaimed from pad)
 
     // --- Header ---
     uint32_t magic;
     uint8_t  version;
     uint8_t  rocket_state;
-    uint8_t  pad[2];
+    // 1 = snapshot was built during a SIMULATED flight (v4).  isSimActive()
+    // does not survive a reboot, so restore paths MUST refuse sim snapshots:
+    // restoring one would resume LIVE INFLIGHT with the pyro dry-fire gate
+    // off and bench igniters connected.  Restore paths also refuse v3
+    // snapshots outright (version check) — a v3 frame can't prove it wasn't
+    // a sim flight.
+    uint8_t  sim_flight;
+    uint8_t  pad[1];
 
     // --- Flight timestamps (relative to launch) ---
     uint32_t flight_elapsed_ms;
@@ -2725,7 +2791,7 @@ static_assert(offsetof(NonSensorData, apogee_flags) == 43, "NonSensorData.apogee
 static_assert(offsetof(NonSensorData, sensor_health) == 44, "NonSensorData.sensor_health moved");
 static_assert(offsetof(NonSensorData, ekf_ticks) == 48, "NonSensorData.ekf_ticks moved");
 
-static_assert(sizeof(OutStatusQueryData) == 41, "OutStatusQueryData wire size");
+static_assert(sizeof(OutStatusQueryData) == 42, "OutStatusQueryData wire size");
 static_assert(offsetof(OutStatusQueryData, ism6_low_g_fs_g) == 0, "OutStatusQueryData.ism6_low_g_fs_g moved");
 static_assert(offsetof(OutStatusQueryData, ism6_high_g_fs_g) == 1, "OutStatusQueryData.ism6_high_g_fs_g moved");
 static_assert(offsetof(OutStatusQueryData, ism6_gyro_fs_dps) == 3, "OutStatusQueryData.ism6_gyro_fs_dps moved");
@@ -2746,6 +2812,8 @@ static_assert(offsetof(OutStatusQueryData, tgt_alt_m)   == 36, "OutStatusQueryDa
 static_assert(offsetof(OutStatusQueryData, tgt_seq)     == 38, "OutStatusQueryData.tgt_seq moved");
 static_assert(offsetof(OutStatusQueryData, tgt_status)  == 39, "OutStatusQueryData.tgt_status moved");
 static_assert(offsetof(OutStatusQueryData, tgt_last_rc) == 40, "OutStatusQueryData.tgt_last_rc moved");
+// v6 mag-type byte.
+static_assert(offsetof(OutStatusQueryData, mag_type) == 41, "OutStatusQueryData.mag_type moved");
 
 static_assert(sizeof(ServoConfigData) == 22, "ServoConfigData wire size");
 static_assert(offsetof(ServoConfigData, bias_us) == 0, "ServoConfigData.bias_us moved");
@@ -2778,7 +2846,7 @@ static constexpr size_t P5 = SIZE_OF_POWER_DATA;
 static constexpr size_t P6 = SIZE_OF_NON_SENSOR_DATA;
 static constexpr size_t P7 = SIZE_OF_LORA_DATA;
 static constexpr size_t P8 = sizeof(RollProfileData);
-static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (224 B as of snapshot v3)
+static constexpr size_t P9 = sizeof(FlightSnapshotData);  // largest payload (224 B as of snapshot v4)
 
 static constexpr size_t M12   = (P1 > P2 ? P1 : P2);
 static constexpr size_t M34   = (P3 > P4 ? P3 : P4);

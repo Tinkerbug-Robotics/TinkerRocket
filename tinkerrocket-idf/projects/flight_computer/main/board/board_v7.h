@@ -50,10 +50,14 @@ struct board_pins
     static constexpr uint8_t IIS2MDC_INT = 12;  // shared with MMC5983MA_INT
 
     // ### Camera (RunCam wiring bench-confirmed, #234/#251) ###
+    // Direction in camera-side terms: GPIO31 listens to the camera's TX pad,
+    // GPIO30 drives its RX pad. (The V7 schematic isn't in-repo; V8+ names
+    // these nets FC-perspective — Camera_RX on 31, Camera_TX on 30, the
+    // reverse of the GNSS convention — see the note in board_v8.h.)
     static constexpr int8_t CAM_PWR_PIN = 30;      // GoPro path, unused
     static constexpr int8_t CAM_SHUTTER_PIN = 31;  // GoPro path, unused
-    static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (Camera_TX)
-    static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (Camera_RX)
+    static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (camera's TX pad)
+    static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (camera's RX pad)
     static constexpr int8_t RUNCAM_PWR_PIN = 32;   // camera power gate (CAM_ACT)
 
     // ### Pyro channels ###
@@ -91,7 +95,10 @@ struct board_pins
     static constexpr int I2S_DOUT_PIN  = 23;
     static constexpr int I2S_FSYNC_PIN = 17;
 
-    // ### Power gates (V8-only topology; -1 = rail not FC-switched) ###
+    // ### Power gates (V8+ topology; -1 = rail not FC-switched) ###
     static constexpr int GPS_ACT_PIN = -1;
     static constexpr int SERVO_ACT_PIN = -1;
+
+    // ### Power latch (V9+ only; -1 = the FC cannot hold its own rail) ###
+    static constexpr int PWR_HOLD_PIN = -1;
 };

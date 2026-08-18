@@ -35,6 +35,15 @@ enum TileSource: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Label for the source menu and the map's active-source plate.
+    /// "(online)" marks the sources no saved area can cover — the distinction
+    /// that matters at a launch site with no signal, and the reason the menu
+    /// lists every source instead of hiding them behind a cycling control.
+    /// Twin: `TileSource.pickerLabel` in the Android app's Basemap.kt.
+    var pickerLabel: String {
+        isCacheable ? displayName : "\(displayName) (online)"
+    }
+
     /// SF Symbol for the source menu.
     var symbol: String {
         switch self {
@@ -52,6 +61,15 @@ enum TileSource: String, CaseIterable, Identifiable {
     /// Whether this source can be cached / downloaded for offline use.
     /// USGS (public domain) yes; Apple no.
     var isCacheable: Bool { !isAppleBasemap }
+
+    /// Deepest zoom this source actually serves.  The USGS ArcGIS basemaps
+    /// stop at 16 — asking for 17/18 returns 404 for every tile in the band,
+    /// which the downloader counts as done with 0 bytes, so an over-deep
+    /// request silently inflates the estimate and downloads nothing.
+    /// Matches Android's per-source `TileSource.maxZoom`.
+    var maxZoom: Int {
+        isAppleBasemap ? 19 : 16
+    }
 
     /// MKMapType for the Apple cases. For USGS cases the value is irrelevant
     /// (the overlay replaces the basemap) but `.standard` keeps Apple from

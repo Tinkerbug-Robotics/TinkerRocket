@@ -7,6 +7,26 @@
 //
 // Net names in comments are the V8 schematic nets. Values marked TODO are
 // still unconfirmed — replace as bring-up proceeds.
+//
+// ALSO THE V9/V10 MAP — this MCU did not move (verified 2026-08-17 by walking
+// U15's pad -> pinfunction -> net in hardware/rocket-computer.kicad_pcb at
+// every commit that ever touched it, and against a kicad-cli netlist export
+// of the V10 schematic). -DTR_BOARD_V9=1 selects this same header; see
+// main/config.h. That is the opposite of the FC, whose V9 map moved PYRO_ARM
+// and swapped two FIRE pins and therefore has its own board_v9.h.
+//
+// Two things changed around this map without changing it:
+//   * PWR_PIN's net was renamed Power_Switch -> P4_EN_S3 at the V9 pre-fab
+//     close-out. Same GPIO7, same job: it is the enable that powers the P4's
+//     rail (U30, a TPS22810). On V9+ the P4 also has its own hold line into
+//     the same enable (its GPIO5, net P4_EN_HOLD) which its firmware does not
+//     currently drive — so dropping PWR_PIN still powers the FC down, but
+//     check flight_computer/main/board/board_v9.h before assuming that.
+//   * MRAM_CS (GPIO34) is V8-only. There is no MRAM_CS net anywhere in the
+//     V9/V10 schematic; the pin is unconnected and the part is unfitted.
+//     Left at 34 because it is correct for V8 and harmless on V9/V10 (it
+//     drives a floating pad), but set it to -1 if an MRAM-present code path
+//     ever costs more than a probe.
 struct board_pins
 {
     // --- Power rail switch ---
@@ -71,4 +91,20 @@ struct board_pins
     // Daughterboard power gate (high = powered), like CAM_ACT for the RunCam.
     // Also the recovery hammer for a wedged/bricked daughterboard (#412).
     static constexpr int LORA_ACT_PIN = 12;      // LoRa_ACT (CONFIRMED)
+
+    // --- High-side-switch current monitors (V9 close-out: TPS22811 U26/U28) ---
+    // IMON sources GIMON x ILOAD into a ground-referenced gain resistor:
+    //   ILOAD = V(pin) / (IMON_GAIN_A_PER_A * R).
+    // GIMON is 95.3 uA/A typical but 82.9-107.6 over temp (datasheet, at
+    // 1.5 A) — calibrate against a known load before trusting absolute amps.
+    // Gain resistors per hardware PR #728: CAM R85 = 2.0 k (2.2 k in the
+    // original V9 close-out) and SERVO R88 = 1.0 k — deliberately landing
+    // BOTH channels near 0.286 V at their design currents (camera 1.5 A,
+    // servo 3 A per high-side-switch-design.md). Nothing reads these yet;
+    // staged so the first implementation cannot inherit the 2.2 k scale.
+    static constexpr int   CAM_IMON_GPIO      = 8;         // CAM_IMON, ADC1_CH7
+    static constexpr int   SERVO_IMON_GPIO    = 9;         // SERVO_IMON, ADC1_CH8
+    static constexpr float IMON_GAIN_A_PER_A  = 95.3e-6f;  // TPS22811 GIMON typ
+    static constexpr float CAM_IMON_R_OHM     = 2000.0f;   // R85 (PR #728)
+    static constexpr float SERVO_IMON_R_OHM   = 1000.0f;   // R88
 };

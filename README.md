@@ -34,6 +34,30 @@ The base station fits easily in your hand or pocket and can run for hours on a s
 
 Finally, manage the flight data intuitively by uploading from the flight computer to an iOS device and then sharing that data using email, text, air drop, or any other iOS supported sharing means.
 
+## Data Analysis
+
+**[Analyze a flight in your browser →](https://tinkerbug-robotics.github.io/TinkerRocket/)**
+
+Drop a flight log in and get a report back: the trajectory in 3D on satellite
+imagery, then altitude, velocity and acceleration, roll control, how apogee was
+detected and by which sensor, stability, deployment and descent rates, the radio
+link, and a panel that will plot any of the ~84 logged channels against time or
+against each other.
+
+The log never leaves your machine. The page runs this repository's own
+`flight_report` Python package in the browser through
+[Pyodide](https://pyodide.org) — the same code the CLI runs, so a report
+generated on the site and one generated locally are the same report. There is a
+sample flight on the page if you want to see the output before you fly.
+
+For the command line, and for what each section is measuring:
+**[Data_Analysis/](Data_Analysis/)** and
+**[Data_Analysis/webtool/](Data_Analysis/webtool/README.md)**.
+
+```bash
+python3 -m Data_Analysis.flight_report run path/to/flight_20260705_174532.bin
+```
+
 ## Architecture
 
 ```mermaid
@@ -209,7 +233,7 @@ rocket is recovered. Binary is not necessary here since data is at 2 Hz.
 ### Flight reports
 
 [`Data_Analysis/flight_report/`](Data_Analysis/flight_report/) turns a `.bin` into a
-self-contained **HTML report**. It reads the binary directly and runs twelve analysis
+self-contained **HTML report**. It reads the binary directly and runs 21 analysis
 modules over it — launch detection, kinematics, apogee and pyro timing, sensor noise,
 timestamp gaps, GNSS staleness, LoRa link quality, roll PID, guidance — then renders the
 plots and findings into one page.
@@ -408,7 +432,8 @@ Nine GitHub Actions workflows run automatically, each path-filtered to what it c
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
 | **android-tests.yml** | Pure-JVM JUnit for `TinkerRocketAndroid/` (protocol/session/maps modules) against the same golden-vector corpus the C++ and iOS suites consume |
 | **android-release.yml** | Signed release APK on `android-v*` tag push — JVM suite, then `assembleRelease` signed from repo secrets, with an `apksigner` gate that fails if the APK came out debug-signed (see `docs/android-release-signing.md`) |
-| **flight-report-tests.yml** | Flight-report tooling |
+| **flight-report-tests.yml** | Flight-report tooling — the Python suite, plus a Node job for the Explore panel, whose choice of what to draw is made in JavaScript and so is tested there |
+| **pages.yml** | Publishes the browser-based analysis tool to GitHub Pages on pushes to `main`. Builds `Data_Analysis/webtool/payload/` rather than shipping it — it is gitignored, and a committed copy would drift from the source the browser actually runs |
 | **wire-codes.yml** | Fails on duplicate BLE command numbers — the dispatch is a first-match chain, so a duplicate silently makes the later handler dead code |
 | **docs.yml** | Fails if a generated section map or the protocol reference disagrees with its source, or if the prose contradicts it — broken links, a stale ESP-IDF version, a missing workflow, a wrong struct size. The only workflow with **no path filter**: it runs on every push and PR, because docs drift as a side effect of changes anywhere |
 

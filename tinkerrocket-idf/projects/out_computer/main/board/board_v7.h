@@ -56,4 +56,10 @@ struct board_pins
     static constexpr int LORA_UART_TX_PIN = -1;
     static constexpr int LORA_UART_RX_PIN = -1;
     static constexpr int LORA_ACT_PIN = -1;
+    // --- High-side-switch current monitors: not present on V7 (see V8) ---
+    static constexpr int   CAM_IMON_GPIO      = -1;
+    static constexpr int   SERVO_IMON_GPIO    = -1;
+    static constexpr float IMON_GAIN_A_PER_A  = 0.0f;
+    static constexpr float CAM_IMON_R_OHM     = 0.0f;
+    static constexpr float SERVO_IMON_R_OHM   = 0.0f;
 };

@@ -1,0 +1,160 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+    fincan.stl
+    {
+        type triSurfaceMesh;
+        name fincan;
+
+        regions
+        {
+            fincan
+            {
+                name    fincan;
+            }
+            finTab
+            {
+                name    finTab;
+            }
+        }
+    }
+
+    // Refinement box around the fin
+    // Fin: X=[0, 0.1104] span, Y=[-0.012, 0.0125] thick, Z=[0.010, 0.160] chord
+    refinementBox
+    {
+        type    searchableBox;
+        min     (-0.005 -0.045 -0.02);
+        max     ( 0.130  0.045  0.21);
+    }
+
+    // Tighter refinement box around the tab region (incl. +-20 deg TE swing)
+    // Tab: X=[0.0547, 0.0787] span, Z=[0.100, 0.160]
+    refinementBoxTab
+    {
+        type    searchableBox;
+        min     ( 0.045 -0.035 0.085);
+        max     ( 0.095  0.035 0.19);
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells   500000;
+    maxGlobalCells  3000000;
+    minRefinementCells 10;
+    maxLoadUnbalance 0.10;
+    nCellsBetweenLevels 3;
+
+    features
+    (
+        {
+            file    "fincan.eMesh";
+            level   3;
+        }
+    );
+
+    refinementSurfaces
+    {
+        fincan
+        {
+            level (2 3);
+
+            regions
+            {
+                fincan
+                {
+                    level (2 3);
+                }
+                finTab
+                {
+                    level (3 4);
+                }
+            }
+        }
+    }
+
+    resolveFeatureAngle 30;
+
+    refinementRegions
+    {
+        refinementBox
+        {
+            mode    inside;
+            levels  ((1E15 1));  // level 1 (5mm)
+        }
+        refinementBoxTab
+        {
+            mode    inside;
+            levels  ((1E15 2));  // level 2 (2.5mm) around tab
+        }
+    }
+
+    // Point inside the mesh (outside the fin, inside domain)
+    locationInMesh (0.22 0.12 -0.12);
+
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch    3;
+    tolerance       2.0;
+    nSolveIter      100;
+    nRelaxIter      5;
+    nFeatureSnapIter 10;
+    implicitFeatureSnap false;
+    explicitFeatureSnap true;
+    multiRegionFeatureSnap false;
+}
+
+addLayersControls
+{
+    relativeSizes   true;
+
+    layers
+    {
+        fincan
+        {
+            nSurfaceLayers  3;
+        }
+        finTab
+        {
+            nSurfaceLayers  4;
+        }
+    }
+
+    expansionRatio          1.3;
+    finalLayerThickness     0.3;
+    minThickness            0.1;
+    nGrow                   0;
+    featureAngle            60;
+    slipFeatureAngle        30;
+    nRelaxIter              5;
+    nSmoothSurfaceNormals   1;
+    nSmoothNormals          3;
+    nSmoothThickness        10;
+    maxFaceThicknessRatio   0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle      90;
+    nBufferCellsNoExtrude   0;
+    nLayerIter              50;
+}
+
+meshQualityControls
+{
+    #include "meshQualityDict"
+}
+
+mergeTolerance  1e-6;

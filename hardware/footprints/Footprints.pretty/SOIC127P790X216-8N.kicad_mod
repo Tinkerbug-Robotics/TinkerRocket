@@ -1,0 +1,251 @@
+(footprint "SOIC127P790X216-8N"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "8-lead SOIC, 208mil body, 1.27 mm pitch (SOIC127P790X216-8N). Generic package land - deliberately not named for a part number, so a change of fitted device needs no rename; the device is carried by the symbol's MPN field. Larger than the DFN/WSON land it replaced.")
+	(property "Reference" "REF**"
+		(at -1.485 -3.702 0)
+		(layer "F.SilkS")
+		(uuid "347560ec-e8c8-4024-b859-557c937cff88")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "SOIC127P790X216-8N"
+		(at 6.77 3.702 0)
+		(layer "F.Fab")
+		(uuid "36d247cb-1c13-4852-a7f9-b8412cf18b33")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "c03143cd-8dba-4f8b-8e64-4f3da6018969")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "287e580e-de6a-48e0-bfd2-6d749ee74d42")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -2.64 -2.64)
+		(end 2.64 -2.64)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "dd8d843b-6cd6-4b43-8471-4d06f097933e")
+	)
+	(fp_line
+		(start -2.64 2.64)
+		(end 2.64 2.64)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "ebb3ae0a-8109-4f0f-b7c4-39a6d9ec7120")
+	)
+	(fp_circle
+		(center -5.215 -1.905)
+		(end -5.115 -1.905)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "c2694535-64c9-4278-8d14-49ee6dbd4a21")
+	)
+	(fp_line
+		(start -4.66 -2.89)
+		(end -4.66 2.89)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "9a61d3eb-76d0-4f2c-8e9f-cb08f45d294f")
+	)
+	(fp_line
+		(start -4.66 -2.89)
+		(end 4.66 -2.89)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "74261546-5b41-463a-974e-49142efa54ee")
+	)
+	(fp_line
+		(start -4.66 2.89)
+		(end 4.66 2.89)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "51294724-3b04-409e-8474-d7e0a428e109")
+	)
+	(fp_line
+		(start 4.66 -2.89)
+		(end 4.66 2.89)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "48aae655-853e-42fc-b997-d5f427746a0b")
+	)
+	(fp_line
+		(start -2.64 -2.64)
+		(end -2.64 2.64)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "a4f473b8-aa28-4437-8f47-e6b4f52424f1")
+	)
+	(fp_line
+		(start -2.64 -2.64)
+		(end 2.64 -2.64)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "5a4e10bb-2b4e-4b9d-9dc9-bc6c19c69ff0")
+	)
+	(fp_line
+		(start -2.64 2.64)
+		(end 2.64 2.64)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "9fe479bc-5668-4b7d-a23f-a3fd9b40b572")
+	)
+	(fp_line
+		(start 2.64 -2.64)
+		(end 2.64 2.64)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "4e224f5f-76fe-4e78-9c26-e9463e92fee0")
+	)
+	(fp_circle
+		(center -5.215 -1.905)
+		(end -5.115 -1.905)
+		(stroke
+			(width 0.2)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "1392930c-c47b-44d1-8d12-e29cc8d9b409")
+	)
+	(pad "1" smd roundrect
+		(at -3.605 -1.905)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "1f28b1e2-a4d6-4bd5-8aa5-53f1f9d631a5")
+	)
+	(pad "2" smd roundrect
+		(at -3.605 -0.635)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "7d02038a-e149-49d0-87a3-9117b17994ae")
+	)
+	(pad "3" smd roundrect
+		(at -3.605 0.635)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "cdbbc3a2-eb8d-44c3-b838-5b7a6d1ba458")
+	)
+	(pad "4" smd roundrect
+		(at -3.605 1.905)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "e35b6fa9-ffaf-4d9d-8ac2-95a67bee8660")
+	)
+	(pad "5" smd roundrect
+		(at 3.605 1.905)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "93164dfb-789b-4f72-93db-92b8eddfb324")
+	)
+	(pad "6" smd roundrect
+		(at 3.605 0.635)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "b4dd3488-297d-42de-b172-9541ff1e46ee")
+	)
+	(pad "7" smd roundrect
+		(at 3.605 -0.635)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "4b173f6d-9258-4bac-88bc-d6071799047d")
+	)
+	(pad "8" smd roundrect
+		(at 3.605 -1.905)
+		(size 1.61 0.58)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+		(roundrect_rratio 0.125)
+		(solder_mask_margin 0.102)
+		(uuid "60c4c679-6cbc-41e3-9e1a-a51ef16f9daa")
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/SOIC127P790X216-8N.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz -90 -0 -0)
+		)
+	)
+)

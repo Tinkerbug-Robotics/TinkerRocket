@@ -154,6 +154,32 @@ public data class TelemetryData(
     // valid, low-priority tail fields absent by design.
     val fieldsTrimmed: Boolean = false,
 ) {
+    /**
+     * iOS `socDisplay` twin.  Clamped to 0..100 for display only — the stored
+     * value and the CSV keep whatever came off the wire.  SOC is packed as an
+     * i16 spanning -25..125% for headroom, so an exact 0% round-trips to
+     * -0.00077 and "%.1f%%" prints it as "-0.0%", which is what a rocket
+     * running off USB shows on every line.  Em dash for absent, as elsewhere
+     * on this dashboard (iOS says "N/A" here).
+     */
+    /** The base station's own pack, same formatting rules as [socDisplay]. */
+    public val bsSocDisplay: String
+        get() = bsSoc?.let {
+            String.format(java.util.Locale.ROOT, "%.1f%%", it.coerceIn(0f, 100f) + 0f)
+        } ?: "—"
+
+    public val socDisplay: String
+        get() = soc?.let {
+            // The `+ 0f` is what actually kills "-0.0%", and it is not
+            // redundant with coerceIn: the OC prints SOC to one decimal, so an
+            // exact 0% arrives as the literal -0.0, and -0.0 == 0.0 means
+            // coerceIn considers it already in range and hands it back
+            // untouched.  Adding positive zero is the IEEE way to drop the
+            // sign.  coerceIn still earns its place for a genuinely
+            // out-of-range value.
+            String.format(java.util.Locale.ROOT, "%.1f%%", it.coerceIn(0f, 100f) + 0f)
+        } ?: "—"
+
     // ── Telemetry freshness (#95) ─────────────────────────────────────────
     public enum class DataStatus(public val raw: Int) {
         LIVE(0), STALE(1), SYNCING(2);
@@ -272,6 +298,24 @@ public data class TelemetryData(
     public fun pyroHealth(channel: Int): SensorHealth {
         if (channel !in 1..4) return SensorHealth.NA
         return shState(12 + (channel - 1) * 2)
+    }
+
+    /**
+     * MEASURED continuity (SH_PYRO_MEAS_SHIFT, bits 24-30) — reported for every
+     * channel whether or not it is configured for flight, unlike [pyroHealth],
+     * which is config-gated because it feeds the go/no-go rollup. This is the
+     * ground-test answer: NA = never tested this session, OK = continuity, BAD =
+     * tested and open. Never DEGRADED.
+     *
+     * Returns null when the rocket predates the field (all four read NA), so
+     * callers fall back to [pyroHealth] rather than showing "never tested"
+     * forever against older firmware. iOS twin: pyroMeasuredContinuity.
+     */
+    public fun pyroMeasuredContinuity(channel: Int): SensorHealth? {
+        if (channel !in 1..4) return null
+        val anyReported = (1..4).any { shState(24 + (it - 1) * 2) != SensorHealth.NA }
+        if (!anyReported) return null
+        return shState(24 + (channel - 1) * 2)
     }
 
     public val hasSensorHealth: Boolean get() = sensorHealth != 0

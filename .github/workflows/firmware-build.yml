@@ -23,14 +23,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project:
-          - out_computer
-          - base_station
-          - flight_computer
-          - radio_board
+        include:
+          - project: out_computer
+          - project: base_station
+          - project: radio_board
+          - project: rocket_computer_mini
+          # flight_computer has no default board revision: the flag is
+          # mandatory (projects/flight_computer/main/CMakeLists.txt) because a
+          # wrong pyro pin map is silent at runtime. Build every map so none of
+          # them rots — V8 and V9 differ on ARM and swap FIRE 2/3.
+          - project: flight_computer
+            board: V7
+            flags: -B build_v7 -DTR_BOARD_V7=1
+          - project: flight_computer
+            board: V8
+            flags: -B build_v8 -DTR_BOARD_V8=1
+          - project: flight_computer
+            board: V9
+            flags: -B build_v9 -DTR_BOARD_V9=1
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # TR_GuidancePN is a private submodule marked `update = none` in
       # .gitmodules so recursive clones (Xcode Cloud, casual
@@ -54,9 +67,9 @@ jobs:
           git -c submodule."tinkerrocket-idf/components/TR_GuidancePN".update=checkout \
             submodule update --init --recursive tinkerrocket-idf/components/TR_GuidancePN
 
-      - name: Build ${{ matrix.project }}
+      - name: Build ${{ matrix.project }} ${{ matrix.board }}
         working-directory: tinkerrocket-idf/projects/${{ matrix.project }}
         shell: bash
         run: |
           . $IDF_PATH/export.sh
-          idf.py build
+          idf.py ${{ matrix.flags }} build

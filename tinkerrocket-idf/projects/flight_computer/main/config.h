@@ -6,15 +6,40 @@
 // --- Board revision (#411, tracking #408) ---
 // Pins + part-presence flags live in the per-board headers; everything in
 // this file is board-independent policy and must not fork per revision.
-// Select the V8 map with: idf.py -B build_v8 -DTR_BOARD_V8=1 build
-// (default stays V7 until V8 bring-up completes).
+//
+// EXACTLY ONE of these must be set — there is no default. A wrong pyro pin
+// map is completely silent at runtime (the board boots, continuity reads
+// correctly, and the wrong channel fires or no channel fires at all), so the
+// flight computer refuses to build rather than guess:
+//
+//   V7 legacy board:  idf.py -B build_v7 -DTR_BOARD_V7=1 build
+//   V8 bench boards:  idf.py -B build_v8 -DTR_BOARD_V8=1 build
+//   V9/V10 boards:    idf.py -B build_v9 -DTR_BOARD_V9=1 build
+//
+// main/CMakeLists.txt enforces the same rule at configure time with a clearer
+// message; this check is the backstop for anything that includes config.h
+// without going through it.
+#ifndef TR_BOARD_V7
+#define TR_BOARD_V7 0
+#endif
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
-#if TR_BOARD_V8
+#ifndef TR_BOARD_V9
+#define TR_BOARD_V9 0
+#endif
+#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1. There is no default — the V8 and V9 pyro maps differ (ARM 5 vs 16, FIRE 2/3 swapped) and a wrong map fires the wrong channel silently."
+#endif
+#if TR_BOARD_V9
+#include "board/board_v9.h"
+#define TR_BOARD_REV_STR "V9/V10"
+#elif TR_BOARD_V8
 #include "board/board_v8.h"
+#define TR_BOARD_REV_STR "V8"
 #else
 #include "board/board_v7.h"
+#define TR_BOARD_REV_STR "V7"
 #endif
 
 struct config : board_pins
@@ -131,6 +156,24 @@ struct config : board_pins
     static constexpr uint32_t RUNCAM_PROBE_READ_MS    = 60;    // per-probe RX wait
     static constexpr uint8_t  RUNCAM_RECORD_RESENDS   = 2;     // extra START sends
     static constexpr uint32_t RUNCAM_RECORD_RESEND_MS = 150;   // resend spacing
+    // Battery-only starts leave the camera dark (no LED, UART silent) even
+    // though the same rail runs it fine once booted (its own button boots it,
+    // recording included) — bench-observed 2026-08-16 on V8; USB/charger
+    // attached masks it.  Charged-pack test eliminated voltage level and
+    // source impedance.  Prime suspect: PHANTOM POWER.  V8 wires the UART
+    // pins straight to J6.3/4 with no series resistance (R30/R32 are a V9
+    // addition — netlist-verified against the archived V8 project), and V8
+    // switches the camera's RETURN (Q3 low-side; J6.2 is always-on VCC), so
+    // the FC's idle-high TX back-feeds the "off" camera through its ESD
+    // diodes and its power-on-reset never sees a clean rise.  Fix: the UART
+    // pins are PARKED high-impedance whenever the camera is unpowered and
+    // attached only while the gate is up.  A silent probe window gets a
+    // park+power-cycle retry (off long enough for the camera's own load to
+    // drain it) before the blind fallback.  NEVER drive these pins low to
+    // "discharge" the branch on V8 — with no series resistors that dumps the
+    // camera's stored charge straight into the P4 pads.
+    static constexpr uint8_t  RUNCAM_POWER_RETRIES    = 2;     // extra power-cycle attempts
+    static constexpr uint32_t RUNCAM_RETRY_OFF_MS     = 3000;  // parked+unpowered between attempts
 
     // ### Pyro timing (pins in board header) ###
     // One shared arming FET feeds all four squib drivers. ARM is raised
@@ -338,10 +381,13 @@ struct config : board_pins
     static constexpr float GUIDANCE_TILT_LIMIT_BOOST_DEG = 15.0f;
     static constexpr float GUIDANCE_TILT_LIMIT_COAST_DEG = 20.0f;
     // Fin→servo layout (cruciform mix shared by roll / ground-test / guidance).
-    // FIN_AZIMUTH_n_DEG = control azimuth of servo n: deflection_n = sign_n·(roll
-    // + pitch·cos(az_n) + yaw·sin(az_n)).  Defaults reproduce the legacy "+"
-    // (servo 0 top/+pitch, 1 right/+yaw, 2 bottom, 3 left).  Bit n of
-    // FIN_REVERSE_MASK bit n negates servo n's pitch/yaw (tilt) response;
+    // FIN_AZIMUTH_n_DEG = ring-POSITION azimuth of servo n's fin (0 = top slot,
+    // 90 = right, … looking from the rear — what the app's ring GUI shows).
+    // The mixer maps position→tangential force (a fin's lift is perpendicular
+    // to its radial arm): deflection_n = sign_n·(pitch·sin(az_n) −
+    // yaw·cos(az_n)) + roll — so with the "+" defaults the right/left pair
+    // carries pitch (elevators) and the top/bottom pair carries yaw (rudders).
+    // Bit n of FIN_REVERSE_MASK negates servo n's pitch/yaw (tilt) response;
     // FIN_ROLL_REVERSE_MASK bit n independently negates its roll response.
     static constexpr float   FIN_AZIMUTH_0_DEG = 0.0f;
     static constexpr float   FIN_AZIMUTH_1_DEG = 90.0f;

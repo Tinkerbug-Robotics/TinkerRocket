@@ -413,8 +413,11 @@ public class CsvGenerator {
                         magDeg = config.magRotationDeg,
                         iisDeg = config.iisRotationDeg,
                     )
+                    // v6 mag_type keys the mag count scale (pre-v6 logs
+                    // resolve to the IIS2MDC default).
+                    converter.configureMagScale(config.magUtPerLsb)
                 }
-                // else: default rotation (0°)
+                // else: default rotation (0°) and IIS2MDC scale
             }
             DeviceType.LEGACY -> {
                 // Legacy data is raw (unrotated), apply 180° rotation in app

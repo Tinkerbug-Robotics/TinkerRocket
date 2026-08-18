@@ -233,6 +233,16 @@ public:
     // [1..]=packed struct LE bytes (RocketStorageStatsData / BaseStationStorageStatsData).
     void sendStorageStats(uint8_t marker, const uint8_t* bytes, size_t len);
 
+    // Tell the app a pyro test command was refused (not queued) on the
+    // file-ops characteristic.  Format:
+    //   [0][0xCE marker] [1][refused BLE cmd: 35 cont / 36 fire]
+    //   [2][channel 1..4] [3][reason: 1 = FC power rail off]
+    // Binary (not a telemetry-char JSON) on purpose: an unknown "type" on
+    // the telemetry characteristic falls through to the app's telemetry
+    // decoder and lands as a phantom all-defaults frame on pre-refusal
+    // apps, while an unknown file-ops discriminator is dropped safely.
+    void sendPyroTestRefusal(uint8_t refused_cmd, uint8_t channel, uint8_t reason);
+
     // Get pending download filename (empty if none)
     // Clears the filename after reading
     String getDownloadFilename();

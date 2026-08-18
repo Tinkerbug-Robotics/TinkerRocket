@@ -142,6 +142,40 @@ class RocketProfileCodecTest {
         assertEquals(listOf(1, 2, 3, 4), decoded.finServoAtSlot)
         assertEquals(listOf(false, false, false, false), decoded.finReverse)
     }
+
+    @Test
+    fun outOfRangeEnumInts_normalizeOnDecode() {
+        // Older builds edited these as free-typed numbers.  The pickers that
+        // replaced those fields can only DISPLAY a valid choice, so a stored
+        // out-of-range value would show one thing while the syncer pushed
+        // another — and an out-of-range pyro mode is a channel the FC (which
+        // matches modes with ==) silently never fires.
+        val decoded = RocketProfileCodec.decode(
+            """{"name":"Legacy","cameraType":5,"imuOrientSetting":30,"imuRateHz":500,
+               "pyro1TriggerMode":2,"pyro2TriggerMode":1}""",
+            nowMs = 0,
+        )
+        assertNotNull(decoded)
+        assertEquals(2, decoded.cameraType)          // clamped into 0..2
+        assertEquals(0, decoded.imuOrientSetting)    // not 0..23 and not auto
+        assertEquals(1920, decoded.imuRateHz)        // off the ODR whitelist
+        assertEquals(1, decoded.pyro1TriggerMode)    // clamped into 0..1
+        assertEquals(1, decoded.pyro2TriggerMode)    // valid, untouched
+    }
+
+    @Test
+    fun validEnumInts_surviveDecodeUnchanged() {
+        val decoded = RocketProfileCodec.decode(
+            """{"name":"OK","cameraType":1,"imuOrientSetting":255,"imuRateHz":3840,
+               "pyro1TriggerMode":0}""",
+            nowMs = 0,
+        )
+        assertNotNull(decoded)
+        assertEquals(1, decoded.cameraType)
+        assertEquals(0xFF, decoded.imuOrientSetting)  // pad auto-detect
+        assertEquals(3840, decoded.imuRateHz)
+        assertEquals(0, decoded.pyro1TriggerMode)
+    }
 }
 
 class RocketProfileStoreTest {

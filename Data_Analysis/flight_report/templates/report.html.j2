@@ -26,6 +26,20 @@
           font-family: ui-monospace, "SF Mono", monospace; font-size: 0.85rem; white-space: pre-wrap; }
   .figure { margin: 12px 0; text-align: center; }
   .figure img { max-width: 100%; border: 1px solid #eee; border-radius: 4px; }
+  .chart { margin: 12px 0; border: 1px solid #eee; border-radius: 4px; padding: 4px; }
+  .chart-note { color: #888; font-size: 0.78rem; margin: 0 0 6px 8px; }
+  /* A stacked group reads as one multi-panel figure rather than as separate
+     charts: no gap, no repeated border between panels, no rounded corners in
+     the middle. The panels share an x range and only the last one draws tick
+     labels, so the seams have to disappear for the alignment to be legible. */
+  .chart.stacked { margin: 0; border-radius: 0; border-bottom: 0; padding: 0 4px; }
+  .chart.stacked-first { border-radius: 4px 4px 0 0; margin-top: 12px; padding-top: 4px; }
+  .chart.stacked-last { border-radius: 0 0 4px 4px; border-bottom: 1px solid #eee;
+                        margin-bottom: 12px; padding-bottom: 4px; }
+  .chart-hint {
+    color: #666; font-size: 0.85rem; background: #f5f5f7;
+    border-radius: 4px; padding: 6px 12px; margin: 8px 0 12px;
+  }
   .summary-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 8px; margin: 8px 0;
@@ -35,82 +49,145 @@
   }
   .summary-grid .cell .label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
   .summary-grid .cell .value { font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* Summary card — the headline read, and the bit people screenshot. */
+  .card {
+    border: 1px solid #e2e2e6; border-radius: 10px; padding: 18px 20px;
+    margin: 16px 0 28px; background: #fff;
+  }
+  .card h2 { margin: 0 0 2px; border: 0; padding: 0; font-size: 1.25rem; }
+  .card .sub { color: #666; font-size: 0.9rem; margin-bottom: 14px; }
+  .card-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px;
+  }
+  .card-grid .stat .k {
+    font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .card-grid .stat .v {
+    font-size: 1.5rem; font-weight: 650; font-variant-numeric: tabular-nums;
+    line-height: 1.15; margin: 1px 0 2px;
+  }
+  .card-grid .stat .h { font-size: 0.72rem; color: #888; }
+  /* Settings snapshot — grouped tables rather than a wall of JSON. */
+  .settings-note { color: #666; font-size: 0.9rem; margin: 4px 0 12px; }
+  .settings {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 12px 24px; align-items: start;
+  }
+  .settings-group h3 { margin: 0 0 4px; font-size: 0.9rem; text-transform: capitalize; }
+  .settings-group table.metrics { width: 100%; font-size: 0.82rem; }
+  .settings-group table.metrics td:first-child {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #444;
+  }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .pill {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    border: 1px solid #d5d5da; color: #333; text-decoration: none; font-size: 0.85rem;
+  }
+  .pill:hover { background: #f0f0f3; }
+  .units { display: inline-flex; border: 1px solid #d5d5da; border-radius: 999px; overflow: hidden; }
+  .units button {
+    border: 0; background: #fff; color: #555; font-size: 0.82rem;
+    padding: 4px 12px; cursor: pointer;
+  }
+  .units button.active { background: #333; color: #fff; }
+  .map { height: 460px; border: 1px solid #eee; border-radius: 4px; margin: 12px 0; }
+  .map-note { color: #888; font-size: 0.78rem; margin: 0 0 6px 2px; }
+  .map-links { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0 16px; }
+  .map-links .map-note { margin: 0; }
+/* --- Explore panel (#752) ------------------------------------------------ */
+details.explore { border: 1px solid #dcdfe4; border-radius: 6px; margin: 14px 0;
+                  background: #fcfcfd; }
+details.explore > summary { cursor: pointer; padding: 10px 14px; font-weight: 600;
+                            user-select: none; }
+details.explore > summary:hover { background: #f2f4f7; }
+.explore-body { padding: 4px 14px 14px; }
+.explore-controls { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+.explore-pick { display: block; font-size: 13px; font-weight: 600; }
+.explore-pick select { display: block; margin-top: 4px; min-width: 340px;
+                       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                       font-size: 12px; }
+.explore-actions { flex: 1 1 260px; font-size: 13px; }
+.explore-actions button { font: inherit; padding: 6px 16px; cursor: pointer;
+                          border: 1px solid #c6cad1; border-radius: 4px; background: #fff; }
+.explore-actions button:hover { background: #f2f4f7; }
+.explore-actions label { display: block; margin-top: 10px; font-weight: 400; }
+.explore-hint { color: #666; font-size: 12px; line-height: 1.45; margin: 10px 0 0; }
+.explore-status { color: #666; font-size: 13px; padding: 6px 0; }
+.explore-mode { border: 0; padding: 0; margin: 0 0 10px; }
+.explore-mode legend { padding: 0; font-weight: 600; font-size: 13px; }
+.explore-mode label { display: inline-block; margin: 4px 14px 0 0; font-weight: 400; }
+.explore-xaxis { display: block; margin-bottom: 10px; font-weight: 600; font-size: 13px; }
+.explore-xaxis select { display: block; margin-top: 4px; min-width: 300px;
+                        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                        font-size: 12px; }
+.explore-error { color: #a33; font-size: 13px; line-height: 1.5; margin: 10px 0 0; }
+.explore-plot { margin-top: 12px; }
+.explore-notes { font-size: 12px; color: #555; line-height: 1.5; }
+.explore-notes .warn { color: #a33; }
+.explore-notes p { margin: 6px 0 0; }
 </style>
 </head>
 <body>
 
-<h1>{{ flight.rocket_name }}</h1>
-<div class="meta">
-  <code>{{ flight.bin_path }}</code><br>
-  Flight: {{ date_str }}{% if duration_s %} &middot; Duration: {{ "%.1f"|format(duration_s) }} s{% endif %}
+<div class="topbar">
+  <div class="topbar-left"></div>
+  <div class="units" role="group" aria-label="Units">
+    <button type="button" data-units="metric" class="active">Metric</button><button
+            type="button" data-units="imperial">Imperial</button>
+  </div>
 </div>
 
-<div class="summary-grid">
-  {% if sidecar.get('apogee_time_s') is not none %}
-  <div class="cell">
-    <div class="label">Apogee</div>
-    <div class="value">{{ "%.2f"|format(sidecar['apogee_time_s']) }} s</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('burnout_time_s') is not none %}
-  <div class="cell">
-    <div class="label">Burnout</div>
-    <div class="value">{{ "%.2f"|format(sidecar['burnout_time_s']) }} s</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('max_altitude_m') is not none %}
-  <div class="cell">
-    <div class="label">Max Altitude</div>
-    <div class="value">{{ "%.1f"|format(sidecar['max_altitude_m']) }} m</div>
-  </div>
-  {% endif %}
-  {% if sidecar.get('max_speed_mps') is not none %}
-  <div class="cell">
-    <div class="label">Max Speed</div>
-    <div class="value">{{ "%.1f"|format(sidecar['max_speed_mps']) }} m/s</div>
-  </div>
-  {% endif %}
-  {% if stats.get('total_frames') is not none %}
-  <div class="cell">
-    <div class="label">Frames</div>
-    <div class="value">{{ "{:,}".format(stats['total_frames']) }}</div>
-  </div>
-  {% endif %}
-  {% if stats.get('total_frames') and stats['total_frames'] > 0 %}
-  <div class="cell">
-    <div class="label">CRC Pass</div>
-    <div class="value">{{ "%.1f"|format(100.0 * stats['good_crc'] / stats['total_frames']) }}%</div>
-  </div>
-  {% endif %}
+<h1>{{ flight.rocket_name }}</h1>
+<div class="meta">
+  Flight: {{ date_str }}
+  {#- Log duration is how long the recorder ran, usually minutes of pad time. It
+      belongs with the detailed data review; the card's "Flight time" is the number
+      a flyer means, and showing both side by side just reads as a contradiction. -#}
+  {% if level == "detailed" %} &middot; detailed data review{% endif %}
 </div>
+
+{% if summary %}
+<div class="card">
+  <h2>Flight summary</h2>
+  <div class="sub">{{ flight.rocket_name }} &middot; {{ date_str }}</div>
+  <div class="card-grid">
+    {% for c in summary %}
+    {% if c.q %}
+    <div class="stat">
+      <div class="k">{{ c.label }}</div>
+      <div class="v">{{ c.q }}</div>
+      {% if c.hint %}<div class="h">{{ c.hint }}</div>{% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="toc">
   <strong>Sections</strong>
   <ul>
-    <li><a href="#settings">Settings snapshot</a></li>
     {% for s in sections %}
+    {% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
+          or s.globes or s.datasets or s.text %}
     <li><a href="#{{ s.name }}">{{ s.title }}</a>
         {%- if s.warnings %} <span style="color:#f9a825">({{ s.warnings|length }} warning{{ "s" if s.warnings|length != 1 else "" }})</span>{% endif %}
         {%- if s.error %} <span style="color:#c62828">(error)</span>{% endif %}
     </li>
+    {% endif %}
     {% endfor %}
-    <li><a href="#parser">Parser stats</a></li>
   </ul>
 </div>
 
-<h2 id="settings">Settings snapshot</h2>
-{% if sidecar %}
-<details open>
-  <summary style="cursor: pointer; color: #666; font-size: 0.9rem; margin-bottom: 6px;">
-    {{ sidecar|length }} field{{ "s" if sidecar|length != 1 else "" }} (click to collapse)
-  </summary>
-  <pre>{{ sidecar | tojson(indent=2) }}</pre>
-</details>
-{% else %}
-<p>No .json sidecar found.</p>
-{% endif %}
-
 {% for s in sections %}
+{# A module with nothing to say prints nothing. Radio Link on a flight flown
+   without a ground station is the common case: it is not a fault and not a
+   warning, so it should leave no trace rather than a bare heading. #}
+{% if s.error or s.warnings or s.metrics or s.charts or s.figures or s.maps
+      or s.globes or s.datasets or s.text %}
 <h2 id="{{ s.name }}">{{ s.title }}</h2>
 
 {% if s.error %}
@@ -123,12 +200,13 @@
 
 {% if s.metrics %}
 <table class="metrics">
-  <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+  <thead><tr><th>{{ s.metric_headers[0] }}</th><th>{{ s.metric_headers[1] }}</th></tr></thead>
   <tbody>
   {% for k, v in s.metrics.items() %}
     <tr>
       <td>{{ k }}</td>
-      <td class="num">{% if v is number %}{{ "%g"|format(v) }}{% else %}{{ v }}{% endif %}</td>
+      {# Numbers right-align to read as a column; prose does not. #}
+      <td{% if s.metric_headers[1] == "Value" %} class="num"{% endif %}>{% if v is number %}{{ "%g"|format(v) }}{% else %}{{ v }}{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -139,35 +217,1199 @@
 <pre>{{ s.text }}</pre>
 {% endif %}
 
+{% for g in s.globes %}
+<h3>{{ g.title }}</h3>
+{% if g.note %}<p class="map-note">{{ g.note }}</p>{% endif %}
+<div class="globe" id="{{ g.id }}"></div>
+<div class="globe-status" id="{{ g.id }}-status">Loading imagery&hellip;</div>
+<script type="application/json" class="globe-spec" data-target="{{ g.id }}"{% if g.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ g.payload }}</script>
+{% endfor %}
+
+{% for m in s.maps %}
+<h3>{{ m.title }}</h3>
+{% if m.note %}<p class="map-note">{{ m.note }}</p>{% endif %}
+<div class="map" id="{{ m.id }}"></div>
+<p class="map-links">
+  {# bin_path.stem, not flight.name — the latter contains a slash. #}
+  <a class="pill" href="{{ m.kml }}" download="{{ flight.bin_path.stem }}.kml">Download KML</a>
+  <a class="pill" href="{{ m.earth_url }}" target="_blank" rel="noopener">Open in Google Earth</a>
+  <a class="pill" href="{{ m.maps_url }}" target="_blank" rel="noopener">Landing point in Google Maps</a>
+  <span class="map-note">KML opens the track over Google's imagery in 3D.</span>
+</p>
+<script type="application/json" class="map-spec" data-target="{{ m.id }}"{% if m.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ m.payload }}</script>
+{% endfor %}
+
+{% if s.charts %}
+{# Once per report, not once per section: the same four sentences repeated above
+   every group of charts is noise a reader learns to skip, and skipping it is how
+   the one genuinely useful instruction (autoscale, for the clipped axes) gets
+   missed. #}
+{% if not chart_hint_shown.done %}
+<div class="chart-hint">
+  Every chart here is interactive: drag to zoom, double-click to reset, drag an axis
+  to pan, click a legend entry to hide a series. Charts with more samples than the
+  screen has pixels draw a min/max envelope, so no peak is hidden and zooming
+  redraws from the full data. Autoscale and PNG export are in each chart's toolbar.
+</div>
+{% set _ = chart_hint_shown.__setitem__('done', True) %}
+{% endif %}
+{% for c in s.charts %}
+<div class="chart{% if c.stack %} stacked stacked-{{ c.stack }}{% endif %}"><div id="{{ c.id }}"></div></div>
+{% if c.note %}<p class="chart-note">{{ c.note }}</p>{% endif %}
+<script type="application/json" class="chart-spec" data-target="{{ c.id }}"{% if c.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ c.payload }}</script>
+{% endfor %}
+
+{% endif %}
+
+{% for d in s.datasets %}
+<details class="explore" id="explore-panel-{{ d.panel }}"{% if d.panel == "time" %} open{% endif %} data-panel="{{ d.panel }}" data-source="{{ d.id }}">
+  <summary>
+    {% if d.panel == "xy" %}Pick an X and a Y channel, then Draw
+    {% else %}Pick one or more channels, then Draw{% endif %}
+  </summary>
+  <div class="explore-body">
+    <div class="explore-status" role="status">Loading channel data&hellip;</div>
+    <div class="explore-controls" hidden>
+      <label class="explore-pick">
+        {% if d.panel == "xy" %}Y axis{% else %}Channels{% endif %}
+        <select multiple size="14"></select>
+      </label>
+      <div class="explore-actions">
+        {% if d.panel == "xy" %}
+        <label class="explore-xaxis">
+          X axis
+          <select></select>
+        </label>
+        {% endif %}
+        <button type="button" class="explore-draw">Draw</button>
+        {% if d.panel == "xy" %}
+        <label class="explore-colort"><input type="checkbox"> Color by time</label>
+        <p class="explore-hint">
+          Both axes must come from the same stream, so each point is one logged
+          frame rather than an interpolated pair. Zoom redraws from the full data.
+        </p>
+        {% else %}
+        <label><input type="checkbox" class="explore-norm"> Normalize each series to 0&ndash;1</label>
+        <p class="explore-hint">
+          Ctrl/&#8984;-click for several. Each series is drawn on its own stream's
+          timestamps &mdash; nothing is resampled onto a shared clock, so two sensors
+          disagreeing stays visible rather than being interpolated away.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+    <div class="explore-plot"></div>
+    <div class="explore-notes"></div>
+  </div>
+</details>
+{% if not d.ref %}
+<script type="application/json" class="dataset-spec" data-target="{{ d.id }}"{% if d.gzipped %} data-encoding="gzip+base64"{% endif %}>{{ d.payload }}</script>
+{% endif %}
+{% endfor %}
+
 {% for fig in s.figures %}
 <div class="figure"><img src="{{ fig }}" /></div>
 {% endfor %}
 
 {% endif %}
+{% endif %}
 {% endfor %}
 
-<h2 id="parser">Parser stats</h2>
-<table class="metrics">
-  <thead><tr><th>Field</th><th>Value</th></tr></thead>
-  <tbody>
-    <tr><td>File size</td><td class="num">{{ "{:,}".format(stats.get('file_size', 0)) }} bytes</td></tr>
-    <tr><td>Total frames</td><td class="num">{{ "{:,}".format(stats.get('total_frames', 0)) }}</td></tr>
-    <tr><td>Good CRC</td><td class="num">{{ "{:,}".format(stats.get('good_crc', 0)) }}</td></tr>
-    <tr><td>Bad CRC</td><td class="num">{{ "{:,}".format(stats.get('bad_crc', 0)) }}</td></tr>
-  </tbody>
-</table>
 
-<h3>Message counts</h3>
-<table class="metrics">
-  <tbody>
-  {% for name, count in stats.get('type_counts', {}).items() | sort(attribute=1, reverse=True) %}
-    <tr><td>{{ name }}</td><td class="num">{{ "{:,}".format(count) }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+{% if has_maps %}
+<style>
+{{ leaflet_css }}
+/* With no network the tiles never arrive and Leaflet's default flat gray
+   container reads as a broken page. Graph paper reads as a deliberate plot, and
+   the track, markers and scale bar all draw regardless — they are SVG. */
+.leaflet-container {
+  background-color: #fbfbfc;
+  background-image:
+    linear-gradient(to right, #eceef1 1px, transparent 1px),
+    linear-gradient(to bottom, #eceef1 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.leaflet-container .leaflet-control-attribution { font-size: 10px; }
+/* The layers control is styled from images/layers.png, a path relative to
+   leaflet.css that does not exist once the CSS is inlined. Same trap as the
+   default marker icon; replaced with an inline SVG so nothing 404s. */
+.leaflet-control-layers-toggle,
+.leaflet-retina .leaflet-control-layers-toggle {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='12 2 2 7 12 12 22 7 12 2'/%3E%3Cpolyline points='2 17 12 22 22 17'/%3E%3Cpolyline points='2 12 12 17 22 12'/%3E%3C/svg%3E");
+  background-size: 20px 20px;
+  width: 30px;
+  height: 30px;
+}
+</style>
+<script>{{ leaflet_js }}</script>
+<script>
+(function () {
+  if (typeof L === "undefined") return;
+  // A 1x1 transparent PNG, so a tile that fails to load resolves invisibly
+  // instead of leaving a broken-image glyph on the grid.
+  var BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-<h3>Sensor configuration</h3>
-<pre>{{ config | tojson(indent=2) }}</pre>
+  function readSpec(el) {
+    if (el.dataset.encoding !== "gzip+base64") return Promise.resolve(JSON.parse(el.textContent));
+    var raw = atob(el.textContent.trim());
+    var bytes = new Uint8Array(raw.length);
+    for (var j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
+    return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")))
+      .text().then(JSON.parse);
+  }
+
+  var specs = document.querySelectorAll("script.map-spec");
+  for (var i = 0; i < specs.length; i++) {
+    (function (el) {
+      var target = document.getElementById(el.dataset.target);
+      readSpec(el).then(function (spec) {
+        var map = L.map(target, {scrollWheelZoom: false});
+
+        /* Basemaps mirror the ones the Android app offers, minus its Google
+           Map Tiles layer: that one needs an API key, and a key embedded in a
+           report we hand to customers is both unprotectable and billed per
+           report *opened*. These three are keyless and free.
+           USGS covers the United States only; OSM is the worldwide fallback and
+           stays the default for that reason. Each provider's attribution is
+           carried on its own layer, so the credit follows what is on screen.
+           No tiles are cached into the file — OSM's policy forbids
+           redistributing them, which is why an offline report degrades. */
+        var USGS = "https://basemap.nationalmap.gov/arcgis/rest/services/";
+        var USGS_CREDIT = 'Imagery: <a href="https://www.usgs.gov/">USGS</a> · The National Map';
+        function usgs(service) {
+          return L.tileLayer(USGS + service + "/MapServer/tile/{z}/{y}/{x}", {
+            // USGS publishes no tiles above z16, and a recovery map fitted to a
+            // few hundred meters of track sits above that. maxNativeZoom makes
+            // Leaflet upscale the z16 tile instead of rendering nothing, which
+            // otherwise looks exactly like a broken layer.
+            maxNativeZoom: 16,
+            maxZoom: 19,
+            errorTileUrl: BLANK,
+            attribution: USGS_CREDIT
+          });
+        }
+
+        var streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          errorTileUrl: BLANK,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
+            'contributors &middot; <a href="https://www.openstreetmap.org/fixthemap">' +
+            'Report a map issue</a>'
+        });
+        /* Esri World Imagery: worldwide, keyless, and published to z19 against
+           USGS's z16 — so it stays sharp at the scale you actually search a
+           field at, where the USGS layer is upscaled and soft. */
+        var esri = L.tileLayer(
+          "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          {
+            maxZoom: 19,
+            errorTileUrl: BLANK,
+            attribution:
+              'Imagery: <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar ' +
+              'Geographics, and the GIS User Community'
+          }
+        );
+
+        streets.addTo(map);
+        L.control.layers({
+          "Streets (OpenStreetMap)": streets,
+          "Satellite (Esri, worldwide)": esri,
+          "Satellite (USGS, US only)": usgs("USGSImageryOnly"),
+          "Satellite + topo (USGS, US only)": usgs("USGSImageryTopo"),
+          "Topo (USGS, US only)": usgs("USGSTopo")
+        }, null, {collapsed: true}).addTo(map);
+
+        var line = L.polyline(spec.points, {color: "#1f77b4", weight: 3, opacity: 0.9}).addTo(map);
+        // circleMarker, not marker: Leaflet's default icon pulls PNGs from a
+        // relative images/ path that does not exist in a standalone file.
+        L.circleMarker(spec.start, {radius: 7, color: "#fff", weight: 2,
+                                    fillColor: "#2ca02c", fillOpacity: 1})
+          .bindTooltip("Pad").addTo(map);
+        L.circleMarker(spec.end, {radius: 7, color: "#fff", weight: 2,
+                                  fillColor: "#d62728", fillOpacity: 1})
+          .bindTooltip("Landing").addTo(map);
+        L.control.scale({imperial: true, metric: true}).addTo(map);
+        map.fitBounds(line.getBounds(), {padding: [24, 24]});
+      }).catch(function (err) {
+        if (target) {
+          target.textContent = "Map failed to render: " + err;
+          target.style.color = "#c62828";
+          target.style.padding = "12px";
+        }
+      });
+    })(specs[i]);
+  }
+})();
+</script>
+{% endif %}
+
+{% if has_globe %}
+<style>
+{{ cesium_css }}
+.globe { height: 560px; border: 1px solid #e3e6ea; border-radius: 4px; overflow: hidden; }
+.globe-status { font-size: 12px; color: #667; margin: 6px 0 4px; }
+.globe-status.bad { color: #c62828; }
+.globe-legend { display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+  margin: 2px 0 10px; font-size: 13px; }
+.globe-legend .item { display: flex; align-items: center; gap: 7px; }
+.globe-legend .sw { width: 12px; height: 12px; border-radius: 2px; flex: none; }
+.globe-legend .num { font-variant-numeric: tabular-nums; }
+/* Cesium's credit sits over the imagery, and its default dark text is
+   unreadable on a dark aerial photograph. A light plate under it fixes that
+   without hiding the attribution, which the Esri terms require stay visible. */
+.cesium-widget-credits {
+  font-size: 10px; color: #333 !important;
+  background: rgba(255, 255, 255, 0.78); border-radius: 3px;
+  padding: 1px 5px; margin: 0 0 3px 3px;
+}
+.cesium-widget-credits a { color: #245 !important; }
+</style>
+<script>{{ cesium_js }}</script>
+<script>
+(function () {
+  if (typeof Cesium === "undefined") return;
+
+  /* Four assets Cesium resolves from an Assets/ folder next to the page, which a
+     single HTML file does not have. Two of them are fatal rather than cosmetic:
+     the skybox and moon textures load from inside the render loop, so their 404
+     throws there and rendering stops for good, leaving a canvas that looks like
+     it is still loading. Each is disabled rather than embedded -- together they
+     are about 2 MB of decoration for a view that never leaves the launch site.
+
+     Note skyBox is cleared by assigning undefined, never by passing
+     `skyBox: false` to the Viewer: Cesium's defined() is
+     `!== undefined && !== null`, so false leaves a boolean where the renderer
+     expects an object and the first frame dies calling .update() on it. */
+  Cesium.Ion.defaultAccessToken = undefined;      // nothing here may reach ion
+  Cesium.ApproximateTerrainHeights._initPromise = Promise.resolve();
+  Cesium.ApproximateTerrainHeights._terrainHeights = {};
+  Cesium.CreditDisplay.cesiumCredit = new Cesium.Credit(
+    '<a href="https://cesium.com/" target="_blank" rel="noopener">CesiumJS</a>', true);
+  /* Earth-orientation data refines the inertial-to-fixed rotation by a few
+     arcseconds -- here that moves only the lighting direction. Cesium already
+     falls back when it is absent, and returning undefined from computeXysRadians
+     is its documented "not loaded" signal; stubbing the chunk loader instead
+     does nothing, because a module-private helper issues the request. */
+  var xys = Cesium.Transforms.iau2006XysData;
+  if (xys && typeof xys.computeXysRadians === "function") {
+    xys.computeXysRadians = function () { return undefined; };
+    xys.preload = function () { return Promise.resolve(); };
+  }
+
+  var ESRI_IMAGERY = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
+  var ESRI_TERRAIN = "https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer";
+
+  /* Wrapped in Promise.resolve().then so that a synchronous throw — atob on a
+     truncated payload, JSON.parse, or DecompressionStream missing entirely on an
+     older browser — becomes a rejection the caller's .catch can report, instead
+     of escaping the loop and leaving the status stuck on "Loading imagery…"
+     with no indication anything went wrong. */
+  function readSpec(el) {
+    return Promise.resolve().then(function () {
+      if (el.dataset.encoding !== "gzip+base64") return JSON.parse(el.textContent);
+      var raw = atob(el.textContent.trim());
+      var bytes = new Uint8Array(raw.length);
+      for (var j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
+      return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")))
+        .text().then(JSON.parse);
+    });
+  }
+
+  var specs = document.querySelectorAll("script.globe-spec");
+  for (var i = 0; i < specs.length; i++) {
+    (function (el) {
+      var target = document.getElementById(el.dataset.target);
+      var statusEl = document.getElementById(el.dataset.target + "-status");
+      var failed = false;
+      function say(msg, bad) {
+        /* A render error is sticky. Rendering stops for good when one fires and
+           the terrain promise resolves a second later; without this the success
+           message overwrites the error and the page merely looks blank. */
+        if (failed && !bad) return;
+        if (bad) failed = true;
+        if (statusEl) { statusEl.textContent = msg; statusEl.className = bad ? "globe-status bad" : "globe-status"; }
+      }
+
+      readSpec(el).then(function (spec) {
+        var viewer;
+        try {
+          /* baseLayer: false, then the imagery is attached below once its
+             provider resolves. Handing fromProviderAsync a promise that later
+             rejects gives no way to *notice* the rejection, and a globe with no
+             imagery and no explanation is the report's worst failure mode: it
+             looks like the flight data is missing when only the basemap is.
+             (`false` really is the documented sentinel for this option — unlike
+             skyBox, where false is a boolean the renderer then tries to draw.) */
+          viewer = new Cesium.Viewer(target, {
+            baseLayer: false,
+            baseLayerPicker: false, geocoder: false, homeButton: false,
+            sceneModePicker: false, navigationHelpButton: false, animation: false,
+            timeline: false, infoBox: false, selectionIndicator: false,
+            fullscreenButton: true
+          });
+        } catch (e) {
+          say("The 3D view could not start: " + e.message + ". The flight path is also plotted in the detailed report.", true);
+          return;
+        }
+
+        /* Tilt on shift-drag, as well as Cesium's defaults.
+           Out of the box, tilting needs a middle-drag or ctrl-drag. A trackpad
+           has no middle button, and macOS turns ctrl-click into a right-click
+           before the page ever sees it — so on the machines this report is most
+           likely to be read on, there is no way to get off the default camera
+           angle. Shift-drag is reachable with one hand on any trackpad.
+           `lookEventTypes` is cleared because shift-drag is its default binding
+           and leaving both would fire two camera behaviors at once; free-look
+           has no use in a view that exists to be orbited. */
+        var ssc = viewer.scene.screenSpaceCameraController;
+        ssc.tiltEventTypes = [
+          Cesium.CameraEventType.MIDDLE_DRAG,
+          Cesium.CameraEventType.PINCH,
+          {eventType: Cesium.CameraEventType.LEFT_DRAG, modifier: Cesium.KeyboardEventModifier.CTRL},
+          {eventType: Cesium.CameraEventType.LEFT_DRAG, modifier: Cesium.KeyboardEventModifier.SHIFT}
+        ];
+        ssc.lookEventTypes = [];
+
+        viewer.scene.skyBox = undefined;
+        viewer.scene.moon = undefined;
+        viewer.scene.globe.depthTestAgainstTerrain = true;
+        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#0b1220");
+        /* Read as "no imagery here", not as ocean. Cesium's default globe color
+           is a deep navy that looks exactly like sea, so a blocked basemap over
+           a New Jersey field reads as a rocket flying over the Atlantic. */
+        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#39404a");
+        viewer.scene.renderError.addEventListener(function (scene, err) {
+          say("The 3D view stopped rendering: " + (err && err.message ? err.message : err), true);
+        });
+
+        var haveImagery = Cesium.ArcGisMapServerImageryProvider.fromUrl(
+          ESRI_IMAGERY, {enablePickFeatures: false}
+        ).then(function (provider) {
+          viewer.scene.imageryLayers.addImageryProvider(provider);
+          return true;
+        }).catch(function () {
+          return false;
+        });
+
+        var pad = spec.pad;
+        /* Resolve the pad's ground height, then draw exactly once.
+           The terrain lookup and the drawing are kept in separate promise links
+           on purpose: a single .then(draw).catch(draw) chain would treat an
+           exception *inside* draw as a terrain failure and run draw a second
+           time, duplicating every entity and inserting a second legend. */
+        Cesium.ArcGISTiledElevationTerrainProvider.fromUrl(ESRI_TERRAIN).then(function (terrain) {
+          viewer.terrainProvider = terrain;
+          /* One terrain sample, at the pad. Both tracks ship as height above the
+             pad, so adding the pad's own ground height puts them on the real
+             surface without needing a geoid model. Deliberately not
+             HeightReference.RELATIVE_TO_GROUND, which samples per vertex and
+             would make a ballistic arc follow the hills underneath it. */
+          return Cesium.sampleTerrainMostDetailed(
+            terrain, [Cesium.Cartographic.fromDegrees(pad.lon, pad.lat)]
+          ).then(function (samples) {
+            return {height: samples && samples[0] ? (samples[0].height || 0) : 0, exact: true};
+          }).catch(function () {
+            /* Terrain is loaded and being drawn, but we could not sample it. The
+               pad's own MSL altitude is the best remaining estimate of the
+               ground here — falling back to 0 would place the whole flight at
+               ellipsoid zero, tens of meters *below* the terrain now on screen,
+               burying the track underground. */
+            return {height: pad.mslM || 0, exact: false};
+          });
+        }).catch(function () {
+          /* No terrain at all: the globe is a smooth ellipsoid, so heights above
+             it are heights above the pad and no offset is wanted. */
+          return {height: 0, exact: false, noTerrain: true};
+        }).then(function (ground) {
+          return haveImagery.then(function (imagery) {
+            try {
+              draw(viewer, spec, ground.height, !ground.noTerrain, say);
+            } catch (e) {
+              say("The 3D view could not be drawn: " + e.message, true);
+              return;
+            }
+            say(describe(imagery, !ground.noTerrain, ground.exact));
+          });
+        });
+      }).catch(function (e) {
+        say("The 3D view could not read its flight data: " + e.message, true);
+      });
+
+      function draw(viewer, spec, groundHeight, haveTerrain, say) {
+        var pad = spec.pad;
+        spec.tracks.forEach(function (tr, ti) {
+          var color = Cesium.Color.fromCssColorString(tr.color);
+          var flat = tr.positions.slice();
+          for (var k = 2; k < flat.length; k += 3) flat[k] += groundHeight;
+          var positions = Cesium.Cartesian3.fromDegreesArrayHeights(flat);
+
+          viewer.entities.add({
+            name: tr.name,
+            polyline: {
+              positions: positions, width: ti === 0 ? 4 : 3,
+              material: new Cesium.PolylineOutlineMaterialProperty({
+                color: color, outlineWidth: 1, outlineColor: Cesium.Color.BLACK.withAlpha(0.35)
+              })
+            }
+          });
+
+          if (ti === 0) {
+            /* Drop lines only from the primary track. Altitude is very hard to
+               judge against a photograph without them, and drawing them from
+               both tracks turns the comparison into a thicket. */
+            var n = tr.positions.length / 3;
+            var step = Math.max(1, Math.floor(n / 45));
+            for (var j = 0; j < n; j += step) {
+              viewer.entities.add({polyline: {
+                positions: Cesium.Cartesian3.fromDegreesArrayHeights([
+                  tr.positions[j * 3], tr.positions[j * 3 + 1], groundHeight + 1,
+                  tr.positions[j * 3], tr.positions[j * 3 + 1], groundHeight + tr.positions[j * 3 + 2]
+                ]),
+                width: 1, material: Cesium.Color.WHITE.withAlpha(0.22)
+              }});
+            }
+          }
+        });
+
+        /* dy staggers labels that would otherwise sit on top of each other. The
+           two landing points are meters apart on a view framing a whole flight,
+           so their labels collide by default and neither is readable. */
+        function marker(lon, lat, height, color, label, dy) {
+          viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(lon, lat, groundHeight + height),
+            point: {pixelSize: 11, color: Cesium.Color.fromCssColorString(color),
+                    outlineColor: Cesium.Color.WHITE, outlineWidth: 2},
+            label: {text: label, font: "13px sans-serif", fillColor: Cesium.Color.WHITE,
+                    outlineColor: Cesium.Color.BLACK, outlineWidth: 3,
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                    pixelOffset: new Cesium.Cartesian2(0, dy === undefined ? -18 : dy),
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY}
+          });
+        }
+
+        var primary = spec.tracks[0].positions;
+        marker(primary[0], primary[1], 0, "#2ca02c", "Pad");
+        var apoIdx = 0, apo = -Infinity;
+        for (var p = 2; p < primary.length; p += 3) {
+          if (primary[p] > apo) { apo = primary[p]; apoIdx = (p - 2) / 3; }
+        }
+        /* Labeled without a figure, for the same reason the legend is: anything
+           formatted here would be stuck in meters while the metrics table above
+           follows the metric/imperial toggle. */
+        marker(primary[apoIdx * 3], primary[apoIdx * 3 + 1], apo, "#ffcc33", "Apogee");
+        /* One landing marker per track: where the two solutions put the rocket
+           down is the difference that costs someone a walk. */
+        spec.tracks.forEach(function (tr, ti) {
+          var e = tr.positions.length - 3;
+          marker(tr.positions[e], tr.positions[e + 1], 0, tr.color,
+                 tr.name + " landing", ti === 0 ? 18 : -18);
+        });
+
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(pad.lon, pad.lat - 0.0075, groundHeight + 620),
+          orientation: {heading: Cesium.Math.toRadians(10), pitch: Cesium.Math.toRadians(-22), roll: 0},
+          duration: 2.0
+        });
+
+        /* A color key and nothing more. Every number this section reports lives
+           in the metrics table above, as a Quantity span that follows the
+           metric/imperial toggle — a figure formatted here in JS would be the
+           one number in the report that ignores it. */
+        var legend = document.createElement("div");
+        legend.className = "globe-legend";
+        legend.innerHTML = spec.tracks.map(function (tr) {
+          return '<span class="item"><span class="sw" style="background:' + tr.color +
+                 '"></span>' + tr.name + '</span>';
+        }).join("");
+        target.parentNode.insertBefore(legend, target.nextSibling);
+
+      }
+
+      /* Says which of the two external layers actually arrived. A viewer looking
+         at bare tracks needs to know the basemap was blocked rather than that
+         something is wrong with their flight — and needs to know *why* it might
+         be blocked, because the commonest causes (offline, or a sandbox that
+         forbids external requests, such as an embedded preview) are both about
+         the surroundings rather than the report. */
+      function describe(imagery, terrain, exactGround) {
+        if (imagery && terrain) {
+          return exactGround
+            ? "Imagery and terrain from Esri. Drag to spin, shift-drag to tilt, scroll to zoom."
+            : "Imagery and terrain from Esri; the pad's ground height could not be "
+              + "sampled, so heights are placed using the recorded pad altitude.";
+        }
+        if (imagery && !terrain) {
+          return "Imagery from Esri; terrain was unavailable, so heights are drawn "
+               + "above a smooth earth. Drag to spin, shift-drag to tilt, scroll to zoom.";
+        }
+        var what = terrain ? "Satellite imagery could not be loaded"
+                           : "Satellite imagery and terrain could not be loaded";
+        return what + ", so the flight path is drawn over a blank globe. The tracks, "
+             + "distances and altitudes are unaffected — they come from the log, which "
+             + "is inside this file. The basemap is fetched from Esri when the report "
+             + "is opened, so this happens with no internet connection, or when the "
+             + "report is viewed somewhere that blocks external requests. Opening the "
+             + "downloaded file directly in a browser will show it.";
+      }
+    })(specs[i]);
+  }
+})();
+</script>
+{% endif %}
+
+{% if has_datasets %}
+<script>{{ explore_js }}</script>
+{% endif %}
+
+{% if has_charts or has_datasets %}
+<script>{{ plotly_js }}</script>
+<script>
+(function () {
+  var config = {
+    responsive: true,
+    displaylogo: false,
+    scrollZoom: true,
+    toImageButtonOptions: {format: "png", scale: 2},
+    modeBarButtonsToRemove: ["select2d", "lasso2d"]
+  };
+
+  // Roughly one bucket per horizontal pixel; two points per bucket (min+max).
+  var BUCKETS = 1200;
+
+  // Binary search for the first index with x >= target.
+  function lowerBound(xs, target) {
+    var lo = 0, hi = xs.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (xs[mid] < target) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  /* Reduce [i0,i1) to at most ~2*BUCKETS points, keeping each bucket's min and
+     max (emitted in the order they occur, so the line still reads left-to-right).
+     Envelope, not sampling: every peak and trough survives at every zoom level.
+     Below the budget the raw samples are returned untouched. */
+  function envelope(xs, ys, i0, i1) {
+    var n = i1 - i0;
+    if (n <= 0) return {x: [], y: []};
+    if (n <= BUCKETS * 2) return {x: xs.slice(i0, i1), y: ys.slice(i0, i1)};
+
+    var step = n / BUCKETS, ox = [], oy = [];
+    for (var b = 0; b < BUCKETS; b++) {
+      var s = i0 + Math.floor(b * step);
+      var e = Math.min(i0 + Math.floor((b + 1) * step), i1);
+      if (e <= s) continue;
+      var minI = s, maxI = s;
+      for (var k = s + 1; k < e; k++) {
+        if (ys[k] < ys[minI]) minI = k;
+        if (ys[k] > ys[maxI]) maxI = k;
+      }
+      var a = Math.min(minI, maxI), z = Math.max(minI, maxI);
+      ox.push(xs[a]); oy.push(ys[a]);
+      if (z !== a) { ox.push(xs[z]); oy.push(ys[z]); }
+    }
+    return {x: ox, y: oy};
+  }
+
+  /* `range` comes from the axis, which may be in converted units; xScale maps it
+     back to the SI values the stored x array holds. */
+  function viewFor(full, range, xScale) {
+    var xs = full.x;
+    var s = xScale || 1;
+    var i0 = range ? Math.max(0, lowerBound(xs, range[0] / s) - 1) : 0;
+    var i1 = range ? Math.min(xs.length, lowerBound(xs, range[1] / s) + 1) : xs.length;
+    return envelope(xs, full.y, i0, i1);
+  }
+
+  /* Marker size and opacity for the current density, mirroring how the static
+     figures are drawn (small semi-transparent dots, so a dense run reads as a
+     band of samples rather than a solid bar). Markers grow and go fully opaque
+     as you zoom in and there is room to see them individually. */
+  function markerStyle(pointCount, baseMode) {
+    if (baseMode.indexOf("markers") < 0) return {mode: baseMode, size: 4, opacity: 1};
+    if (pointCount > 3000) return {mode: baseMode, size: 2, opacity: 0.45};
+    if (pointCount > 1200) return {mode: baseMode, size: 3, opacity: 0.6};
+    if (pointCount > 300) return {mode: baseMode, size: 5, opacity: 0.85};
+    return {mode: baseMode, size: 7, opacity: 1};
+  }
+
+  function draw(gd, fullSeries, range, spec) {
+    // The stored range is always SI; the axis may be showing imperial.
+    var yf = spec && spec.yUnit ? unitFactor(spec.yUnit) : 1;
+    var xf = spec && spec.xUnit ? unitFactor(spec.xUnit) : 1;
+    var xs = [], ys = [], sizes = [], opacities = [];
+    for (var i = 0; i < fullSeries.length; i++) {
+      var v = viewFor(fullSeries[i], range, xf);
+      var st = markerStyle(v.x.length, fullSeries[i].baseMode);
+      xs.push(xf === 1 ? v.x : v.x.map(function (n) { return n * xf; }));
+      ys.push(yf === 1 ? v.y : v.y.map(function (n) { return n * yf; }));
+      sizes.push(st.size); opacities.push(st.opacity);
+    }
+    return Plotly.restyle(gd, {
+      x: xs, y: ys, "marker.size": sizes, "marker.opacity": opacities
+    });
+  }
+
+  /* Large charts ship gzip+base64 (see render._chart_payload) — full-resolution
+     sample arrays are mostly digits and commas, which compress about 5x. */
+  function readSpec(el) {
+    if (el.dataset.encoding !== "gzip+base64") {
+      return Promise.resolve(JSON.parse(el.textContent));
+    }
+    if (typeof DecompressionStream === "undefined") {
+      return Promise.reject(new Error(
+        "this browser cannot inflate the chart data (needs DecompressionStream)"));
+    }
+    var raw = atob(el.textContent.trim());
+    var bytes = new Uint8Array(raw.length);
+    for (var j = 0; j < raw.length; j++) bytes[j] = raw.charCodeAt(j);
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Response(stream).text().then(JSON.parse);
+  }
+
+  /* --- units -------------------------------------------------------------
+     Values render in SI and are converted in place, so one file serves both
+     systems and switching costs no regeneration. */
+  var CONV = {
+    "m":       {f: 3.280839895, label: "ft",    places: 0},
+    "km":      {f: 0.621371192, label: "mi",    places: 2},
+    "m/s":     {f: 2.236936292, label: "mph",   places: 1},
+    /* Vertical rates read in ft/s, not mph — a descent rate is compared against
+       a canopy's rated sink rate, which every chart and table quotes in ft/s.
+       Quantity emits data-conv="m/s:fps" alongside data-unit="m/s" to ask for
+       this; without the entry below the lookup fell through to "m/s" and the
+       report showed a descent rate in mph. */
+    "m/s:fps": {f: 3.280839895, label: "ft/s",  places: 1},
+    "m/s²":   {f: 3.280839895, label: "ft/s²", places: 1}
+  };
+  var imperial = false;
+  var charts = [];   // {gd, spec, range} registered as each one is plotted
+
+  function fmt(v, places) {
+    return v.toLocaleString(undefined, {minimumFractionDigits: places, maximumFractionDigits: places});
+  }
+
+  function convertSpans() {
+    var qs = document.querySelectorAll("span.q");
+    for (var i = 0; i < qs.length; i++) {
+      var el = qs[i];
+      var si = parseFloat(el.dataset.si);
+      var unit = el.dataset.unit;
+      var places = parseInt(el.dataset.places, 10) || 0;
+      var suffix = el.dataset.suffix || "";
+      /* data-conv overrides data-unit when a value wants a different imperial
+         target than its SI unit implies. The metric branch still prints
+         data-unit, so the SI label stays "m/s" rather than the lookup key. */
+      var c = imperial ? (CONV[el.dataset.conv] || CONV[unit]) : null;
+      el.textContent = c
+        ? fmt(si * c.f, c.places) + " " + c.label + suffix
+        : fmt(si, places) + " " + unit + suffix;
+    }
+  }
+
+  /* `conv` names a different imperial target than the SI unit implies — a
+     vertical rate is metres per second but reads in ft/s, not mph. It takes
+     precedence when present, matching what convertSpans does for the metric
+     cells, so an axis and a table cell describing the same quantity agree. */
+  function pick(unit, conv) {
+    if (!imperial) return null;
+    return CONV[conv] || CONV[unit] || null;
+  }
+  function unitFactor(unit, conv) {
+    var c = pick(unit, conv);
+    return c ? c.f : 1;
+  }
+  function unitLabel(unit, conv) {
+    var c = pick(unit, conv);
+    return c ? c.label : unit;
+  }
+  function axisTitle(base, unit, conv) {
+    if (!base) return "";
+    return unit ? base + " (" + unitLabel(unit, conv) + ")" : base;
+  }
+  /* The 3D scene carries its unit in the chart title rather than on the axes —
+     see charts.trajectory_3d on why rotated axis titles clip there. */
+  function sceneTitle3d(spec) {
+    var word = imperial ? "feet" : "meters";
+    return spec.titleBase + " — " + word + " from the pad";
+  }
+
+  function convertCharts() {
+    for (var i = 0; i < charts.length; i++) {
+      var c = charts[i];
+
+      if (c.is3d) {
+        var f = c.spec.sceneUnit ? unitFactor(c.spec.sceneUnit) : 1;
+        var scale = function (arr) {
+          return f === 1 ? arr.slice() : arr.map(function (n) { return n * f; });
+        };
+        Plotly.restyle(c.gd, {
+          x: c.base3d.map(function (b) { return scale(b.x); }),
+          y: c.base3d.map(function (b) { return scale(b.y); }),
+          z: c.base3d.map(function (b) { return scale(b.z); })
+        });
+        if (c.spec.sceneUnit) {
+          Plotly.relayout(c.gd, {"title.text": sceneTitle3d(c.spec)});
+        }
+        continue;
+      }
+
+      /* An X–Y panel plot. It cannot go through draw(): that reduces via
+         lowerBound, which assumes the x array increases, and here x is a
+         channel. Its own redraw filters on both axes and rescales as it goes. */
+      if (c.is2d) {
+        c.redraw(c);
+        var upd2 = {};
+        if (c.spec.xUnit) upd2["xaxis.title.text"] = axisTitle(c.spec.xTitleBase, c.spec.xUnit, c.spec.xConv);
+        if (c.spec.yUnit) upd2["yaxis.title.text"] = axisTitle(c.spec.yTitleBase, c.spec.yUnit, c.spec.yConv);
+        if (Object.keys(upd2).length) Plotly.relayout(c.gd, upd2);
+        continue;
+      }
+
+      draw(c.gd, c.full, c.range, c.spec);
+      var upd = {};
+      if (c.spec.yUnit) upd["yaxis.title.text"] = axisTitle(c.spec.yTitleBase, c.spec.yUnit);
+      if (c.spec.xUnit) upd["xaxis.title.text"] = axisTitle(c.spec.xTitleBase, c.spec.xUnit);
+      // A fixed y-range was computed in SI; rescale it so the framing survives.
+      var yr = c.spec.layout.yaxis && c.spec.layout.yaxis.range;
+      if (yr && c.spec.yUnit) {
+        var f = unitFactor(c.spec.yUnit);
+        upd["yaxis.range"] = [yr[0] * f, yr[1] * f];
+      }
+      if (Object.keys(upd).length) Plotly.relayout(c.gd, upd);
+    }
+  }
+
+  var buttons = document.querySelectorAll(".units button");
+  for (var b = 0; b < buttons.length; b++) {
+    buttons[b].addEventListener("click", function () {
+      var want = this.dataset.units === "imperial";
+      if (want === imperial) return;
+      imperial = want;
+      for (var k = 0; k < buttons.length; k++) {
+        buttons[k].classList.toggle("active", buttons[k].dataset.units === this.dataset.units);
+      }
+      convertSpans();
+      convertCharts();
+      try { localStorage.setItem("tr-units", imperial ? "imperial" : "metric"); } catch (e) {}
+    });
+  }
+  try {
+    if (localStorage.getItem("tr-units") === "imperial") {
+      var btn = document.querySelector('.units button[data-units="imperial"]');
+      if (btn) btn.click();
+    }
+  } catch (e) {}
+  /* --- Explore panel (#752) ---------------------------------------------
+     Plot any channel in the log, chosen at read time. Lives inside this IIFE so
+     it reuses the machinery the curated charts already use — readSpec for the
+     gzip transport, viewFor/envelope for the viewport reduction, and the same
+     `charts` registration, which is what makes the metric/imperial toggle and
+     the zoom-to-reslice behaviour work here too rather than being reimplemented.
+
+     The data is inflated on first open, not at load. It is the largest payload
+     in the document and a reader who never opens the panel should not pay to
+     parse it. */
+  /* Two Explore panels — one against time, one channel against channel —
+     sharing a single embedded payload. `data-source` names the <script> that
+     carries it; whichever panel is opened first inflates it and the other
+     awaits the same promise, so the ~4 MB is parsed once at most and not at
+     all if neither is opened. */
+  var datasetLoads = {};
+  function loadDataset(id) {
+    if (datasetLoads[id]) return datasetLoads[id];
+    var el = document.querySelector('script.dataset-spec[data-target="' + id + '"]');
+    if (!el) {
+      datasetLoads[id] = Promise.reject(new Error("no embedded data for " + id));
+    } else {
+      datasetLoads[id] = readSpec(el);
+    }
+    return datasetLoads[id];
+  }
+
+  var panels = document.querySelectorAll("details.explore");
+  for (var pi = 0; pi < panels.length; pi++) {
+    (function (panel) {
+      var kind = panel.dataset.panel || "time";
+      var statusEl = panel.querySelector(".explore-status");
+      var controls = panel.querySelector(".explore-controls");
+      var pick = panel.querySelector(".explore-pick select");
+      var drawBtn = panel.querySelector(".explore-draw");
+      var normBox = panel.querySelector(".explore-norm");
+      var xWrap = panel.querySelector(".explore-xaxis");
+      var xSel = xWrap ? xWrap.querySelector("select") : null;
+      var colorBox = panel.querySelector(".explore-colort input");
+      var plotEl = panel.querySelector(".explore-plot");
+      var notesEl = panel.querySelector(".explore-notes");
+      var data = null, entry = null, loading = false;
+
+      function label(key, ch) {
+        /* ch.label is the human name from the channel catalog ("Vertical
+           velocity"); key is the internal dotted path. Show the name and keep
+           the path alongside it, because the path is what the notes and the
+           legend cite. */
+        var bits = [ch.label ? ch.label + "  [" + key + "]" : key];
+        if (ch.unit) bits.push("(" + ch.unit + ")");
+        if (ch.const !== undefined) bits.push("— constant");
+        else if (!ch.shown.length) bits.push("— not plotted elsewhere");
+        return bits.join(" ");
+      }
+
+      function populate() {
+        var byStream = {};
+        Object.keys(data.channels).forEach(function (key) {
+          var ch = data.channels[key];
+          (byStream[ch.stream] = byStream[ch.stream] || []).push(key);
+        });
+        Object.keys(data.streams).forEach(function (sname) {
+          var keys = byStream[sname];
+          if (!keys) return;
+          var group = document.createElement("optgroup");
+          group.label = sname + "  (" + data.streams[sname].n.toLocaleString() + " samples)";
+          keys.forEach(function (key) {
+            var opt = document.createElement("option");
+            opt.value = key;
+            opt.textContent = label(key, data.channels[key]);
+            group.appendChild(opt);
+          });
+          pick.appendChild(group);
+          if (xSel) xSel.appendChild(group.cloneNode(true));
+        });
+      }
+
+      function note(text, cls) {
+        var p = document.createElement("p");
+        if (cls) p.className = cls;
+        p.textContent = text;
+        notesEl.appendChild(p);
+      }
+
+      function unregister() {
+        if (!entry) return;
+        var at = charts.indexOf(entry);
+        if (at >= 0) charts.splice(at, 1);
+        entry = null;
+      }
+
+      /* X–Y redraw. Deliberately not the time-axis path: `viewFor` calls
+         `lowerBound`, which binary-searches assuming x increases — false the
+         moment x is a channel rather than a clock. It would return a wrong
+         slice silently. This filters on both axes instead, and carries the
+         colour array through the same filter. */
+      function drawScatter(e) {
+        var xf = e.spec.xUnit ? unitFactor(e.spec.xUnit, e.spec.xConv) : 1;
+        var yf = e.spec.yUnit ? unitFactor(e.spec.yUnit, e.spec.yConv) : 1;
+        var xs = [], ys = [], colors = [], anyColor = false;
+        for (var i = 0; i < e.full.length; i++) {
+          var v = TRExplore.scatterView(
+            e.full[i],
+            e.xrange ? [e.xrange[0] / xf, e.xrange[1] / xf] : null,
+            e.yrange ? [e.yrange[0] / yf, e.yrange[1] / yf] : null
+          );
+          xs.push(xf === 1 ? v.x : v.x.map(function (n) { return n * xf; }));
+          ys.push(yf === 1 ? v.y : v.y.map(function (n) { return n * yf; }));
+          if (e.colorByTime && v.t) { colors.push(v.t); anyColor = true; }
+          else { colors.push(undefined); }
+        }
+        var upd = {x: xs, y: ys};
+        if (anyColor) upd["marker.color"] = colors;
+        return Plotly.restyle(e.gd, upd);
+      }
+
+      function renderScatter(yKeys) {
+        var out = TRExplore.buildScatter(data, xSel.value, yKeys, {
+          colorByTime: colorBox && colorBox.checked
+        });
+        if (out.error) {
+          // Clear the previous plot as well as showing the message. Leaving the
+          // last chart up next to an error reads as though it were the answer to
+          // the selection that just failed.
+          unregister();
+          Plotly.purge(plotEl);
+          note(out.error, "explore-error");
+          return;
+        }
+
+        var spec = {
+          xUnit: out.xUnit, xConv: out.xConv,
+          yUnit: out.yUnit, yConv: out.yConv,
+          xTitleBase: out.xBase, yTitleBase: out.yBase,
+          layout: {yaxis: {}, xaxis: {}}
+        };
+        var layout = {
+          height: 520,
+          margin: {l: 70, r: 20, t: 30, b: 55},
+          xaxis: {title: {text: axisTitle(out.xBase, out.xUnit, out.xConv)},
+                  gridcolor: "#eee", zeroline: false},
+          yaxis: {title: {text: axisTitle(out.yBase, out.yUnit, out.yConv)},
+                  gridcolor: "#eee", zeroline: false},
+          hovermode: "closest",
+          showlegend: out.traces.length > 1,
+          legend: {orientation: "h", y: -0.16, font: {size: 11}},
+          plot_bgcolor: "#fff", paper_bgcolor: "#fff"
+        };
+
+        unregister();
+        Plotly.newPlot(plotEl, out.traces, layout, config).then(function (gd) {
+          entry = {gd: gd, full: out.full, spec: spec, is2d: true,
+                   colorByTime: colorBox && colorBox.checked,
+                   xrange: null, yrange: null, redraw: drawScatter};
+          charts.push(entry);
+          var pending = null;
+          gd.on("plotly_relayout", function (ev) {
+            /* Two spellings, both real: a drag emits "xaxis.range[0]" and
+               "xaxis.range[1]", while a programmatic relayout emits
+               "xaxis.range" as one array. Handling only the first works when a
+               person zooms and silently does nothing otherwise. */
+            var touched = false;
+            if (ev["xaxis.range[0]"] !== undefined) {
+              entry.xrange = [ev["xaxis.range[0]"], ev["xaxis.range[1]"]]; touched = true;
+            } else if (ev["xaxis.range"]) {
+              entry.xrange = ev["xaxis.range"].slice(); touched = true;
+            }
+            if (ev["yaxis.range[0]"] !== undefined) {
+              entry.yrange = [ev["yaxis.range[0]"], ev["yaxis.range[1]"]]; touched = true;
+            } else if (ev["yaxis.range"]) {
+              entry.yrange = ev["yaxis.range"].slice(); touched = true;
+            }
+            if ("xaxis.autorange" in ev || "yaxis.autorange" in ev) {
+              entry.xrange = null; entry.yrange = null; touched = true;
+            }
+            if (!touched) return;
+            if (pending) clearTimeout(pending);
+            pending = setTimeout(function () {
+              pending = null;
+              drawScatter(entry);
+            }, 60);
+          });
+        });
+
+        out.notes.forEach(function (n) { note(n); });
+        out.cautions.forEach(function (c) { note("⚠ " + c, "warn"); });
+      }
+
+      function renderTime(keys) {
+        /* What to draw is decided in static/explore.js, which is covered by
+           tests/js/ — the DOM wiring stays here because it is not. */
+        var out = TRExplore.build(data, keys, {
+          normalised: normBox && normBox.checked,
+          convertible: Object.keys(CONV)
+        });
+
+        if (!out.traces.length) {
+          notesEl.textContent = "Nothing to draw: " +
+            (out.skipped.length ? out.skipped.join(", ") + " never carried a value."
+                                : "no data.");
+          return;
+        }
+
+        var spec = {
+          yUnit: out.yUnit, yConv: out.yConv, xUnit: null,
+          yTitleBase: out.yBase, xTitleBase: "Time (s)",
+          layout: {yaxis: {}, xaxis: {}}
+        };
+        var layout = {
+          height: 460,
+          margin: {l: 70, r: 20, t: 30, b: 50},
+          xaxis: {title: {text: "Time (s)"}, gridcolor: "#eee", zeroline: false},
+          yaxis: {title: {text: axisTitle(out.yBase, out.yUnit, out.yConv)},
+                  gridcolor: "#eee", zeroline: false},
+          hovermode: "closest",
+          showlegend: true,
+          legend: {orientation: "h", y: -0.18, font: {size: 11}},
+          plot_bgcolor: "#fff", paper_bgcolor: "#fff"
+        };
+
+        var initial = out.traces.map(function (tr, idx) {
+          var v = viewFor(out.full[idx], null);
+          var st = markerStyle(v.x.length, out.full[idx].baseMode);
+          var copy = Object.assign({}, tr);
+          copy.x = v.x; copy.y = v.y; copy.mode = st.mode;
+          copy.marker = Object.assign({}, tr.marker, {size: st.size, opacity: st.opacity});
+          return copy;
+        });
+
+        unregister();
+        Plotly.newPlot(plotEl, initial, layout, config).then(function (gd) {
+          entry = {gd: gd, full: out.full, spec: spec, range: null};
+          charts.push(entry);
+          var pending = null;
+          gd.on("plotly_relayout", function (ev) {
+            var range = null;
+            if (ev["xaxis.range[0]"] !== undefined) {
+              range = [ev["xaxis.range[0]"], ev["xaxis.range[1]"]];
+            } else if (ev["xaxis.range"]) {
+              range = ev["xaxis.range"];
+            } else if (!("xaxis.autorange" in ev)) {
+              return;
+            }
+            entry.range = range;
+            if (pending) clearTimeout(pending);
+            pending = setTimeout(function () {
+              pending = null;
+              draw(gd, out.full, entry.range, spec);
+            }, 60);
+          });
+        });
+
+        out.notes.forEach(function (n) { note(n); });
+        out.cautions.forEach(function (c) { note("⚠ " + c, "warn"); });
+      }
+
+      function render() {
+        var keys = Array.prototype.slice.call(pick.selectedOptions).map(function (o) {
+          return o.value;
+        });
+        notesEl.innerHTML = "";
+        if (!keys.length) {
+          notesEl.textContent = kind === "xy"
+            ? "Select one or more Y channels, then press Draw."
+            : "Select one or more channels, then press Draw.";
+          return;
+        }
+        if (kind === "xy") renderScatter(keys); else renderTime(keys);
+      }
+
+      function load() {
+        if (data || loading) return;
+        loading = true;
+        loadDataset(panel.dataset.source).then(function (spec) {
+          data = spec;
+          populate();
+          statusEl.hidden = true;
+          controls.hidden = false;
+          /* Open on something rather than on an empty frame. Only the time
+             panel does this: an X-Y plot has no obvious default pair, and
+             guessing one would assert a relationship nobody asked about. */
+          var want = (kind === "xy") ? [] : (data.default || []);
+          var drew = false;
+          for (var oi = 0; oi < pick.options.length; oi++) {
+            if (want.indexOf(pick.options[oi].value) >= 0) {
+              pick.options[oi].selected = true;
+              drew = true;
+            }
+          }
+          if (drew) render();
+        }).catch(function (err) {
+          statusEl.textContent = "Could not load the channel data: " + err.message;
+        });
+      }
+
+      /* The payload is the largest thing in the document, so it is inflated on
+         first open rather than at load. The time panel ships open, so that is
+         usually immediately; the X-Y panel ships closed and costs nothing until
+         asked, and by then the time panel has already put the data in cache. */
+      panel.addEventListener("toggle", function () { if (panel.open) load(); });
+      if (panel.open) {
+        if (window.requestIdleCallback) requestIdleCallback(load, {timeout: 2000});
+        else setTimeout(load, 0);
+      }
+      drawBtn.addEventListener("click", render);
+    })(panels[pi]);
+  }
+
+
+
+  var specs = document.querySelectorAll("script.chart-spec");
+  for (var i = 0; i < specs.length; i++) {
+    (function (el) {
+      var target = document.getElementById(el.dataset.target);
+      readSpec(el).then(function (spec) {
+
+        /* 3D charts plot straight through. The viewport renderer is a windowing
+           scheme over a 1-D x axis — there is no such axis on a trajectory, and
+           the builder already limits these to the flight itself. */
+        if (spec.kind === "3d") {
+          var base3d = spec.traces.map(function (t) {
+            return {x: t.x.slice(), y: t.y.slice(), z: t.z.slice()};
+          });
+          var init3d = spec.traces.map(function (t) {
+            var f = spec.sceneUnit ? unitFactor(spec.sceneUnit) : 1;
+            if (f === 1) return t;
+            var c = Object.assign({}, t);
+            c.x = t.x.map(function (n) { return n * f; });
+            c.y = t.y.map(function (n) { return n * f; });
+            c.z = t.z.map(function (n) { return n * f; });
+            return c;
+          });
+          var layout3d = JSON.parse(JSON.stringify(spec.layout));
+          if (spec.sceneUnit) {
+            layout3d.title = {text: sceneTitle3d(spec), font: {size: 14}};
+          }
+          Plotly.newPlot(target, init3d, layout3d, config).then(function (gd) {
+            charts.push({gd: gd, spec: spec, base3d: base3d, is3d: true});
+          });
+          return;
+        }
+
+        // Keep the full arrays aside; the plot only ever holds a viewport-sized
+        // reduction of them.
+        var full = spec.traces.map(function (t) {
+          return {x: t.x, y: t.y, baseMode: t.mode || "markers"};
+        });
+        var yf0 = spec.yUnit ? unitFactor(spec.yUnit) : 1;
+        var xf0 = spec.xUnit ? unitFactor(spec.xUnit) : 1;
+        var initial = spec.traces.map(function (t, idx) {
+          var v = viewFor(full[idx], null);
+          var st = markerStyle(v.x.length, full[idx].baseMode);
+          var copy = Object.assign({}, t);
+          copy.x = xf0 === 1 ? v.x : v.x.map(function (n) { return n * xf0; });
+          copy.y = yf0 === 1 ? v.y : v.y.map(function (n) { return n * yf0; });
+          copy.mode = st.mode;
+          copy.marker = Object.assign({}, t.marker, {size: st.size, opacity: st.opacity});
+          return copy;
+        });
+
+        var layout = Object.assign({}, spec.layout);
+        layout.yaxis = Object.assign({}, spec.layout.yaxis);
+        layout.xaxis = Object.assign({}, spec.layout.xaxis);
+        if (spec.yUnit) {
+          layout.yaxis.title = {text: axisTitle(spec.yTitleBase, spec.yUnit)};
+          if (layout.yaxis.range) {
+            layout.yaxis.range = [layout.yaxis.range[0] * yf0, layout.yaxis.range[1] * yf0];
+          }
+        }
+        if (spec.xUnit) layout.xaxis.title = {text: axisTitle(spec.xTitleBase, spec.xUnit)};
+
+        Plotly.newPlot(target, initial, layout, config).then(function (gd) {
+          var entry = {gd: gd, full: full, spec: spec, range: null};
+          charts.push(entry);
+          var pending = null;
+          gd.on("plotly_relayout", function (ev) {
+            var range = null;
+            if (ev["xaxis.range[0]"] !== undefined) {
+              range = [ev["xaxis.range[0]"], ev["xaxis.range[1]"]];
+            } else if (ev["xaxis.range"]) {
+              range = ev["xaxis.range"];
+            } else if (!("xaxis.autorange" in ev)) {
+              return; // a y-only or cosmetic relayout; nothing to re-slice
+            }
+            // Coalesce: drags emit a burst of relayouts. setTimeout rather than
+            // requestAnimationFrame — rAF is suspended in a background tab, which
+            // would leave the chart showing the wrong slice after switching away
+            // and back mid-zoom.
+            if (pending) clearTimeout(pending);
+            pending = setTimeout(function () {
+              pending = null;
+              entry.range = range;   // remembered so a unit switch keeps the zoom
+              draw(gd, full, range, spec);
+            }, 60);
+          });
+        });
+      }).catch(function (err) {
+        if (target) {
+          target.textContent = "Chart failed to render: " + err;
+          target.style.color = "#c62828";
+          target.style.padding = "12px";
+        }
+      });
+    })(specs[i]);
+  }
+})();
+</script>
+{% endif %}
 
 </body>
 </html>

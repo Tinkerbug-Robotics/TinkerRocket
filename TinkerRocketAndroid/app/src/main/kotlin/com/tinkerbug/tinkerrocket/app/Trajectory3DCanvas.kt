@@ -12,6 +12,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -171,15 +173,47 @@ internal fun OrbitSceneCanvas(
         }
 
         // ── Markers + labels ─────────────────────────────────────────────
+        // Labels stack instead of overprinting.  Two markers at the same spot
+        // used to stamp their text at the same pixel, and "Launch Pad" over
+        // "Landing" renders as unreadable mush.  That is not an edge case
+        // here: a reverse drift cast lands you where you launched, so the two
+        // coincide on every normal run, and a bench log or a pad abort does
+        // the same to Apogee/Landing on the flight trajectory.
+        val placed = mutableListOf<Rect>()
+        fun place(candidate: Rect): Rect {
+            var r = candidate
+            val step = r.height + 2.dp.toPx()
+            // Walk upward until clear.  Bounded: markers are few, and running
+            // off the top is better than an illegible pile.
+            var guard = 0
+            while (placed.any { it.overlaps(r) } && guard++ < markers.size * 2) {
+                r = r.translate(0f, -step)
+            }
+            placed += r
+            return r
+        }
+
         for (m in markers) {
             val pp = proj(m.pos) ?: continue
             val r = m.radiusDp.dp.toPx()
             drawCircle(m.color, r, pp.o())
             val t = textMeasurer.measure(m.label, TextStyle(fontSize = 11.sp, color = labelColor))
-            drawText(t, topLeft = Offset(pp.x.toFloat() - t.size.width / 2, pp.y.toFloat() - r - t.size.height - 2))
+            val slot = place(
+                Rect(
+                    Offset(pp.x.toFloat() - t.size.width / 2, pp.y.toFloat() - r - t.size.height - 2),
+                    Size(t.size.width.toFloat(), t.size.height.toFloat()),
+                ),
+            )
+            drawText(t, topLeft = slot.topLeft)
             m.sublabel?.let { sub ->
                 val st = textMeasurer.measure(sub, TextStyle(fontSize = 10.sp, color = labelColor))
-                drawText(st, topLeft = Offset(pp.x.toFloat() - st.size.width / 2, pp.y.toFloat() + 8.dp.toPx()))
+                val subSlot = place(
+                    Rect(
+                        Offset(pp.x.toFloat() - st.size.width / 2, pp.y.toFloat() + 8.dp.toPx()),
+                        Size(st.size.width.toFloat(), st.size.height.toFloat()),
+                    ),
+                )
+                drawText(st, topLeft = subSlot.topLeft)
             }
         }
 
@@ -220,7 +254,7 @@ fun Trajectory3DCanvas(data: FlightCsvData) {
     val extra = lm?.let {
         listOf(SceneLine(
             it.apogee, V3(it.apogee.e, it.apogee.n, groundU),
-            Color(0xFF64B5F6).copy(alpha = 0.35f),
+            Color(0xFF4DABF7).copy(alpha = 0.25f),
         ))
     } ?: emptyList()
 

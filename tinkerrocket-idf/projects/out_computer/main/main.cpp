@@ -16,6 +16,7 @@
 #include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
+#include <TR_OTA_Receiver.h>      // TR_OTA_Receiver::Error — decode the FC's relayed OTA error
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
 #include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
@@ -458,6 +459,13 @@ static volatile uint8_t pending_out_command = 0U;  // command currently being SE
 //     reset edge even between back-to-back identical command ids
 // With the rail off the queue simply holds; powering on drains the whole
 // sync in order — connecting before power-on now works by design.
+// EXCEPTION: pyro test commands are never enqueued while the rail is off —
+// a held PYRO_FIRE_TEST (or PYRO_CONT_TEST's momentary ARM) would energize
+// the channel at the NEXT power-on, possibly while someone is handling the
+// rocket. Every entry point refuses instead: the BLE cmd 35/36 handlers
+// (with a 0xCE file-ops refusal frame back to the app) and the LoRa cmd
+// 35/36 branches in processUplinkCommand (log-only — the uplink has no
+// feedback channel, #285 blind fire-and-retry).
 struct QueuedCommand
 {
     uint8_t cmd;
@@ -2351,6 +2359,37 @@ static bool isKnownMessageType(uint8_t type)
     }
 }
 
+// Decode the FC's relayed OTA failure (TR_OTA_Receiver::Error) into a stable
+// token for the app.  Every verify failure used to relay as one "fc_error",
+// which threw away the only thing that distinguishes a dropped relay chunk
+// (size_mismatch — bytes never all arrived) from a corrupted image
+// (sha_mismatch — they arrived wrong) from a flash-side refusal (end_failed /
+// set_boot_failed).  The FC logs the code over serial, but an assembled rocket
+// is exactly the case where serial isn't reachable — so it has to come up the
+// BLE link.  Tokens stay machine-stable and fc_-prefixed so they can't be
+// confused with the OC's own OTA errors.
+static const char* fcOtaErrToken(uint8_t e)
+{
+    switch ((TR_OTA_Receiver::Error)e)
+    {
+        case TR_OTA_Receiver::Error::AlreadyActive:    return "fc_already_active";
+        case TR_OTA_Receiver::Error::SessionNotActive: return "fc_session_not_active";
+        case TR_OTA_Receiver::Error::BeginFailed:      return "fc_begin_failed";
+        case TR_OTA_Receiver::Error::BadOffset:        return "fc_bad_offset";
+        case TR_OTA_Receiver::Error::SizeOverflow:     return "fc_size_overflow";
+        case TR_OTA_Receiver::Error::WriteFailed:      return "fc_write_failed";
+        case TR_OTA_Receiver::Error::SizeMismatch:     return "fc_size_mismatch";
+        case TR_OTA_Receiver::Error::ShaMismatch:      return "fc_sha_mismatch";
+        case TR_OTA_Receiver::Error::EndFailed:        return "fc_end_failed";
+        case TR_OTA_Receiver::Error::SetBootFailed:    return "fc_set_boot_failed";
+        // Ok-with-VERIFY_FAILED shouldn't happen; report it rather than imply a
+        // specific cause, and keep the legacy token for anything unrecognised
+        // (an FC newer than this OC could add a code we don't know yet).
+        case TR_OTA_Receiver::Error::Ok:               return "fc_error";
+    }
+    return "fc_error";
+}
+
 static void processFrame(const uint8_t* frame, size_t frame_len,
                          uint8_t type, const uint8_t* payload, size_t payload_len)
 {
@@ -2689,7 +2728,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     break;
                 case OTA_RELAY_WRITING:       state = "writing"; break;
                 case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
-                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = "fc_error"; terminal = true; break;
+                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = fcOtaErrToken(st.err); terminal = true; break;
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
                 default: break;
             }
@@ -3795,7 +3834,13 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
     // be delivered after landing and refused by the FC's state gate — but the
     // LoRa path has no echo (#285, blind fire-and-retry), so refusing here is
     // the only honest answer.
-    if ((cmd == 1 || cmd == 23 || cmd == 28) && latest_rocket_state == INFLIGHT)
+    // cmds 35/36 (pyro cont test / TEST-FIRE via BS relay) join too: queued
+    // mid-flight they would deliver at landing — a delayed FIRE pulse (or a
+    // cont test's momentary ARM) firing on the ground while the recovery crew
+    // walks up is exactly the stale-command hazard this gate refuses. The
+    // FC's own lockout gate is the second layer, not a reason to skip this.
+    if ((cmd == 1 || cmd == 23 || cmd == 28 || cmd == 35 || cmd == 36) &&
+        latest_rocket_state == INFLIGHT)
     {
         uplink_inflight_refusals++;
         ESP_LOGW("LORA", "UPLINK cmd=%u refused: rocket INFLIGHT (undeliverable"
@@ -3866,6 +3911,66 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Servo test stop
         setPendingCommand(SERVO_TEST_STOP);
         ESP_LOGI("LORA", "UPLINK Servo test stop");
+    }
+    else if (cmd == 35 && payload_len >= 1)
+    {
+        // Pyro continuity test via BS relay — same handling as BLE cmd 35.
+        // No duplicate suppression: the BS retry train just re-runs the
+        // momentary arm→read→disarm, which keeps the reading fresh.
+        uint8_t ch = payload[0];
+        if (ch < 1 || ch > 4) {
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test: invalid channel %u", ch);
+        } else if (!pwr_pin_on) {
+            // Rail-off refusal, same as the cmd 36 branch below: the #366
+            // queue would HOLD this and deliver the momentary ARM pulse at
+            // the next power-on. Like all LoRa refusals this can only log —
+            // there is no uplink feedback channel (#285 blind fire-and-retry).
+            ESP_LOGW("LORA", "UPLINK Pyro continuity test CH%u refused: FC rail"
+                             " off (queued arm pulse would deliver at power-on)", ch);
+        } else {
+            setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
+            ESP_LOGI("LORA", "UPLINK Pyro continuity test CH%u", ch);
+        }
+    }
+    else if (cmd == 36 && payload_len >= 1)
+    {
+        // Pyro TEST-FIRE via BS relay — the LoRa half of the stand-back pyro
+        // test (app → BS cmd 50 → here), so the operator can keep LoRa
+        // distance from a live charge instead of BLE distance.
+        //
+        // Rail-off refusal: the FC command queue HOLDS while the rail is off
+        // and drains on power-up (#366) — a fire queued now would pulse the
+        // channel whenever someone next powers the FC, minutes or hours
+        // later, with no telemetry telling the LoRa operator the rail was
+        // even off. Same undeliverable-command philosophy as the #383
+        // INFLIGHT gate above: refuse honestly, don't queue a latent fire.
+        //
+        // Dedup: the uplink is blind fire-and-retry with no sequence number,
+        // so one FIRE tap arrives as up to UPLINK_RETRIES identical packets,
+        // and each would queue a full ARM→pulse→disarm. Worst-case train
+        // span is ~11 s: 7 inter-retry gaps × (100 ms pacing + the TX-window
+        // gate's 1.5 s max_defer, which re-arms per attempt — bs_uplink_
+        // txwin.h / serviceUplink). 13 s covers that with margin while
+        // staying under the fastest deliberate re-test of the same channel
+        // (5 s recording + 10 s countdown ≈ 15 s away at minimum).
+        static uint32_t last_fire_uplink_ms = 0;
+        static uint8_t  last_fire_uplink_ch = 0;
+        constexpr uint32_t kFireDedupWindowMs = 13000;
+        uint8_t ch = payload[0];
+        if (ch < 1 || ch > 4) {
+            ESP_LOGW("LORA", "UPLINK Pyro test fire: invalid channel %u", ch);
+        } else if (!pwr_pin_on) {
+            ESP_LOGW("LORA", "UPLINK Pyro test fire CH%u refused: FC rail off "
+                             "(queued fire would deliver at next power-on)", ch);
+        } else if (ch == last_fire_uplink_ch && last_fire_uplink_ms != 0 &&
+                   (millis() - last_fire_uplink_ms) < kFireDedupWindowMs) {
+            ESP_LOGI("LORA", "UPLINK Pyro test fire CH%u: duplicate retry ignored", ch);
+        } else {
+            last_fire_uplink_ch = ch;
+            last_fire_uplink_ms = millis();
+            setPendingCommandWithConfig(PYRO_FIRE_TEST, PYRO_FIRE_TEST, &ch, 1);
+            ESP_LOGI("LORA", "UPLINK Pyro test fire CH%u", ch);
+        }
     }
     else if (cmd == 28 && payload_len >= sizeof(GuidancePointData))
     {
@@ -5969,7 +6074,10 @@ static void setup_oc()
     pwr_pin_on = false;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
-    ESP_LOGW("OC", "[BOARD] pin map: %s", TR_BOARD_V8 ? "V8" : "V7");
+    // V9 selects the same map as V8 on this MCU (see config.h) — reported
+    // separately so the boot log says which board the image was built for.
+    ESP_LOGW("OC", "[BOARD] pin map: %s",
+             TR_BOARD_V9 ? "V9/V10 (same pins as V8)" : (TR_BOARD_V8 ? "V8" : "V7"));
 
     // OTA boot-state check (#8). If this image was just OTA-installed it
     // boots PENDING_VERIFY; we hold off the "valid" mark until we've seen
@@ -6604,10 +6712,30 @@ static void loop_oc()
         ESP_LOGI("OC_CMD", "BLE cmd=%u", (unsigned)ble_cmd);
         if (ble_cmd == 1)
         {
-            // Toggle camera recording
-            camera_recording_requested = !camera_recording_requested;
-            setPendingCommand(camera_recording_requested ? CAMERA_START : CAMERA_STOP);
-            ESP_LOGI("BLE", "Camera toggle requested: %s", camera_recording_requested ? "START" : "STOP");
+            // Camera: payload[0] = desired state (1 = on, 0 = off), same
+            // semantics as the LoRa uplink (processUplinkCommand cmd 1) and
+            // the BS relay.  A blind toggle inverts whenever the app's idea
+            // of the state and ours disagree — bench-observed 2026-08-16: the
+            // OC held recording_requested=true across an FC reboot, so the
+            // next "start" tap stopped the camera 11 ms after the FC had sent
+            // START_RECORDING.  Falls back to toggle with no payload (legacy
+            // app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool want_on = (plen >= 1) ? (payload[0] != 0)
+                                             : !camera_recording_requested;
+            if (want_on != camera_recording_requested)
+            {
+                camera_recording_requested = want_on;
+                setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
+                ESP_LOGI("BLE", "Camera %s%s", want_on ? "START" : "STOP",
+                         (plen >= 1) ? "" : " (legacy toggle)");
+            }
+            else
+            {
+                ESP_LOGI("BLE", "Camera already %s, ignoring",
+                         want_on ? "ON" : "OFF");
+            }
         }
         else if (ble_cmd == 2)
         {
@@ -6623,8 +6751,21 @@ static void loop_oc()
         }
         else if (ble_cmd == 23)
         {
-            // Toggle logging (manual start/stop from app)
-            if (logger.isLoggingActive())
+            // Logging: payload[0] = desired state (1 = start, 0 = stop),
+            // matching the LoRa uplink and BS relay.  Same desync hazard as
+            // cmd 1 above — a blind toggle turns "start" into "stop" whenever
+            // the app's view disagrees with ours.  Falls back to toggle with
+            // no payload (legacy app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool logging_now = logger.isLoggingActive();
+            const bool want_on = (plen >= 1) ? (payload[0] != 0) : !logging_now;
+            if (want_on == logging_now)
+            {
+                ESP_LOGI("OC_CMD", "Logging already %s, ignoring",
+                         logging_now ? "ACTIVE" : "STOPPED");
+            }
+            else if (!want_on)
             {
                 logger.endLogging();
                 flightlogEndFlight();
@@ -7047,11 +7188,27 @@ static void loop_oc()
         }
         else if (ble_cmd == 8)
         {
-            // Toggle power rail
-            pwr_pin_on = !pwr_pin_on;
+            // Power rail: payload[0] = desired state (1 = on, 0 = off), same
+            // semantics as cmds 1/23.  A blind toggle inverts whenever the
+            // app's view and ours disagree — and here that means cutting the
+            // FC's rail when the operator asked to power it up (or a repeated
+            // command double-toggling).  The app knows the true state: the OC
+            // stays alive with the rail down and keeps reporting pwr_pin_on,
+            // and the UI gates the button on having received telemetry
+            // (#377).  No payload still means toggle (legacy app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool was_on  = pwr_pin_on;
+            const bool want_on = (plen >= 1) ? (payload[0] != 0) : !pwr_pin_on;
 
-            if (pwr_pin_on)
+            if (want_on == was_on)
             {
+                ESP_LOGI("BLE", "Power rail already %s, ignoring",
+                         was_on ? "ON" : "OFF");
+            }
+            else if (want_on)
+            {
+                pwr_pin_on = true;
                 // Exit low-power mode BEFORE powering peripherals — need
                 // full CPU speed and no auto light-sleep during init.
                 exitLowPowerMode();
@@ -7087,6 +7244,7 @@ static void loop_oc()
             }
             else
             {
+                pwr_pin_on = false;
                 // Power off: drop the FC rail and reset the OC.
                 //
                 // Surgically tearing down each peripheral on power-off
@@ -7158,13 +7316,19 @@ static void loop_oc()
                 // not reached
             }
 
-            ESP_LOGI("BLE", "Power rail toggled: %s", pwr_pin_on ? "ON" : "OFF");
+            // Only on an actual state change — an ignored duplicate must not
+            // claim the rail was switched, nor re-push config.
+            if (want_on != was_on)
+            {
+                ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
+                         (plen >= 1) ? "" : " (legacy toggle)");
 
-            // After power-on, NVS config is freshly loaded — resend config
-            // readback so the app gets the actual persisted values.
-            if (pwr_pin_on && ble_app.isConnected()) {
-                delay(100);  // let peripherals finish init
-                sendCurrentConfig();
+                // After power-on, NVS config is freshly loaded — resend config
+                // readback so the app gets the actual persisted values.
+                if (pwr_pin_on && ble_app.isConnected()) {
+                    delay(100);  // let peripherals finish init
+                    sendCurrentConfig();
+                }
             }
         }
         else if (ble_cmd == 9)
@@ -7523,6 +7687,13 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro continuity test: invalid channel %u", ch);
+            } else if (!pwr_pin_on) {
+                // Rail off: the FC queue would HOLD this and deliver the
+                // momentary ARM pulse at the next power-on (see the queue
+                // header's pyro exception). Refuse and tell the app.
+                ble_app.sendPyroTestRefusal(35, ch, 1 /* FC rail off */);
+                ESP_LOGW("BLE", "Pyro continuity test CH%u refused: FC rail off"
+                                " (queued arm pulse would deliver at power-on)", ch);
             } else {
                 setPendingCommandWithConfig(PYRO_CONT_TEST, PYRO_CONT_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro continuity test CH%u", ch);
@@ -7536,6 +7707,14 @@ static void loop_oc()
             uint8_t ch = (plen >= 1) ? payload[0] : 0;
             if (ch < 1 || ch > 4) {
                 ESP_LOGW("BLE", "Pyro test fire: invalid channel %u", ch);
+            } else if (!pwr_pin_on) {
+                // Rail off: the FC queue would HOLD this and FIRE the channel
+                // at the next power-on — a latent fire delivered while someone
+                // may be handling the rocket (see the queue header's pyro
+                // exception). Refuse and tell the app.
+                ble_app.sendPyroTestRefusal(36, ch, 1 /* FC rail off */);
+                ESP_LOGW("BLE", "Pyro test fire CH%u refused: FC rail off"
+                                " (queued fire would deliver at power-on)", ch);
             } else {
                 setPendingCommandWithConfig(PYRO_FIRE_TEST, PYRO_FIRE_TEST, &ch, 1);
                 ESP_LOGI("BLE", "Pyro test fire CH%u", ch);

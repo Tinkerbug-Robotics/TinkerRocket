@@ -61,8 +61,10 @@ fun FinLayoutEditor(
     onJogStop: () -> Unit,
 ) {
     var selectedSlot by remember { mutableIntStateOf(0) }
-    // Control azimuth (deg) of each ring slot — the firmware convention
-    // (θ=0 top/+pitch, 90 +yaw, …); the nose-down view is rendering only.
+    // Fin-position azimuth (deg) of each ring slot in the firmware convention
+    // (θ=0 = +Z/top slot, 90 = −Y slot, … — positions, NOT force directions:
+    // the FC maps position→tangential force itself, sin/cos in
+    // TR_ControlMixer::setFinLayout); the nose-down view is rendering only.
     val slotAzimuths =
         if (ringMode == 1) listOf(45.0, 135.0, 225.0, 315.0) else listOf(0.0, 90.0, 180.0, 270.0)
     val selectedServo = servoAtSlot.getOrElse(selectedSlot) { 1 }
@@ -246,11 +248,15 @@ private fun mixDescription(
     val th = Math.toRadians(azimuthDeg)
     val tilt = if (reverse.getOrElse(servo - 1) { false }) -1.0 else 1.0
     val rollS = if (rollReverse.getOrElse(servo - 1) { false }) -1.0 else 1.0
-    val c = cos(th) * tilt
-    val s = sin(th) * tilt
+    // Position→force: a fin's tangential lift is perpendicular to its radial
+    // arm, so pitch = sin(az), yaw = -cos(az) — matches
+    // TR_ControlMixer::setFinLayout (top/bottom fins are yaw rudders, side
+    // fins are pitch elevators).
+    val p = sin(th) * tilt
+    val y = -cos(th) * tilt
     val parts = mutableListOf<String>()
-    if (abs(c) > 0.05) parts += "pitch ${if (c > 0) "+" else "−"}"
-    if (abs(s) > 0.05) parts += "yaw ${if (s > 0) "+" else "−"}"
+    if (abs(p) > 0.05) parts += "pitch ${if (p > 0) "+" else "−"}"
+    if (abs(y) > 0.05) parts += "yaw ${if (y > 0) "+" else "−"}"
     parts += "roll ${if (rollS > 0) "+" else "−"}"
     return parts.joinToString(" · ")
 }

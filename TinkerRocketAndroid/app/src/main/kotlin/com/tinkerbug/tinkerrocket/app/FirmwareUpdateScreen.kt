@@ -54,6 +54,7 @@ fun FirmwareUpdateScreen(
     session: DeviceSession,
     onBack: () -> Unit,
 ) {
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     val context = LocalContext.current
     val ota = remember(deviceId) { container.otaSessionFor(deviceId) }
     val state by ota.state.collectAsState()
@@ -153,7 +154,11 @@ fun FirmwareUpdateScreen(
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Target", style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TargetChip("This device", !targetIsFc, !busy) { targetIsFc = false }
+                        // Named, not "This device": the picker only appears for a
+                        // rocket, whose BLE peer IS the Out Computer, and the choice
+                        // that matters is OC vs FC — "this device" made the default
+                        // read as "the whole rocket".
+                        TargetChip("Out Computer", !targetIsFc, !busy) { targetIsFc = false }
                         TargetChip("Flight Computer", targetIsFc, !busy) { targetIsFc = true }
                     }
                     if (targetIsFc) {
@@ -225,14 +230,14 @@ fun FirmwareUpdateScreen(
             }
 
             is OtaSession.State.Verified -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("✅ Updated successfully", style = MaterialTheme.typography.titleMedium, color = Color(0xFF43A047))
+                Text("✅ Updated successfully", style = MaterialTheme.typography.titleMedium, color = tr.statusOk)
                 OtaRow("Previous", ota.preFlashVersion.ifEmpty { "—" })
                 OtaRow("Now running", s.newVersion)
                 FlashAnotherButton { ota.reset() }
             }
 
             is OtaSession.State.RollbackDetected -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("↩ Rollback detected", style = MaterialTheme.typography.titleMedium, color = Color(0xFFFFA000))
+                Text("↩ Rollback detected", style = MaterialTheme.typography.titleMedium, color = tr.statusWarn)
                 Text(
                     "The device reconnected but is still running ${s.version}. The new " +
                         "image likely failed to boot, so the bootloader reverted to the " +

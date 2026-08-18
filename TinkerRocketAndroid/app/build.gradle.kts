@@ -18,8 +18,8 @@ android {
         targetSdk = 36
         // versionCode must only ever increase (Play + sideload "update"
         // installs both key on it); bump BOTH before tagging android-v<name>.
-        versionCode = 5
-        versionName = "1.0.1"
+        versionCode = 7
+        versionName = "1.0.3"
 
         // Google Map Tiles API key (online-only satellite basemap).  Same
         // env-var discipline as release signing below: never in the repo;

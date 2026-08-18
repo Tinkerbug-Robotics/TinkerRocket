@@ -58,6 +58,24 @@ target_include_directories(test_servo_control PRIVATE
 target_link_libraries(test_servo_control GTest::gtest_main)
 gtest_discover_tests(test_servo_control)
 
+# ---------- test_roll_path_parity ----------
+# The FC mixes roll-only control in two places — the ground test via
+# TR_ControlMixer, the flight via TR_ServoControl — so this links both and
+# asserts they drive the servos identically.  See the file header.
+add_executable(test_roll_path_parity test_roll_path_parity.cpp
+    ${LIB_DIR}/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp
+    ${LIB_DIR}/TR_ControlMixer/TR_ControlMixer.cpp
+    ${LIB_DIR}/TR_PID/TR_PID.cpp
+)
+target_include_directories(test_roll_path_parity PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_ServoControl_ledc_mult
+    ${LIB_DIR}/TR_ControlMixer
+    ${LIB_DIR}/TR_PID
+)
+target_link_libraries(test_roll_path_parity GTest::gtest_main)
+gtest_discover_tests(test_roll_path_parity)
+
 # ---------- test_rocket_computer_types ----------
 add_executable(test_rocket_computer_types test_rocket_computer_types.cpp)
 target_include_directories(test_rocket_computer_types PRIVATE
@@ -431,6 +449,22 @@ target_include_directories(test_bs_download_policy PRIVATE
 target_link_libraries(test_bs_download_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_download_policy)
 
+# ---------- test_bs_storage_policy ----------
+# Host-side test for the NAND bring-up retry policy (#761): mountExternalFlashFat
+# was single-shot, so one transient error demoted the whole boot from a 512 MB
+# NAND to a ~1.9 MB SPIFFS partition and truncated the flight. Two of these
+# decisions are destructive if off by one (formatting on the wrong attempt wipes
+# every stored flight), so they are pinned here. bs_storage_policy.h is pure;
+# the test also pulls in config.h, which needs RocketComputerTypes on the path.
+add_executable(test_bs_storage_policy test_bs_storage_policy.cpp)
+target_include_directories(test_bs_storage_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_storage_policy GTest::gtest_main)
+gtest_discover_tests(test_bs_storage_policy)
+
 # ---------- test_burnout_detector (#197/#256) ----------
 # Detector logic is shared with the firmware via
 # components/TR_KinematicChecks/BurnoutDetector.h — the test exercises the
@@ -580,6 +614,26 @@ target_include_directories(test_sim_sensor_model PRIVATE
 )
 target_link_libraries(test_sim_sensor_model GTest::gtest_main)
 gtest_discover_tests(test_sim_sensor_model)
+
+# ---------- test_lc86_parser ----------
+# Host-side test for the Quectel LC86G NMEA/PQTM stream parser — the protocol
+# half of the mini's GNSS driver (TR_GNSSReceiverLC86_Serial). Lc86Parser.cpp
+# is deliberately IDF-free (bytes in, GNSSData out), so the checksum rules
+# (anchored on the protocol doc's published examples), the $PQTMPVT mapping
+# incl. the vel_u = -VelD sign the EKF hard-fuses, the Quality==0 fix-trust
+# gate, the $PQTMEPE accuracy merge, and junk/partial-line resilience are all
+# pinned on the host. The ESP UART glue lives in TR_GNSSReceiverLC86_Serial.cpp
+# and is not compiled here.
+add_executable(test_lc86_parser test_lc86_parser.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/Lc86Parser.cpp
+)
+target_include_directories(test_lc86_parser PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_lc86_parser GTest::gtest_main)
+gtest_discover_tests(test_lc86_parser)
 
 # ---------- wire fixture corpus (docs/plans/android-port.md §2.1) ----------
 # Golden-vector generation from the REAL packed structs: wire_fixture_gen
