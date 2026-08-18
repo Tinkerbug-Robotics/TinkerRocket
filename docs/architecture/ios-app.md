@@ -137,10 +137,14 @@ heavily tested pieces in the app.
 
 ## What runs during a flight
 
-- **`FlightAnnouncer`** speaks burnout speed, altitude, apogee, descent rate and
-  distance, and landing through `AVSpeechSynthesizer` — so you can watch the sky instead
-  of the screen. The dispatch logic is behind a protocol so tests can substitute a spy
-  without instantiating an audio session.
+- **`FlightAnnouncer`** speaks burnout speed, altitude, apogee, drogue and main
+  deployment, descent rate and distance, and landing through `AVSpeechSynthesizer` — so
+  you can watch the sky instead of the screen. The dispatch logic is behind a protocol so
+  tests can substitute a spy without instantiating an audio session.
+- **`DeploymentWatcher`** is what makes the deployment callouts possible: it reads drogue
+  and main out of the descent-rate curve alone, because that is the only recovery signal
+  carried on *both* the direct BLE link and the base-station relay. The flight computer
+  knows far more (it sees the ejection shock) but has no spare wire bit to tell anyone.
 - **`LandingPredictor`** classifies flight phase and runs a forward drift simulation from
   the current state. The point is the failure case: if LoRa drops mid-flight, the last
   published prediction stays pinned on the map so the recovery walk still has a target.

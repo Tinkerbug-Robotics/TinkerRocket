@@ -8,6 +8,10 @@
 //  FlightAnnouncer has the same shape, which is what lets the 15 flight-
 //  profile policy tests run on both platforms.
 //
+//  Callouts, in flight order: burnout speed, altitude every 5 s (post-burnout,
+//  pre-apogee), apogee, recovery deployments and their chute verdict (#813,
+//  see DeploymentWatcher), descent every 10 s, landing with distance.
+//
 
 import Foundation
 import AVFoundation
@@ -62,6 +66,14 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     private let now: () -> Date
     /// Read per callout so a settings change applies immediately.
     private let unitSystem: () -> UnitSystem
+    /// Test seam for the recovery expectations; production reads `profileStore`.
+    private let recoveryOverride: (() -> RecoveryProfile?)?
+
+    /// The active rocket's profile, for grading a deployment against what THIS
+    /// rocket is supposed to do (#813).  Set by the dashboard alongside the
+    /// announcer hand-off, same shape as `LandingPredictor.attach`.  Weak: the
+    /// store outlives the announcer and must not be retained by it.
+    weak var profileStore: RocketProfileStore?
 
     // MARK: - Private State
 
@@ -87,6 +99,9 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     private var maxSpeedStableCount: Int = 0
     private static let burnoutStableThreshold = 3  // consecutive unchanged updates to confirm burnout
 
+    /// Recovery-event detector (#813).  Self-guards on apogee and landing.
+    private let deployment = DeploymentWatcher()
+
     // MARK: - Constants
 
     private static let altitudeInterval: TimeInterval = 5.0       // seconds between altitude callouts
@@ -105,10 +120,12 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     init(speech: AnnouncerSpeech,
          now: @escaping () -> Date = Date.init,
          unitSystem: @escaping () -> UnitSystem = { .current },
-         persistEnabled: Bool = true) {
+         persistEnabled: Bool = true,
+         recovery: (() -> RecoveryProfile?)? = nil) {
         self.speech = speech
         self.now = now
         self.unitSystem = unitSystem
+        self.recoveryOverride = recovery
         super.init()
 
         speech.onStatusChange = { [weak self] in
@@ -212,6 +229,11 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
             lastDescentAnnounceTime = now().addingTimeInterval(-(Self.descentInterval - 5.0))
         }
 
+        // --- Recovery events (#813) ---
+        // Before the cadence callout: a deployment should pre-empt the
+        // periodic descent readout, not race it.
+        checkDeployment(telemetry, state: state)
+
         // --- Descent callouts (after apogee, before landed) ---
         if telemetry.alt_apo && !telemetry.landed_flag && state == "INFLIGHT" {
             checkDescentCallout(telemetry)
@@ -262,6 +284,60 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
                 announceImmediate("Burnout. Max speed \(UnitFormatter.spokenSpeed(Double(lastMaxSpeed), system: unitSystem()))")
             }
         }
+    }
+
+    /// The active recovery expectations: injected in tests, from the profile
+    /// store in production.  Nil is normal — no profile selected.
+    private func currentRecovery() -> RecoveryProfile? {
+        if let recoveryOverride { return recoveryOverride() }
+        guard let p = profileStore?.activeProfile else { return nil }
+        return RecoveryProfile(p)
+    }
+
+    /// Drogue and main deployment, detected from the descent-rate curve — the
+    /// only recovery signal present on BOTH the direct BLE link and the
+    /// base-station relay (see `DeploymentWatcher`).
+    ///
+    /// The deployment itself interrupts, because it is the callout the flyer is
+    /// waiting for.  The verdict follows a few seconds later on the ordinary
+    /// path, once the rate has settled enough to be worth quoting.
+    private func checkDeployment(_ telemetry: TelemetryData, state: String) {
+        guard let event = deployment.step(
+            now: now(),
+            altitudeRateMps: telemetry.altitude_rate,
+            altAglM: telemetry.pressure_alt,
+            afterApogee: telemetry.alt_apo,
+            landed: telemetry.landed_flag || state == "LANDED",
+            profile: currentRecovery()
+        ) else { return }
+
+        switch event {
+        case let .deployed(kind, _):
+            announceImmediate(Self.deployedPhrase(kind))
+            // Hold the cadence off so the readout that follows is the verdict,
+            // not a periodic callout carrying the same number.
+            lastDescentAnnounceTime = now()
+        case let .verdict(_, rateMps, nominal):
+            announce(verdictPhrase(rateMps: rateMps, nominal: nominal))
+            lastDescentAnnounceTime = now()
+        }
+    }
+
+    static func deployedPhrase(_ kind: DeploymentKind) -> String {
+        switch kind {
+        case .drogue: return "Drogue out."
+        case .main:   return "Main out."
+        case .chute:  return "Chute out."
+        }
+    }
+
+    /// A nominal rate earns the words "good chute"; anything else is reported
+    /// as the bare number (#813).  Saying "no chute" at 200 m changes nothing
+    /// the flyer can do and is the callout most likely to be wrong — the rate
+    /// itself is the honest signal, and they can judge it.
+    private func verdictPhrase(rateMps: Double, nominal: Bool) -> String {
+        let rate = UnitFormatter.spokenSpeed(rateMps, system: unitSystem())
+        return nominal ? "Good chute, descending \(rate)" : "Descending \(rate)"
     }
 
     /// Direction word for a SIGNED altitude rate, or nil within the deadband
@@ -368,6 +444,7 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         lastAltitudeAnnounceTime = .distantPast
         lastDescentAnnounceTime = .distantPast
         launchLocation = nil
+        deployment.reset()
     }
 }
 

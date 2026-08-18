@@ -46,10 +46,10 @@ public interface AnnouncerSpeech {
  * `FlightAnnouncer` (minus `AVAudioSession`, which has no Android twin —
  * ducking is per-utterance audio focus and lives in the `:app` speaker).
  *
- * Announces burnout speed, altitude, apogee, descent rate/distance, and
- * landing. Everything time-based runs off the injected [clock] (milliseconds),
- * same convention as [DeviceSession], so the whole flight profile is testable
- * under virtual time.
+ * Announces burnout speed, altitude, apogee, recovery deployments, descent
+ * rate/distance, and landing. Everything time-based runs off the injected
+ * [clock] (milliseconds), same convention as [DeviceSession], so the whole
+ * flight profile is testable under virtual time.
  *
  * Threading: [processTelemetry]/[reset] are called on the fleet dispatcher
  * (single-writer contract); [setEnabled]/[testVoice] may be called from the
@@ -62,6 +62,12 @@ public interface AnnouncerSpeech {
  *  - **Altitude** every 5 s, only INFLIGHT pre-apogee and only after burnout —
  *    during powered flight the values change too fast to be useful.
  *  - **Apogee**: on the alt_apo rising edge, with max altitude.
+ *  - **Deployment** (#813): drogue and main, from the descent-rate step
+ *    ([DeploymentWatcher]) — the only recovery signal carried on both the
+ *    direct BLE link and the base-station relay. Interrupts, like apogee.
+ *  - **Chute verdict**: the settled descent rate a few seconds after each
+ *    deployment. "Good chute" only when it matches the profile; otherwise the
+ *    bare rate, never an alarm word.
  *  - **Descent** every 10 s after apogee (first one 5 s after apogee).
  *  - **Landed**: on the landed_flag rising edge (state=LANDED fallback), with
  *    horizontal distance from the captured launch location.
@@ -78,6 +84,12 @@ public class FlightAnnouncer(
     private val clock: () -> Long = { System.currentTimeMillis() },
     /** Read per callout so a future settings toggle applies immediately. */
     private val unitSystem: () -> UnitSystem = { UnitSystem.METRIC },
+    /**
+     * The active rocket's expected descent rates (#813), read per event so a
+     * profile switch applies immediately. Null when no profile is selected —
+     * deployments are still announced, they just go ungraded.
+     */
+    private val recovery: () -> RecoveryProfile? = { null },
 ) : TelemetryAnnouncer {
 
     private val _enabled = MutableStateFlow(initialEnabled)
@@ -102,6 +114,9 @@ public class FlightAnnouncer(
     // Burnout detection: consecutive frames where max_speed didn't increase
     private var lastMaxSpeed: Float = 0f
     private var maxSpeedStableCount: Int = 0
+
+    /** Recovery-event detector (#813). Self-guards on apogee/landing. */
+    private val deployment = DeploymentWatcher()
 
     // ── Enable / test ────────────────────────────────────────────────────
 
@@ -173,6 +188,10 @@ public class FlightAnnouncer(
             lastDescentAnnounceMs = clock() - (DESCENT_INTERVAL_MS - 5_000)
         }
 
+        // Recovery events (#813) before the cadence callout: a deployment
+        // should pre-empt the periodic descent readout, not race it.
+        checkDeployment(telemetry, state)
+
         // Descent callouts (after apogee, before landed).
         if (telemetry.altApo && !telemetry.landedFlag && state == "INFLIGHT") {
             checkDescentCallout(telemetry)
@@ -217,6 +236,56 @@ public class FlightAnnouncer(
                 )
             }
         }
+    }
+
+    /**
+     * Drogue and main deployment, detected from the descent-rate curve — the
+     * only signal present on BOTH the direct BLE link and the base-station
+     * relay (see [DeploymentWatcher]).
+     *
+     * The deployment itself interrupts, because it is the callout the flyer is
+     * waiting for. The verdict arrives a few seconds later on the ordinary
+     * path, once the rate has settled enough to be worth quoting.
+     */
+    private fun checkDeployment(telemetry: TelemetryData, state: String) {
+        val event = deployment.step(
+            nowMs = clock(),
+            altitudeRateMps = telemetry.altitudeRate,
+            altAglM = telemetry.pressureAlt,
+            afterApogee = telemetry.altApo,
+            landed = telemetry.landedFlag || state == "LANDED",
+            profile = recovery(),
+        ) ?: return
+
+        when (event) {
+            is DeploymentEvent.Deployed -> {
+                announceImmediate(deployedPhrase(event.kind))
+                // Hold the cadence off so the readout that follows is the
+                // verdict, not a periodic callout carrying the same number.
+                lastDescentAnnounceMs = clock()
+            }
+            is DeploymentEvent.Verdict -> {
+                announce(verdictPhrase(event))
+                lastDescentAnnounceMs = clock()
+            }
+        }
+    }
+
+    private fun deployedPhrase(kind: DeploymentKind): String = when (kind) {
+        DeploymentKind.DROGUE -> "Drogue out."
+        DeploymentKind.MAIN -> "Main out."
+        DeploymentKind.CHUTE -> "Chute out."
+    }
+
+    /**
+     * A nominal rate earns the words "good chute"; anything else is reported as
+     * the bare number (#813). Saying "no chute" at 200 m changes nothing the
+     * flyer can do and is the callout most likely to be wrong — the rate itself
+     * is the honest signal, and they can judge it.
+     */
+    private fun verdictPhrase(v: DeploymentEvent.Verdict): String {
+        val rate = SpokenUnits.speed(v.rateMps, unitSystem())
+        return if (v.nominal) "Good chute, descending $rate" else "Descending $rate"
     }
 
     private fun checkPeriodicAltitude(telemetry: TelemetryData) {
@@ -292,6 +361,7 @@ public class FlightAnnouncer(
         lastAltitudeAnnounceMs = Long.MIN_VALUE / 2
         lastDescentAnnounceMs = Long.MIN_VALUE / 2
         launchLocation = null
+        deployment.reset()
     }
 
     public companion object {
