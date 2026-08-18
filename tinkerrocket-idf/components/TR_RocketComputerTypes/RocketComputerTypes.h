@@ -1416,7 +1416,26 @@ static constexpr uint8_t SH_STORAGE_SHIFT = 20;
 // the existing sensor_health carrier to the app on BOTH the direct-BLE and
 // LoRa/BS-relay paths (BLE JSON key "h") — no new wire field needed.
 static constexpr uint8_t SH_GNSS_ABSENT_SHIFT = 22;
-// bits 24-31 reserved
+// Per pyro channel, MEASURED continuity — reported for EVERY channel whether or
+// not it is configured for flight.  Distinct from SH_PYRO_SHIFT above, which is
+// deliberately config-gated because it feeds the operator's go/no-go rollup.
+//
+// Why both exist (bench 2026-08-17): the direct-BLE pyro_status CONT bit has no
+// config gate, but the scorecard's did — so a ground test on an unconfigured
+// channel read CONT over Bluetooth and "no reading" over LoRa, and the LoRa
+// stand-back test (#803) could never confirm a charge on a channel that wasn't
+// already armed for flight.  The gate cannot simply be dropped: the app treats
+// ANY SH_BAD pyro as a hard "Do not fly" (TelemetryData.flightReadiness), so a
+// bench-tested empty channel would ground the rocket.  Hence a second field
+// that answers "what did the wire actually measure", leaving the first to
+// answer "is this flight's deployment train ready".
+//
+// SH_NA = never tested this session (no reading to report); SH_OK = continuity
+// present; SH_BAD = tested, open.  SH_DEGRADED is unused here — "untested" is
+// SH_NA, since an unconfigured channel has nothing to be degraded about.
+// All-NA across the four means the rocket predates this field: consumers fall
+// back to SH_PYRO_SHIFT.
+static constexpr uint8_t SH_PYRO_MEAS_SHIFT[4] = { 24, 26, 28, 30 };
 static inline uint32_t shSet(uint32_t field, uint8_t shift, SensorHealthState st) {
     return (field & ~(uint32_t)(0x3u << shift)) | ((uint32_t)st << shift);
 }
@@ -2297,19 +2316,24 @@ typedef struct __attribute__((packed)) {
 } GuidancePointData;
 static_assert(sizeof(GuidancePointData) == 20, "GuidancePointData must be 20 bytes");
 
-// App-configurable fin→servo mix.  azimuth_deg[i] is the CONTROL azimuth of the fin
-// driven by servo i:
-//   deflection_i = tilt_i·(pitch·cos(az_i) + yaw·sin(az_i)) + roll_i·roll
+// App-configurable fin→servo mix.  azimuth_deg[i] is the RING-POSITION azimuth of
+// the fin driven by servo i (0 = top slot, 90, 180, 270 — exactly what the app's
+// ring GUI shows).  A fin's tangential lift is perpendicular to its radial arm
+// (top/bottom fins are yaw rudders, right/left fins are pitch elevators), so the FC
+// maps position → force internally:
+//   deflection_i = tilt_i·(pitch·sin(az_i) − yaw·cos(az_i)) + roll_i·roll
+// (Earlier firmware used cos/sin here — treating the position azimuth as the force
+// azimuth — which swapped the pitch/yaw fin pairs; see TR_ControlMixer::setFinLayout.)
 // tilt_i = -1 if bit i of reverse_mask is set (flips that fin's pitch/yaw response);
 // roll_i = -1 if bit i of roll_reverse_mask is set (flips its roll response).  The two
 // are INDEPENDENT: a fin's tilt and roll directions don't always share a sign in real
 // hardware (e.g. a linkage that mirrors pitch/yaw but not the roll moment), so one bit
-// can't express both.  Both masks 0 + azimuths {0,90,180,270} reproduce the legacy
-// hardcoded "+" mix (servo 0 = top/+pitch, 1 = right/+yaw, 2 = bottom, 3 = left).  The
-// app derives all of this from the ring GUI.
+// can't express both.  Both masks 0 + azimuths {0,90,180,270} give the "+" mix
+// (servo 0 = top/+yaw, 1 = right/+pitch, 2 = bottom, 3 = left).  The app derives all
+// of this from the ring GUI.
 typedef struct __attribute__((packed))
 {
-    float   azimuth_deg[4];     // per-servo fin control azimuth (deg)
+    float   azimuth_deg[4];     // per-servo fin ring-position azimuth (deg)
     uint8_t reverse_mask;       // bit i ⇒ negate servo i pitch/yaw (tilt) response
     uint8_t roll_reverse_mask;  // bit i ⇒ negate servo i roll response (independent)
 } FinConfigData;

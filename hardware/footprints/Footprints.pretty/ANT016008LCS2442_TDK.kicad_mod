@@ -3,7 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
-	(descr "TDK ANT016008LCS2442MA2 2.4 GHz multilayer chip antenna, 1.6x0.8x0.4mm, land per LCSC/EasyEDA C209892. Pad 4 = FEED (marked by fab chamfer), pad 1 = radiator-pattern end, pads 2/3/5/6 dummy. REQUIRES: 6.0 x 2.5 mm keep-out with GND removed on ALL layers at a board corner/edge (TDK layout example), the printed antenna pattern extension per datasheet, Ft (freq tune, eval 2.0 nH 0603) + Mt (match, eval 3.0 nH 0603) slots, 0.2 mm ground stitching vias along the clearance boundary, 50 ohm feed. VNA tune on the real stackup mandatory.")
+	(descr "TDK ANT016008LCS2442MA2 2.4 GHz multilayer chip antenna, 1.6x0.8x0.4mm, land per LCSC/EasyEDA C209892. Pad 4 = FEED (marked by fab chamfer), pad 1 = radiator-pattern end, pads 2/3/5/6 dummy. REQUIRES: 6.0 x 2.5 mm keep-out with GND removed on ALL layers at a board corner/edge (TDK layout example), the printed antenna pattern extension per datasheet - TWO-SIDED: mirror the arm on the bottom layer and tie the two halves with vias near each end (TDK's layout shows the pattern on both top and bottom, joined by 2 vias 4.2 mm apart; the inner layers stay cleared), Ft (freq tune, eval 2.0 nH 0603) + Mt (match, eval 3.0 nH 0603) slots, 0.2 mm ground stitching vias along the clearance boundary, 50 ohm feed. VNA tune on the real stackup mandatory.")
 	(tags "ANT016008 TDK antenna 2.4GHz chip")
 	(property "Reference" "REF**"
 		(at 0 -1.4 0)

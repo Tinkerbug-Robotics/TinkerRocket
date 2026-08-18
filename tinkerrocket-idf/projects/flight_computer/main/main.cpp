@@ -2673,8 +2673,19 @@ static void setup_fc()
     }
 
     ESP_LOGI(TAG, "Starting ....");
-    ESP_LOGW(TAG, "[BOARD] pin map: %s  (flash the other variant with/without -B build_v8 -DTR_BOARD_V8=1)",
-             TR_BOARD_V8 ? "V8" : "V7");
+    // Board revision + the pyro pins it implies. The pyro map is the one part
+    // of the pin map whose mismatch has no runtime symptom (V8 and V9 swap
+    // FIRE 2/3 and move ARM, but keep all four CONT pins), so print the
+    // numbers rather than just the revision — they can be checked against the
+    // connector with a meter before anything is armed.
+    ESP_LOGW(TAG, "[BOARD] pin map: %s  (select with -DTR_BOARD_V7/V8/V9=1; no default)",
+             TR_BOARD_REV_STR);
+    ESP_LOGW(TAG, "[BOARD] pyro: ARM=%d FIRE=%d/%d/%d/%d CONT=%d/%d/%d/%d",
+             (int)config::PYRO_ARM_PIN,
+             (int)config::PYRO1_FIRE_PIN, (int)config::PYRO2_FIRE_PIN,
+             (int)config::PYRO3_FIRE_PIN, (int)config::PYRO4_FIRE_PIN,
+             (int)config::PYRO1_CONT_PIN, (int)config::PYRO2_CONT_PIN,
+             (int)config::PYRO3_CONT_PIN, (int)config::PYRO4_CONT_PIN);
     gpio_set_direction((gpio_num_t)(config::RED_LED_PIN), GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)(config::RED_LED_PIN), 1);
     gpio_set_direction((gpio_num_t)(config::BLUE_LED_PIN), GPIO_MODE_OUTPUT);
@@ -2924,6 +2935,11 @@ static void setup_fc()
                                          config::GAIN_SCHEDULE_V_MIN);
     }
     control_mixer.setFinLayout(fin_az, fin_rev, fin_rrev);
+    // The roll-reverse mask has to reach BOTH mixers: control_mixer serves the
+    // guided / ground-test path, servo_control the roll-only path (powered
+    // flight and guidance-off flight).  Pushing it to only one is what made
+    // "Reverse roll" look inert — it flipped the ground test but not the flight.
+    servo_control.setRollReverseMask(fin_rrev);
     ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                   (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
                   (unsigned)fin_rev, (unsigned)fin_rrev);
@@ -6258,6 +6274,10 @@ static void loop_fc()
                         memcpy(az, f.azimuth_deg, sizeof(az));
                         control_mixer.setFinLayout(az, f.reverse_mask,
                                                    f.roll_reverse_mask);
+                        // Roll-only control mixes in servo_control, not in
+                        // control_mixer — keep both in step (see the boot
+                        // restore for why).
+                        servo_control.setRollReverseMask(f.roll_reverse_mask);
                         ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                                       (double)f.azimuth_deg[0], (double)f.azimuth_deg[1],
                                       (double)f.azimuth_deg[2], (double)f.azimuth_deg[3],
@@ -7349,6 +7369,15 @@ static void loop_fc()
                         : (cont_state[i] ? SH_OK : SH_BAD); // continuity present / none
                 }
                 sh = shSet(sh, SH_PYRO_SHIFT[i], pst);
+
+                // Measured continuity, NOT config-gated — the ground-test
+                // answer, which the gated bits above cannot give for a channel
+                // that isn't armed for this flight. Mirrors the pyro_status
+                // CONT bit (also ungated) onto the LoRa path, where
+                // pyro_status does not exist.
+                sh = shSet(sh, SH_PYRO_MEAS_SHIFT[i],
+                           !cont_known[i] ? SH_NA
+                                          : (cont_state[i] ? SH_OK : SH_BAD));
             }
 
             // #557: GNSS-absent degraded-flight verdict (distinct from the fix

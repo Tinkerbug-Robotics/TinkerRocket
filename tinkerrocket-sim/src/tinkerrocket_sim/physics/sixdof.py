@@ -421,12 +421,20 @@ class SixDOF:
                 roll_common = (d0 + d1 + d2 + d3) * 0.25
                 moments_body[0] += cf.Kt_roll * V_ratio_sq * roll_common
 
-                # Pitch: differential top vs bottom (fins 0, 2)
-                pitch_diff = d0 - d2
+                # A fin's tangential lift is PERPENDICULAR to its radial arm:
+                # the right/left (horizontal) pair are the pitch elevators and
+                # the top/bottom (vertical) pair are the yaw rudders.  The
+                # pre-fix pairing (pitch from d0−d2, yaw from d1−d3) treated
+                # each fin's force as radial, which swapped the pitch/yaw
+                # pairs in lockstep with the same bug in TR_ControlMixer — so
+                # closed-loop sims passed while real hardware mixed 90° off.
+
+                # Pitch: differential right vs left (fins 1, 3 — elevators)
+                pitch_diff = d1 - d3
                 moments_body[1] += cf.Kt_pitch * V_ratio_sq * pitch_diff
 
-                # Yaw: differential right vs left (fins 1, 3)
-                yaw_diff = d1 - d3
+                # Yaw: differential top vs bottom (fins 0, 2 — rudders)
+                yaw_diff = d0 - d2
                 moments_body[2] += cf.Kt_yaw * V_ratio_sq * yaw_diff
             elif abs(fin_tab_deflection_deg) > 0.001:
                 # --- Single fin tab mode (roll-only) ---

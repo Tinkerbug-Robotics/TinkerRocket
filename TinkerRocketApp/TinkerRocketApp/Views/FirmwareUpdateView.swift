@@ -11,6 +11,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import CryptoKit
 
 struct FirmwareUpdateView: View {
     @ObservedObject var device: BLEDevice
@@ -34,6 +35,7 @@ private struct FirmwareUpdateContent: View {
     @State private var pickedFileURL: URL?
     @State private var pickedFileSize: Int = 0
     @State private var pickedFileName: String = ""
+    @State private var pickedFileSha: String = ""   // SHA-256 of the picked file, for build-machine comparison
     @State private var targetIsFC = false   // #14: relay the OTA to the Flight Computer via the OC
 
     var body: some View {
@@ -62,8 +64,13 @@ private struct FirmwareUpdateContent: View {
             GroupBox("Firmware image") {
                 if let url = pickedFileURL {
                     LabeledRow(label: "File", value: pickedFileName)
-                    LabeledRow(label: "Size", value: byteCountString(pickedFileSize))
+                    LabeledRow(label: "Size", value: "\(pickedFileSize) B · \(byteCountString(pickedFileSize))")
                     LabeledRow(label: "Path", value: url.lastPathComponent, mono: true)
+                    if !pickedFileSha.isEmpty {
+                        LabeledRow(label: "SHA-256",
+                                   value: String(pickedFileSha.prefix(16)),
+                                   mono: true)
+                    }
                 } else {
                     Text("No file selected")
                         .foregroundColor(.secondary)
@@ -87,7 +94,11 @@ private struct FirmwareUpdateContent: View {
             if !device.isBaseStation {
                 GroupBox("Target") {
                     Picker("Target", selection: $targetIsFC) {
-                        Text("This device").tag(false)
+                        // Named, not "This device": the picker only appears for a
+                        // rocket, whose BLE peer IS the Out Computer, and the
+                        // choice that matters is OC vs FC — "this device" made the
+                        // default read as "the whole rocket".
+                        Text("Out Computer").tag(false)
                         Text("Flight Computer").tag(true)
                     }
                     .pickerStyle(.segmented)
@@ -190,18 +201,41 @@ private struct FirmwareUpdateContent: View {
     private var flashButton: some View {
         Button(action: startFlash) {
             HStack {
-                Image(systemName: "arrow.up.circle.fill")
-                Text(targetIsFC ? "Flash Flight Computer" : "Flash \(device.displayName)")
+                Image(systemName: isFailedState ? "arrow.clockwise" : "arrow.up.circle.fill")
+                Text(isFailedState
+                     ? "Try again"
+                     : (targetIsFC ? "Flash Flight Computer" : "Flash \(device.displayName)"))
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderedProminent)
-        .disabled(pickedFileURL == nil || !device.isConnected || isTerminalState)
+        // A FAILED run stays retryable. Only a run that actually landed
+        // (.verified / .rollbackDetected) disables the button, so a finished
+        // flash can't be repeated by a stray tap. Previously any terminal state
+        // disabled it and re-picking the file was the sole way back to .idle —
+        // after a failure that reads as "the app is stuck", and it makes the
+        // obvious response to a transient failure (press it again) impossible.
+        .disabled(pickedFileURL == nil || !device.isConnected || isCompletedState)
     }
 
     private var isTerminalState: Bool {
         switch session.state {
         case .verified, .rollbackDetected, .failed: return true
+        default: return false
+        }
+    }
+
+    private var isFailedState: Bool {
+        if case .failed = session.state { return true }
+        return false
+    }
+
+    /// Terminal AND the image reached the device — the cases where re-flashing
+    /// the same file is not what the user wants. `.failed` is deliberately
+    /// excluded: retrying is exactly what they want.
+    private var isCompletedState: Bool {
+        switch session.state {
+        case .verified, .rollbackDetected: return true
         default: return false
         }
     }
@@ -237,6 +271,18 @@ private struct FirmwareUpdateContent: View {
             } else {
                 pickedFileSize = 0
             }
+            // Hash the picked file up front and show it. A `sha_mismatch` from
+            // the device says the bytes it received differ from the bytes we
+            // hashed — but NOT whether the file on the phone was already wrong
+            // (bad copy off the Mac) or the BLE transfer corrupted it. Reading
+            // this against the build machine's sha256sum separates the two
+            // before committing to a multi-minute flash.
+            if let data = try? Data(contentsOf: url) {
+                pickedFileSha = Data(SHA256.hash(data: data))
+                    .map { String(format: "%02x", $0) }.joined()
+            } else {
+                pickedFileSha = ""
+            }
             // Re-arm after a completed/failed run: clearing the terminal state
             // back to .idle re-enables the Flash button for this new file.
             if isTerminalState { session.reset() }
@@ -247,6 +293,10 @@ private struct FirmwareUpdateContent: View {
 
     private func startFlash() {
         guard let url = pickedFileURL else { return }
+        // Retry after a failure: clear the terminal state first so the run
+        // starts from .idle. Without this the previous .failed reason would
+        // linger behind the new attempt's progress.
+        if isTerminalState { session.reset() }
         session.start(fileURL: url, targetIsFC: targetIsFC)
     }
 

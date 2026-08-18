@@ -31,8 +31,10 @@ struct FinLayoutView: View {
 
     @State private var selectedSlot: Int = 0
 
-    /// Control azimuth (deg) of each ring slot — the firmware convention
-    /// (θ=0 top/+pitch, 90 +yaw, …); the nose-down view is rendering only.
+    /// Fin-position azimuth (deg) of each ring slot in the firmware convention
+    /// (θ=0 = +Z/top slot, 90 = −Y slot, … — positions, NOT force directions:
+    /// the FC maps position→tangential force itself, sin/cos in
+    /// TR_ControlMixer::setFinLayout); the nose-down view is rendering only.
     private var slotAzimuths: [Double] {
         ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]
     }
@@ -55,6 +57,12 @@ struct FinLayoutView: View {
             Text("Viewed from the nose, looking aft · +Z up, +Y right · tap a fin")
                 .font(.caption2).foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
+
+            Divider()
+
+            Toggle("Reverse roll direction", isOn: rollDirectionBinding)
+            Text("Use this when the rocket rolls the wrong way — it flips roll on all four fins at once. The per-fin Reverse roll below is only for a single mis-linked servo: flipping one fin makes it fight the other three (weaker roll, same direction) rather than reversing roll.")
+                .font(.caption2).foregroundColor(.secondary)
 
             Divider()
             selectedFinEditor
@@ -138,7 +146,7 @@ struct FinLayoutView: View {
             }
 
             Toggle("Reverse pitch/yaw (tilt)", isOn: reverseBinding)
-            Toggle("Reverse roll", isOn: rollReverseBinding)
+            Toggle("Reverse roll (this fin only)", isOn: rollReverseBinding)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Jog servo \(selectedServo) to confirm direction")
@@ -180,6 +188,16 @@ struct FinLayoutView: View {
             rev[selectedServo - 1] = newVal
             onSetReverse(rev)
         })
+    }
+    /// Whole-airframe roll direction — every servo's roll bit at once.  This is
+    /// the common case by far: a mirrored horn or fin convention reverses all
+    /// four together, and reversing roll from the per-fin toggles means getting
+    /// all four right.  Reads ON only when every bit is set; a mixed state (one
+    /// fin overridden below) reads OFF, and switching it on normalises all four.
+    /// Same wire field as the per-fin toggle — FinConfigData.roll_reverse_mask.
+    private var rollDirectionBinding: Binding<Bool> {
+        Binding(get: { rollReverse.count == 4 && rollReverse.allSatisfy { $0 } },
+                set: { newVal in onSetRollReverse([Bool](repeating: newVal, count: 4)) })
     }
     private var rollReverseBinding: Binding<Bool> {
         Binding(get: { rollReverse.indices.contains(selectedServo - 1) ? rollReverse[selectedServo - 1] : false },
@@ -226,10 +244,14 @@ struct FinLayoutView: View {
         let servo = servoAtSlot.indices.contains(slot) ? servoAtSlot[slot] : slot + 1
         let tilt = (reverse.indices.contains(servo - 1) && reverse[servo - 1]) ? -1.0 : 1.0
         let rollS = (rollReverse.indices.contains(servo - 1) && rollReverse[servo - 1]) ? -1.0 : 1.0
-        let c = cos(th) * tilt, s = sin(th) * tilt
+        // Position→force: a fin's tangential lift is perpendicular to its
+        // radial arm, so pitch = sin(az), yaw = -cos(az) — matches
+        // TR_ControlMixer::setFinLayout (top/bottom fins are yaw rudders,
+        // side fins are pitch elevators).
+        let p = sin(th) * tilt, y = -cos(th) * tilt
         var parts: [String] = []
-        if abs(c) > 0.05 { parts.append("pitch \(c > 0 ? "+" : "−")") }
-        if abs(s) > 0.05 { parts.append("yaw \(s > 0 ? "+" : "−")") }
+        if abs(p) > 0.05 { parts.append("pitch \(p > 0 ? "+" : "−")") }
+        if abs(y) > 0.05 { parts.append("yaw \(y > 0 ? "+" : "−")") }
         parts.append("roll \(rollS > 0 ? "+" : "−")")
         return parts.joined(separator: " · ")
     }

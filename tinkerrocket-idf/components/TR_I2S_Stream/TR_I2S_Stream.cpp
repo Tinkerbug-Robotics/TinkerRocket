@@ -2,6 +2,7 @@
 #include <TR_I2C_Interface.h>   // for packMessage() static method
 #include <cstring>
 #include <esp_log.h>
+#include <driver/gpio.h>        // gpio_reset_pin / gpio_get_io_config (see end())
 
 static const char* TAG = "I2S_STREAM";
 
@@ -18,6 +19,33 @@ void TR_I2S_Stream::end()
         i2s_del_channel(chan_handle_);
         chan_handle_ = nullptr;
     }
+
+    // Release the pins we configured.  i2s_del_channel() frees the driver's
+    // resources but does NOT detach the GPIO matrix or clear output-enable, so
+    // a pin this instance drove stays driven after teardown.  That is harmless
+    // for a same-direction restart, but the OTA image pump REVERSES the link:
+    // the FC goes master->slave while the OC goes slave->master, and BCLK/WS
+    // change which chip drives them.  If the outgoing master still holds them
+    // as outputs, both ends drive the clock at once and the receiver samples a
+    // contended line — which reads as bytes arriving mostly corrupt with the
+    // occasional intact frame header, not as a clean failure.
+    //
+    // Note the OC's flip handshake waits for the FC's I2S to go QUIET before it
+    // takes over the clock. Quiet proves the FC stopped clocking; it does not
+    // prove the FC stopped driving. This is the missing half of that proof.
+    const int pins[3] = { bclk_pin_, ws_pin_, data_pin_ };
+    for (int p : pins)
+    {
+        if (p < 0) continue;
+        // Log before releasing: an output-enabled pin here is the contention
+        // this reset exists to prevent, and is the direct evidence for it.
+        gpio_io_config_t cfg = {};
+        if (gpio_get_io_config(static_cast<gpio_num_t>(p), &cfg) == ESP_OK && cfg.oe)
+            ESP_LOGW(TAG, "end(): GPIO%d still output-enabled (periph_oe=%d) after "
+                          "i2s_del_channel — releasing", p, (int)cfg.oe_ctrl_by_periph);
+        gpio_reset_pin(static_cast<gpio_num_t>(p));
+    }
+    bclk_pin_ = ws_pin_ = data_pin_ = -1;
     // Reset role/callback state so a subsequent beginMasterTx()/beginSlaveRx()
     // + registerRecvCallback() starts from a clean slate (the callback was
     // bound to the now-deleted channel).
@@ -41,6 +69,10 @@ esp_err_t TR_I2S_Stream::beginMasterTx(int bclk_pin,
 {
     is_tx_ = true;
     frame_sync_pin_ = frame_sync_pin;
+    // Recorded so end() can hand the pins back — see the contention note there.
+    bclk_pin_ = bclk_pin;
+    ws_pin_   = ws_pin;
+    data_pin_ = dout_pin;
 
     // ── FRAME_SYNC GPIO (output) ──
     if (frame_sync_pin_ >= 0)
@@ -143,6 +175,10 @@ esp_err_t TR_I2S_Stream::beginSlaveRx(int bclk_pin,
 {
     is_tx_ = false;
     frame_sync_pin_ = frame_sync_pin;
+    // Recorded so end() can hand the pins back — see the contention note there.
+    bclk_pin_ = bclk_pin;
+    ws_pin_   = ws_pin;
+    data_pin_ = din_pin;
 
     // ── FRAME_SYNC GPIO (input) ──
     if (frame_sync_pin_ >= 0)

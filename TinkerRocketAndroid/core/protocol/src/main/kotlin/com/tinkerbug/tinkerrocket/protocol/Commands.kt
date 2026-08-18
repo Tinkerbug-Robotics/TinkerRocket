@@ -254,8 +254,10 @@ public object Commands {
 
     /**
      * cmd 66, ring-GUI form mirroring iOS `sendFinConfig`: derives each
-     * servo's CONTROL azimuth from the ring slot it occupies (slot azimuths
-     * {0,90,180,270} for "+" ringMode 0, {45,135,225,315} for "×" ringMode 1)
+     * servo's fin RING-POSITION azimuth from the ring slot it occupies (slot
+     * azimuths {0,90,180,270} for "+" ringMode 0, {45,135,225,315} for "×"
+     * ringMode 1 — positions, not force directions; the FC maps
+     * position→tangential force in TR_ControlMixer::setFinLayout)
      * and packs the per-servo reverse bitmasks (bit i = servo i+1).
      * Returns null when any list is not exactly 4 long — iOS guards and
      * silently skips the send.
