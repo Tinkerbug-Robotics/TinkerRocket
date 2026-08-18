@@ -7369,6 +7369,15 @@ static void loop_fc()
                         : (cont_state[i] ? SH_OK : SH_BAD); // continuity present / none
                 }
                 sh = shSet(sh, SH_PYRO_SHIFT[i], pst);
+
+                // Measured continuity, NOT config-gated — the ground-test
+                // answer, which the gated bits above cannot give for a channel
+                // that isn't armed for this flight. Mirrors the pyro_status
+                // CONT bit (also ungated) onto the LoRa path, where
+                // pyro_status does not exist.
+                sh = shSet(sh, SH_PYRO_MEAS_SHIFT[i],
+                           !cont_known[i] ? SH_NA
+                                          : (cont_state[i] ? SH_OK : SH_BAD));
             }
 
             // #557: GNSS-absent degraded-flight verdict (distinct from the fix
