@@ -194,7 +194,7 @@ NonSensorData canonicalNonSensor() {
     d.flags = 0x2D;         // landed | vel_u_apogee | launch | guidance_active
     d.rocket_state = 6;
     d.baro_alt_rate_dmps = -123;
-    d.pyro_status = 0x0A;   // ch2 continuity + ch2 fired
+    d.pyro_status = 0x0A;   // PSF: ch1 fired + ch2 fired (bits 1, 3)
     d.apogee_flags = 0x05;  // gps_apogee | master apogee
     d.sensor_health = 0x00F0A5C3u;  // gnssAbsent bits 22-23 = 3 (BAD/active)
     d.ekf_ticks = 54321;
@@ -1014,7 +1014,9 @@ void buildCsvFlight(Builder& b) {
             d.flags = flags;
             d.rocket_state = (t_ms < 8000) ? 3 : (t_ms < 14000) ? 5 : (t_ms < 19000) ? 6 : 7;
             d.baro_alt_rate_dmps = static_cast<int16_t>(d.u_vel / 10);
-            d.pyro_status = (t_ms >= 14000) ? 0x0F : 0x03;
+            // PSF bits are interleaved per channel (cont, fired), so the
+            // pre-apogee value is ch1+ch2 CONTINUITY and nothing fired.
+            d.pyro_status = (t_ms >= 14000) ? 0x0F : 0x05;
             uint8_t af = 0;
             if (t_ms >= 14100) af |= 0x01;      // gps apogee (per-detector)
             if (t_ms >= 14000) af |= 0x04;      // MASTER voted apogee (max-speed gate)
