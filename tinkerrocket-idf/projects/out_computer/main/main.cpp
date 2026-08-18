@@ -16,6 +16,7 @@
 #include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
+#include <TR_OTA_Receiver.h>      // TR_OTA_Receiver::Error — decode the FC's relayed OTA error
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
 #include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
@@ -2358,6 +2359,37 @@ static bool isKnownMessageType(uint8_t type)
     }
 }
 
+// Decode the FC's relayed OTA failure (TR_OTA_Receiver::Error) into a stable
+// token for the app.  Every verify failure used to relay as one "fc_error",
+// which threw away the only thing that distinguishes a dropped relay chunk
+// (size_mismatch — bytes never all arrived) from a corrupted image
+// (sha_mismatch — they arrived wrong) from a flash-side refusal (end_failed /
+// set_boot_failed).  The FC logs the code over serial, but an assembled rocket
+// is exactly the case where serial isn't reachable — so it has to come up the
+// BLE link.  Tokens stay machine-stable and fc_-prefixed so they can't be
+// confused with the OC's own OTA errors.
+static const char* fcOtaErrToken(uint8_t e)
+{
+    switch ((TR_OTA_Receiver::Error)e)
+    {
+        case TR_OTA_Receiver::Error::AlreadyActive:    return "fc_already_active";
+        case TR_OTA_Receiver::Error::SessionNotActive: return "fc_session_not_active";
+        case TR_OTA_Receiver::Error::BeginFailed:      return "fc_begin_failed";
+        case TR_OTA_Receiver::Error::BadOffset:        return "fc_bad_offset";
+        case TR_OTA_Receiver::Error::SizeOverflow:     return "fc_size_overflow";
+        case TR_OTA_Receiver::Error::WriteFailed:      return "fc_write_failed";
+        case TR_OTA_Receiver::Error::SizeMismatch:     return "fc_size_mismatch";
+        case TR_OTA_Receiver::Error::ShaMismatch:      return "fc_sha_mismatch";
+        case TR_OTA_Receiver::Error::EndFailed:        return "fc_end_failed";
+        case TR_OTA_Receiver::Error::SetBootFailed:    return "fc_set_boot_failed";
+        // Ok-with-VERIFY_FAILED shouldn't happen; report it rather than imply a
+        // specific cause, and keep the legacy token for anything unrecognised
+        // (an FC newer than this OC could add a code we don't know yet).
+        case TR_OTA_Receiver::Error::Ok:               return "fc_error";
+    }
+    return "fc_error";
+}
+
 static void processFrame(const uint8_t* frame, size_t frame_len,
                          uint8_t type, const uint8_t* payload, size_t payload_len)
 {
@@ -2696,7 +2728,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     break;
                 case OTA_RELAY_WRITING:       state = "writing"; break;
                 case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
-                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = "fc_error"; terminal = true; break;
+                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = fcOtaErrToken(st.err); terminal = true; break;
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
                 default: break;
             }
