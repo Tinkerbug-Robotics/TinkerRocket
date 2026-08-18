@@ -154,7 +154,11 @@ fun FirmwareUpdateScreen(
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Target", style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TargetChip("This device", !targetIsFc, !busy) { targetIsFc = false }
+                        // Named, not "This device": the picker only appears for a
+                        // rocket, whose BLE peer IS the Out Computer, and the choice
+                        // that matters is OC vs FC — "this device" made the default
+                        // read as "the whole rocket".
+                        TargetChip("Out Computer", !targetIsFc, !busy) { targetIsFc = false }
                         TargetChip("Flight Computer", targetIsFc, !busy) { targetIsFc = true }
                     }
                     if (targetIsFc) {
