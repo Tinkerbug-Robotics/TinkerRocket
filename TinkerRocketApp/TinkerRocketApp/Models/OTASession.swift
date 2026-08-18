@@ -183,7 +183,7 @@ final class OTASession: ObservableObject {
 
             // VerifyFailed during the pump? Surface and bail.
             if let st = device?.otaStatus, st.state == .verifyFailed {
-                state = .failed(reason: "Device rejected chunk: \(st.err ?? "unknown")")
+                state = .failed(reason: "Device rejected chunk: \(st.err ?? "unknown") — accepted \(st.bytes) of \(fileData.count) B")
                 device?.sendOtaAbort()
                 return
             }
@@ -215,6 +215,26 @@ final class OTASession: ObservableObject {
             }
         }
 
+        // ---- 4b. Re-hash the source AFTER the pump ----
+        // Splits a `sha_mismatch` into its two very different causes. The
+        // device reports the full byte count and contiguous offsets (a drop or
+        // reorder fails earlier as bad_offset), so the bytes it received simply
+        // differ from the ones we hashed at step 1. Either the buffer we sent
+        // FROM changed underneath us during the multi-minute pump —
+        // Data(contentsOf:) can memory-map, and a file the OS evicts or
+        // re-downloads mid-flight then reads back different — or the transfer
+        // itself corrupted them. Hashing the same buffer again answers which:
+        // a changed hash indicts the source, an unchanged one indicts the wire.
+        let shaAfterPump = Data(SHA256.hash(data: fileData))
+        if shaAfterPump != sha {
+            state = .failed(reason: "Source image changed during upload — "
+                + "hashed \(sha.prefix(4).map { String(format: "%02x", $0) }.joined()) before, "
+                + "\(shaAfterPump.prefix(4).map { String(format: "%02x", $0) }.joined()) after. "
+                + "Copy the .bin to local storage (not iCloud) and retry.")
+            device?.sendOtaAbort()
+            return
+        }
+
         // ---- 5. OTA_FINISH ----
         state = .verifying
         device?.sendOtaFinish()
@@ -231,30 +251,42 @@ final class OTASession: ObservableObject {
             try await awaitOtaState(.readyToBoot, timeout: finishTimeoutS)
         } catch {
             if let st = device?.otaStatus, st.state == .verifyFailed {
-                state = .failed(reason: "Verify failed: \(st.err ?? "unknown")")
+                // Byte count included deliberately: short of the image size means
+                // the relay dropped chunks, the full size with a SHA failure means
+                // they arrived corrupted. Two very different faults that the error
+                // token alone doesn't separate on a rocket with no serial access.
+                state = .failed(reason: "Verify failed: \(st.err ?? "unknown") — device took \(st.bytes) of \(fileData.count) B")
             } else {
                 state = .failed(reason: "Device did not finalize OTA within \(Int(finishTimeoutS))s")
             }
             return
         }
 
-        // ---- 7. Wait for disconnect (device reboots ~500ms after ready_to_boot) ----
-        // BLEFleet destroys the BLEDevice on disconnect, so `device == nil`
-        // also counts as "disconnected".
+        // ---- 7/8. Wait for the reboot round-trip (local OTA only) ----
+        // Only the BLE peer's OWN firmware makes it drop the link. On an FC
+        // relay the peer is the OC, which doesn't reboot at all — the FC does,
+        // behind it — so there is no disconnect to wait for and no reconnect to
+        // confirm. Step 9's comment already said as much ("the OC<->app link
+        // never drops"); running these two stages anyway just burned the
+        // disconnect timeout on every FC flash and made the app look hung
+        // during the window when the FC was in fact rebooting normally.
         state = .rebooting
-        _ = await waitFor(timeout: OTATimeouts.seconds(.disconnect, targetIsFC: targetIsFC)) { [weak self] in
-            self?.device == nil || self?.device?.isConnected == false
-        }
+        if !targetIsFC {
+            // BLEFleet destroys the BLEDevice on disconnect, so `device == nil`
+            // also counts as "disconnected".
+            _ = await waitFor(timeout: OTATimeouts.seconds(.disconnect, targetIsFC: targetIsFC)) { [weak self] in
+                self?.device == nil || self?.device?.isConnected == false
+            }
 
-        // ---- 8. Wait for reconnect ----
-        // After BLEFleet creates a fresh BLEDevice for our peripheralID,
-        // self.device starts returning the new instance.
-        let reconnected = await waitFor(timeout: OTATimeouts.seconds(.reconnect, targetIsFC: targetIsFC)) { [weak self] in
-            self?.device?.isConnected == true
-        }
-        if !reconnected {
-            state = .failed(reason: "Device did not reconnect within 60s — try power-cycling")
-            return
+            // After BLEFleet creates a fresh BLEDevice for our peripheralID,
+            // self.device starts returning the new instance.
+            let reconnected = await waitFor(timeout: OTATimeouts.seconds(.reconnect, targetIsFC: targetIsFC)) { [weak self] in
+                self?.device?.isConnected == true
+            }
+            if !reconnected {
+                state = .failed(reason: "Device did not reconnect within 60s — try power-cycling")
+                return
+            }
         }
 
         // ---- 9. Wait for the new version to publish ----
