@@ -88,7 +88,17 @@ enum DeploymentEvent {
 /// canopy, and nothing real deploys that low); a phase must have reached
 /// `minReferenceMps` before any drop counts; and at most two transitions per
 /// flight, since a third could only be noise or the ground.
-final class DeploymentWatcher {
+///
+/// `nonisolated` because this is pure state-machine logic stepped from
+/// telemetry dispatch — its Android twin carries the same fleet-thread-only
+/// contract, and main-actor isolation would be wrong on both counts. It also
+/// has to be nonisolated to be *destroyable*: a main-actor class gets an
+/// isolated deinit, and with the app's iOS 16 deployment target that executor
+/// hop comes from the back-deployed shim, which double-frees on iOS 26.2 and
+/// aborts the process. Same trap `OfflineTileCache` documents — production
+/// never sees it because the announcer outlives the app, so the first code to
+/// deallocate one is a test.
+nonisolated final class DeploymentWatcher {
 
     // MARK: - Tunables (mirrored in DeploymentWatcher.kt)
 
