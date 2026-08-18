@@ -121,6 +121,29 @@ struct SettingsView: View {
             && device.telemetry.state == "INITIALIZATION"
     }
 
+    /// The power rail is off, so the FC — the thing that actually answers
+    /// config writes — isn't running.  This fails quietly rather than loudly:
+    /// the OC's #366 command queue HOLDS commands while the rail is down and
+    /// drains the batch at power-on, so a user can edit several screens of
+    /// settings and have them land much later, out of order, or not at all.
+    /// Block the sheet exactly as INITIALIZATION does, for the same reason —
+    /// the rocket can't honour the write yet.
+    ///
+    /// Two scoping guards, both load-bearing:
+    ///  - `!isBaseStation`: the BS relay's TelemetryData never carries
+    ///    pwr_pin_on (the LoRa packet has no room for it), so over a
+    ///    base-station link it reads false forever — an unscoped gate would
+    ///    lock Settings permanently on every BS connection.
+    ///  - `hasReceivedTelemetry` (#377): before the first frame `telemetry` is
+    ///    all zeros, and a zeroed pwr_pin_on is indistinguishable from a
+    ///    genuinely-off rocket.  Without this the overlay would flash on every
+    ///    connect, including for a rocket that is already powered on.
+    private var isRocketOff: Bool {
+        device.isConnected && !device.isBaseStation
+            && device.hasReceivedTelemetry
+            && !device.telemetry.pwr_pin_on
+    }
+
     /// Calibrations run on the rocket, so they need it connected AND powered
     /// on (its sensors aren't running otherwise).  Other settings stay
     /// editable offline — only the cal rows are gated.
@@ -236,6 +259,16 @@ struct SettingsView: View {
                     firmwareSection
                 } else if store.activeProfile == nil {
                     noProfileSection
+                    firmwareSection
+                } else if isRocketOff {
+                    // Swap the config sections out rather than covering them with
+                    // an INITIALIZATION-style overlay: firmwareSection lives
+                    // inside rocketSettingsSections (#314), and a full-sheet
+                    // overlay would take Firmware Update down with it. The OC
+                    // flashes ITSELF over BLE and never touches the FC rail, so
+                    // that one genuinely works with the rocket off — it's the
+                    // only thing on this screen that does.
+                    rocketOffSection
                     firmwareSection
                 } else {
                     rocketSettingsSections
@@ -991,7 +1024,7 @@ struct SettingsView: View {
                 onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() },
                 onSetRollReverse: { r in updateProfile { $0.finRollReverse = r }; applyFinConfig() }
             )
-            Text("Map each servo to its fin and set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}). If a fin's tilt is backwards in ground test, flip Reverse pitch/yaw; if its roll is backwards, flip Reverse roll. Jog each servo on the bench to confirm direction.")
+            Text("Map each servo to its fin and set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}). If the rocket rolls the wrong way in ground test, flip Reverse roll direction \u{2014} that is the whole-airframe control. The per-fin toggles are for one wrong fin: Reverse pitch/yaw for backwards tilt, Reverse roll (this fin only) for a mis-linked servo. Jog each servo on the bench to confirm direction.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1173,6 +1206,21 @@ struct SettingsView: View {
         } label: {
             HStack { Image(systemName: "trash"); Text("Clear Roll Profile") }
                 .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var rocketOffSection: some View {
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: "power")
+                    .font(.system(size: 40)).foregroundColor(.secondary)
+                Text("Rocket is off").font(.title3.bold())
+                Text("The flight computer answers every setting on this screen, and it isn't running yet. Power on the rocket to configure it.")
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
         }
     }
 
