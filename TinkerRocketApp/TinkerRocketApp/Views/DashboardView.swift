@@ -539,6 +539,11 @@ struct ConnectedDashboardView: View {
     @ObservedObject var fleet: BLEFleet
     @ObservedObject var locationManager: LocationManager
     @Binding var activeSheet: DashboardSheet?
+    /// Base-station pyro cards: the app owns pyro config (the BS sends no
+    /// config_pyro readback), so trigger text comes from the active profile.
+    @EnvironmentObject private var profileStore: RocketProfileStore
+    /// Channel whose stand-back LoRa test cover is up (BS links only).
+    @State private var pyroTestChannel: Int?
 
     var body: some View {
         if device.deviceType == .unknown {
@@ -687,6 +692,33 @@ struct ConnectedDashboardView: View {
 
             if !device.isBaseStation {
                 PyroChannelsView(device: device)
+            } else {
+                // Same cards on a base-station link, driven by the relay: no
+                // armed/fired bits exist on this path, continuity comes from
+                // the health scorecard, and a tile tap opens the stand-back
+                // LoRa test rather than the config sheet.
+                PyroChannelsView(
+                    device: device,
+                    relayMode: true,
+                    configProvider: { ch in
+                        let p = profileStore.activeProfile
+                        switch ch {
+                        case 1: return (p?.pyro1Enabled ?? false, p?.pyro1TriggerMode ?? 0, p?.pyro1TriggerValue ?? 0)
+                        case 2: return (p?.pyro2Enabled ?? false, p?.pyro2TriggerMode ?? 0, p?.pyro2TriggerValue ?? 0)
+                        case 3: return (p?.pyro3Enabled ?? false, p?.pyro3TriggerMode ?? 0, p?.pyro3TriggerValue ?? 0)
+                        default: return (p?.pyro4Enabled ?? false, p?.pyro4TriggerMode ?? 0, p?.pyro4TriggerValue ?? 0)
+                        }
+                    },
+                    onTest: { pyroTestChannel = $0 })
+                // Stand-back pyro test over LoRa. Presented from the cards
+                // themselves — this branch is a view sequence, not a single
+                // container, so there is nothing else to hang it on.
+                .fullScreenCover(item: Binding<IdentifiableInt?>(
+                    get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
+                    set: { pyroTestChannel = $0?.value }
+                )) { item in
+                    PyroTestView(device: device, channel: item.value)
+                }
             }
 
             ControlsView(device: device)
@@ -2074,6 +2106,16 @@ struct StatusBadge: View {
 
 struct PyroChannelsView: View {
     @ObservedObject var device: BLEDevice
+    /// Base-station relay mode. The LoRa downlink carries no pyro_status, so
+    /// the armed/fired bits simply do not exist on this path, and the BS sends
+    /// no config_pyro — hence the caller supplies the trigger config and a
+    /// tile tap opens the LoRa test instead of the (impossible) config sheet.
+    var relayMode: Bool = false
+    /// Trigger config source for relay mode; nil = read the device readback.
+    var configProvider: ((Int) -> (enabled: Bool, mode: UInt8, value: Float))? = nil
+    /// Relay mode: open the stand-back LoRa test for this channel.
+    var onTest: ((Int) -> Void)? = nil
+
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
     @State private var showPyroSheet = false
     @State private var editingChannel: Int = 1
@@ -2081,7 +2123,7 @@ struct PyroChannelsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Pyro Channels")
+            Text(relayMode ? "Pyro Channels (via LoRa)" : "Pyro Channels")
                 .font(.headline)
 
             // 2x2 grid for the 4 channels. The global "armed" bit (single
@@ -2106,8 +2148,11 @@ struct PyroChannelsView: View {
         }
     }
 
-    /// Pull the right enabled/mode/value for the channel from rocketConfig.
+    /// Pull the right enabled/mode/value for the channel from rocketConfig —
+    /// or from the caller in relay mode, where the base station sends no
+    /// config_pyro readback and every channel would otherwise read "Disabled".
     private func pyroChannelConfig(_ ch: Int) -> (enabled: Bool, mode: UInt8, value: Float) {
+        if let provider = configProvider { return provider(ch) }
         guard let cfg = device.rocketConfig else { return (false, 0, 0) }
         switch ch {
         case 1: return (cfg.pyro1Enabled, cfg.pyro1TriggerMode, cfg.pyro1TriggerValue)
@@ -2123,25 +2168,32 @@ struct PyroChannelsView: View {
         return pyroTile(
             channel: ch,
             enabled: cfg.enabled,
-            armed: device.telemetry.pyro_armed,
-            // #297: only trust continuity from a LIVE frame.  After the
-            // stale/auto-hide window a held-over frame would otherwise keep
-            // showing green "CONT" from old data; gate to .live so a stale
-            // frame reads NO CONT (fail-safe).
-            continuity: device.telemetry.pyroCont(channel: ch)
-                        && device.telemetry.data_status == .live,
-            fired: device.telemetry.pyroFired(channel: ch),
+            // No ps bits exist on a relay link — the BS never populates them,
+            // so armed/fired are structurally false there rather than "off".
+            armed: relayMode ? false : device.telemetry.pyro_armed,
+            // #297 fail-safe lives inside pyroContinuity: a non-live frame is
+            // .noData, never a held-over green. Four-state so an untested
+            // channel can't render as a measured open circuit.
+            continuity: device.pyroContinuity(channel: ch),
+            fired: relayMode ? false : device.telemetry.pyroFired(channel: ch),
             mode: cfg.mode,
             value: cfg.value)
     }
 
     func pyroTile(channel: Int, enabled: Bool, armed: Bool,
-                  continuity: Bool, fired: Bool, mode: UInt8, value: Float) -> some View {
+                  continuity: BLEDevice.PyroContinuity, fired: Bool,
+                  mode: UInt8, value: Float) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Tap to configure
+            // Tap to configure — or, on a relay link, to open the stand-back
+            // LoRa test. Configuring is not possible there: cmd 34 would go to
+            // the base station, which has no pyro config to set.
             Button {
-                editingChannel = channel
-                showPyroSheet = true
+                if relayMode {
+                    onTest?(channel)
+                } else {
+                    editingChannel = channel
+                    showPyroSheet = true
+                }
             } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -2157,7 +2209,10 @@ struct PyroChannelsView: View {
                                 .padding(.vertical, 2)
                                 .background(Color.orange)
                                 .cornerRadius(4)
-                        } else if armed || contTestChannel == channel {
+                        // Relay mode has no ARM bit to gate on, and the
+                        // four-state badge says "NOT TESTED" for itself, so
+                        // it is always shown there.
+                        } else if relayMode || armed || contTestChannel == channel {
                             if device.contTestPending(channel: UInt8(channel)) {
                                 HStack(spacing: 4) {
                                     ProgressView().controlSize(.mini)
@@ -2166,14 +2221,7 @@ struct PyroChannelsView: View {
                                         .foregroundColor(.secondary)
                                 }
                             } else {
-                                HStack(spacing: 4) {
-                                    Circle()
-                                        .fill(continuity ? Color.green : Color.red)
-                                        .frame(width: 8, height: 8)
-                                    Text(continuity ? "CONT" : "NO CONT")
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundColor(continuity ? .green : .red)
-                                }
+                                PyroContinuityBadge(state: continuity)
                             }
                         }
                     }
@@ -2189,13 +2237,20 @@ struct PyroChannelsView: View {
             // test would deliver its ARM pulse at the next power-on. The
             // Settings twin shows the disabled state with a caption; this
             // compact tile just hides the button until power-on.)
-            if !armed && !fired && device.telemetry.state != "INFLIGHT"
-                && device.telemetry.pwr_pin_on {
+            // Relay mode has no rail signal (pwr_pin_on never crosses LoRa) and
+            // no armed/fired bits, so it gates on the relay path being live
+            // instead; the rocket's own rail-off refusal is the backstop.
+            let canTest = relayMode
+                ? device.pyroCommandPathReady
+                : (!armed && !fired && device.telemetry.state != "INFLIGHT"
+                   && device.telemetry.pwr_pin_on)
+            if canTest {
                 Button {
                     device.sendPyroContTest(channel: UInt8(channel))
                     contTestChannel = channel
-                    // Auto-hide result after 5 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    // Auto-hide result after the round trip (longer on relay).
+                    let hide = relayMode ? BLEDevice.contTestPendingWindowRelay + 1 : 5
+                    DispatchQueue.main.asyncAfter(deadline: .now() + hide) {
                         if contTestChannel == channel { contTestChannel = 0 }
                     }
                 } label: {
@@ -2204,8 +2259,9 @@ struct PyroChannelsView: View {
                         .foregroundColor(.blue)
                 }
                 .buttonStyle(.plain)
-                // Test Pyro Channel (test-fire) lives on the detailed Pyro
-                // settings screen only — kept off the main dashboard tile.
+                // Test-fire lives behind the tile tap in relay mode (opens the
+                // slow-mo LoRa test); on a direct link it stays on the Pyro
+                // settings screen only, off the dashboard tile.
             }
         }
         .padding(10)

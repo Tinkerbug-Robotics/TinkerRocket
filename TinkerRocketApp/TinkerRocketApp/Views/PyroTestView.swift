@@ -78,9 +78,10 @@ struct PyroTestView: View {
 
     // Path-aware (#297 fail-safe included): direct link reads the "ps" cont
     // bit; a base-station link reads the relayed sensor-health scorecard —
-    // the LoRa downlink carries no pyro_status byte.
-    private var continuity: Bool {
-        device.pyroContinuityLive(channel: channel)
+    // the LoRa downlink carries no pyro_status byte. Four-state, so "no
+    // reading" can never render as a measured open circuit.
+    private var continuity: BLEDevice.PyroContinuity {
+        device.pyroContinuity(channel: channel)
     }
 
     var body: some View {
@@ -268,12 +269,7 @@ struct PyroTestView: View {
                             .font(.caption.weight(.bold))
                             .foregroundColor(.white)
                     } else {
-                        Circle()
-                            .fill(continuity ? Color.green : Color.red)
-                            .frame(width: 10, height: 10)
-                        Text(continuity ? "CONT" : "NO CONT")
-                            .font(.caption.weight(.bold))
-                            .foregroundColor(continuity ? .green : .red)
+                        PyroContinuityBadge(state: continuity, dotSize: 10)
                     }
                 }
             }
@@ -399,18 +395,23 @@ struct PyroTestView: View {
                 .foregroundColor(.orange)
                 .multilineTextAlignment(.center)
         } else {
-            switch device.telemetry.pyroHealth(channel: channel) {
-            case .bad:
+            // Reads the MEASURED continuity (via pyroContinuity), not the
+            // config-gated go/no-go bits: a ground test is routinely run on a
+            // channel that isn't armed for this flight, and those bits report
+            // NA for it forever — which used to make every such test end in
+            // "could not confirm" no matter what the wire actually measured.
+            switch continuity {
+            case .open:
                 Text("Continuity gone — charge fired")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.green)
                     .multilineTextAlignment(.center)
-            case .ok:
+            case .present:
                 Text("CONTINUITY STILL PRESENT — charge may not have fired. Treat it as LIVE.")
                     .font(.subheadline.weight(.bold))
                     .foregroundColor(.orange)
                     .multilineTextAlignment(.center)
-            case .degraded, .na:
+            case .untested, .noData:
                 Text("COULD NOT CONFIRM — no fresh continuity reading. Treat the charge as LIVE; do not approach.")
                     .font(.subheadline.weight(.bold))
                     .foregroundColor(.orange)
@@ -534,6 +535,54 @@ struct PyroTestView: View {
             }
             camera.stopRecording()
             cameraRecording = false
+        }
+    }
+}
+
+// MARK: - Continuity Badge (shared by the test view and the pyro cards)
+
+/// Renders the four continuity states distinguishably. Red is reserved for a
+/// MEASURED open circuit; the absence of a reading is grey and says so.
+struct PyroContinuityBadge: View {
+    let state: BLEDevice.PyroContinuity
+    var dotSize: CGFloat = 8
+    /// Test view draws on a dark camera background; the cards on systemGray5.
+    var onDark: Bool = false
+
+    private var color: Color {
+        switch state {
+        case .present:  return .green
+        case .open:     return .red
+        case .untested: return onDark ? .white.opacity(0.7) : .secondary
+        case .noData:   return onDark ? .white.opacity(0.5) : Color(.tertiaryLabel)
+        }
+    }
+
+    private var label: String {
+        switch state {
+        case .present:  return "CONT"
+        case .open:     return "NO CONT"
+        case .untested: return "NOT TESTED"
+        case .noData:   return "NO DATA"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            // Only a real measurement gets a filled status dot; an absent
+            // reading gets a hollow one, so the two never look alike.
+            Group {
+                switch state {
+                case .present, .open:
+                    Circle().fill(color)
+                default:
+                    Circle().strokeBorder(color, lineWidth: 1.5)
+                }
+            }
+            .frame(width: dotSize, height: dotSize)
+            Text(label)
+                .font(.caption2.weight(.bold))
+                .foregroundColor(color)
         }
     }
 }

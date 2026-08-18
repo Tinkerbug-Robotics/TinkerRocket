@@ -941,11 +941,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
     }
 
-    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's CONTROL
-    /// azimuth from the ring slot it occupies (slot azimuths {0,90,180,270} for "+"
-    /// or {45,135,225,315} for "×"), then sends 4 LE floats + a per-servo tilt-reverse
-    /// bitmask + an independent per-servo roll-reverse bitmask. The ring GUI's nose-down
-    /// view is a rendering choice and does not change these control-frame azimuths.
+    /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's fin
+    /// RING-POSITION azimuth from the ring slot it occupies (slot azimuths
+    /// {0,90,180,270} for "+" or {45,135,225,315} for "×" — positions, not force
+    /// directions; the FC maps position→tangential force in
+    /// TR_ControlMixer::setFinLayout), then sends 4 LE floats + a per-servo
+    /// tilt-reverse bitmask + an independent per-servo roll-reverse bitmask. The ring
+    /// GUI's nose-down view is a rendering choice and does not change these azimuths.
     func sendFinConfig(ringMode: UInt8, servoAtSlot: [Int], reverse: [Bool], rollReverse: [Bool]) {
         guard servoAtSlot.count == 4, reverse.count == 4, rollReverse.count == 4 else { return }
         let slotAz: [Float] = ringMode == 1 ? [45, 135, 225, 315] : [0, 90, 180, 270]
@@ -1055,18 +1057,63 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return ageMs <= Self.relayStaleThresholdMs
     }
 
-    /// Path-aware live continuity for the pyro test UIs, #297 fail-safe
-    /// included (stale telemetry reads NO CONT, never a held-over green).
-    /// Direct link: the "ps" cont bit. BS relay: the 65-byte LoRa downlink
-    /// carries no pyro_status — per-channel continuity rides the
-    /// sensor-health scorecard instead (SH_OK = continuity present, #303),
-    /// which the FC fills for exactly this reason.
-    func pyroContinuityLive(channel: Int) -> Bool {
-        guard effectiveDataStatus == .live else { return false }
+    /// What the link can actually say about a pyro channel's continuity.
+    /// Distinguishing these four is the whole point: a red "NO CONT" must mean
+    /// "we measured an open circuit", never "we have no measurement". Folding
+    /// them into a Bool is what made a never-tested channel display a
+    /// confident red NO CONT on the LoRa path (bench 2026-08-17).
+    enum PyroContinuity: Equatable {
+        case present      // measured: continuity OK
+        case open         // measured: no continuity (fired, or nothing connected)
+        case untested     // link is good, but no reading has been taken yet
+        case noData       // stream stale / disconnected — nothing trustworthy
+    }
+
+    /// Path-aware continuity for the pyro UIs, #297 fail-safe included (a
+    /// non-live stream is .noData, never a held-over green).
+    ///
+    /// Direct link: the "ps" cont bit, which is ungated on the FC and so is a
+    /// real measurement whenever it is set. BS relay: the 65-byte LoRa
+    /// downlink carries no pyro_status, so continuity rides the sensor-health
+    /// scorecard — preferring the MEASURED bits (reported for every channel)
+    /// and falling back to the config-gated ones for pre-#803 rockets.
+    func pyroContinuity(channel: Int) -> PyroContinuity {
+        guard isConnected, effectiveDataStatus == .live else { return .noData }
         if isBaseStation {
-            return telemetry.pyroHealth(channel: channel) == .ok
+            if let measured = telemetry.pyroMeasuredContinuity(channel: channel) {
+                switch measured {
+                case .ok:  return .present
+                case .bad: return .open
+                default:   return .untested      // .na here = not tested yet
+                }
+            }
+            // Older rocket firmware: only the config-gated bits exist. An
+            // unconfigured channel (.na) is unknowable on this path, and
+            // .degraded means configured-but-untested — both are "untested",
+            // NOT an open circuit.
+            switch telemetry.pyroHealth(channel: channel) {
+            case .ok:  return .present
+            case .bad: return .open
+            default:   return .untested
+            }
         }
-        return telemetry.pyroCont(channel: channel)
+        // Direct link: prefer the measured scorecard bits when present, since
+        // they distinguish untested from open; the raw cont bit cannot.
+        if let measured = telemetry.pyroMeasuredContinuity(channel: channel) {
+            switch measured {
+            case .ok:  return .present
+            case .bad: return .open
+            default:   return .untested
+            }
+        }
+        return telemetry.pyroCont(channel: channel) ? .present : .open
+    }
+
+    /// Fail-safe Bool for callers that must reduce to go/no-go: ONLY a
+    /// measured .present counts. Never use this to render a verdict — it
+    /// cannot distinguish "open" from "no reading".
+    func pyroContinuityLive(channel: Int) -> Bool {
+        pyroContinuity(channel: channel) == .present
     }
 
     func sendPyroContTest(channel: UInt8) {

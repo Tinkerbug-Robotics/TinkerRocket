@@ -300,6 +300,24 @@ public data class TelemetryData(
         return shState(12 + (channel - 1) * 2)
     }
 
+    /**
+     * MEASURED continuity (SH_PYRO_MEAS_SHIFT, bits 24-30) — reported for every
+     * channel whether or not it is configured for flight, unlike [pyroHealth],
+     * which is config-gated because it feeds the go/no-go rollup. This is the
+     * ground-test answer: NA = never tested this session, OK = continuity, BAD =
+     * tested and open. Never DEGRADED.
+     *
+     * Returns null when the rocket predates the field (all four read NA), so
+     * callers fall back to [pyroHealth] rather than showing "never tested"
+     * forever against older firmware. iOS twin: pyroMeasuredContinuity.
+     */
+    public fun pyroMeasuredContinuity(channel: Int): SensorHealth? {
+        if (channel !in 1..4) return null
+        val anyReported = (1..4).any { shState(24 + (it - 1) * 2) != SensorHealth.NA }
+        if (!anyReported) return null
+        return shState(24 + (channel - 1) * 2)
+    }
+
     public val hasSensorHealth: Boolean get() = sensorHealth != 0
 
     /** One row of the pre-launch health card (iOS SensorHealthRow; id = name). */

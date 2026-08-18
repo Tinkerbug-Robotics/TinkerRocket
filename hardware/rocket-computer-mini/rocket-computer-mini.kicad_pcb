@@ -2735,6 +2735,7 @@
 		(property "Reference" "L7"
 			(at 0 -0.6 180)
 			(layer "F.SilkS")
+			(hide yes)
 			(uuid "5afda780-9563-43b5-a7ff-07282f14310c")
 			(effects
 				(font
@@ -2746,6 +2747,7 @@
 		(property "Value" "2 nH"
 			(at 0 1.17 0)
 			(layer "F.Fab")
+			(hide yes)
 			(uuid "80dd6ae5-feac-4a1d-8ec7-ea2ceae19122")
 			(effects
 				(font
@@ -14513,6 +14515,7 @@
 		(property "Reference" "L8"
 			(at 0 0 90)
 			(layer "F.SilkS")
+			(hide yes)
 			(uuid "441a0974-a478-4438-bd77-1d1555bfffc8")
 			(effects
 				(font
@@ -14522,8 +14525,9 @@
 			)
 		)
 		(property "Value" "3 nH"
-			(at 0 1.17 270)
+			(at 0 1.17 90)
 			(layer "F.Fab")
+			(hide yes)
 			(uuid "2ea577db-d4bc-4a7c-bb5c-966943c9e8df")
 			(effects
 				(font
@@ -14533,7 +14537,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "76ed168e-4b3d-40d7-9876-f8f70608f50a")
@@ -14544,7 +14548,7 @@
 			)
 		)
 		(property "Description" "Inductor, small symbol"
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "6ba1fb5b-45b4-445c-acbd-489e4578a3fc")
@@ -14555,7 +14559,7 @@
 			)
 		)
 		(property "MPN" "LQG15HS3N0S02D"
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "26e10d58-fb82-41bd-9264-0fae43a027ec")
@@ -14567,7 +14571,7 @@
 			)
 		)
 		(property "Mfr" "Murata"
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "1117690d-b1d2-4f47-81a4-95cb2d416c95")
@@ -14579,7 +14583,7 @@
 			)
 		)
 		(property "KiLib_Generator" "SMD_2terminal_chip_molded"
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.SilkS")
 			(hide yes)
 			(uuid "b74b8fc1-87af-4a51-82ac-0f5c4708fac1")
@@ -14616,7 +14620,7 @@
 			(uuid "08f4e241-9a57-4084-ba34-42f143840523")
 		)
 		(fp_text user "${REFERENCE}"
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(uuid "0fb7ecdf-3326-402f-8715-7206d45105b5")
 			(effects
@@ -43973,6 +43977,46 @@
 		(layer "F.Cu")
 		(net "unconnected-(U31-RAD-Pad1)")
 		(uuid "d8324eb3-e4c9-4075-9455-c5fe21c35fdd")
+	)
+	(via
+		(at 94.15 169.95)
+		(size 0.4)
+		(drill 0.3)
+		(layers "F.Cu" "B.Cu")
+		(net "unconnected-(U31-RAD-Pad1)")
+		(uuid "58a99b9a-c0f6-43fc-be55-66ab944cbe93")
+	)
+	(via
+		(at 92.633 167.2)
+		(size 0.4)
+		(drill 0.3)
+		(layers "F.Cu" "B.Cu")
+		(net "unconnected-(U31-RAD-Pad1)")
+		(uuid "994d06a6-30bf-4746-b410-6383ad2ab39b")
+	)
+	(segment
+		(start 92.633 167.6)
+		(end 94.15 167.6)
+		(width 0.6)
+		(layer "B.Cu")
+		(net "unconnected-(U31-RAD-Pad1)")
+		(uuid "4521b75b-6123-4d3f-b8b2-d497ea395d01")
+	)
+	(segment
+		(start 94.15 167.6)
+		(end 94.15 170.4)
+		(width 0.6)
+		(layer "B.Cu")
+		(net "unconnected-(U31-RAD-Pad1)")
+		(uuid "45649141-fc07-4f15-a905-5c6d8051526b")
+	)
+	(segment
+		(start 92.633 167.2)
+		(end 92.633 167.6)
+		(width 0.6)
+		(layer "B.Cu")
+		(net "unconnected-(U31-RAD-Pad1)")
+		(uuid "6ddd76b1-9881-4c8c-8a7f-2cbcfac69cdb")
 	)
 	(segment
 		(start 93.435 164.9)

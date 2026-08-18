@@ -121,6 +121,29 @@ struct SettingsView: View {
             && device.telemetry.state == "INITIALIZATION"
     }
 
+    /// The power rail is off, so the FC — the thing that actually answers
+    /// config writes — isn't running.  This fails quietly rather than loudly:
+    /// the OC's #366 command queue HOLDS commands while the rail is down and
+    /// drains the batch at power-on, so a user can edit several screens of
+    /// settings and have them land much later, out of order, or not at all.
+    /// Block the sheet exactly as INITIALIZATION does, for the same reason —
+    /// the rocket can't honour the write yet.
+    ///
+    /// Two scoping guards, both load-bearing:
+    ///  - `!isBaseStation`: the BS relay's TelemetryData never carries
+    ///    pwr_pin_on (the LoRa packet has no room for it), so over a
+    ///    base-station link it reads false forever — an unscoped gate would
+    ///    lock Settings permanently on every BS connection.
+    ///  - `hasReceivedTelemetry` (#377): before the first frame `telemetry` is
+    ///    all zeros, and a zeroed pwr_pin_on is indistinguishable from a
+    ///    genuinely-off rocket.  Without this the overlay would flash on every
+    ///    connect, including for a rocket that is already powered on.
+    private var isRocketOff: Bool {
+        device.isConnected && !device.isBaseStation
+            && device.hasReceivedTelemetry
+            && !device.telemetry.pwr_pin_on
+    }
+
     /// Calibrations run on the rocket, so they need it connected AND powered
     /// on (its sensors aren't running otherwise).  Other settings stay
     /// editable offline — only the cal rows are gated.
@@ -237,6 +260,16 @@ struct SettingsView: View {
                 } else if store.activeProfile == nil {
                     noProfileSection
                     firmwareSection
+                } else if isRocketOff {
+                    // Swap the config sections out rather than covering them with
+                    // an INITIALIZATION-style overlay: firmwareSection lives
+                    // inside rocketSettingsSections (#314), and a full-sheet
+                    // overlay would take Firmware Update down with it. The OC
+                    // flashes ITSELF over BLE and never touches the FC rail, so
+                    // that one genuinely works with the rocket off — it's the
+                    // only thing on this screen that does.
+                    rocketOffSection
+                    firmwareSection
                 } else {
                     rocketSettingsSections
                 }
@@ -325,76 +358,8 @@ struct SettingsView: View {
             }
         }
 
-        pyroTestViaLoRaSection
-
         loRaSections
         networkSection
-    }
-
-    // Stand-back pyro test: the same countdown/slow-mo-video flow as a direct
-    // link (PyroTestView), with the fire command relayed BS → LoRa uplink →
-    // focused rocket (inner cmds 35/36 in a cmd-50 wrap) so the operator can
-    // film from LoRa distance instead of BLE distance. Continuity here rides
-    // the sensor-health scorecard (SH pyro bits) — the 65-byte LoRa downlink
-    // carries no pyro_status byte.
-    @ViewBuilder
-    private var pyroTestViaLoRaSection: some View {
-        Section(header: Text("Pyro Test (via LoRa)"),
-                footer: Text(pyroTestViaLoRaFooter)) {
-            ForEach(1..<5, id: \.self) { ch in
-                Button {
-                    pyroTestChannel = ch
-                } label: {
-                    HStack {
-                        Text("Channel \(ch)")
-                            .foregroundColor(.primary)
-                        Spacer()
-                        pyroHealthBadge(ch)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(Color(.tertiaryLabel))
-                    }
-                }
-                .disabled(!device.pyroCommandPathReady)
-            }
-        }
-    }
-
-    private var pyroTestViaLoRaFooter: String {
-        guard device.isConnected else {
-            return "Connect to the base station to test."
-        }
-        guard let rid = device.focusRocketID else {
-            return "No rocket heard yet — the test fires on the focused rocket."
-        }
-        let name = device.remoteRockets.first { $0.rocketID == rid }?.displayName
-            ?? "Rocket \(rid)"
-        if device.pyroCommandPathReady {
-            return "Fires on \(name) over the LoRa uplink — stand back and film from the phone."
-        }
-        return "\(name)'s LoRa link is stale — waiting for fresh telemetry before allowing a test."
-    }
-
-    /// Channel state at a glance, from the relayed health scorecard. #297
-    /// fail-safe: anything but a LIVE stream shows no reading at all — a
-    /// held-over green CONT is exactly the display this rule exists to
-    /// prevent.
-    @ViewBuilder
-    private func pyroHealthBadge(_ ch: Int) -> some View {
-        if device.effectiveDataStatus != .live {
-            Text("—").font(.caption).foregroundColor(.secondary)
-        } else {
-            switch device.telemetry.pyroHealth(channel: ch) {
-            case .ok:
-                Text("CONT").font(.caption.weight(.bold)).foregroundColor(.green)
-            case .bad:
-                Text("NO CONT").font(.caption.weight(.bold)).foregroundColor(.red)
-            case .degraded:
-                Text("NOT TESTED").font(.caption.weight(.bold)).foregroundColor(.secondary)
-            case .na:
-                Text("—").font(.caption).foregroundColor(.secondary)
-            }
-        }
     }
 
     // #150: Network (restored from #136, with the drift bug fixed).  The
@@ -991,7 +956,7 @@ struct SettingsView: View {
                 onSetReverse: { r in updateProfile { $0.finReverse = r }; applyFinConfig() },
                 onSetRollReverse: { r in updateProfile { $0.finRollReverse = r }; applyFinConfig() }
             )
-            Text("Map each servo to its fin and set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}). If a fin's tilt is backwards in ground test, flip Reverse pitch/yaw; if its roll is backwards, flip Reverse roll. Jog each servo on the bench to confirm direction.")
+            Text("Map each servo to its fin and set the ring orientation (+ on axes or \u{00D7} at 45\u{00B0}). If the rocket rolls the wrong way in ground test, flip Reverse roll direction \u{2014} that is the whole-airframe control. The per-fin toggles are for one wrong fin: Reverse pitch/yaw for backwards tilt, Reverse roll (this fin only) for a mis-linked servo. Jog each servo on the bench to confirm direction.")
                 .font(.caption).foregroundColor(.secondary)
         }
     }
@@ -1173,6 +1138,21 @@ struct SettingsView: View {
         } label: {
             HStack { Image(systemName: "trash"); Text("Clear Roll Profile") }
                 .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var rocketOffSection: some View {
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: "power")
+                    .font(.system(size: 40)).foregroundColor(.secondary)
+                Text("Rocket is off").font(.title3.bold())
+                Text("The flight computer answers every setting on this screen, and it isn't running yet. Power on the rocket to configure it.")
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
         }
     }
 

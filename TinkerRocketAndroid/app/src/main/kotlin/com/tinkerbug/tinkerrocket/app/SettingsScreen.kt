@@ -45,6 +45,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
@@ -100,6 +101,16 @@ fun SettingsScreen(
         session?.isConnected ?: kotlinx.coroutines.flow.MutableStateFlow(false)
         ).collectAsState()
     val canJog = session != null && connected && powerOn
+
+    // Inputs for the device-state gate below. Same distinct-until-changed
+    // discipline as powerOn — never subscribe this screen at telemetry rate.
+    val hasTelemetry by (
+        session?.hasReceivedTelemetry ?: kotlinx.coroutines.flow.MutableStateFlow(false)
+        ).collectAsState()
+    val initializing by remember(session) {
+        session?.telemetry?.map { it.state == "INITIALIZATION" }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(false)
+    }.collectAsState(initial = false)
 
     // Self-apply (#144): persist the edit, then push just its group.
     fun edit(group: ConfigGroup?, mutate: (RocketProfile) -> RocketProfile) {
@@ -183,6 +194,44 @@ fun SettingsScreen(
                 if (profiles.isEmpty()) "No profiles yet — add one to configure a rocket."
                 else "Select a profile to edit.",
                 style = MaterialTheme.typography.bodyMedium,
+            )
+            return@Column
+        }
+
+        // ── Device-state gate ────────────────────────────────────────────
+        // Everything below is FC configuration, and the FC answers none of it
+        // until it is running. This fails silently rather than loudly: the OC's
+        // #366 queue HOLDS commands while the rail is down and drains the batch
+        // at power-on, so edits made now land much later, out of order, or not
+        // at all. iOS SettingsView gates the same two states; Android had
+        // neither.
+        //
+        // Both scopes are load-bearing:
+        //  - !isBaseStation: the BS relay's TelemetryData never carries
+        //    pwrPinOn (the LoRa packet has no room for it), so over a
+        //    base-station link it reads false forever — an unscoped gate would
+        //    lock Settings on every BS connection.
+        //  - hasReceivedTelemetry (#377): before the first frame TelemetryData
+        //    is all-defaults, and a defaulted pwrPinOn is indistinguishable
+        //    from a genuinely-off rocket, so the notice would flash on every
+        //    connect — including for a rocket that is already powered on.
+        //
+        // Unlike iOS, firmware update is its own screen here rather than a row
+        // inside Settings, so nothing that still works with the rail off is
+        // lost behind this gate.
+        val directLink = session != null && connected && !session.isBaseStation
+        if (directLink && hasTelemetry && !powerOn) {
+            GateNotice(
+                "Rocket is off",
+                "The flight computer answers every setting on this screen, and it " +
+                    "isn't running yet. Power on the rocket to configure it.",
+            )
+            return@Column
+        }
+        if (directLink && initializing) {
+            GateNotice(
+                "Initializing…",
+                "Waiting for sensors to start up. Settings can be applied once ready.",
             )
             return@Column
         }
@@ -690,6 +739,27 @@ private fun CalBanner(label: String, advisory: CalAdvisory, onImport: (() -> Uni
                     )
                 }
             }
+    }
+}
+
+/** Full-width notice shown in place of the config sections when the rocket
+ *  can't accept settings yet (rail off / initializing). */
+@Composable
+private fun GateNotice(title: String, body: String) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
