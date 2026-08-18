@@ -406,6 +406,10 @@ class CommandsGoldenTest {
         assertEquals(listOf(1, 1), Commands.cameraToggleWithState(true).map { it.toInt() })
         assertEquals(listOf(23, 0), Commands.toggleLoggingWithState(false).map { it.toInt() })
         assertEquals(listOf(2, 3), Commands.fileList(3).map { it.toInt() })
+        // cmd 8 both ways: state-based is what the app sends now, bare is the
+        // legacy toggle old apps send and firmware still accepts.
+        assertEquals(listOf(8, 1), Commands.powerState(railOn = true).map { it.toInt() })
+        assertEquals(listOf(8, 0), Commands.powerState(railOn = false).map { it.toInt() })
         assertEquals(listOf(8), Commands.bare(BleCommandId.POWER_TOGGLE).map { it.toInt() })
         assertEquals(listOf(64, 7), Commands.imuOrient(7).map { it.toInt() })
     }
