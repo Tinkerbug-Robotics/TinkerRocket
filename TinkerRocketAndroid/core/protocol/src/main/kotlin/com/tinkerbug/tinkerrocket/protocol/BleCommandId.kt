@@ -19,10 +19,11 @@ package com.tinkerbug.tinkerrocket.protocol
  * Payload layouts are pinned byte-exactly by tests_cpp/fixtures/wire/commands/.
  */
 public object BleCommandId {
-    // Camera toggle. Direct link: bare cmd 1. BS link: relayed with an
-    // explicit desired-state byte computed from the FOCUSED rocket's
-    // telemetry (#390 — the legacy broadcast keyed off whichever rocket was
-    // heard last).
+    // Camera on/off. `[desired u8]` (1 = record, 0 = stop) on BOTH links —
+    // BS relayed to the FOCUSED rocket (#390 — the legacy broadcast keyed off
+    // whichever rocket was heard last), direct link state-based too since a
+    // blind toggle inverts on any app/OC desync. Firmware still accepts the
+    // bare form as a legacy toggle.
     public const val CAMERA_TOGGLE: Int = 1
 
     // File operations (sent as raw writes in iOS — Data([N, ...]), not
@@ -49,7 +50,7 @@ public object BleCommandId {
     public const val REQUEST_CONFIG: Int = 20
     public const val SENSOR_CAL_RUN: Int = 21      // on-pad gyro+high-g cal, ~12 s
     public const val GAIN_SCHED_ENABLE: Int = 22   // [bool]
-    public const val TOGGLE_LOGGING: Int = 23
+    public const val TOGGLE_LOGGING: Int = 23      // [desired u8]; bare = legacy toggle
     public const val SERVO_TEST: Int = 24          // ServoTestAnglesData 8 B
     public const val SERVO_TEST_STOP: Int = 25
     public const val ROLL_PROFILE: Int = 26        // RollProfileData 76 B

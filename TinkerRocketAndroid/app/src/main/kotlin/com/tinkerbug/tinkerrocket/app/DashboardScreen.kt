@@ -899,8 +899,13 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
                                 ),
                             )
                         } else {
-                            session.sendBareCommand(
-                                com.tinkerbug.tinkerrocket.protocol.BleCommandId.CAMERA_TOGGLE,
+                            // Explicit desired state on the direct link too:
+                            // a bare toggle inverts whenever the app and the
+                            // OC disagree about the current state (a "start"
+                            // tap stopping the camera — bench 2026-08-16).
+                            session.sendCommandFrame(
+                                com.tinkerbug.tinkerrocket.protocol.Commands
+                                    .cameraToggleWithState(!cam),
                             )
                         }
                     },
@@ -921,8 +926,11 @@ private fun ControlsCard(session: DeviceSession, telemetry: TelemetryData) {
                                 ),
                             )
                         } else {
-                            session.sendBareCommand(
-                                com.tinkerbug.tinkerrocket.protocol.BleCommandId.TOGGLE_LOGGING,
+                            // Explicit desired state — same reason as the
+                            // camera button above.
+                            session.sendCommandFrame(
+                                com.tinkerbug.tinkerrocket.protocol.Commands
+                                    .toggleLoggingWithState(!log),
                             )
                         }
                     },

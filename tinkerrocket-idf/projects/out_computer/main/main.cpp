@@ -6712,10 +6712,30 @@ static void loop_oc()
         ESP_LOGI("OC_CMD", "BLE cmd=%u", (unsigned)ble_cmd);
         if (ble_cmd == 1)
         {
-            // Toggle camera recording
-            camera_recording_requested = !camera_recording_requested;
-            setPendingCommand(camera_recording_requested ? CAMERA_START : CAMERA_STOP);
-            ESP_LOGI("BLE", "Camera toggle requested: %s", camera_recording_requested ? "START" : "STOP");
+            // Camera: payload[0] = desired state (1 = on, 0 = off), same
+            // semantics as the LoRa uplink (processUplinkCommand cmd 1) and
+            // the BS relay.  A blind toggle inverts whenever the app's idea
+            // of the state and ours disagree — bench-observed 2026-08-16: the
+            // OC held recording_requested=true across an FC reboot, so the
+            // next "start" tap stopped the camera 11 ms after the FC had sent
+            // START_RECORDING.  Falls back to toggle with no payload (legacy
+            // app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool want_on = (plen >= 1) ? (payload[0] != 0)
+                                             : !camera_recording_requested;
+            if (want_on != camera_recording_requested)
+            {
+                camera_recording_requested = want_on;
+                setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
+                ESP_LOGI("BLE", "Camera %s%s", want_on ? "START" : "STOP",
+                         (plen >= 1) ? "" : " (legacy toggle)");
+            }
+            else
+            {
+                ESP_LOGI("BLE", "Camera already %s, ignoring",
+                         want_on ? "ON" : "OFF");
+            }
         }
         else if (ble_cmd == 2)
         {
@@ -6731,8 +6751,21 @@ static void loop_oc()
         }
         else if (ble_cmd == 23)
         {
-            // Toggle logging (manual start/stop from app)
-            if (logger.isLoggingActive())
+            // Logging: payload[0] = desired state (1 = start, 0 = stop),
+            // matching the LoRa uplink and BS relay.  Same desync hazard as
+            // cmd 1 above — a blind toggle turns "start" into "stop" whenever
+            // the app's view disagrees with ours.  Falls back to toggle with
+            // no payload (legacy app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool logging_now = logger.isLoggingActive();
+            const bool want_on = (plen >= 1) ? (payload[0] != 0) : !logging_now;
+            if (want_on == logging_now)
+            {
+                ESP_LOGI("OC_CMD", "Logging already %s, ignoring",
+                         logging_now ? "ACTIVE" : "STOPPED");
+            }
+            else if (!want_on)
             {
                 logger.endLogging();
                 flightlogEndFlight();

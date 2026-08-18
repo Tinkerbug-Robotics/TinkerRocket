@@ -2432,7 +2432,12 @@ struct ControlsView: View {
                                             innerCommand: 1,
                                             innerPayload: Data([desired]))
                 } else {
-                    device.sendCommand(1)
+                    // Direct link: send the desired state too.  A bare toggle
+                    // inverts whenever the app and the OC disagree about the
+                    // current state (a "start" tap stopping the camera —
+                    // bench 2026-08-16); firmware still accepts the bare form.
+                    let desired: UInt8 = device.telemetry.camera_recording ? 0 : 1
+                    device.sendRawCommand(1, payload: Data([desired]))
                 }
             }) {
                 HStack {
@@ -2458,7 +2463,10 @@ struct ControlsView: View {
                                             innerCommand: 23,
                                             innerPayload: Data([desired]))
                 } else {
-                    device.sendCommand(23)   // direct link: OC toggle
+                    // Direct link: desired state, same reason as the camera
+                    // button above.
+                    let desired: UInt8 = device.telemetry.rocketLoggingActive ? 0 : 1
+                    device.sendRawCommand(23, payload: Data([desired]))
                 }
             }) {
                 let active = device.telemetry.rocketLoggingActive
