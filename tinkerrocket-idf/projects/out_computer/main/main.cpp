@@ -7188,11 +7188,27 @@ static void loop_oc()
         }
         else if (ble_cmd == 8)
         {
-            // Toggle power rail
-            pwr_pin_on = !pwr_pin_on;
+            // Power rail: payload[0] = desired state (1 = on, 0 = off), same
+            // semantics as cmds 1/23.  A blind toggle inverts whenever the
+            // app's view and ours disagree — and here that means cutting the
+            // FC's rail when the operator asked to power it up (or a repeated
+            // command double-toggling).  The app knows the true state: the OC
+            // stays alive with the rail down and keeps reporting pwr_pin_on,
+            // and the UI gates the button on having received telemetry
+            // (#377).  No payload still means toggle (legacy app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool was_on  = pwr_pin_on;
+            const bool want_on = (plen >= 1) ? (payload[0] != 0) : !pwr_pin_on;
 
-            if (pwr_pin_on)
+            if (want_on == was_on)
             {
+                ESP_LOGI("BLE", "Power rail already %s, ignoring",
+                         was_on ? "ON" : "OFF");
+            }
+            else if (want_on)
+            {
+                pwr_pin_on = true;
                 // Exit low-power mode BEFORE powering peripherals — need
                 // full CPU speed and no auto light-sleep during init.
                 exitLowPowerMode();
@@ -7228,6 +7244,7 @@ static void loop_oc()
             }
             else
             {
+                pwr_pin_on = false;
                 // Power off: drop the FC rail and reset the OC.
                 //
                 // Surgically tearing down each peripheral on power-off
@@ -7299,13 +7316,19 @@ static void loop_oc()
                 // not reached
             }
 
-            ESP_LOGI("BLE", "Power rail toggled: %s", pwr_pin_on ? "ON" : "OFF");
+            // Only on an actual state change — an ignored duplicate must not
+            // claim the rail was switched, nor re-push config.
+            if (want_on != was_on)
+            {
+                ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
+                         (plen >= 1) ? "" : " (legacy toggle)");
 
-            // After power-on, NVS config is freshly loaded — resend config
-            // readback so the app gets the actual persisted values.
-            if (pwr_pin_on && ble_app.isConnected()) {
-                delay(100);  // let peripherals finish init
-                sendCurrentConfig();
+                // After power-on, NVS config is freshly loaded — resend config
+                // readback so the app gets the actual persisted values.
+                if (pwr_pin_on && ble_app.isConnected()) {
+                    delay(100);  // let peripherals finish init
+                    sendCurrentConfig();
+                }
             }
         }
         else if (ble_cmd == 9)

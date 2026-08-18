@@ -199,7 +199,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 5 |  | Configure simulation: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4] |
 | 6 |  |  |
 | 7 |  |  |
-| 8 |  | Toggle power rail |
+| 8 |  | Power rail: payload[0] = desired state (1 = on, 0 = off), same semantics as cmds 1/23. A blind toggle inverts… |
 | 9 |  | Phone time sync: [year_lo][year_hi][month][day][hour][minute][second] |
 | 10 |  | Direct LoRa reconfig over BLE is no longer accepted on the rocket side (#106). LoRa link parameters are owned… |
 | 11 |  | Rocket computer sound enable/disable: [enabled:1] |
