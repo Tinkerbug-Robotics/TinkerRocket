@@ -54,8 +54,12 @@ struct board_pins
     // GPIO30 drives its RX pad. (The V7 schematic isn't in-repo; V8+ names
     // these nets FC-perspective — Camera_RX on 31, Camera_TX on 30, the
     // reverse of the GNSS convention — see the note in board_v8.h.)
-    static constexpr int8_t CAM_PWR_PIN = 30;      // GoPro path, unused
-    static constexpr int8_t CAM_SHUTTER_PIN = 31;  // GoPro path, unused
+    // GoPro shutter = the line the FC drives (camera's input pad), pulled to
+    // ground for a short press. Same pad as RUNCAM_TX_PIN — one mode owns it
+    // at a time. No separate GoPro power pin: power is the CAM_ACT gate below.
+    // V7 series resistance is unverified (the V7 schematic isn't in-repo);
+    // assume none, as on V8.
+    static constexpr int8_t CAM_SHUTTER_PIN = 30;  // GoPro shutter (net Camera_TX)
     static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (camera's TX pad)
     static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (camera's RX pad)
     static constexpr int8_t RUNCAM_PWR_PIN = 32;   // camera power gate (CAM_ACT)
