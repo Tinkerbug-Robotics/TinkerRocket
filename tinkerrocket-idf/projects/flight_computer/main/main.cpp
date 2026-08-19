@@ -6384,8 +6384,29 @@ static void loop_fc()
                 (uint32_t)(time_us() - bmp_latest_si.time_us) < BARO_STALE_TIMEOUT_US;
             const bool ekf_healthy = ekf_initialized && ekf.isHealthy();
 
+            // #259 applied to launch detection.  ism6_latest_si RETAINS its last
+            // converted value when the drain yields no new sample (main.cpp
+            // ISM6 block), and have_ism6_si latches on first read and never
+            // clears — so a frozen IMU re-presents the same accel every tick.
+            // For the #258 accel-only launch fallback that is the difference
+            // between "250 ms of sustained >3 g" and "ONE sample above 3 g,
+            // then a freeze": launch_count_hi would run to the threshold with no
+            // further physical stimulus and latch launch_flag.  That path is now
+            // load-bearing (it is the only live launch detector with a dead baro,
+            // and it promotes straight out of INITIALIZATION), so gate it on the
+            // same freshness test burnout detection already uses below.
+            //
+            // Gate the ARGUMENT, not accel_norm itself: accel_norm also feeds
+            // deploymentDetectStep() and the telemetry/log field, which must keep
+            // reporting the last known value rather than a synthetic zero.
+            // 0.0f fails the >20 m/s2 test and takes the counter-zeroing branch,
+            // i.e. exactly "no launch evidence from a stale IMU".
+            constexpr uint32_t IMU_STALE_TIMEOUT_US = 100000u;  // 0.1 s (~1 kHz IMU)
+            const bool ism6_fresh_kc = have_ism6_si &&
+                (uint32_t)(time_us() - ism6_latest_si.time_us) < IMU_STALE_TIMEOUT_US;
+
             kinematics.kinematicChecks(pressure_altitude_m,
-                                       accel_norm,
+                                       ism6_fresh_kc ? accel_norm : 0.0f,
                                        imu_pos,
                                        imu_vel,
                                        roll_rate_dps,
@@ -6626,6 +6647,37 @@ static void loop_fc()
                         ready_chirp_played = true;
                     }
                     ESP_LOGI(TAG, "[STATE] INITIALIZATION -> READY");
+                }
+                else if (kinematics.launch_flag)
+                {
+                    // Launch detected while INITIALIZATION never completed —
+                    // in practice a baro that was already dead at power-up, since
+                    // have_bmp_si latches on the first in-band sample and never
+                    // clears.  The pad interlock is deliberate: the operator sees
+                    // a red baro dot (sensor_health SH_BAD) and a state that never
+                    // reaches READY, and the app gates its pad actions on
+                    // READY/PRELAUNCH.  But refusing to advance is only a *deploy*
+                    // inhibit, not a launch inhibit — nothing here can stop a
+                    // motor.  If the vehicle is demonstrably flying, sitting in
+                    // INITIALIZATION means no enterInflight(), no
+                    // servicePyroChannels(), no drogue, no main: a guaranteed
+                    // ballistic return.  Deploying on a degraded sensor set beats
+                    // not deploying at all, so hand over to the flight logic —
+                    // the same call #382 makes from READY and #363 makes from an
+                    // active ground test, for the same reason.
+                    //
+                    // Safe against a false positive on the pad: with the baro dead
+                    // the primary detector cannot fire (it requires baro-confirmed
+                    // climb), so the only way here is the #258 accel-only fallback
+                    // — ~250 ms of UNINTERRUPTED >3 g.  That is a strictly harder
+                    // bar than the escape READY already has.  And entering INFLIGHT
+                    // arms nothing by itself: enterInflight() leaves ARM low and
+                    // every channel Idle until a trigger fires.
+                    ESP_LOGW(TAG, "[STATE] LAUNCH FROM INITIALIZATION — init gates "
+                                  "never met (ism6=%d bmp=%d); promoting to INFLIGHT "
+                                  "in degraded mode",
+                             (int)have_ism6_si, (int)have_bmp_si);
+                    enterInflight(now_ms, "INITIALIZATION");
                 }
                 break;
             }
