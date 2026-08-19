@@ -49,6 +49,84 @@ internal fun b2rOrientationName(code: Int): String {
 }
 
 /**
+ * Flight-computer boot progress (mirrors RocketComputerTypes.h FcBootStep,
+ * carried FC->OC as FC_BOOT_STATUS_MSG 0xFA and re-emitted as the "bs"
+ * telemetry key; iOS twin FcBootStep).
+ *
+ * The wire enum is APPEND-ONLY, so an unrecognised raw value is newer
+ * firmware talking, not an error: [fromRaw] returns null and the caller falls
+ * back to [FC_BOOT_UNKNOWN_LABEL] rather than dropping the line — a boot the
+ * app cannot name is still a boot the operator must see.
+ */
+public enum class FcBootStep(public val raw: Int) {
+    LINKS(0),      // I2C + I2S up (first reportable step)
+    NVS(1),        // reading stored config
+    SENSORS(2),    // IMU / baro / mag bring-up — and GNSS: begin() BLOCKS
+                   // here for ~35 s when the module is dead, so a boot parked
+                   // on this step IS the dead-GNSS stall
+    GNSS(3),       // GNSS receiver bring-up
+    SERVOS(4),     // servo init + neutral settle
+    COMPLETE(5);   // setup_fc done; the state machine takes over
+
+    public val label: String
+        get() = when (this) {
+            LINKS -> "Linking to flight computer"
+            NVS -> "Loading saved settings"
+            SENSORS -> "Starting sensors"
+            GNSS -> "Starting GNSS"
+            SERVOS -> "Starting servos"
+            COMPLETE -> "Flight computer ready"
+        }
+
+    public companion object {
+        /** FCB_STEP_COUNT — the count, not a step (progress denominator). */
+        public const val STEP_COUNT: Int = 6
+
+        public fun fromRaw(raw: Int): FcBootStep? = entries.firstOrNull { it.raw == raw }
+    }
+}
+
+// FCB_DEG_* bitmask ("bd").  A set bit means that step finished DEGRADED and
+// boot CONTINUED — the "carry on but tell the operator" case, which nothing
+// else on the dashboard surfaces during boot.
+public const val FCB_DEG_SENSORS: Int = 0x01
+public const val FCB_DEG_GNSS: Int = 0x02
+public const val FCB_DEG_SERVOS: Int = 0x04
+public const val FCB_DEG_NVS: Int = 0x08
+
+/**
+ * Seconds watching the SAME boot step before the line calls it stuck (iOS
+ * FcBootProgress.stallAfter).  PER STEP, because their legitimate durations
+ * differ by four orders of magnitude -- measured on the bench 2026-08-19 (FC
+ * boot, healthy board): LINKS 3 ms, NVS 12 ms, SENSORS ~21 s, GNSS 11 ms,
+ * SERVOS 4.2 s, setup_fc complete at 25.4 s.
+ *
+ * SENSORS is the outlier and must not be judged by the others: GNSS bootstrap
+ * runs INSIDE sensor_collector.begin(), which blocks until a ~35 s deadline
+ * when the module is unresponsive, so a healthy board legitimately sits here
+ * for tens of seconds.  A single 12 s threshold (what this shipped with before
+ * the bench run) flagged EVERY normal boot as stalled -- the precise way to
+ * train an operator to ignore the one warning this feature exists to give.
+ */
+public fun fcBootStallAfterS(step: FcBootStep?): Int = when (step) {
+    FcBootStep.SENSORS -> 45   // ~35 s GNSS bring-up deadline + margin
+    FcBootStep.SERVOS  -> 15   // neutral settle measured at 4.2 s
+    else               -> 8    // links/NVS/GNSS are all milliseconds
+}
+
+/** Shown for a step this build has no name for (append-only wire enum). */
+public const val FC_BOOT_UNKNOWN_LABEL: String = "Starting up\u2026"
+
+/**
+ * Shown while the app is connected but the FC has not spoken at all: either
+ * the rail is off (the OC waits for a power-on command) or the FC is silent.
+ * The wire cannot tell those apart — "bs" is absent in both — but neither is
+ * INITIALIZATION, which is what the zeroed rocket_state would otherwise read
+ * as.
+ */
+public const val FC_BOOT_SILENT_LABEL: String = "Waiting for flight computer\u2026"
+
+/**
  * Live BLE telemetry JSON model — a semantics-exact port of iOS
  * `TelemetryData.swift` (the behavioral reference; short JSON keys mirror its
  * CodingKeys, which in turn mirror TR_BLE_To_APP.cpp:buildTelemetryJSON).
@@ -77,6 +155,15 @@ public data class TelemetryData(
     val gdop: Float? = null,
     val numSats: Int = 0,                     // "nsat"
     val state: String = "UNKNOWN",            // "st"
+
+    // FC boot progress, emitted ONLY while the FC is still in setup_fc()
+    // (the OC gates all three on boot_valid = fc_boot_status_valid &&
+    // !latest_non_sensor_valid).  Their absence therefore means "the FC is
+    // past boot" OR "the FC has never spoken" — see [fcBootStatusLine].
+    val fcBootStepRaw: Int? = null,           // "bs"  FcBootStep now STARTING
+    val fcBootElapsedMs: Int? = null,         // "bt"  u16 ms since FC reset
+    // "bd" is omitted on the normal boot, so 0 is the honest default.
+    val fcBootDegraded: Int = 0,              // "bd"  FCB_DEG_* bitmask
     val activeFile: String = "",              // "af"
     val rxKbs: Float? = null,                 // "rxk"  I2C RX rate kB/s
     val wrKbs: Float? = null,                 // "wrk"  Flash write rate kB/s
@@ -419,6 +506,75 @@ public data class TelemetryData(
             return if (code < 24) b2rOrientationName(code) else "custom"
         }
 
+    // ── FC boot progress ("bs"/"bt"/"bd") ─────────────────────────────────
+
+    /** True while the OC is still reporting FC boot steps. */
+    public val fcBooting: Boolean get() = fcBootStepRaw != null
+
+    /** Null when the FC is not booting, or reports a step this build predates. */
+    public val fcBootStep: FcBootStep? get() = fcBootStepRaw?.let(FcBootStep::fromRaw)
+
+    /** Step name (generic for an unknown step); null when the FC is not booting. */
+    public val fcBootStepLabel: String?
+        get() = if (!fcBooting) null else fcBootStep?.label ?: FC_BOOT_UNKNOWN_LABEL
+
+    /**
+     * Degraded subsystems, in "bd" bit order; empty on the normal boot (iOS
+     * FcBootProgress.degradedSubsystems).
+     */
+    public val fcBootDegradedSubsystems: List<String>
+        get() = buildList {
+            if ((fcBootDegraded and FCB_DEG_SENSORS) != 0) add("sensors")
+            if ((fcBootDegraded and FCB_DEG_GNSS) != 0) add("GNSS")
+            if ((fcBootDegraded and FCB_DEG_SERVOS) != 0) add("servos")
+            if ((fcBootDegraded and FCB_DEG_NVS) != 0) add("saved settings")
+        }
+
+    /**
+     * [dwellS] is the APP's own time on the current step, NOT [fcBootElapsedMs]:
+     * "bt" is stamped when the step STARTS and then repeats unchanged in every
+     * frame, so a wedged boot and a just-started one carry the same "bt" — only
+     * the dwell separates them.  FcBootStep.COMPLETE is exempt: setup_fc() has
+     * finished and the app is merely waiting for the first real NonSensorData.
+     */
+    public fun fcBootStalled(dwellS: Int): Boolean =
+        fcBooting && fcBootStep != FcBootStep.COMPLETE &&
+            dwellS >= fcBootStallAfterS(fcBootStep)
+
+    /**
+     * The one secondary line under the state label (iOS twin: RocketStateView
+     * bootLine over FcBootProgress.line).  Null means the FC is up and the
+     * state label already tells the whole story.
+     *
+     * The other two returns both happen while that label reads INITIALIZATION,
+     * which by itself is a lie of omission: rocket_state is zero for a rail
+     * that is off, for a boot still in setup_fc(), and for a genuine
+     * INITIALIZATION alike.  A boot step names the middle case; with no step at
+     * all, the honest thing to say is that nothing has been heard from the FC —
+     * never "initializing".
+     *
+     * [dwellS] defaults to 0 = "just seen", so a caller with no clock of its
+     * own still gets the step and any degraded bits.
+     */
+    public fun fcBootStatusLine(dwellS: Int = 0): String? {
+        val step = fcBootStepLabel
+            ?: return if (state == "INITIALIZATION") FC_BOOT_SILENT_LABEL else null
+        val parts = mutableListOf(step)
+        if (fcBootStalled(dwellS)) {
+            // FcBootStep.SENSORS covers GNSS bring-up too — sensor_collector
+            // .begin() blocks to its ~35 s deadline when the module is dead —
+            // so a boot parked there IS the dead-GNSS stall, and naming it is
+            // the difference between "wait longer" and "check the receiver".
+            parts.add(
+                if (fcBootStep == FcBootStep.SENSORS) "no progress for ${dwellS}s, GNSS may be dead"
+                else "no progress for ${dwellS}s"
+            )
+        }
+        val degraded = fcBootDegradedSubsystems
+        if (degraded.isNotEmpty()) parts.add("degraded: " + degraded.joinToString(", "))
+        return parts.joinToString(" — ")
+    }
+
     public companion object {
 
         /** Strict-field type mismatch → the whole frame is discarded. */
@@ -523,6 +679,9 @@ public data class TelemetryData(
             // gdop: intentionally NOT decoded — absent from iOS CodingKeys.
             numSats = flexInt(json, "nsat") ?: 0,                       // #571
             state = strictString(json, "st") ?: "UNKNOWN",
+            fcBootStepRaw = flexInt(json, "bs"),
+            fcBootElapsedMs = flexInt(json, "bt"),
+            fcBootDegraded = flexInt(json, "bd") ?: 0,
             activeFile = strictString(json, "af") ?: "",
             rxKbs = strictFloat(json, "rxk"),
             wrKbs = strictFloat(json, "wrk"),

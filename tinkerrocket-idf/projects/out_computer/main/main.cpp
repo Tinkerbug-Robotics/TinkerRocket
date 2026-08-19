@@ -884,6 +884,25 @@ static bool latest_gnss_valid = false;
 static bool latest_power_valid = false;
 static bool latest_non_sensor_valid = false;
 
+// FC boot progress (FC_BOOT_STATUS_MSG), live only during the FC's setup_fc.
+// Deliberately NOT cleared when boot completes: the last frame carries the
+// final degraded bitmask, and the app stops consulting it once real
+// rocket_state frames start arriving.
+static FcBootStatusData fc_boot_status{};
+static bool     fc_boot_status_valid = false;
+static uint32_t fc_boot_status_rx_ms = 0;
+// True once NonSensorData has arrived SINCE the last boot-status frame, i.e.
+// "this boot has finished and real state is flowing".
+//
+// Deliberately NOT latest_non_sensor_valid, which is set once at first receipt
+// and never cleared for the life of the OC process.  Gating on that worked
+// exactly once — on the first FC boot after an OC reset — and then suppressed
+// the boot line on every subsequent FC reboot, because the flag was still true
+// from the previous FC session.  (That never-aged latch is the same one behind
+// the stale-continuity finding.)  This flag is per boot sequence: cleared when
+// a boot-status frame arrives, set when NonSensorData does.
+static bool     fc_ns_since_boot = false;
+
 static float ground_pressure_pa = 101325.0f;
 static bool ground_pressure_set = false;
 static float pressure_alt_m = 0.0f;
@@ -2353,6 +2372,7 @@ static bool isKnownMessageType(uint8_t type)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
         case I2C_TX_RESYNC:          // FC→OC over I2C — slave TX desync recovery (#402)
+        case FC_BOOT_STATUS_MSG:     // FC→OC over I2C during setup_fc — boot progress
             return true;
         default:
             return false;
@@ -2693,6 +2713,26 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
         }
     }
+    else if (type == FC_BOOT_STATUS_MSG)
+    {
+        // FC boot progress during its ~10 s setup_fc, before any NonSensorData
+        // exists.  Latch it for the telemetry builder; the app renders it under
+        // the state so the operator sees which step is running (and which one it
+        // stalled on) instead of an undifferentiated "INITIALIZATION".
+        if (payload_len >= sizeof(FcBootStatusData))
+        {
+            memcpy(&fc_boot_status, payload, sizeof(FcBootStatusData));
+            fc_boot_status_valid = true;
+            fc_boot_status_rx_ms = millis();
+            // A new boot sequence: any NonSensorData seen before this belongs
+            // to the PREVIOUS FC session and must not suppress this one.
+            fc_ns_since_boot = false;
+            ESP_LOGI("OC", "[FC BOOT] step=%u degraded=0x%02X t=%u ms",
+                     (unsigned)fc_boot_status.step,
+                     (unsigned)fc_boot_status.degraded,
+                     (unsigned)fc_boot_status.elapsed_ms);
+        }
+    }
     else if (type == OTA_STATUS_MSG)
     {
         // #8 Phase 4: FC→OC OTA relay status. Map the FC's state byte to the
@@ -2772,6 +2812,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             const RocketState prev_state = latest_rocket_state;
             memcpy(&latest_non_sensor, payload, sizeof(NonSensorData));
             latest_non_sensor_valid = true;
+            fc_ns_since_boot = true;   // boot sequence over — real state is flowing
             latest_rocket_state = (RocketState)latest_non_sensor.rocket_state;
             // Update the flight-freeze sticky flag whenever the state
             // changes (issue #71).  Safe to call on every frame — the
@@ -5416,6 +5457,17 @@ static void printStats()
     ble_telem.longitude = NAN;
     ble_telem.gdop = NAN;
     ble_telem.num_sats = 0;
+
+    // FC boot progress: report it ONLY until the FC's first NonSensorData
+    // arrives.  From that moment rocket_state is real and the boot keys would
+    // be stale, so they stop being emitted and the app falls back to the state
+    // machine.  Before ANY boot frame arrives the keys are absent too, which is
+    // itself the "flight computer has not spoken" signal the app needs to
+    // distinguish a powered-off FC from a booting one.
+    ble_telem.boot_valid      = fc_boot_status_valid && !fc_ns_since_boot;
+    ble_telem.boot_step       = fc_boot_status.step;
+    ble_telem.boot_degraded   = fc_boot_status.degraded;
+    ble_telem.boot_elapsed_ms = fc_boot_status.elapsed_ms;
     if (latest_power_valid)
     {
         POWERDataSI p = {};

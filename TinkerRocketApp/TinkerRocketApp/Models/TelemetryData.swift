@@ -266,6 +266,122 @@ struct TelemetryData: Codable {
         return mustBeOK.allSatisfy { $0 == .ok } ? .ready : .caution
     }
 
+    // ── FC boot progress ──────────────────────────────────────────────────
+    // The FC spends ~10 s in setup_fc() before its state machine runs, and it
+    // transmits no NonSensorData in that window — so the OC's zeroed
+    // latest_non_sensor makes rocket_state read 0 == INITIALIZATION, and "FC
+    // rail off", "FC still booting" and "FC genuinely initializing" all
+    // rendered as the same bare INIT.  The FC now reports each step as it
+    // STARTS (FC_BOOT_STATUS_MSG), and the OC forwards it ONLY while the FC is
+    // still booting — so the absence of "bs" is itself information: the FC has
+    // not spoken at all this session (see RocketStateView).
+    var fc_boot_step: Int?          // "bs": FcBootStep now starting (raw wire value)
+    var fc_boot_ms: Int?            // "bt": ms since FC reset, saturating at 65535
+    var fc_boot_degraded: Int = 0   // "bd": FCB_DEG_* bits; key omitted on a normal boot
+
+    /// setup_fc()'s reportable steps (RocketComputerTypes.h FcBootStep).  The
+    /// wire enum is append-only, so an unrecognized value must still render —
+    /// a newer FC may report a step this build has never heard of.
+    enum FcBootStep: Int {
+        case links = 0, nvs, sensors, gnss, servos, complete
+        var label: String {
+            switch self {
+            case .links:    return "Linking to flight computer"
+            case .nvs:      return "Loading saved settings"
+            case .sensors:  return "Starting sensors"
+            case .gnss:     return "Starting GNSS"
+            case .servos:   return "Starting servos"
+            case .complete: return "Flight computer ready"
+            }
+        }
+    }
+
+    /// One frame's view of the FC boot, rendered as the secondary line under
+    /// the rocket state.  Kept a value type so the view rebuilds it per frame.
+    struct FcBootProgress: Equatable {
+        let step: Int          // raw "bs" — may outrun the FcBootStep this build knows
+        let elapsedMs: Int     // "bt"
+        let degradedBits: Int  // "bd"
+
+        var knownStep: FcBootStep? { FcBootStep(rawValue: step) }
+
+        // FCB_DEG_* (RocketComputerTypes.h).  A set bit means the step finished
+        // DEGRADED and boot CONTINUED — nothing stopped, which is exactly why
+        // it has to be said out loud: a dead receiver or an unread config
+        // otherwise only shows up as a missing fix or wrong settings in flight.
+        static let degSensors = 0x01
+        static let degGnss    = 0x02
+        static let degServos  = 0x04
+        static let degNvs     = 0x08
+
+        var degradedSubsystems: [String] {
+            var names: [String] = []
+            if degradedBits & Self.degSensors != 0 { names.append("sensors") }
+            if degradedBits & Self.degGnss    != 0 { names.append("GNSS") }
+            if degradedBits & Self.degServos  != 0 { names.append("servos") }
+            if degradedBits & Self.degNvs     != 0 { names.append("saved settings") }
+            return names
+        }
+
+        /// How long the app watches this SAME step before calling it stuck.
+        /// PER STEP, because their legitimate durations differ by four orders
+        /// of magnitude — measured on the bench 2026-08-19 (FC boot, healthy
+        /// board): LINKS 3 ms, NVS 12 ms, SENSORS ~21 s, GNSS 11 ms,
+        /// SERVOS 4.2 s, setup_fc complete at 25.4 s.
+        ///
+        /// SENSORS is the outlier and must not be judged by the others: GNSS
+        /// bootstrap runs INSIDE sensor_collector.begin(), which blocks until a
+        /// ~35 s deadline when the module is unresponsive, so a healthy board
+        /// legitimately sits here for tens of seconds. A single 12 s threshold
+        /// (what this shipped with before the bench run) flagged EVERY normal
+        /// boot as stalled — the precise way to train an operator to ignore the
+        /// one warning this feature exists to give.
+        static func stallAfter(_ step: FcBootStep?) -> TimeInterval {
+            switch step {
+            case .sensors: return 45   // ~35 s GNSS bring-up deadline + margin
+            case .servos:  return 15   // neutral settle measured at 4.2 s
+            default:       return 8    // links/NVS/GNSS are all milliseconds
+            }
+        }
+
+        /// `dwell` is the app's own time on the current step, NOT elapsedMs:
+        /// "bt" is stamped when the step STARTS and then repeats unchanged in
+        /// every frame, so a wedged boot and a just-started one carry the same
+        /// "bt" — only the dwell separates them.  FCB_COMPLETE is exempt: the
+        /// FC has finished and the app is just waiting for the first real
+        /// NonSensorData to arrive.
+        func isStalled(dwell: TimeInterval) -> Bool {
+            knownStep != .complete && dwell >= Self.stallAfter(knownStep)
+        }
+
+        /// The secondary line.  `dwell` defaults to 0 = "just seen", so a caller
+        /// with no clock of its own still gets the step and any degraded bits.
+        func line(dwell: TimeInterval = 0) -> String {
+            var parts = [knownStep?.label ?? "Starting up…"]
+            if isStalled(dwell: dwell) {
+                // FCB_SENSORS covers GNSS bring-up too — sensor_collector.begin()
+                // blocks to its ~35 s deadline when the module is dead — so a boot
+                // parked there IS the dead-GNSS stall, and naming it is the
+                // difference between "wait longer" and "check the receiver".
+                parts.append(knownStep == .sensors
+                    ? "no progress for \(Int(dwell))s, GNSS may be dead"
+                    : "no progress for \(Int(dwell))s")
+            }
+            if !degradedSubsystems.isEmpty {
+                parts.append("degraded: " + degradedSubsystems.joined(separator: ", "))
+            }
+            return parts.joined(separator: " — ")
+        }
+    }
+
+    /// nil on every frame from a running FC — "bs" rides only the boot window.
+    var fcBootProgress: FcBootProgress? {
+        guard let step = fc_boot_step else { return nil }
+        return FcBootProgress(step: step,
+                              elapsedMs: fc_boot_ms ?? 0,
+                              degradedBits: fc_boot_degraded)
+    }
+
     // Short JSON keys → Swift property names (saves ~150 bytes in BLE payload)
     enum CodingKeys: String, CodingKey {
         case soc
@@ -317,6 +433,11 @@ struct TelemetryData: Codable {
         case data_status = "ds"        // #95
         case data_age_ms = "age"       // #95
         case fields_trimmed = "tr"     // #282: frame trimmed to fit MTU
+        // FC boot progress, Tier 1 right after "st" because it QUALIFIES the
+        // state; all three are absent once the FC is running.
+        case fc_boot_step = "bs"
+        case fc_boot_ms = "bt"
+        case fc_boot_degraded = "bd"
     }
 
     // Custom decoder: non-optional fields with defaults need decodeIfPresent
@@ -394,6 +515,11 @@ struct TelemetryData: Codable {
         data_status = DataStatus(rawValue: dsRaw) ?? .live
         data_age_ms = UInt32(clamping: flexInt(.data_age_ms) ?? 0)   // #293: tolerant
         fields_trimmed = (flexInt(.fields_trimmed) ?? 0) != 0        // #282
+        // Absent on every frame from a running FC, and "bd" is absent on a
+        // normal boot as well — lenient like hch/nidd, never an error.
+        fc_boot_step = flexInt(.fc_boot_step)
+        fc_boot_ms = flexInt(.fc_boot_ms)
+        fc_boot_degraded = flexInt(.fc_boot_degraded) ?? 0
     }
 
     // Default memberwise init (for creating empty telemetry)

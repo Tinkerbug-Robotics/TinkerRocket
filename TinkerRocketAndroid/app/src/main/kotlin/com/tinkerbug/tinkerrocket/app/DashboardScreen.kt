@@ -189,7 +189,7 @@ fun DashboardScreen(
         // Rocket state — iOS RocketStateView twin (#382 display mapping:
         // READY and PRELAUNCH both render "PRELAUNCH" with a readiness badge
         // carrying the real distinction; raw wire strings untouched).
-        RocketStateBanner(telemetry.state)
+        RocketStateBanner(telemetry)
 
         // Power section — #377: never offer the blind cmd-8 toggle until the
         // first telemetry frame of this session confirmed the power state.
@@ -1138,10 +1138,18 @@ private data class StorageRow(
  * carries the real distinction.  Colors match iOS: acquiring orange, ready
  * green, INFLIGHT red, COMPLETE/MAG_CAL blue, else gray.  Wire strings,
  * CSV columns, and the announcer's raw-state logic are untouched.
+ *
+ * The second line is the FC boot report ("bs"/"bt"/"bd"): it exists because
+ * the state label alone cannot tell a rail that is off from a flight computer
+ * ten seconds into setup_fc() — both read INITIALIZATION off a zeroed
+ * rocket_state.  It sits UNDER the label rather than replacing it, so the
+ * state the rest of the dashboard is gated on stays where the operator
+ * expects it.
  */
 @Composable
-private fun RocketStateBanner(state: String) {
+private fun RocketStateBanner(telemetry: TelemetryData) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    val state = telemetry.state
     val color = when (state) {
         "READY" -> tr.statusScanning      // acquiring (orange)
         "PRELAUNCH" -> tr.statusConnected // fully ready (green)
@@ -1169,7 +1177,47 @@ private fun RocketStateBanner(state: String) {
                 36f, androidx.compose.ui.unit.TextUnitType.Sp),
             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
         )
+        val dwellS = rememberBootDwellSeconds(telemetry)
+        telemetry.fcBootStatusLine(dwellS)?.let { line ->
+            // A degraded step FINISHED and boot carried on, so nothing else
+            // will ever mention it; amber is the caution rung.  Everything
+            // else is secondary text — the state label owns the color.
+            val warn = telemetry.fcBootStalled(dwellS) ||
+                telemetry.fcBootDegradedSubsystems.isNotEmpty()
+            Text(
+                line,
+                color = if (warn) tr.statusWarn else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
     }
+}
+
+/**
+ * Whole seconds the app has been looking at the SAME boot report — the dwell
+ * TelemetryData.fcBootStalled needs, because "bt" is stamped when a step
+ * starts and then repeats unchanged, so it cannot say how long the FC has sat
+ * there.  Any change to the report (step, "bt", degraded bits) is progress and
+ * re-arms the clock, which also keeps a boot that begins on a long-open
+ * dashboard from flashing an instant stall.
+ */
+@Composable
+private fun rememberBootDwellSeconds(telemetry: TelemetryData): Int {
+    if (!telemetry.fcBooting) return 0
+    val report = Triple(telemetry.fcBootStepRaw, telemetry.fcBootElapsedMs, telemetry.fcBootDegraded)
+    val seenAtMs = remember(report) { System.currentTimeMillis() }
+    var nowMs by remember(report) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(report) {
+        // iOS leans on SwiftUI re-rendering at the ~2 Hz telemetry rate; a
+        // Compose recomposition needs a state write, and a wedged boot is
+        // precisely the case where no new frame changes anything.
+        while (true) {
+            delay(1_000)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+    return ((nowMs - seenAtMs) / 1000L).toInt()
 }
 
 /**

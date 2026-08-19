@@ -68,10 +68,11 @@ TEST_F(KinematicChecksTest, Launch_BriefSpike_NoTrigger) {
 // ── #258: accel-only launch fallback when the baro is invalid ──
 
 // Baro invalid (dead) -> d_alt_est_ never confirms a climb.  Sustained >3 g for
-// >500 samples must still latch launch so recovery arms (a missed launch = no
-// pyro arming = ballistic).  callFlight's last arg is baro_healthy.
+// >250 samples (~250 ms at the 1 kHz flight-logic rate) must still latch launch
+// so recovery arms (a missed launch = no pyro arming = ballistic).  callFlight's
+// last arg is baro_healthy.
 TEST_F(KinematicChecksTest, Launch_DeadBaro_AccelOnlyFallbackFires) {
-    for (int i = 0; i < 600; i++) {
+    for (int i = 0; i < 300; i++) {
         setMockMillis(i * 2);
         // flat altitude (no climb), ~3.5 g, baro UNHEALTHY
         callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
@@ -80,14 +81,46 @@ TEST_F(KinematicChecksTest, Launch_DeadBaro_AccelOnlyFallbackFires) {
     EXPECT_TRUE(kc.launch_flag);
 }
 
-// Baro invalid but only ~300 samples of >3 g (< 500) -> fallback must NOT fire.
+// Baro invalid but only ~150 samples of >3 g (< 250) -> fallback must NOT fire.
 TEST_F(KinematicChecksTest, Launch_DeadBaro_ShortHighG_NoLaunch) {
-    for (int i = 0; i < 300; i++) {
+    for (int i = 0; i < 150; i++) {
         setMockMillis(i * 2);
         callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
                    true, /*baro_healthy=*/false);
     }
     EXPECT_FALSE(kc.launch_flag);
+}
+
+// The threshold is UNINTERRUPTED: a single sample at or below the 20 m/s2 reset
+// floor zeroes both counters, so an oscillating stimulus (hand motion, a bump,
+// vibration) can never accumulate to the bar no matter how long it goes on.
+// This is what makes ~250 ms safe to auto-promote on — see the INITIALIZATION
+// launch escape in flight_computer/main/main.cpp.
+TEST_F(KinematicChecksTest, Launch_DeadBaro_InterruptedHighG_NeverLatches) {
+    for (int i = 0; i < 2000; i++) {
+        setMockMillis(i * 2);
+        // 200 samples above the bar, then one sample at the reset floor.
+        const float acc = (i % 201 == 200) ? 15.0f : 35.0f;
+        callFlight(0.0f, acc, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/false);
+    }
+    EXPECT_FALSE(kc.launch_flag);
+}
+
+// Boundary: 249 sustained samples is still short of the bar, 251 clears it.
+TEST_F(KinematicChecksTest, Launch_DeadBaro_FallbackBoundary) {
+    for (int i = 0; i < 249; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/false);
+    }
+    EXPECT_FALSE(kc.launch_flag) << "249 samples must not latch";
+    for (int i = 249; i < 252; i++) {
+        setMockMillis(i * 2);
+        callFlight(0.0f, 35.0f, 0.0f, 0.0f, 0.0f, false, 1.57f, false, false, 0.0f,
+                   true, /*baro_healthy=*/false);
+    }
+    EXPECT_TRUE(kc.launch_flag) << "251 samples must latch";
 }
 
 // Explicit goal: accel must NOT decide launch while the baro is VALID.

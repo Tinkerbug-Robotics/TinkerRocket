@@ -44,12 +44,34 @@ constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
 
 // Launch accel-only fallback (#258): when the baro is INVALID, latch launch on
 // sustained high-G alone.  Deliberately a much higher bar than the baro-
-// confirmed path (3 g vs 2 g, 500 vs 50 samples) so handling/transport can't
+// confirmed path (3 g vs 2 g, 250 vs 50 samples) so handling/transport can't
 // fake it — a missed launch means recovery never arms (ballistic), so we
 // over-confirm.  Gated on !baro_healthy, so accel never decides launch while
 // the baro is valid.
+//
+// The counter is in flight-loop iterations, and the flight-logic block is
+// gated at flight_loop_period = 1e6 / config::FLIGHT_LOOP_UPDATE_RATE
+// (main.cpp:208, 4051) = 1 kHz, so 250 samples is ~250 ms of wall clock.
+// Halved from 500 (~500 ms): a short-burn motor's thrust curve tapers, so the
+// *continuous* >3 g window is shorter than the burn time, and a 500 ms gate
+// could sit out an entire small-motor boost and never latch — the exact
+// ballistic outcome the fallback exists to prevent.  Both counters reset on a
+// single sample <= 20 m/s2, so it takes a quarter second of UNINTERRUPTED >3 g.
+// A restrained motor burn reads ~1 g (thrust balanced by the rail nets out of
+// specific force), a drop is 0 g in free fall and milliseconds at impact, and
+// linear hand motion, bumps and vibration are oscillatory — they cross back
+// through the 2 g reset floor and can never accumulate.
+//
+// The one non-boost stimulus that is NOT oscillatory is sustained ROTATION:
+// centripetal acceleration is steady, so swinging the airframe with the board
+// ~1 m from the pivot at ~5.5 m/s holds 30 m/s2 for as long as the swing lasts.
+// A quarter second of that clears the bar.  Unquantified on a real prep bench,
+// and the halving is what brings it into reach — but it is not load-bearing on
+// its own: entering INFLIGHT arms nothing (enterInflight leaves ARM low and all
+// channels Idle), both pyro triggers are apogee-gated, and the apogee vote needs
+// burnout_detected, which a nose-up airframe cannot produce.
 constexpr float    LAUNCH_ACCEL_FALLBACK_MS2   = 30.0f;  // ~3 g
-constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 500;    // sustained samples
+constexpr uint16_t LAUNCH_ACCEL_FALLBACK_COUNT = 250;    // sustained samples (~250 ms at 1 kHz)
 
 // Baro settle window after burnout. Thrust tail-off can snap the bay pressure
 // back from its boost-suction offset (7/05 V2 F1: indicated altitude fell 15 m
@@ -289,8 +311,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 // #258 accel-only fallback — ONLY when the baro is invalid.
                 // On a healthy baro this branch is unreachable (the primary
                 // latches first), so accel never decides launch unless the baro
-                // can't.  Half a second of sustained >3 g with a dead baro is an
-                // unambiguous boost; latching here is what keeps recovery from
+                // can't.  A quarter second of sustained >3 g with a dead baro is
+                // an unambiguous boost; latching here is what keeps recovery from
                 // never arming (ballistic) on a baro failure.
                 launch_flag = true;
             }

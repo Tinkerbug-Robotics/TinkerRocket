@@ -20,6 +20,7 @@ on:
       - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
       - 'TinkerRocketAndroid/core/protocol/**'
       - 'tools/check_ble_command_ids.py'
+      - 'tools/check_dispatch_admits.py'
       - '.github/workflows/wire-codes.yml'
   pull_request:
     paths:
@@ -32,6 +33,7 @@ on:
       - 'TinkerRocketApp/TinkerRocketApp/**/*.swift'
       - 'TinkerRocketAndroid/core/protocol/**'
       - 'tools/check_ble_command_ids.py'
+      - 'tools/check_dispatch_admits.py'
       - '.github/workflows/wire-codes.yml'
 
 jobs:
@@ -43,3 +45,13 @@ jobs:
       # Pure stdlib (re, pathlib); ubuntu-latest ships python3, no deps needed.
       - name: Check BLE command-number uniqueness (app<->OC / app<->BS)
         run: python3 tools/check_ble_command_ids.py
+
+      # A handled-but-not-admitted OC message type is dead code: processFrame()
+      # drops it at `if (!isKnownMessageType(type)) return;` before the branch
+      # ever runs.  FC_BOOT_STATUS_MSG shipped that way on 2026-08-19 and no
+      # host test noticed — the gtest registry guards code UNIQUENESS, not
+      # whitelist membership.  Runs even if the check above failed so one PR
+      # surfaces both.
+      - name: Check every handled OC message type is admitted
+        if: '!cancelled()'
+        run: python3 tools/check_dispatch_admits.py
