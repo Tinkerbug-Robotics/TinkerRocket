@@ -351,6 +351,9 @@ struct DashboardView: View {
             other.flightAnnouncer = nil
         }
         voiceDevice?.flightAnnouncer = flightAnnouncer
+        // #813: lets a deployment be graded against this rocket's own
+        // expected descent rates.  Weak on the announcer's side.
+        flightAnnouncer.profileStore = profileStore
 
         if let rocket = directRocket {
             syncer.attach(device: rocket, store: profileStore)
