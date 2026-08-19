@@ -533,6 +533,19 @@ target_include_directories(test_baro_gate_policy PRIVATE
 target_link_libraries(test_baro_gate_policy GTest::gtest_main)
 gtest_discover_tests(test_baro_gate_policy)
 
+# ---------- test_gnss_framing ----------
+# GNSS bring-up baud detection used to accept ANY byte, so a 9600 stream sampled
+# at 38400 read as "alive" and ran a ~3 s recovery branch per wrong baud (bench
+# 2026-08-19: 9.4 s lost before the sweep came back to 9600).  gnss_framing.h is
+# pure, so the test just adds the component dir.
+add_executable(test_gnss_framing test_gnss_framing.cpp)
+target_include_directories(test_gnss_framing PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/components/TR_GNSSReceiverUBlox_Serial
+)
+target_link_libraries(test_gnss_framing GTest::gtest_main)
+gtest_discover_tests(test_gnss_framing)
+
 # ---------- test_dedup_reboot_policy ----------
 # Host-side test for the OC's FC-reboot-vs-replay discriminator (#468): a
 # reboot verdict requires the timestamp backstep to persist for the confirm
