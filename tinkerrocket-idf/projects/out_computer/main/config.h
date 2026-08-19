@@ -10,23 +10,40 @@
 // fork per revision. Select the V8 map with: idf.py -DTR_BOARD_V8=1 build
 // (default stays V7 until V8 bring-up completes).
 //
-// TR_BOARD_V9=1 selects the SAME board_v8.h. Unlike the FC — where V9 moved
-// three pyro pins and needed its own header — the S3's pin map is unchanged
-// from V8 through V10 (verified 2026-08-17 against every committed revision
-// of hardware/rocket-computer; see board_v8.h). The flag exists so a V9/V10
-// pair is built with one consistent revision flag on both MCUs, and so the
-// image is stamped "-v9". If a future revision does move an S3 pin, split
-// board_v9.h out here and switch this branch to it.
+// TR_BOARD_V9=1 selects board_v9.h (V9/V10). The S3's *pin* map is unchanged
+// from V8 through V10 — unlike the FC, where V9 moved three pyro pins — so
+// this used to be an alias to board_v8.h. #822: it isn't a pin change that
+// forced the split, it's a deleted part. V9 removed the MRAM (U12), and an
+// alias is presence-blind: it can say "same pins" but not "one fewer device",
+// so V9/V10 firmware kept driving an MRAM_CS that goes nowhere and backed the
+// log ring + reboot snapshot with an unfitted chip. The two headers differ in
+// exactly one value, MRAM_CS (34 vs -1); keep every other pin in step by hand.
 #ifndef TR_BOARD_V8
 #define TR_BOARD_V8 0
 #endif
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
 #endif
-#if TR_BOARD_V8 || TR_BOARD_V9
+#if TR_BOARD_V8
 #include "board/board_v8.h"
+#elif TR_BOARD_V9
+#include "board/board_v9.h"
 #else
 #include "board/board_v7.h"
+#endif
+
+// The one difference between the V8 and V9 maps, asserted rather than trusted.
+// Nothing at runtime notices a wrong MRAM_CS: with 34 on a V9 board the ring
+// and the snapshot slot write to a floating pad and report success, and with
+// -1 on a V8 board the fitted MRAM simply goes unused. Both are silent. So pin
+// it here — re-aliasing the V9 branch back to board_v8.h, or editing MRAM_CS
+// in the wrong header, then fails the build instead of the flight.
+#if TR_BOARD_V9
+static_assert(board_pins::MRAM_CS < 0,
+              "V9/V10 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");
+#elif TR_BOARD_V8
+static_assert(board_pins::MRAM_CS == 34,
+              "V8 bench boards have the MRAM fitted on GPIO34 — do not change this (#822)");
 #endif
 
 struct config : board_pins
@@ -41,10 +58,17 @@ struct config : board_pins
     static constexpr bool PROFILE_TASK_CPU = true;
 
     // --- MRAM (MR25H10 on shared SPI bus; CS pin in board header) ---
-    // Enabled: 128 KB non-volatile ring buffer survives hard resets.
-    // SPI bus mutex prevents contention between Core 1 (ring push) and
-    // Core 0 (NAND flush).  On dirty startup, MRAM is drained to a
+    // V7/V8 only.  Enabled: 128 KB non-volatile ring buffer survives hard
+    // resets.  SPI bus mutex prevents contention between Core 1 (ring push)
+    // and Core 0 (NAND flush).  On dirty startup, MRAM is drained to a
     // recovery file before clearing.  MRAM_CS = -1 falls back to RAM ring.
+    //
+    // V9/V10 have no MRAM (board_v9.h, MRAM_CS = -1), so everything below
+    // that is measured from MRAM_SIZE — the snapshot region and the #274
+    // dirty marker — addresses a device that isn't there.  The constants stay
+    // (they are the V7/V8 geometry, and TR_LogToFlash ignores them outright
+    // when use_mram_ is false), but do NOT read them as "the OC always has a
+    // non-volatile snapshot store".  It doesn't; see initPeripherals().
     static constexpr uint32_t MRAM_SIZE = 131072;       // 128 KB
     static constexpr uint32_t SPI_HZ_MRAM = 40'000'000;
     static constexpr uint8_t SPI_MODE_MRAM = SPI_MODE0;

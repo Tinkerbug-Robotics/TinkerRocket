@@ -25,21 +25,43 @@ idf_component_register(
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format -Wno-narrowing)
 
-# Board revision selection (#411): `idf.py -DTR_BOARD_V8=1 build` compiles the
-# V8 pin map (main/board/board_v8.h); default is V7. Use a separate build dir
-# per variant (e.g. -B build_v8) — the flag is cached by CMake.
+# Board revision selection (#411). Use a separate build dir per variant — the
+# flag is cached by CMake:
 #
-# -DTR_BOARD_V9=1 is accepted and selects the same map: the S3 pin map did not
-# change between V8 and V9/V10 (see board_v8.h and main/config.h). It exists so
-# both MCUs of a V9 pair take the same flag — the FC's V9 map is a genuinely
-# different header, and mixing -DTR_BOARD_V8=1 here with -DTR_BOARD_V9=1 there
-# reads like a mistake even when it isn't.
+#   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards (MRAM fitted)
+#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # V9/V10 (no MRAM)
+#
+# V8 and V9/V10 share every S3 GPIO, but they are NOT interchangeable: #822
+# split board_v9.h out because V9 deleted the MRAM (U12). Building V9/V10
+# hardware with -DTR_BOARD_V8=1 puts the log ring and the reboot snapshot on an
+# unfitted chip, and nothing at runtime says so — the writes go to a floating
+# pad.
+#
+# Default is still V7 (no flag), unlike the FC where the flag is mandatory.
+# That default is itself a trap — V7's PWR_PIN (6) is the V8+ ESP_SCL net — but
+# changing it is out of scope here; CI now builds V8 and V9 explicitly so
+# neither map can rot.
+set(_tr_oc_board_flags "")
+foreach(_tr_flag TR_BOARD_V8 TR_BOARD_V9)
+    if(${_tr_flag})
+        list(APPEND _tr_oc_board_flags ${_tr_flag})
+    endif()
+endforeach()
+list(LENGTH _tr_oc_board_flags _tr_oc_board_flag_count)
+if(_tr_oc_board_flag_count GREATER 1)
+    # Previously V8 silently won this race. Harmless while the two flags
+    # selected the same header; now it picks a board.
+    message(FATAL_ERROR
+        "out_computer: more than one board revision selected "
+        "(${_tr_oc_board_flags}). Pass exactly one, and use a separate build "
+        "dir per variant — a stale CMake cache is the usual cause.")
+endif()
 if(TR_BOARD_V8)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BOARD_V8=1)
-    message(STATUS "out_computer: board pin map V8")
+    message(STATUS "out_computer: board pin map V8 (main/board/board_v8.h, MRAM fitted)")
 elseif(TR_BOARD_V9)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BOARD_V9=1)
-    message(STATUS "out_computer: board pin map V9/V10 (identical to V8 on this MCU)")
+    message(STATUS "out_computer: board pin map V9/V10 (main/board/board_v9.h, no MRAM)")
 else()
     message(STATUS "out_computer: board pin map V7 (default; pass -DTR_BOARD_V8=1 or -DTR_BOARD_V9=1 for newer hardware)")
 endif()

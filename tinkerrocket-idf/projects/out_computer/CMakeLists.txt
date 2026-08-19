@@ -29,9 +29,11 @@ if(NOT TR_GIT_DIRTY_CODE EQUAL 0)
 endif()
 string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # Board revision marker (#411): V8/V9 builds are identifiable from the app
-# version string (BLE config_identity "fw" field, boot log, OTA metadata).
-# The two select the same pin map on this MCU (see main/config.h) but are
-# stamped apart so an image can be traced back to the board it was built for.
+# version string (BLE config_identity "fw" field, boot log, OTA metadata), so
+# an image can be traced back to the board it was built for. Since #822 that
+# matters at runtime and not only for provenance: the two select different
+# headers (V9/V10 has no MRAM), so a "-v8" image on V9 hardware is a real
+# misconfiguration, not just a mislabel.
 if(TR_BOARD_V9)
     set(TR_BOARD_SUFFIX "-v9")
 elseif(TR_BOARD_V8)

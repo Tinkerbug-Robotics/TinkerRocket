@@ -2907,6 +2907,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 last_snap_elapsed_ms = elapsed_ms;
                 // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
                 // so the recovery path can hand the bytes straight back to FC.
+                // #822: a no-op returning false on a board with no MRAM
+                // (V9/V10) — deliberately unlogged here, because this runs at
+                // 10 Hz for the whole flight.  initPeripherals() warns once at
+                // boot and the GET_FLIGHT_SNAPSHOT handler warns when the FC
+                // actually comes asking; those are the two places that matter.
                 (void)logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
                                           frame, frame_len);
             }
@@ -2927,6 +2932,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
+        }
+        else
+        {
+            // #822: no MRAM on this board, so there is no snapshot slot and we
+            // stage no response at all.  The FC handles that safely — its
+            // masterRead fails or its SOF scan finds nothing, and it logs
+            // "[RECOVERY] I2C read for snapshot failed" and carries on from a
+            // cold start — but from the OC side the request would otherwise
+            // vanish without trace.  This only fires when the FC has actually
+            // asked, i.e. once per unexpected FC reset, so it cannot spam.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and this "
+                           "board has no MRAM to keep one in (#822) — sending "
+                           "no reply; in-flight reboot recovery is unavailable");
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -5638,8 +5656,48 @@ void initPeripherals()
 
     if (!logger.begin(SPI, log_cfg))
     {
+        // Non-obvious on the RAM-ring path: begin() also fails when the 64 KB
+        // internal-RAM ring can't be allocated. That leaves
+        // peripherals_initialized false and flightlog uninitialized, so
+        // ocStorageHealth() reports SH_BAD and the pre-launch scorecard goes
+        // red — the operator does find out. Keep it that way.
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
+    }
+
+    // #822: V9/V10 deleted the MRAM (U12, MR25H10) — the S3RH2's in-package
+    // PSRAM replaced it — so board_v9.h sets MRAM_CS = -1 and TR_LogToFlash
+    // falls back to a heap RAM ring. Flight logging is unaffected (the ring
+    // still feeds the NAND flush task), but two things that live in the MRAM
+    // region are GONE on those boards, not degraded:
+    //
+    //   * #104 in-flight reboot recovery. The FC asks for its last snapshot
+    //     with GET_FLIGHT_SNAPSHOT after a brownout/panic; the handler reads it
+    //     out of MRAM, so with no MRAM there is nothing to answer with and the
+    //     FC skips recovery.
+    //   * #274 dirty-ring replay. The marker sits in the same region, so an
+    //     unclean shutdown can no longer be detected, and the volatile ring
+    //     would not have survived the reset anyway.
+    //
+    // Both failures are otherwise completely silent — mramRawWrite/Read just
+    // return false, nothing logs, nothing goes red — so the first evidence
+    // would be a flight that browned out and never came back. Say it once,
+    // loudly, at boot instead. The replacement design already exists on the
+    // mini (snapshots written into the NAND log stream, recovered by a
+    // tail-scan at boot); porting it to the OC/FC pair is the real fix.
+    if (!logger.isMramEnabled())
+    {
+        TR_LogToFlashStats mram_st = {};
+        logger.getStats(mram_st);
+        ESP_LOGW("PWR", "========================================");
+        ESP_LOGW("PWR", "NO MRAM ON THIS BOARD (MRAM_CS = -1).");
+        ESP_LOGW("PWR", "  Log ring: %lu KB of internal RAM, VOLATILE.",
+                 (unsigned long)(mram_st.ring_size / 1024));
+        ESP_LOGW("PWR", "  In-flight reboot recovery (#104): UNAVAILABLE.");
+        ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
+        ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
+        ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
+        ESP_LOGW("PWR", "========================================");
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------
