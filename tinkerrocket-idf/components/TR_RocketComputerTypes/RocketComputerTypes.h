@@ -1329,44 +1329,40 @@ typedef struct __attribute__((packed))
     int32_t n_vel;
     int32_t u_vel;
 
-    // Flags (bitfield)
+    // Flight-status bitfield.  The bit map is the NSF_* constants below; it is
+    // deliberately NOT restated here, because the restated copy that used to
+    // sit at this spot is what drifted — it still claimed bits 6–7 were
+    // reserved long after NSF_PYRO_ARMED and NSF_SIM_ACTIVE took them.
+    // The byte is FULL.
     uint8_t flags;
-    /*
-        bit 0: alt_landed_flag
-        bit 1: alt_apogee_flag
-        bit 2: vel_u_apogee_flag
-        bit 3: launch_flag
-        bit 4: burnout_detected
-        bit 5: guidance_active
-        bit 6–7: reserved
-    */
 
     uint8_t rocket_state; // RocketState enum
 
     // KF-filtered barometric altitude rate from FlightComputer (dm/s = 0.1 m/s)
     int16_t baro_alt_rate_dmps;
 
-    // Pyro channel status (bitfield)
+    // Pyro channel status: 4 channels × (continuity, fired), interleaved per
+    // channel — ch1 cont, ch1 fired, ch2 cont, ch2 fired, … — and NOT grouped
+    // by type.  The bit map is the PSF_* constants below; it is deliberately
+    // NOT restated here.  The copy that used to sit at this spot had the
+    // grouping backwards (all conts, then all fireds) and claimed channels 3
+    // and 4 were free bits.  That is not a harmless doc nit: a Python decoder
+    // was written from it, which reported pyro1_fired as pyro2_cont and left
+    // pyro1_fired permanently false in flight reports — see the note above
+    // PSF_CH1_CONT in Data_Analysis/plot_flight_data_mini.py.  The byte is FULL.
     uint8_t pyro_status;
-    /*
-        bit 0: ch1 continuity (1 = load present)
-        bit 1: ch2 continuity (1 = load present)
-        bit 2: ch1 fired
-        bit 3: ch2 fired
-        bit 4–7: reserved
-    */
 
     // Apogee detector outputs (bitfield, appended in #142/#143).
     // The `flags` byte was full, so the remaining per-detector flags and the
     // master voted result live here.  alt_apogee_flag and vel_u_apogee_flag
     // remain in `flags` for backwards-compatible decoding of old logs.
+    // The bit map is the NSF2_* constants below; it is deliberately NOT restated
+    // here.  The copy that used to sit at this spot listed only the three
+    // apogee bits and called 3–7 reserved, long after reboot-recovery,
+    // guidance-enabled, orientation-mismatch, FC-IMU-drop and the deployment
+    // latch had claimed them.  The byte is FULL — a new signal needs a new
+    // field, not a bit.
     uint8_t apogee_flags;
-    /*
-        bit 0: gps_apogee_flag
-        bit 1: pitch_apogee_flag
-        bit 2: apogee_flag (master voted result)
-        bit 3–7: reserved
-    */
 
     // Sensor health scorecard (#303): 2 bits per item (SensorHealthState), see
     // the SH_*_SHIFT positions below — incl. a state per pyro channel.  FC fills

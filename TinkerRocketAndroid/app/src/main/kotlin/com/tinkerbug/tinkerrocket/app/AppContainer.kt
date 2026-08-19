@@ -77,6 +77,13 @@ class AppContainer(app: Application) {
             initialEnabled = prefs.getBoolean("voiceAnnouncementsEnabled", false),
             onEnabledChanged = { prefs.edit().putBoolean("voiceAnnouncementsEnabled", it).apply() },
             unitSystem = { units.system.value },
+            // #813: the flyer's own descent figures, so a deployment can be
+            // graded against what THIS rocket is supposed to do.
+            recovery = {
+                profileStore.activeProfile?.let {
+                    com.tinkerbug.tinkerrocket.session.RecoveryProfile.from(it)
+                }
+            },
         )
     }
 

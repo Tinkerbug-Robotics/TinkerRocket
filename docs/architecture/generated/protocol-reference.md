@@ -193,13 +193,13 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
-| 1 |  | Toggle camera recording |
+| 1 |  | Camera: payload[0] = desired state (1 = on, 0 = off), same semantics as the LoRa uplink (processUplinkCommand… |
 | 2 |  | Send file list with pagination (5 files per page). Encoder lives in wire_format:: and is byte-tested against… |
 | 3 |  | Delete file, then return the refreshed page-0 listing |
 | 5 |  | Configure simulation: [mass_g:4][thrust_n:4][burn_s:4][descent_rate_mps:4] |
 | 6 |  |  |
 | 7 |  |  |
-| 8 |  | Toggle power rail |
+| 8 |  | Power rail: payload[0] = desired state (1 = on, 0 = off), same semantics as cmds 1/23. A blind toggle inverts… |
 | 9 |  | Phone time sync: [year_lo][year_hi][month][day][hour][minute][second] |
 | 10 |  | Direct LoRa reconfig over BLE is no longer accepted on the rocket side (#106). LoRa link parameters are owned… |
 | 11 |  | Rocket computer sound enable/disable: [enabled:1] |
@@ -211,7 +211,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 20 |  | Config readback request |
 | 21 |  |  |
 | 22 |  | Gain schedule enable/disable: [enabled:1] |
-| 23 |  | Toggle logging (manual start/stop from app) |
+| 23 |  | Logging: payload[0] = desired state (1 = start, 0 = stop), matching the LoRa uplink and BS relay. Same desync… |
 | 24 |  | Servo test: set angles |
 | 25 |  | Servo test: stop |
 | 26 |  | Roll profile set: [num_wp:1][pad:3][wp0_time:4f][wp0_angle:4f]...[wp7_time:4f][wp7_angle:4f] |

@@ -3153,6 +3153,11 @@ static void setup_fc()
                                          config::GAIN_SCHEDULE_V_MIN);
     }
     control_mixer.setFinLayout(fin_az, fin_rev, fin_rrev);
+    // The roll-reverse mask has to reach BOTH mixers: control_mixer serves the
+    // guided / ground-test path, servo_control the roll-only path (powered
+    // flight and guidance-off flight).  Pushing it to only one is what made
+    // "Reverse roll" look inert — it flipped the ground test but not the flight.
+    servo_control.setRollReverseMask(fin_rrev);
     ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                   (double)fin_az[0], (double)fin_az[1], (double)fin_az[2], (double)fin_az[3],
                   (unsigned)fin_rev, (unsigned)fin_rrev);
@@ -6503,6 +6508,10 @@ static void loop_fc()
                         memcpy(az, f.azimuth_deg, sizeof(az));
                         control_mixer.setFinLayout(az, f.reverse_mask,
                                                    f.roll_reverse_mask);
+                        // Roll-only control mixes in servo_control, not in
+                        // control_mixer — keep both in step (see the boot
+                        // restore for why).
+                        servo_control.setRollReverseMask(f.roll_reverse_mask);
                         ESP_LOGI(TAG, "[FIN CFG] az=[%.0f %.0f %.0f %.0f] rev=0x%X rollrev=0x%X",
                                       (double)f.azimuth_deg[0], (double)f.azimuth_deg[1],
                                       (double)f.azimuth_deg[2], (double)f.azimuth_deg[3],

@@ -59,6 +59,12 @@ struct FinLayoutView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
 
             Divider()
+
+            Toggle("Reverse roll direction", isOn: rollDirectionBinding)
+            Text("Use this when the rocket rolls the wrong way — it flips roll on all four fins at once. The per-fin Reverse roll below is only for a single mis-linked servo: flipping one fin makes it fight the other three (weaker roll, same direction) rather than reversing roll.")
+                .font(.caption2).foregroundColor(.secondary)
+
+            Divider()
             selectedFinEditor
         }
         .padding(.vertical, 4)
@@ -140,7 +146,7 @@ struct FinLayoutView: View {
             }
 
             Toggle("Reverse pitch/yaw (tilt)", isOn: reverseBinding)
-            Toggle("Reverse roll", isOn: rollReverseBinding)
+            Toggle("Reverse roll (this fin only)", isOn: rollReverseBinding)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Jog servo \(selectedServo) to confirm direction")
@@ -182,6 +188,16 @@ struct FinLayoutView: View {
             rev[selectedServo - 1] = newVal
             onSetReverse(rev)
         })
+    }
+    /// Whole-airframe roll direction — every servo's roll bit at once.  This is
+    /// the common case by far: a mirrored horn or fin convention reverses all
+    /// four together, and reversing roll from the per-fin toggles means getting
+    /// all four right.  Reads ON only when every bit is set; a mixed state (one
+    /// fin overridden below) reads OFF, and switching it on normalises all four.
+    /// Same wire field as the per-fin toggle — FinConfigData.roll_reverse_mask.
+    private var rollDirectionBinding: Binding<Bool> {
+        Binding(get: { rollReverse.count == 4 && rollReverse.allSatisfy { $0 } },
+                set: { newVal in onSetRollReverse([Bool](repeating: newVal, count: 4)) })
     }
     private var rollReverseBinding: Binding<Bool> {
         Binding(get: { rollReverse.indices.contains(selectedServo - 1) ? rollReverse[selectedServo - 1] : false },

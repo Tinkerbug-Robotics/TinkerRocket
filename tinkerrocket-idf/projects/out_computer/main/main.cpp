@@ -16,6 +16,7 @@
 #include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
+#include <TR_OTA_Receiver.h>      // TR_OTA_Receiver::Error — decode the FC's relayed OTA error
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
 #include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
@@ -2358,6 +2359,37 @@ static bool isKnownMessageType(uint8_t type)
     }
 }
 
+// Decode the FC's relayed OTA failure (TR_OTA_Receiver::Error) into a stable
+// token for the app.  Every verify failure used to relay as one "fc_error",
+// which threw away the only thing that distinguishes a dropped relay chunk
+// (size_mismatch — bytes never all arrived) from a corrupted image
+// (sha_mismatch — they arrived wrong) from a flash-side refusal (end_failed /
+// set_boot_failed).  The FC logs the code over serial, but an assembled rocket
+// is exactly the case where serial isn't reachable — so it has to come up the
+// BLE link.  Tokens stay machine-stable and fc_-prefixed so they can't be
+// confused with the OC's own OTA errors.
+static const char* fcOtaErrToken(uint8_t e)
+{
+    switch ((TR_OTA_Receiver::Error)e)
+    {
+        case TR_OTA_Receiver::Error::AlreadyActive:    return "fc_already_active";
+        case TR_OTA_Receiver::Error::SessionNotActive: return "fc_session_not_active";
+        case TR_OTA_Receiver::Error::BeginFailed:      return "fc_begin_failed";
+        case TR_OTA_Receiver::Error::BadOffset:        return "fc_bad_offset";
+        case TR_OTA_Receiver::Error::SizeOverflow:     return "fc_size_overflow";
+        case TR_OTA_Receiver::Error::WriteFailed:      return "fc_write_failed";
+        case TR_OTA_Receiver::Error::SizeMismatch:     return "fc_size_mismatch";
+        case TR_OTA_Receiver::Error::ShaMismatch:      return "fc_sha_mismatch";
+        case TR_OTA_Receiver::Error::EndFailed:        return "fc_end_failed";
+        case TR_OTA_Receiver::Error::SetBootFailed:    return "fc_set_boot_failed";
+        // Ok-with-VERIFY_FAILED shouldn't happen; report it rather than imply a
+        // specific cause, and keep the legacy token for anything unrecognised
+        // (an FC newer than this OC could add a code we don't know yet).
+        case TR_OTA_Receiver::Error::Ok:               return "fc_error";
+    }
+    return "fc_error";
+}
+
 static void processFrame(const uint8_t* frame, size_t frame_len,
                          uint8_t type, const uint8_t* payload, size_t payload_len)
 {
@@ -2696,7 +2728,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     break;
                 case OTA_RELAY_WRITING:       state = "writing"; break;
                 case OTA_RELAY_READY_TO_BOOT: state = "ready_to_boot"; terminal = true; break;
-                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = "fc_error"; terminal = true; break;
+                case OTA_RELAY_VERIFY_FAILED: state = "verify_failed"; err = fcOtaErrToken(st.err); terminal = true; break;
                 case OTA_RELAY_ABORTED:       state = "aborted"; terminal = true; break;
                 default: break;
             }
@@ -6680,10 +6712,30 @@ static void loop_oc()
         ESP_LOGI("OC_CMD", "BLE cmd=%u", (unsigned)ble_cmd);
         if (ble_cmd == 1)
         {
-            // Toggle camera recording
-            camera_recording_requested = !camera_recording_requested;
-            setPendingCommand(camera_recording_requested ? CAMERA_START : CAMERA_STOP);
-            ESP_LOGI("BLE", "Camera toggle requested: %s", camera_recording_requested ? "START" : "STOP");
+            // Camera: payload[0] = desired state (1 = on, 0 = off), same
+            // semantics as the LoRa uplink (processUplinkCommand cmd 1) and
+            // the BS relay.  A blind toggle inverts whenever the app's idea
+            // of the state and ours disagree — bench-observed 2026-08-16: the
+            // OC held recording_requested=true across an FC reboot, so the
+            // next "start" tap stopped the camera 11 ms after the FC had sent
+            // START_RECORDING.  Falls back to toggle with no payload (legacy
+            // app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool want_on = (plen >= 1) ? (payload[0] != 0)
+                                             : !camera_recording_requested;
+            if (want_on != camera_recording_requested)
+            {
+                camera_recording_requested = want_on;
+                setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
+                ESP_LOGI("BLE", "Camera %s%s", want_on ? "START" : "STOP",
+                         (plen >= 1) ? "" : " (legacy toggle)");
+            }
+            else
+            {
+                ESP_LOGI("BLE", "Camera already %s, ignoring",
+                         want_on ? "ON" : "OFF");
+            }
         }
         else if (ble_cmd == 2)
         {
@@ -6699,8 +6751,21 @@ static void loop_oc()
         }
         else if (ble_cmd == 23)
         {
-            // Toggle logging (manual start/stop from app)
-            if (logger.isLoggingActive())
+            // Logging: payload[0] = desired state (1 = start, 0 = stop),
+            // matching the LoRa uplink and BS relay.  Same desync hazard as
+            // cmd 1 above — a blind toggle turns "start" into "stop" whenever
+            // the app's view disagrees with ours.  Falls back to toggle with
+            // no payload (legacy app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool logging_now = logger.isLoggingActive();
+            const bool want_on = (plen >= 1) ? (payload[0] != 0) : !logging_now;
+            if (want_on == logging_now)
+            {
+                ESP_LOGI("OC_CMD", "Logging already %s, ignoring",
+                         logging_now ? "ACTIVE" : "STOPPED");
+            }
+            else if (!want_on)
             {
                 logger.endLogging();
                 flightlogEndFlight();
@@ -7123,11 +7188,27 @@ static void loop_oc()
         }
         else if (ble_cmd == 8)
         {
-            // Toggle power rail
-            pwr_pin_on = !pwr_pin_on;
+            // Power rail: payload[0] = desired state (1 = on, 0 = off), same
+            // semantics as cmds 1/23.  A blind toggle inverts whenever the
+            // app's view and ours disagree — and here that means cutting the
+            // FC's rail when the operator asked to power it up (or a repeated
+            // command double-toggling).  The app knows the true state: the OC
+            // stays alive with the rail down and keeps reporting pwr_pin_on,
+            // and the UI gates the button on having received telemetry
+            // (#377).  No payload still means toggle (legacy app compat).
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t   plen    = ble_app.getCommandPayloadLength();
+            const bool was_on  = pwr_pin_on;
+            const bool want_on = (plen >= 1) ? (payload[0] != 0) : !pwr_pin_on;
 
-            if (pwr_pin_on)
+            if (want_on == was_on)
             {
+                ESP_LOGI("BLE", "Power rail already %s, ignoring",
+                         was_on ? "ON" : "OFF");
+            }
+            else if (want_on)
+            {
+                pwr_pin_on = true;
                 // Exit low-power mode BEFORE powering peripherals — need
                 // full CPU speed and no auto light-sleep during init.
                 exitLowPowerMode();
@@ -7163,6 +7244,7 @@ static void loop_oc()
             }
             else
             {
+                pwr_pin_on = false;
                 // Power off: drop the FC rail and reset the OC.
                 //
                 // Surgically tearing down each peripheral on power-off
@@ -7234,13 +7316,19 @@ static void loop_oc()
                 // not reached
             }
 
-            ESP_LOGI("BLE", "Power rail toggled: %s", pwr_pin_on ? "ON" : "OFF");
+            // Only on an actual state change — an ignored duplicate must not
+            // claim the rail was switched, nor re-push config.
+            if (want_on != was_on)
+            {
+                ESP_LOGI("BLE", "Power rail: %s%s", pwr_pin_on ? "ON" : "OFF",
+                         (plen >= 1) ? "" : " (legacy toggle)");
 
-            // After power-on, NVS config is freshly loaded — resend config
-            // readback so the app gets the actual persisted values.
-            if (pwr_pin_on && ble_app.isConnected()) {
-                delay(100);  // let peripherals finish init
-                sendCurrentConfig();
+                // After power-on, NVS config is freshly loaded — resend config
+                // readback so the app gets the actual persisted values.
+                if (pwr_pin_on && ble_app.isConnected()) {
+                    delay(100);  // let peripherals finish init
+                    sendCurrentConfig();
+                }
             }
         }
         else if (ble_cmd == 9)

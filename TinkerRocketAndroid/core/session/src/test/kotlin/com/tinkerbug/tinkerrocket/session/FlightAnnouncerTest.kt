@@ -81,13 +81,14 @@ class FlightAnnouncerTest {
         dataStatus = status,
     )
 
-    private class Rig(initialEnabled: Boolean = true) {
+    private class Rig(initialEnabled: Boolean = true, recovery: RecoveryProfile? = null) {
         var now = 0L
         val speech = FakeSpeech()
         val announcer = FlightAnnouncer(
             speech = speech,
             initialEnabled = initialEnabled,
             clock = { now },
+            recovery = { recovery },
         )
     }
 
@@ -504,5 +505,196 @@ class FlightAnnouncerTest {
         assertEquals(listOf("Burnout. Max speed 197 feet per second"), speech.spoken)
         announcer.processTelemetry(frame(apo = true, maxAlt = 400f))
         assertEquals("Apogee. 1312 feet", speech.spoken[1])
+    }
+
+    // ── 4. Recovery deployment (#813) ────────────────────────────────────
+
+    /** The stock profile: 60 fps drogue, 12 fps main, main at 700 ft. */
+    private val profile = RecoveryProfile(
+        drogueMps = 60.0 * 0.3048,        // 18.29 m/s
+        mainMps = 12.0 * 0.3048,          //  3.66 m/s
+        mainDeployAglM = 700.0 * 0.3048,  // 213.4 m
+    )
+
+    /** Feed the apogee frame and clear the log, leaving the flight descending. */
+    private fun Rig.pastApogee(maxAlt: Float = 1000f) {
+        announcer.processTelemetry(frame(apo = true, maxAlt = maxAlt, palt = maxAlt, rate = 0f))
+        speech.spoken.clear()
+        speech.interrupts.clear()
+    }
+
+    /**
+     * Descend at [rateMps] (positive = falling) for [forMs], integrating
+     * altitude. Frames land at 2 Hz, matching the LoRa downlink — the slowest
+     * link the detector has to work on.
+     */
+    private fun Rig.descend(
+        rateMps: Float,
+        fromAltM: Float,
+        forMs: Long,
+        stepMs: Long = 500,
+    ): Float {
+        var alt = fromAltM
+        var elapsed = 0L
+        while (elapsed < forMs) {
+            announcer.processTelemetry(frame(apo = true, palt = alt, rate = -rateMps))
+            now += stepMs
+            elapsed += stepMs
+            alt -= rateMps * (stepMs / 1000f)
+        }
+        return alt
+    }
+
+    @Test
+    fun twoStageRecovery_announcesDrogueThenMain() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee()
+        var alt = rig.descend(30f, 1000f, 6_000)     // ballistic
+        alt = rig.descend(15f, alt, 8_000)           // drogue
+        assertTrue("Drogue out." in rig.speech.spoken, "expected drogue callout, got ${rig.speech.spoken}")
+
+        alt = rig.descend(15f, alt, 30_000)          // drift down to main altitude
+        rig.descend(3.5f, alt, 8_000)                // main
+        assertTrue("Main out." in rig.speech.spoken, "expected main callout, got ${rig.speech.spoken}")
+
+        // Order matters: drogue strictly before main.
+        assertTrue(rig.speech.spoken.indexOf("Drogue out.") < rig.speech.spoken.indexOf("Main out."))
+    }
+
+    @Test
+    fun deploymentInterrupts_verdictDoesNot() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee()
+        val alt = rig.descend(30f, 1000f, 6_000)
+        rig.descend(15f, alt, 8_000)
+
+        val i = rig.speech.spoken.indexOf("Drogue out.")
+        assertTrue(rig.speech.interrupts[i], "the deployment callout must interrupt")
+        val verdict = rig.speech.spoken.indexOfFirst { it.startsWith("Good chute") }
+        assertTrue(verdict > i, "verdict should follow the deployment")
+        assertEquals(false, rig.speech.interrupts[verdict], "the verdict must not interrupt")
+    }
+
+    @Test
+    fun nominalRate_earnsGoodChute() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee()
+        var alt = rig.descend(30f, 1000f, 6_000)
+        alt = rig.descend(15f, alt, 8_000)           // 15 m/s vs 18.3 expected
+        assertTrue(
+            rig.speech.spoken.any { it.startsWith("Good chute, descending") },
+            "a drogue at 15 m/s against an 18 m/s profile is nominal: ${rig.speech.spoken}",
+        )
+    }
+
+    @Test
+    fun badRate_isStatedAsABareNumber_neverAnAlarm() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee()
+        var alt = rig.descend(30f, 1000f, 6_000)
+        alt = rig.descend(15f, alt, 8_000)
+        rig.speech.spoken.clear()
+
+        alt = rig.descend(15f, alt, 30_000)
+        rig.descend(8f, alt, 8_000)                  // 8 m/s vs 3.7 expected — bad
+
+        assertTrue("Main out." in rig.speech.spoken)
+        assertTrue(
+            rig.speech.spoken.any { it == "Descending 8 meters per second" },
+            "a bad main should be quoted as a plain rate: ${rig.speech.spoken}",
+        )
+        assertTrue(
+            rig.speech.spoken.none { it.contains("Good chute") },
+            "8 m/s under a 3.7 m/s main is not a good chute",
+        )
+    }
+
+    /**
+     * The failure this whole design is guarding: descent rate collapses at
+     * touchdown exactly like a canopy, so a ballistic flight must not earn a
+     * deployment callout when it hits the ground.
+     */
+    @Test
+    fun ballisticImpact_isNotAnnouncedAsADeployment() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee(500f)
+        val alt = rig.descend(40f, 500f, 11_000)     // straight in, no canopy
+        assertTrue(alt < 70f, "should be near the ground, was $alt")
+        rig.descend(0f, 8f, 6_000)                   // stopped, on the deck
+
+        assertTrue(
+            rig.speech.spoken.none { it.contains("out.") },
+            "impact must not read as a deployment: ${rig.speech.spoken}",
+        )
+    }
+
+    @Test
+    fun singleDeployBelowMainAltitude_isCalledMain() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee(250f)
+        val alt = rig.descend(25f, 250f, 3_000)      // brief ballistic, low flight
+        rig.descend(4f, alt, 8_000)                  // straight to main
+
+        assertTrue("Main out." in rig.speech.spoken, "got ${rig.speech.spoken}")
+        assertTrue("Drogue out." !in rig.speech.spoken, "there was no drogue")
+    }
+
+    @Test
+    fun noProfile_stillAnnouncesButCannotGrade() {
+        val rig = Rig(recovery = null)
+        rig.pastApogee()
+        val alt = rig.descend(30f, 1000f, 6_000)
+        rig.descend(15f, alt, 8_000)
+
+        assertTrue("Chute out." in rig.speech.spoken, "got ${rig.speech.spoken}")
+        assertTrue(
+            rig.speech.spoken.none { it.contains("Good chute") },
+            "nothing to grade against without a profile",
+        )
+    }
+
+    @Test
+    fun briefDip_doesNotFire() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee()
+        var alt = rig.descend(30f, 1000f, 6_000)
+        alt = rig.descend(10f, alt, 1_000)           // below the ratio, but only 1 s
+        rig.descend(30f, alt, 4_000)                 // back up to speed
+
+        assertTrue(
+            rig.speech.spoken.none { it.contains("out.") },
+            "a dip shorter than the hold is not a canopy: ${rig.speech.spoken}",
+        )
+    }
+
+    @Test
+    fun beforeApogee_nothingIsDetected() {
+        val rig = Rig(recovery = profile)
+        // Descending frames without the apogee flag — e.g. a bad baro on the pad.
+        var alt = 500f
+        repeat(40) {
+            rig.announcer.processTelemetry(frame(apo = false, palt = alt, rate = -30f))
+            rig.now += 500
+            alt -= 15f
+        }
+        assertTrue(rig.speech.spoken.none { it.contains("out.") }, "got ${rig.speech.spoken}")
+    }
+
+    @Test
+    fun reset_clearsDeploymentStateForTheNextFlight() {
+        val rig = Rig(recovery = profile)
+        rig.pastApogee()
+        var alt = rig.descend(30f, 1000f, 6_000)
+        rig.descend(15f, alt, 8_000)
+        assertTrue("Drogue out." in rig.speech.spoken)
+
+        rig.announcer.reset()
+        rig.speech.spoken.clear()
+
+        // A second flight must be able to call its own drogue again.
+        rig.pastApogee()
+        alt = rig.descend(30f, 1000f, 6_000)
+        rig.descend(15f, alt, 8_000)
+        assertTrue("Drogue out." in rig.speech.spoken, "reset should re-arm: ${rig.speech.spoken}")
     }
 }
