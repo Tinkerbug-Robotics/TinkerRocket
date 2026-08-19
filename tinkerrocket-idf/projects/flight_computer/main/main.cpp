@@ -360,20 +360,28 @@ static uint32_t last_gnss_time_us_for_ekf = 0;
 static uint8_t  last_gnss_fix_second = 0xFF;
 static uint16_t last_gnss_fix_ms     = 0xFFFF;
 static bool landed_actions_done = false;
-static bool gopro_recording = false;
-static bool gopro_pulse_active = false;
-static uint32_t gopro_pulse_end_ms = 0;
+// FC intent: a camera sequence is running.  NOT a confirmation that the camera
+// is recording — neither camera type has a feedback channel back to the FC.
+static bool camera_recording = false;
+// Truth of the CAM_ACT gate (RUNCAM_PWR_PIN).  Both camera types share that
+// pin, so it has exactly one writer (cameraGateSet) and this flag is what the
+// GoPro shutter interlock tests before it may pull the shutter line down.
+static bool camera_gate_on = false;
 
 // ==========================================================================
 // SECTION: Camera phase state machines
 // ==========================================================================
 // Deferred camera-stop sequence (see cameraStop / serviceCameraStop).
-// Idle → DelayBeforeStop (30s post-LANDED) → for RunCam, RunCamToggleSent
-// (500ms after toggle, then power off) → Idle.
+//   Idle → DelayBeforeStop (30 s post-LANDED)
+//     → RunCam: RunCamToggleSent (500 ms after toggle, then power off) → Idle
+//     → GoPro:  GoProStopPress (shutter held) → GoProFinalize (file close,
+//               then gate off + park) → Idle
 enum class CameraStopPhase : uint8_t {
     Idle,
     DelayBeforeStop,
     RunCamToggleSent,
+    GoProStopPress,   // stop press asserted, waiting out GOPRO_STOP_PULSE_MS
+    GoProFinalize,    // press released, letting the camera close the file
 };
 static CameraStopPhase camera_stop_phase = CameraStopPhase::Idle;
 static uint32_t camera_stop_due_ms = 0;
@@ -392,14 +400,34 @@ static uint32_t camera_stop_due_ms = 0;
 // before the final blind fallback.
 //   Idle → WaitingForBoot → Probing → ResendRecord → Idle,
 //   with Probing → RetryOff → WaitingForBoot on a silent window.
+//
+// The GoPro start is a much simpler machine on the same timer — there is no
+// protocol to probe, so it is just: gate on → let the camera's ground bond to
+// board ground → let it boot → one short shutter press.
+//   Idle → GoProSettle → GoProBoot → GoProPressStart → Idle.
 enum class CameraStartPhase : uint8_t {
     Idle,
     RetryOff,        // gate off, pins parked, waiting to reapply power
     WaitingForBoot,  // min boot grace before the first probe
     Probing,         // polling GET_DEVICE_INFO until the camera answers
     ResendRecord,    // re-sending START_RECORDING for reliability
+    GoProSettle,     // gate up; wait before claiming the shutter pad
+    GoProBoot,       // shutter claimed (released); waiting for the camera to boot
+    GoProPressStart, // start press asserted, waiting out GOPRO_PULSE_MS
 };
 static CameraStartPhase camera_start_phase = CameraStartPhase::Idle;
+// The camera type a sequence was ARMED with.  Every phase dispatches on this,
+// never on the live runtime_camera_type: both phase machines used to be
+// type-blind, so a camera-type push landing mid-sequence left the RunCam probe
+// and power-cycle retries driving the gate while the FC believed it was in
+// GoPro mode.  Latching the type at arm time makes that race structurally
+// impossible; cameraAbortAndPowerOff() handles the type edge itself.
+static uint8_t camera_seq_type = CAM_TYPE_NONE;
+// Did the GoPro start press actually go out?  A shutter press is a TOGGLE, so
+// a stop that presses without a start having pressed would START a recording
+// rather than end one.  Set when the start press is asserted, cleared when a
+// sequence is armed or abandoned.
+static bool gopro_start_pressed = false;
 static uint32_t camera_start_due_ms = 0;
 static uint32_t camera_start_power_ms = 0;       // when RUNCAM_PWR_PIN went high
 static uint32_t camera_probe_deadline_ms = 0;    // stop polling, record blind
@@ -2101,25 +2129,84 @@ static inline void piezoStart(uint32_t freq_hz, uint32_t duration_ms)
 // ==========================================================================
 // SECTION: Camera control (GoPro pulse, RunCam serial)
 // ==========================================================================
-// ── GoPro control (GPIO pulse on shutter pin) ──
-static inline void startGoProPulse(uint32_t now_ms)
+// ── Camera power gate (CAM_ACT) — one writer, shared by both camera types ──
+// The gate used to be poked from five scattered places, which is how a stop in
+// GoPro/None mode could leave it latched high forever (camera powered, never
+// recording — the reported symptom).  Route every change through here so
+// camera_gate_on is always the truth, and so the GoPro shutter interlock has
+// something honest to test.
+static void cameraGateInit()
 {
-    if ((config::CAM_SHUTTER_PIN < 0) || !config::USE_GOPRO)
+    if (config::RUNCAM_PWR_PIN < 0)
         return;
-    gpio_set_level((gpio_num_t)(config::CAM_SHUTTER_PIN), 0);
-    gopro_pulse_active = true;
-    gopro_pulse_end_ms = now_ms + (uint32_t)config::GOPRO_PULSE_MS;
+    gpio_set_direction((gpio_num_t)(config::RUNCAM_PWR_PIN), GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);  // OFF at boot
+    camera_gate_on = false;
+    ESP_LOGI(TAG, "Camera gate pin %d configured (camera OFF)",
+             (int)config::RUNCAM_PWR_PIN);
 }
 
-static inline void serviceGoProPulse(uint32_t now_ms)
+static void cameraGateSet(bool on)
 {
-    if (!gopro_pulse_active)
+    if (config::RUNCAM_PWR_PIN < 0)
         return;
-    if ((int32_t)(now_ms - gopro_pulse_end_ms) >= 0)
+    if (camera_gate_on == on)
+        return;
+    gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), on ? 1 : 0);
+    camera_gate_on = on;
+    ESP_LOGI(TAG, "Camera gate %s", on ? "ON" : "OFF");
+}
+
+// ── GoPro control (short pull-to-ground on the shutter line) ──
+// The pad is shared with RUNCAM_TX_PIN, so only one mode may own it; the claim
+// below forces the pin back off the UART matrix to plain GPIO.  Open-drain is
+// deliberate: level 1 on an OD pad is high-Z, which is the only release state
+// that never sources current into a resistor-less V8 camera net (see config.h).
+static void goproShutterPark()
+{
+    if (config::CAM_SHUTTER_PIN < 0)
+        return;
+    gpio_reset_pin((gpio_num_t)config::CAM_SHUTTER_PIN);
+    gpio_set_direction((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_MODE_INPUT);
+    // gpio_reset_pin leaves the pull-up enabled — remove it; even a weak pull
+    // is a phantom-feed path on a line with no series resistor.
+    gpio_set_pull_mode((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_FLOATING);
+}
+
+// Take the pad as an open-drain output, already released.  Only legal once the
+// gate is up: until then the camera's ground floats and this pin is the wrong
+// side of an open switch.
+static void goproShutterClaim()
+{
+    if ((config::CAM_SHUTTER_PIN < 0) || !camera_gate_on)
+        return;
+    gpio_reset_pin((gpio_num_t)config::CAM_SHUTTER_PIN);
+    gpio_set_direction((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_MODE_OUTPUT_OD);
+    gpio_set_pull_mode((gpio_num_t)config::CAM_SHUTTER_PIN, GPIO_FLOATING);
+    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 1);  // OD high = released
+}
+
+// THE interlock.  Asserting with the gate open does not press a button — on V8
+// it bridges the open low-side switch and dumps the always-on camera rail
+// through the P4 pad (config.h).  Refuse, loudly.
+static void goproShutterAssert()
+{
+    if (config::CAM_SHUTTER_PIN < 0)
+        return;
+    if (!camera_gate_on)
     {
-        gpio_set_level((gpio_num_t)(config::CAM_SHUTTER_PIN), 1);
-        gopro_pulse_active = false;
+        ESP_LOGE(TAG, "GoPro shutter assert REFUSED — camera gate is off "
+                      "(would bridge the open low-side switch)");
+        return;
     }
+    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 0);
+}
+
+static void goproShutterRelease()
+{
+    if (config::CAM_SHUTTER_PIN < 0)
+        return;
+    gpio_set_level((gpio_num_t)config::CAM_SHUTTER_PIN, 1);  // OD high = high-Z
 }
 
 // ── RunCam control (UART command to toggle recording) ──
@@ -2143,14 +2230,8 @@ static void initRunCam()
     if (!config::USE_RUNCAM)
         return;
 
-    // Configure pins but keep camera powered OFF at boot.
-    // Camera is powered on only when the user presses "Start Recording".
-    if (config::RUNCAM_PWR_PIN >= 0)
-    {
-        gpio_set_direction((gpio_num_t)(config::RUNCAM_PWR_PIN), GPIO_MODE_OUTPUT);
-        gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);  // OFF at boot
-        ESP_LOGI(TAG, "RunCam pin %d configured (camera OFF)", (int)config::RUNCAM_PWR_PIN);
-    }
+    // The camera power gate belongs to cameraGateInit() — both camera types
+    // share it, so it is initialised once, before this, for either mode.
 
     // Init UART to RunCam via ESP-IDF driver (ready for when camera powers on)
     uart_config_t uart_cfg = {};
@@ -2296,12 +2377,24 @@ static void runcamUartAttach()
 // ── Generic camera start/stop (dispatches based on runtime_camera_type) ──
 static void cameraStart(uint32_t now_ms)
 {
-    if (gopro_recording) return;  // already recording
+    if (camera_recording) return;  // already recording
     if (runtime_camera_type == CAM_TYPE_GOPRO)
     {
-        startGoProPulse(now_ms);
-        gopro_recording = true;
-        ESP_LOGI(TAG, "Camera START (GoPro)");
+        // Nothing may drive a camera whose ground is still floating, so both
+        // signal pins are parked BEFORE the gate rises; the shutter pad is
+        // claimed only after GOPRO_GATE_SETTLE_MS has bonded the camera's
+        // return to board ground (serviceCameraStart, GoProSettle).
+        runcamUartPark();
+        goproShutterPark();
+        camera_seq_type = CAM_TYPE_GOPRO;
+        gopro_start_pressed = false;
+        cameraGateSet(true);
+        camera_recording = true;
+        camera_start_power_ms = now_ms;
+        camera_start_phase = CameraStartPhase::GoProSettle;
+        camera_start_due_ms = now_ms + config::GOPRO_GATE_SETTLE_MS;
+        ESP_LOGI(TAG, "Camera START (GoPro) — gate ON, shutter press in %lu ms",
+                 (unsigned long)config::GOPRO_BOOT_MS);
     }
     else if (runtime_camera_type == CAM_TYPE_RUNCAM)
     {
@@ -2311,9 +2404,9 @@ static void cameraStart(uint32_t now_ms)
         // UART (#234); serviceCameraStart commands START_RECORDING as soon
         // as it answers GET_DEVICE_INFO.
         runcamUartAttach();
-        if (config::RUNCAM_PWR_PIN >= 0)
-            gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 1);
-        gopro_recording = true;
+        camera_seq_type = CAM_TYPE_RUNCAM;
+        cameraGateSet(true);
+        camera_recording = true;
         runcam_features = 0;  // re-probe each power cycle; don't trust a stale cache
         camera_start_power_ms = now_ms;
         camera_power_retries_left = config::RUNCAM_POWER_RETRIES;
@@ -2334,10 +2427,19 @@ static inline void serviceCameraStop(uint32_t now_ms);
 // toggle-to-power-off step runs non-blockingly via serviceCameraStop().
 static void cameraStop(uint32_t now_ms, uint32_t delay_ms = 0)
 {
-    if (!gopro_recording) return;                            // not recording
+    if (!camera_recording) return;                            // not recording
     if (camera_stop_phase != CameraStopPhase::Idle) return;  // already stopping
     // A stop during the RunCam boot wait abandons the pending probe;
     // serviceCameraStop powers the camera off regardless.
+    // For GoPro, a stop landing mid-press must release the shutter here and
+    // now: leaving it held turns a short press into a long one (a different
+    // gesture on the camera), and a LANDED stop would hold it for 30 s.
+    if (camera_seq_type == CAM_TYPE_GOPRO &&
+        camera_start_phase == CameraStartPhase::GoProPressStart)
+    {
+        goproShutterRelease();
+        gopro_start_pressed = true;
+    }
     camera_start_phase = CameraStartPhase::Idle;
     camera_stop_phase = CameraStopPhase::DelayBeforeStop;
     camera_stop_due_ms = now_ms + delay_ms;
@@ -2356,16 +2458,30 @@ static inline void serviceCameraStop(uint32_t now_ms)
     if (camera_stop_phase == CameraStopPhase::Idle) return;
     if ((int32_t)(now_ms - camera_stop_due_ms) < 0) return;
 
+    // Every arm dispatches on camera_seq_type — the type this sequence was
+    // ARMED with — so a camera-type push landing mid-stop cannot cross the
+    // wires (it aborts the sequence outright instead; see the 0xCB handler).
     if (camera_stop_phase == CameraStopPhase::DelayBeforeStop)
     {
-        if (runtime_camera_type == CAM_TYPE_GOPRO)
+        if (camera_seq_type == CAM_TYPE_GOPRO)
         {
-            startGoProPulse(now_ms);
-            ESP_LOGI(TAG, "Camera STOP (GoPro)");
-            gopro_recording = false;
-            camera_stop_phase = CameraStopPhase::Idle;
+            // Nothing to press if the gate never came up, or if the start
+            // press never went out — pressing now would START a recording
+            // instead of ending one.  Fall through to the tidy-up so nothing
+            // is left latched on either way.
+            if (!camera_gate_on || !gopro_start_pressed)
+            {
+                camera_stop_phase = CameraStopPhase::GoProFinalize;
+                camera_stop_due_ms = now_ms;
+                return;
+            }
+            goproShutterAssert();
+            ESP_LOGI(TAG, "GoPro stop press asserted (%u ms)",
+                     (unsigned)config::GOPRO_STOP_PULSE_MS);
+            camera_stop_phase = CameraStopPhase::GoProStopPress;
+            camera_stop_due_ms = now_ms + config::GOPRO_STOP_PULSE_MS;
         }
-        else if (runtime_camera_type == CAM_TYPE_RUNCAM)
+        else if (camera_seq_type == CAM_TYPE_RUNCAM)
         {
             // A stop can land mid-retry (pins parked); reattach the UART
             // unconditionally so the toggle actually transmits.
@@ -2377,19 +2493,67 @@ static inline void serviceCameraStop(uint32_t now_ms)
         }
         else
         {
-            gopro_recording = false;
+            // Type None — but the gate may still be up from an earlier
+            // sequence.  This arm used to clear the flag and walk away, which
+            // is how a camera ended up powered forever with the FC convinced
+            // nothing was running.
+            goproShutterPark();
+            runcamUartPark();
+            cameraGateSet(false);
+            camera_recording = false;
             camera_stop_phase = CameraStopPhase::Idle;
         }
     }
-    else  // RunCamToggleSent
+    else if (camera_stop_phase == CameraStopPhase::GoProStopPress)
     {
-        if (config::RUNCAM_PWR_PIN >= 0)
-            gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);
-        runcamUartPark();  // unpowered camera: nothing may feed it (config.h)
-        ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off, pins parked");
-        gopro_recording = false;
+        goproShutterRelease();
+        ESP_LOGI(TAG, "GoPro stop press released — power-off in %lu ms (file finalize)",
+                 (unsigned long)config::GOPRO_FINALIZE_MS);
+        camera_stop_phase = CameraStopPhase::GoProFinalize;
+        camera_stop_due_ms = now_ms + config::GOPRO_FINALIZE_MS;
+    }
+    else if (camera_stop_phase == CameraStopPhase::GoProFinalize)
+    {
+        // Park BEFORE the gate drops — the instant Q3 opens, the camera side
+        // of this line floats toward VBATT and the pad must already be a
+        // pull-less input (config.h).
+        goproShutterPark();
+        cameraGateSet(false);
+        ESP_LOGI(TAG, "Camera STOP (GoPro) — powered off, shutter parked");
+        camera_recording = false;
         camera_stop_phase = CameraStopPhase::Idle;
     }
+    else  // RunCamToggleSent
+    {
+        runcamUartPark();  // park first: unpowered camera, nothing may feed it
+        cameraGateSet(false);
+        ESP_LOGI(TAG, "Camera STOP (RunCam) — powered off, pins parked");
+        camera_recording = false;
+        camera_stop_phase = CameraStopPhase::Idle;
+    }
+}
+
+// Abandon whatever camera sequence is in flight and leave the hardware in the
+// one safe state: gate off, both signal pins parked high-Z.  Called on a
+// camera-type change (the old code let a RunCam sequence keep running — and
+// keep driving the gate — after the type had been switched to GoPro) and on
+// sim reset (which reset ~30 pieces of flight state but no camera state, so a
+// simulated flight left a real camera powered and the start machine armed).
+static void cameraAbortAndPowerOff(const char* why)
+{
+    const bool was_active = (camera_start_phase != CameraStartPhase::Idle) ||
+                            (camera_stop_phase != CameraStopPhase::Idle) ||
+                            camera_recording || camera_gate_on;
+    camera_start_phase = CameraStartPhase::Idle;
+    camera_stop_phase  = CameraStopPhase::Idle;
+    goproShutterPark();
+    runcamUartPark();
+    cameraGateSet(false);
+    camera_recording = false;
+    camera_seq_type = CAM_TYPE_NONE;
+    gopro_start_pressed = false;
+    if (was_active)
+        ESP_LOGW(TAG, "Camera sequence aborted, gate off, pins parked (%s)", why);
 }
 
 // Drives the deferred RunCam start queued by cameraStart, serviced from the
@@ -2406,14 +2570,58 @@ static inline void serviceCameraStart(uint32_t now_ms)
     if (camera_start_phase == CameraStartPhase::Idle) return;
     if ((int32_t)(now_ms - camera_start_due_ms) < 0) return;
 
+    // ── GoPro arm ──  The gate is already up; all that remains is to let the
+    // camera's return bond and boot, then press the shutter once.  Shares no
+    // code with the RunCam probe / blind-record / power-cycle ladder below —
+    // that machinery exists for a protocol a GoPro does not speak, and running
+    // it against one only power-cycles the camera mid-boot.
+    if (camera_seq_type == CAM_TYPE_GOPRO)
+    {
+        if (camera_start_phase == CameraStartPhase::GoProSettle)
+        {
+            goproShutterClaim();
+            camera_start_phase = CameraStartPhase::GoProBoot;
+            camera_start_due_ms = now_ms +
+                ((config::GOPRO_BOOT_MS > config::GOPRO_GATE_SETTLE_MS)
+                     ? (config::GOPRO_BOOT_MS - config::GOPRO_GATE_SETTLE_MS)
+                     : 0U);
+            return;
+        }
+        if (camera_start_phase == CameraStartPhase::GoProBoot)
+        {
+            goproShutterAssert();
+            gopro_start_pressed = true;
+            ESP_LOGI(TAG, "GoPro start press asserted %lu ms after gate ON (%u ms wide)",
+                     (unsigned long)(now_ms - camera_start_power_ms),
+                     (unsigned)config::GOPRO_PULSE_MS);
+            camera_start_phase = CameraStartPhase::GoProPressStart;
+            camera_start_due_ms = now_ms + config::GOPRO_PULSE_MS;
+            return;
+        }
+        // GoProPressStart → release, and that is the whole sequence.
+        // Deliberately NO resend: a shutter press is a TOGGLE, so a second
+        // press would stop the recording.  Contrast the RunCam ResendRecord
+        // arm below, where START_RECORDING is idempotent and resending is the
+        // reliability fix.  Do not "helpfully" unify the two.
+        goproShutterRelease();
+        ESP_LOGI(TAG, "GoPro start press released — recording assumed ON "
+                      "(no feedback channel; confirm on the camera)");
+        camera_start_phase = CameraStartPhase::Idle;
+        return;
+    }
+    if (camera_seq_type != CAM_TYPE_RUNCAM)
+    {
+        cameraAbortAndPowerOff("start serviced with no camera type");
+        return;
+    }
+
     if (camera_start_phase == CameraStartPhase::RetryOff)
     {
         // Off-time elapsed: reattach the UART and reapply power.  If launch
         // happened during the off-time, same rule as the probe path — no
         // blocking UART reads in boost, start blind immediately.
         runcamUartAttach();
-        if (config::RUNCAM_PWR_PIN >= 0)
-            gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 1);
+        cameraGateSet(true);
         camera_start_power_ms = now_ms;
         if (rocket_state == INFLIGHT)
         {
@@ -2463,9 +2671,8 @@ static inline void serviceCameraStart(uint32_t now_ms)
         if (!alive && !in_flight && camera_power_retries_left > 0)
         {
             camera_power_retries_left--;
-            if (config::RUNCAM_PWR_PIN >= 0)
-                gpio_set_level((gpio_num_t)(config::RUNCAM_PWR_PIN), 0);
             runcamUartPark();
+            cameraGateSet(false);
             camera_start_phase = CameraStartPhase::RetryOff;
             camera_start_due_ms = now_ms + config::RUNCAM_RETRY_OFF_MS;
             ESP_LOGW(TAG, "RunCam: no UART reply %lu ms after power-on — "
@@ -2904,10 +3111,21 @@ static void setup_fc()
     prefs.begin("rocket", false);  // read-write (creates namespace on first boot)
     enable_sounds = prefs.getBool("sounds", config::ENABLE_SOUNDS);
     servo_enabled = prefs.getBool("servo_en", config::USE_SERVO_CONTROL);
+    // Camera type must survive an FC-only reset.  It used to be RAM-only,
+    // seeded from config::CAMERA_TYPE, and the app pushes it exactly once per
+    // BLE attach — so any FC brownout, watchdog or OTA reboot silently put the
+    // FC back on the compiled default while the app still showed the user's
+    // choice.  It is also BLE-only (no LoRa uplink command carries it), so a
+    // base-station-linked session could never set it at all.  Persisting it
+    // here closes both.
+    runtime_camera_type = prefs.getUChar("camt", config::CAMERA_TYPE);
+    if (runtime_camera_type > CAM_TYPE_RUNCAM)
+        runtime_camera_type = config::CAMERA_TYPE;  // ignore a corrupt value
     prefs.end();
-    ESP_LOGI(TAG, "NVS: enable_sounds=%s servo_enabled=%s",
+    ESP_LOGI(TAG, "NVS: enable_sounds=%s servo_enabled=%s camera_type=%u",
                   enable_sounds ? "true" : "false",
-                  servo_enabled ? "true" : "false");
+                  servo_enabled ? "true" : "false",
+                  runtime_camera_type);
 
     // Load servo/PID NVS settings (namespace "servo")
     int16_t nvs_servo_hz  = config::SERVO_HZ;
@@ -3362,24 +3580,25 @@ static void setup_fc()
         ESP_LOGW(TAG, "OUT ESP32 not ready yet (will latch on first success)");
     }
 
-    // Camera setup
-    if (config::USE_GOPRO)
-    {
-        if (config::CAM_PWR_PIN >= 0)
-        {
-            gpio_set_direction((gpio_num_t)(config::CAM_PWR_PIN), GPIO_MODE_OUTPUT);
-            gpio_set_level((gpio_num_t)(config::CAM_PWR_PIN), 1);
-        }
-        if (config::CAM_SHUTTER_PIN >= 0)
-        {
-            gpio_set_direction((gpio_num_t)(config::CAM_SHUTTER_PIN), GPIO_MODE_OUTPUT);
-            gpio_set_level((gpio_num_t)(config::CAM_SHUTTER_PIN), 1);
-        }
-    }
-    else if (config::USE_RUNCAM)
+    // Camera setup.  The gate and both signal pins belong to EVERY camera
+    // type, so they are initialised unconditionally — gate off, pins parked
+    // high-Z.  (This used to be two compile-time arms: a GoPro build never
+    // configured the gate at all, and drove both signal pins hard high into an
+    // unpowered camera — the exact phantom feed the park logic exists to
+    // prevent.  Camera type is a runtime property now.)
+    cameraGateInit();
+    goproShutterPark();
+    if (config::USE_RUNCAM)
     {
         initRunCam();
     }
+    // The FC used to print its camera type nowhere at boot, so "which mode is
+    // it actually in?" was unanswerable from the log until a config push or a
+    // start arrived — which is precisely how a silent revert to the compiled
+    // default went unnoticed for so long.
+    ESP_LOGI(TAG, "Camera type at boot: %u (%s)", runtime_camera_type,
+             runtime_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
+             runtime_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
 
     ESP_LOGI(TAG, "Servo init...");
     // Derivative-term LPF for every flight-computer PID. Prevents sample-
@@ -3671,6 +3890,10 @@ static void resetFlightStateForSim(const char* edge)
     // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
     // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
     pyroSafeAll();
+    // A sim start/stop used to leave a REAL camera powered and the start phase
+    // machine armed — and with the sim driving rocket_state to INFLIGHT, that
+    // armed machine takes the in-flight blind-record shortcuts.
+    cameraAbortAndPowerOff("sim reset");
     rocket_state = READY;
     post_flight_lockout = false;  // #317: a deliberate sim start/stop re-arms
     ground_pressure_found = false;
@@ -5790,8 +6013,19 @@ static void loop_fc()
                     // Note: the FC config.h CAMERA_TYPE is the compile-time default;
                     // this overrides it at runtime.
                     // Store in a runtime variable (not constexpr)
+                    if (cam_cfg.camera_type != runtime_camera_type)
+                    {
+                        // A sequence armed under the old type must not keep
+                        // running — it owns the shared gate and the shared
+                        // signal pins, and would go on driving them while the
+                        // FC believed it was in the other mode.
+                        cameraAbortAndPowerOff("camera type changed");
+                    }
                     runtime_camera_type = cam_cfg.camera_type;
-                    ESP_LOGI(TAG, "[CFG] Camera type: %u (%s)",
+                    prefs.begin("rocket", false);  // read-write
+                    prefs.putUChar("camt", runtime_camera_type);
+                    prefs.end();
+                    ESP_LOGI(TAG, "[CFG] Camera type: %u (%s) — saved to NVS",
                              runtime_camera_type,
                              runtime_camera_type == CAM_TYPE_GOPRO ? "GoPro" :
                              runtime_camera_type == CAM_TYPE_RUNCAM ? "RunCam" : "None");
@@ -7600,7 +7834,6 @@ static void loop_fc()
     serviceBootReadyChirp(now_ms_for_sound);
     serviceHeartbeatBeep(now_ms_for_sound);
     serviceBlueLedFlash(now_ms_for_sound);
-    serviceGoProPulse(now_ms_for_sound);
     serviceCameraStart(now_ms_for_sound);
     serviceCameraStop(now_ms_for_sound);
 

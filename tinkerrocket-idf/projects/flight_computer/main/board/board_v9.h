@@ -102,8 +102,11 @@ struct board_pins
     // through a low-side MOSFET). Still active-high, so firmware is unchanged,
     // but the connector's polarity is not what a V8 harness expects. The
     // switch's IMON is read by the OutComputer, not by us.
-    static constexpr int8_t CAM_PWR_PIN = 30;      // GoPro path, unused
-    static constexpr int8_t CAM_SHUTTER_PIN = 31;  // GoPro path, unused
+    // GoPro shutter = net Camera_TX -> R32 (1k) -> J4.4, pulled to ground for a
+    // short press. Same pad as RUNCAM_TX_PIN — one mode owns it at a time. No
+    // separate GoPro power pin: power is the CAM_ACT gate below. Unlike V8, V9
+    // does have 1k series resistors (R30/R32) on both camera signal lines.
+    static constexpr int8_t CAM_SHUTTER_PIN = 30;  // GoPro shutter (net Camera_TX, J4.4)
     static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (net Camera_RX, camera's TX pad)
     static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (net Camera_TX, camera's RX pad)
     static constexpr int8_t RUNCAM_PWR_PIN = 32;   // camera power gate (CAM_ACT)

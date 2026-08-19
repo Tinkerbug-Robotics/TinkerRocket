@@ -125,14 +125,52 @@ struct config : board_pins
     static constexpr uint8_t BOARD_TO_ROCKET_ORIENT = 0;
 
     // ### Camera Controls ###
-    // Camera type: 0 = none, 1 = GoPro (GPIO pulse), 2 = RunCam (UART command)
+    // Camera type is a RUNTIME property (runtime_camera_type, set over BLE and
+    // persisted in NVS).  CAMERA_TYPE is only the first-boot default for a
+    // board that has never been told otherwise.  Nothing gates camera
+    // *behaviour* at compile time: the old USE_GOPRO flag made the whole GoPro
+    // path unreachable no matter what the app selected, which is why "set it to
+    // GoPro" silently did nothing for so long.
     static constexpr uint8_t CAMERA_TYPE = 2;  // 0=none, 1=GoPro, 2=RunCam
-    static constexpr bool USE_GOPRO = (CAMERA_TYPE == 1);
-    static constexpr bool USE_RUNCAM = (CAMERA_TYPE == 2);
+    // Still compile-time: whether to install the UART2 driver at boot for the
+    // RunCam protocol.  Left true so a board can be switched to RunCam at
+    // runtime; the pins stay parked high-Z until a RunCam start attaches them.
+    static constexpr bool USE_RUNCAM = true;
 
-    // GoPro timing (pins in board header; GoPro path DEAD on this PCB —
-    // USE_GOPRO false. Revisit before ever setting CAMERA_TYPE=1.)
-    static constexpr uint16_t GOPRO_PULSE_MS = 120;
+    // ### GoPro control (pin in board header: CAM_SHUTTER_PIN) ###
+    // A Hero 10 toggles video recording on a short pull-to-ground of the
+    // shutter line.  Power is the CAM_ACT gate (RUNCAM_PWR_PIN), shared with
+    // the RunCam path.  Two invariants, both safety-critical on V8:
+    //
+    //   1. NEVER assert the shutter while the gate is open.  V8 switches the
+    //      camera's RETURN (Q3 low-side) and J6.2 is always-on raw VCC, so an
+    //      unpowered camera floats toward VBATT.  Pulling J6.4 to board ground
+    //      then does not "press a button" — it BRIDGES the open low-side
+    //      switch (VCC -> camera internals -> that pad's clamp -> the P4 pad ->
+    //      GND), limited only by the camera's impedance because V8 has no
+    //      series resistor.  goproShutterAssert() interlocks on camera_gate_on,
+    //      and the shutter is parked BEFORE the gate ever drops.
+    //   2. NEVER resend the start press.  START_RECORDING (RunCam) is
+    //      idempotent so that path resends it; a GoPro shutter press is a
+    //      TOGGLE, so a "reliability" resend would stop the recording, and
+    //      there is no feedback channel to notice.
+    //
+    // Release is open-drain-high (high-Z), never a driven high — an FC-side
+    // drive or even a weak pull on a resistor-less V8 camera net is the same
+    // phantom-feed that broke battery cold-start (see the RunCam note below).
+    //
+    // The timings below are STARTING POINTS, not measurements — no build in
+    // this repo's history has ever executed a GoPro pulse.  Sweep them on the
+    // bench and record what the Hero 10 actually wants.
+    // Both waits are deliberately generous.  Nothing is racing them — the
+    // camera is started on the pad, and the stop is already 30 s behind LANDED
+    // (CAMERA_STOP_DELAY_MS) — so the cost of waiting is nil and the cost of
+    // being short is a press the camera slept through, or a truncated MP4.
+    static constexpr uint32_t GOPRO_GATE_SETTLE_MS = 300;    // gate up -> safe to claim the pad
+    static constexpr uint32_t GOPRO_BOOT_MS        = 7000;   // gate up -> first press
+    static constexpr uint16_t GOPRO_PULSE_MS       = 200;    // start press width
+    static constexpr uint16_t GOPRO_STOP_PULSE_MS  = 200;    // stop press width (separate knob)
+    static constexpr uint32_t GOPRO_FINALIZE_MS    = 10000;  // stop press -> gate off (file close)
 
     // Time to keep the camera rolling after LANDED before issuing the stop.
     // Captures post-impact footage and, critically, removes the inline

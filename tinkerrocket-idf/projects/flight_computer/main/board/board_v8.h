@@ -65,12 +65,21 @@ struct board_pins
     // The camera nets are named from the FC's perspective — Camera_TX is the
     // line the FC transmits on, into the camera's RX pad — the OPPOSITE of
     // the GNSS_TX/GNSS_RX convention above (named from the module's side).
-    // Netlist-verified 2026-08-16: GPIO30 = Camera_TX -> R32 (1k) -> J4.4,
-    // GPIO31 = Camera_RX -> R30 (1k) -> J4.3. The constants below are correct
-    // (two RunCam Split 4 units answered GET_DEVICE_INFO and recorded on this
-    // mapping) — don't "fix" them to a module-perspective reading of the nets.
-    static constexpr int8_t CAM_PWR_PIN = 30;      // GoPro path, unused
-    static constexpr int8_t CAM_SHUTTER_PIN = 31;  // GoPro path, unused
+    // Netlist-verified against the archived V8 project: GPIO30 = Camera_TX ->
+    // J6.4 and GPIO31 = Camera_RX -> J6.3, BOTH WIRED STRAIGHT THROUGH — V8
+    // has NO series resistors on these nets (the 1k R30/R32 are a V9 addition,
+    // see board_v9.h) and the connector is J6, not V9's J4. The constants below
+    // are correct (two RunCam Split 4 units answered GET_DEVICE_INFO and
+    // recorded on this mapping) — don't "fix" them to a module-perspective
+    // reading of the nets.
+    //
+    // GoPro shutter: a Hero 10 toggles recording on a short pull-to-ground of
+    // the line the FC drives, i.e. net Camera_TX / J6.4 / GPIO30 — the SAME pad
+    // as RUNCAM_TX_PIN, so exactly one camera mode may own it at a time. There
+    // is no separate GoPro power pin on this board: power is the CAM_ACT gate
+    // below, shared with the RunCam path. (The old CAM_PWR_PIN = 30 constant
+    // named a data pin as "power" and was never reachable — removed.)
+    static constexpr int8_t CAM_SHUTTER_PIN = 30;  // GoPro shutter (net Camera_TX, J6.4)
     static constexpr int8_t RUNCAM_RX_PIN = 31;    // FC receives (net Camera_RX, camera's TX pad)
     static constexpr int8_t RUNCAM_TX_PIN = 30;    // FC transmits (net Camera_TX, camera's RX pad)
     static constexpr int8_t RUNCAM_PWR_PIN = 32;   // camera power gate (CAM_ACT)
