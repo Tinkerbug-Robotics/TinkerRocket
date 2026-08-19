@@ -6194,9 +6194,32 @@ static void loop_fc()
             else if (out_pending_command == PYRO_FIRE_TEST)
             {
                 // Test-fire a pyro channel from the app (ground test only)
-                if (isCommandLockoutState(rocket_state)) {
-                    ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — state=%u (no test commands while INFLIGHT or in MAG_CALIBRATION)",
-                             (unsigned)rocket_state);
+                //
+                // post_flight_lockout is checked SEPARATELY from
+                // isCommandLockoutState(), which covers only INFLIGHT and
+                // MAG_CALIBRATION — LANDED is not in that set, so before this the
+                // handler ran to completion after a flight.  pyroSetArmLocked()
+                // silently downgrades want_high to false under #317's lockout, so
+                // ARM never rose: with the arming FET off the squib return reaches
+                // ground only through R73 (1 k), single-digit mA, nowhere near an
+                // igniter's all-fire.  Nothing fired — but the handler still pulsed
+                // the FIRE pin, latched PyroChState::Done, and logged "CH%u fired".
+                // Done is what feeds the PSF_CHn_FIRED telemetry bit and the NVS
+                // flight snapshot, so a recovery crew trying to expend a leftover
+                // charge was told the channel had fired while the squib stayed live.
+                //
+                // Refusing is the correct outcome, not a limitation: #317 makes
+                // LANDED terminal until a hardware reboot precisely so the squib
+                // rail cannot be re-energised post-flight.  The bug was never that
+                // it refused — it was that it refused SILENTLY and then reported
+                // success.  A leftover charge is handled physically, or by rebooting
+                // the FC, which clears the lockout.
+                if (isCommandLockoutState(rocket_state) || post_flight_lockout) {
+                    ESP_LOGW(TAG, "[PYRO FIRE TEST] Rejected — state=%u post_flight_lockout=%d "
+                                  "(no test commands while INFLIGHT or in MAG_CALIBRATION, and "
+                                  "none after landing — ARM cannot be raised, so a 'fire' here "
+                                  "would report success without energising the squib)",
+                             (unsigned)rocket_state, (int)post_flight_lockout);
                 } else {
                     delay_ms(1);
                     uint8_t cfg_payload[4];
