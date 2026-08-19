@@ -30,8 +30,29 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(NonSensorData),  50u);  // #529: +uint16 ekf_ticks (2 B)
     EXPECT_EQ(sizeof(LoRaData),       65u);  // #191: +ENU vel +flags2, -derived Euler/speed
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
+    EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
+}
+
+// FC boot progress: the app renders a step name and a stall from these, so the
+// enum ordering and the degraded bits are wire contract, not implementation
+// detail.  Append-only — the apps map an unknown step to a generic message.
+TEST(RocketComputerTypes, FcBootStepContract) {
+    EXPECT_EQ(FCB_LINKS,      0u);
+    EXPECT_EQ(FCB_NVS,        1u);
+    EXPECT_EQ(FCB_SENSORS,    2u);
+    EXPECT_EQ(FCB_GNSS,       3u);
+    EXPECT_EQ(FCB_SERVOS,     4u);
+    EXPECT_EQ(FCB_COMPLETE,   5u);
+    EXPECT_EQ(FCB_STEP_COUNT, 6u);
+    // Degraded bits are independent — a boot can finish with several set.
+    EXPECT_EQ(FCB_DEG_SENSORS, 0x01u);
+    EXPECT_EQ(FCB_DEG_GNSS,    0x02u);
+    EXPECT_EQ(FCB_DEG_SERVOS,  0x04u);
+    EXPECT_EQ(FCB_DEG_NVS,     0x08u);
+    const uint8_t all = FCB_DEG_SENSORS | FCB_DEG_GNSS | FCB_DEG_SERVOS | FCB_DEG_NVS;
+    EXPECT_EQ(all, 0x0Fu) << "degraded bits must not overlap";
 }
 
 // #281/#278: the flight-log storage verdict the OC folds into sensor_health.  A
@@ -1485,6 +1506,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(I2C_TX_RESYNC),
         // OC-self-emitted uplink RX record — the rocket's only RF measurement.
         MT(LORA_UPLINK_MSG),
+        // FC->OC boot progress during setup_fc, before the I2S stream exists.
+        MT(FC_BOOT_STATUS_MSG),
     };
 #undef MT
 
@@ -1508,7 +1531,8 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     //    + I2C_TX_RESYNC (#402) + IMU rate config pair (BLE cmd 67).
     // 89 = 87 + Drift-Cast guidance point pair (#435, BLE cmd 28).
     // 90 = 89 + LORA_UPLINK_MSG (OC-self-emitted uplink RSSI/SNR record).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 90u)
+    // 91 = 90 + FC_BOOT_STATUS_MSG (FC->OC boot progress during setup_fc).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 91u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }

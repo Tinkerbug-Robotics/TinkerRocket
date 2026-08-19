@@ -633,7 +633,8 @@ struct ConnectedDashboardView: View {
                                     isBaseStation: device.isBaseStation,
                                     hopModeOn: device.rocketConfig?.loraHopDisabled == false,
                                     hopChannel: device.telemetry.hop_channel,
-                                    state: device.telemetry.state))
+                                    state: device.telemetry.state),
+                                boot: device.telemetry.fcBootProgress)
                     .opacity(staleOpacity)
             }
 
@@ -986,6 +987,28 @@ func hopBadge(isBaseStation: Bool, hopModeOn: Bool,
 struct RocketStateView: View {
     let state: String
     var hopBadge: HopBadge? = nil
+    /// FC boot progress — carried only while setup_fc() is still running.
+    var boot: TelemetryData.FcBootProgress? = nil
+
+    // When the app first saw the boot state it is showing now.  "bt" is stamped
+    // when a step STARTS and then repeats unchanged in every frame, so it
+    // cannot say how long the FC has been sitting there; this can.
+    @State private var bootStepSeenAt = Date()
+
+    // The dwell needs its own clock.  Relying on the body being re-evaluated by
+    // incoming telemetry fails in precisely the two cases the stall line exists
+    // to catch: a WEDGED boot leaves `boot` unchanged (so SwiftUI has no reason
+    // to re-render), and a dropped link stops delivering frames altogether — in
+    // both the dwell would freeze and the stall would never appear.  1 Hz,
+    // matching the Android twin's ticker; `bootNow` is only written while a boot
+    // line is actually showing, so there is no steady-state invalidation cost.
+    private let bootTicker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var bootNow = Date()
+    // The state the timestamp belongs to.  Without it the first render after a
+    // step change still reads the OLD timestamp (onChange runs after the body),
+    // which flashes "no progress for 300s" the instant a boot begins on a
+    // dashboard that has been open a while.
+    @State private var bootStepSeenFor: TelemetryData.FcBootProgress?
 
     // #382 (display-only): the wire states READY and PRELAUNCH both mean "on
     // the pad" — READY is still waiting on the OC/GNSS gates, PRELAUNCH means
@@ -1014,11 +1037,39 @@ struct RocketStateView: View {
         }
     }
 
+    /// The secondary line under the state label.  Two very different things
+    /// land here.  With "bs" present the FC is mid-boot and we name the step.
+    /// Without it, a state still reading INITIALIZATION means the FC has NEVER
+    /// spoken (rail off, or not yet alive) — the OC's zeroed rocket_state, not
+    /// a rocket that is initializing — so say so instead of letting a bare
+    /// "INITIALIZATION" pass for a live flight computer.
+    var bootLine: String? {
+        if let boot { return boot.line(dwell: bootDwell) }
+        return state == "INITIALIZATION" ? "Waiting for flight computer…" : nil
+    }
+
+    var bootLineColor: Color {
+        guard let boot else { return .secondary }   // waiting on a silent FC
+        return (boot.isStalled(dwell: bootDwell) || !boot.degradedSubsystems.isEmpty)
+            ? .orange : .secondary
+    }
+
+    private var bootDwell: TimeInterval {
+        guard boot != nil, boot == bootStepSeenFor else { return 0 }
+        return bootNow.timeIntervalSince(bootStepSeenAt)
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             Text(Self.displayLabel(for: state))
                 .font(.system(size: 36, weight: .bold))
                 .foregroundColor(stateColor)
+            if let bootLine {
+                Text(bootLine)
+                    .font(.caption)
+                    .foregroundColor(bootLineColor)
+                    .multilineTextAlignment(.center)
+            }
             switch hopBadge {
             case .active:
                 Label("Frequency Hopping", systemImage: "dot.radiowaves.left.and.right")
@@ -1040,6 +1091,19 @@ struct RocketStateView: View {
         .frame(maxWidth: .infinity)
         .background(stateColor.opacity(0.1))
         .cornerRadius(10)
+        .onAppear { noteBootStep() }
+        .onChange(of: boot) { _ in noteBootStep() }
+        .onReceive(bootTicker) { t in
+            // Only tick while a boot line is on screen — outside boot this view
+            // is static and re-rendering it once a second would be pure waste.
+            if bootLine != nil { bootNow = t }
+        }
+    }
+
+    private func noteBootStep() {
+        bootStepSeenAt = Date()
+        bootNow = bootStepSeenAt
+        bootStepSeenFor = boot
     }
 }
 

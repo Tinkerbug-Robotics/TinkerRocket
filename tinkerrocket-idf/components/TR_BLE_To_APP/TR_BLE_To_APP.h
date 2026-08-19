@@ -135,6 +135,20 @@ public:
         enum class DataStatus : uint8_t { LIVE = 0, STALE = 1, SYNCING = 2 };
         DataStatus data_status;
         uint32_t   data_age_ms;         // only meaningful when STALE
+
+        // FC boot progress, live ONLY while the flight computer is still in
+        // setup_fc() and has never sent a NonSensorData frame.  The FC's setup
+        // takes ~10 s, during which rocket_state does not exist and the app
+        // would otherwise show a bare "INITIALIZATION" (in fact the zero value
+        // of a never-written field) for the whole window — indistinguishable
+        // from "flight computer powered off".  boot_step is FcBootStep,
+        // boot_degraded is the FCB_DEG_* bitmask of steps that finished
+        // degraded but did not stop the boot.  Set boot_valid false once real
+        // state frames arrive; the app then ignores these entirely.
+        bool     boot_valid;
+        uint8_t  boot_step;
+        uint8_t  boot_degraded;
+        uint16_t boot_elapsed_ms;
     };
 
     // Constructor

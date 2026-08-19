@@ -2605,6 +2605,92 @@ static inline void fcMaybeMarkOtaValid()
 // ==========================================================================
 // SECTION: Boot setup
 // ==========================================================================
+
+// Boot progress, FC->OC over I2C during setup_fc only (FcBootStatusData).
+//
+// setup_fc() takes ~10 s — sensor bring-up, GNSS, servos — and none of it is
+// visible to the operator today: NonSensorData (and with it sensor_health and
+// rocket_state) is not transmitted until loop_fc() runs, so the OC's zeroed
+// latest_non_sensor makes the app render rocket_state 0 == INITIALIZATION for
+// the whole window.  "Flight computer off", "flight computer booting" and
+// "flight computer in INITIALIZATION" are indistinguishable.  This announces
+// each step as it STARTS, so a stall is visible as a step that stops advancing.
+//
+// Rides I2S, NOT the I2C command link, and that choice is load-bearing.
+//
+// Bench 2026-08-19: sent over I2C, only steps 3/4/5 ever arrived.  The OC
+// defers its I2C SLAVE until it has seen 50 I2S DMA callbacks proving the FC is
+// alive (out_computer main.cpp, `dma_cb_count > 50`), so for the first ~20 s of
+// FC boot there is no slave on the bus at all and a master write goes nowhere.
+// The steps that were lost are exactly the ones worth reporting — LINKS, NVS
+// and the ~20 s SENSORS step — leaving the app on "waiting for flight
+// computer" for almost the whole boot and then flashing through GNSS/servos in
+// a couple of seconds.  I2S is up from the sender task onward, which is before
+// every step below, and it reaches the same processFrame() dispatch via
+// parseRxStream() -> handleReceivedFrame().
+//
+// Fire-and-forget: a failed enqueue must never hold up or abort boot, so the
+// result is discarded.  The OC treats absence as "no boot info", not an error.
+// FC_BOOT_STATUS_MSG is deliberately NOT one of the timestamped sensor types in
+// the OC's dedup switch, so its payload is never misread as a time_us the way
+// SNAPSHOT_MSG's magic would be.
+// REPEATED, not one-shot, and that is the whole reason this works.
+//
+// Bench 2026-08-19, twice: steps 0/1/2 never reached the OC over EITHER
+// transport.  All three fire inside the first ~250 ms of FC boot, when the link
+// is still coming up — the OC has not enabled its I2C slave yet (it waits for
+// 50 I2S DMA callbacks) and its I2S receiver has not locked onto the SOF sync.
+// A single frame per transition is therefore lost precisely for the steps worth
+// reporting, and the app sat on "waiting for flight computer" for the whole
+// ~20 s sensor phase before flashing through GNSS/servos.
+//
+// So a task re-emits the CURRENT step every 500 ms until boot completes.  Any
+// one lost frame stops mattering, and it is robust to whichever end is slow —
+// no assumption about when either transport becomes reliable.
+//
+// elapsed_ms is the step's START time, not "now", so repeats are byte-identical.
+// The app keys its dwell on the (step, elapsed, degraded) triple changing; a
+// ticking elapsed_ms would re-arm that every 500 ms and the stall line could
+// never appear.
+static uint8_t  fc_boot_degraded = 0;   // sticky FCB_DEG_* bits for this boot
+static volatile uint8_t  fc_boot_step_now = FCB_LINKS;
+static volatile uint16_t fc_boot_step_started_ms = 0;
+static volatile bool     fc_boot_reporting = false;
+
+static void fcBootEmitOnce()
+{
+    FcBootStatusData s{};
+    s.step       = fc_boot_step_now;
+    s.degraded   = fc_boot_degraded;
+    s.elapsed_ms = fc_boot_step_started_ms;
+    (void)enqueueI2STx(FC_BOOT_STATUS_MSG, (uint8_t*)&s, sizeof(s));
+}
+
+static void fcBootStatus(uint8_t step, uint8_t degraded_bit = 0)
+{
+    fc_boot_degraded |= degraded_bit;
+    fc_boot_step_now = step;
+    // Saturate rather than wrap so a slow boot reads as "a long time".
+    const uint32_t ms = time_ms();
+    fc_boot_step_started_ms = (ms > 65535u) ? 65535u : (uint16_t)ms;
+    fcBootEmitOnce();                       // immediate, for a warm link
+    fc_boot_reporting = (step != FCB_COMPLETE);
+}
+
+// Re-emitter.  Exits once setup_fc reports FCB_COMPLETE — from then on
+// NonSensorData carries the real state and the OC stops publishing boot keys.
+static void fcBootReporterTask(void*)
+{
+    while (fc_boot_reporting)
+    {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (fc_boot_reporting) fcBootEmitOnce();
+    }
+    // One last COMPLETE so a listener that missed the transition still sees it.
+    fcBootEmitOnce();
+    vTaskDelete(nullptr);
+}
+
 static void setup_fc()
 {
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4 may not auto-init)
@@ -2794,6 +2880,17 @@ static void setup_fc()
                             &i2s_sender_task_handle,
                             i2s_sender_core);
 
+    // First reportable boot step.  This sits AFTER the I2S queue and sender
+    // task exist, not up at the I2C init, because boot status rides I2S — see
+    // fcBootStatus().  "Links up" is honest here in a way it would not have
+    // been earlier: both transports are now live, which is exactly what the
+    // operator needs to know before the ~20 s sensor step.
+    fcBootStatus(FCB_LINKS);
+    // Low priority, off the sensor core: it must not compete with bring-up, and
+    // a 500 ms tick has no deadline worth defending.
+    xTaskCreatePinnedToCore(fcBootReporterTask, "FC Boot Rpt", 2560, nullptr, 1,
+                            nullptr, i2s_sender_core == 0 ? 1 : 0);
+
     // Phase 4 Layer 3: OTA image parser. Idle (blocked on notify) until the
     // I2S link is flipped to slave RX and the recv callback starts waking it.
     // Pinned to Core 1 (off the sensor core) at low priority — it only runs
@@ -2802,6 +2899,7 @@ static void setup_fc()
                             &fc_ota_parser_task, 1);
 
     // Load persistent rocket settings from NVS (factory default from config.h)
+    fcBootStatus(FCB_NVS);
     ESP_LOGI(TAG, "NVS prefs loading...");
     prefs.begin("rocket", false);  // read-write (creates namespace on first boot)
     enable_sounds = prefs.getBool("sounds", config::ENABLE_SOUNDS);
@@ -3115,6 +3213,12 @@ static void setup_fc()
 
     // Initialize sensor collector (including sensors) and start polling tasks
     ESP_LOGI(TAG, "Sensor collector init...");
+    // FCB_SENSORS covers GNSS bring-up too: begin() BLOCKS until the ~35 s GNSS
+    // deadline when the module is dead, so the two cannot be announced
+    // separately from out here.  That is also the stall this reporting exists to
+    // make visible — a boot parked on "Sensors" for 35 s is a dead GNSS, and the
+    // FCB_GNSS report immediately after begin() returns confirms it.
+    fcBootStatus(FCB_SENSORS);
     sensor_collector.begin(config::SENSOR_CORE);
 
     // #557: latch GNSS-absent mode.  isGnssOnline() is false when GNSS is built
@@ -3129,6 +3233,10 @@ static void setup_fc()
         ESP_LOGW(TAG, "[GNSS] Module absent (bring-up failed) — GNSS-absent "
                       "degraded mode: baro+IMU EKF init, guidance forced off");
     }
+    // Boot CONTINUES either way — the degraded bit is how the operator learns
+    // the receiver never came up, rather than only finding out from a missing
+    // fix later.
+    fcBootStatus(FCB_GNSS, gnss_absent_mode ? FCB_DEG_GNSS : 0);
     sensor_converter.configureISM6HG256FullScale(
         static_cast<ISM6LowGFullScale>(config::ISM6_LOW_G_FS_G),
         static_cast<ISM6HighGFullScale>(config::ISM6_HIGH_G_FS_G),
@@ -3284,6 +3392,9 @@ static void setup_fc()
     servo_control.setPIDDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
     control_mixer.setDerivativeFilterCutoffHz(config::D_FILTER_CUTOFF_HZ);
     // Servo setup — always init hardware if pins valid, gate enabled on NVS.
+    // No pins configured is a build choice, not a fault, so it does not set the
+    // degraded bit — the app just sees the step pass.
+    fcBootStatus(FCB_SERVOS);
     if (servoPinsValid())
     {
         servo_control.begin();
@@ -3540,6 +3651,11 @@ static void setup_fc()
     ESP_LOGI(TAG, "Setup complete…");
     triggerBlueLedFlash(time_ms());
 
+    // Last boot report: from here the state machine runs and NonSensorData
+    // carries rocket_state, so the app switches to showing real states.  Any
+    // degraded bits accumulated above ride this final frame so a boot that
+    // finished imperfectly still says so.
+    fcBootStatus(FCB_COMPLETE);
 }
 
 // ==========================================================================

@@ -1819,6 +1819,22 @@ String TR_BLE_To_APP::buildTelemetryJSON(const TelemetryData& data)
     // State
     addString("st", data.state);
 
+    // FC boot progress — Tier 1, immediately after the state, because it
+    // QUALIFIES the state: during the FC's ~10 s setup_fc there is no
+    // rocket_state at all, and the app would otherwise show a bare
+    // "INITIALIZATION" that is really just a zeroed field.  Both keys are
+    // omitted once the FC starts sending real state, so this costs nothing in
+    // the peak-payload case the tiering exists to protect (boost + GPS fix
+    // under a small MTU) — by then boot_valid is false.  "bd" is further
+    // omitted when no step degraded, which is the normal boot.
+    if (data.boot_valid) {
+        addUint("bs", data.boot_step);
+        addUint("bt", data.boot_elapsed_ms);
+        if (data.boot_degraded != 0) {
+            addUint("bd", data.boot_degraded);
+        }
+    }
+
     // #95: data freshness status.  LIVE is the default and is omitted
     // entirely to save bytes — the iOS app treats "ds" absent as LIVE.
     // Kept up front so a stale frame is always *flagged* as stale.
