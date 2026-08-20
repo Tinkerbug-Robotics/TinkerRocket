@@ -681,18 +681,19 @@
     </ul>
 
   <section>
-    <h2><span class="n">05</span>Recovery, and a bigger problem</h2>
+    <h2><span class="n">05</span>Recovery</h2>
     <div class="prose">
       <p>Knowing where the gate closes says nothing about how long it stays shut.
-        Answering that needs a trajectory that comes back under the limit, so three
-        flights were flown: vertical profiles integrated from thrust, drag and gravity
-        rather than drawn as ramps.</p>
+        Answering that needs a trajectory that comes back under the limit, so vertical
+        flights were flown, integrated from thrust, drag and gravity rather than drawn as
+        ramps, and flown to the ground under a drogue-then-main recovery.</p>
       <p><strong>The gate re-opens in one epoch.</strong> On the gentle flight, the
         receiver descended back through 80 km at 217 m/s and had a fix again
-        <strong>0.7 s later</strong>. Closing is just as sharp in the other direction:
-        across all three flights the fix disappeared between 0.3 s and 0.9 s after the
-        limit was first exceeded. This is an output inhibit, not a filter reset &mdash;
-        which fits what the frames show, since the receiver never stops tracking.</p>
+        <strong>0.7 s later</strong>, and the velocity gate re-opened in 1.1 s and 1.5 s
+        in two other windows. Closing is just as sharp in the other direction: the fix
+        disappeared between 0.3 s and 0.9 s after the limit was first exceeded, every time.
+        This is an output inhibit, not a filter reset &mdash; which fits what the frames
+        show, since the receiver never stops tracking across a gate transition.</p>
     </div>
 
     <figure>
@@ -2244,25 +2245,44 @@
         took longer had two. The gate is not slow; losing the satellites is what costs the
         time, and the two want opposite fixes.</p>
 
-      <h3>Why the satellite count collapses at all</h3>
-      <p>It is not the signal. The generator transmits every satellite above the local
-        horizon at equal, constant power for the whole run &mdash; elevation mask zero,
-        path loss disabled &mdash; so roughly ten GPS satellites are present at full
-        strength from first sample to last. Every dip in the satellite bar is the receiver
-        letting go of them, and there are three reasons it does:</p>
+      <h3>A hypothesis that did not survive its own test</h3>
+      <p>An earlier draft of this report claimed a realistic 15 g boost breaks the
+        receiver&rsquo;s tracking loops &mdash; 15 g is 787 Hz/s of Doppler rate on L1, and
+        the first two flights shed five of seven satellites within a second of ignition.
+        The acceleration panel above was added to test that. It failed the test.</p>
+      <p>Re-flown on a healthy signal, the <em>same</em> 15 g profile held
+        <strong>six satellites at 47&ndash;49 dBHz straight through the burn</strong>, 0 to
+        1334 m/s, losing none; the fix vanishing partway up is the COCOM gate at 515 m/s,
+        not a lock failure. And on the 3 g flight the satellite count swung between two and
+        seven while acceleration sat flat at &minus;10 m/s&#178;, which acceleration cannot
+        explain.</p>
+      <p>What separates the runs is margin. Where satellites were lost they had been sitting
+        at <strong>34&ndash;35 dBHz before ignition</strong>; where they were not, at
+        <strong>49 dBHz</strong>. Fourteen decibels, on a bench path whose SMA had already
+        worked loose once.</p>
+      <h3>So why does the satellite count move?</h3>
+      <p>Not the injected signal: the generator transmits every satellite above the local
+        horizon at equal, constant power for the whole run &mdash; elevation mask zero, path
+        loss disabled &mdash; so about ten GPS satellites are present at full strength from
+        first sample to last. Every dip is the receiver letting go, and on this bench:</p>
     </div>
     <ul class="notes">
-      <li><strong>Doppler rate under acceleration.</strong> The dominant one. 15 g is
-        787 Hz/s on L1 and breaks tracking within a second; 3 g is 154 Hz/s and does not.</li>
+      <li><strong>A bench path with no headroom.</strong> The dominant effect, and an
+        artefact of the bench rather than of flight. Pre-flight C/N&#8320; varied between 34
+        and 49 dBHz across runs on identical settings, and the runs that started low are
+        exactly the ones that shed satellites.</li>
       <li><strong>Only ten satellites to lose.</strong> gps-sdr-sim is GPS L1 C/A only,
         while the receiver is multi-constellation and dual-band. In flight it would have
         GPS, GLONASS, Galileo and BeiDou across L1 and L5 &mdash; perhaps 25 to 35 signals,
         not 10. There is no redundancy in the injected sky, so a few losses take it under
         the four needed for a fix. The measured recovery times are pessimistic for this
-        reason; the measured thresholds are not affected.</li>
-      <li><strong>A bench RF path with no headroom.</strong> An SMA worked loose partway
-        through and cost about 25 dB, leaving the transmitter pinned at its maximum
-        47 dB gain. C/N&#8320; is adequate but has nothing in reserve.</li>
+        reason; the measured thresholds are not affected. Nor does picking a better hour
+        help much: across the whole of 2026-08-19 the best offers twelve GPS satellites
+        against the ten used.</li>
+      <li><strong>Acceleration, if at all, only as a contributor.</strong> The measurement
+        puts a ceiling on it: 677 Hz/s of Doppler rate cost nothing when the satellites had
+        15 dB of margin. It has not been shown to matter independently, and a bench holding
+        a steady 49 dBHz would be needed to test it properly.</li>
     </ul>
     <div class="prose">
       <p>One earlier zero-satellite stretch was neither: it was a modelling error. The
@@ -2276,7 +2296,54 @@
   </section>
 
   <section>
-    <h2><span class="n">06</span>What this cannot tell us</h2>
+    <h2><span class="n">06</span>Receiver settings worth knowing about</h2>
+    <div class="prose">
+      <p>The Phoenix protocol has no u-blox-style dynamics tuning. There is no exposed
+        tracking-loop bandwidth and no Doppler search window; <em>Configure Parameter Search
+        Engine Number</em> (<code>0x64/0x0A</code>) was removed from the protocol in a later
+        revision, leaving only the query. Navigation mode is the only dynamics lever. Two
+        things are nevertheless worth setting, and both are accepted by the bench
+        firmware:</p>
+      <ul class="notes">
+        <li><strong>Power mode</strong> (<code>0x0C</code>, 0 = Normal). AN0037 states power
+          save is enabled <em>by default</em> &ldquo;to reduce current consumption by the
+          search engine&rdquo; &mdash; the same engine that has to re-acquire after a
+          boost.</li>
+        <li><strong>SLR, Speed Lag Reduced</strong> (<code>0x64/0x17</code> mode 9), added in
+          the same protocol revision as quadcopter mode, alongside airborne (mode 5).</li>
+      </ul>
+      <p>Flown back to back on the 15 g profile against airborne with power save left at its
+        default, neither changed anything that matters for the gate:</p>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>SLR + power normal against the airborne baseline, 15 g flight</caption>
+        <thead><tr><th>Configuration</th><th class="num">TTFF</th><th class="num">Median sats</th><th class="num">Median C/N&#8320;</th><th class="num">Fix held when clear</th><th class="num">Velocity error, no lag</th></tr></thead>
+        <tbody>
+          <tr><td class="id">airborne, power save</td><td class="num">42 s</td><td class="num">6</td>
+              <td class="num">44 dBHz</td><td class="num">88%</td><td class="num">13.4 m/s</td></tr>
+          <tr><td class="id">SLR, power normal</td><td class="num">48 s</td><td class="num">6</td>
+              <td class="num">45 dBHz</td><td class="num">85%</td><td class="num"><strong>9.7 m/s</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p>Acquisition, satellite count, signal level and fix availability are the same to
+        within run-to-run scatter, and that scatter is large on this bench. The one column
+        that moved is the one SLR is named for: reported speed compared against the injected
+        speed <em>with no time shift applied</em> was 9.7 m/s RMS against 13.4 m/s. Allowing
+        a best-fit shift collapses the difference &mdash; 7.9 against 7.5 m/s &mdash; so what
+        changed is the delay in the velocity output, not its noise, which is exactly what
+        &ldquo;speed lag reduced&rdquo; claims.</p>
+      <p>That is one run each, on a path whose C/N&#8320; has been seen to vary by 14 dB
+        between runs. It is a lead, not a result. If velocity lag matters to the flight
+        computer &mdash; and for apogee detection it does &mdash; it is worth repeating
+        properly.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">07</span>What this cannot tell us</h2>
     <ul class="notes">
       <li><strong>Still no vibration, and no multipath.</strong> The injected signal is
         clean. What the flight profiles added was real Doppler and real Doppler rate, which

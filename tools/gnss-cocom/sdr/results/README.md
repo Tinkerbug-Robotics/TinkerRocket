@@ -38,6 +38,7 @@ a regenerated scenario, and `plot_flight.py` now refuses the mismatch.
 |---|---|---|
 | `gentle_alt_v2` | 3 g | altitude gate re-opened **0.7 s** after descending below 80 km, with 6 satellites |
 | `spaceshot_v2` | 15 g | velocity gate re-opened **1.1 s** and **1.5 s** in two separate windows, with 6 and 4 satellites |
+| `spaceshot_slr_pwr` | 15 g | same profile with nav mode SLR (0x64/0x17 mode 9) and power mode Normal (0x0C) instead of airborne + default power save |
 
 Every window where four or more satellites were tracked re-opened in 0.7-1.5 s,
 on both gates. Windows that took 12-33 s all had two satellites: that is
@@ -49,3 +50,18 @@ deployed the main parachute at 3 km while still doing 560 m/s, which produced
 ~7000 m/s^2, reversed the velocity in an explicit integrator, and lofted the
 vehicle back to 28 km. Both the flights and the tracking losses in them were
 artefacts. The profiles now fly a drogue from apogee and the main at 600 m AGL.
+
+
+## The 15 g tracking claim, retracted
+
+An earlier version of this record said a 15 g boost breaks the tracking loops,
+on the grounds that 15 g is 787 Hz/s of Doppler rate and the first flights shed
+five of seven satellites at ignition. `spaceshot_v2` disproves it: the same
+profile held six satellites at 47-49 dBHz straight through the burn, 0 to
+1334 m/s, losing none. The fix vanishing partway up is the COCOM gate at
+515 m/s, not a lock failure.
+
+What differs is margin. The flights that lost satellites had them at 34-35 dBHz
+before ignition; the flight that did not had 49 dBHz. That is the bench RF path,
+not the flight. Acceleration has not been shown to matter independently here,
+and testing it properly needs a bench that holds a steady C/N0.
