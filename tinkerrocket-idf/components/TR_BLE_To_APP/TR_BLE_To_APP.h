@@ -282,8 +282,13 @@ public:
     // failure), NOT because the file was fully sent. The app must FAIL the download
     // instead of saving the bytes it has. Old apps ignore bit1 and behave as today.
     // Defaulted so the base-station call sites are unchanged and byte-identical.
-    bool sendFileChunk(uint32_t offset, const uint8_t* data, size_t len, bool eof,
-                       bool abort = false);
+    // [[nodiscard]] (#827): the base station shipped for months silently
+    // dropping this return and handing the app spliced CSVs.  Two other
+    // downloaders honoured the contract by convention alone; now the compiler
+    // enforces it.  Terminal sends (an EOF or EOF|ABORT that ends the
+    // transfer) have nothing left to do on failure and cast to (void).
+    [[nodiscard]] bool sendFileChunk(uint32_t offset, const uint8_t* data,
+                                     size_t len, bool eof, bool abort = false);
 
     // Get the negotiated MTU (after connection established)
     // Returns 0 if not yet negotiated
