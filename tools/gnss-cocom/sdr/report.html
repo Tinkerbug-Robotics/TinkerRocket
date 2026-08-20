@@ -2322,6 +2322,16 @@
         and worth spending.</p>
     </div>
     <ul class="notes">
+      <li><strong>The simulator was withholding satellites at altitude.</strong> Not the
+        cause of anything measured above, but a fidelity bug worth naming: gps-sdr-sim
+        decides visibility against the local <em>horizontal plane</em>. From height h the
+        horizon is depressed by acos(R/(R+h)) &mdash; 9.2&deg; at 82.5 km &mdash; so a
+        vehicle up there genuinely sees a whole band of satellites the simulator was hiding.
+        Worse, <code>allocateChannel</code> accepts an <code>elvMask</code> parameter and
+        ignores it, calling <code>checkSatVisibility</code> with a hardcoded 0.0, so passing
+        a correct mask in changes nothing until that is fixed too. With both repaired
+        (<code>patch_horizon.py</code>) the 40&deg;N site transmits 14 satellites at 82.5 km
+        against 11 on the ground, and the receiver tracked a median of 8 rather than 7.</li>
       <li><strong>Only ten satellites to lose.</strong> gps-sdr-sim is GPS L1 C/A only,
         while the receiver is multi-constellation and dual-band. In flight it would have
         GPS, GLONASS, Galileo and BeiDou across L1 and L5 &mdash; perhaps 25 to 35 signals,

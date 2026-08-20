@@ -40,6 +40,7 @@ a regenerated scenario, and `plot_flight.py` now refuses the mismatch.
 | `spaceshot_v2` | 15 g | velocity gate re-opened **1.1 s** and **1.5 s** in two separate windows, with 6 and 4 satellites |
 | `spaceshot_v3` | 15 g | flown after the SMA was re-seated; 7 satellites held at 48-50 dBHz straight through the burn, gate re-opened in 1.0 s and 1.5 s |
 | `spaceshot_eq` | 15 g | equator / 08:30 / complete-day ephemeris, 14 SV transmitted. Never fell below 4 satellites; all three windows recovered in 1.0-1.5 s |
+| `spaceshot_horizon` | 15 g | equator 08:30 with the horizon patch: 15 SV transmitted at altitude, median 8 tracked, recoveries 1.5 / 0.0 / 1.1 s |
 | `spaceshot_slr_pwr` | 15 g | same profile with nav mode SLR (0x64/0x17 mode 9) and power mode Normal (0x0C) instead of airborne + default power save |
 
 Every window where four or more satellites were tracked re-opened in 0.7-1.5 s,
@@ -84,3 +85,17 @@ complete-day ephemeris, puts 14 satellites in the sky instead of 10:
 Signal level did not move, so this is redundancy rather than power. Use the
 equator and a scanned hour for future runs: `best_geometry.py <nav> <day>
 <lats> <hours> [lon] [elev_mask]`, and `make_flights.py --lat/--lon`.
+
+
+## Satellites near apogee: there was no deficit
+
+Checked because a vehicle at 80 km should see more sky, not less. It does: near
+apogee the tracked count is flat or higher (equator run 6 -> 8 -> 7 across the
+80 km band). The low counts sit where median C/N0 dips to ~31 dBHz, climbing and
+descending fast, not at apogee.
+
+The check did turn up a simulator bug. gps-sdr-sim tests visibility against the
+local horizontal plane, but from 82.5 km the horizon is 9.2 degrees below it. And
+allocateChannel accepts an elvMask parameter then ignores it, hardcoding 0.0 in
+its checkSatVisibility call. `patch_horizon.py` fixes both; at 40N the sim then
+transmits 14 satellites at 82.5 km against 11 on the ground.
