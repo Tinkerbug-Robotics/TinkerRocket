@@ -13,6 +13,8 @@
 #include <nvs_flash.h>
 #include <esp_log.h>
 #include <esp_mac.h>              // esp_efuse_mac_get_default for unit_id
+#include <esp_efuse.h>            // #822: read PSRAM_CAP to verify the board flag
+#include <esp_efuse_table.h>      // #822: ESP_EFUSE_PSRAM_CAP
 #include <esp_app_desc.h>         // esp_app_get_description for firmware version readback (#8)
 #include <esp_ota_ops.h>          // esp_ota_mark_app_valid_cancel_rollback (#8)
 #include <esp_partition.h>        // esp_ota_get_running_partition for rollback gate (#8)
@@ -135,6 +137,36 @@ static bool flightlogWriteSink(void* ctx, const uint8_t* payload, size_t payload
 {
     auto* fl = static_cast<tr_flightlog::TR_FlightLog*>(ctx);
     return fl->writeFrame(payload, payload_len) == tr_flightlog::Status::Ok;
+}
+
+// #822: read the silicon rather than trusting the board flag.
+//
+// esp_chip_info() is no help on this part — esp_hw_support's S3 port hardcodes
+// features to WIFI_BGN|BLE and never sets CHIP_FEATURE_EMB_PSRAM — but eFuse
+// BLK1 carries PSRAM_CAP, and it reads the same whether or not CONFIG_SPIRAM
+// was compiled in. So even a V7/V8 image, which links no PSRAM support at all,
+// can still say what silicon it is sitting on.
+//
+// Returns in-package PSRAM size in MB, 0 for none, or -1 if unreadable.
+static int s3PsramCapMb()
+{
+    uint8_t cap = 0;
+    if (esp_efuse_read_field_blob(ESP_EFUSE_PSRAM_CAP, &cap,
+                                  ESP_EFUSE_PSRAM_CAP[0]->bit_count) != ESP_OK)
+    {
+        return -1;
+    }
+    // esp_efuse_table.csv: {0: None, 1: 8M, 2: 2M, 3: 16M}. The CSV also lists
+    // 4 = 4M, which a 2-bit field cannot encode; treat anything unexpected as
+    // unknown rather than inventing a size.
+    switch (cap)
+    {
+        case 0: return 0;
+        case 1: return 8;
+        case 2: return 2;   // the RH2
+        case 3: return 16;
+        default: return -1;
+    }
 }
 
 // #281/#278: classify flight-log storage for the #303 scorecard.  A full or
@@ -2907,6 +2939,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                 last_snap_elapsed_ms = elapsed_ms;
                 // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
                 // so the recovery path can hand the bytes straight back to FC.
+                // #822: a no-op returning false on a board with no MRAM
+                // (V9/V10) — deliberately unlogged here, because this runs at
+                // 10 Hz for the whole flight.  initPeripherals() warns once at
+                // boot and the GET_FLIGHT_SNAPSHOT handler warns when the FC
+                // actually comes asking; those are the two places that matter.
                 (void)logger.mramRawWrite(config::SNAPSHOT_REGION_BASE,
                                           frame, frame_len);
             }
@@ -2927,6 +2964,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
+        }
+        else
+        {
+            // #822: no MRAM on this board, so there is no snapshot slot and we
+            // stage no response at all.  The FC handles that safely — its
+            // masterRead fails or its SOF scan finds nothing, and it logs
+            // "[RECOVERY] I2C read for snapshot failed" and carries on from a
+            // cold start — but from the OC side the request would otherwise
+            // vanish without trace.  This only fires when the FC has actually
+            // asked, i.e. once per unexpected FC reset, so it cannot spam.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and this "
+                           "board has no MRAM to keep one in (#822) — sending "
+                           "no reply; in-flight reboot recovery is unavailable");
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -5613,6 +5663,10 @@ void initPeripherals()
     log_cfg.spi_hz_nand = config::SPI_HZ_NAND;
     log_cfg.spi_mode_nand = config::SPI_MODE_NAND;
     log_cfg.ring_buffer_size = config::RAM_RING_SIZE;
+    // #822: on a board whose MRAM was replaced by in-package PSRAM, put the
+    // ring there instead of in the 64 KB internal fallback. 0 on every
+    // MRAM-fitted board, which keeps V7/V8 on exactly their old path.
+    log_cfg.psram_ring_size = config::RING_IN_PSRAM ? config::PSRAM_RING_SIZE : 0;
     log_cfg.debug = config::DEBUG;
     // MRAM ring buffer (128 KB on shared SPI bus — replaces 64 KB RAM ring)
     log_cfg.mram_cs = config::MRAM_CS;
@@ -5638,8 +5692,95 @@ void initPeripherals()
 
     if (!logger.begin(SPI, log_cfg))
     {
+        // Non-obvious on the RAM-ring path: begin() also fails when the 64 KB
+        // internal-RAM ring can't be allocated. That leaves
+        // peripherals_initialized false and flightlog uninitialized, so
+        // ocStorageHealth() reports SH_BAD and the pre-launch scorecard goes
+        // red — the operator does find out. Keep it that way.
         ESP_LOGE("PWR", "TR_LogToFlash begin failed");
         return;
+    }
+
+    // #822: V9/V10 deleted the MRAM (U12, MR25H10) — the S3RH2's in-package
+    // PSRAM replaced it — so board_v9.h sets MRAM_CS = -1 and TR_LogToFlash
+    // falls back to a heap RAM ring. Flight logging is unaffected (the ring
+    // still feeds the NAND flush task), but two things that live in the MRAM
+    // region are GONE on those boards, not degraded:
+    //
+    //   * #104 in-flight reboot recovery. The FC asks for its last snapshot
+    //     with GET_FLIGHT_SNAPSHOT after a brownout/panic; the handler reads it
+    //     out of MRAM, so with no MRAM there is nothing to answer with and the
+    //     FC skips recovery.
+    //   * #274 dirty-ring replay. The marker sits in the same region, so an
+    //     unclean shutdown can no longer be detected, and the volatile ring
+    //     would not have survived the reset anyway.
+    //
+    // Both failures are otherwise completely silent — mramRawWrite/Read just
+    // return false, nothing logs, nothing goes red — so the first evidence
+    // would be a flight that browned out and never came back. Say it once,
+    // loudly, at boot instead. The replacement design already exists on the
+    // mini (snapshots written into the NAND log stream, recovered by a
+    // tail-scan at boot); porting it to the OC/FC pair is the real fix.
+    // #822: cross-check the board flag against the silicon, unconditionally —
+    // this is the generalisation of the bug that motivated board_v9.h. A wrong
+    // -DTR_BOARD_* flag has no runtime symptom on this MCU (the pin maps are
+    // identical), so the only thing that can catch it is asking the chip.
+    {
+        const int psram_mb = s3PsramCapMb();
+        if (psram_mb < 0)
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: unreadable");
+        }
+        else if (psram_mb == 0)
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: none");
+        }
+        else
+        {
+            ESP_LOGI("PWR", "In-package PSRAM per eFuse: %d MB", psram_mb);
+        }
+
+        // Disagreements are build/flash mistakes, not hardware faults, so they
+        // are worth shouting about while someone is still at the bench.
+        if (config::RING_IN_PSRAM && psram_mb == 0)
+        {
+            ESP_LOGE("PWR", "BOARD FLAG SAYS PSRAM, SILICON SAYS NONE — this is "
+                            "not a V9/V10 board, or it was built -DTR_BOARD_V9=1 "
+                            "by mistake. Ring falls back to internal RAM.");
+        }
+        else if (!config::RING_IN_PSRAM && psram_mb > 0)
+        {
+            ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
+                            "selected board map does not use. Expected on a V7/V8 "
+                            "board (MRAM is fitted); if this IS a V9/V10 board, it "
+                            "was built with the wrong -DTR_BOARD_* flag.", psram_mb);
+        }
+    }
+
+    if (!logger.isMramEnabled())
+    {
+        TR_LogToFlashStats mram_st = {};
+        logger.getStats(mram_st);
+        ESP_LOGW("PWR", "========================================");
+        ESP_LOGW("PWR", "NO MRAM ON THIS BOARD (MRAM_CS = -1).");
+        ESP_LOGW("PWR", "  Log ring: %lu KB of %s, VOLATILE.",
+                 (unsigned long)(mram_st.ring_size / 1024),
+                 logger.isRingInPsram() ? "in-package PSRAM" : "internal RAM");
+        ESP_LOGW("PWR", "  In-flight reboot recovery (#104): UNAVAILABLE.");
+        ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
+        ESP_LOGW("PWR", "  Expected on V9/V10. On a V8 board this means the");
+        ESP_LOGW("PWR", "  image was built with the wrong -DTR_BOARD_* flag.");
+        ESP_LOGW("PWR", "========================================");
+        // #822: PSRAM is the ring's intended home on V9/V10. Landing on
+        // internal RAM instead means either CONFIG_SPIRAM is off or the part
+        // did not come up — the ring is then ~8x smaller than designed, which
+        // is exactly the kind of quiet downgrade this block exists to prevent.
+        if (config::RING_IN_PSRAM && !logger.isRingInPsram())
+        {
+            ESP_LOGE("PWR", "  ^ THIS BOARD EXPECTED A PSRAM RING AND DID NOT "
+                            "GET ONE — see the PSRAM init line earlier in this "
+                            "boot log.");
+        }
     }
 
     // --- TR_FlightLog begin (issue #50) -------------------------------------

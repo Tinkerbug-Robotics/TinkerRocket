@@ -8,25 +8,26 @@
 // Net names in comments are the V8 schematic nets. Values marked TODO are
 // still unconfirmed — replace as bring-up proceeds.
 //
-// ALSO THE V9/V10 MAP — this MCU did not move (verified 2026-08-17 by walking
-// U15's pad -> pinfunction -> net in hardware/rocket-computer.kicad_pcb at
-// every commit that ever touched it, and against a kicad-cli netlist export
-// of the V10 schematic). -DTR_BOARD_V9=1 selects this same header; see
-// main/config.h. That is the opposite of the FC, whose V9 map moved PYRO_ARM
-// and swapped two FIRE pins and therefore has its own board_v9.h.
+// V8 ONLY. The S3's GPIO map really is unchanged V8 -> V10 (verified
+// 2026-08-17 by walking U15's pad -> pinfunction -> net in
+// hardware/rocket-computer.kicad_pcb at every commit that ever touched it,
+// and against a kicad-cli netlist export of the V10 schematic), and until
+// #822 -DTR_BOARD_V9=1 therefore selected this header. It no longer does:
+// V9/V10 deleted the MRAM (U12), and an alias cannot express "same pins, one
+// fewer device". board_v9.h is that revision's header; the ONLY value that
+// differs is MRAM_CS (34 here, -1 there).
 //
-// Two things changed around this map without changing it:
-//   * PWR_PIN's net was renamed Power_Switch -> P4_EN_S3 at the V9 pre-fab
-//     close-out. Same GPIO7, same job: it is the enable that powers the P4's
-//     rail (U30, a TPS22810). On V9+ the P4 also has its own hold line into
-//     the same enable (its GPIO5, net P4_EN_HOLD) which its firmware does not
-//     currently drive — so dropping PWR_PIN still powers the FC down, but
-//     check flight_computer/main/board/board_v9.h before assuming that.
-//   * MRAM_CS (GPIO34) is V8-only. There is no MRAM_CS net anywhere in the
-//     V9/V10 schematic; the pin is unconnected and the part is unfitted.
-//     Left at 34 because it is correct for V8 and harmless on V9/V10 (it
-//     drives a floating pad), but set it to -1 if an MRAM-present code path
-//     ever costs more than a probe.
+// Keep the two in step. Anything that moves an S3 pin has to move it in both
+// files — nothing in CI diffs them, and a pin edited here alone would be
+// silently absent from every V9/V10 image.
+//
+// One thing changed around this map without changing it: PWR_PIN's net was
+// renamed Power_Switch -> P4_EN_S3 at the V9 pre-fab close-out. Same GPIO7,
+// same job: it is the enable that powers the P4's rail (U30, a TPS22810). On
+// V9+ the P4 also has its own hold line into the same enable (its GPIO5, net
+// P4_EN_HOLD) which its firmware does not currently drive — so dropping
+// PWR_PIN still powers the FC down, but check
+// flight_computer/main/board/board_v9.h before assuming that.
 struct board_pins
 {
     // --- Power rail switch ---
@@ -35,6 +36,7 @@ struct board_pins
     // power on/off.
     static constexpr int PWR_PIN = 7;        // Power_Switch (CONFIRMED)
     // No separate GPS rail identified on V8 yet; -1 = call sites skip it.
+    // (On V9/V10 the GNSS rail is gated by the FC, not the S3 — see board_v9.h.)
     static constexpr int GPS_PWR_PIN = -1;   // TODO: confirm whether V8 has one
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
@@ -46,7 +48,12 @@ struct board_pins
     static constexpr int SPI_MISO = 35;      // M_MISO     (CONFIRMED)
     static constexpr int SPI_MOSI = 38;      // M_MOSI     (CONFIRMED)
     static constexpr int NAND_CS = 36;       // M_FLASH_CS (CONFIRMED)
-    static constexpr int MRAM_CS = 34;       // MRAM_CS    (CONFIRMED; -1 if unfitted)
+    // Fitted on V8 only; board_v9.h sets this to -1 (U12 deleted in V9).
+    static constexpr int MRAM_CS = 34;       // MRAM_CS    (CONFIRMED)
+    // MRAM is fitted, so the ring lives there and never reaches the RAM/PSRAM
+    // path at all. false regardless of what this board's S3 turns out to be —
+    // no V8 artwork was ever committed, so its part is unproven either way.
+    static constexpr bool RING_IN_PSRAM = false;
 
     // --- I2C slave (commands from FlightComputer) ---
     static constexpr int I2C_SDA_PIN = 5;    // ESP_SDA (CONFIRMED)

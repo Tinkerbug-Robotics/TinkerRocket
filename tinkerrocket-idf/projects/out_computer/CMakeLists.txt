@@ -29,9 +29,11 @@ if(NOT TR_GIT_DIRTY_CODE EQUAL 0)
 endif()
 string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # Board revision marker (#411): V8/V9 builds are identifiable from the app
-# version string (BLE config_identity "fw" field, boot log, OTA metadata).
-# The two select the same pin map on this MCU (see main/config.h) but are
-# stamped apart so an image can be traced back to the board it was built for.
+# version string (BLE config_identity "fw" field, boot log, OTA metadata), so
+# an image can be traced back to the board it was built for. Since #822 that
+# matters at runtime and not only for provenance: the two select different
+# headers (V9/V10 has no MRAM), so a "-v8" image on V9 hardware is a real
+# misconfiguration, not just a mislabel.
 if(TR_BOARD_V9)
     set(TR_BOARD_SUFFIX "-v9")
 elseif(TR_BOARD_V8)
@@ -54,6 +56,22 @@ else()
     set(TR_BENCH_SUFFIX "")
 endif()
 set(PROJECT_VER "${TR_GIT_SHA}${TR_BOARD_SUFFIX}${TR_BENCH_SUFFIX}+${TR_BUILD_DATE}")
+
+# Board revision has to reach sdkconfig, not just the compiler (#822): V9/V10
+# enables the S3RH2's in-package PSRAM and V7/V8 must NOT, because those boards
+# have no PSRAM part and would spend every boot failing to find one.
+#
+# Both lines matter. SDKCONFIG_DEFAULTS picks the overlay; SDKCONFIG moves the
+# GENERATED config into the build dir, because the default is one shared
+# sdkconfig at the project root and IDF does not re-apply defaults to an
+# existing one. Without the second line, a root sdkconfig written by a V9 build
+# would silently carry CONFIG_SPIRAM into the next V8 build — the same
+# stale-cache trap as a wrong -DTR_BOARD_* flag, and just as quiet.
+if(TR_BOARD_V9)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v9")
+    message(STATUS "out_computer: sdkconfig overlay sdkconfig.defaults.v9 (PSRAM on)")
+endif()
+set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(out_computer)
