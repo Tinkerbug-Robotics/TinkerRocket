@@ -635,6 +635,28 @@ target_include_directories(test_nand_geometry PRIVATE
 target_link_libraries(test_nand_geometry GTest::gtest_main)
 gtest_discover_tests(test_nand_geometry)
 
+# ---------- test_pwr_hold_policy (#848) ----------
+# FC power-hold latch boot reconciliation (P4_EN_HOLD): keep/release/assert
+# decision for a hold inherited across a reset. Pure header in the FC project.
+add_executable(test_pwr_hold_policy test_pwr_hold_policy.cpp)
+target_include_directories(test_pwr_hold_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_pwr_hold_policy GTest::gtest_main)
+gtest_discover_tests(test_pwr_hold_policy)
+
+# ---------- test_rail_restore_policy (#825) ----------
+# OC boot rail re-assert decision: fault reset restores, the deliberate
+# power-off reboot stands down. Pure header in the OC project.
+add_executable(test_rail_restore_policy test_rail_restore_policy.cpp)
+target_include_directories(test_rail_restore_policy PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_rail_restore_policy GTest::gtest_main)
+gtest_discover_tests(test_rail_restore_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification

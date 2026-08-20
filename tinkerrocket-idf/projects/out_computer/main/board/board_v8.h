@@ -25,9 +25,10 @@
 // renamed Power_Switch -> P4_EN_S3 at the V9 pre-fab close-out. Same GPIO7,
 // same job: it is the enable that powers the P4's rail (U30, a TPS22810). On
 // V9+ the P4 also has its own hold line into the same enable (its GPIO5, net
-// P4_EN_HOLD) which its firmware does not currently drive — so dropping
-// PWR_PIN still powers the FC down, but check
-// flight_computer/main/board/board_v9.h before assuming that.
+// P4_EN_HOLD), which FC firmware HOLDS while INFLIGHT (#848) — so on V9+
+// hardware dropping PWR_PIN powers the FC down on the ground but NOT during
+// a flight/sim; see flight_computer/main/board/board_v9.h for the
+// hold/release policy. (Irrelevant on a physical V8: no hold line exists.)
 struct board_pins
 {
     // --- Power rail switch ---

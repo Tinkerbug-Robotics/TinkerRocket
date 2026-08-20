@@ -55,6 +55,9 @@ static inline std::string itos(int v)
 }
 
 #include "config.h"
+#include "rail_restore_policy.h"  // #825: boot rail re-assert decision
+#include <esp_attr.h>             // RTC_NOINIT_ATTR
+#include <esp_system.h>           // esp_reset_reason
 #include "dedup_reboot_policy.h"
 
 #include <TR_I2C_Interface.h>
@@ -625,7 +628,37 @@ static uint8_t lora_cr         = config::LORA_CR;
 static int8_t  lora_tx_power   = config::LORA_TX_POWER_DBM;
 
 static RocketState latest_rocket_state = INITIALIZATION;
-static bool pwr_pin_on = false;              // Power rail state — starts OFF
+// #825: rail state retained across resets (RTC memory survives everything
+// except a true power-on). Updated at every rail toggle; deliberate_off is
+// set immediately before the #9 power-off esp_restart() so THAT reboot — the
+// one that implements power-off — keeps the boot-time rail-LOW behaviour it
+// depends on. Decision table in rail_restore_policy.h.
+// INVARIANT for every writer: assign the WHOLE struct in one statement so
+// rail_on and deliberate_off can never drift apart across a reset — the
+// restore decision reads them as a unit (rail_restore_policy.h), and a
+// partial update (e.g. setting deliberate_off while leaving rail_on=1) would
+// re-assert a rail the operator just turned off on the NEXT fault reset.
+// restore_attempts bounds the brownout retry loop: a sagging pack that
+// browns the OC out under the restored load must not cycle the rail forever
+// (pre-#825 it settled into rail-off idle; the bound restores that endpoint).
+struct RailRtcState { uint32_t magic; uint8_t rail_on; uint8_t deliberate_off;
+                      uint8_t restore_attempts; };
+static constexpr uint32_t kRailRtcMagic = 0x5241494D;  // "RAIM" (v2: +attempts)
+RTC_NOINIT_ATTR static RailRtcState rail_rtc;
+static bool boot_rail_restored = false;  // this boot re-asserted the FC rail
+// #825: the restore's cmd-8-ON side effects (initPeripherals etc.) must run
+// on the SAME core as the normal path — the I2S RX GDMA interrupt is
+// allocated on the calling core, and setup_oc runs on core 0 (the BT core)
+// while every other initPeripherals call runs from loop_oc on core 1. Set in
+// setup, consumed by the first loop_oc iteration.
+static bool boot_rail_restore_init_pending = false;
+
+static bool pwr_pin_on = false;
+// #825: false after a boot rail restore — our reset wiped the commanded
+// camera state while the FC (kept alive by the restored rail) may still be
+// recording, so the explicit-state dedup below must forward the first
+// command instead of "already OFF, ignoring" it. True everywhere else.
+static bool camera_state_known = true;              // Power rail state — starts OFF
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 
 // ==========================================================================
@@ -3954,8 +3987,9 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // Falls back to toggle if no payload (legacy compat).
         bool want_on = (payload_len >= 1) ? (payload[0] != 0)
                                           : !camera_recording_requested;
-        if (want_on != camera_recording_requested)
+        if (want_on != camera_recording_requested || !camera_state_known)
         {
+            camera_state_known = true;   // #825: see the BLE cmd-1 twin
             camera_recording_requested = want_on;
             setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
             ESP_LOGI("LORA", "UPLINK Camera %s", want_on ? "START" : "STOP");
@@ -6269,6 +6303,46 @@ static void initI2CSlave()
 // ==========================================================================
 static void setup_oc()
 {
+    // #825: FIRST thing, before NVS init and the 500 ms boot delay burn the
+    // R84/C105 window (~0.8 s from the chip reset) — if the previous session
+    // had the FC rail ON and this reset was not a real power-on or the
+    // deliberate power-off reboot, re-assert the rail NOW. Without this, any
+    // OC panic/WDT/brownout (or a self-OTA restart) mid-flight let the FC —
+    // and its pyro channels — power off ~0.8 s later, ballistic.
+    {
+        const esp_reset_reason_t rst = esp_reset_reason();
+        const bool magic_ok = (rail_rtc.magic == kRailRtcMagic);
+        boot_rail_restored = RailRestorePolicy::shouldRestore(
+            rst == ESP_RST_POWERON, magic_ok,
+            magic_ok && rail_rtc.rail_on != 0,
+            magic_ok && rail_rtc.deliberate_off != 0,
+            magic_ok ? rail_rtc.restore_attempts : 0);
+        if (!magic_ok || rst == ESP_RST_POWERON)
+        {
+            rail_rtc = {kRailRtcMagic, 0, 0, 0};
+        }
+        rail_rtc.deliberate_off = 0;   // one-shot: consumed by this boot
+        if (magic_ok && rail_rtc.rail_on != 0 && !boot_rail_restored &&
+            rail_rtc.restore_attempts >= RailRestorePolicy::kMaxRestoreAttempts)
+        {
+            // Retry budget exhausted: stand down to the stable rail-off idle
+            // (the pre-#825 endpoint) instead of brownout-cycling the rail.
+            rail_rtc.rail_on = 0;
+            rail_rtc.restore_attempts = 0;
+        }
+        if (boot_rail_restored)
+        {
+            rail_rtc.restore_attempts++;   // cleared when the restore proves stable
+            pinMode(config::PWR_PIN, OUTPUT);
+            digitalWrite(config::PWR_PIN, HIGH);
+            if (config::GPS_PWR_PIN >= 0)
+            {
+                pinMode(config::GPS_PWR_PIN, OUTPUT);
+                digitalWrite(config::GPS_PWR_PIN, HIGH);
+            }
+        }
+    }
+
     // Ensure NVS is initialised (ESP-IDF on ESP32-P4/S3 may not auto-init)
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -6279,14 +6353,23 @@ static void setup_oc()
 
     delay(500);
 
-    pinMode(config::PWR_PIN, OUTPUT);
-    digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
-    if (config::GPS_PWR_PIN >= 0)  // -1: board has no separate GPS rail (#411)
+    if (!boot_rail_restored)
     {
-        pinMode(config::GPS_PWR_PIN, OUTPUT);
-        digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
+        pinMode(config::PWR_PIN, OUTPUT);
+        digitalWrite(config::PWR_PIN, LOW);   // Start with power rail OFF
+        if (config::GPS_PWR_PIN >= 0)  // -1: board has no separate GPS rail (#411)
+        {
+            pinMode(config::GPS_PWR_PIN, OUTPUT);
+            digitalWrite(config::GPS_PWR_PIN, LOW);  // GPS enable rail off at boot
+        }
     }
-    pwr_pin_on = false;
+    else
+    {
+        ESP_LOGE("PWR", "FC rail RE-ASSERTED at boot: previous session had it "
+                        "ON and this was not a power-on or a deliberate "
+                        "power-off (#825). Peripherals re-init after setup.");
+    }
+    pwr_pin_on = boot_rail_restored;
 
     ESP_LOGI("OC", "Starting OutComputer (low-power mode)...");
     // V9 selects the same map as V8 on this MCU (see config.h) — reported
@@ -6538,11 +6621,33 @@ static void setup_oc()
     ble_app.setOtaRelayDelegate(ocOtaRelayBegin, ocOtaRelayFinish, ocOtaRelayAbort,
                                 ocOtaRelayData, nullptr);
 
-    // Enter low-power mode: 80 MHz, DFS to 40 MHz when idle
-    enterLowPowerMode();
+    if (boot_rail_restored)
+    {
+        // #825: the rail came back up at the top of setup. Stay OUT of
+        // low-power mode — the FC is running — but DEFER the cmd-8 power-ON
+        // side effects (initPeripherals etc.) to the first loop_oc iteration:
+        // loop_oc is pinned to core 1, where every other initPeripherals call
+        // runs, and the I2S RX GDMA / LoRa interrupts are allocated on the
+        // calling core. Running them here (setup_oc = core 0 = the BT core)
+        // would park the ~3 ms-cadence I2S ISR against the BLE stack for the
+        // rest of the resumed flight.
+        boot_rail_restore_init_pending = true;
+        // #825: the restored FC may still be mid-recording — our reset wiped
+        // the commanded camera state, so the explicit-state dedup must not
+        // trust it until the first command re-synchronizes it.
+        camera_state_known = false;
+        last_stats_ms = millis();
+        ESP_LOGW("OC", "OutComputer ready (FC rail RESTORED after reset — "
+                       "peripheral re-init deferred to the loop task).");
+    }
+    else
+    {
+        // Enter low-power mode: 80 MHz, DFS to 40 MHz when idle
+        enterLowPowerMode();
 
-    last_stats_ms = millis();
-    ESP_LOGI("OC", "OutComputer ready (PWR_PIN OFF, waiting for power-on command).");
+        last_stats_ms = millis();
+        ESP_LOGI("OC", "OutComputer ready (PWR_PIN OFF, waiting for power-on command).");
+    }
 }
 
 // ==========================================================================
@@ -6583,6 +6688,29 @@ static constexpr uint32_t IDLE_LOOP_DELAY_MS = 20;
 
 static void loop_oc()
 {
+    // #825: one-shot completion of a boot rail restore, on THIS task/core
+    // (core 1) so the I2S RX GDMA and LoRa interrupts land where every other
+    // initPeripherals() call puts them. The rail has been up since the top of
+    // setup_oc — far longer than the cmd-8 path's 500 ms settle.
+    if (boot_rail_restore_init_pending)
+    {
+        boot_rail_restore_init_pending = false;
+        vTaskDelay(1);  // feed watchdog before long init
+        initPeripherals();
+        if (ina230_ok) {
+            ina230.setConfiguration(INA230_Avg::AVG_1,
+                                    INA230_ConvTime::CT_332us,
+                                    INA230_ConvTime::CT_332us,
+                                    INA230_Mode::POWER_DOWN);
+            ina_continuous = false;
+        }
+        // The restore has proven stable (system up, peripherals in): reset
+        // the brownout retry budget so a LATER fault gets a fresh allowance.
+        rail_rtc.restore_attempts = 0;
+        ESP_LOGW("OC", "FC rail restore complete — peripherals re-initialized "
+                       "on the loop core, telemetry resuming.");
+    }
+
     // Serial debug console removed (was Arduino Serial.available/read).
     // Use ESP-IDF console component or BLE commands for debug interaction.
     const int64_t _loop_oc_t0 = esp_timer_get_time();
@@ -6939,8 +7067,12 @@ static void loop_oc()
             const size_t   plen    = ble_app.getCommandPayloadLength();
             const bool want_on = (plen >= 1) ? (payload[0] != 0)
                                              : !camera_recording_requested;
-            if (want_on != camera_recording_requested)
+            if (want_on != camera_recording_requested || !camera_state_known)
             {
+                // #825: after a boot rail restore the flag is a guess (our
+                // reset zeroed it; the FC kept running) — forward the first
+                // explicit command unconditionally so a stop can always stop.
+                camera_state_known = true;
                 camera_recording_requested = want_on;
                 setPendingCommand(want_on ? CAMERA_START : CAMERA_STOP);
                 ESP_LOGI("BLE", "Camera %s%s", want_on ? "START" : "STOP",
@@ -7437,6 +7569,7 @@ static void loop_oc()
                 {
                     digitalWrite(config::GPS_PWR_PIN, HIGH);
                 }
+                rail_rtc = {kRailRtcMagic, 1, 0, 0};  // #825: whole-struct write (see invariant)
                 vTaskDelay(pdMS_TO_TICKS(500));  // Allow power rail to stabilize
                 vTaskDelay(1);  // feed watchdog before long init
                 initPeripherals();  // Initialize SPI, NAND, LoRa, I2C
@@ -7478,6 +7611,10 @@ static void loop_oc()
                 // reconnect because the existing brownout-on-power-on
                 // hardware quirk exercises the same recovery path.
                 ESP_LOGI("PWR", "Power off: resetting OC for clean idle state (#9)...");
+                // #825: mark this restart as the DELIBERATE power-off so the
+                // boot-time re-assert stands down — boot-time rail-LOW is
+                // load-bearing for this flow (the reset IS the power-off).
+                rail_rtc = {kRailRtcMagic, 0, 1, 0};
                 digitalWrite(config::PWR_PIN, LOW);
                 if (config::GPS_PWR_PIN >= 0)
                 {
@@ -7508,11 +7645,17 @@ static void loop_oc()
                     (gpio_num_t)config::LORA_RST_PIN,
                     (gpio_num_t)config::LORA_DIO1_PIN,
                     (gpio_num_t)config::LORA_BUSY_PIN,
-                    // I2S signals from FC (slave RX on OC). FC's outputs go
-                    // high-Z when unpowered, but pinning these LOW removes
-                    // any residual matrix routing and avoids noise on
-                    // floating inputs that could spuriously draw through the
-                    // OC's input buffer / pull-up network. (#9)
+                };
+                // I2S signals from the FC (slave RX on the OC) are handled
+                // separately: they are FC OUTPUTS, and since #848 the FC can
+                // legitimately still be POWERED here (its P4_EN_HOLD latch
+                // during a sim/flight means dropping PWR_PIN no longer cuts
+                // its rail). Driving a live I2S bit clock hard LOW for the
+                // 100 ms below would be a sustained push-pull drive fight.
+                // gpio_reset_pin leaves them high-Z inputs — per the comment
+                // below, high-Z is not a back-feed source, which was the only
+                // reason these were ever in the driven-LOW list (#9).
+                static const gpio_num_t kFcDrivenPins[] = {
                     (gpio_num_t)config::I2S_BCLK_PIN,
                     (gpio_num_t)config::I2S_WS_PIN,
                     (gpio_num_t)config::I2S_DIN_PIN,
@@ -7524,6 +7667,10 @@ static void loop_oc()
                     gpio_set_direction(pin, GPIO_MODE_OUTPUT);
                     gpio_set_pull_mode(pin, GPIO_FLOATING);
                     gpio_set_level(pin, 0);
+                }
+                for (gpio_num_t pin : kFcDrivenPins) {
+                    if ((int)pin < 0) continue;
+                    gpio_reset_pin(pin);   // high-Z input: safe against a live FC
                 }
 
                 vTaskDelay(pdMS_TO_TICKS(100));   // let rail drop, caps discharge
